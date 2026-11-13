@@ -257,6 +257,14 @@ struct Unlink {
 }
 
 /// Whether `e`, or anything it wraps, is a connection closed by the other device with code 403 (its Gate: "not linked").
+///
+/// Why not the error's text: the other device's Gate closes the connection only after the handshake (iroh endpoint/connection.rs
+/// `conn.close(error_code, &reason)` in conn_from_noq_conn), and this side's connect() finishes before that close arrives. Where
+/// the close is then met decides what the error says. At connect or open_bi it is `ConnectionError::ApplicationClosed`, whose text
+/// is "closed by peer: not linked (code 403)" (noq-proto connection/mod.rs ConnectionError). On a slower machine it is met at
+/// write_all or read_to_end instead, as `WriteError::ConnectionLost` (noq send_stream.rs) or `ReadToEndError::Read(ReadError::
+/// ConnectionLost)` (noq recv_stream.rs), whose text is only "connection lost" / "read error: connection lost": the reason is in
+/// the error's source, not in its text. The close code is the same in every case, so it is what is looked for.
 fn closed_403(e: &(dyn std::error::Error + 'static)) -> bool {
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(x) = cur {
@@ -3215,5 +3223,40 @@ mod peer_tests {
         let mut p: Peer = serde_json::from_str(old).unwrap();
         assert!(p.adopt_name("Pixel nine"));
         assert_eq!(p.name, "Pixel nine");
+    }
+}
+
+#[cfg(test)]
+mod gate_close_tests {
+    use super::*;
+    use iroh::endpoint::{ApplicationClose, ConnectionError, ReadError, ReadToEndError, WriteError};
+
+    fn gate_close(code: u32) -> ConnectionError {
+        ConnectionError::ApplicationClosed(ApplicationClose { error_code: VarInt::from_u32(code), reason: (&b"not linked"[..]).into() })
+    }
+
+    /// What the earlier check looked at: the error's text, as `anyhow!("{e:#}")` makes it.
+    fn old_text_check<E: std::error::Error>(e: &E) -> bool {
+        format!("{e:#}").to_lowercase().contains("not linked")
+    }
+
+    #[test]
+    fn a_403_met_while_writing_or_reading_is_found_by_its_code_not_its_text() {
+        // Met at connect or open_bi: the text carries the reason, and the code is found too.
+        let at_connect = gate_close(403);
+        assert!(old_text_check(&at_connect));
+        assert!(closed_403(&at_connect));
+        // Met while writing the message: the text says only "connection lost"; the old check misses it, the code is found.
+        let at_write = WriteError::ConnectionLost(gate_close(403));
+        assert!(!old_text_check(&at_write), "{at_write:#}");
+        assert!(closed_403(&at_write));
+        // Met while reading the answer.
+        let at_read = ReadToEndError::Read(ReadError::ConnectionLost(gate_close(403)));
+        assert!(!old_text_check(&at_read), "{at_read:#}");
+        assert!(closed_403(&at_read));
+        // Any other close is not taken for the Gate's.
+        assert!(!closed_403(&WriteError::ConnectionLost(gate_close(7))));
+        assert!(!closed_403(&ReadToEndError::Read(ReadError::ConnectionLost(ConnectionError::TimedOut))));
+        assert!(!closed_403(&WriteError::ClosedStream));
     }
 }
