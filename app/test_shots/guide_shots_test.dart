@@ -514,6 +514,9 @@ void main() {
     await show(tester, RegionsScreen(regions: o.regions, initialTab: 1));
     await tester.pump(const Duration(seconds: 5));
     await o.settle(tester);
+    // The row's speed is measured on the real clock (two seconds of data), so the stalled download's "Waiting for the server"
+    // comes after a varying wait: wait for it, so every redraw shows the same row.
+    await _until(tester, find.textContaining('Waiting for the server'), max: 400);
     await shot(tester, 'region-row');
 
     await show(tester, RegionPage(regions: o.regions, id: 'us-id'));
@@ -522,6 +525,7 @@ void main() {
 
     // A county with its map, ready: the Updates tab lists its map with the date.
     final county = o.us['us-id-twin-falls-county']!;
+    o.s.engine.clock = () => _shotClock;
     await tester.runAsync(() async {
       await o.catalogue.geometry(county);
       await o.regions.download(county, routing: true, map: true, anyway: true);
@@ -944,7 +948,7 @@ void main() {
     await n.start(tester);
     final dir = Directory.systemTemp.createTempSync('guide-conn');
     addTearDown(() => dir.deleteSync(recursive: true));
-    final c = NotebookConnections(notebook: n.nb, dir: () async => dir);
+    final c = NotebookConnections(notebook: n.nb, dir: () async => dir, clock: () => _shotClock);
     await tester.runAsync(c.init);
     // An Obsidian vault connected on a phone: the line that Obsidian syncs only while it is open.
     final vault = Directory('${dir.path}/Field notes')..createSync();
@@ -966,7 +970,7 @@ void main() {
     final mem = _MemFolder()..text.addAll(notes);
     final dir = Directory.systemTemp.createTempSync('guide-tagsync');
     addTearDown(() => dir.deleteSync(recursive: true));
-    final c = NotebookConnections(notebook: nb, dir: () async => dir, folderFor: (_) => mem);
+    final c = NotebookConnections(notebook: nb, dir: () async => dir, folderFor: (_) => mem, clock: () => _shotClock);
     await tester.runAsync(() async {
       await nb.start();
       await nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Camping trip', fields: [], sort: NotebookSort.recent));
@@ -1951,6 +1955,11 @@ class _Hub extends HfHub {
 // ---- Notebooks ----
 
 final DateTime _now = DateTime(2026, 10, 29, 16, 12);
+
+/// The moment the guide's pictures show where a screen tells the time of a sync or a download ("Synced 4:59 PM", an imported
+/// note's date, "Downloaded Nov 8"), so a redraw on another day does not change them. A local time, so it reads the same on
+/// any machine.
+final DateTime _shotClock = DateTime(2026, 11, 8, 16, 59);
 
 Templates _templates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
 

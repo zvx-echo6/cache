@@ -7,6 +7,7 @@ import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
 import 'package:cache/app_state.dart';
 import 'package:cache/car/car_overlay.dart';
+import 'package:cache/car/phone_drive.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/theme.dart';
@@ -231,7 +232,7 @@ void main() {
       expect(t.containsKey('climb'), isFalse);
       expect(t['overview'], isNotNull);
       expect(t['palette'], isNotNull);
-      expect(t['overlay'], {'climb': kCarClimbAheadDefault, 'miniMap': kCarRouteMiniMapDefault});
+      expect(t['overlay'], {'phoneDrive': false});
       final none = ElevationProfile.none(24000);
       expect(none.hasData, isFalse);
       expect(carClimb(none, distanceAlongM: 0, routeM: 24000), isNull);
@@ -466,21 +467,21 @@ void main() {
     });
   });
 
-  test('the car switches default to the constants and are kept with the app settings', () async {
+  test('an old settings file that still has the two removed car switches loads, and does not write them back', () async {
     final d = Directory.systemTemp.createTempSync('carset');
     addTearDown(() => d.deleteSync(recursive: true));
+    final file = File('${d.path}/settings.json');
+    file.writeAsStringSync(jsonEncode({'theme': 'light', 'moduleIcons': 'large', 'carClimbAhead': false, 'carRouteMiniMap': false}));
     final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
     await a.init();
-    expect(a.carClimbAhead, kCarClimbAheadDefault);
-    expect(a.carRouteMiniMap, kCarRouteMiniMapDefault);
-    await a.setCarClimbAhead(false);
-    await a.setCarRouteMiniMap(false);
-    final b = AppState(settingsDirOverride: d, modelsDirOverride: d);
-    await b.init();
-    expect(b.carClimbAhead, isFalse);
-    expect(b.carRouteMiniMap, isFalse);
+    expect(a.theme, CacheThemeId.light);
+    expect(a.largeModuleIcons, isTrue);
+    await a.setTheme(CacheThemeId.dark); // any change writes the file again
+    final written = jsonDecode(file.readAsStringSync()) as Map;
+    expect(written['theme'], 'dark');
+    expect(written.containsKey('carClimbAhead'), isFalse);
+    expect(written.containsKey('carRouteMiniMap'), isFalse);
     a.dispose();
-    b.dispose();
   });
 
   group('CarBridge over the platform channel', () {
@@ -812,13 +813,11 @@ void main() {
       expect(embedded, 1, reason: 'control: the phone path does use the embedder');
     });
 
-    test('the two car switches reach the car in the trip within one update', () async {
-      final climb = ValueNotifier(true);
-      final mini = ValueNotifier(true);
-      final changed = ValueNotifier(0);
+    test('phoneDrive reaches the car in the trip at once on every change, and only that key is sent', () async {
+      final signal = PhoneDriveSignal();
       final b = CarBridge(
-          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed,
-          overlay: () => carOverlaySwitches(climb: climb.value, miniMap: mini.value), glyphs: () async => 'g');
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(seconds: 30), phoneDrive: signal,
+          overlay: () => carOverlaySwitches(phoneDrive: signal.value), glyphs: () async => 'g');
       await b.start();
       await fromCar('connected', {'on': true});
       await preview();
@@ -827,16 +826,42 @@ void main() {
       gps.controller.add(fixAt(42.5, -113.74, heading: 90));
       await settle();
       Map lastOverlay() => (toCar.lastWhere((c) => c.method == 'trip').arguments as Map)['overlay'] as Map;
-      expect(lastOverlay(), {'climb': true, 'miniMap': true});
-      climb.value = false;
-      changed.value++;
+      expect(lastOverlay(), {'phoneDrive': false});
+      // The throttle is 30 s here: a change that arrives within it would not be seen if the signal waited for it.
+      signal.value = true;
       await settle();
-      expect(lastOverlay(), {'climb': false, 'miniMap': true});
-      mini.value = false;
-      changed.value++;
+      expect(lastOverlay(), {'phoneDrive': true});
+      signal.value = false;
       await settle();
-      expect(lastOverlay(), {'climb': false, 'miniMap': false});
+      expect(lastOverlay(), {'phoneDrive': false});
       b.dispose();
+      signal.dispose();
+    });
+
+    test('what the car carries: each word, an unknown word, absent, and the reset when the car disconnects', () async {
+      final carries = ValueNotifier(CarExtras.never);
+      final b = CarBridge(nav: nav, maps: maps, drive: drive, carries: carries, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(carries.value, CarExtras.never, reason: 'absent until the car reports');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('extras', {'carries': 'unlessPhone'});
+      expect(carries.value, CarExtras.unlessPhoneShows);
+      await fromCar('extras', {'carries': 'never'});
+      expect(carries.value, CarExtras.never);
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', {'carries': 'huge'});
+      expect(carries.value, CarExtras.never, reason: 'an unknown word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', <String, Object?>{});
+      expect(carries.value, CarExtras.never, reason: 'a missing word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('connected', {'on': false});
+      expect(carries.value, CarExtras.never, reason: 'absent again when the car disconnects');
+      b.dispose();
+      carries.dispose();
     });
 
     test('places wait for the core when the car started the app', () async {
