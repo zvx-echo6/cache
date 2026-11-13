@@ -112,7 +112,12 @@ class Shell extends StatefulWidget {
     this.railPrefs,
     this.firstRunWizard = false,
     this.discoverFetch,
+    this.onAskShown,
   });
+
+  /// Ask became the screen shown (true) or stopped being it (false): the app lets the chat model go a while after Ask is left
+  /// (AskIdleRelease).
+  final void Function(bool shown)? onAskShown;
 
   /// On a device set up for the first time, Discover's wizard opens by itself once (the app sets it; tests leave it off).
   final bool firstRunWizard;
@@ -410,15 +415,23 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
+  /// Tells the app when Ask stops or starts being the screen shown ([Shell.onAskShown]), around a change of [_module].
+  void _changeModule(void Function() change) {
+    final before = _module == ModuleId.ask;
+    setState(change);
+    final after = _module == ModuleId.ask;
+    if (before != after) widget.onAskShown?.call(after);
+  }
+
   void _goHome() {
-    setState(() {
+    _changeModule(() {
       _module = null;
       _onModules = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _whatsNew());
   }
 
-  void _goModules() => setState(() {
+  void _goModules() => _changeModule(() {
         _module = null;
         _onModules = true;
       });
@@ -428,7 +441,7 @@ class _ShellState extends State<Shell> {
     if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.
     if (m == ModuleId.ask && _askOn) SearchModel.aboutToSearch();
-    setState(() {
+    _changeModule(() {
       _module = m;
       _onModules = false;
       _built.add(m);
