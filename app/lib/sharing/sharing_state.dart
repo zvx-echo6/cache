@@ -30,7 +30,7 @@ class SharingState extends ChangeNotifier {
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
     bool? phone,
-  }) : _phone = phone ?? (Platform.isAndroid || Platform.isIOS),
+  }) : _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? _openReal;
 
