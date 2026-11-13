@@ -97,7 +97,9 @@ Future<void> _withPreview(
     map.onMapCreated!(camera);
     map.onStyleLoadedCallback!();
     await tester.pump();
-    location.publish(fixAt(42.5, -113.8));
+    // The route starts from a chosen place, as on Linux with no position (and with no position chip over the map: the test's
+    // font draws every letter as a wide box, and the chip and the buttons would not fit side by side at 390).
+    nav.setFrom(const MapPlace(id: 'place:test:0', type: 'place', name: 'Place 0', kind: '', address: '', lat: 42.5, lon: -113.8, matched: 'name'));
     await tester.runAsync(() => nav.openDirections(_to));
     await _settle(tester);
     expect(nav.phase, NavPhase.previewing);
@@ -241,7 +243,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('step-next')));
       await _settle(tester);
       expect(_counter(tester), stepCounterText(3, 5));
-      expect(find.text('Stop 1: Market 1'), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('step-card')), matching: find.text('Stop 1: Market 1')), findsOneWidget);
     });
   });
 
