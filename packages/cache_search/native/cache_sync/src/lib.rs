@@ -54,6 +54,9 @@ use tokio::sync::Notify;
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
 /// The index exchange between linked devices.
 pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
+/// Telling a device that this one has unlinked it ([`Unlink`]). A device from before this has no handler for it, so the
+/// handshake fails there with no effect at all (on [`SYNC_ALPN`] it would answer with its whole file list).
+pub const UNLINK_ALPN: &[u8] = b"cache/unlink/1";
 
 /// A transfer with no new data for this long is dropped and retried in the next round (from its verified chunks).
 const STALL: Duration = Duration::from_secs(20);
@@ -67,6 +70,12 @@ const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// link, so a restart does not start the wait again. A clock that is behind never removes anything; a clock wrongly far
 /// ahead could remove such a link early, which is accepted because only links never confirmed are ever touched.
 const CONFIRM_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// How long an unlink that could not be delivered is kept, counted from when it was made ([`Unlink`]). Longer than
+/// [`CONFIRM_WINDOW`]. After it the other device keeps its one-sided entry (as it did before there was a message) and can unlink
+/// this one by hand.
+const UNLINK_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// The least time between two tries to tell a device that has no such message (an older version): it may be updated meanwhile.
+const UNLINK_OLD_RETRY: Duration = Duration::from_secs(6 * 60 * 60);
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
 
@@ -216,6 +225,37 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
+    /// Names this link, the same on both devices: set when the link is made from the link code's one-time token ([`link_id_of`]),
+    /// so a message about one link cannot end a newer link between the same two devices. Absent on links made before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link_id: Option<String>,
+}
+
+/// An unlink made here that the other device has not yet been told about. Saved in the same write that removes the device from
+/// the links, so a removed device never has no entry here (see [`Inner::forget_peer`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Unlink {
+    /// The device's key, and the name it had here.
+    id: String,
+    name: String,
+    /// The link that was ended ([`Peer::link_id`]); the device applies the message only if it holds the same one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link_id: Option<String>,
+    /// When it was made (ms since 1970); it is dropped [`UNLINK_KEEP`] later.
+    since: u64,
+    /// How many times it was tried and when last (ms since 1970).
+    #[serde(default)]
+    tries: u32,
+    #[serde(default)]
+    last_try: u64,
+    /// The device was reached but does not know this message (an older version): tried again only every [`UNLINK_OLD_RETRY`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    old: bool,
+}
+
+/// What the two devices of a link both hold: a name for it, from the one-time token of the code that made it.
+fn link_id_of(token: &str) -> String {
+    blake3::hash(format!("cache link id 1:{token}").as_bytes()).to_hex()[..32].to_string()
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -307,6 +347,9 @@ struct Saved {
     /// The links made before new links started Off have been given `"match"` ([`migrate_links`]); done once, never again.
     #[serde(default)]
     links_migrated: bool,
+    /// Devices unlinked here that have not been told yet ([`Unlink`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unlinks: Vec<Unlink>,
 }
 
 /// A link as it is made: Off, waiting for the person's answer (`ask`), until either device sets it. Its time is 0, so any
@@ -437,12 +480,27 @@ impl Run {
 #[derive(Debug)]
 struct Gate {
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    /// Devices this one has unlinked and not yet told: admitted on [`UNLINK_ALPN`] only (in both directions, so two devices
+    /// unlinking each other at once can both answer). Every other protocol stays refused, so no file list leaks.
+    unlinking: Arc<RwLock<HashSet<EndpointId>>>,
+    /// Rung when such a device asks for the file list: it is online now.
+    unlink_wake: Arc<Notify>,
 }
 
 impl EndpointHooks for Gate {
     async fn after_handshake<'a>(&'a self, conn: &'a Connection) -> AfterHandshakeOutcome {
-        if conn.alpn() == PAIR_ALPN || self.allowed.read().map(|a| a.contains(&conn.remote_id())).unwrap_or(false) {
+        let remote = conn.remote_id();
+        let alpn = conn.alpn();
+        if alpn == PAIR_ALPN || self.allowed.read().map(|a| a.contains(&remote)).unwrap_or(false) {
             AfterHandshakeOutcome::accept()
+        } else if self.unlinking.read().map(|u| u.contains(&remote)).unwrap_or(false) {
+            if alpn == UNLINK_ALPN {
+                return AfterHandshakeOutcome::accept();
+            }
+            if alpn == SYNC_ALPN {
+                self.unlink_wake.notify_one();
+            }
+            AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(403), reason: b"not linked".to_vec() }
         } else {
             AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(403), reason: b"not linked".to_vec() }
         }
@@ -459,6 +517,12 @@ struct Inner {
     store: FsStore,
     saved: Mutex<Saved>,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    /// The devices in [`Saved::unlinks`] (see [`Gate`]).
+    unlinking: Arc<RwLock<HashSet<EndpointId>>>,
+    /// Rung by the gate when a device waiting to be told asks for the file list: tell it now.
+    unlink_wake: Arc<Notify>,
+    /// The devices an unlink is being sent to right now, so one try is not started on top of another.
+    unlink_busy: Mutex<HashSet<String>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
     run: Mutex<Run>,
@@ -1277,28 +1341,195 @@ impl Inner {
     fn drop_unconfirmed(&self) {
         let window = self.confirm_window().as_millis() as u64;
         let now = now_ms();
-        let mut gone: Vec<Peer> = Vec::new();
         // Saturating: a link dated after now (the clock went back) has waited no time at all.
-        self.saved.lock().unwrap().peers.retain(|p| {
-            if !p.unconfirmed || now.saturating_sub(p.linked) < window {
-                return true;
-            }
-            gone.push(p.clone());
-            false
-        });
-        if gone.is_empty() {
-            return;
-        }
+        let gone: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| p.unconfirmed && now.saturating_sub(p.linked) >= window).cloned().collect();
         for p in &gone {
-            if let Ok(k) = p.id.parse::<EndpointId>() {
-                self.allowed.write().unwrap().remove(&k);
-            }
-            self.run.lock().unwrap().peers.remove(&p.id);
-            self.secrets.lock().unwrap().remove(&p.id);
-            self.received.lock().unwrap().remove(&p.id);
+            // Told when it next appears too: the other device may hold the link after all (its answer to the code is what was lost).
+            let _ = self.forget_peer(&p.id, true);
             self.note(format!("{} did not finish linking with this device, so the link was removed. Link the two again to connect them.", p.name));
         }
-        let _ = self.save();
+    }
+
+    /// Removes a linked device from everything that lets it in, in one go: the links file (written once, with the waiting unlink
+    /// when `tell` is set, so there is never a removed device without its entry), the keys that may connect, what the round knows
+    /// of it, and its secrets. Files are never touched. The one removal behind `unlink`, [`Inner::drop_unconfirmed`] and the
+    /// message from the device itself (`tell` false there: it already knows). Returns the device as it was linked, if it was.
+    fn forget_peer(&self, id: &str, tell: bool) -> Result<Option<Peer>> {
+        let (gone, written) = {
+            let mut sv = self.saved.lock().unwrap();
+            let gone = sv.peers.iter().find(|p| p.id == id).cloned();
+            sv.peers.retain(|p| p.id != id);
+            if let (true, Some(p)) = (tell, &gone) {
+                sv.unlinks.retain(|u| u.id != id);
+                sv.unlinks.push(Unlink { id: id.to_string(), name: p.name.clone(), link_id: p.link_id.clone(), since: now_ms(), tries: 0, last_try: 0, old: false });
+            }
+            // Under the same lock as the change, so what is on disk is never older than a later save.
+            (gone, write_saved(&self.saved_path(), &sv))
+        };
+        if let Ok(k) = id.parse::<EndpointId>() {
+            if tell && gone.is_some() {
+                self.unlinking.write().unwrap().insert(k);
+            }
+            self.allowed.write().unwrap().remove(&k);
+        }
+        self.run.lock().unwrap().peers.remove(id);
+        self.secrets.lock().unwrap().remove(id);
+        self.received.lock().unwrap().remove(id);
+        written?;
+        Ok(gone)
+    }
+
+    /// Whether `peer` is still one of the linked devices.
+    fn is_linked(&self, peer: &str) -> bool {
+        self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer)
+    }
+
+    /// A time the tests shorten: the milliseconds in `<dir>/<name>`. Always `None` outside the tests.
+    #[cfg(feature = "test-hooks")]
+    fn hook_ms(&self, name: &str) -> Option<u64> {
+        std::fs::read_to_string(self.dir.join(name)).ok().and_then(|v| v.trim().parse().ok())
+    }
+
+    #[cfg(not(feature = "test-hooks"))]
+    fn hook_ms(&self, _name: &str) -> Option<u64> {
+        None
+    }
+
+    /// Drops the waiting unlinks that were not delivered in [`UNLINK_KEEP`], saying so; the other device keeps its entry.
+    fn expire_unlinks(&self) {
+        let keep = self.hook_ms("unlink-keep-ms").unwrap_or(UNLINK_KEEP.as_millis() as u64);
+        let now = now_ms();
+        let mut gone: Vec<Unlink> = Vec::new();
+        {
+            let mut sv = self.saved.lock().unwrap();
+            sv.unlinks.retain(|u| {
+                // Saturating: an unlink dated after now (the clock went back) has waited no time at all.
+                if now.saturating_sub(u.since) < keep {
+                    return true;
+                }
+                gone.push(u.clone());
+                false
+            });
+            if gone.is_empty() {
+                return;
+            }
+            let _ = write_saved(&self.saved_path(), &sv);
+        }
+        for u in gone {
+            if let Ok(k) = u.id.parse::<EndpointId>() {
+                self.unlinking.write().unwrap().remove(&k);
+            }
+            // WORDING QUESTION (owner): draft, not yet approved
+            self.note(format!("{} was not reached within 30 days; it may still show this device.", u.name));
+        }
+    }
+
+    /// Starts a try to tell each device waiting to be told that is due: every round for one that is merely off, and an older
+    /// version only every [`UNLINK_OLD_RETRY`]. Each try runs on its own, so a device that is off holds up nothing.
+    fn send_unlinks(self: &Arc<Self>) {
+        if !self.may_use_network() {
+            return;
+        }
+        self.expire_unlinks();
+        let now = now_ms();
+        let retry = self.hook_ms("unlink-old-retry-ms").unwrap_or(UNLINK_OLD_RETRY.as_millis() as u64);
+        let due: Vec<Unlink> = self.saved.lock().unwrap().unlinks.iter().filter(|u| !u.old || now.saturating_sub(u.last_try) >= retry).cloned().collect();
+        for u in due {
+            if !self.unlink_busy.lock().unwrap().insert(u.id.clone()) {
+                continue;
+            }
+            let me = self.clone();
+            tokio::spawn(async move {
+                me.deliver_unlink(&u).await;
+                me.unlink_busy.lock().unwrap().remove(&u.id);
+            });
+        }
+    }
+
+    /// One try to tell the device in `u`. Whatever it answers about the link ends the wait; an error never ends it, and is never
+    /// taken as the other device agreeing: only the device's own answer is.
+    async fn deliver_unlink(self: &Arc<Self>, u: &Unlink) {
+        let res: Result<String> = async {
+            let id: EndpointId = u.id.parse().map_err(|_| anyhow!("bad device key"))?;
+            let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, UNLINK_ALPN))
+                .await
+                .map_err(|_| anyhow!("not reachable"))?
+                .map_err(|e| anyhow!("not reachable: {e:#}"))?;
+            let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e:#}"))?;
+            send.write_all(&serde_json::to_vec(&json!({"link_id": u.link_id}))?).await.map_err(|e| anyhow!("{e:#}"))?;
+            send.finish().map_err(|e| anyhow!("{e:#}"))?;
+            let bytes = tokio::time::timeout(Duration::from_secs(30), recv.read_to_end(1024))
+                .await
+                .map_err(|_| anyhow!("no answer"))?
+                .map_err(|e| anyhow!("{e:#}"))?;
+            conn.close(0u32.into(), b"done");
+            let reply: Value = serde_json::from_slice(&bytes)?;
+            match (reply.get("ok").and_then(|v| v.as_bool()), reply.get("done").and_then(|v| v.as_str())) {
+                (Some(true), Some(done @ ("unlinked" | "not_linked" | "stale"))) => Ok(done.to_string()),
+                _ => bail!("unexpected answer"),
+            }
+        }
+        .await;
+        let now = now_ms();
+        let delivered = res.is_ok()
+            // The other device's own gate said it holds no link with this one (it never learned of it): the same as "not linked".
+            || res.as_ref().err().map(|e| format!("{e:#}").to_lowercase().contains("not linked")).unwrap_or(false);
+        // The device was reached but has no such protocol: the handshake was refused for want of it (an older version).
+        let old = !delivered
+            && res.as_ref().err().map(|e| {
+                let t = format!("{e:#}").to_lowercase();
+                t.contains("application protocol") || t.contains("no_application_protocol") || t.contains("known protocol") || t.contains("alpn")
+            }).unwrap_or(false);
+        let told = {
+            let mut sv = self.saved.lock().unwrap();
+            // The same unlink, not one made since (a link made again clears it, and an unlink after that is a new one).
+            match sv.unlinks.iter().position(|x| x.id == u.id && x.since == u.since) {
+                None => false,
+                Some(i) if delivered => {
+                    sv.unlinks.remove(i);
+                    let _ = write_saved(&self.saved_path(), &sv);
+                    true
+                }
+                Some(i) => {
+                    let e = &mut sv.unlinks[i];
+                    e.tries += 1;
+                    e.last_try = now;
+                    e.old |= old;
+                    // On disk when it is an older version, so the slow retry survives a restart; otherwise only in memory.
+                    if old {
+                        let _ = write_saved(&self.saved_path(), &sv);
+                    }
+                    false
+                }
+            }
+        };
+        if told {
+            if let Ok(k) = u.id.parse::<EndpointId>() {
+                self.unlinking.write().unwrap().remove(&k);
+            }
+            // WORDING QUESTION (owner): draft, not yet approved
+            self.note(format!("{} was told it is unlinked.", u.name));
+        }
+    }
+
+    /// The message from a linked device that it has unlinked this one. It can only ever unlink itself (`peer` is the key the
+    /// connection proved), and only the link it names: a message for another link (made before this one, or after) changes nothing.
+    fn receive_unlink(&self, peer: &str, link_id: Option<String>) -> &'static str {
+        let Some(p) = self.saved.lock().unwrap().peers.iter().find(|p| p.id == peer).cloned() else { return "not_linked" };
+        if p.link_id != link_id {
+            return "stale";
+        }
+        match self.forget_peer(peer, false) {
+            Ok(_) => {
+                // WORDING QUESTION (owner): draft, not yet approved
+                self.note(format!("{} unlinked this device.", p.name));
+                "unlinked"
+            }
+            Err(e) => {
+                self.note(format!("{} unlinked this device, but the links could not be saved: {e:#}", p.name));
+                "unlinked"
+            }
+        }
     }
 
     /// The link as `peer` last set it, when it should replace the copy here (see [`link_replaces`]).
@@ -1405,11 +1636,19 @@ impl Inner {
             return;
         }
         self.drop_unconfirmed();
+        // Devices unlinked here that are still to be told: tried again with every round (each on its own, so none holds this up).
+        if scope.whole() {
+            self.send_unlinks();
+        }
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
                 break;
+            }
+            // Unlinked since this round began: nothing more of its is taken.
+            if !self.is_linked(&p.id) {
+                continue;
             }
             let res = self.fetch_index(&p.id).await;
             let mut asks = None;
@@ -1447,6 +1686,12 @@ impl Inner {
                     let _ = self.save();
                 }
             }
+            // The entry above was made after the check, so it is looked at again: an unlink that came in between has already removed
+            // what it could find, and this one removes what it did not.
+            if !self.is_linked(&p.id) {
+                self.run.lock().unwrap().peers.remove(&p.id);
+                continue;
+            }
             let Some((link, secrets)) = asks else { continue };
             if let Some(l) = link {
                 self.adopt_link(&p.id, l);
@@ -1463,8 +1708,24 @@ impl Inner {
                 }
             }
         }
+        #[cfg(feature = "test-hooks")]
+        {
+            // A round caught between reading the peers' file lists and applying them: held while `<dir>/hold-apply` exists (it says
+            // so with `<dir>/hold-apply.held`), so a test can unlink a device meanwhile.
+            let hold = self.dir.join("hold-apply");
+            if hold.exists() {
+                let _ = std::fs::write(self.dir.join("hold-apply.held"), b"");
+                while hold.exists() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                let _ = std::fs::remove_file(self.dir.join("hold-apply.held"));
+            }
+        }
         let mut paused = None;
         for p in &peers {
+            if !self.is_linked(&p.id) {
+                continue;
+            }
             let Some(remote) = self.run.lock().unwrap().peers.get(&p.id).filter(|s| s.error.is_none()).and_then(|s| s.index.clone()) else {
                 continue;
             };
@@ -1472,6 +1733,10 @@ impl Inner {
                 let Some(sh) = shares.iter().find(|s| s.id == rs.id) else { continue };
                 if !self.shares_with(&sh.id, &p.id) {
                     continue;
+                }
+                // Unlinked while an earlier folder of this device was applied: nothing more comes from it.
+                if !self.is_linked(&p.id) {
+                    break;
                 }
                 match self.apply(sh, &scope.narrow(&rs.index), &p.id).await {
                     Ok(()) => {}
@@ -1927,7 +2192,7 @@ impl ProtocolHandler for PairProto {
         let reply = if let (true, Some(h)) = (ok, hello) {
             let id = conn.remote_id();
             // Not confirmed until the other device comes back: this answer may never reach it.
-            add_peer(inner, &id.to_string(), &h.name, true);
+            add_peer(inner, &id.to_string(), &h.name, true, Some(link_id_of(&h.token)));
             inner.note(format!("Linked with {}", h.name));
             inner.wake.notify_one();
             json!({"ok": true, "name": inner.saved.lock().unwrap().name})
@@ -1941,16 +2206,57 @@ impl ProtocolHandler for PairProto {
     }
 }
 
-fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
+fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool, link_id: Option<String>) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
+        // A link made again ends any unlink still waiting for this device: it would end the new link's predecessor, not this one.
+        s.unlinks.retain(|u| u.id != id);
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, link_id });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
+        inner.unlinking.write().unwrap().remove(&k);
         inner.allowed.write().unwrap().insert(k);
     }
     let _ = inner.save();
+}
+
+/// Takes the message that a linked device has unlinked this one ([`Inner::receive_unlink`]).
+#[derive(Clone)]
+struct UnlinkProto(Arc<Inner>);
+
+impl std::fmt::Debug for UnlinkProto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UnlinkProto")
+    }
+}
+
+/// What the message says: which link ended (none for a link made before links had ids).
+#[derive(Deserialize)]
+struct UnlinkMessage {
+    #[serde(default)]
+    link_id: Option<String>,
+}
+
+impl ProtocolHandler for UnlinkProto {
+    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+        let (mut send, mut recv) = conn.accept_bi().await?;
+        let bytes = recv.read_to_end(1024).await.map_err(AcceptError::from_err)?;
+        // The key is the one the handshake proved; the message cannot name another device.
+        let peer = conn.remote_id().to_string();
+        let reply = match serde_json::from_slice::<UnlinkMessage>(&bytes) {
+            Ok(m) => {
+                let inner = self.0.clone();
+                let done = tokio::task::spawn_blocking(move || inner.receive_unlink(&peer, m.link_id)).await.map_err(AcceptError::from_err)?;
+                json!({"ok": true, "done": done})
+            }
+            Err(_) => json!({"ok": false, "error": "not an unlink message"}),
+        };
+        send.write_all(reply.to_string().as_bytes()).await.map_err(AcceptError::from_err)?;
+        send.finish()?;
+        conn.closed().await;
+        Ok(())
+    }
 }
 
 /// Sends a linked device this device's index.
@@ -2047,7 +2353,11 @@ impl SyncEngine {
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
 
-        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone()).hooks(Gate { allowed: allowed.clone() });
+        let unlinking: Arc<RwLock<HashSet<EndpointId>>> = Arc::new(RwLock::new(saved.unlinks.iter().filter_map(|u| u.id.parse().ok()).collect()));
+        let unlink_wake = Arc::new(Notify::new());
+        let mut b = Endpoint::builder(presets::Minimal)
+            .secret_key(secret.clone())
+            .hooks(Gate { allowed: allowed.clone(), unlinking: unlinking.clone(), unlink_wake: unlink_wake.clone() });
         b = if !cfg.relay {
             b.relay_mode(RelayMode::Disabled)
         } else if !cfg.relay_urls.is_empty() {
@@ -2103,6 +2413,9 @@ impl SyncEngine {
             store: store.clone(),
             saved: Mutex::new(saved),
             allowed,
+            unlinking,
+            unlink_wake,
+            unlink_busy: Mutex::new(HashSet::new()),
             pairing: Mutex::new(None),
             run: Mutex::new(Run::default()),
             wanted,
@@ -2131,8 +2444,24 @@ impl SyncEngine {
         let router = Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs)
             .accept(PAIR_ALPN, PairProto(inner.clone()))
-            .accept(SYNC_ALPN, SyncProto(inner.clone()))
-            .spawn();
+            .accept(SYNC_ALPN, SyncProto(inner.clone()));
+        // Tests only: a device that does not know the unlink message, as the versions before it do not.
+        #[cfg(feature = "test-hooks")]
+        let old_device = cfg.dir.join("no-unlink-alpn").exists();
+        #[cfg(not(feature = "test-hooks"))]
+        let old_device = false;
+        let router = if old_device { router } else { router.accept(UNLINK_ALPN, UnlinkProto(inner.clone())) }.spawn();
+        // A device waiting to be told that asks for the file list is online now: tell it at once, not at the next round.
+        let again = inner.clone();
+        tokio::spawn(async move {
+            loop {
+                again.unlink_wake.notified().await;
+                if again.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                again.send_unlinks();
+            }
+        });
         inner.note("Started");
         if let Some(n) = saved_note {
             inner.note(n);
@@ -2171,6 +2500,7 @@ impl SyncEngine {
                 let name = inner.saved.lock().unwrap().name.clone();
                 let ep = inner.endpoint.clone();
                 let peer = code.a.id;
+                let link_id = link_id_of(&code.t);
                 // Allowed before connecting: the reply comes back on our own connection, and from now on it may connect to us.
                 inner.allowed.write().unwrap().insert(peer);
                 let reply: Result<Value> = self.rt.block_on(async move {
@@ -2199,21 +2529,17 @@ impl SyncEngine {
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
-                add_peer(inner, &peer.to_string(), &pname, false);
+                add_peer(inner, &peer.to_string(), &pname, false, Some(link_id));
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
             }
             "unlink" => {
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
-                inner.saved.lock().unwrap().peers.retain(|p| p.id != id);
-                if let Ok(k) = id.parse::<EndpointId>() {
-                    inner.allowed.write().unwrap().remove(&k);
-                }
-                inner.run.lock().unwrap().peers.remove(&id);
-                inner.secrets.lock().unwrap().remove(&id);
-                inner.received.lock().unwrap().remove(&id);
-                inner.save()?;
+                // Removed here at once, and the device told: now if it is on, or when it is back (see [`Unlink`]).
+                inner.forget_peer(&id, true)?;
+                let _in_runtime = self.rt.enter();
+                inner.send_unlinks();
                 Ok(json!({"ok": true}))
             }
             "set_link" => {
@@ -2534,6 +2860,50 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
+            #[cfg(feature = "test-hooks")]
+            "test_set_link_id" => {
+                // A link's id as an older version or a link made again would have left it (the tests only).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let lid = s("link_id");
+                {
+                    let mut sv = inner.saved.lock().unwrap();
+                    sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?.link_id = lid;
+                }
+                inner.save()?;
+                Ok(json!({"ok": true}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_drop_peer" => {
+                // A link this device never learned of: removed without a word to the other device (the tests only).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                inner.forget_peer(&id, false)?;
+                Ok(json!({"ok": true}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_unlink_message" => {
+                // Sends the unlink message by hand, to a linked `peer` or to the device showing `code`, naming `link_id` (the tests
+                // only). The device sending it is let through its own gate, as `link` does; the other device's gate is the test.
+                let lid = s("link_id");
+                let to: EndpointAddr = match (s("peer"), s("code")) {
+                    (Some(p), _) => p.parse::<EndpointId>().map_err(|_| anyhow!("bad device key"))?.into(),
+                    (None, Some(c)) => decode_code(&c)?.a,
+                    _ => bail!("peer or code is required"),
+                };
+                inner.allowed.write().unwrap().insert(to.id);
+                let ep = inner.endpoint.clone();
+                self.rt.block_on(async move {
+                    let conn = tokio::time::timeout(Duration::from_secs(30), ep.connect(to, UNLINK_ALPN))
+                        .await
+                        .map_err(|_| anyhow!("not reachable"))?
+                        .map_err(|e| anyhow!("not reachable: {e:#}"))?;
+                    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e:#}"))?;
+                    send.write_all(&serde_json::to_vec(&json!({"link_id": lid}))?).await.map_err(|e| anyhow!("{e:#}"))?;
+                    send.finish().map_err(|e| anyhow!("{e:#}"))?;
+                    let bytes = recv.read_to_end(1024).await.map_err(|e| anyhow!("{e:#}"))?;
+                    conn.close(0u32.into(), b"done");
+                    Ok(serde_json::from_slice::<Value>(&bytes)?)
+                })
+            }
             _ => bail!("unknown method {method}"),
         }
     }
@@ -2566,6 +2936,7 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "link_id": p.link_id,
                 })
             })
             .collect();
@@ -2613,6 +2984,7 @@ impl SyncEngine {
             "free_bytes": Inner::free_bytes(&inner.dir),
             "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()),
             "peers": peers,
+            "unlinks": saved.unlinks.iter().map(|u| json!({"id": u.id, "name": u.name, "since": u.since, "tries": u.tries, "old": u.old})).collect::<Vec<_>>(),
             "shares": shares,
             "offers": offers,
             "transfer": run.transfer,
@@ -2633,6 +3005,7 @@ impl SyncEngine {
     pub fn close(mut self) {
         self.inner.stop.store(true, Ordering::Relaxed);
         self.inner.wake.notify_one();
+        self.inner.unlink_wake.notify_one();
         let router = self.router.take();
         let store = self.inner.store.clone();
         self.rt.block_on(async move {
@@ -2738,7 +3111,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, link_id: None }
     }
 
     #[test]
