@@ -48,3 +48,43 @@ impl Layers {
         Ok(serde_json::json!({"port": s.port, "base_url": s.base_url(), "tilejson": format!("{}/layers/{{id}}/tilejson.json", s.base_url()), "online": self.inner.is_online()}))
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::io::AsRawFd;
+    use std::time::Duration;
+
+    fn answers(port: u16) -> bool {
+        ureq::get(&format!("http://127.0.0.1:{port}/health")).timeout(Duration::from_secs(2)).call().map(|r| r.status() == 200).unwrap_or(false)
+    }
+
+    /// iOS takes a suspended app's listening socket away (Apple TN2277): the server must not keep handing out a dead port.
+    #[test]
+    fn a_tile_server_whose_listener_died_is_started_again_on_the_next_serve() {
+        let dir = std::env::temp_dir().join(format!("cache-layers-relisten-{}", std::process::id()));
+        let cfg = LayersCfg { dir: dir.to_string_lossy().into_owned(), defs_dirs: vec![], catalogue_urls: vec![], cache_max_bytes: 1 << 20, online: false };
+        let layers = Layers::new(cfg).unwrap();
+        let port = |v: serde_json::Value| v["port"].as_u64().unwrap() as u16;
+        let first = port(layers.serve().unwrap());
+        assert!(answers(first));
+        assert_eq!(port(layers.serve().unwrap()), first, "a live server is kept");
+        {
+            let g = layers.server.lock().unwrap();
+            // SAFETY: shuts down a socket this test owns a handle on; the descriptor stays open.
+            unsafe { libc::shutdown(g.as_ref().unwrap().listener.as_raw_fd(), libc::SHUT_RDWR) };
+        }
+        for _ in 0..100 {
+            if !answers(first) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!answers(first), "the old port no longer answers");
+        let second = port(layers.serve().unwrap());
+        assert!(answers(second), "the next serve gives a port that answers");
+        assert_eq!(port(layers.serve().unwrap()), second, "and keeps it");
+        drop(layers);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

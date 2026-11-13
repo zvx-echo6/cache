@@ -25,6 +25,9 @@ pub struct TileServer {
     server: Arc<Tiny>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
+    /// A second handle on the listening socket, so a test can take the socket away as iOS does.
+    #[cfg(test)]
+    pub(crate) listener: std::net::TcpListener,
 }
 
 const WORKERS: usize = 8;
@@ -36,7 +39,11 @@ const RETRY_OFFLINE: &str = "5";
 
 impl TileServer {
     pub fn start(inner: Arc<Inner>) -> Result<TileServer> {
-        let server = Arc::new(Tiny::http("127.0.0.1:0").map_err(|e| Error::io(format!("cannot start the tile server: {e}")))?);
+        let cannot = |e: &dyn std::fmt::Display| Error::io(format!("cannot start the tile server: {e}"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| cannot(&e))?;
+        #[cfg(test)]
+        let kept = listener.try_clone().map_err(|e| cannot(&e))?;
+        let server = Arc::new(Tiny::from_listener(listener, None).map_err(|e| cannot(&e))?);
         let port = server.server_addr().to_ip().map(|a| a.port()).ok_or_else(|| Error::internal("no port"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let sched = Sched::new(inner.clone(), format!("http://127.0.0.1:{port}"));
@@ -61,7 +68,14 @@ impl TileServer {
                     .map_err(|e| Error::internal(format!("thread: {e}")))?,
             );
         }
-        Ok(TileServer { port, server, stop, threads })
+        Ok(TileServer {
+            port,
+            server,
+            stop,
+            threads,
+            #[cfg(test)]
+            listener: kept,
+        })
     }
 
     pub fn base_url(&self) -> String {
