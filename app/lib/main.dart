@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +18,7 @@ import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
 import 'car/car_pins.dart';
+import 'car/car_places.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -912,6 +913,8 @@ class _CacheAppState extends State<CacheApp> {
     };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
+    // A core call that took over two seconds is logged with its name, its wait in the core's queue and its run (no arguments).
+    CoreCallTimes.onSlow = (op, queued, ran) => logInfo(CoreCallTimes.line(op, queued, ran));
     sources.embedding = searchModel;
     // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
     if (plat.isWeb) unawaited(searchModel.refreshServer());
@@ -1191,6 +1194,8 @@ class _CacheAppState extends State<CacheApp> {
         carries: _phoneDrive.extras,
         settings: app,
         ready: () => sources.whenCoreReady(),
+        // Saved places and the place search on a handle of their own: not behind the main core's library work.
+        places: CoreCarPlaces(config: sources.whenConfigReady),
         // The phone map's pins (notebook places, saved places, shown repeater lists) on the car's map.
         pins: CarPins.of(notebooks: notebooks, userLayers: userLayers, maps: maps),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).

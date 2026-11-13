@@ -130,6 +130,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return _retrying ?? _coreOpened.future;
   }
 
+  final Completer<Map<String, dynamic>?> _configBuilt = Completer<Map<String, dynamic>?>();
+
+  /// The sections of the cs_open config besides the sources ([openedExtra]) once they are built, before the core opens its
+  /// sources (the car's own places handle, car/car_places.dart, opens with some of them); null when they could not be built.
+  Future<Map<String, dynamic>?> whenConfigReady() => _configBuilt.future;
+
   /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
   /// starts once the core is up waits on this, so a core opened by Try again starts it too.
   Future<SearchCore> whenCoreOpen() => _everOpened.future;
@@ -189,6 +195,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
       final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
+      if (!_configBuilt.isCompleted) _configBuilt.complete(extra);
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -196,6 +203,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       );
     } catch (e, stack) {
       logError('Search core startup failed', error: e, stack: stack);
+      if (!_configBuilt.isCompleted) _configBuilt.complete(null);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';

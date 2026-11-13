@@ -36,8 +36,17 @@ class IsolateTransport implements CoreTransport {
   int _nextId = 1;
   final Map<int, Completer<dynamic>> _pending = {};
 
+  /// Each pending call's op and the clock started when it was sent ([CoreCallTimes]).
+  final Map<int, (String, Stopwatch)> _sent = {};
+
   void _onReply(Map m) {
-    final c = _pending.remove(m['id'] as int);
+    final id = m['id'] as int;
+    final sent = _sent.remove(id);
+    if (sent != null) {
+      final (op, clock) = sent;
+      CoreCallTimes.answered(op, clock.elapsed, Duration(microseconds: (m['runUs'] as int?) ?? 0));
+    }
+    final c = _pending.remove(id);
     if (c == null) return;
     final err = m['error'];
     if (err is List) {
@@ -52,6 +61,7 @@ class IsolateTransport implements CoreTransport {
       c.completeError(e);
     }
     _pending.clear();
+    _sent.clear();
   }
 
   @override
@@ -59,6 +69,7 @@ class IsolateTransport implements CoreTransport {
     final id = _nextId++;
     final c = Completer<dynamic>();
     _pending[id] = c;
+    _sent[id] = (op, Stopwatch()..start());
     _toWorker.send({'id': id, 'op': op, 'args': args});
     return c.future;
   }
@@ -82,13 +93,15 @@ void _workerMain(List<dynamic> init) {
     final msg = m as Map;
     final id = msg['id'] as int;
     final a = (msg['args'] as Map).cast<String, dynamic>();
+    // How long the call ran here; the rest of its time on the main side was the wait in this queue.
+    final ran = Stopwatch()..start();
     try {
       final result = dispatcher.handle(msg['op'] as String, a);
-      toMain.send({'id': id, 'result': result});
+      toMain.send({'id': id, 'result': result, 'runUs': ran.elapsedMicroseconds});
     } on CacheSearchException catch (e) {
-      toMain.send({'id': id, 'error': [e.code, e.message]});
+      toMain.send({'id': id, 'error': [e.code, e.message], 'runUs': ran.elapsedMicroseconds});
     } catch (e) {
-      toMain.send({'id': id, 'error': ['internal', e.toString()]});
+      toMain.send({'id': id, 'error': ['internal', e.toString()], 'runUs': ran.elapsedMicroseconds});
     }
   });
 }
