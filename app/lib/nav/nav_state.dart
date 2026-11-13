@@ -90,6 +90,8 @@ class NavState extends ChangeNotifier {
     this.searchDebounce = const Duration(milliseconds: 220),
     this.meaningDebounce = const Duration(milliseconds: 700),
     this.rerouteCooldown = const Duration(seconds: 8),
+    this.guidanceLogEvery,
+    this.rerouteTimeout = const Duration(seconds: 25),
   }) : _clock = clock ?? DateTime.now;
 
   final MapBackend backend;
@@ -100,6 +102,13 @@ class NavState extends ChangeNotifier {
   final Duration searchDebounce;
   final Duration meaningDebounce;
   final Duration rerouteCooldown;
+
+  /// How often guidance writes its one line to the app log (fixes, the last progress answer, failures) while it runs; the
+  /// app gives one minute. Null: no timer, only the line written when guidance lets go of the position service.
+  final Duration? guidanceLogEvery;
+
+  /// How long a re-route waits for the core before it is given up (see [_reroute]).
+  final Duration rerouteTimeout;
   final DateTime Function() _clock;
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
@@ -281,7 +290,9 @@ class NavState extends ChangeNotifier {
     _passedStops
       ..clear()
       ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    _rerouteGen++;
     rerouting = true;
+    _reroutingSince = _clock();
     _lastReroute = _clock();
     notifyListeners();
     var added = false;
@@ -314,6 +325,7 @@ class NavState extends ChangeNotifier {
           ..addAll(beforePassed);
       }
       rerouting = false;
+      _reroutingSince = null;
       notifyListeners();
     }
     return added;
@@ -701,7 +713,9 @@ class NavState extends ChangeNotifier {
     if (r == null || phase != NavPhase.previewing) return;
     phase = NavPhase.guiding;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     progress = null;
     _sendRoute = true;
     _routeStarted = false;
@@ -719,8 +733,9 @@ class NavState extends ChangeNotifier {
       location.holdStream(false);
       return;
     }
-    _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
+    _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix, onError: _onFixError);
     _simulated = simulatedDrive?.call() ?? false;
+    _startGuidanceLog();
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
     if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
@@ -730,9 +745,82 @@ class NavState extends ChangeNotifier {
   bool _simulated = false;
 
   void _onFix(Fix f) {
+    _diag.fixes++;
+    _diag.lastFix = f;
     location.publish(f);
     unawaited(_handleFix(f));
   }
+
+  /// The position stream reported an error. Before, nothing listened for it; it is counted and logged, and the stream goes on.
+  void _onFixError(Object e) {
+    _diag.streamErrors++;
+    _diag.streamFailures.failed('Guidance: the position stream reported an error', e, _clock());
+  }
+
+  // ---- the guidance log ----------------------------------------------------------------------------------
+  // One line a minute while guidance runs, so a drive in the log says whether fixes came, what the core answered and what
+  // failed. These are log lines only; nothing here changes what guidance does.
+
+  final _GuidanceDiag _diag = _GuidanceDiag();
+  Timer? _guidanceLogTimer;
+
+  void _startGuidanceLog() {
+    _guidanceLogTimer?.cancel();
+    _diag.reset(_clock());
+    logInfo('Guidance: started, waiting for fixes from the position service${_simulated ? ' (a simulated drive)' : ''}');
+    final every = guidanceLogEvery;
+    if (every != null) _guidanceLogTimer = Timer.periodic(every, (_) => logGuidanceMinute());
+    _guidanceLogOn = true;
+  }
+
+  bool _guidanceLogOn = false;
+
+  void _stopGuidanceLog() {
+    _guidanceLogTimer?.cancel();
+    _guidanceLogTimer = null;
+    if (!_guidanceLogOn) return;
+    _guidanceLogOn = false;
+    logGuidanceMinute();
+  }
+
+  /// Writes the guidance line for the time since the last one and starts counting again. The timer calls it once every
+  /// [guidanceLogEvery] while guidance runs, and once more when guidance lets go of the position service.
+  @visibleForTesting
+  void logGuidanceMinute() {
+    final now = _clock();
+    final d = _diag;
+    final secs = now.difference(d.since).inSeconds;
+    final f = d.lastFix ?? lastFix;
+    final fixPart = f == null
+        ? 'no fix yet'
+        : 'last fix ${_age(now, f.time)} old, accuracy ${f.accuracyM.round()} m';
+    final p = d.lastProgress;
+    final progressPart = p == null
+        ? 'no progress answer'
+        : 'last progress ${_age(now, d.lastProgressAt!)} old: on route ${p.onRoute}, off route ${p.offRoute} '
+            '(${p.offRouteCount} fixes off), ${p.offsetM.round()} m from the route, ${p.distanceAlongM.round()} of ${p.totalM.round()} m along';
+    final parts = <String>[
+      '${d.fixes} fixes in ${secs}s',
+      fixPart,
+      '${d.progressCalls} progress calls',
+      progressPart,
+      '${d.progressErrors} progress errors${d.firstProgressError == null ? '' : ' (first: ${d.firstProgressError})'}',
+      if (d.streamErrors > 0) '${d.streamErrors} position stream errors',
+      if (d.offRouteAnswers > 0) '${d.offRouteAnswers} off-route answers',
+      if (d.reroutesSkipped > 0) '${d.reroutesSkipped} re-routes skipped (one already running or within the cooldown)',
+      if (d.rerouteFailures > 0) '${d.rerouteFailures} re-routes failed',
+      if (rerouting && _reroutingSince != null) 'a new route has been worked out for ${now.difference(_reroutingSince!).inSeconds}s',
+    ];
+    logInfo('Guidance: ${parts.join(', ')}');
+    d.next(now);
+  }
+
+  static String _age(DateTime now, DateTime t) {
+    final s = now.difference(t).inMilliseconds / 1000;
+    return '${s.toStringAsFixed(s.abs() < 10 ? 1 : 0)} s';
+  }
+
+  DateTime? _reroutingSince;
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
   Future<void> _handleFix(Fix f) async {
@@ -764,9 +852,13 @@ class NavState extends ChangeNotifier {
   Future<void> _progressFor(Fix f) async {
     final r = route;
     if (r == null || !guiding) return;
+    _diag.progressCalls++;
     try {
       final p = await backend.progress(r, lat: f.lat, lon: f.lon, accuracyM: f.accuracyM, now: _clock(), sendRoute: _sendRoute);
       _sendRoute = false;
+      _diag.lastProgress = p;
+      _diag.lastProgressAt = _clock();
+      if (p.offRoute) _diag.offRouteAnswers++;
       if (!guiding || arrived || route?.routeId != r.routeId) return;
       progress = p;
       // The stops the core has seen reached along this route are passed, so the list of stops ahead (the route panel, the
@@ -797,23 +889,59 @@ class NavState extends ChangeNotifier {
     } catch (e) {
       // A bad update is skipped; the next fix tries again. A core that lost the route is sent it again.
       if (e is CacheSearchException && e.code == 'not_found') _sendRoute = true;
+      // It is counted for the guidance line and logged (the first, then at most once a minute): before, a drive whose every
+      // update failed left nothing in the log.
+      _diag.progressErrors++;
+      _diag.firstProgressError ??= _GuidanceDiag.describe(e);
+      _diag.progressFailures.failed('Guidance: a progress update failed', e, _clock());
     }
   }
 
+  /// Counts re-route requests: an answer is applied only by the request that is still the newest ([_reroute]). Start, End and
+  /// Add stop while guiding move it on too, so an answer from before them is never applied after them.
+  int _rerouteGen = 0;
+
   Future<void> _reroute(Fix f) async {
     final now = _clock();
-    if (rerouting || (_lastReroute != null && now.difference(_lastReroute!) < rerouteCooldown)) return;
+    if (rerouting) {
+      _diag.reroutesSkipped++;
+      final since = _reroutingSince;
+      logInfo('Guidance: off the route, re-route skipped: one is already being worked out'
+          '${since == null ? '' : ' (for ${now.difference(since).inSeconds}s)'}');
+      return;
+    }
+    final last = _lastReroute;
+    if (last != null && now.difference(last) < rerouteCooldown) {
+      _diag.reroutesSkipped++;
+      logInfo('Guidance: off the route, re-route skipped: ${now.difference(last).inSeconds}s since the last one '
+          '(it waits ${rerouteCooldown.inSeconds}s)');
+      return;
+    }
     final old = route;
     final to = selected;
-    if (old == null || to == null) return;
+    if (old == null || to == null) {
+      _diag.rerouteFailures++;
+      logError('Guidance: off the route, but there is ${old == null ? 'no route' : 'no destination'} to work out a new one for');
+      return;
+    }
+    final gen = ++_rerouteGen;
     rerouting = true;
+    _reroutingSince = now;
     _lastReroute = now;
     notifyListeners();
     _say('Rerouting.');
     try {
-      final r = await backend.route(
-          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
-      if (!guiding) return;
+      // The core is one queue: a route can wait behind a slow call (opening the core, a model loading). The limit is long enough
+      // for that; past it this request is given up, the next off-route fix asks again, and its answer, if it still comes, is
+      // never used.
+      final r = await backend
+          .route(
+              from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
+          .timeout(rerouteTimeout);
+      if (gen != _rerouteGen || !guiding || !identical(selected, to)) {
+        logInfo('Guidance: a new route came after guidance had moved on, it is not used');
+        return;
+      }
       if (r.ok) {
         routes = [r];
         routeIndex = 0;
@@ -825,13 +953,29 @@ class NavState extends ChangeNotifier {
         _routeStops = _aheadIndexes();
         logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, no new route (${r.errors.isEmpty ? 'no error code' : r.errors.first.code})');
         _events.add(NavNotice(routeErrorText(r)));
       }
-    } catch (_) {
-      _events.add(const NavNotice('Could not work out a new route'));
+    } on TimeoutException {
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, no new route within ${rerouteTimeout.inSeconds}s; the next fix off the route asks again');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
+    } catch (e) {
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, working out a new route failed: ${_GuidanceDiag.describe(e)}');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
     } finally {
-      rerouting = false;
-      notifyListeners();
+      // Only the newest request lets go of the flag: one that was overtaken (a new drive, Add stop) leaves the newer one's.
+      if (gen == _rerouteGen) {
+        rerouting = false;
+        _reroutingSince = null;
+        notifyListeners();
+      }
     }
   }
 
@@ -849,6 +993,7 @@ class NavState extends ChangeNotifier {
   /// lock) and the hold on the map's own position stream. The guidance fix is forgotten with them, so [here] is the phone's
   /// own position again. Calling it again is harmless.
   Future<void> _stopTracking() async {
+    _stopGuidanceLog();
     final sub = _fixSub;
     _fixSub = null;
     _pendingFix = null;
@@ -885,7 +1030,9 @@ class NavState extends ChangeNotifier {
     stops = const [];
     progress = null;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
@@ -907,12 +1054,89 @@ class NavState extends ChangeNotifier {
     _disposed = true;
     _searchTimer?.cancel();
     _meaningTimer?.cancel();
+    _guidanceLogTimer?.cancel();
+    _guidanceLogTimer = null;
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);
     lastFix = null;
     _events.close();
     super.dispose();
+  }
+}
+
+/// What guidance counts between two of its log lines ([NavState.logGuidanceMinute]).
+class _GuidanceDiag {
+  DateTime since = DateTime.fromMillisecondsSinceEpoch(0);
+  int fixes = 0;
+  int progressCalls = 0;
+  int progressErrors = 0;
+  String? firstProgressError;
+  int streamErrors = 0;
+  int offRouteAnswers = 0;
+  int reroutesSkipped = 0;
+  int rerouteFailures = 0;
+
+  /// Kept from one line to the next: their age says how long ago the last one came.
+  Fix? lastFix;
+  MapProgress? lastProgress;
+  DateTime? lastProgressAt;
+
+  final _FailureLog progressFailures = _FailureLog();
+  final _FailureLog streamFailures = _FailureLog();
+
+  /// A new drive.
+  void reset(DateTime now) {
+    next(now);
+    lastFix = null;
+    lastProgress = null;
+    lastProgressAt = null;
+    progressFailures.reset();
+    streamFailures.reset();
+  }
+
+  /// The counts start again after a line.
+  void next(DateTime now) {
+    since = now;
+    fixes = 0;
+    progressCalls = 0;
+    progressErrors = 0;
+    firstProgressError = null;
+    streamErrors = 0;
+    offRouteAnswers = 0;
+    reroutesSkipped = 0;
+    rerouteFailures = 0;
+  }
+
+  /// An error in one line of the log: the core's code and message, or the error's own text, at most 200 characters.
+  static String describe(Object e) {
+    final s = (e is CacheSearchException ? '${e.code}: ${e.message}' : '$e').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s.length <= 200 ? s : '${s.substring(0, 200)}...';
+  }
+}
+
+/// Logs a failure that can repeat with every fix: the first one, then at most one line a minute, saying how many were not
+/// logged in between.
+class _FailureLog {
+  static const Duration every = Duration(minutes: 1);
+  DateTime? _lastAt;
+  int _notLogged = 0;
+
+  void reset() {
+    _lastAt = null;
+    _notLogged = 0;
+  }
+
+  void failed(String what, Object? error, DateTime now) {
+    final last = _lastAt;
+    if (last != null && now.difference(last) < every) {
+      _notLogged++;
+      return;
+    }
+    final more = _notLogged > 0 ? ' ($_notLogged more since the last such line)' : '';
+    logError('$what$more${error == null ? '' : ': ${_GuidanceDiag.describe(error)}'}');
+    _lastAt = now;
+    _notLogged = 0;
   }
 }
 

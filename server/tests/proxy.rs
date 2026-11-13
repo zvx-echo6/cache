@@ -52,6 +52,7 @@ async fn rig(tag: &str, sources: Option<&str>) -> Rig {
     }
     let mut cfg = HelperConfig::new(PathBuf::from(env!("CARGO_BIN_EXE_fake-helper")), PathBuf::from("libfake"), dir.0.join("sources.json"));
     cfg.app_dirs = Some((PathBuf::from("/app/support"), PathBuf::from("/app/docs")));
+    cfg.data_dir = Some(PathBuf::from("/var/lib/cache-app"));
     cfg.shim = PathBuf::from("/opt/cache/lib/libvalhalla_shim.so");
     cfg.backoff = vec![Duration::from_millis(50), Duration::from_millis(100)];
     cfg.ready_timeout = Duration::from_secs(10);
@@ -129,8 +130,36 @@ async fn no_sources_file_opens_with_null_sources_and_the_helper_gets_the_app_fol
     assert_eq!(open_args(&rig.log()[0]), json!({"sources": null}));
     assert_eq!(
         rig.core(r#"{"op":"env","args":{}}"#).await,
-        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs", "shim": "/opt/cache/lib/libvalhalla_shim.so"}}))
+        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs", "shim": "/opt/cache/lib/libvalhalla_shim.so", "data": "/var/lib/cache-app"}}))
     );
+    rig.app.helper.as_ref().unwrap().shutdown().await;
+}
+
+#[tokio::test]
+async fn the_sharing_ops_need_a_session_and_are_forwarded_to_the_helper() {
+    let _g = LOCK.lock().await;
+    let rig = rig("sharing", None).await;
+    let ops = [
+        r#"{"op":"sharing.state","args":{}}"#,
+        r#"{"op":"sharing.setup","args":{}}"#,
+        r#"{"op":"sharing.set_kind","args":{"kind":"library","on":true}}"#,
+        r#"{"op":"sharing.set_item","args":{"kind":"library","key":"library/a.zim","on":false}}"#,
+        r#"{"op":"sharing.link_start","args":{"code":"x"}}"#,
+        r#"{"op":"sharing.call","args":{"method":"link_code","args":{}}}"#,
+    ];
+    // without a session none of them reaches the helper
+    for body in ops {
+        let r = route(&rig.app, "POST", "/api/core", None, body.as_bytes()).await;
+        assert_eq!(r.status, 401, "{body}");
+    }
+    assert!(rig.log().iter().all(|l| l.starts_with("open ")), "{:?}", rig.log());
+    // signed in, each one is forwarded as it came (the helper decides what a browser may do)
+    for body in ops {
+        assert_eq!(rig.core(body).await.0, 200, "{body}");
+    }
+    let log = rig.log();
+    let sent: Vec<&str> = log.iter().filter(|l| l.starts_with("sharing.")).map(|l| l.split(' ').next().unwrap()).collect();
+    assert_eq!(sent, ["sharing.state", "sharing.setup", "sharing.set_kind", "sharing.set_item", "sharing.link_start", "sharing.call"], "{log:?}");
     rig.app.helper.as_ref().unwrap().shutdown().await;
 }
 

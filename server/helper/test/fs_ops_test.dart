@@ -156,14 +156,14 @@ void main() {
     expect(fs.handles('fs.roots'), isTrue);
   });
 
-  test('over the line protocol: bytes travel as {"\$bytes"}, errors carry the code', () {
+  test('over the line protocol: bytes travel as {"\$bytes"}, errors carry the code', () async {
     final d = CoreDispatcher(() => FakeNative());
-    String run(Map<String, dynamic> req) => handleLine(jsonEncode(req), d, handlers: [fs]);
-    var r = jsonDecode(run({'id': 1, 'op': 'fs.write', 'args': {'root': 'docs', 'path': 'p', 'bytes': {r'$bytes': base64Encode([9, 8])}}}));
+    Future<String> run(Map<String, dynamic> req) => handleLine(jsonEncode(req), d, handlers: [fs]);
+    var r = jsonDecode(await run({'id': 1, 'op': 'fs.write', 'args': {'root': 'docs', 'path': 'p', 'bytes': {r'$bytes': base64Encode([9, 8])}}}));
     expect(r, {'id': 1, 'ok': true, 'result': null});
-    r = jsonDecode(run({'id': 2, 'op': 'fs.read', 'args': {'root': 'docs', 'path': 'p'}}));
+    r = jsonDecode(await run({'id': 2, 'op': 'fs.read', 'args': {'root': 'docs', 'path': 'p'}}));
     expect(r['result'], {r'$bytes': base64Encode([9, 8])});
-    r = jsonDecode(run({'id': 3, 'op': 'fs.read', 'args': {'root': 'docs', 'path': '../p'}}));
+    r = jsonDecode(await run({'id': 3, 'op': 'fs.read', 'args': {'root': 'docs', 'path': '../p'}}));
     expect(r['ok'], isFalse);
     expect(r['error']['code'], 'bad_path');
   });

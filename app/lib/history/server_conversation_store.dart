@@ -17,6 +17,11 @@ import 'memory_conversation_store.dart';
 /// write is made there at once and also queued as an op for the server; the queue is sent in order and retried when the server
 /// cannot be reached. Ids are made here (time based), so `create` stays synchronous. Every few seconds [refresh] asks the server
 /// what changed and takes in what other tabs did, except for a conversation this tab has unsent or just-sent writes for.
+
+/// A position later than any change, for asking the server whether it answers without being sent anything. 2^52 written out:
+/// `1 << 52` is 0 in a browser, where shifts work on 32 bits, and asked for the whole history instead.
+const int kSinceFarFuture = 4503599627370496;
+
 class ServerConversationStore implements ConversationStore {
   ServerConversationStore(this._t, {DateTime Function()? now, Random? random, this.onChanged, void Function(String message)? log, Duration? retryDelay})
       : _now = now ?? DateTime.now,
@@ -132,7 +137,7 @@ class ServerConversationStore implements ConversationStore {
             if (++_internalFails >= maxInternalRetries) {
               var reachable = true;
               try {
-                await _t.call('history.sync', {'since': 1 << 52});
+                await _t.call('history.sync', {'since': kSinceFarFuture});
               } catch (_) {
                 reachable = false;
               }

@@ -23,27 +23,7 @@ import 'problem_words.dart';
 import 'region_catalogue.dart';
 import 'regions_core.dart';
 
-/// What the region engine's folder (the `regions` shared folder) holds that each device makes for itself, as sync patterns (see
-/// DataKind.notShared), so it never syncs. The downloaded parts all sync: regions.sqlite (the region records, tile lists and
-/// meta) with its -wal, `tiles/<build>/` (routing tiles, streamed ones among them: they share the folder), `places/<build>.sqlite`
-/// (the merged places, the only copy of the places tiles: each is merged in and its download deleted), `places/<build>/common.sqlite`,
-/// places/CURRENT and offroad/. Left out:
-/// - `index`, `places/index`: where the tile indexes were kept before. They now live, and sync, in the indexes folder as
-///   snapshots (`region-index/<build>/`, `places-index/<build>/`; search/indexes_share.dart): this version moves what it finds
-///   here into it, and only Cache 1.0.29 and earlier still write here, so these stay out of the regions share (a file a newer
-///   device moved away would otherwise go out as a delete and remove an older device's copy).
-/// - `**/*-shm`: SQLite's shared-memory index of a WAL file, which also holds the locks of the connections on this device; SQLite
-///   rebuilds it from the -wal when it opens the database.
-/// - `**/*-journal`: a rollback journal, this device's alone (a copied one would be played back into another device's database).
-const List<String> kRegionsNotShared = ['index', 'places/index', '**/*-shm', '**/*-journal'];
-
-/// What the layer engine's folder (the `maps` shared folder) holds that each device makes for itself, as sync patterns. The
-/// downloaded map layers sync: `store/<layer>.sqlite` (every tile downloaded for offline use, and the areas) with its -wal,
-/// catalogue.json and latest.json (the layer definitions those tiles belong to), user-defs/. Left out:
-/// - `tiles.sqlite*`: the cache of tiles viewed online (size-capped, least recently used first), with its -wal and -shm.
-/// - `tilejson`: TileJSON documents as fetched from each source, kept a day.
-/// - `**/*-shm`, `**/*-journal`: as for [kRegionsNotShared].
-const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'];
+export '../sharing/share_rules.dart' show kRegionsNotShared, kMapLayersNotShared;
 
 /// The file next to the core's region folder where the app keeps what each region holds (its parts and the map areas it
 /// downloaded).

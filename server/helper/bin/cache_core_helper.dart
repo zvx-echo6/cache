@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -14,11 +15,13 @@ import 'pdf_zim_indexer.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'regions_ops.dart';
+import 'sharing_host.dart';
 import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
 /// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
-/// the core's config work on them. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
+/// the core's config work on them. CACHE_DATA is the server's data folder: with it the helper runs the sharing host (bin/sharing_host.dart:
+/// the sync engine, on `<data>/sync`), which starts here when sharing was set up and stops when stdin ends. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
 Future<void> main() async {
   final path = Platform.environment['CACHE_CORE_LIB'];
@@ -69,6 +72,13 @@ Future<void> main() async {
     open: (c) => FfiRegionsEngine.open(lib, c),
     log: log,
   );
+  final data = dirs.data;
+  if (data == null) log('CACHE_DATA is not set: no sharing host');
+  final SharingHost? sharing = data == null
+      ? null
+      : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
+  // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
+  if (sharing != null) unawaited(sharing.init());
   await serveLines(
     stdin,
     (line) async {
@@ -91,8 +101,10 @@ Future<void> main() async {
       VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve),
       HistoryOps(Directory('${dirs.support.path}/history'), log: log),
       keys,
+      if (sharing != null) SharingOps(sharing),
     ],
     hook: keys,
+    onEnd: () => sharing?.stop(),
   );
   indexer.stop();
   liveTimer.stop();

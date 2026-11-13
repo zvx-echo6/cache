@@ -20,6 +20,7 @@ import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
+import 'platform/byte_units.dart';
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -401,7 +402,7 @@ class AppState extends ChangeNotifier {
       await _unloading;
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
-      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
+      logInfo('Model loads (${mbOf(entry.size)} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}; ${mappedFileSummary(entry.path) ?? ''}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
@@ -588,10 +589,10 @@ class AppState extends ChangeNotifier {
       final room = await memory();
       final need = room == null ? null : await needOf(r);
       if (room != null && need != null && need.total > room.room) {
-        logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        logInfo('Model not loaded on wake: it needs about ${mbOf(need.total)} MB, $room');
         heldForMemory = true;
-        heldNeedMb = need.total >> 20;
-        heldFreeMb = room.room >> 20;
+        heldNeedMb = mbOf(need.total);
+        heldFreeMb = mbOf(room.room);
         notifyListeners();
         return;
       }

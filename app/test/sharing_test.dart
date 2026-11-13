@@ -100,6 +100,30 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('the Mainline DHT is switched off on a phone only', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final configs = <bool, Map<String, Object?>>{};
+    for (final phone in [true, false]) {
+      final s = SharingState(
+        policy: r.policy,
+        supportDir: () async => r.dir,
+        kinds: const [],
+        phone: phone,
+        opener: (c) async {
+          configs[phone] = c;
+          return r.sync;
+        },
+      );
+      await tester.runAsync(s.setUp);
+      s.dispose();
+    }
+    expect(configs[true]!['dht'], false);
+    // Elsewhere there is no key: the engine's default (on) stands.
+    expect(configs[false]!.containsKey('dht'), false);
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
+
   testWidgets('the search indexes are always shared once sharing is set up, and fetch only what this device holds', (tester) async {
     final r = await SettingsRig.create(tester);
     final configs = <Map<String, Object?>>[];

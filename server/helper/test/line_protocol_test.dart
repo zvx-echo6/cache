@@ -88,7 +88,7 @@ void main() {
     final d = CoreDispatcher(() => fake);
     final client = MockClient((req) async {
       final body = jsonDecode(req.body) as Map<String, dynamic>;
-      final reply = jsonDecode(handleLine(jsonEncode({'id': 1, ...body}), d)) as Map<String, dynamic>;
+      final reply = jsonDecode(await handleLine(jsonEncode({'id': 1, ...body}), d)) as Map<String, dynamic>;
       reply.remove('id');
       return http.Response(jsonEncode(reply), 200, headers: {'content-type': 'application/json'});
     });
@@ -104,4 +104,43 @@ void main() {
     );
     await t.close();
   });
+
+  test('a handler that waits (returns a Future) is answered in order, its errors come back as errors, and onEnd runs before close', () async {
+    final fake = _fake();
+    final h = _SlowHandler();
+    final out = <String>[];
+    var ended = '';
+    await serveLines(
+      Stream.value(utf8.encode('${[_req(1, 'slow.wait'), _req(2, 'slow.fail'), _req(3, 'version')].map(jsonEncode).join('\n')}\n')),
+      out.add,
+      CoreDispatcher(() => fake),
+      handlers: [h],
+      onEnd: () => ended = fake.calls.any((c) => c.startsWith('close')) ? 'after close' : 'before close',
+    );
+    final r = [for (final l in out) jsonDecode(l) as Map<String, dynamic>];
+    expect(r[1], {'id': 1, 'ok': true, 'result': 'waited'});
+    expect(r[2]['error'], {'code': 'busy', 'message': 'try later'});
+    expect(r[3]['id'], 3, reason: 'the next request waits for the one before');
+    expect(h.order, ['wait start', 'wait end', 'fail']);
+    expect(ended, 'before close', reason: 'onEnd ran before the core was closed');
+  });
+}
+
+class _SlowHandler implements OpHandler {
+  final List<String> order = [];
+
+  @override
+  bool handles(String op) => op.startsWith('slow.');
+
+  @override
+  FutureOr<Object?> handle(String op, Map<String, dynamic> args) async {
+    if (op == 'slow.wait') {
+      order.add('wait start');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      order.add('wait end');
+      return 'waited';
+    }
+    order.add('fail');
+    throw const CacheSearchException('busy', 'try later');
+  }
 }

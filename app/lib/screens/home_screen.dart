@@ -148,6 +148,22 @@ class _HomeScreenState extends State<HomeScreen> {
     _changed('');
   }
 
+  /// Enter in the search box: the search runs now (not after the typing pause) and the keyboard closes; the text and the results
+  /// stay.
+  void _submit(String text) {
+    _focus.unfocus();
+    _debounce?.cancel();
+    final gen = ++_generation;
+    if (text.trim().isEmpty) {
+      setState(() => _results = null);
+      return;
+    }
+    unawaited(() async {
+      final found = await widget.search?.search(text) ?? const <AppSearchResult>[];
+      if (mounted && gen == _generation) setState(() => _results = found);
+    }());
+  }
+
   void _ask() {
     final text = _query.text.trim();
     if (text.isEmpty || !widget.askOn) return;
@@ -291,10 +307,10 @@ class _HomeScreenState extends State<HomeScreen> {
     controller: _query,
     focusNode: _focus,
     onChanged: _changed,
-    // Enter asks Cache: the keyboard's action key is the send key. Search only (no model): the results show as you type, and
-    // the key is the keyboard's search key.
-    onSubmitted: widget.askOn ? (_) => _ask() : null,
-    textInputAction: widget.askOn ? TextInputAction.send : TextInputAction.search,
+    // Enter searches (owner, 2026-11-13): the results, which show as you type, are found at once and the keyboard closes so all
+    // of them can be seen. It never asks Cache: asking is the "Ask Cache" row of the results, or Ask itself.
+    onSubmitted: _submit,
+    textInputAction: TextInputAction.search,
     style: TextStyle(fontSize: 15, color: k.text),
     decoration: InputDecoration(
       hintText: widget.askOn ? 'Search Cache or ask anything' : 'Search Cache',
@@ -361,7 +377,7 @@ class _HomeScreenState extends State<HomeScreen> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 14),
             ),
-            trailing: Text('Enter', style: TextStyle(fontSize: 12, color: k.secondary)),
+            // no "Enter" hint: Enter searches; this row is the way to ask (owner, 2026-11-13)
             onTap: _ask,
           ),
           if (results != null && results.isEmpty && !widget.askOn)
