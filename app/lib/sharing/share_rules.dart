@@ -7,7 +7,11 @@
 /// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
 /// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
 /// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index'];
+const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
+
+/// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
+/// for itself (the saved `.icon.png` does sync, with its ZIM).
+const List<String> kZimNotShared = ['*.illustration.png'];
 
 /// What the region engine's folder (the `regions` shared folder) holds that each device makes for itself, as sync patterns (see
 /// DataKind.notShared), so it never syncs. The downloaded parts all sync: regions.sqlite (the region records, tile lists and

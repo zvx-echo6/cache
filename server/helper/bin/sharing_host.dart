@@ -630,7 +630,7 @@ class ShareTable {
           id: 'library',
           label: 'Library',
           shares: {'library': '$docs/zims', 'libraries': '$docs/libraries'},
-          notShared: {'libraries': kLibraryNotShared},
+          notShared: {'library': kZimNotShared, 'libraries': kLibraryNotShared},
         ),
         ShareKind(
           id: 'regions',

@@ -18,11 +18,9 @@ import '../search/search_access.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
-/// One ZIM file in the sources folder.
-/// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
-/// for itself (the saved `.icon.png` does sync, with its ZIM).
-const List<String> kZimNotShared = ['*.illustration.png'];
+export '../sharing/share_rules.dart' show kZimNotShared;
 
+/// One ZIM file in the sources folder.
 class ZimFile {
   ZimFile({required this.path, required this.size});
 

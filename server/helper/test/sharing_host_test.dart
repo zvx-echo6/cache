@@ -136,7 +136,10 @@ void main() {
       'bookshelves': ['match'],
     });
     final ex = {for (final k in t.kinds) ...k.notShared};
-    expect(ex['libraries'], ['*/index']);
+    // the same lists the phone's Library kind gives its engine (app/lib/main.dart dataKinds): a server that synced what phones never
+    // do would send those files, and their deletes, to every linked device
+    expect(ex['libraries'], ['*/index', '*/index-snapshots']);
+    expect(ex['library'], ['*.illustration.png']);
     expect(ex['maps'], contains('tiles.sqlite*'));
     expect(ex['regions'], contains('places/index'));
     expect(ex['models'], contains('*.part'));
@@ -165,7 +168,8 @@ void main() {
     for (final k in ['relay', 'relay_urls', 'dht', 'mdns', 'lookup', 'lookup_url', 'port', 'interval_secs', 'reserve_bytes']) {
       expect(cfg.containsKey(k), isFalse, reason: k);
     }
-    expect((cfg['exclude'] as Map)['libraries'], ['*/index']);
+    expect((cfg['exclude'] as Map)['libraries'], ['*/index', '*/index-snapshots']);
+    expect((cfg['exclude'] as Map)['library'], ['*.illustration.png']);
     expect((cfg['exclude'] as Map)['indexes'], contains('.local'));
     expect(cfg['only'], {'indexes': <String>[]});
     expect(cfg['local_deletes'], {'indexes': ['*/*/snap']});
