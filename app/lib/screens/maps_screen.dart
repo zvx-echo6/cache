@@ -29,6 +29,7 @@ import '../nav/elevation/route_elevation.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
+import '../nav/overview/route_snapshotter.dart';
 import '../car/phone_drive.dart';
 import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
@@ -329,7 +330,7 @@ class _MapsScreenState extends State<MapsScreen> {
   // ---- guidance: the elevation panel and the route mini map ----
 
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
-  RouteSnapshotter get _snapshotter => widget.snapshotter ?? const ChannelRouteSnapshotter();
+  RouteSnapshotter get _snapshotter => widget.snapshotter ?? platformRouteSnapshotter();
 
   /// The style the live map has (the whole-route picture is rendered from it).
   String? _styleJson;
