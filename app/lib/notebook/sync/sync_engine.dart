@@ -521,6 +521,11 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
+    // The notebook may be here under another name (this device's `.cache/notebooks.json` is from its last sync: renamed since).
+    // The name and the rest of the definition come from that file; the fields and their property names stay as they are here
+    // (saveNotebook keeps an existing notebook's fields), so every value stays in its field and every file keeps its keys.
+    final sharedId = shared?['id'];
+    final renamed = sharedId is String && notebook.notebook(sharedId) != null;
     final made = await notebook.saveNotebook(
       id: shared?['id'] as String?,
       template: (shared?['template'] as String?) ?? 'notes',
@@ -531,7 +536,7 @@ class NotebookSync {
     // The other device's property names, by label, so both write the same ones.
     final sharedProps = shared?['props'];
     final sharedFields = shared?['def'] is Map ? (shared!['def'] as Map)['fields'] as List? ?? const [] : const [];
-    if (sharedProps is Map) {
+    if (sharedProps is Map && !renamed) {
       final byLabel = {for (final f in sharedFields) '${(f as Map)['label']}': sharedProps['${f['fid']}']};
       _props[made.id] = {
         for (final f in made.def.fields)
@@ -539,6 +544,26 @@ class NotebookSync {
       };
     }
     return made;
+  }
+
+  /// Notebook sync: an entry this device has, in a file that names a notebook not here, is in a notebook renamed on the other
+  /// device (an entry never moves to another notebook in Cache). Its notebook here takes the new name and keeps its fields and
+  /// their property names, so the entry stays where it is and every value stays in its field. Before, a new notebook with no
+  /// fields was made for the name and the entry went there, its values left out of every field (`.cache/notebooks.json`, which
+  /// would have described the notebook, is a hidden file: it never leaves the device).
+  Future<void> _followRename(String id, String name, Map<String, Notebook> byName) async {
+    if (kind != SyncKind.share || name.trim().isEmpty || notebook.nameTaken(name)) return;
+    final had = await notebook.entry(id);
+    final home = had == null ? null : notebook.notebook(had.notebookId);
+    if (home == null || home.name == name) return;
+    try {
+      final renamed = await notebook.saveNotebook(id: home.id, def: home.def.copyWith(name: name));
+      byName.removeWhere((_, n) => n.id == home.id);
+      byName[renamed.name] = renamed;
+    } catch (e) {
+      // Not renamed (the store refused the name): the entry is read as before this change.
+      logError('Notebook sync: could not follow a notebook renamed on another device', error: e, detail: name);
+    }
   }
 
   static Map _withoutFids(Map def) => {
@@ -566,6 +591,7 @@ class NotebookSync {
   /// the file as the person's own properties.
   Future<NbEntry> _apply(String id, EntryDoc d, Map<String, Notebook> byName, {String? text}) async {
     final known = byName.containsKey(d.notebook);
+    if (!known) await _followRename(id, d.notebook, byName);
     var book = await _bookFor(d, byName);
     if (!known && text != null) {
       // The notebook was just made: read the fields again with its field names.
