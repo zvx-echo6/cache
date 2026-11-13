@@ -8,6 +8,8 @@
 // takes its saved places away and gives them back, through the harness's own plugin (steps_plugin).
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -270,6 +272,48 @@ class _HarnessAppState extends State<HarnessApp> {
     await _push();
     await _car.invokeMethod<void>('savedChanged');
     await _car.invokeMethod<void>('notice', <String, Object?>{'text': 'A recorded notice'});
+    await _sendPins();
+  }
+
+  // Made-up pins around the recorded drive, sent as the phone sends its map's pins (lib/car/car_pins.dart, carPinsMessage): the
+  // style's pin source, points that carry only their picture's name, the picture as PNG at 3 pixels per point, and reset.
+  static const List<List<double>> _pinPlaces = <List<double>>[
+    <double>[10.5015, 20.2315], <double>[10.5045, 20.2348], <double>[10.4985, 20.226], <double>[10.512, 20.2295], <double>[10.5075, 20.2410],
+  ];
+
+  Future<void> _sendPins() async {
+    final List<Map<String, Object?>> features = <Map<String, Object?>>[
+      for (final List<double> at in _pinPlaces)
+        <String, Object?>{
+          'type': 'Feature',
+          'geometry': <String, Object?>{'type': 'Point', 'coordinates': <double>[at[1], at[0]]},
+          'properties': <String, Object?>{'pin': 'harness-pin'},
+        },
+    ];
+    final String geojson = jsonEncode(<String, Object?>{'type': 'FeatureCollection', 'features': features});
+    await _car.invokeMethod<void>('pins', <String, Object?>{
+      'source': 'cache-notebook',
+      'geojson': geojson,
+      'images': <String, Uint8List>{'harness-pin': await _pinPicture()},
+      'ratio': 3.0,
+      'reset': true,
+    });
+    await _steps.invokeMethod<void>('say', 'pins sent, ${features.length} pins');
+  }
+
+  // A round pin, 45 points square at 3 pixels per point (the phone's pictures are that size): a red disc with a white edge.
+  static Future<Uint8List> _pinPicture() async {
+    const double ratio = 3;
+    const double box = 45;
+    final ui.PictureRecorder rec = ui.PictureRecorder();
+    final Canvas c = Canvas(rec)..scale(ratio);
+    const Offset mid = Offset(box / 2, box / 2);
+    c.drawCircle(mid, 13, Paint()..color = const Color(0xFFC62E24));
+    c.drawCircle(mid, 13, Paint()..color = const Color(0xFFFFFFFF)..style = PaintingStyle.stroke..strokeWidth = 3);
+    c.drawCircle(mid, 4, Paint()..color = const Color(0xFFFFFFFF));
+    final ui.Image img = await rec.endRecording().toImage((box * ratio).round(), (box * ratio).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    return data!.buffer.asUint8List();
   }
 
   @override

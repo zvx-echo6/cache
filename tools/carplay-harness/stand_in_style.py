@@ -88,7 +88,10 @@ def style(name, c):
     return {
         "version": 8,
         "name": "CarPlay harness stand-in, %s" % name,
-        "sources": {"town": {"type": "geojson", "data": town()}},
+        # The phone's style has the notebook pins' source and layer (app/lib/maps/style/style_generator.dart, kNotebookSource and
+        # kNotebookPins, as with an icon pin style): the car fills the source with the pins the phone sends (car_pins.dart).
+        "sources": {"town": {"type": "geojson", "data": town()},
+                    "cache-notebook": {"type": "geojson", "data": {"type": "FeatureCollection", "features": []}}},
         "layers": [
             {"id": "land", "type": "background", "paint": {"background-color": c["land"]}},
             {"id": "water", "type": "fill", "source": "town", "filter": is_kind("water"), "paint": {"fill-color": c["water"]}},
@@ -97,6 +100,11 @@ def style(name, c):
             road("major-casing", "major", c["roadMajorCasing"], width(9, 1.6, 13, 5, 16, 15), 0),
             road("minor", "minor", c["roadMinor"], width(13, 0.8, 16, 8), 13),
             road("major", "major", c["roadMajor"], width(9, 0.9, 13, 3.6, 16, 12), 0),
+            {
+                "id": "notebook-pins", "type": "symbol", "source": "cache-notebook", "filter": ["has", "pin"],
+                "layout": {"icon-image": ["get", "pin"], "icon-size": 1, "icon-anchor": "center", "icon-allow-overlap": True,
+                           "icon-ignore-placement": True},
+            },
         ],
     }
 

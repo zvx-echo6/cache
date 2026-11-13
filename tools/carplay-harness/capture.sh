@@ -483,6 +483,13 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, dark and 
   BUTTONS_MISSING=""
   # The Simulator's car is in its dark setting. The app's style has to be the one drawn before the first picture.
   wait_log 'car map: style loaded, dark' 40 || MAP_MISSING="$MAP_MISSING [no 'style loaded, dark' line]"
+  # The phone's pins (five made-up ones, sent by the stand-in as the phone does on connect) are on the map, in the style's own
+  # pin source, under the route and the markers.
+  if wait_log 'car pins: 5 pins' 20; then
+    MAP_NOTES="the phone's 5 pins were put on the map ($(grep 'car pins: 5 pins' "$STREAM" | tail -n 1 | sed 's/.*car pins: //'))"
+  else
+    MAP_MISSING="$MAP_MISSING [the pins the phone sent were not put on the map: $(grep -E 'car pins|pins sent' "$STREAM" | tail -n 2 | sed 's/.*\] //' | tr '\n' ';')]"
+  fi
   sleep 3
   shot_ext "$label-map-dark-browsing"
   # The light pictures: the harness tells the car scene that the car switched to day, through the call CarPlay makes. The map
@@ -515,7 +522,7 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, dark and 
   fi
   sleep 3
   shot_ext "$label-map-panning"
-  MAP_NOTES="the Pan button answered a tap at pixel $found"
+  MAP_NOTES="${MAP_NOTES:+$MAP_NOTES; }the Pan button answered a tap at pixel $found"
 
   # The buttons at work. First one of CarPlay's panning arrows, the one at the top of the free area: taps go down the middle
   # of the free area from its top until the app says the camera stopped following the position.

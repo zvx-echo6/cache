@@ -592,5 +592,21 @@ check(!link.dartReady, "detached: Dart is not ready")
 link.reset()
 check(link.trip == CarTrip.empty && !link.carConnected, "reset")
 
+// The phone map's pins (the pins message, lib/car/car_pins.dart carPinsMessage): held until the car goes.
+let twoPins = "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[20.2,10.5]},\"properties\":{\"pin\":\"a\"}},{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[20.3,10.6]},\"properties\":{\"pin\":\"b\"}}]}"
+var pinSet = CarPinSet.empty
+pinSet.receive(["source": "cache-notebook", "geojson": twoPins, "images": ["a": Data([1, 2]), "b": Data([3])], "ratio": 3.0, "reset": true])
+check(pinSet.count == 2 && pinSet.pictures.count == 2 && pinSet.pictures["a"]?.ratio == 3 && pinSet.source == "cache-notebook", "the pins and their pictures")
+pinSet.receive(["geojson": twoPins, "images": ["c": Data([4])], "reset": false])
+check(pinSet.pictures.count == 3 && pinSet.pictures["c"]?.ratio == 3, "a later message adds the pictures not sent before; no ratio means 3")
+pinSet.receive(["geojson": CarLink.emptyGeoJSON, "images": [String: Any](), "reset": true])
+check(pinSet.pictures.isEmpty && pinSet.count == 0, "reset drops the pictures held")
+link.setCarConnected(true)
+link.handle(method: "pins", arguments: ["geojson": twoPins, "images": ["a": Data([1])], "reset": true], reply: { _ in })
+check(link.pins.count == 2 && link.pins.pictures.count == 1, "the link holds the pins it was sent")
+link.setCarConnected(false)
+check(link.pins == CarPinSet.empty, "the car went: no pins and no pictures")
+link.reset()
+
 print("car link tests: \(checks - failures) of \(checks) passed")
 exit(failures == 0 ? 0 : 1)

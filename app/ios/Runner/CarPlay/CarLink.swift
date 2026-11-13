@@ -12,6 +12,7 @@ protocol CarLinkListener: AnyObject {
   func carLinkNotice(_ text: String)
   func carLinkDartReady()
   func carLinkSavedChanged()
+  func carLinkPins()
 }
 
 extension CarLinkListener {
@@ -21,14 +22,58 @@ extension CarLinkListener {
   func carLinkNotice(_ text: String) {}
   func carLinkDartReady() {}
   func carLinkSavedChanged() {}
+  func carLinkPins() {}
+}
+
+/// One picture of the pins, as the phone drew it: PNG bytes, and its pixels per point.
+struct CarPinPicture: Equatable {
+  let png: Data
+  let ratio: Double
+}
+
+/// The phone map's pins (the `pins` message, lib/car/car_pins.dart): the style's source to fill, its points (GeoJSON, each
+/// feature with only `pin`, its picture's name) and the pictures by name. The Swift twin of the Android car's CarPins.kt.
+/// Coordinates and pictures only: nothing of a place's name comes across, and nothing of them is logged.
+struct CarPinSet: Equatable {
+  static let defaultSource = "cache-notebook"
+  static let defaultRatio: Double = 3
+
+  var source = CarPinSet.defaultSource
+  var geojson = CarLink.emptyGeoJSON
+  var pictures: [String: CarPinPicture] = [:]
+
+  static let empty = CarPinSet()
+
+  /// Dart's message: the pins, and the pictures not sent before in this connection (`reset`: drop the ones held first). The
+  /// pictures come as Data (the channel's typed bytes are turned into Data where the channel is: CarLink.attach).
+  mutating func receive(_ args: [String: Any]) {
+    if (args["reset"] as? Bool) == true { pictures = [:] }
+    if let s = args["source"] as? String, !s.isEmpty { source = s }
+    let given = CarValue.double(args["ratio"]) ?? 0
+    let ratio = given > 0 ? given : CarPinSet.defaultRatio
+    if let images = args["images"] as? [String: Any] {
+      for (name, value) in images {
+        if let png = value as? Data { pictures[name] = CarPinPicture(png: png, ratio: ratio) }
+      }
+    }
+    geojson = args["geojson"] as? String ?? CarLink.emptyGeoJSON
+  }
+
+  /// How many pins, for the log (no places, no names).
+  var count: Int {
+    guard let data = geojson.data(using: .utf8), let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let features = parsed["features"] as? [Any]
+    else { return 0 }
+    return features.count
+  }
 }
 
 /// The car side of the `co.cache/car` channel (lib/car/car_bridge.dart is the other side). The Swift twin of the Android
 /// car's CarLink.kt: the same messages, the same state, the same rules.
 ///
 /// Dart pushes the trip (`trip`), the route line (`route`), that the map style changed (`styleChanged`), short notices
-/// (`notice`) and spoken prompts (`prompt`, `promptStop`). The car asks Dart for places, directions, start and stop, through
-/// `call`. Main thread only, as CarPlay's templates and Flutter's channels both are.
+/// (`notice`), spoken prompts (`prompt`, `promptStop`) and the phone map's pins (`pins`). The car asks Dart for places,
+/// directions, start and stop, through `call`. Main thread only, as CarPlay's templates and Flutter's channels both are.
 ///
 /// Nothing here needs Flutter to compile, so the rules are tested on a Mac on recorded messages
 /// (tools/carplay-harness/tests); the part that ties it to a real engine is at the end of the file.
@@ -43,6 +88,8 @@ final class CarLink {
   private(set) var trip = CarTrip.empty
   private(set) var routeGeoJson: String?
   private(set) var routeBounds: [Double]?
+  /// The phone map's pins, held for the car's map (a style loaded again gets them at once); none while no car is connected.
+  private(set) var pins = CarPinSet.empty
 
   /// A spoken prompt is about to play: the answer is how it may be given at this moment (CarPromptStyle's answers; nil with
   /// no hook, and the phone then speaks as it would with no car). And a prompt was stopped. Set by CarPrompts.
@@ -87,6 +134,7 @@ final class CarLink {
       trip = CarTrip.empty
       routeGeoJson = nil
       routeBounds = nil
+      pins = CarPinSet.empty
     }
     if dartReady {
       send?("connected", ["on": on], nil)
@@ -144,6 +192,10 @@ final class CarLink {
     case "promptStop":
       onPromptStop?()
       reply(nil)
+    case "pins":
+      pins.receive(args ?? [:])
+      reply(nil)
+      each { $0.carLinkPins() }
     default:
       return false
     }
@@ -162,6 +214,7 @@ final class CarLink {
     trip = CarTrip.empty
     routeGeoJson = nil
     routeBounds = nil
+    pins = CarPinSet.empty
     carConnected = false
     dartReady = false
     send = nil
@@ -179,7 +232,13 @@ extension CarLink {
   func attach(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: "co.cache/car", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
-      let known = self?.handle(method: call.method, arguments: call.arguments, reply: { result($0) }) ?? false
+      var arguments = call.arguments
+      // The pins' pictures come as the channel's typed bytes: Data for CarLink, which does not know Flutter.
+      if call.method == "pins", var m = arguments as? [String: Any], let images = m["images"] as? [String: Any] {
+        m["images"] = images.compactMapValues { ($0 as? FlutterStandardTypedData)?.data ?? ($0 as? Data) }
+        arguments = m
+      }
+      let known = self?.handle(method: call.method, arguments: arguments, reply: { result($0) }) ?? false
       if !known {
         result(FlutterMethodNotImplemented)
       }

@@ -336,6 +336,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
   func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
     guard mapView === self.mapView else { return }
     addOverlays(to: style)
+    applyPins(style)
     applyRoute(CarLink.shared.routeGeoJson ?? CarLink.emptyGeoJSON)
     applyTrip(CarLink.shared.trip)
     // The new style's position source is empty: the marker is drawn into it at once.
@@ -469,6 +470,7 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   /// The present style is going (a new one is loading, or the map is let go): nothing of it is used again.
   private func dropStyleParts() {
+    pinPictures = []
     arrowLayer = nil
     compassLayer = nil
     dotLayer = nil
@@ -527,6 +529,36 @@ final class CarMapViewController: UIViewController, MLNMapViewDelegate, CarLinkL
 
   private func source(_ identifier: String) -> MLNShapeSource? {
     mapView?.style?.source(withIdentifier: identifier) as? MLNShapeSource
+  }
+
+  /// The pictures the present style has been given (applyPins); a new style starts with none.
+  private var pinPictures: Set<String> = []
+
+  /// The phone map's pins (CarLink.pins) into the style's own pin source, with the pictures it does not have yet. The phone's
+  /// style has that source and its layer (the notebook pins), with the icon size and anchor of the person's pin style, under
+  /// everything added here (the route, the destination, the grade marker, the vehicle). The car's map takes no taps, so the
+  /// pins do nothing when touched. Each picture is shown at the scale the phone drew it at, so a pin is as many points as on
+  /// the phone. Counts only in the log.
+  private func applyPins(_ style: MLNStyle) {
+    let pins = CarLink.shared.pins
+    var added = 0
+    for (name, picture) in pins.pictures where !pinPictures.contains(name) {
+      guard let image = UIImage(data: picture.png, scale: CGFloat(picture.ratio)) else { continue }
+      style.setImage(image, forName: name)
+      pinPictures.insert(name)
+      added += 1
+    }
+    guard let source = style.source(withIdentifier: pins.source) as? MLNShapeSource else {
+      if pins.count > 0 { Self.log.info("car pins: the style has no source for them") }
+      return
+    }
+    source.shape = Self.shape(pins.geojson)
+    Self.log.info("car pins: \(pins.count) pins, \(added) new pictures")
+  }
+
+  func carLinkPins() {
+    guard let style = mapView?.style else { return }
+    applyPins(style)
   }
 
   private func applyRoute(_ geojson: String) {
