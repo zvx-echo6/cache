@@ -1,0 +1,308 @@
+[
+ {
+  "scenario": "s1-online",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s1-online",
+  "check": "the files reach B",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s1-online",
+  "check": "A lists nobody at once",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "B no longer lists A",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "A's waiting unlinks are empty",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "B's Activity says Desk unlinked this device.",
+  "ok": true,
+  "detail": "Desk unlinked this device. | Family: got note.txt (13 B) | Family: got map.bin (4.9 KB) | Linked with Desk | Started"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "A's Activity says Phone was told it is unlinked.",
+  "ok": true,
+  "detail": "Phone was told it is unlinked. | Linked with Phone | Started"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "B's files are all still there and unchanged",
+  "ok": true,
+  "detail": "{'folder-b/map.bin': 'c59d3c0480cc2d71d8f646e735e92da65450311eec46e81a5db8c7e6e8a92054', 'folder-b/note.txt': 'fe0eac324282c49689fdfcccb5390b7f531c2c3693a4a741f39192c8f7b2f303'}"
+ },
+ {
+  "scenario": "s1-online",
+  "check": "A's files are still there",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "A shows one waiting unlink for Phone",
+  "ok": true,
+  "detail": "[{'id': '9f0e36e7670465c1b4b8ff9b346a2cb71f4d1d2ee0872fc438d0714b04434ad0', 'name': 'Phone', 'since': 1794593018152, 'tries': 0, 'old': False}]"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "the same sync.json no longer lists B and holds the waiting unlink",
+  "ok": true,
+  "detail": "{'name': 'Desk', 'peers': [], 'shares': [], 'links_migrated': True, 'unlinks': [{'id': '9f0e36e7670465c1b4b8ff9b346a2cb71f4d1d2ee0872fc438d0714b04434ad0', 'name': 'Phone', 'link_id': 'ac660848d0887b9ba7724649c7d2639b', 'since': 1794593018152, 'tries': 0, 'last_try': 0}]}"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "still waiting while B is off",
+  "ok": true,
+  "detail": "[{'id': '9f0e36e7670465c1b4b8ff9b346a2cb71f4d1d2ee0872fc438d0714b04434ad0', 'name': 'Phone', 'since': 1794593018152, 'tries': 0, 'old': False}]"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "B no longer lists A",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "A's waiting unlinks are empty",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "B's Activity says Desk unlinked this device.",
+  "ok": true,
+  "detail": "Desk unlinked this device. | Started"
+ },
+ {
+  "scenario": "s2-offline-then-back",
+  "check": "A's Activity says Phone was told it is unlinked.",
+  "ok": true,
+  "detail": "Phone was told it is unlinked. | Linked with Phone | Started"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "waiting",
+  "ok": true,
+  "detail": "[{'id': 'ad108630e09d417791b2f65a01fe974c83917f03506259c58c4f4ef8cfeed8a2', 'name': 'Phone', 'since': 1794593087456, 'tries': 0, 'old': False}]"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "on disk after A stopped: no peer, one waiting unlink",
+  "ok": true,
+  "detail": "{'name': 'Desk', 'peers': [], 'shares': [], 'links_migrated': True, 'unlinks': [{'id': 'ad108630e09d417791b2f65a01fe974c83917f03506259c58c4f4ef8cfeed8a2', 'name': 'Phone', 'link_id': '704d57b20514f3c9f0607b35e8093592', 'since': 1794593087456, 'tries': 0, 'last_try': 0}]}"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "A's waiting unlink survives its restart",
+  "ok": true,
+  "detail": "[{'id': 'ad108630e09d417791b2f65a01fe974c83917f03506259c58c4f4ef8cfeed8a2', 'name': 'Phone', 'since': 1794593087456, 'tries': 0, 'old': False}]"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "B no longer lists A",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "A's waiting unlinks are empty",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "B's Activity says Desk unlinked this device.",
+  "ok": true,
+  "detail": "Desk unlinked this device. | Started"
+ },
+ {
+  "scenario": "s3-offline-across-a-restart",
+  "check": "A's Activity says Phone was told it is unlinked.",
+  "ok": true,
+  "detail": "Phone was told it is unlinked. | Started"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "the files reach B",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "A lists nobody at once",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "A marks the waiting unlink old (reached, no such protocol) and keeps it",
+  "ok": true,
+  "detail": "[{'id': 'f8837fb7a7bf94000ac73f9e35c304a0a9e368f69c14897bbcf0e6ad246f5d20', 'name': 'Phone', 'since': 1794593172623, 'tries': 1, 'old': True}]"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "A did not try again within 40 s (six hours between tries)",
+  "ok": true,
+  "detail": "[{'id': 'f8837fb7a7bf94000ac73f9e35c304a0a9e368f69c14897bbcf0e6ad246f5d20', 'name': 'Phone', 'since': 1794593172623, 'tries': 1, 'old': True}]"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "B's sync.json is byte-identical (sha256) while the old device runs",
+  "ok": true,
+  "detail": "{'before': {'sync.json': '6795035ea83a3e3ddf37ad492e75066704460ee57f39bdaddf9869367893eb4c'}, 'after': {'sync.json': '6795035ea83a3e3ddf37ad492e75066704460ee57f39bdaddf9869367893eb4c'}}"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "B's files are byte-identical (sha256)",
+  "ok": true,
+  "detail": "{'folder-b/map.bin': '3c45db29c8ef328025296a2b8b1db1afe7229eedd84a62f5290a1f60c47c6ee6', 'folder-b/note.txt': 'fe0eac324282c49689fdfcccb5390b7f531c2c3693a4a741f39192c8f7b2f303'}"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "B still lists A and says nothing of an unlink",
+  "ok": true,
+  "detail": "Started"
+ },
+ {
+  "scenario": "s4-old-peer-v1030",
+  "check": "B's sync.json and files are byte-identical after it is stopped too",
+  "ok": true,
+  "detail": "{'sync.json': {'sync.json': '6795035ea83a3e3ddf37ad492e75066704460ee57f39bdaddf9869367893eb4c'}, 'files': {'folder-b/map.bin': '3c45db29c8ef328025296a2b8b1db1afe7229eedd84a62f5290a1f60c47c6ee6', 'folder-b/note.txt': 'fe0eac324282c49689fdfcccb5390b7f531c2c3693a4a741f39192c8f7b2f303'}}"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "the files reach B",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "A lists nobody at once",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "A marks the waiting unlink old (reached, no such protocol) and keeps it",
+  "ok": true,
+  "detail": "[{'id': '176941ede56982ee2789d455e33ad6fba080eaaff4f99d7f9b8bd17bde43840e', 'name': 'Phone', 'since': 1794593284779, 'tries': 1, 'old': True}]"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "A did not try again within 40 s (six hours between tries)",
+  "ok": true,
+  "detail": "[{'id': '176941ede56982ee2789d455e33ad6fba080eaaff4f99d7f9b8bd17bde43840e', 'name': 'Phone', 'since': 1794593284779, 'tries': 1, 'old': True}]"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "B's sync.json is byte-identical (sha256) while the old device runs",
+  "ok": true,
+  "detail": "{'before': {'sync.json': 'a31f79a21e480c5d050059227bd45ce2d45c2213ca7b4b8a69c9834af58c2e0a'}, 'after': {'sync.json': 'a31f79a21e480c5d050059227bd45ce2d45c2213ca7b4b8a69c9834af58c2e0a'}}"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "B's files are byte-identical (sha256)",
+  "ok": true,
+  "detail": "{'folder-b/map.bin': '3c45db29c8ef328025296a2b8b1db1afe7229eedd84a62f5290a1f60c47c6ee6', 'folder-b/note.txt': 'fe0eac324282c49689fdfcccb5390b7f531c2c3693a4a741f39192c8f7b2f303'}"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "B still lists A and says nothing of an unlink",
+  "ok": true,
+  "detail": "Started"
+ },
+ {
+  "scenario": "s4-old-peer-b51",
+  "check": "B's sync.json and files are byte-identical after it is stopped too",
+  "ok": true,
+  "detail": "{'sync.json': {'sync.json': 'a31f79a21e480c5d050059227bd45ce2d45c2213ca7b4b8a69c9834af58c2e0a'}, 'files': {'folder-b/map.bin': '3c45db29c8ef328025296a2b8b1db1afe7229eedd84a62f5290a1f60c47c6ee6', 'folder-b/note.txt': 'fe0eac324282c49689fdfcccb5390b7f531c2c3693a4a741f39192c8f7b2f303'}}"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "linked",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "A has one waiting unlink",
+  "ok": true,
+  "detail": "[{'id': '0654672d98924cacde0297e85d59b6bf745fbe577897d211303b1c72c4ec3baa', 'name': 'Phone', 'since': 1794593370754, 'tries': 0, 'old': False}]"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "B reads the new code",
+  "ok": true,
+  "detail": "{'ok': True, 'peer': 'f37149e5d51d8ed63215fe90f59b485fe0d37567696526486c46f9b104ab61c6', 'name': 'Desk'}"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "both list each other again",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "linking again cleared A's waiting unlink",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "both hold the same new link id, different from the first",
+  "ok": true,
+  "detail": "{'a': 'c759aa5fa5811379ea1bedb8da4a5c04', 'b': 'c759aa5fa5811379ea1bedb8da4a5c04', 'first': '3cc7ad865203f0e2fc33bc886607e999'}"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "B still lists A and was never told",
+  "ok": true,
+  "detail": "Linked with Desk | Linked with Desk | Started"
+ },
+ {
+  "scenario": "s5-link-again-racing",
+  "check": "A still lists B",
+  "ok": true,
+  "detail": "[{'id': '0654672d98924cacde0297e85d59b6bf745fbe577897d211303b1c72c4ec3baa', 'name': 'Phone', 'linked': 1794593382519, 'last_seen': 1794593445150, 'via': 'direct', 'live': True, 'error': None, 'free_bytes': 25173397504, 'link': {'mode': 'off', 'ask': True}, 'link_t': 0, 'link_known': True, 'unconfirmed': False, 'link_id': 'c759aa5fa5811379ea1bedb8da4a5c04'}]"
+ }
+]

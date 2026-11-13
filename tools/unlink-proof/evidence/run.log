@@ -1,0 +1,53 @@
+[18:02:42] PASS  s1-online: linked
+[18:02:49] PASS  s1-online: the files reach B
+[18:02:55] PASS  s1-online: A lists nobody at once
+[18:03:06] PASS  s1-online: B no longer lists A
+[18:03:09] PASS  s1-online: A's waiting unlinks are empty
+[18:03:13] PASS  s1-online: B's Activity says Desk unlinked this device.
+[18:03:16] PASS  s1-online: A's Activity says Phone was told it is unlinked.
+[18:03:16] PASS  s1-online: B's files are all still there and unchanged
+[18:03:16] PASS  s1-online: A's files are still there
+[18:03:32] PASS  s2-offline-then-back: linked
+[18:03:42] PASS  s2-offline-then-back: A shows one waiting unlink for Phone
+[18:03:42] PASS  s2-offline-then-back: the same sync.json no longer lists B and holds the waiting unlink
+[18:03:59] PASS  s2-offline-then-back: still waiting while B is off
+[18:04:16] PASS  s2-offline-then-back: B no longer lists A
+[18:04:19] PASS  s2-offline-then-back: A's waiting unlinks are empty
+[18:04:23] PASS  s2-offline-then-back: B's Activity says Desk unlinked this device.
+[18:04:26] PASS  s2-offline-then-back: A's Activity says Phone was told it is unlinked.
+[18:04:42] PASS  s3-offline-across-a-restart: linked
+[18:04:52] PASS  s3-offline-across-a-restart: waiting
+[18:04:58] PASS  s3-offline-across-a-restart: on disk after A stopped: no peer, one waiting unlink
+[18:05:03] PASS  s3-offline-across-a-restart: A's waiting unlink survives its restart
+[18:05:17] PASS  s3-offline-across-a-restart: B no longer lists A
+[18:05:21] PASS  s3-offline-across-a-restart: A's waiting unlinks are empty
+[18:05:23] PASS  s3-offline-across-a-restart: B's Activity says Desk unlinked this device.
+[18:05:27] PASS  s3-offline-across-a-restart: A's Activity says Phone was told it is unlinked.
+[18:05:46] PASS  s4-old-peer-v1030: linked
+[18:05:55] PASS  s4-old-peer-v1030: the files reach B
+[18:06:17] PASS  s4-old-peer-v1030: A lists nobody at once
+[18:06:25] PASS  s4-old-peer-v1030: A marks the waiting unlink old (reached, no such protocol) and keeps it
+[18:07:14] PASS  s4-old-peer-v1030: A did not try again within 40 s (six hours between tries)
+[18:07:14] PASS  s4-old-peer-v1030: B's sync.json is byte-identical (sha256) while the old device runs
+[18:07:14] PASS  s4-old-peer-v1030: B's files are byte-identical (sha256)
+[18:07:20] PASS  s4-old-peer-v1030: B still lists A and says nothing of an unlink
+[18:07:22] PASS  s4-old-peer-v1030: B's sync.json and files are byte-identical after it is stopped too
+[18:07:39] PASS  s4-old-peer-b51: linked
+[18:07:47] PASS  s4-old-peer-b51: the files reach B
+[18:08:09] PASS  s4-old-peer-b51: A lists nobody at once
+[18:08:17] PASS  s4-old-peer-b51: A marks the waiting unlink old (reached, no such protocol) and keeps it
+[18:09:05] PASS  s4-old-peer-b51: A did not try again within 40 s (six hours between tries)
+[18:09:05] PASS  s4-old-peer-b51: B's sync.json is byte-identical (sha256) while the old device runs
+[18:09:05] PASS  s4-old-peer-b51: B's files are byte-identical (sha256)
+[18:09:11] PASS  s4-old-peer-b51: B still lists A and says nothing of an unlink
+[18:09:13] PASS  s4-old-peer-b51: B's sync.json and files are byte-identical after it is stopped too
+[18:09:26] PASS  s5-link-again-racing: linked
+[18:09:34] PASS  s5-link-again-racing: A has one waiting unlink
+[18:09:43] PASS  s5-link-again-racing: B reads the new code
+[18:09:45] PASS  s5-link-again-racing: both list each other again
+[18:09:48] PASS  s5-link-again-racing: linking again cleared A's waiting unlink
+[18:09:51] PASS  s5-link-again-racing: both hold the same new link id, different from the first
+[18:10:42] PASS  s5-link-again-racing: B still lists A and was never told
+[18:10:45] PASS  s5-link-again-racing: A still lists B
+
+51 of 51 checks passed; evidence in /home/build/proof/unlinkproof/pr/evidence
