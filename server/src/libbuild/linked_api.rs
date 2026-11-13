@@ -391,7 +391,9 @@ fn progress_bases(job: &CheckJob) -> ProgressBase {
     ))).collect()
 }
 
-fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport, settle_ms: u64) -> Vec<Value> {
+/// One row per folder of the check. `scanned_at` is when the scan began: a file not yet hashed that was first seen less than the
+/// settle delay before then is still settling, however long the scan took.
+fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport, settle_ms: u64, scanned_at: u64) -> Vec<Value> {
     report.roots.iter().map(|root| {
         let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
             .any(|location| location.root_id == root.root_id && location.available)).collect();
@@ -401,7 +403,7 @@ fn make_root_reports(registry: &LinkedRegistry, report: &ScanReport, settle_ms: 
         ).sum();
         let settling = registry.local_config().roots.iter().find(|config| config.id == root.root_id)
             .map(|config| config.state.values().filter(|state|
-                state.blake3.is_none() && now().saturating_sub(state.first_observed_ms) < settle_ms
+                state.blake3.is_none() && scanned_at.saturating_sub(state.first_observed_ms) < settle_ms
             ).count()).unwrap_or(0);
         json!({
             "root_id": root.root_id,
@@ -475,6 +477,9 @@ fn run_check_locked(
     }
     let timestamp = now();
     let mut progress = ProgressState { last_checkpoint: timestamp, last_saved: timestamp, ..ProgressState::default() };
+    // The settling count below is taken on the clock of the scan it belongs to: a slow scan must not make a file that was
+    // still settling when it was looked at count as settled (no follow-up check would come back for it until the hourly rescan).
+    let mut scan_started = now();
     let mut report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &ProgressBase::new(), settle_ms)?;
     // Newly observed files need two unchanged seconds before they can be hashed. A manual check waits
     // here; an automatic check never holds the job for its (longer) settle delay, the scheduler comes back.
@@ -484,12 +489,13 @@ fn run_check_locked(
             .map(progress_bases).unwrap_or_default();
         progress.checkpoint_seen.clear();
         refresh_books(&mut *registry);
+        scan_started = now();
         report = scan_pass(registry, root_id, rt, sidecar, &mut progress, &bases, settle_ms)?;
     }
     let mut state = rt.lock().unwrap_or_else(|e| e.into_inner());
     // Apply every future control, including controls for roots outside this job's scope.
     registry.reconcile_controls(&state.controls)?;
-    let roots = make_root_reports(registry, &report, settle_ms);
+    let roots = make_root_reports(registry, &report, settle_ms, scan_started);
     let scanned: HashSet<_> = report.roots.iter().filter(|root| !root.paused)
         .map(|root| root.root_id.as_str()).collect();
     let books: Vec<_> = report.books.iter().filter(|book| book.locations.iter()
@@ -739,6 +745,32 @@ mod tests {
         std::fs::write(outside.join("cache-library.json"), b"{}").unwrap();
         std::os::unix::fs::symlink(&outside, parent.join("escape")).unwrap();
         assert!(library_path(&data.0, "escape").is_err());
+    }
+
+    /// A file not yet hashed when the scan looked at it is still settling, even when the report is made after the settle delay
+    /// has passed (a slow scan): otherwise no follow-up check is planned, and with no further event the file waits for the hourly
+    /// rescan.
+    #[test]
+    fn a_file_settling_at_scan_time_still_counts_when_the_report_comes_later() {
+        let data = crate::TempDir::new("linked-settle-clock");
+        let target = data.0.join("library");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("cache-library.json"), b"{}").unwrap();
+        std::fs::write(target.join("documents.tsv"), "").unwrap();
+        let source = data.0.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("new.pdf"), b"just arrived").unwrap();
+        let target = target.canonicalize().unwrap();
+        let mut registry = LinkedRegistry::open(&target.join(".local"), &target).unwrap();
+        registry.register_root("root-a", "Folder".into(), &source, vec![]).unwrap();
+        let settle_ms = 300;
+        let scanned_at = now();
+        let report = registry.scan_scoped_progress(Some("root-a"), settle_ms, |_, _, _, _, _, _| {}).unwrap();
+        // the scan, or the work after it, takes longer than the settle delay
+        thread::sleep(Duration::from_millis(settle_ms + 200));
+        let rows = make_root_reports(&registry, &report, settle_ms, scanned_at);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["settling_file_count"], 1, "the file seen unhashed is still settling: {rows:?}");
     }
 
     #[test]

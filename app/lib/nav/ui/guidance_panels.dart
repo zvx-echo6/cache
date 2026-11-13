@@ -70,8 +70,7 @@ class GuidanceBanner extends StatelessWidget {
       } else {
         final icon = turnIconFor(next.type, offroad: next.isOffroad);
         // The lanes show once the turn is as close as the first voice prompt (800 m by car), read from the engine for the way of travel.
-        final far = nav.farStageM;
-        if (next.lanes.isNotEmpty && !next.isOffroad && !next.isArrival && far != null && next.distanceM <= far) lanes = next.lanes;
+        lanes = lanesToShow(next, nav.farStageM);
         body = _row(
           context,
           icon: iconForTurn(icon),
