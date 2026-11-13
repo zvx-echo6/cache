@@ -69,7 +69,8 @@ Future<void> turnOnWeather(BuildContext buttonContext, WeatherTurnOn t) async {
 }
 
 /// Lets the person pick a saved place (or a downloaded region), or find one, to watch; then switches weather on and updates.
-Future<void> chooseWeatherPlace(BuildContext buttonContext, WeatherTurnOn t, {String? why}) async {
+/// With [switchOn] false nothing is switched on (Weather's "Add a place": the sources stay as the person has them).
+Future<void> chooseWeatherPlace(BuildContext buttonContext, WeatherTurnOn t, {String? why, bool switchOn = true}) async {
   final context = _lasting(buttonContext);
   final picked = await showModalBottomSheet<bool>(
     context: context,
@@ -78,7 +79,7 @@ Future<void> chooseWeatherPlace(BuildContext buttonContext, WeatherTurnOn t, {St
     builder: (_) => _ChoosePlaceSheet(t: t, why: why),
   );
   if (picked != true || !context.mounted) return;
-  await t.switchOn();
+  if (switchOn) await t.switchOn();
   if (context.mounted) await _update(context, t.weather);
 }
 

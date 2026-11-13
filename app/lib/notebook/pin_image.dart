@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/painting.dart';
 import 'package:flutter/widgets.dart' show IconData;
 
@@ -94,6 +95,23 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
 String pinImageId(PinStyle style, String iconId, Color tint, {bool tactical = false}) =>
     'pin-${style.name}${tactical ? '-t' : ''}-$iconId-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
+// How big the map draws a pin. A pin is 30 points ([renderPinPng]), in an image half as wide again. The map does not take an
+// added image the same way everywhere, so the pixels the image is drawn at and the size its symbol layer draws it at go together:
+// - A phone (MapLibre on Android and iOS, through the map plugin's addImage): the map reads an added image at the screen's own
+//   scale, its pixels divided by the screen's pixels per point. The image is drawn at that scale and the layer draws it as it is.
+// - A browser (MapLibre GL JS, through the web plugin): one pixel of an added image is one point. The image is drawn at
+//   [kPinImageRatio] pixels per point and the layer draws it that much smaller.
+// (Every image used to be drawn at 3 pixels per point and shown at a third: right in a browser, a third of the size on a 3x phone.)
+
+/// Pixels per point of the pin images in a browser, where the symbol layers draw them this much smaller.
+const double kPinImageRatio = 3;
+
+/// Pixels per point the pin images are drawn at for a screen of [devicePixelRatio] pixels per point ([web]: in a browser).
+double pinImageRatio(double devicePixelRatio, {bool web = kIsWeb}) => web ? kPinImageRatio : devicePixelRatio;
+
+/// The `icon-size` of the symbol layers that draw the pin images ([web]: in a browser).
+double pinIconSize({bool web = kIsWeb}) => web ? 1 / kPinImageRatio : 1;
+
 /// The pin as PNG bytes in a square of [size] points at [ratio] pixels per point (room for the edge, the teardrop's point at the
 /// bottom middle), for `addImage` with the anchor at the bottom for the teardrop and the centre for the others.
 Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false}) async {
@@ -108,17 +126,20 @@ Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {doubl
 /// Which pin images the map style already has, so each style, icon and colour is drawn and added once ([add] is the style's
 /// `addImage`). A new style (a theme change drops the images) is a new cache: call [reset].
 class PinImages {
-  PinImages(this.add, this.style, {this.tactical = false});
+  PinImages(this.add, this.style, {this.tactical = false, required this.ratio});
 
   final Future<void> Function(String name, Uint8List png) add;
   final PinStyle style;
   final bool tactical;
+
+  /// Pixels per point the images are drawn at: [pinImageRatio] of the screen the map is on.
+  final double ratio;
   final Set<String> _have = {};
 
   /// The image name for [iconId] in [tint], added on first use.
   Future<String> ensure(String iconId, IconData icon, Color tint) async {
     final name = pinImageId(style, iconId, tint, tactical: tactical);
-    if (_have.add(name)) await add(name, await renderPinPng(icon, tint, style, tactical: tactical));
+    if (_have.add(name)) await add(name, await renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical));
     return name;
   }
 

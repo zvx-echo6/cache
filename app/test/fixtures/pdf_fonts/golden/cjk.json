@@ -1,0 +1,16 @@
+{
+  "title": "CJK",
+  "pages": [
+    {
+      "text": "日本語のテキスト。水の浄化は一分間沸騰させます。\r\nJapanese text with a Latin line.",
+      "label": null,
+      "png_sha256": {
+        "windows": "b14cb0b0ede96005d7ce40156de21abb81624751c6017825934894d931bd0f08",
+        "linux": "b14cb0b0ede96005d7ce40156de21abb81624751c6017825934894d931bd0f08"
+      },
+      "width": 612,
+      "height": 792,
+      "dpi": 72
+    }
+  ]
+}

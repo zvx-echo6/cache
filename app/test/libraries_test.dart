@@ -305,6 +305,44 @@ void main() {
       expect((c['settings'] as Map)['library_id'], 'manuals');
     });
 
+    Map<String, dynamic> written(LibraryItem l) => (jsonDecode(File('${l.dir.path}/cache-library.json').readAsStringSync()) as Map).cast<String, dynamic>();
+    String ownArchive(String id, {bool isDefault = false}) {
+      final body = (jsonDecode(_lib(id: id)) as Map).cast<String, dynamic>();
+      (body['settings'] as Map)['own'] = true;
+      if (isDefault) (body['settings'] as Map)['own_default'] = true;
+      return jsonEncode(body);
+    }
+
+    test('an archive exported from an own library imports with own kept: Add PDF can target it, and it takes the highest-generation rule', () async {
+      await setUpLibs();
+      await libs.addFile(libFile('mine.cache-library', ownArchive('mine')), confirmUpdate: never, askSettings: noSettings);
+      final l = libs.libraries.single;
+      expect(written(l)['own'], isTrue, reason: 'restoring or moving an own library leaves it theirs to write to');
+      expect(libs.ownLibraries, [l]);
+      // the core's rule reads the same file: own means the highest generation (packages/cache_search idxsnap::appendable_library)
+      expect(l.settings?['own'], isTrue);
+    });
+
+    test('own_default is stripped when the device already has an own library, and kept when it has none', () async {
+      await setUpLibs();
+      // none yet: the imported one may become the default
+      await libs.addFile(libFile('first.cache-library', ownArchive('first', isDefault: true)), confirmUpdate: never, askSettings: noSettings);
+      final first = libs.libraries.single;
+      expect(written(first)['own'], isTrue);
+      expect(written(first)['own_default'], isTrue, reason: 'the device had no own library: it may become the default, as creating one would');
+      expect(libs.defaultOwnLibrary?.folderName, first.folderName);
+      // one already: a second export that says default does not become a second default
+      await libs.addFile(libFile('second.cache-library', ownArchive('second', isDefault: true)), confirmUpdate: never, askSettings: noSettings);
+      final second = libs.libraries.firstWhere((l) => l.folderName != first.folderName);
+      expect(written(second)['own'], isTrue);
+      expect(written(second).containsKey('own_default'), isFalse, reason: 'the device already has an own library');
+      expect(libs.defaultOwnLibrary?.folderName, first.folderName);
+      // and the app's own creation still says own
+      expect(ownLibrarySettings(title: 'My books', id: 'my-books-x', isDefault: true)['own'], isTrue);
+      expect(settingsForImport({'own': true, 'own_default': true}, deviceHasOtherOwn: true), {'own': true});
+      expect(settingsForImport({'own': true, 'own_default': true}, deviceHasOtherOwn: false), {'own': true, 'own_default': true});
+    });
+
     test('archive catalog, original identities and copies are installed beside settings', () async {
       await setUpLibs();
       const catalog = 'doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n';

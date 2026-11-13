@@ -215,7 +215,7 @@ mod tests {
     fn run(args: &Value) -> String {
         match CalculateTool.run(&ctx(), args) {
             Ok(ToolOutput::Json(v)) => serde_json::to_string(&v).unwrap(),
-            Ok(ToolOutput::Text(_)) => panic!("expected json"),
+            Ok(ToolOutput::Text(_) | ToolOutput::Pieces(_)) => panic!("expected json"),
             Err(e) => serde_json::to_string(&e.to_json()).unwrap(),
         }
     }
@@ -308,7 +308,7 @@ mod tests {
         let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now, geocoder: None, live_fetcher: None };
         match CalculateTool.run(&ctx, &json!({"expression": expression})) {
             Ok(ToolOutput::Json(v)) => serde_json::to_string(&v).unwrap(),
-            Ok(ToolOutput::Text(_)) => panic!("expected json"),
+            Ok(ToolOutput::Text(_) | ToolOutput::Pieces(_)) => panic!("expected json"),
             Err(e) => serde_json::to_string(&e.to_json()).unwrap(),
         }
     }

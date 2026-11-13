@@ -56,6 +56,23 @@ impl BuildService {
         })
     }
 
+    /// `GET /api/build/libraries/{id}/books/{doc}/pdf`: the device copy of the book (its filed PDF) and the name it is given. 404
+    /// for a library or book that is not there, and for a book whose copy is gone. The path comes from the stored record, never
+    /// from the request.
+    pub fn book_pdf(&self, id: &str, doc: &str) -> Result<(PathBuf, String), ApiErr> {
+        let lib_there = lock(&self.st).libs.iter().any(|l| l.id == id);
+        if !lib_there {
+            return Err(err(404, "not_found", "no such library"));
+        }
+        let b = self.book_of(id, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
+        let path = self.source_of(id, &b);
+        if !path.is_file() {
+            return Err(err(404, "not_found", "this book has no PDF on the server"));
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| format!("{doc}.pdf"));
+        Ok((path, name))
+    }
+
     /// `GET /api/build/libraries/{id}/books?division=&class=&sort=`. `division` is a number or `unsorted`; `sort` is `title`
     /// (the default) or `call`, which lists Unsorted first and then by call number.
     pub fn books_q(&self, id: &str, query: &str) -> Result<Value, ApiErr> {

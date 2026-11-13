@@ -90,6 +90,24 @@ class SearchHit {
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
+
+  /// The hit as [SearchHit.fromJson] reads it. The worker sends its hits to the app with this, so the two sides share one
+  /// list of fields: a field added to the class goes here and in [SearchHit.fromJson], and nowhere else.
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'snippet': snippet,
+        'source_id': sourceId,
+        'source_kind': sourceKind,
+        'source_title': sourceTitle,
+        'page': page,
+        'pdf_page': ?pdfPage,
+        'link': ?link,
+        'time': ?time,
+        'time_end': ?timeEnd,
+        'lang': ?lang,
+        'quote': ?quote,
+      };
 }
 
 class SearchResponse {
@@ -106,6 +124,14 @@ class SearchResponse {
   final int totalEstimate;
   final List<String> vectorSources;
   final List<String> keywordOnlySources;
+
+  /// The response as [SearchResponse.fromJson] reads it (what the worker sends to the app).
+  Map<String, dynamic> toJson() => {
+        'results': [for (final h in results) h.toJson()],
+        'total_estimate': totalEstimate,
+        'vector_sources': vectorSources,
+        'keyword_only_sources': keywordOnlySources,
+      };
 }
 
 /// A query embedding made by the caller; the core uses it only for libraries embedded with [model].
@@ -118,27 +144,50 @@ class QueryVector {
   Map<String, dynamic> toJson() => {'model': model, 'vector': vector};
 }
 
-/// What cs_read returns. [author], [page] and [sourceType] are only set for libraries.
+/// What cs_read returns. [author], [page], [pageLabel] and [sourceType] are only set for libraries and PDF pages.
 class ReadResult {
-  const ReadResult({required this.address, required this.title, required this.text, required this.truncated, this.author, this.page, this.sourceType});
+  const ReadResult({required this.address, required this.title, required this.text, required this.truncated, this.author, this.page, this.pageLabel, this.sourceType});
 
-  factory ReadResult.fromJson(Map<String, dynamic> j) => ReadResult(
-        address: j['address'] as String,
-        title: (j['title'] ?? '') as String,
-        text: (j['text'] ?? '') as String,
-        truncated: (j['truncated'] ?? false) as bool,
-        author: j['author'] as String?,
-        page: j['page'] as int?,
-        sourceType: j['source_type'] as String?,
-      );
+  factory ReadResult.fromJson(Map<String, dynamic> j) {
+    // The core sends a page as a number, or as its printed label when that is not a number ("iv", "A-3").
+    final p = j['page'];
+    final number = p is int ? p : (p is double && p.isFinite && p == p.truncateToDouble() ? p.toInt() : null);
+    return ReadResult(
+      address: j['address'] as String,
+      title: (j['title'] ?? '') as String,
+      text: (j['text'] ?? '') as String,
+      truncated: (j['truncated'] ?? false) as bool,
+      author: j['author'] as String?,
+      page: number,
+      pageLabel: number != null ? '$number' : (p is String && p.trim().isNotEmpty ? p : (p is num ? '$p' : null)),
+      sourceType: j['source_type'] as String?,
+    );
+  }
 
   final String address;
   final String title;
   final String text;
   final bool truncated;
   final String? author;
+
+  /// The page when it is a number; null for a page whose printed label is text (see [pageLabel]).
   final int? page;
+
+  /// The page as printed: "47", "iv", "A-3". Null when the text has no page.
+  final String? pageLabel;
   final String? sourceType;
+
+  /// The result as [ReadResult.fromJson] reads it (what the worker sends to the app): the page as a number when it is one,
+  /// else its label.
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'text': text,
+        'truncated': truncated,
+        'author': author,
+        'page': page ?? pageLabel,
+        'source_type': sourceType,
+      };
 }
 
 class Suggestion {
@@ -167,9 +216,11 @@ class SourceStatus {
     required this.docs,
     this.error,
     this.keywordSource,
+    this.keywordPending,
     this.embeddingModel,
     this.wholeLibraryOnly,
     this.sourceId,
+    this.settings,
     this.index,
     this.captionsIndex,
     this.epubIndex,
@@ -190,6 +241,8 @@ class SourceStatus {
       updating: (j['updating'] ?? false) as bool,
       docs: (j['docs'] ?? 0) as int,
       keywordSource: j['keyword_source'] as String?,
+      keywordPending: j['keyword_pending'] as bool?,
+      settings: j['settings'] is Map ? (j['settings'] as Map).cast<String, dynamic>() : null,
       embeddingModel: j['embedding_model'] as String?,
       wholeLibraryOnly: j['whole_library_only'] as bool?,
       sourceId: j['source_id'] as String?,
@@ -214,6 +267,13 @@ class SourceStatus {
   /// Where keyword search for this source comes from: "own" (the ZIM's built-in Xapian index, read through libzim), "device"
   /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
   final String? keywordSource;
+
+  /// A library that grows (one Add PDF writes to): true while its newest points are not in its keyword index yet (their words are
+  /// not searchable), false when they are; null for any other source, or one with no keyword index to be behind.
+  final bool? keywordPending;
+
+  /// A library's resolved settings (the core's own JSON), to hand back to a job that builds or extends its index.
+  final Map<String, dynamic>? settings;
 
   /// The embedding model a library's settings name (its query vectors must come from it); null for a ZIM or a library
   /// that names none.

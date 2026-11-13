@@ -169,7 +169,7 @@ fn run_at(t: &NavigateTool, loc: Option<&Location>, args: Value, now: &str) -> R
     let ctx = ToolCtx { location: loc, places: &Saved, now, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args)? {
         ToolOutput::Json(v) => Ok(v),
-        ToolOutput::Text(_) => panic!("navigate gives JSON"),
+        ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("navigate gives JSON"),
     }
 }
 
@@ -642,3 +642,61 @@ fn turn_lanes_reach_the_guidance_snapshot_and_never_the_tool_result() {
     // and nothing else in the snapshot differs
     assert_eq!(without(snap_b, "lanes"), snap_a);
 }
+
+// ---- Golden: what the model reads when a route fails (the tool result text, exactly) ----
+
+/// A tile stream whose fetch crashes: the route goes ahead on the tiles there are.
+struct CrashingStream;
+impl cache_navigate::TileStream for CrashingStream {
+    fn prepare(&self, _points: &[(f64, f64)]) -> cache_navigate::TilePrep {
+        panic!("the fetch failed");
+    }
+}
+
+fn failed_text(fake: Fake, to: &str, stream: bool) -> String {
+    let t = tool(fake, None);
+    if stream {
+        let s: Arc<dyn cache_navigate::TileStream> = Arc::new(CrashingStream);
+        t.core().set_stream(Some(s));
+    }
+    let e = run(&t, Some(&here()), json!({"to": to, "mode": "drive"})).unwrap_err();
+    e.to_json().to_string()
+}
+
+#[test]
+fn golden_failed_route_text_154() {
+    assert_eq!(failed_text(Fake { fail: Some(154), ..fake() }, "42.60,-113.70", false), GOLDEN_154);
+}
+
+#[test]
+fn golden_failed_route_text_170() {
+    assert_eq!(failed_text(Fake { fail: Some(170), ..fake() }, "42.60,-113.70", false), GOLDEN_170);
+}
+
+#[test]
+fn golden_failed_route_text_171() {
+    assert_eq!(failed_text(Fake { fail: Some(171), no_edges: true, ..fake() }, "42.60,-113.70", false), GOLDEN_171);
+}
+
+#[test]
+fn golden_failed_route_text_442() {
+    assert_eq!(failed_text(Fake { fail: Some(442), ..fake() }, "42.60,-113.70", false), GOLDEN_442);
+}
+
+#[test]
+fn golden_failed_route_text_out_of_coverage() {
+    assert_eq!(failed_text(Fake { fail: Some(170), ..fake() }, "51.50,-0.12", false), GOLDEN_OUT_OF_COVERAGE);
+}
+
+#[test]
+fn golden_failed_route_text_after_a_failed_fetch() {
+    assert_eq!(failed_text(Fake { fail: Some(171), no_edges: true, ..fake() }, "42.60,-113.70", true), GOLDEN_FETCH_171);
+    assert_eq!(failed_text(Fake { fail: Some(170), ..fake() }, "42.60,-113.70", true), GOLDEN_FETCH_170);
+}
+const GOLDEN_154: &str = r#"{"ok":false,"error":{"type":"too_far","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_170: &str = r#"{"ok":false,"error":{"type":"too_far","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_171: &str = r#"{"ok":false,"error":{"type":"too_far","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_442: &str = r#"{"ok":false,"error":{"type":"no_route","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_OUT_OF_COVERAGE: &str = r#"{"ok":false,"error":{"type":"out_of_coverage","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"51.50,-0.12","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_FETCH_171: &str = r#"{"ok":false,"error":{"type":"too_far","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;
+const GOLDEN_FETCH_170: &str = r#"{"ok":false,"error":{"type":"too_far","detail":"No path could be found for input"},"from_matched":{"place_name":"current location","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null},"to_matched":{"place_name":"42.60,-113.70","kind":null,"street":null,"locality":null,"county":null,"state":null,"distance_km":null}}"#;

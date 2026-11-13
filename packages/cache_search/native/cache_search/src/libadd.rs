@@ -403,6 +403,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_template_settings_never_say_own() {
+        // `own` marks a library the person made on the device; only the app's own creation writes it (libraries_state.dart ownLibrarySettings)
+        assert!(template_settings().get("own").is_none() && template_settings().get("own_default").is_none());
+    }
+
+    #[test]
     fn template_settings_parse() {
         let s = LibrarySettings::parse(&template_settings()).unwrap();
         assert_eq!(s.library_id, "my-library");

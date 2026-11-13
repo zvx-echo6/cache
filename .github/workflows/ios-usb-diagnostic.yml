@@ -26,6 +26,8 @@ env:
   BUNDLE_ID: com.happylittle.cache
   FLUTTER_VERSION: 3.44.8
   IPHONEOS_DEPLOYMENT_TARGET: '16.3'
+  # The Rust toolchain, pinned like tests.yml and native-libs.yml (not the runner image's own).
+  RUST_VERSION: 1.99.1
 
 jobs:
   plan:
@@ -107,6 +109,8 @@ jobs:
       - name: Native toolchain identity
         id: toolchain
         run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
           echo "id=$( { xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version; rustc -vV; cmake --version; ninja --version; uname -m; } | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Finished library cache
         id: out

@@ -184,6 +184,24 @@ void main() {
       expect(frame.forwards, 1);
     });
 
+    testWidgets("on the ZIM's main page the bar shows the library title, on other pages the page's own", (tester) async {
+      await tester.pumpWidget(reader(address: null));
+      await tester.pump();
+      await tester.pump();
+      final library = sources.titleOf(ZimFile(path: '/z/wiki.zim', size: 1));
+      gotPage('/zim/TOKEN/$id/A/Main_Page', 'Wikipedia');
+      await tester.pump();
+      expect(find.text('Wikipedia'), findsNothing, reason: "the main page's own HTML title is not shown");
+      expect(find.text(library), findsWidgets);
+      gotPage('/zim/TOKEN/$id/A/Atlanta', 'Atlanta');
+      await tester.pump();
+      expect(find.text('Atlanta'), findsOneWidget);
+      gotPage('/zim/TOKEN/$id/A/Main_Page', 'Wikipedia');
+      await tester.pump();
+      expect(find.text('Wikipedia'), findsNothing);
+      expect(find.text('Atlanta'), findsNothing);
+    });
+
     testWidgets('Main page and a search suggestion load their page in the frame', (tester) async {
       await tester.pumpWidget(reader());
       await tester.pump();

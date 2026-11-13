@@ -42,6 +42,12 @@ import workmanager_apple
     }
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     // Notebooks > Connections: a folder the person picks for Obsidian or Logseq, kept as a security-scoped bookmark.
+    // A cachelink: link from outside (see LinkBridge in SceneDelegate.swift).
+    let link = FlutterMethodChannel(name: "co.cache/link", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    LinkBridge.shared.channel = link
+    link.setMethodCallHandler { call, result in
+      if call.method == "take" { result(LinkBridge.shared.take()) } else { result(FlutterMethodNotImplemented) }
+    }
     let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     let access = folderAccess
     folders.setMethodCallHandler { call, result in access.handle(call, result: result) }
