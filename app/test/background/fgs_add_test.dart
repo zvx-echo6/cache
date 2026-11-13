@@ -412,7 +412,7 @@ void main() {
       expect(n.title, '2 PDFs could not be added');
       final several = FgsAddNotice.of(FgsAddResult(at: DateTime(2026), why: 'done', total: 5, added: 3, failedIds: const ['a', 'z'], leftIds: const []), [sampleJob('a', status: AddPdfStatus.failed), sampleJob('z', status: AddPdfStatus.failed)])!;
       expect(several.title, 'Added 3 of 5 PDFs to Bookshelves');
-      expect(several.text, '2 could not be added · tap to see');
+      expect(several.text, '2 could not be added');
     });
 
     test('it ended before it was done: paused, with the reason in the existing words', () {

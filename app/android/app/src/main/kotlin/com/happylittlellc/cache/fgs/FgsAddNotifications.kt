@@ -143,10 +143,10 @@ object FgsAddNotifications {
                     text = listOfNotNull(f.failedName, f.failedBody).joinToString(" · ")
                 } else if (f.added > 0) {
                     title = "Added ${f.added} of ${f.total} PDFs to ${f.library}"
-                    text = "${f.failed} could not be added · tap to see"
+                    text = "${f.failed} could not be added"
                 } else {
                     title = "${f.failed} PDFs could not be added"
-                    text = "Tap to see them"
+                    text = ""
                 }
             }
             "paused" -> {

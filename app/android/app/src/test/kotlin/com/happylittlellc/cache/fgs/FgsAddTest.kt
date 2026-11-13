@@ -170,7 +170,7 @@ class FgsAddTest {
             FgsAddNotifications.ended(context, FgsFinish(kind, why, done, total, added, failed, battery, warm, "Bookshelves", name, ft, fb))!!
         f("added", added = 5, total = 5).let { assertEquals("Added 5 PDFs to Bookshelves", title(it)); assertEquals("Adding to search index", text(it)) }
         assertEquals("Added to Bookshelves", title(f("added", added = 1, total = 1)))
-        f("failed", added = 4, total = 5, failed = 1).let { assertEquals("Added 4 of 5 PDFs to Bookshelves", title(it)); assertEquals("1 could not be added · tap to see", text(it)) }
+        f("failed", added = 4, total = 5, failed = 1).let { assertEquals("Added 4 of 5 PDFs to Bookshelves", title(it)); assertEquals("1 could not be added", text(it)) }
         f("failed", failed = 1, total = 1, name = "Radio field manual", ft = "This PDF could not be added", fb = "Nothing was added. Your PDF was not changed.").let {
             assertEquals("This PDF could not be added", title(it))
             assertEquals("Radio field manual · Nothing was added. Your PDF was not changed.", text(it))

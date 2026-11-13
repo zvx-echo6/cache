@@ -77,10 +77,10 @@ class FgsWords {
   static String addedSomeTitle(int added, int total, String library) => 'Added $added of $total PDFs to $library';
 
   // WORDING QUESTION (owner): draft, not yet approved
-  static String someFailedText(int failed) => '$failed could not be added · tap to see';
+  static String someFailedText(int failed) => '$failed could not be added';
 
   // WORDING QUESTION (owner): draft, not yet approved
-  static const String severalFailedText = 'Tap to see them';
+  static const String severalFailedText = '';
 
   // WORDING QUESTION (owner): draft, not yet approved
   static const String dismiss = 'Dismiss';
