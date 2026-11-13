@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/gguf_header.dart';
 import 'memory.dart' show modelMemoryNeed;
+import 'byte_units.dart';
 
 /// llama.cpp's compute buffer for the chat context: 560 MiB reserved, the same with flash attention on or off (measured on the
 /// Pixel 8; see the memory research record). It is the worst case for the output logits (262,144-token vocabulary x 512-token
@@ -32,8 +33,8 @@ class MemoryNeed {
 
   /// The log line for a load.
   String get logLine => fromHeader
-      ? 'Memory need: ${total ~/ (1 << 20)} MB (weights ${weights ~/ (1 << 20)} MB, kv ${kv ~/ (1 << 20)} MB, compute ${compute ~/ (1 << 20)} MB) from header'
-      : 'Memory need: ${total ~/ (1 << 20)} MB (size-based: 0.65 x file + 1024 MB) fallback';
+      ? 'Memory need: ${mbOf(total)} MB (weights ${mbOf(weights)} MB, kv ${mbOf(kv)} MB, compute ${mbOf(compute)} MB) from header'
+      : 'Memory need: ${mbOf(total)} MB (size-based: 0.65 x file + 1024 MB) fallback';
 }
 
 /// What a chat model needs in memory while it answers with [nCtx] tokens of context, from its GGUF [h], with the chat model loaded

@@ -17,6 +17,7 @@ import '../platform/memory.dart';
 import '../sources/sources_state.dart' show LibraryEmbedding;
 import 'hf_hub.dart';
 import 'model_downloads.dart';
+import '../platform/byte_units.dart';
 
 /// A search model: an embedding GGUF pinned to one file on Hugging Face (repository, commit, path, size and SHA-256).
 class SearchModelSpec {
@@ -322,7 +323,7 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
       final reading = await _readMemory();
       if (!_warmWanted || _disposed) return;
       if (reading == null || reading.avail < need) {
-        logInfo('Search model: warm load skipped (${reading == null ? 'memory unknown' : 'available ${reading.avail ~/ (1 << 20)} MB'}, needs ${need ~/ (1 << 20)} MB)');
+        logInfo('Search model: warm load skipped (${reading == null ? 'memory unknown' : 'available ${mbOf(reading.avail)} MB'}, needs ${mbOf(need)} MB)');
         return;
       }
       logInfo('Search model: warm load started');
