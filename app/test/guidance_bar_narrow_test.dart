@@ -4,7 +4,6 @@
 
 import 'package:cache/nav/ui/guidance_panels.dart';
 import 'package:cache/nav/units.dart';
-import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
