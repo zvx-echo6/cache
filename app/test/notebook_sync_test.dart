@@ -472,6 +472,37 @@ void main() {
 
     Future<NbEntry> entryOf(_Rig r, String nb, String title) async => (await r.nb.entries(nb)).firstWhere((e) => e.title == title);
 
+    test('R1: a notebook renamed on one device is renamed on the other, which keeps its fields and every value in its field', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      // A renames the notebook and edits Lake, so a file naming the new name reaches B.
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      final lake = await entryOf(a, ida, 'Lake');
+      await a.nb.saveEntry(id: lake.id, notebookId: ida, occurredAt: lake.occurredAt, title: 'Lake', body: 'Windy.', values: lake.values);
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      final book = b.nb.notebook(idb)!;
+      expect(book.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect([for (final f in book.def.fields) (f.fid, f.label, f.hidden)], [('f1', 'Trail', false), ('f2', 'Distance', false), ('f3', 'Weather', false)],
+          reason: 'no field is made again or hidden');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3});
+      expect((await entryOf(b, idb, 'Lake')).body, 'Windy.');
+      expect((await entryOf(b, idb, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5, 'f3': 'Sunny'});
+      // B edits Ridge: its file keeps the keys both devices read.
+      final ridge = await entryOf(b, idb, 'Ridge');
+      await b.nb.saveEntry(id: ridge.id, notebookId: idb, occurredAt: ridge.occurredAt, title: 'Ridge', body: 'Steep and dry.', values: ridge.values);
+      await syncTo(b, a);
+      final text = fileOf(a, 'Ridge');
+      expect(text, contains('notebook: Hikes 2024'));
+      expect(text, contains('trail: Ridge loop'));
+      expect(text, contains('distance: 5'));
+      expect(text, contains('weather: Sunny'));
+      expect((await entryOf(a, ida, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A keeps its values in its fields');
+      expect((await entryOf(a, ida, 'Ridge')).body, 'Steep and dry.');
+      expect(a.nb.notebook(ida)!.def.fields.length, 2);
+    });
+
     test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
       final (a, b, id, idb) = await twoDevices();
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
