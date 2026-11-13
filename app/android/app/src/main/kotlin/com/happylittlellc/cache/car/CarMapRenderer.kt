@@ -232,6 +232,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             frame.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val ov = CarOverlayView(p.context, surfaceContainer.dpi / 160f)
             ov.setSurfaceSize(width, height)
+            ov.onCarries = { word -> CarLink.extras(word) }
             ov.setAreas(visible, stable)
             ov.setOverview(overview)
             ov.setTrip(CarLink.trip, dark, now = true)
@@ -610,9 +611,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 st.getLayer("car-route-driven")?.setProperties(PropertyFactory.lineColor(hex(pal.routeDriven)))
             }
         }
-        // The badge shows with the climb switch, at the steepest point ahead.
+        // The badge is part of the map (it marks the steepest point ahead), so it shows on every screen that has the figures.
         val g = ov?.steepGradePct
-        val showBadge = t.guiding && t.overlay.climb && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
+        val showBadge = t.guiding && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
         if (showBadge) {
             val key = "${pal!!.theme}|${dark}|${CarOverlayPainter.gradeText(g!!)}"
             if (key != badgeKey) {

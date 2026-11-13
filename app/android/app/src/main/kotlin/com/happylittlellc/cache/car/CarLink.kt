@@ -96,6 +96,10 @@ object CarLink {
      * once, the route line goes, and the phone is asked to end its guidance. Nothing that depends on "guiding" waits for the
      * phone's answer.
      */
+    /** Tells the phone how this car's screen carries the two extras ([CarExtrasClass.carries]): the phone shows them itself
+     * when the car does not. Nothing is sent when the car goes; the phone forgets the word by itself then. */
+    fun extras(carries: String) = call("extras", mapOf("carries" to carries))
+
     fun stopGuidance() {
         if (trip.guiding) {
             stopping = true

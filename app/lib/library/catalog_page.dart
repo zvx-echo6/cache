@@ -248,6 +248,17 @@ class CatalogPage extends StatelessWidget {
                         : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: s.pauseAll),
                   ),
                 ),
+              // In a browser the server does the index work; its Pause all and Resume are the same buttons.
+              if (plat.isWeb && d.sources.serverIndexBusy)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                    child: d.sources.serverIndexPaused
+                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: () => d.sources.setServerIndexPaused(false))
+                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: () => d.sources.setServerIndexPaused(true)),
+                  ),
+                ),
               if (entries.isEmpty) ...[
                 Padding(
                   padding: const EdgeInsets.all(8),

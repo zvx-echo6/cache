@@ -195,6 +195,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     if let Some(shim) = a.get("valhalla-shim") {
         helper_cfg.shim = PathBuf::from(shim);
     }
+    helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
@@ -279,6 +280,8 @@ fn main() {
         }
         // Hidden: the server re-runs itself as this to read one PDF, so a PDF that crashes MuPDF takes down only this process.
         Some("extract-pdf") => std::process::exit(cache_builder::isolate::child_main()),
+        // Hidden: the helper runs this on each PDF inside a ZIM to index it headless (builder/src/pdf_text.rs).
+        Some("pdf-text") => std::process::exit(cache_builder::pdf_text::child_main(&argv[1..])),
         Some("serve") => serve(&argv[1..]),
         Some("set-password") => set_password(&argv[1..]),
         Some("keys") => keys(&argv[1..]),

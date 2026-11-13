@@ -15,6 +15,7 @@ pub mod isolate;
 pub mod layout;
 pub mod docs;
 pub mod library;
+pub mod pdf_text;
 pub mod log;
 pub mod samebook;
 pub mod sorter;
