@@ -16,6 +16,7 @@ import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
 import 'car_overlay.dart';
+import 'car_pins.dart';
 import 'car_trip.dart';
 import 'phone_drive.dart';
 
@@ -42,6 +43,7 @@ class CarBridge {
     Future<String> Function()? glyphs,
     this.ready,
     this.onConnected,
+    this.pins,
     this.throttle = const Duration(milliseconds: 250),
   })  : _channel = channel ?? const MethodChannel('co.cache/car'),
         _glyphs = glyphs ?? MapAssets.glyphsUrl;
@@ -82,6 +84,9 @@ class CarBridge {
   /// closed, when nothing else has read one yet).
   final Future<void> Function()? onConnected;
 
+  /// The phone map's pins for the car's map (car_pins.dart); null: the car's map draws none.
+  final CarPins? pins;
+
   Future<void> _ready() async {
     final r = ready;
     if (r == null) return;
@@ -117,6 +122,7 @@ class CarBridge {
     _lastTheme = theme?.call();
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
+    pins?.bind(connected: connected, send: _send);
     try {
       // The native side may have a car session already (the car started the app): it answers with whether it does.
       final r = await _channel.invokeMethod<Object?>('hello');
@@ -137,6 +143,7 @@ class CarBridge {
     phoneDrive?.removeListener(_onPhoneDrive);
     maps.removeListener(_onMaps);
     _events?.cancel();
+    pins?.dispose();
     if (_started) _channel.setMethodCallHandler(null);
     connected.dispose();
   }
@@ -369,6 +376,8 @@ class CarBridge {
   Future<Map<String, Object?>?> style({required bool dark}) async {
     if (!maps.engine.ready) return null;
     final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
+    // The pins' pictures follow the map's look (Tactical has its own).
+    pins?.setTactical(palette.id == CacheThemeId.tactical);
     final String glyphs;
     try {
       glyphs = await _glyphs();
