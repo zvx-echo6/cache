@@ -16,6 +16,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
+import com.happylittlellc.cache.fgs.FgsAddArm
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -101,6 +102,18 @@ class MainActivity : FlutterActivity() {
     // answers; cleanUpFlutterEngine tells the engine's keeper that this screen has let go.
     override fun shouldDestroyEngineWithHost(): Boolean = false
 
+    // Leaving with adds pending starts the foreground service that carries them on (fgs/FgsAddArm.kt): Home and recents come here;
+    // Back at the root finishes the activity, which onPause sees. Both while Cache is still in front, as Android 12 requires.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        FgsAddArm.onLeave(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) FgsAddArm.onLeave(this)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) window.decorView.post(restoreSystemBars)
@@ -160,6 +173,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -236,6 +250,7 @@ class MainActivity : FlutterActivity() {
         linkChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)

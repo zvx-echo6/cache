@@ -7,6 +7,7 @@ import 'package:cache_ocr/cache_ocr.dart' show deviceOcrEngine;
 import '../../app_fs.dart';
 import '../../background/background_lock.dart';
 import '../../background/background_tasks.dart';
+import '../../background/fgs_add.dart';
 import '../../notebook/sync/folder.dart' show FolderFile;
 import '../../pdf/pdfium_init.dart' show installNativePdfFonts;
 import '../../platform/app_log.dart';
@@ -224,6 +225,181 @@ Future<String> watchAddJob({
     await s.save();
     await w.save();
     if (watch == null) w.dispose();
+    if (state == null) s.dispose();
+    l.release(kAddPdfWork);
+  }
+}
+
+/// How long the foreground service's add may run: the slice's budget (it has no 8-minute slice; Android 15's own limit, 6 hours in
+/// 24, ends it with `onTimeout`, handled by the service).
+const Duration kFgsAddBudget = Duration(hours: 7);
+
+/// How long the service waits for Cache to finish going to the back (it is started while Cache is still in front, and the app's
+/// hand-off then lets go of the lock) before it gives up.
+const Duration kFgsWaitForBack = Duration(seconds: 90);
+
+/// The service's side of a run: what it is told (stop, with why: "person" Pause, "timeout" Android's limit) and what it tells.
+class FgsAddControl {
+  FgsAddControl({this.onProgress});
+
+  /// Set by a stop message; read by the slice's checks.
+  String? stopWhy;
+
+  /// How the run ended, set when it does (also written to the result file for the in-app notice).
+  FgsAddResult? result;
+
+  /// When exactly one PDF could not be added: its name and the Add PDF page's own words for the error (title and body).
+  (String, String, String)? failedWords;
+
+  /// A change of progress (at most one a second).
+  final void Function(FgsProgress p)? onProgress;
+
+  void stop(String why) => stopWhy ??= why;
+}
+
+/// How the service's add ended, in a few words for the log (the result is on [FgsAddControl.result]).
+class FgsAddEnd {
+  const FgsAddEnd(this.words);
+  final String words;
+}
+
+/// The foreground service's add job: the same Add PDF slice as [watchAddJob], over the same lock (`run-pdf-add`: it never runs
+/// at the same time as the charging run, and Cache coming to the front stops it), with three differences: it runs on the battery
+/// too (above the low-battery threshold), it takes every PDF the person left pending (not only the watched folders'), and it has no
+/// 8-minute slice. It waits (at most [waitForBack]) for Cache to finish going to the back, since it is started while Cache is
+/// still in front. What is left when it ends falls to the charging run ([queue]).
+Future<FgsAddEnd> fgsAddJob({
+  required String support,
+  required FgsAddControl control,
+  BackgroundLock? lock,
+  BatteryReader battery = readBattery,
+  AddPdfState? state,
+  IndexThrottle? throttle,
+  Duration budget = kFgsAddBudget,
+  Duration waitForBack = kFgsWaitForBack,
+  Duration look = const Duration(milliseconds: 500),
+  Duration progressEvery = const Duration(seconds: 1),
+  // how often it looks at the stop, the battery and the heat: Pause answers within this
+  Duration lookEvery = const Duration(seconds: 5),
+  bool resume = false,
+  bool anyway = false,
+  Future<void> Function({bool next, Duration delay})? queue,
+}) async {
+  final l = lock ?? BackgroundLock(Directory(backgroundDir(support)));
+  final again = queue ?? ({bool next = false, Duration delay = Duration.zero}) => scheduleWatchAdd(next: next, delay: delay);
+  final th = throttle ?? IndexThrottle(read: battery, mobile: Platform.isAndroid || Platform.isIOS, speed: await _indexSpeed());
+  void dispose() {
+    if (throttle == null) th.dispose();
+  }
+
+  // the battery rule: held only below the low-battery threshold (or by heat), not for being unplugged
+  // Resume anyway: a low battery does not hold this run (heat still does)
+  String? ok(String? w) => anyway && w == 'battery' ? null : w;
+  final first = ok(await addPdfHeldNow(th, unplugged: true));
+  if (first != null) {
+    dispose();
+    control.result = FgsAddResult(at: DateTime.now(), why: first, total: 0, added: 0, failedIds: const [], leftIds: const [], batteryPercent: th.reading?.percent, warm: th.reading?.thermal.hot ?? false);
+    return FgsAddEnd('held: $first');
+  }
+  // the one lock: the charging run holds it, or Cache is still in front (the hand-off lets go of it in a moment)
+  final end = DateTime.now().add(waitForBack);
+  while (!l.hold(kAddPdfWork)) {
+    if (l.runs(kAddPdfWork)) {
+      dispose();
+      return const FgsAddEnd('skipped: another run is adding');
+    }
+    if (control.stopWhy != null || !DateTime.now().isBefore(end)) {
+      dispose();
+      return FgsAddEnd(control.stopWhy != null ? 'stopped before it started' : 'skipped: Cache is open');
+    }
+    await Future<void>.delayed(look);
+  }
+  final before = indexThrottleShared;
+  indexThrottleShared = th;
+  final refresh = Timer.periodic(BackgroundLock.refreshEvery, (_) => l.refresh(kAddPdfWork));
+  final ingest = Directory('$support${Platform.pathSeparator}ingest');
+  final s = state ?? await _backgroundAddPdfState(support, ingest);
+  Timer? tick;
+  var ids = <String>{};
+  AddPdfSliceResult? r;
+  try {
+    await s.load();
+    // the notification's Resume (and Resume anyway: the low battery does not hold it) started this run
+    if (resume) {
+      for (final j in s.active) {
+        j.pausedByPerson = false;
+        if (anyway) {
+          j.anyway = true;
+          j.startNow = true;
+        }
+      }
+    }
+    ids = {for (final j in s.active) if (fgsJobMayRun(j, th.reading)) j.id};
+    if (ids.isEmpty) return const FgsAddEnd('nothing to add');
+    String? lastSent;
+    void send() {
+      final p = FgsProgress.of(ids, s.jobs);
+      if (p == null) return;
+      final j = jsonEncode(p.toJson());
+      if (j == lastSent) return;
+      lastSent = j;
+      control.onProgress?.call(p);
+    }
+
+    send();
+    tick = Timer.periodic(progressEvery, (_) => send());
+    r = await AddPdfSlice(
+      s,
+      budget: budget,
+      stopAsked: () => l.stopAsked(kAddPdfWork) || control.stopWhy != null,
+      // everything the person left pending that may run now, not only the watched folders' PDFs
+      only: (j) => ids.contains(j.id) && fgsJobMayRun(j, th.reading),
+      throttle: th,
+      lookEvery: lookEvery,
+      held: () async => ok(addPdfHeld(th, unplugged: true)),
+    ).run();
+    return FgsAddEnd(r.words);
+  } finally {
+    tick?.cancel();
+    indexThrottleShared = before;
+    refresh.cancel();
+    final why = control.stopWhy ?? r?.why ?? 'stopped';
+    // Pause: what was running is paused the way the card's Pause pauses it, so it shows "Paused by you" and the charging run leaves it
+    if (why == 'person') {
+      for (final j in s.active) {
+        if (ids.contains(j.id)) j.pausedByPerson = true;
+      }
+    }
+    await s.save();
+    final jobs = s.jobs;
+    final result = FgsAddResult(
+      at: DateTime.now(),
+      why: why,
+      total: ids.length,
+      added: [for (final j in jobs) if (ids.contains(j.id) && j.status == AddPdfStatus.done) j].length,
+      failedIds: [for (final j in jobs) if (ids.contains(j.id) && j.status == AddPdfStatus.failed) j.id],
+      leftIds: [for (final j in jobs) if (ids.contains(j.id) && j.status == AddPdfStatus.active) j.id],
+      batteryPercent: th.reading?.percent,
+      warm: th.reading?.thermal.hot ?? false,
+      library: switch (jobs.where((j) => ids.contains(j.id)).firstOrNull) { final j? => fgsLibraryWords(j), _ => 'Bookshelves' },
+    );
+    if (result.failedIds.length == 1) {
+      final j = jobs.firstWhere((j) => j.id == result.failedIds.first);
+      final w = addPdfErrorWords(j);
+      control.failedWords = (j.title, w.title, w.body);
+    }
+    if (ids.isNotEmpty) {
+      await writeFgsResult(backgroundDir(support), result);
+      control.result = result;
+    }
+    // what is left falls to the charging run (watched folders' PDFs; the rest waits for Cache)
+    final left = result.leftIds.isNotEmpty;
+    if (left && why != 'app' && why != 'person') {
+      try {
+        await again(delay: kWatchAddRetry);
+      } catch (_) {}
+    }
+    if (throttle == null) th.dispose();
     if (state == null) s.dispose();
     l.release(kAddPdfWork);
   }

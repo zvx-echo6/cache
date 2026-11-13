@@ -8,6 +8,11 @@
          its notification (geolocator runs it). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Adding PDFs in the background after the person leaves Cache: a foreground service of type dataSync (local file processing),
+         with its notification (FgsAddService; its type is the one constant FgsAddService.FGS_TYPE). If Play refuses dataSync the
+         fallback is specialUse: this permission becomes FOREGROUND_SERVICE_SPECIAL_USE, the type below becomes specialUse, and a
+         PROPERTY_SPECIAL_USE_FGS_SUBTYPE property is added to the service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
@@ -50,6 +55,10 @@
                 <data android:scheme="cachelink"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".fgs.FgsAddService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- Android Auto is declared in src/car/AndroidManifest.xml, merged only when the build has -PcacheAndroidAuto=true
              (build.gradle.kts): release builds leave it out until it ships with CarPlay. -->
         <!-- Don't delete the meta-data below.
