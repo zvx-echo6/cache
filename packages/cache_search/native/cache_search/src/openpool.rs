@@ -38,7 +38,7 @@ pub fn run_pool<I: Sync, T: Send, F: Fn(&I) -> T + Sync>(items: &[I], threads: u
     std::thread::scope(|s| {
         for k in 1..workers {
             // a thread that cannot start just leaves its share to the others (the calling thread takes items too)
-            let _ = std::thread::Builder::new().name(format!("cs-open-zim-{k}")).spawn_scoped(s, &work);
+            let _ = std::thread::Builder::new().name(format!("cs-open-zim-{k}")).spawn_scoped(s, work);
         }
         work();
     });

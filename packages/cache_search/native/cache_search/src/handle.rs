@@ -720,7 +720,7 @@ impl Handle {
         let total_ms = t_all.elapsed().as_millis() as u64;
         let other_ms = total_ms.saturating_sub(zims_ms + snap_ms + regions_ms + ext_ms + layers_ms + notebook_ms);
         // slowest three ZIM opens (one line, not one per ZIM: a phone holds dozens)
-        zim_ms.sort_by(|a, b| b.1.cmp(&a.1));
+        zim_ms.sort_by_key(|z| std::cmp::Reverse(z.1));
         let slowest: Vec<String> = zim_ms.iter().take(3).map(|(t, ms)| format!("{t} {ms} ms")).collect();
         self.open_timings = vec![
             format!(
