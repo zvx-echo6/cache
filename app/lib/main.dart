@@ -925,6 +925,8 @@ class _CacheAppState extends State<CacheApp> {
         _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) unawaited(_backToFront());
+        // iOS can take the map tile server's socket away while the app is in the back: the core starts a new one if so.
+        if (!plat.isWeb) unawaited(maps.engine.recheckServer());
       },
       // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
       // search box does (SearchModel.aboutToSearch).

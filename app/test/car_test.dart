@@ -41,6 +41,23 @@ class _GenEngine extends TestLayerEngine {
   }
 }
 
+/// A tile server that is started again on a new port when it is asked for after losing its socket ([lose]).
+class _PortEngine extends TestLayerEngine {
+  int _port = 1;
+  int _upcoming = 1;
+  int rechecks = 0;
+  @override
+  int get port => _port;
+  void lose(int next) => _upcoming = next;
+  @override
+  Future<void> recheckServer() async {
+    rechecks++;
+    if (_upcoming == _port) return;
+    _port = _upcoming;
+    notifyListeners();
+  }
+}
+
 class _NoSource implements PositionSource {
   @override
   Future<LocationPermissionState> permission() async => LocationPermissionState.granted;
@@ -766,6 +783,36 @@ void main() {
       m.setLayersOn(on);
       await settle();
       expect(count(), 3);
+      b.dispose();
+    });
+
+    test('a tile server on a new port reloads the phone map and the car map; one found while answering the car is in that answer', () async {
+      final eng = _PortEngine();
+      final m = MapsState(engine: eng, settingsDirOverride: dir);
+      addTearDown(m.dispose);
+      await m.init();
+      final b = CarBridge(nav: nav, maps: m, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(eng.rechecks, greaterThan(0), reason: 'a car screen connecting asks for the tile server again');
+      await b.style(dark: true);
+      int count() => toCar.where((c) => c.method == 'styleChanged').length;
+      toCar.clear();
+      // The app comes back to the front and the server has a new port.
+      final keyBefore = m.styleKey;
+      eng.lose(2);
+      await eng.recheckServer();
+      await settle();
+      expect(m.styleKey, isNot(keyBefore), reason: 'the phone map loads its style again');
+      expect(count(), 1, reason: 'the car map loads its style again');
+      // The car asks for its style and the server has to be started again right then: the answer is the new style, no second load.
+      eng.lose(3);
+      final before = eng.rechecks;
+      expect(await b.style(dark: true), isNotNull);
+      expect(eng.rechecks, before + 1);
+      expect(eng.port, 3);
+      await settle();
+      expect(count(), 1);
       b.dispose();
     });
 

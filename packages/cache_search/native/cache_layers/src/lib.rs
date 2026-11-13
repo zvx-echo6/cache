@@ -38,9 +38,14 @@ impl Layers {
         Ok(Layers { inner: Arc::new(Inner::open(cfg)?), server: Mutex::new(None) })
     }
 
-    /// Start the tile server (once) and say where it is.
+    /// Start the tile server if it is not running and say where it is. A server that no longer listens (iOS takes a suspended
+    /// app's listening socket away) is stopped and a new one started, on a new port: the app asks again when it comes to the
+    /// front and when a car screen connects, and reloads its map styles when the port changed.
     pub fn serve(&self) -> Result<serde_json::Value> {
         let mut g = self.server.lock().map_err(|_| Error::internal("poisoned"))?;
+        if g.as_ref().is_some_and(|s| !s.is_listening()) {
+            *g = None;
+        }
         if g.is_none() {
             *g = Some(server::TileServer::start(self.inner.clone())?);
         }

@@ -106,6 +106,7 @@ class CarBridge {
   String? _lastTrip;
   String? _lastRouteSig;
   String? _lastStyleKey;
+  bool _answeringStyle = false;
   bool _started = false;
 
   /// Places the car was last shown, by id, so a tap in the car picks the very place the phone found.
@@ -157,6 +158,8 @@ class CarBridge {
       _lastRouteSig = null;
       _pushedPhase = null;
       _schedule();
+      // The tile server may have lost its socket while the app was in the back: a new port reloads the car's map ([_onMaps]).
+      unawaited(maps.engine.recheckServer());
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
@@ -204,6 +207,8 @@ class CarBridge {
   String get _carStyleKey => [
         for (final u in maps.uses) u.def.id,
         'pins-${maps.pinStyle.name}',
+        // A tile server started again on a new port: the car's map must load its sources from the new one.
+        'port${maps.engine.port}',
         for (final l in maps.engine.layers) l.styleSignature,
       ].join(',');
 
@@ -227,7 +232,7 @@ class CarBridge {
   }
 
   void _onMaps() {
-    if (!connected.value) return;
+    if (!connected.value || _answeringStyle) return;
     final key = _carStyleKey;
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
@@ -387,6 +392,14 @@ class CarBridge {
   /// with the colors of the route and the position for the lines the car adds on top.
   Future<Map<String, Object?>?> style({required bool dark}) async {
     if (!maps.engine.ready) return null;
+    // The style must point at a tile server that answers (iOS can take its socket away while the app is in the back). A new port
+    // found here is in the style being answered, so it does not also send styleChanged.
+    _answeringStyle = true;
+    try {
+      await maps.engine.recheckServer();
+    } finally {
+      _answeringStyle = false;
+    }
     final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
     // The pins' pictures follow the map's look (Tactical has its own).
     pins?.setTactical(palette.id == CacheThemeId.tactical);
