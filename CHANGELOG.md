@@ -6,8 +6,13 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 51, test) - 2026-11-12
+
+- If you went from 1.0 to build 49, check Settings > Sharing and sync: it may have switched itself off
+
 ### New
-- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons. Android Auto is off in store builds for now
+- Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons
+- CarPlay: Cache's map on the car screen with Saved places and Search, a choice of routes, and turn-by-turn guidance with lane arrows, a position arrow that glides, the grade of a climb ahead marked on the route, a mini map of the whole route and the climb ahead drawn on the map on car screens big enough for them, and a Route overview button; spoken prompts give way to a tone during a call
 - Weather: the screen is now a weather page for one place at a time: the temperature and conditions at the top, everything happening nearby in one list with the most serious first, and the forecast one line per day; tap the place's name to see all your places with the worst thing happening at each
 - Sharing and sync: scanning a device's link code with the phone's camera opens Cache with the code already filled in, and Share link sends the same link (the code under the QR and Copy code are unchanged); a device that is already linked is told so and nothing changes; the clipboard is read only when you tap Paste
 - Navigation: a row of lane arrows appears under the turn banner as a turn comes within the first voice prompt's distance (800 m driving), with the lane to be in lit and the other usable lanes marked; screen readers say which lanes to use
@@ -16,6 +21,9 @@ release notes).
 - Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Library: a scanned PDF added on Android now has its pages read, so its words can be found (in store builds, reading failed on every page)
+- Ask: sources cited as a list or a range, such as [1, 2] or [1-3], now count as sources; they were dropped
+- Ask: when the search engine fails to start or stops, Ask's searches no longer wait for ever; the engine starts again
 - Sharing: updating from 1.0 no longer turns sharing off at the next start
 - Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
 - Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line

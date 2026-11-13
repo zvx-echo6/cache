@@ -94,6 +94,7 @@ import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
+import 'settings/token_store_open.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
@@ -126,6 +127,7 @@ import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
 import 'platform/phone_screen.dart';
+import 'platform/phone_window.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -247,13 +249,14 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState(
+    tokens: platformTokenStore(),
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
     indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     setWeb: (provider, key, online) async =>
         (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
     // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
@@ -275,7 +278,7 @@ class _CacheAppState extends State<CacheApp> {
     settings: settings,
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     // A browser keeps these on Cache Server: the catalogues in the support folder, and the core's source folder (the server opens its
     // core with `<docs>/live-defs`) in the documents folder.
     catalogueDir: plat.isWeb ? null : () async => Directory('${await appSupportPath()}/live-catalogues'),
@@ -435,7 +438,7 @@ class _CacheAppState extends State<CacheApp> {
       placeNames: () => _placeNames.names,
       recommended: () => RecommendedModels.shared.models,
     ),
-    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
@@ -809,7 +812,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   Timer? _shareSync;
   // The optional app PIN: asked when Cache opens.
-  late final AppPin appPin = AppPin(const SecureTokenStore());
+  late final AppPin appPin = AppPin(platformTokenStore());
   // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
   late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
     final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
@@ -935,6 +938,8 @@ class _CacheAppState extends State<CacheApp> {
             _modelRelease.toBackground();
           case AppLifecycleState.resumed:
             _modelRelease.toFront();
+            // Where the phone's window stands is asked again: a missed message must not leave the phone's map still.
+            if (plat.isIOS) unawaited(phoneWindow.refresh());
           case AppLifecycleState.inactive:
           case AppLifecycleState.detached:
             break;
@@ -1150,7 +1155,29 @@ class _CacheAppState extends State<CacheApp> {
     _mapsRead = maps.init();
     if (plat.isAndroid) {
       unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
-      _car = CarBridge(
+      _car = _newCarBridge();
+      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
+      _car!.connected.addListener(_onCarScreen);
+      unawaited(_car!.start());
+    } else if (plat.isIOS) {
+      // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
+      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
+      // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
+      unawaited(readCarScreenSupport().then((on) {
+        if (!on || !mounted) return;
+        _car = _newCarBridge();
+        // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
+        _car!.connected.addListener(_onCarScreen);
+        unawaited(_car!.start());
+      }));
+      // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
+      unawaited(phoneWindow.start());
+    }
+    _openHistory();
+  }
+
+  /// The car screen's link to the phone's guidance (Android Auto; CarPlay in an iPhone build made with it).
+  CarBridge _newCarBridge() => CarBridge(
         nav: nav,
         maps: maps,
         drive: carDrive,
@@ -1168,12 +1195,6 @@ class _CacheAppState extends State<CacheApp> {
           await location.request(explain: () async => false);
         },
       );
-      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
-      _car!.connected.addListener(_onCarScreen);
-      unawaited(_car!.start());
-    }
-    _openHistory();
-  }
 
   void _onCarScreen() {
     final attached = _car?.connected.value ?? false;
@@ -1276,7 +1297,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      _store = await openHistoryStore();
+      _store = await openHistoryStore(onChanged: () => chat.historyRevision.value++);
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
