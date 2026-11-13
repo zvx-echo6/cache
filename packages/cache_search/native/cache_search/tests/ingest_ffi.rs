@@ -862,6 +862,42 @@ fn a_book_removed_from_the_library_is_removed_from_the_next_generation_of_the_sn
     assert!(!keyword_hits(&old, "nebula", 5).unwrap().0.is_empty());
 }
 
+/// Removing a book with nothing added leaves the shard with fewer points than the keyword snapshot covers. The status says the words
+/// are pending then too (the app schedules an extension on it), and the extension deletes the removed book's ids: before, only a shard
+/// with more points than the snapshot counted, so a delete alone never brought an extension and the stale ids stayed in the index.
+#[test]
+fn a_book_removed_with_nothing_added_makes_the_keyword_index_pending_until_the_extension_deletes_it() {
+    let tmp = TempDir::new("sealed-delete-pending");
+    let (lib, svc, indexes) = sealed_library(&tmp);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["generation"], 1, "{r}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    assert_eq!(sealed::pending(h), json!(false), "everything is in the snapshot");
+    sealed::close(h);
+
+    let gone = delete_book(&lib, "Nebula Guide");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    assert_eq!(sealed::pending(h), json!(true), "the snapshot covers points the shard no longer has: an extension is due");
+    sealed::close(h);
+
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["generation"], 2, "{r}");
+    assert_eq!(r["result"]["added"], 0, "{r}");
+    assert_eq!(r["result"]["removed"], gone, "{r}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 2);
+    assert_eq!(sealed::pending(h), json!(false), "nothing is pending once the stale ids are deleted");
+    assert_eq!(sealed::found(h, "nebula"), 0);
+    assert!(sealed::found(h, "quasar") > 0);
+    sealed::close(h);
+    let g2 = snap_dirs(&indexes).into_iter().find(|d| generation(d) == 2).unwrap();
+    let now = LibOpenIndex::open(&g2, TOKENIZER).unwrap();
+    assert!(keyword_hits(&now, "nebula", 20).unwrap().0.is_empty(), "the removed book's documents are gone from the index");
+}
+
 /// An extension holds the missing pieces, with their text, in memory. Past `max_extend_pieces` the library is built whole instead
 /// (which streams the shard), published as the next generation, and every word is searchable.
 #[test]
