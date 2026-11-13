@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../platform.dart' as plat;
+import 'byte_units.dart';
 
 /// The app's resident memory and swap now, from /proc/self/status (Android and Linux): "RSS 2346 MB (anon 1200 MB, file
 /// 1146 MB), swap 2163 MB"; "memory unknown" where the system does not say. iOS gives its last native reading (phys_footprint
@@ -92,18 +93,18 @@ class MemoryReading {
   final int? compressed;
 
   String get diagnostics => [
-    if (footprint != null) 'footprint ${footprint! >> 20} MB',
-    if (resident != null) 'RSS ${resident! >> 20} MB',
-    if (compressed != null) 'compressed ${compressed! >> 20} MB',
-    '${appScoped ? 'app room' : 'available'} ${avail >> 20} MB',
-    'device ${total >> 20} MB',
+    if (footprint != null) 'footprint ${mbOf(footprint!)} MB',
+    if (resident != null) 'RSS ${mbOf(resident!)} MB',
+    if (compressed != null) 'compressed ${mbOf(compressed!)} MB',
+    '${appScoped ? 'app room' : 'available'} ${mbOf(avail)} MB',
+    'device ${mbOf(total)} MB',
   ].join(', ');
 
   /// What can be used before the system starts killing apps.
   int get room => avail - threshold;
 
   @override
-  String toString() => appScoped ? diagnostics : 'free ${avail >> 20} MB of ${total >> 20} MB (kills below ${threshold >> 20} MB${low ? ', low' : ''})';
+  String toString() => appScoped ? diagnostics : 'free ${mbOf(avail)} MB of ${mbOf(total)} MB (kills below ${mbOf(threshold)} MB${low ? ', low' : ''})';
 }
 
 /// Android's memory channel (MainActivity: ActivityManager.MemoryInfo, and onTrimMemory).
