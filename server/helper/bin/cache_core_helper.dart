@@ -12,6 +12,7 @@ import 'index_driver.dart';
 import 'keystore.dart';
 import 'pdf_zim_indexer.dart';
 import 'line_protocol.dart';
+import 'live_timer.dart';
 import 'regions_ops.dart';
 import 'video_ops.dart';
 
@@ -59,6 +60,8 @@ Future<void> main() async {
   final guide = guidePath != null && guidePath.isNotEmpty
       ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
       : null;
+  // Weather, alerts and fires stay fresh with no tab open (what a phone's background run does).
+  final liveTimer = LiveTimer(dispatcher, support: dirs.support, log: log)..start();
   // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
   final regionsOps = RegionsOps(
     dirs.support,
@@ -92,6 +95,7 @@ Future<void> main() async {
     hook: keys,
   );
   indexer.stop();
+  liveTimer.stop();
   await stdout.flush();
   exit(0);
 }

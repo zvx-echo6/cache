@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../app_fs.dart';
 import '../files.dart';
 import 'alert_area.dart';
 import 'live_view.dart';
@@ -588,12 +589,18 @@ typedef ToldList = ({Set<String> addresses, List<ToldAlert> alerts, bool known})
 /// A second copy is kept beside it (`<file>.bak`), and the store remembers the last list it read or wrote: a file that cannot
 /// be read falls back to those, and only when none is left is it an empty list (see [ToldList]).
 class ToldStore {
-  ToldStore(File file) : _where = (() async => file);
+  ToldStore(File file) : _where = (() async => file), _fs = null, _path = '';
 
   /// For when the folder is only known later (the app reads its support folder at start).
-  ToldStore.lazy(this._where);
+  ToldStore.lazy(Future<File> Function() where) : _where = where, _fs = null, _path = '';
 
-  final Future<File> Function() _where;
+  /// A browser: the file is `alerts_told.json` in the support folder on Cache Server, reached through [AppFs] (so the server's own
+  /// timer and every tab share one memory of what was told).
+  ToldStore.appFs(AppFs fs, [this._path = 'alerts_told.json']) : _where = null, _fs = fs;
+
+  final Future<File> Function()? _where;
+  final AppFs? _fs;
+  final String _path;
 
   /// The most kept; older ones drop off (an alert that old has long ended).
   static const int keep = 500;
@@ -614,31 +621,47 @@ class ToldStore {
   /// The list, and whether it is known: from the file; when that cannot be read, from the copy beside it, then from what this
   /// store last had. No file at all is a list that is known to be empty (nothing was told yet).
   Future<({List<Object?> list, bool known})> _all() async {
-    final File file;
-    try {
-      file = await _where();
-    } catch (_) {
-      return (list: _last ?? const <Object?>[], known: _last != null);
+    final main = await _readAt('');
+    final list = main.list;
+    if (list != null) {
+      _last = list;
+      return (list: list, known: true);
     }
-    var there = true;
-    try {
-      there = await file.exists();
-    } catch (_) {}
-    if (there) {
-      final list = await _listIn(file);
-      if (list != null) {
-        _last = list;
-        return (list: list, known: true);
-      }
-    }
-    final copy = await _listIn(File('${file.path}.bak'));
+    final copy = (await _readAt('.bak')).list;
     if (copy != null) {
       _last = copy;
       return (list: copy, known: true);
     }
     final last = _last;
     if (last != null) return (list: last, known: true);
-    return (list: const <Object?>[], known: !there);
+    return (list: const <Object?>[], known: !main.there);
+  }
+
+  /// The store's file ([suffix] '' ) or the copy beside it ('.bak'): whether it is there, and its list (null when it cannot be
+  /// read as one). A file that cannot be reached at all counts as there and unreadable. A browser's is read through [AppFs].
+  Future<({bool there, List<Object?>? list})> _readAt(String suffix) async {
+    final fs = _fs;
+    if (fs != null) {
+      try {
+        final text = await fs.readString(AppRoot.support, '$_path$suffix');
+        if (text == null) return (there: false, list: null);
+        final j = jsonDecode(text);
+        return (there: true, list: j is List ? j : null);
+      } catch (_) {
+        return (there: true, list: null);
+      }
+    }
+    final File file;
+    try {
+      file = File('${(await _where!()).path}$suffix');
+    } catch (_) {
+      return (there: true, list: null);
+    }
+    var there = true;
+    try {
+      there = await file.exists();
+    } catch (_) {}
+    return (there: there, list: there ? await _listIn(file) : null);
   }
 
   /// Everything told about, read once.
@@ -664,10 +687,16 @@ class ToldStore {
     final list = [...(await _all()).list, ...addresses, for (final a in alerts) a.toJson()];
     final kept = list.length > keep ? list.sublist(list.length - keep) : list;
     _last = kept;
+    final text = jsonEncode(kept);
     try {
-      final file = await _where();
+      final fs = _fs;
+      if (fs != null) {
+        await fs.writeStringAtomic(AppRoot.support, _path, text);
+        await fs.writeStringAtomic(AppRoot.support, '$_path.bak', text);
+        return;
+      }
+      final file = await _where!();
       await file.parent.create(recursive: true);
-      final text = jsonEncode(kept);
       await writeStringAtomic(file, text);
       await writeStringAtomic(File('${file.path}.bak'), text);
     } catch (_) {}

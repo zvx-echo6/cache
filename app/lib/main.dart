@@ -107,7 +107,9 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/browser_notification.dart';
 import 'weather/foreground_updates.dart';
+import 'weather/weather_files.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -277,12 +279,24 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
     secrets: platformTokenStore(),
-    catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
-    liveDir: () async {
-      await sources.whenCoreReady();
-      final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
-      return dir is String ? Directory(dir) : null;
-    },
+    // A browser keeps these on Cache Server: the catalogues in the support folder, and the core's source folder (the server opens its
+    // core with `<docs>/live-defs`) in the documents folder.
+    catalogueDir: plat.isWeb ? null : () async => Directory('${await appSupportPath()}/live-catalogues'),
+    catalogueFiles: plat.isWeb ? () => AppFsFiles.open(_appFs, AppRoot.support, 'live-catalogues') : null,
+    liveDir: plat.isWeb
+        ? null
+        : () async {
+            await sources.whenCoreReady();
+            final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
+            return dir is String ? Directory(dir) : null;
+          },
+    liveFiles: plat.isWeb
+        ? () async {
+            await sources.whenCoreReady();
+            return AppFsFiles.open(_appFs, AppRoot.docs, 'live-defs');
+          }
+        : null,
+    onPlan: plat.isWeb ? (plan) => _appFs.writeStringAtomic(AppRoot.support, 'live_plan.json', jsonEncode(plan)) : null,
     builtIns: readLiveSourceAssets,
     position: () {
       final f = location.fix;
@@ -291,10 +305,13 @@ class _CacheAppState extends State<CacheApp> {
     regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
-    told: ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
+    told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
   )..placeAlerts = placeAlerts;
+  /// The app's files on Cache Server (a browser only; a phone reaches its own folders directly).
+  late final AppFs _appFs = createAppFs();
   /// Each place's own alert rule (Places notebook, the place's gear).
-  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
+  late final PlaceAlerts placeAlerts =
+      plat.isWeb ? PlaceAlerts.appFs(_appFs) : PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -1048,9 +1065,14 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
-        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
-        final state = WidgetsBinding.instance.lifecycleState;
-        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        if (plat.isWeb) {
+          // A browser: the server's own timer fetches with no tab open, so while a tab is open the alerts that arrived are checked.
+          weather.watchWhileOpen(every: const Duration(minutes: 5), due: kBackgroundEvery);
+        } else {
+          // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+          final state = WidgetsBinding.instance.lifecycleState;
+          if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        }
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1246,7 +1268,7 @@ class _CacheAppState extends State<CacheApp> {
       await scheduleBackgroundUpdates(anythingOn: on);
       if (on && !_askedNotifications) {
         _askedNotifications = true;
-        await PlatformNotificationAccess().request();
+        await (plat.isWeb ? askBrowserNotifications() : PlatformNotificationAccess().request());
       }
     }
     _rememberPlace();
