@@ -58,6 +58,8 @@ class CoreDispatcher {
         eng().deleteSavedPlace(a['key'] as String);
       case 'setSources':
         eng().setSources(sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+      case 'openTimings':
+        result = eng().openTimings();
       case 'rejected':
         result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
       case 'status':

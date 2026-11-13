@@ -186,6 +186,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// One start of the core: null (with [unavailable] saying why) when it could not open.
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
+    final clock = Stopwatch()..start();
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
       final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
@@ -206,7 +207,18 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     unavailable = null;
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
+    logInfo('Search core opened in ${clock.elapsedMilliseconds} ms (${_configs().length} sources)');
+    unawaited(_logOpenTimings(core));
     return core;
+  }
+
+  /// The core's own lines about how long its open took (the ZIM opens and the steps after them), into the log.
+  Future<void> _logOpenTimings(SearchCore core) async {
+    try {
+      for (final line in await core.openTimings()) {
+        logInfo(line);
+      }
+    } catch (_) {}
   }
 
   /// In a browser the server holds the folders, so the config sections come from it (`server.features`): the whole `extras` the
