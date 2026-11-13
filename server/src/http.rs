@@ -184,6 +184,38 @@ fn library_reply(r: Result<Value, ApiErr>) -> Reply {
     }
 }
 
+/// The helper op that swaps the keystore references in an address for the stored keys. Only `/api/fetch` calls it (never a tab).
+const KEYS_EXPAND_OP: &str = "keys.expandUrl";
+
+/// `query` of `/api/fetch`, with a keystore reference (`keystore://<name>`) in its `url` swapped for the stored key by the helper,
+/// so a browser can try an own data source with its saved key without ever holding the key. A query without one is returned as is.
+async fn expand_fetch_keys(app: &App, query: &str) -> Result<String, Reply> {
+    let Some(url) = crate::fetch::query_param(query, "url") else { return Ok(query.to_string()) };
+    if !url.to_ascii_lowercase().contains("keystore") {
+        return Ok(query.to_string());
+    }
+    let Some(helper) = app.helper.clone() else { return Ok(query.to_string()) };
+    let mut reply = helper.call(KEYS_EXPAND_OP, json!({"url": url})).await.map_err(|m| Reply::error(503, "core_unavailable", m))?;
+    if reply["ok"] != json!(true) {
+        let m = reply["error"]["message"].as_str().unwrap_or("That key is not saved on the server").to_string();
+        return Err(Reply::error(404, "key_missing", m));
+    }
+    let Some(expanded) = reply["result"].take().as_str().map(str::to_string) else { return Ok(query.to_string()) };
+    let mut encoded = String::with_capacity(expanded.len() * 3);
+    for b in expanded.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|kv| if kv.split_once('=').is_some_and(|(k, _)| k == "url") { format!("url={encoded}") } else { kv.to_string() })
+        .collect();
+    Ok(parts.join("&"))
+}
+
 /// The job id in `/api/library/jobs/{id}{suffix}`; `None` when the path has none (`/api/library/jobs/pause`, where the one slash
 /// is both the prefix's and the suffix's).
 fn job_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
@@ -214,7 +246,12 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             let b = Full::new(Bytes::copy_from_slice(body));
             library_reply(lib.upload(query, Some(body.len() as u64), b).await)
         }
-        ("GET", "/api/fetch") => match lib.fetch(query).await {
+        ("GET", "/api/fetch") => match lib.fetch(&match expand_fetch_keys(app, query).await {
+            Ok(q) => q,
+            Err(r) => return Some(r),
+        })
+        .await
+        {
             Ok(s) => Reply {
                 status: 200,
                 headers: vec![
@@ -507,6 +544,10 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
         let bytes = body.to_vec();
         return Some(blocking(move || crate::libbuild::linked_api::preview(&service, &bytes)).await);
     }
+    if method == "GET" && rest == "storage" {
+        let service = app.build.clone();
+        return Some(blocking(move || Ok(crate::libbuild::linked_api::storage(&service))).await);
+    }
     if method == "GET" && rest == "libraries" {
         let targets: Vec<Value> = app.library.items().await.into_iter()
             .filter(|item| item["kind"].as_str() == Some("library"))
@@ -563,6 +604,10 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
             }
             // The rescan is the server's own call, after it changes the library folders; a tab may not make the engine re-read them.
             if op == "sources.rescan" {
+                return Reply::error(403, "forbidden", "only the server may do that");
+            }
+            // `keys.expandUrl` gives a stored key back inside an address, for `/api/fetch` only: a tab may never ask for it.
+            if op == KEYS_EXPAND_OP {
                 return Reply::error(403, "forbidden", "only the server may do that");
             }
             core_call(app, op, args).await
@@ -1035,7 +1080,7 @@ mod tests {
     async fn api_needs_a_session() {
         let d = TempDir::new("http");
         let a = app(&d);
-        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example")] {
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example"), ("GET", "/api/linked-folders/storage"), ("GET", "/api/linked-folders/example/books/doc"), ("POST", "/api/linked-folders/example/books/doc/forget")] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
             let v: Value = serde_json::from_slice(&r.body).unwrap();
