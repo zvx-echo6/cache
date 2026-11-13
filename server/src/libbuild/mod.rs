@@ -46,6 +46,7 @@ use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr,
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
+use cache_builder::ocr::OcrSettings;
 use cache_shelves::events::{By, How};
 use cache_builder::pack::{read_pack, write_pack, Pack, Suggested};
 use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
@@ -232,6 +233,9 @@ pub struct Item {
     pub pieces_total: Option<u32>,
     #[serde(default)]
     pub ocr_pages: u32,
+    /// While scanned pages are being read by OCR (state `reading`, `ocr_pages` is how many there are): how many are done.
+    #[serde(default)]
+    pub ocr_done: u32,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
@@ -289,6 +293,7 @@ impl Item {
             pieces_done: 0,
             pieces_total: None,
             ocr_pages: 0,
+            ocr_done: 0,
             error: None,
             note: None,
             doc_id: None,
@@ -491,6 +496,9 @@ pub struct BuildService {
     stopping: AtomicBool,
     /// How PDFs are read: in a child process, so a PDF that crashes MuPDF fails its own book and never the service.
     extractor: Mutex<ChildExtractor>,
+    /// Where the OCR's trained data is, when this installation has it: pages with no text layer are then read by OCR (`None`: a
+    /// scan ends as `ocr_needed`). Set by the server at start from the install folder (`cache_builder::ocr::OcrSettings::discover`).
+    ocr: Mutex<Option<OcrSettings>>,
     pub(crate) removed: Mutex<Vec<RemovedEntry>>,
     class_cache: Mutex<ClassCache>,
     /// The classifier model files in `<data>/models/`.
@@ -660,6 +668,7 @@ impl BuildService {
                 it.pieces_done = 0;
                 it.pieces_total = None;
                 it.ocr_pages = 0;
+                it.ocr_done = 0;
             }
         }
         let drop = dropdir::DropState::load(&data);
@@ -691,6 +700,7 @@ impl BuildService {
             drop,
             stopping: AtomicBool::new(false),
             extractor: Mutex::new(default_extractor(data_for_tmp)),
+            ocr: Mutex::new(None),
             removed: Mutex::new(removed::load(&data_for_removed)),
             class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()) }),
             models: ModelStore::new(&data_for_models),
@@ -714,6 +724,11 @@ impl BuildService {
     #[cfg(test)]
     pub(crate) fn set_extractor(&self, e: ChildExtractor) {
         *lock(&self.extractor) = e;
+    }
+
+    /// Turn OCR on (the settings of the trained data) or off (`None`).
+    pub fn set_ocr(&self, s: Option<OcrSettings>) {
+        *lock(&self.ocr) = s;
     }
 
     /// Start the build thread and the drop-folder thread.
@@ -1023,6 +1038,7 @@ impl BuildService {
         let mut seen_text: Option<(usize, usize)> = None;
         let id = item.id.clone();
         let extractor = lock(&self.extractor).clone();
+        let ocr = lock(&self.ocr).clone();
         let result = build_pack_with_extractor(&bytes, &opts, &adapter, &mut |p| match p {
             Progress::Extracted { pages, pieces, ocr_pages } => {
                 seen_text = Some((pieces, ocr_pages));
@@ -1034,7 +1050,16 @@ impl BuildService {
                 });
             }
             Progress::Embedded { done, .. } => self.update_item(&id, |it| it.pieces_done = done as u32),
-        }, &|pdf| extractor.extract(pdf));
+        }, &|pdf| {
+            // Reading the PDF, then (when this installation has the OCR data) the pages with no text layer, a few at a time. The
+            // phase shows as "Reading scanned pages (OCR)": state `reading` with `ocr_pages` and `ocr_done` set.
+            extractor.extract_with_ocr(pdf, ocr.as_ref(), &mut |done, total| {
+                self.update_item(&id, |it| {
+                    it.ocr_pages = total as u32;
+                    it.ocr_done = done as u32;
+                })
+            })
+        });
         match result {
             Ok((mut pack, report)) => {
                 let mut replacing = replacing;
@@ -1081,7 +1106,8 @@ impl BuildService {
                     return Outcome::Failed(m);
                 }
                 match seen_text {
-                    Some((0, ocr)) if ocr > 0 => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {ocr} page(s) need OCR, which Cache cannot do yet.")),
+                    Some((0, n)) if n > 0 && ocr.is_some() => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {n} page(s) need OCR.")),
+                    Some((0, n)) if n > 0 => Outcome::OcrNeeded(format!("No text was found and the pages could not be read as images. {n} page(s) need OCR, which Cache cannot do yet.")),
                     _ => Outcome::Failed(friendly_error(&e.0)),
                 }
             }
@@ -1497,6 +1523,7 @@ impl BuildService {
                         it.pieces_done = 0;
                         it.pieces_total = None;
                         it.ocr_pages = 0;
+                        it.ocr_done = 0;
                     }
                     Outcome::Gone => next = Next::Remove,
                 }
@@ -1661,7 +1688,7 @@ impl BuildService {
     fn item_view(it: &Item, position: Option<usize>) -> Value {
         json!({
             "id": it.id, "library_id": it.library_id, "file_name": it.file_name, "title": it.title, "state": it.state, "size": it.size,
-            "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages},
+            "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages, "ocr_done": it.ocr_done},
             "error": it.error, "note": it.note, "replace": it.replace, "doc_id": it.doc_id, "duplicate_of": it.duplicate_of,
             "drop": it.origin == Origin::Drop, "position": position, "created_at": it.created_at, "started_at": it.started_at,
             "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
@@ -1801,6 +1828,7 @@ impl BuildService {
                 x.pieces_done = 0;
                 x.pieces_total = None;
                 x.ocr_pages = 0;
+                x.ocr_done = 0;
                 x.started_at = None;
                 x.finished_at = None;
                 x.finished_epoch = None;
