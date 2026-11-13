@@ -69,6 +69,10 @@ class ElevationProfile {
 
   bool get hasData => runs.isNotEmpty;
 
+  /// There is data and the route is long enough to draw a chart of: at least [kMinChartM]. A shorter route (an arrival a few feet
+  /// away) has nothing to chart, and its axis would read ticks like 0.0005 mi.
+  bool get chartable => hasData && totalM >= kMinChartM;
+
   /// Part of the route has data and part has none.
   bool get partial => hasData && missingM > kProfileStepM * 1.5;
 
@@ -216,6 +220,9 @@ const double kSimplifyM = 6;
 /// The smallest rise and length that count as a climb.
 const double kMinClimbRiseM = 10;
 const double kMinClimbLengthM = 200;
+
+/// The shortest route the drive screen draws an elevation chart for: no shorter stretch counts as a climb.
+const double kMinChartM = kMinClimbLengthM;
 
 /// Gaussian smoothing along the distance, within the stretches that have data (see [ElevationProfile]).
 List<double> smoothProfile(List<double> distM, List<double> elevM, {double sigmaM = kSmoothSigmaM}) {
