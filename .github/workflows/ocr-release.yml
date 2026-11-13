@@ -1,0 +1,122 @@
+# Release-mode (R8) OCR guard: the same fixtures and engine as ocr.yml, but the example app is built the way the shipped app is
+# (`flutter build apk --release`: shrinking on, the app's own proguard-rules.pro, legacy JNI packaging) and, started with
+# --dart-define=OCR_SELFTEST=1, reads the pages itself (example/lib/selftest.dart) and prints OCR-RESULT to logcat. ocr.yml's debug,
+# unshrunk build cannot catch R8 breaking ML Kit (build 100104: R8 dropped the constructors of ML Kit's component registrars and
+# every scanned page failed). It copies app/android/app/proguard-rules.pro, so the guard tests the real rule file.
+# The emulator is x86_64 (the app ships arm64 only); R8's result does not depend on the ABI.
+name: OCR release build
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - packages/cache_ocr/**
+      - app/android/app/proguard-rules.pro
+      - app/android/app/build.gradle.kts
+      - .github/workflows/ocr-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Page images from known text (grayscale, 300 dpi, scanned look)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pillow==12.1.0
+          "$RUNNER_TEMP/venv/bin/python" packages/cache_ocr/example/tool/make_fixtures.py "$RUNNER_TEMP/fixtures"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocr-fixtures
+          path: ${{ runner.temp }}/fixtures
+          retention-days: 7
+
+  android:
+    needs: fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/cache_ocr/example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk space
+        working-directory: .
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: KVM for the emulator
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      # The Gradle distribution and dependencies, cached by setup-gradle (the wrapper distribution by its version, dependencies
+      # restored from the newest entry, not only an exact match of the build files). Every branch writes, as setup-java's cache did.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ !(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ocr-fixtures
+          path: packages/cache_ocr/example/assets/fixtures
+      - name: Example app
+        run: |
+          flutter create --platforms=android --org co.cache --project-name cache_ocr_example .
+          rm -rf test
+          flutter pub get
+      - name: Release settings as the app's (x86_64 kept for the emulator)
+        run: bash tool/release_settings.sh
+      - name: Build the RELEASE self-test APK (R8)
+        run: flutter build apk --release --target-platform android-x64 --dart-define=OCR_SELFTEST=1
+      - name: R8 files of the x86_64 build
+        run: |
+          ls -la build/app/outputs/mapping/release/ || true
+          grep -c . build/app/outputs/mapping/release/mapping.txt || true
+          mkdir -p "$RUNNER_TEMP/r8x64" && cp -r build/app/outputs/mapping/release/. "$RUNNER_TEMP/r8x64/" || true
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep -E 'lib/|classes' || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r8-x64
+          path: ${{ runner.temp }}/r8x64
+          retention-days: 7
+      - name: Release OCR on the emulator (API 34, x86_64, 4 GB)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # One more try only when the tool never got the test going (a run sat after installing the APK until the job's
+          # limit); a test that ran and failed is not tried again.
+          script: bash packages/cache_ocr/example/tool/android_release_test.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-logcat
+          path: ${{ runner.temp }}/ocr-release-logcat.log
+          retention-days: 7
