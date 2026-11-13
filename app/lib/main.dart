@@ -94,6 +94,7 @@ import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
+import 'settings/token_store_open.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
@@ -246,13 +247,14 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState(
+    tokens: platformTokenStore(),
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
     indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     setWeb: (provider, key, online) async =>
         (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
     // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
@@ -274,7 +276,7 @@ class _CacheAppState extends State<CacheApp> {
     settings: settings,
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
     liveDir: () async {
       await sources.whenCoreReady();
@@ -419,7 +421,7 @@ class _CacheAppState extends State<CacheApp> {
       placeNames: () => _placeNames.names,
       recommended: () => RecommendedModels.shared.models,
     ),
-    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
@@ -793,7 +795,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   Timer? _shareSync;
   // The optional app PIN: asked when Cache opens.
-  late final AppPin appPin = AppPin(const SecureTokenStore());
+  late final AppPin appPin = AppPin(platformTokenStore());
   // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
   late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
     final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
@@ -1273,7 +1275,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      _store = await openHistoryStore();
+      _store = await openHistoryStore(onChanged: () => chat.historyRevision.value++);
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
