@@ -42,7 +42,7 @@ use classify::{call_letters, Classes, ModelStore, Suggestion};
 use filing::decision_view;
 use removed::RemovedEntry;
 use same::{Match, Quality};
-use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
+use crate::library::{dir_bytes, free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
@@ -1718,10 +1718,47 @@ impl BuildService {
         })
     }
 
-    /// `GET /api/build/libraries`.
+    /// `GET /api/build/libraries`. Each library carries `bytes`: what deleting it frees (see [`BuildService::library_bytes`]).
     pub fn libraries(&self) -> Value {
-        let st = lock(&self.st);
-        Value::Array(st.libs.iter().map(|m| self.lib_view(&st, m)).collect())
+        // The sizes are read after the state is let go, so a slow disk never holds up the queue.
+        let rows: Vec<(Value, Vec<PathBuf>)> = {
+            let st = lock(&self.st);
+            st.libs
+                .iter()
+                .map(|m| {
+                    let uploads = st.items.iter().filter(|i| i.library_id == m.id && i.origin == Origin::Upload).map(|i| PathBuf::from(i.path.clone())).collect();
+                    (self.lib_view(&st, m), uploads)
+                })
+                .collect()
+        };
+        Value::Array(
+            rows.into_iter()
+                .map(|(mut v, uploads)| {
+                    let id = v["id"].as_str().unwrap_or_default().to_string();
+                    v["bytes"] = json!(self.library_bytes(&id, &uploads));
+                    v
+                })
+                .collect(),
+        )
+    }
+
+    /// What deleting library `id` frees, in bytes: every file [`BuildService::delete_library`] removes. That is the library folder
+    /// (shard, keyword index, packs), the library's own work copy of the shard, the stored PDFs, the library's record and the
+    /// uploads still waiting in `uploads`. A library with no books yet is not 0 while any of these is on disk.
+    pub(crate) fn library_bytes(&self, id: &str, uploads: &[PathBuf]) -> u64 {
+        let file = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        dir_bytes(&self.live_dir(id))
+            + dir_bytes(&self.data.join("build/work").join(id))
+            + dir_bytes(&self.sources_root(id))
+            + file(self.meta_path(id).as_path())
+            + uploads.iter().map(|p| file(p.as_path())).sum::<u64>()
+    }
+
+    /// The two files removing book `b` deletes: its stored PDF and its pack. Does not touch the disk, so it is fine under the state
+    /// lock; the sizes are read after the lock is let go. The book's share of the shard and of the keyword index shrinks when the
+    /// library is published again; it cannot be measured, so it is not counted.
+    pub(crate) fn book_files(&self, lib: &str, b: &Book) -> (PathBuf, PathBuf) {
+        (self.source_of(lib, b), self.packs_dir(lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version)))
     }
 
     fn item_view(it: &Item, position: Option<usize>) -> Value {
