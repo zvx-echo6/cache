@@ -85,7 +85,7 @@ class BrowseState extends ChangeNotifier {
     return ZimTransfer(e)
       ..done = j.bytes
       ..total = j.total > 0 ? j.total : e.size
-      ..phase = j.failed ? TransferPhase.failed : (j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
+      ..phase = j.failed ? TransferPhase.failed : (j.paused ? TransferPhase.paused : j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
       ..error = j.failed ? deviceJobWords(j) : null;
   }
 
@@ -674,6 +674,13 @@ class BrowseState extends ChangeNotifier {
 
   /// Pauses a download: it stops and keeps the partly downloaded file; [resume] continues it.
   void pause(CatalogEntry entry) {
+    final onDevice = device;
+    if (onDevice != null) {
+      // In a browser the device runs the download; it keeps the part and Resume continues it.
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null && j.active) unawaited(onDevice.pauseJob(j));
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
@@ -686,6 +693,12 @@ class BrowseState extends ChangeNotifier {
 
   /// Continues a paused download from where it stopped.
   Future<void> resume(CatalogEntry entry) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null && j.paused) await onDevice.resumeJob(j);
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null || t.phase != TransferPhase.paused) return;
     // The paused loop closes the file first; the new one waits for it and continues the file (on mobile data with mobile data
@@ -695,6 +708,12 @@ class BrowseState extends ChangeNotifier {
 
   /// Stops a download and throws away the partly downloaded file.
   Future<void> cancel(CatalogEntry entry) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null) await onDevice.cancelJob(j);
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null) return;
     t.token?.cancel();

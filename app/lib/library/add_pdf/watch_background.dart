@@ -8,6 +8,7 @@ import '../../app_fs.dart';
 import '../../background/background_lock.dart';
 import '../../background/background_tasks.dart';
 import '../../notebook/sync/folder.dart' show FolderFile;
+import '../../pdf/pdfium_init.dart' show installNativePdfFonts;
 import '../../platform/app_log.dart';
 import '../../platform/battery.dart';
 import '../../search/index_throttle.dart';
@@ -231,13 +232,15 @@ Future<String> watchAddJob({
 /// Add PDF over the real core in the background engine: the same ingest calls, engines and OCR engine as the app, and the
 /// Bookshelves argument the app left in `add-context.json`.
 Future<AddPdfState> _backgroundAddPdfState(String support, Directory ingest) async {
+  // the core's one PDFium font mapper, before the first PDF is read (pdfrx is not started in the background run)
+  await installNativePdfFonts();
   Map<String, dynamic>? shelves;
   try {
     final f = watchAddContextFile(support);
     if (f.existsSync()) shelves = ((jsonDecode(await f.readAsString()) as Map)['bookshelves'] as Map?)?.cast<String, dynamic>();
   } catch (_) {}
   return AddPdfState(
-    calls: const CoreIngestCalls(),
+    calls: const CoreIngestCalls.withoutPdfrx(),
     dir: () async => ingest,
     engines: () async => addPdfEngines(support: Directory(support), modelsDir: Directory('${await appFilesPath()}${Platform.pathSeparator}models')),
     ocrEngine: deviceOcrEngine,

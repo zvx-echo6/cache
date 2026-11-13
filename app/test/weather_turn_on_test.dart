@@ -135,7 +135,15 @@ void main() {
     }
     expect(find.byType(CircularProgressIndicator), findsNothing, reason: 'nothing to wait for: the forecast is on the phone');
     expect(find.textContaining('43 °F'), findsWidgets);
-    expect(find.textContaining('50 minutes old'), findsWidgets, reason: 'the age as of now, not as of the last read');
+    // The page no longer prints each source's age (one line says when everything was updated); a reading's age is in its
+    // detail, which the reading opens.
+    await tester.tap(find.byKey(const ValueKey('weather-temperature')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('50 minutes old'), findsOneWidget, reason: 'the age as of now, not as of the last read');
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     r.liveCore.busy!.complete();
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pump();
@@ -206,7 +214,8 @@ void main() {
     await tester.runAsync(() => r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Weather forecast'), true));
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ChoiceChip, 'Where I am'), findsOneWidget, reason: 'the place row is there for a single place');
+    // The place is named in the top card (it was a chip): the page says which place it is about, for a single place too.
+    expect(find.descendant(of: find.byKey(const ValueKey('weather-place')), matching: find.text('Where I am')), findsOneWidget);
     await tester.tap(find.text('Update now'));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tester.pumpAndSettle();

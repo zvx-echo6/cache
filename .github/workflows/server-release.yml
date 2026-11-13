@@ -60,6 +60,10 @@ on:
       - '.github/actions/valhalla-source/**'
   workflow_dispatch:
 
+env:
+  # The Rust toolchain, pinned like tests.yml, native-libs.yml and core-cs.yml (a new stable can bring new clippy lints).
+  RUST_VERSION: 1.99.1
+
 permissions:
   contents: read
 
@@ -143,7 +147,7 @@ jobs:
         id: rust
         working-directory: .
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --default-toolchain stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --default-toolchain "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           . "$HOME/.cargo/env"
           echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"

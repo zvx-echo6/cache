@@ -19,32 +19,41 @@ EdgeInsets weatherPadding(BuildContext context, double width, {bool centered = f
   return EdgeInsets.fromLTRB(m.gutter, 24, side, 24);
 }
 
-/// The Dashboard template for the populated page: the forecast in the main column (about 62 percent) and what is happening nearby in a
-/// side column (38 percent), 24 apart. Under 1280, or with only one of them, the side column drops under the main one, as the phone
-/// has them.
+/// The Dashboard template for the populated page. On a phone, and under 1280, one column: the top card, what is happening nearby,
+/// then the forecast and the credits, 12 apart. From 1280 the top card and the forecast are the main column (about 62 percent) and
+/// what is happening nearby is a side column (38 percent), 24 apart. With nothing happening nearby to show it is one column.
 class WeatherColumns extends StatelessWidget {
-  const WeatherColumns({super.key, required this.main, required this.side});
+  const WeatherColumns({super.key, required this.top, required this.nearby, required this.below});
 
-  final List<Widget> main;
-  final List<Widget> side;
+  /// The top card, and the one plain line when there is one.
+  final List<Widget> top;
+
+  /// "Happening nearby".
+  final List<Widget> nearby;
+
+  /// The forecast and the credits.
+  final List<Widget> below;
+
+  static const double _gap = 12;
+
+  static List<Widget> _spaced(List<Widget> parts) => [
+    for (var i = 0; i < parts.length; i++) ...[
+      if (i > 0) const SizedBox(height: _gap),
+      parts[i],
+    ],
+  ];
 
   @override
   Widget build(BuildContext context) {
-    if (!isLinuxWide(context) || main.isEmpty || side.isEmpty) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ...main,
-          if (side.isNotEmpty) ...[const SizedBox(height: 8), ...side],
-        ],
-      );
+    if (!isLinuxWide(context) || nearby.isEmpty) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _spaced([...top, ...nearby, ...below]));
     }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(flex: 62, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: main)),
+        Expanded(flex: 62, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _spaced([...top, ...below]))),
         const SizedBox(width: 24),
-        Expanded(flex: 38, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: side)),
+        Expanded(flex: 38, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _spaced(nearby))),
       ],
     );
   }

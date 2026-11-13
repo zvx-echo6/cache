@@ -309,6 +309,8 @@ pub struct LlmService {
     send_timeout_ms: AtomicU64,
     /// The id (sent to its client in the `started` event) and the model of the generation that is running now (what `stop` stops).
     running: Mutex<Option<(String, Arc<dyn ChatBackend>)>>,
+    /// Downloads and uploads of model files (see `models`).
+    jobs: Arc<crate::models::ModelJobs>,
 }
 
 impl LlmService {
@@ -329,7 +331,8 @@ impl LlmService {
     }
 
     pub fn with_loader(data: PathBuf, embed_file: String, loader: Box<Loader>) -> Arc<LlmService> {
-        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(),
+        let jobs = crate::models::ModelJobs::new(data.clone(), embed_file.clone());
+        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(), jobs,
             loaded: Mutex::new(None),
             is_loaded: AtomicBool::new(false),
             send_timeout_ms: AtomicU64::new(SEND_TIMEOUT.as_millis() as u64),
@@ -339,6 +342,28 @@ impl LlmService {
 
     fn models_dir(&self) -> PathBuf {
         self.data.join("models")
+    }
+
+    /// The model downloads and uploads.
+    pub fn jobs(&self) -> &Arc<crate::models::ModelJobs> {
+        &self.jobs
+    }
+
+    /// `DELETE /api/models/files/<id>`: removes a model file. The model loaded now is kept (409 `in_use`).
+    pub fn delete_model(&self, id: &str) -> Result<Value, ApiErr> {
+        if !valid_model_id(id) || id == self.embed_file {
+            return Err(err(400, "bad_model", "that is not a model id"));
+        }
+        // the loaded slot is held across the removal, so a load cannot start between the check and the delete
+        let slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|l| l.id == id) {
+            return Err(err(409, "in_use", "That model is loaded. Unload it first."));
+        }
+        match std::fs::remove_file(self.models_dir().join(id)) {
+            Ok(()) => Ok(json!({"deleted": id})),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(err(404, "model_not_found", "no such model on this server")),
+            Err(e) => Err(err(500, "server_error", format!("could not delete the file: {e}"))),
+        }
     }
 
     /// The `.gguf` files in `<data>/models/` other than the embedder, as (id, size), by name. Every other `.gguf` is taken to be a
@@ -730,6 +755,22 @@ mod tests {
         let v = s.models_json();
         assert_eq!(v["v"], 1);
         assert_eq!(v["models"][0], json!({"id": "chat-a.gguf", "size": 4, "loaded": false}));
+    }
+
+    #[test]
+    fn a_model_is_deleted_by_name_and_the_loaded_one_is_kept() {
+        let d = TempDir::new("llm-delete");
+        let s = service(&d, Fake::new(1));
+        std::fs::write(d.0.join("models").join("chat-b.gguf"), b"xy").unwrap();
+        for bad in ["../chat-a.gguf", "chat-a.txt", "bge-m3-Q8_0.gguf"] {
+            assert_eq!(s.delete_model(bad).unwrap_err().status, 400, "{bad}");
+        }
+        s.load("chat-a.gguf", 512).unwrap();
+        assert_eq!(s.delete_model("chat-a.gguf").unwrap_err().code, "in_use");
+        assert!(d.0.join("models").join("chat-a.gguf").exists());
+        assert_eq!(s.delete_model("chat-b.gguf").unwrap()["deleted"], "chat-b.gguf");
+        assert_eq!(s.delete_model("chat-b.gguf").unwrap_err().status, 404);
+        assert_eq!(s.list_models(), vec![("chat-a.gguf".to_string(), 4)]);
     }
 
     #[test]

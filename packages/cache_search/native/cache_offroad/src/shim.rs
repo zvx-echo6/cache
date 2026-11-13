@@ -42,13 +42,17 @@ pub fn config_for_tiles(tile_extract: &Path) -> String {
 
 /// Valhalla config for a folder of tiles laid out `<level>/<aaa>/<bbb>/<ccc>.gph` (`mjolnir.tile_dir`): the downloaded
 /// regions. There is no tile_extract, so Valhalla reads each tile from the folder when a route first needs it, and a tile
-/// that arrives later can be read by a later route.
+/// that arrives later can be read by a later route. `loki.use_connectivity` is off: Valhalla builds its connectivity map once,
+/// when the router starts, from the tiles then present, and it also colours by tile adjacency, so with it on a route between
+/// tiles fetched later, or between two separate islands of tiles, fails with 170 before any search. The search itself reads
+/// tiles from the folder on each miss and needs no such pre-check.
 pub fn config_for_tile_dir(tile_dir: &Path) -> String {
     let mut c: Value = serde_json::from_str(include_str!("valhalla_config.json")).expect("config template");
     if let Some(m) = c["mjolnir"].as_object_mut() {
         m.remove("tile_extract");
     }
     c["mjolnir"]["tile_dir"] = Value::String(tile_dir.to_string_lossy().into_owned());
+    c["loki"]["use_connectivity"] = Value::Bool(false);
     c.to_string()
 }
 

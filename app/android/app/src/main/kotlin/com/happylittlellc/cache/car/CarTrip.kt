@@ -12,6 +12,10 @@ data class CarStep(
     val distanceM: Double,
 )
 
+/** A stop still ahead on the route (the phone's Add stop, or the car's). [number] is the one the turn card says when the stop
+ * is reached: its place in the route as it was made, kept when the stops before it are passed. */
+data class CarStop(val name: String, val address: String?, val number: Int)
+
 data class CarRoute(val index: Int, val distanceM: Double, val durationS: Long, val via: String?)
 
 data class CarTrip(
@@ -39,9 +43,25 @@ data class CarTrip(
     val remainingM: Double?,
     val remainingS: Long?,
     val etaMs: Long?,
+    val overlay: CarOverlaySwitches = CarOverlaySwitches.DEFAULT,
+    val climb: CarClimb? = null,
+    val overview: CarOverview? = null,
+    val palette: CarOverlayPalette? = null,
+    val stops: List<CarStop> = emptyList(),
 ) {
     val guiding: Boolean get() = phase == "guiding"
     val previewing: Boolean get() = phase == "previewing"
+
+    /**
+     * This trip with guidance over, as the phone pushes it once its own guidance has ended (lib/car/car_trip.dart): back to
+     * browsing with no routes, step, estimate, climb or overview. The car side uses it to say so at once, before the phone has
+     * answered ([CarLink.stopGuidance]).
+     */
+    fun ended(): CarTrip = copy(
+        phase = "browsing", routing = false, error = null, routes = emptyList(), routeIndex = 0, routeId = null, arrived = false,
+        rerouting = false, step = null, then = null, currentRoad = null, remainingM = null, remainingS = null, etaMs = null,
+        climb = null, overview = null, stops = emptyList(),
+    )
 
     companion object {
         val EMPTY = CarTrip(
@@ -87,6 +107,18 @@ data class CarTrip(
                 remainingM = m["remainingM"].asDouble(),
                 remainingS = (m["remainingS"] as? Number)?.toLong(),
                 etaMs = (m["etaMs"] as? Number)?.toLong(),
+                overlay = CarOverlaySwitches.from(m["overlay"]),
+                climb = CarClimb.from(m["climb"]),
+                overview = CarOverview.from(m["overview"]),
+                palette = CarOverlayPalette.from(m["palette"]),
+                stops = (m["stops"] as? List<*>).orEmpty().mapIndexedNotNull { i, s ->
+                    val x = s.asMap() ?: return@mapIndexedNotNull null
+                    CarStop(
+                        name = x["name"] as? String ?: return@mapIndexedNotNull null,
+                        address = (x["address"] as? String)?.takeIf { it.isNotBlank() },
+                        number = (x["number"] as? Number)?.toInt() ?: (i + 1),
+                    )
+                },
             )
         }
 

@@ -31,14 +31,14 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-11-11';
+const String kGuideVersion = '2026-11-12';
 
 /// What a library folder holds that never syncs with the libraries folder (see DataKind.notShared): its old keyword index
 /// ([LibraryItem.indexPath]). Library indexes now build into the indexes folder and sync from there as snapshots
 /// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
 /// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
 /// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index'];
+const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
@@ -497,6 +497,15 @@ class LibrariesState extends ChangeNotifier {
   void _onSources() => notifyListeners();
 
   SourceStatus? statusOf(LibraryItem l) => sources.statusAt(l.shardPath);
+
+  /// Whether the library in the folder [libraryPath] has points its keyword index lacks (see SourceStatus.keywordPending); null when
+  /// not known.
+  bool? wordsPendingAt(String libraryPath) {
+    for (final l in libraries) {
+      if (l.path == libraryPath) return statusOf(l)?.keywordPending;
+    }
+    return null;
+  }
 
   /// The library's own name: the core's, else its settings', else its folder's.
   String titleOf(LibraryItem l) {
@@ -978,7 +987,13 @@ class LibrariesState extends ChangeNotifier {
         if (p == null) return false;
       }
       if (settings != null) {
-        await _writeText('$stagePath$_pathSep$kLibrarySettingsFile', const JsonEncoder.withIndent('  ').convert(settings));
+        // A library that was exported from the person's own one keeps `own` (restoring or moving it must leave it writable: Add PDF
+        // targets it and its keyword snapshot grows by generations). `own_default` (My books) is kept only when this device has no other
+        // own library, as creating one would; otherwise two libraries would both claim to be the default.
+        await _writeText(
+          '$stagePath$_pathSep$kLibrarySettingsFile',
+          const JsonEncoder.withIndent('  ').convert(settingsForImport(settings, deviceHasOtherOwn: ownLibraries.any((l) => l != existing))),
+        );
       }
       t
         ..step = AddStep.swapping
@@ -1388,6 +1403,15 @@ Future<void> extractTarMember(File tarFile, String name, File out, {bool gzipped
   }
   await sink?.close();
   if (!found) throw FileSystemException('$name is not in the archive', tarFile.path);
+}
+
+/// [settings] as they are written for a library that came from elsewhere (an archive, a settings file the person picked): `own` is kept,
+/// so an exported own library stays theirs to write to; `own_default` is removed when the device already has [deviceHasOtherOwn]
+/// another own library. Only [ownLibrarySettings] makes a new one.
+Map<String, dynamic> settingsForImport(Map<String, dynamic> settings, {required bool deviceHasOtherOwn}) {
+  final s = {...settings};
+  if (deviceHasOtherOwn) s.remove('own_default');
+  return s;
 }
 
 /// The settings of a library the person makes on the device (Add PDF's My books): the blank template's (bge-m3, the usual

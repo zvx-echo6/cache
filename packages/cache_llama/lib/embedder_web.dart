@@ -19,6 +19,10 @@ class CacheEmbedder {
   /// The server keeps the model: nothing here to hold.
   bool keepLoaded = false;
 
+  /// Timing lines for the log. The browser build embeds on the server, so nothing here calls it; the member exists so
+  /// shared code that sets it compiles for the browser too.
+  void Function(String line)? onTiming;
+
   /// The context length cl_embed_load is given.
   static const int nCtx = 512;
 

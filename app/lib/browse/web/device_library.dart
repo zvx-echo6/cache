@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../../app_fs.dart';
+import '../../platform/app_log.dart';
 import '../../settings/space.dart' show Space, reserveFor;
 import '../opds.dart';
 import 'build_state.dart';
@@ -183,10 +184,10 @@ class DeviceLibrary extends ChangeNotifier {
     return t is String && t.isNotEmpty ? t : j.name;
   }
 
-  /// The transfer for [url] that is waiting, running or failed, or null.
+  /// The transfer for [url] that is waiting, running, paused or failed, or null.
   DeviceJob? jobForUrl(String url) {
     for (final j in jobs) {
-      if (j.url == url && (j.active || j.failed)) return j;
+      if (j.url == url && (j.active || j.paused || j.failed)) return j;
     }
     return null;
   }
@@ -359,11 +360,56 @@ class DeviceLibrary extends ChangeNotifier {
     await _download(req);
   }
 
+  /// Why the last Pause or Resume of a transfer did not happen, in words for people: shown with the transfers for a short while, or
+  /// until the next press. Null when there is nothing to say.
+  String? jobProblem;
+  Timer? _jobProblemTimer;
+
+  void _clearJobProblem() {
+    _jobProblemTimer?.cancel();
+    _jobProblemTimer = null;
+    jobProblem = null;
+  }
+
+  void _jobActionFailed(String what, DeviceJob j, DeviceException e, String words) {
+    logError('$what failed (${e.code}, ${e.status})', error: e.message, detail: j.name, job: 'download/${j.id}');
+    // A download that ended meanwhile is said in the device's own words; anything else (no connection, a server error) in the app's.
+    jobProblem = e.code == 'not_active' || e.code == 'not_paused' ? e.message : words;
+    _jobProblemTimer?.cancel();
+    _jobProblemTimer = Timer(const Duration(seconds: 10), () {
+      _jobProblemTimer = null;
+      jobProblem = null;
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  /// Pauses a waiting or running transfer: it keeps what it has downloaded. [resumeJob] continues it. A press that fails says so
+  /// ([jobProblem]) and is logged.
+  Future<void> pauseJob(DeviceJob j) async {
+    _clearJobProblem();
+    try {
+      await api.pauseJob(j.id);
+    } on DeviceException catch (e) {
+      _jobActionFailed('Download pause', j, e, 'The download could not be paused. Try again.');
+    }
+    await refresh();
+  }
+
+  Future<void> resumeJob(DeviceJob j) async {
+    _clearJobProblem();
+    try {
+      await api.resumeJob(j.id);
+    } on DeviceException catch (e) {
+      _jobActionFailed('Download resume', j, e, 'The download could not be resumed. Try again.');
+    }
+    await refresh();
+  }
+
   /// Stops a waiting or running transfer, or takes a failed one off the list.
   Future<void> cancelJob(DeviceJob j) async {
     try {
       await api.cancelJob(j.id);
-      if (j.active) await api.cancelJob(j.id); // the cancelled one is then taken off the list as well
+      if (j.active || j.paused) await api.cancelJob(j.id); // the cancelled one is then taken off the list as well
     } on DeviceException catch (_) {}
     await refresh();
   }
@@ -476,6 +522,7 @@ class DeviceLibrary extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    _jobProblemTimer?.cancel();
     if (upload?.running == true) _leaveWarning(false);
     build?.removeListener(_onBuild);
     build?.dispose();
