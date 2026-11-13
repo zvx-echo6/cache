@@ -1,6 +1,7 @@
-// Stepping through a route's turns before Start, for the owner to look at: the route preview with its new button, and the step card
-// open on a turn with lane arrows and on a stop, on a phone 390 and 320 points wide in the Dark and the Light theme, and the
-// Linux desktop layout of the same screen (the browser build: a window 1280 wide, no position, the route from a chosen start).
+// Stepping through a route's turns before Start, for the owner to look at: the whole-route preview with the back and next arrows
+// beside Start, and a turn shown (one with lane arrows, a stop, the last turn), on a phone 390 and 320 points wide and in the
+// Linux desktop layout of the same screen (the browser build: a window 1280 wide, no position, the route from a chosen start),
+// each in the Dark and the Light theme.
 // The map itself is a platform view and is not drawn; the round marker shows where the camera the screen asked for puts the turn
 // shown (worked out from that camera), so it can be seen that the turn is clear of the card. The route and places are made up.
 // flutter test test_shots/route_steps_renders_test.dart --update-goldens  (pictures in test_shots/route_steps/)
@@ -123,9 +124,8 @@ Future<void> _draw(WidgetTester tester, {required String name, required Size siz
     await settle();
     expect(nav.phase, NavPhase.previewing);
     if (step != null) {
-      await tester.tap(find.byKey(const ValueKey('route-steps')));
-      await settle();
-      for (var i = 0; i < step; i++) {
+      // The panel's next arrow shows the first turn; each next after it the one after.
+      for (var i = 0; i <= step; i++) {
         await tester.tap(find.byKey(const ValueKey('step-next')));
         await settle();
       }
@@ -152,31 +152,20 @@ Future<void> _draw(WidgetTester tester, {required String name, required Size siz
 void main() {
   setUpAll(loadShotFonts);
 
-  const phoneInsets = EdgeInsets.only(top: 47, bottom: 34);
+  final List<({String name, Size size, double ratio, EdgeInsets insets, bool linux})> screens = [
+    (name: 'phone-390', size: const Size(390, 844), ratio: 3.0, insets: const EdgeInsets.only(top: 47, bottom: 34), linux: false),
+    (name: 'phone-320', size: const Size(320, 568), ratio: 2.0, insets: const EdgeInsets.only(top: 20), linux: false),
+    (name: 'linux-1280', size: const Size(1280, 800), ratio: 1.0, insets: EdgeInsets.zero, linux: true),
+  ];
+  // The whole route (no turn shown), a turn with lane arrows, a stop, the last turn.
+  const List<({String name, int? step, bool stop})> shots = [(name: 'preview', step: null, stop: false), (name: 'step-lanes', step: 1, stop: false), (name: 'step-stop', step: 2, stop: true), (name: 'step-last', step: 6, stop: false)];
   for (final theme in [CacheThemeId.dark, CacheThemeId.light]) {
-    testWidgets('preview with the step button, 390, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-390-preview', size: const Size(390, 844), ratio: 3, insets: phoneInsets, theme: theme);
-    });
-    testWidgets('preview with the step button, 320, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-320-preview', size: const Size(320, 568), ratio: 2, insets: const EdgeInsets.only(top: 20), theme: theme);
-    });
-    testWidgets('step card on a turn with lanes, 390, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-390-step-lanes', size: const Size(390, 844), ratio: 3, insets: phoneInsets, theme: theme, step: 1);
-    });
-    testWidgets('step card on a stop, 390, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-390-step-stop', size: const Size(390, 844), ratio: 3, insets: phoneInsets, theme: theme, step: 2, stop: true);
-    });
-    testWidgets('step card on a turn with lanes, 320, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-320-step-lanes', size: const Size(320, 568), ratio: 2, insets: const EdgeInsets.only(top: 20), theme: theme, step: 1);
-    });
-    testWidgets('step card on the last turn, 320, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'phone-320-step-last', size: const Size(320, 568), ratio: 2, insets: const EdgeInsets.only(top: 20), theme: theme, step: 6);
-    });
-    testWidgets('Linux desktop: preview, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'linux-1280-preview', size: const Size(1280, 800), ratio: 1, insets: EdgeInsets.zero, theme: theme, linux: true);
-    });
-    testWidgets('Linux desktop: step card, ${theme.name}', (tester) async {
-      await _draw(tester, name: 'linux-1280-step-lanes', size: const Size(1280, 800), ratio: 1, insets: EdgeInsets.zero, theme: theme, step: 1, linux: true);
-    });
+    for (final w in screens) {
+      for (final s in shots) {
+        testWidgets('${w.name} ${s.name}, ${theme.name}', (tester) async {
+          await _draw(tester, name: '${w.name}-${s.name}', size: w.size, ratio: w.ratio, insets: w.insets, theme: theme, step: s.step, stop: s.stop, linux: w.linux);
+        });
+      }
+    }
   }
 }

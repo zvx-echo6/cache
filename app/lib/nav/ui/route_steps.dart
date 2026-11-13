@@ -8,10 +8,6 @@ import 'drive_screen.dart';
 import 'lane_strip.dart';
 
 // PLACEHOLDER: the owner chooses the final words
-/// The route panel's button that opens the step card (beside Start).
-const String kStepThroughLabel = 'Step through';
-
-// PLACEHOLDER: the owner chooses the final words
 /// The step card's counter: {n} is the turn shown, {total} how many the route has ("3 of 18").
 const String kStepCounterFormat = '{n} of {total}';
 
@@ -59,9 +55,41 @@ List<Lane> previewStepLanes(MapRoute r, int i) {
   return j is Map ? Lane.listFrom(j['lanes']) : const [];
 }
 
+/// The back and next arrows beside Start, on the route panel (the whole route: back is off, next shows the first turn) and on the
+/// step card (back from the first turn returns to the whole route). Null leaves an arrow off.
+class StepArrows extends StatelessWidget {
+  const StepArrows({super.key, required this.onBack, required this.onNext});
+
+  final VoidCallback? onBack;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton.outlined(
+            key: const ValueKey('step-back'),
+            tooltip: 'Previous',
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.arrow_back),
+            onPressed: onBack,
+          ),
+          const SizedBox(width: 8),
+          IconButton.outlined(
+            key: const ValueKey('step-next'),
+            tooltip: 'Next',
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: const Icon(Icons.arrow_forward),
+            onPressed: onNext,
+          ),
+        ],
+      );
+}
+
 /// The route preview's step card: one turn of the route at a time, drawn as the drive screen draws its turn rows (the arrow, the
 /// router's words, how far, the lane arrows when the route has them, a stop's number and name), with the way back and forward
-/// through the turns (also a sideways swipe on the card), the count, a close button and Start.
+/// through the turns (also a sideways swipe on the card), the count, a close button and Start. Back from the first turn, like
+/// close, returns to the whole route ([onClose]).
 class RouteStepCard extends StatefulWidget {
   const RouteStepCard({super.key, required this.nav, required this.rows, required this.index, required this.onStep, required this.onClose});
 
@@ -82,11 +110,14 @@ class RouteStepCard extends StatefulWidget {
 class _RouteStepCardState extends State<RouteStepCard> {
   double _drag = 0;
 
-  bool get _canBack => widget.index > 0;
   bool get _canNext => widget.index < widget.rows.length - 1;
 
   void _back() {
-    if (_canBack) widget.onStep(widget.index - 1);
+    if (widget.index > 0) {
+      widget.onStep(widget.index - 1);
+    } else {
+      widget.onClose();
+    }
   }
 
   void _next() {
@@ -160,21 +191,7 @@ class _RouteStepCardState extends State<RouteStepCard> {
                 padding: const EdgeInsets.only(right: 8),
                 child: Row(
                   children: [
-                    IconButton.outlined(
-                      key: const ValueKey('step-back'),
-                      tooltip: 'Previous',
-                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: _canBack ? _back : null,
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton.outlined(
-                      key: const ValueKey('step-next'),
-                      tooltip: 'Next',
-                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                      icon: const Icon(Icons.arrow_forward),
-                      onPressed: _canNext ? _next : null,
-                    ),
+                    StepArrows(onBack: _back, onNext: _canNext ? _next : null),
                     const SizedBox(width: 12),
                     Expanded(
                       child: FilledButton.icon(

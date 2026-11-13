@@ -141,10 +141,22 @@ bool _enabled(WidgetTester tester, String key) => tester.widget<IconButton>(find
 
 String _counter(WidgetTester tester) => tester.widget<Text>(find.byKey(const ValueKey('step-counter'))).data!;
 
+/// From the whole route (the route panel): its next arrow shows the first turn.
 Future<void> _open(WidgetTester tester) async {
-  await tester.tap(find.byKey(const ValueKey('route-steps')));
+  expect(find.byKey(const ValueKey('step-card')), findsNothing);
+  await tester.tap(find.byKey(const ValueKey('step-next')));
   await _settle(tester);
   expect(find.byKey(const ValueKey('step-card')), findsOneWidget);
+}
+
+/// The whole route on the route panel: the arrows beside Start, back off and next on, no counter and no close.
+void _expectWholeRoute(WidgetTester tester) {
+  expect(find.byKey(const ValueKey('step-card')), findsNothing);
+  expect(find.byType(RoutePanel), findsOneWidget);
+  expect(_enabled(tester, 'step-back'), isFalse);
+  expect(_enabled(tester, 'step-next'), isTrue);
+  expect(find.byKey(const ValueKey('step-counter')), findsNothing);
+  expect(find.byKey(const ValueKey('step-close')), findsNothing);
 }
 
 /// Checks that the camera the screen last asked for shows maneuver [i] of [route] at a street's zoom, north up, on the map and
@@ -167,12 +179,17 @@ void _expectCameraOn(WidgetTester tester, CameraController camera, MapRoute rout
 void main() {
   testWidgets('the step card goes forward and back through the turns, one at a time, and the map follows each turn', (tester) async {
     await _withPreview(tester, route: (n, mode) => stepRouteJson(id: 's$n', turns: 5, lanes: true), body: (nav, camera, backend) async {
+      // The whole route first: back is off, next is on, no counter and no close.
+      _expectWholeRoute(tester);
+      expect(find.byTooltip('Previous'), findsOneWidget);
+      expect(find.byTooltip('Next'), findsOneWidget);
       await _open(tester);
       final r = nav.route!;
       expect(_counter(tester), stepCounterText(1, 5));
       expect(find.text('Drive east on Road 0'), findsOneWidget);
-      // The first turn: there is no way back.
-      expect(_enabled(tester, 'step-back'), isFalse);
+      expect(find.byKey(const ValueKey('step-close')), findsOneWidget);
+      // The first turn: back returns to the whole route, so it is on.
+      expect(_enabled(tester, 'step-back'), isTrue);
       expect(_enabled(tester, 'step-next'), isTrue);
       _expectCameraOn(tester, camera, r, 0);
       // The turn shown is marked on the map.
@@ -224,12 +241,13 @@ void main() {
       await tester.drag(find.byKey(const ValueKey('step-counter')), const Offset(120, 0));
       await _settle(tester);
       expect(_counter(tester), stepCounterText(2, 4));
-      // Past the first turn there is nothing: a swipe back there leaves it.
-      await tester.drag(find.byKey(const ValueKey('step-counter')), const Offset(120, 0));
-      await _settle(tester);
       await tester.drag(find.byKey(const ValueKey('step-counter')), const Offset(120, 0));
       await _settle(tester);
       expect(_counter(tester), stepCounterText(1, 4));
+      // A swipe back from the first turn is the back arrow's: the whole route again.
+      await tester.drag(find.byKey(const ValueKey('step-counter')), const Offset(120, 0));
+      await _settle(tester);
+      _expectWholeRoute(tester);
     });
   });
 
@@ -247,11 +265,12 @@ void main() {
     });
   });
 
-  testWidgets('a route of one turn: both arrows are off', (tester) async {
+  testWidgets('a route of one turn: next shows it, and then only back (to the whole route) is on', (tester) async {
     await _withPreview(tester, route: (n, mode) => stepRouteJson(id: 's$n', turns: 1), body: (nav, camera, backend) async {
+      _expectWholeRoute(tester);
       await _open(tester);
       expect(_counter(tester), stepCounterText(1, 1));
-      expect(_enabled(tester, 'step-back'), isFalse);
+      expect(_enabled(tester, 'step-back'), isTrue);
       expect(_enabled(tester, 'step-next'), isFalse);
       _expectCameraOn(tester, camera, nav.route!, 0);
     });
@@ -265,13 +284,35 @@ void main() {
       final before = _fits(camera);
       await tester.tap(find.byKey(const ValueKey('step-close')));
       await _settle(tester);
-      expect(find.byKey(const ValueKey('step-card')), findsNothing);
-      expect(find.byType(RoutePanel), findsOneWidget);
+      _expectWholeRoute(tester);
       expect(_fits(camera), greaterThan(before), reason: 'the whole route was not fitted again');
       expect(camera.cameras.last is List && (camera.cameras.last as List).first == 'newLatLngBounds', isTrue);
       final marks = (camera.sources[kPinSource]!['features'] as List).cast<Map<String, dynamic>>().where((f) => (f['properties'] as Map)['id'] == 'route-step');
       expect(marks, isEmpty, reason: 'the turn is still marked');
       expect(nav.phase, NavPhase.previewing);
+    });
+  });
+
+  testWidgets('back from the first turn returns to the whole route, fitted into view, as close does', (tester) async {
+    await _withPreview(tester, route: (n, mode) => stepRouteJson(id: 's$n'), body: (nav, camera, backend) async {
+      await _open(tester);
+      await tester.tap(find.byKey(const ValueKey('step-next')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const ValueKey('step-back')));
+      await _settle(tester);
+      expect(_counter(tester), stepCounterText(1, 5));
+      final before = _fits(camera);
+      await tester.tap(find.byKey(const ValueKey('step-back')));
+      await _settle(tester);
+      _expectWholeRoute(tester);
+      expect(_fits(camera), greaterThan(before), reason: 'the whole route was not fitted again');
+      expect(camera.cameras.last is List && (camera.cameras.last as List).first == 'newLatLngBounds', isTrue);
+      final marks = (camera.sources[kPinSource]!['features'] as List).cast<Map<String, dynamic>>().where((f) => (f['properties'] as Map)['id'] == 'route-step');
+      expect(marks, isEmpty, reason: 'the turn is still marked');
+      expect(nav.phase, NavPhase.previewing);
+      // Next again starts from the first turn.
+      await _open(tester);
+      expect(_counter(tester), stepCounterText(1, 5));
     });
   });
 
@@ -281,8 +322,7 @@ void main() {
       final before = _fits(camera);
       await tester.binding.handlePopRoute();
       await _settle(tester);
-      expect(find.byKey(const ValueKey('step-card')), findsNothing);
-      expect(find.byType(RoutePanel), findsOneWidget);
+      _expectWholeRoute(tester);
       expect(_fits(camera), greaterThan(before));
       expect(nav.phase, NavPhase.previewing, reason: 'Back left the route preview');
     });
@@ -296,8 +336,7 @@ void main() {
       expect(_counter(tester), stepCounterText(2, 5));
       await tester.runAsync(() => nav.setMode('walk'));
       await _settle(tester);
-      expect(find.byKey(const ValueKey('step-card')), findsNothing);
-      expect(find.byType(RoutePanel), findsOneWidget);
+      _expectWholeRoute(tester);
       // Opened again, it is the new route's first turn.
       await _open(tester);
       expect(_counter(tester), stepCounterText(1, 3));
@@ -310,7 +349,7 @@ void main() {
       await _open(tester);
       nav.selectRoute(1);
       await _settle(tester);
-      expect(find.byKey(const ValueKey('step-card')), findsNothing);
+      _expectWholeRoute(tester);
       await _open(tester);
       expect(_counter(tester), stepCounterText(1, 3));
     });

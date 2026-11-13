@@ -901,7 +901,7 @@ class _MapsScreenState extends State<MapsScreen> {
     return GeoPoint(m.lat, m.lon);
   }
 
-  /// The route panel's step button: the card opens on the route's first turn.
+  /// The route panel's next arrow: the card opens on the route's first turn.
   void _openSteps() {
     final r = nav.route;
     if (r == null || r.maneuvers.isEmpty || nav.routing || nav.phase != NavPhase.previewing) return;
@@ -912,7 +912,7 @@ class _MapsScreenState extends State<MapsScreen> {
     _showStep();
   }
 
-  /// The card's back and next arrows and its swipe.
+  /// The card's back and next arrows and its swipe (back from the first turn is [_closeSteps]).
   void _goStep(int i) {
     final r = nav.route;
     if (_step == null || r == null || i < 0 || i >= r.maneuvers.length || i == _step) return;
@@ -920,7 +920,8 @@ class _MapsScreenState extends State<MapsScreen> {
     _showStep();
   }
 
-  /// The card's close button and the system Back: the routes again, and the whole route fitted into view as before.
+  /// The card's close button, its back arrow on the first turn, and the system Back: the routes again, and the whole route
+  /// fitted into view as before.
   void _closeSteps() {
     if (_step == null) return;
     setState(() {
@@ -1857,7 +1858,7 @@ class _MapsScreenState extends State<MapsScreen> {
       final step = _step;
       final rows = step == null ? const <DriveRow>[] : previewStepRows(nav);
       if (step != null && rows.isNotEmpty) return RouteStepCard(nav: nav, rows: rows, index: step, onStep: _goStep, onClose: _closeSteps);
-      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette), onSteps: _openSteps);
+      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette), onNextTurn: _openSteps);
     }
     if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight);
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
