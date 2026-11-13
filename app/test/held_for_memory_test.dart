@@ -26,9 +26,11 @@ void main() {
         memory: () async => MemoryReading(avail: availBytes, total: 8 * _gb, threshold: 200 << 20),
       );
 
-  test('the start gate holding the model back sets heldForMemory and the two numbers', () async {
+  test('the start never runs the gate (nothing loads at start); the gate on Ask opening sets heldForMemory and the two numbers', () async {
     final app = make(900 << 20);
     await app.init();
+    expect(app.heldForMemory, isFalse);
+    await app.wake();
     expect(app.heldForMemory, isTrue);
     expect(app.heldNeedMb, greaterThan(app.heldFreeMb!));
     expect(app.heldFreeMb, 700);
@@ -55,6 +57,7 @@ void main() {
   test('choosing another model clears it', () async {
     final app = make(900 << 20);
     await app.init();
+    await app.wake();
     expect(app.heldForMemory, isTrue);
     File('${dir.path}/models/other.gguf').writeAsBytesSync(List.filled(16, 0));
     await app.refreshModels();
