@@ -21,6 +21,9 @@ release notes).
 - Library: the Cache guide's Credits and licenses section gives the credits for the map data in the guide's pictures
 
 ### Fixed
+- Library: a scanned PDF added on Android now has its pages read, so its words can be found (in store builds, reading failed on every page)
+- Ask: sources cited as a list or a range, such as [1, 2] or [1-3], now count as sources; they were dropped
+- Ask: when the search engine fails to start or stops, Ask's searches no longer wait for ever; the engine starts again
 - Sharing: updating from 1.0 no longer turns sharing off at the next start
 - Maps: after you choose a place, tapping the search box again selects its name, so what you type replaces it; it was added to the end of the name
 - Home: when the weather card's conditions take a second line, the line breaks between its parts and keeps each of "High 52 °F" and "low 31 °F" together; it could leave "°F" alone on the second line
