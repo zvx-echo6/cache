@@ -5,7 +5,10 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
 import 'fs_ops.dart';
+import 'guide_install.dart';
+import 'host_load.dart';
 import 'index_driver.dart';
+import 'pdf_zim_indexer.dart';
 import 'line_protocol.dart';
 import 'regions_ops.dart';
 import 'video_ops.dart';
@@ -37,7 +40,20 @@ Future<void> main() async {
   }
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
-  final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
+  final extras = serverCoreExtras(dirs);
+  // The PDFs inside ZIMs are read by the server program itself (`cache pdf-text`, MuPDF); without it (a helper run by hand) they are
+  // not indexed.
+  final pdfExe = Platform.environment['CACHE_PDF_TEXT_EXE'];
+  final indexes = extras['indexes_dir'];
+  final pdf = pdfExe != null && pdfExe.isNotEmpty && indexes is String
+      ? PdfWork(core: DispatcherPdfCore(dispatcher), read: PdfTextProcess(pdfExe, '${dirs.support.path}/tmp/pdf-text').read, indexesDir: indexes)
+      : null;
+  final indexer = IndexDriver(dispatcher, log: log, extra: extras, load: HostLoad(), pdf: pdf);
+  // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
+  final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
+  final guide = guidePath != null && guidePath.isNotEmpty
+      ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
+      : null;
   // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
   final regionsOps = RegionsOps(
     dirs.support,
@@ -54,9 +70,10 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer, onOpened: regionsOps.afterOpen),
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, onOpened: regionsOps.afterOpen, guide: guide),
       RescanOp(dirs, dispatcher, log: log, indexer: indexer),
       IndexStateOp(indexer),
+      IndexPauseOp(indexer),
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
       regionsOps,
