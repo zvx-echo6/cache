@@ -101,6 +101,22 @@ fn issue_code(kind: io::ErrorKind) -> &'static str {
         _ => "io_error",
     }
 }
+/// A per-file problem as the browser is told it: the reason code, and one fixed sentence for that reason (the wording the
+/// browser already uses for the code). The operating system's own error text goes to the log only.
+fn scan_issue(relpath: String, error: &io::Error) -> ScanError {
+    eprintln!("cache: linked folder: {relpath}: {error}");
+    let code = issue_code(error.kind());
+    ScanError { relpath, code: code.into(), message: reason_text(code).into() }
+}
+fn reason_text(code: &str) -> &'static str {
+    match code {
+        "permission_denied" => "Cache cannot read this folder. Restore access and try again.",
+        "not_found" => "The linked folder or file is no longer available.",
+        "invalid_path" => "The folder path could not be used. Check it and try again.",
+        "invalid_state" => "This folder cannot be checked right now. Refresh and try again.",
+        _ => "Cache could not read a file. Check access and try again.",
+    }
+}
 fn hash_beneath_progress(root:&Path,relative:&Path,on_bytes:impl FnMut(u64))->io::Result<HashedFile>{hash_opened_progress(&mut open_beneath(root,relative)?,on_bytes)}
 
 /// Scan a canonical registered directory. Exclusions must be nonempty relative component paths.
@@ -145,9 +161,7 @@ where
         Err(error) => {
             result.unavailable = true;
             result.complete = false;
-            result.errors.push(ScanError {
-                relpath: String::new(), code: issue_code(error.kind()).into(), message: error.to_string(),
-            });
+            result.errors.push(scan_issue(String::new(), &error));
             result.state = retained(previous, exclusions);
             return result;
         }
@@ -172,9 +186,7 @@ where
             Err(error) => {
                 result.complete = false;
                 result.inaccessible_prefixes.push(key.clone());
-                result.errors.push(ScanError {
-                    relpath: key, code: issue_code(error.kind()).into(), message: error.to_string(),
-                });
+                result.errors.push(scan_issue(key, &error));
                 continue;
             }
         };
@@ -184,9 +196,7 @@ where
                 Err(error) => {
                     result.complete = false;
                     result.inaccessible_prefixes.push(key.clone());
-                    result.errors.push(ScanError {
-                        relpath: key.clone(), code: issue_code(error.kind()).into(), message: error.to_string(),
-                    });
+                    result.errors.push(scan_issue(key.clone(), &error));
                     continue;
                 }
             };
@@ -211,9 +221,7 @@ where
                 Err(error) => {
                     result.complete = false;
                     result.inaccessible_prefixes.push(child_s.clone());
-                    result.errors.push(ScanError {
-                        relpath: child_s, code: issue_code(error.kind()).into(), message: error.to_string(),
-                    });
+                    result.errors.push(scan_issue(child_s, &error));
                     continue;
                 }
             };
@@ -255,9 +263,7 @@ where
                     Err(error) => {
                         result.complete = false;
                         result.inaccessible_prefixes.push(child_s.clone());
-                        result.errors.push(ScanError {
-                            relpath: child_s.clone(), code: issue_code(error.kind()).into(), message: error.to_string(),
-                        });
+                        result.errors.push(scan_issue(child_s.clone(), &error));
                         if let Some(old) = old {
                             state = old.clone();
                         }
@@ -297,6 +303,22 @@ where
     result
 }
 
+/// Read a linked original once, in place, for the builder. It is opened beneath the registered root (no symlinks), read
+/// through that one handle, and refused unless its size and modified time are the same before and after the read and its BLAKE3
+/// is the one the check recorded. A file still being written, or changed since it was checked, returns an error: the caller
+/// drops the result and the next automatic check tries again once the file is stable. Nothing is ever written.
+pub fn read_stable(root: &Path, relative: &str, expected_blake3: &str) -> Result<Vec<u8>, String> {
+    let mut file = open_beneath(root, Path::new(relative)).map_err(|e| format!("could not open the file: {e}"))?;
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    if !before.is_file() { return Err("source is not a regular file".into()); }
+    let mut bytes = Vec::with_capacity(before.len().min(1 << 30) as usize);
+    file.read_to_end(&mut bytes).map_err(|e| format!("could not read the file: {e}"))?;
+    let after = file.metadata().map_err(|e| e.to_string())?;
+    if fingerprint(&before) != fingerprint(&after) || bytes.len() as u64 != before.len() { return Err("the file changed while it was read".into()); }
+    if blake3::hash(&bytes).to_hex().to_string() != expected_blake3.to_ascii_lowercase() { return Err("the file is not the one that was checked".into()); }
+    Ok(bytes)
+}
+
 /// Open and validate a stored source immediately before use. Returns the same read-only handle
 /// whose contents were hashed; callers must serve from this handle, never reopen its pathname.
 /// Unix opens components relative to held descriptors with O_NOFOLLOW. The non-Unix fallback
@@ -324,6 +346,42 @@ pub fn read_only_source_path(root: &Path, relative: &str, expected_blake3: &str)
     fn setup()->(Temp,PathBuf) {let t=Temp::new();let root=fs::canonicalize(&t.0).unwrap();(t,root)}
     #[test] fn read_only_and_quiet_reuse() { let (_t,root)=setup();fs::write(root.join("a.PDF"),b"abc").unwrap();let a=scan_linked_root(&root,&[],&ScanState::new(),1,0);let meta=fs::metadata(root.join("a.PDF")).unwrap();assert!(a.candidates.len()==1);assert_eq!(fs::metadata(root.join("a.PDF")).unwrap().len(),meta.len());let mut opened=read_only_source_path(&root,"a.PDF",&a.candidates[0].blake3).unwrap();let mut bytes=Vec::new();opened.read_to_end(&mut bytes).unwrap();assert_eq!(bytes,b"abc");let b=scan_linked_root(&root,&[],&a.state,99,500);assert_eq!(a.candidates[0].blake3,b.candidates[0].blake3);assert_eq!(a.state["a.PDF"].first_observed_ms,b.state["a.PDF"].first_observed_ms); }
     #[test] fn settle_change_rename_duplicate_and_unavailable() { let (_t,root)=setup();fs::write(root.join("a.pdf"),b"old").unwrap();let mut s=scan_linked_root(&root,&[],&ScanState::new(),10,100);assert!(s.candidates.is_empty());s=scan_linked_root(&root,&[],&s.state,111,100);assert_eq!(s.candidates.len(),1);fs::write(root.join("a.pdf"),b"new! ").unwrap();let changed=scan_linked_root(&root,&[],&s.state,200,100);assert!(changed.candidates.is_empty());let settled=scan_linked_root(&root,&[],&changed.state,301,100);assert_eq!(settled.candidates.len(),1);fs::rename(root.join("a.pdf"),root.join("b.pdf")).unwrap();let renamed=scan_linked_root(&root,&[],&settled.state,400,0);assert_eq!(renamed.candidates.len(),1);assert_eq!(renamed.candidates[0].blake3,settled.candidates[0].blake3);fs::write(root.join("c.pdf"),b"new! ").unwrap();let dup=scan_linked_root(&root,&[],&renamed.state,500,0);assert_eq!(dup.candidates.iter().filter(|c|c.blake3==renamed.candidates[0].blake3).count(),2);let gone=root.join("missing");let unavailable=scan_linked_root(&gone,&[],&dup.state,600,0);assert!(unavailable.unavailable);assert_eq!(unavailable.state,dup.state); }
+    #[test] fn a_failed_read_is_reported_by_reason_not_in_the_operating_systems_words() {
+        let (_t,root)=setup(); let gone=root.join("missing");
+        let r=scan_linked_root(&gone,&[],&ScanState::new(),1,0);
+        let e=&r.errors[0];
+        assert_eq!(e.code,"not_found");
+        assert_eq!(e.message,"The linked folder or file is no longer available.");
+        assert!(!e.message.contains("os error")&&!e.message.contains("No such file"));
+    }
+    #[test] fn read_stable_returns_the_bytes_only_for_the_file_that_was_checked_and_never_writes() {
+        let (_t,root)=setup(); fs::write(root.join("a.pdf"),b"the whole file").unwrap();
+        let meta=fs::metadata(root.join("a.pdf")).unwrap();
+        let hash=blake3::hash(b"the whole file").to_hex().to_string();
+        assert_eq!(read_stable(&root,"a.pdf",&hash).unwrap(),b"the whole file");
+        assert!(read_stable(&root,"a.pdf",blake3::hash(b"other").to_hex().as_ref()).is_err(),"changed since it was checked");
+        assert!(read_stable(&root,"missing.pdf",&hash).is_err());
+        assert!(read_stable(&root,"../a.pdf",&hash).is_err());
+        let after=fs::metadata(root.join("a.pdf")).unwrap();
+        assert_eq!((meta.len(),meta.modified().unwrap()),(after.len(),after.modified().unwrap()));
+    }
+    #[test] fn a_file_that_changes_while_it_is_read_is_dropped_and_waits_again() {
+        use std::io::Write as _;
+        let (_t,root)=setup(); let path=root.join("big.pdf");
+        fs::write(&path,vec![1u8;300_000]).unwrap();
+        let first=scan_linked_root(&root,&[],&ScanState::new(),10,100); assert!(first.candidates.is_empty());
+        // the copy grows after the first chunk has been read
+        let mut grew=false;
+        let second=scan_linked_root_with_progress(&root,&[],&first.state,200,100,|_,_,_,_,_|{ if !grew { grew=true; OpenOptions::new().append(true).open(&path).unwrap().write_all(b"more").unwrap(); } });
+        assert!(second.candidates.is_empty(),"a half-read result is dropped");
+        assert!(second.errors.iter().any(|e|e.code=="file_changing"));
+        assert!(second.state["big.pdf"].blake3.is_none());
+        // it is seen with its new size, and read only once that has stayed the same for the settle delay
+        let third=scan_linked_root(&root,&[],&second.state,250,100); assert!(third.candidates.is_empty());
+        let fourth=scan_linked_root(&root,&[],&third.state,400,100);
+        assert_eq!(fourth.candidates.len(),1);
+        assert_eq!(fourth.candidates[0].blake3,blake3::hash(&fs::read(&path).unwrap()).to_hex().to_string());
+    }
     #[cfg(unix)] #[test] fn opener_rejects_symlink_ancestor_and_handle_survives_rename() {
         use std::os::unix::fs::symlink;
         let (_t,root)=setup(); fs::create_dir_all(root.join("dir")).unwrap(); fs::write(root.join("dir/file.pdf"),b"original").unwrap();

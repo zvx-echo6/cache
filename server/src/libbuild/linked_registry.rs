@@ -2,14 +2,17 @@
 use super::linked_source::{PdfCandidate, ScanState};
 use serde::{Deserialize,Serialize};
 use std::{collections::{BTreeMap,BTreeSet},fs,io,path::{Component,Path,PathBuf},time::{SystemTime,UNIX_EPOCH}};
-#[derive(Clone,Copy,Debug,Default,Serialize,Deserialize,PartialEq,Eq)] #[serde(rename_all="snake_case")] pub enum BrowseMode { #[default] Keep, Cds, Both }
-#[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootConfig { pub id:String, #[serde(default)] pub label:String, #[serde(default)] pub mode:BrowseMode, pub path:PathBuf, #[serde(default)] pub exclusions:Vec<PathBuf>, #[serde(default)] pub paused:bool, #[serde(default)] pub state:ScanState }
-#[derive(Clone,Debug,Serialize,Deserialize)] pub struct Location { pub root_id:String, pub relative_path:String, pub blake3:String, pub available:bool }
+#[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootConfig { pub id:String, #[serde(default)] pub label:String, pub path:PathBuf, #[serde(default)] pub exclusions:Vec<PathBuf>, #[serde(default)] pub paused:bool, #[serde(default)] pub state:ScanState }
+#[derive(Clone,Debug,Serialize,Deserialize)] pub struct Location { pub root_id:String, pub relative_path:String, pub blake3:String, pub available:bool,
+ /// Why the file is not present, as a code (`missing`, `unreadable`, `changing`, `folder_offline`, `unlinked`); none while it is present.
+ #[serde(default)] pub reason:Option<String>,
+ /// The last time (milliseconds since 1970) a check found the file present.
+ #[serde(default)] pub last_seen_ms:Option<u64> }
 #[derive(Clone,Debug,Serialize,Deserialize)] pub struct LinkedBook { pub blake3:String, pub doc_id:Option<String>, #[serde(default)] pub doc_version:Option<u32>, pub title:Option<String>, pub pending_indexing:bool, #[serde(default)] pub pending_reason:Option<String>, pub locations:Vec<Location> }
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct RegistryData { pub roots:Vec<RootConfig>, pub books:Vec<LinkedBook> }
 #[derive(Clone,Debug,Serialize,Deserialize)] pub struct RootReport { pub root_id:String, pub paused:bool, pub unavailable:bool, pub complete:bool, pub candidates:usize, pub pending:usize, pub errors:Vec<String>, #[serde(skip)] pub issues:Vec<super::linked_source::RootIssue> }
 #[derive(Clone,Debug,Default,Serialize,Deserialize)] pub struct ScanReport { pub roots:Vec<RootReport>, pub books:Vec<LinkedBook> }
-pub struct LinkedRegistry { sidecar:PathBuf, library:PathBuf, data:RegistryData }
+pub struct LinkedRegistry { sidecar:PathBuf, library:PathBuf, data:RegistryData, known_override:Option<Catalog> }
 fn safe_id(s:&str)->bool {!s.is_empty()&&s.len()<=80&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')}
 fn valid_rel(p:&Path)->bool {!p.as_os_str().is_empty()&&p.components().all(|c|matches!(c,Component::Normal(_)))}
 fn hash_ok(s:&str)->bool {s.len()==64&&s.bytes().all(|b|b.is_ascii_hexdigit())}
@@ -37,12 +40,12 @@ if !md.is_file()||path.extension().and_then(|x|x.to_str())!=Some("cdoc"){continu
 }
 impl LinkedRegistry {
  /// Open device-local state under the supplied cache-owned sidecar; use the trusted existing library path.
- pub fn open(sidecar:&Path,library:&Path)->io::Result<Self>{fs::create_dir_all(sidecar)?;if fs::symlink_metadata(sidecar)?.file_type().is_symlink(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"sidecar is a symlink"))}let sidecar=fs::canonicalize(sidecar)?;let library=fs::canonicalize(library)?;if !library.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"library is not a directory"))}let f=sidecar.join("linked-registry.json");if fs::symlink_metadata(&f).map(|m|m.file_type().is_symlink()).unwrap_or(false){return Err(io::Error::new(io::ErrorKind::InvalidInput,"registry file is a symlink"))}let data=if f.exists(){serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)?}else{RegistryData::default()};let mut x=Self{sidecar,library,data};x.validate()?;Ok(x)}
+ pub fn open(sidecar:&Path,library:&Path)->io::Result<Self>{fs::create_dir_all(sidecar)?;if fs::symlink_metadata(sidecar)?.file_type().is_symlink(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"sidecar is a symlink"))}let sidecar=fs::canonicalize(sidecar)?;let library=fs::canonicalize(library)?;if !library.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"library is not a directory"))}let f=sidecar.join("linked-registry.json");if fs::symlink_metadata(&f).map(|m|m.file_type().is_symlink()).unwrap_or(false){return Err(io::Error::new(io::ErrorKind::InvalidInput,"registry file is a symlink"))}let data=if f.exists(){serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)?}else{RegistryData::default()};let mut x=Self{sidecar,library,data,known_override:None};x.validate()?;Ok(x)}
  fn persist(&self)->io::Result<()>{save(&self.sidecar.join("linked-registry.json"),&self.data)}
  fn validate(&mut self)->io::Result<()>{self.data.roots.retain(|r|safe_id(&r.id));let mut ids=BTreeSet::new();self.data.roots.retain(|r|ids.insert(r.id.clone()));if self.data.roots.iter().any(|r|r.exclusions.iter().any(|e|!valid_rel(e))){return Err(io::Error::new(io::ErrorKind::InvalidData,"invalid exclusion"))}self.data.books.retain(|b|hash_ok(&b.blake3));for b in &mut self.data.books{b.blake3.make_ascii_lowercase();b.locations.retain(|l|safe_id(&l.root_id)&&valid_rel(Path::new(&l.relative_path))&&hash_ok(&l.blake3));}Ok(())}
  fn canonical_root(&self,root:&Path)->io::Result<PathBuf>{let p=fs::canonicalize(root)?;if !p.is_dir(){return Err(io::Error::new(io::ErrorKind::InvalidInput,"source is not a directory"))}let _=fs::read_dir(&p)?;if self.sidecar.starts_with(&p)||p.starts_with(&self.sidecar)||p.starts_with(&self.library)||self.library.starts_with(&p){return Err(io::Error::new(io::ErrorKind::InvalidInput,"source overlaps library or cache sidecar"))}Ok(p)}
- pub fn register_root(&mut self,id:&str,label:String,mode:BrowseMode,root:&Path,exclusions:Vec<PathBuf>)->io::Result<()>{if !safe_id(id)||exclusions.iter().any(|p|!valid_rel(p)){return Err(io::Error::new(io::ErrorKind::InvalidInput,"invalid root id or exclusion"))}let path=self.canonical_root(root)?;for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==id{l.available=false}}}
-if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.exclusions!=exclusions{r.state=ScanState::new()}r.path=path;r.label=label;r.mode=mode;r.exclusions=exclusions;r.paused=false}else{self.data.roots.push(RootConfig{id:id.into(),label,mode,path,exclusions,paused:false,state:ScanState::new()})}self.persist()}
+ pub fn register_root(&mut self,id:&str,label:String,root:&Path,exclusions:Vec<PathBuf>)->io::Result<()>{if !safe_id(id)||exclusions.iter().any(|p|!valid_rel(p)){return Err(io::Error::new(io::ErrorKind::InvalidInput,"invalid root id or exclusion"))}let path=self.canonical_root(root)?;for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==id{l.available=false}}}
+if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.exclusions!=exclusions{r.state=ScanState::new()}r.path=path;r.label=label;r.exclusions=exclusions;r.paused=false}else{self.data.roots.push(RootConfig{id:id.into(),label,path,exclusions,paused:false,state:ScanState::new()})}self.persist()}
  pub fn pause(&mut self,id:&str)->io::Result<()>{let r=self.data.roots.iter_mut().find(|r|r.id==id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"root not found"))?;r.paused=true;self.persist()}
  pub fn resume(&mut self,id:&str)->io::Result<()>{let r=self.data.roots.iter_mut().find(|r|r.id==id).ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"root not found"))?;r.paused=false;self.persist()}
  /// Merge future controls once, including roots outside the active job's scope.
@@ -60,7 +63,9 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
      Ok(())
  }
  /// Stop checking a root; retain its books and locations as unavailable. Originals are untouched.
- pub fn unlink(&mut self,id:&str)->io::Result<()>{let n=self.data.roots.len();self.data.roots.retain(|r|r.id!=id);if n==self.data.roots.len(){return Err(io::Error::new(io::ErrorKind::NotFound,"root not found"))}for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==id{l.available=false}}b.pending_indexing=b.doc_id.is_none()}self.persist()}
+ pub fn unlink(&mut self,id:&str)->io::Result<()>{let n=self.data.roots.len();self.data.roots.retain(|r|r.id!=id);if n==self.data.roots.len(){return Err(io::Error::new(io::ErrorKind::NotFound,"root not found"))}for b in &mut self.data.books{for l in &mut b.locations{if l.root_id==id{l.available=false;l.reason=Some("unlinked".into())}}b.pending_indexing=b.doc_id.is_none()}self.persist()}
+ /// The person forgot these books: take them (by hash) out of the registry, with their places. Originals are untouched. The number removed.
+ pub fn forget_books(&mut self,hashes:&BTreeSet<String>)->io::Result<usize>{let n=self.data.books.len();self.data.books.retain(|b|!hashes.contains(&b.blake3));let gone=n-self.data.books.len();if gone>0{self.persist()?}Ok(gone)}
  pub fn scan(&mut self,settle_ms:u64)->io::Result<ScanReport>{self.scan_scoped(None,settle_ms)}
  pub fn scan_scoped(&mut self,root_id:Option<&str>,settle_ms:u64)->io::Result<ScanReport>{self.scan_scoped_progress(root_id,settle_ms,|_,_,_,_,_,_| {})}
  pub fn scan_scoped_progress<F>(
@@ -72,7 +77,7 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
  where
      F: FnMut(&str, usize, usize, u64, usize, &ScanState),
  {
-     let known = catalog(&self.library)?;
+     let known = match &self.known_override { Some(known) => known.clone(), None => catalog(&self.library)? };
      let when = ms();
      let mut reports = vec![];
      for index in 0..self.data.roots.len() {
@@ -101,7 +106,7 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
              }
          }
          for candidate in &scanned.candidates {
-             adopt(&mut self.data.books, &known, &root.id, candidate);
+             adopt(&mut self.data.books, &known, &root.id, candidate, when);
          }
          // An inaccessible file cannot be served, but its book and hash history remain.
          for prefix in &scanned.inaccessible_prefixes {
@@ -122,6 +127,38 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
                      if location.root_id == root.id {
                          location.available = false;
                      }
+                 }
+             }
+         }
+         // Why each place of this folder that is not present is not, as a code. It is kept until the file is back (a present
+         // place has no reason), and the time it was last seen is never touched here.
+         {
+             let state = &self.data.roots[index].state;
+             for book in &mut self.data.books {
+                 for location in &mut book.locations {
+                     if location.root_id != root.id || location.available {
+                         continue;
+                     }
+                     let unreadable = scanned.inaccessible_prefixes.iter().any(|prefix| prefix.is_empty()
+                         || location.relative_path == *prefix
+                         || location.relative_path.starts_with(&(prefix.clone() + "/")));
+                     let changing = state.get(&location.relative_path).is_some_and(|s| s.blake3.is_none());
+                     let reason = if scanned.unavailable { "folder_offline" }
+                         else if unreadable { "unreadable" }
+                         else if changing { "changing" }
+                         else { "missing" };
+                     location.reason = Some(reason.to_string());
+                 }
+             }
+         }
+         // A file that moved or was renamed inside this folder is the same book at a new path. When a complete
+         // walk finds a book at one of its places, its old place in this folder is dropped (the shelf entry, call
+         // number and indexing stay with the book). A book whose only place has gone keeps that place, marked
+         // unavailable: a missing file is never removed from the library on its own.
+         if scanned.complete && !scanned.unavailable {
+             for book in &mut self.data.books {
+                 if book.locations.iter().any(|l| l.root_id == root.id && l.available) {
+                     book.locations.retain(|l| l.root_id != root.id || l.available);
                  }
              }
          }
@@ -148,6 +185,11 @@ if let Some(r)=self.data.roots.iter_mut().find(|r|r.id==id){if r.path!=path||r.e
      self.persist()?;
      Ok(ScanReport { roots: reports, books: self.data.books.clone() })
  }
+ /// For a library Cache builds: use the builder's own books, each `(blake3, doc_id, version, title)`, as the catalog instead of
+ /// an imported library's `documents.tsv`. A hash that two different documents hold is ambiguous, as for an imported library.
+ pub fn use_builder_books(&mut self,books:impl IntoIterator<Item=(String,String,u32,String)>){let mut rows:BTreeMap<String,Vec<(String,u32,String)>>=BTreeMap::new();for(h,id,v,t)in books{rows.entry(h.to_ascii_lowercase()).or_default().push((id,v,t))}let mut out=Catalog::new();for(h,rs)in rows{let ids:BTreeSet<_>=rs.iter().map(|r|r.0.clone()).collect();if ids.len()!=1{out.insert(h,None);continue}let best=rs.iter().max_by_key(|r|r.1).unwrap();out.insert(h,Some((best.0.clone(),best.1,if best.2.is_empty(){None}else{Some(best.2.clone())})));}self.known_override=Some(out)}
+ /// The registry as saved, read without validating or touching anything (for the automatic-check scheduler).
+ pub fn read_saved(sidecar:&Path)->io::Result<RegistryData>{let f=sidecar.join("linked-registry.json");if !f.is_file(){return Ok(RegistryData::default())}serde_json::from_slice(&fs::read(f)?).map_err(io::Error::other)}
  /// Local configuration includes absolute roots; never expose this in a shared response.
  pub fn local_config(&self)->&RegistryData{&self.data}
 }
@@ -161,13 +203,13 @@ pub fn checkpoint_state(path: &Path, root_id: &str, observed: &ScanState) -> io:
     save(path, &data)
 }
 
-fn adopt(books:&mut Vec<LinkedBook>,known:&Catalog,rid:&str,c:&PdfCandidate){let h=c.blake3.to_ascii_lowercase();let idx=books.iter().position(|b|b.blake3==h);let i=idx.unwrap_or_else(||{books.push(LinkedBook{blake3:h.clone(),doc_id:None,doc_version:None,title:None,pending_indexing:true,pending_reason:Some("not found in existing catalog".into()),locations:vec![]});books.len()-1});let b=&mut books[i];if b.doc_id.is_none(){if let Some(Some((id,version,title)))=known.get(&h){b.doc_id=Some(id.clone());b.doc_version=Some(*version);b.title=title.clone();b.pending_indexing=false;b.pending_reason=None}else if known.get(&h).is_some_and(|v|v.is_none()){b.pending_reason=Some("hash matches multiple existing document identities".into())}else if b.doc_id.is_none(){b.pending_reason=Some("not found in existing catalog".into())}}
-if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c.relpath){l.available=true;l.blake3=h}else{b.locations.push(Location{root_id:rid.into(),relative_path:c.relpath.clone(),blake3:h,available:true})}}
+fn adopt(books:&mut Vec<LinkedBook>,known:&Catalog,rid:&str,c:&PdfCandidate,when:u64){let h=c.blake3.to_ascii_lowercase();let idx=books.iter().position(|b|b.blake3==h);let i=idx.unwrap_or_else(||{books.push(LinkedBook{blake3:h.clone(),doc_id:None,doc_version:None,title:None,pending_indexing:true,pending_reason:Some("not found in existing catalog".into()),locations:vec![]});books.len()-1});let b=&mut books[i];if b.doc_id.is_none(){if let Some(Some((id,version,title)))=known.get(&h){b.doc_id=Some(id.clone());b.doc_version=Some(*version);b.title=title.clone();b.pending_indexing=false;b.pending_reason=None}else if known.get(&h).is_some_and(|v|v.is_none()){b.pending_reason=Some("hash matches multiple existing document identities".into())}else if b.doc_id.is_none(){b.pending_reason=Some("not found in existing catalog".into())}}
+if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c.relpath){l.available=true;l.reason=None;l.last_seen_ms=Some(when);l.blake3=h}else{b.locations.push(Location{root_id:rid.into(),relative_path:c.relpath.clone(),blake3:h,available:true,reason:None,last_seen_ms:Some(when)})}}
 #[cfg(test)]mod tests{use super::*;struct Temp(PathBuf);impl std::ops::Deref for Temp{type Target=Path;fn deref(&self)->&Path{&self.0}}impl Drop for Temp{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}fn temp()->Temp{let p=std::env::temp_dir().join(format!("linked-reg-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir_all(&p).unwrap();Temp(fs::canonicalize(p).unwrap())}
- #[test]fn reuses_catalog_identity_and_marks_unknown_pending(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}let bytes=b"pdf-data";fs::write(s.join("a.pdf"),bytes).unwrap();fs::write(s.join("unknown.pdf"),b"unknown-pdf").unwrap();let h=blake3::hash(bytes).to_hex();fs::write(l.join("documents.tsv"),format!("doc-123\t1\tExisting\t{}\t1\t1\n",h)).unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),BrowseMode::Keep,&s,vec![]).unwrap();let x=r.scan(0).unwrap();assert!(x.books.iter().any(|b|b.doc_id.as_deref()==Some("doc-123")&&!b.pending_indexing));assert!(x.books.iter().any(|b|b.doc_id.is_none()&&b.pending_indexing));assert_eq!(fs::read(s.join("a.pdf")).unwrap(),bytes);assert!(!l.join("packs").exists());assert_eq!(fs::read(l.join("documents.tsv")).unwrap(),format!("doc-123\t1\tExisting\t{}\t1\t1\n",h).as_bytes());}
- #[test]fn pause_resume_unlink_and_path_safety(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();assert!(r.register_root("bad/id","Folder".into(),BrowseMode::Keep,&s,vec![]).is_err());fs::create_dir_all(c.join("nested")).unwrap();assert!(r.register_root("nested","Folder".into(),BrowseMode::Keep,&c.join("nested"),vec![]).is_err());r.register_root("r","Folder".into(),BrowseMode::Keep,&s,vec![]).unwrap();r.pause("r").unwrap();assert!(r.local_config().roots[0].paused);r.resume("r").unwrap();r.unlink("r").unwrap();assert!(r.local_config().roots.is_empty());}
- #[test]fn ambiguous_existing_hash_stays_pending(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}let bytes=b"same";fs::write(s.join("a.pdf"),bytes).unwrap();let h=blake3::hash(bytes).to_hex();fs::write(l.join("documents.tsv"),format!("doc-a\t1\tA\t{}\t1\t1\ndoc-b\t1\tB\t{}\t1\t1\n",h,h)).unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),BrowseMode::Keep,&s,vec![]).unwrap();let x=r.scan(0).unwrap();assert!(x.books[0].doc_id.is_none());assert_eq!(x.books[0].pending_reason.as_deref(),Some("hash matches multiple existing document identities"));}
- #[test]fn unavailable_root_keeps_existing_location(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.data.books.push(LinkedBook{blake3:"a".repeat(64),doc_id:Some("doc-1".into()),doc_version:Some(1),title:None,pending_indexing:false,pending_reason:None,locations:vec![Location{root_id:"r".into(),relative_path:"old.pdf".into(),blake3:"a".repeat(64),available:true}]});r.data.roots.push(RootConfig{id:"r".into(),label:"Folder".into(),mode:BrowseMode::Keep,path:s.join("gone"),exclusions:vec![],paused:false,state:ScanState::new()});let x=r.scan(0).unwrap();assert!(!x.books[0].locations[0].available);assert!(x.roots[0].unavailable);}
+ #[test]fn reuses_catalog_identity_and_marks_unknown_pending(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}let bytes=b"pdf-data";fs::write(s.join("a.pdf"),bytes).unwrap();fs::write(s.join("unknown.pdf"),b"unknown-pdf").unwrap();let h=blake3::hash(bytes).to_hex();fs::write(l.join("documents.tsv"),format!("doc-123\t1\tExisting\t{}\t1\t1\n",h)).unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),&s,vec![]).unwrap();let x=r.scan(0).unwrap();assert!(x.books.iter().any(|b|b.doc_id.as_deref()==Some("doc-123")&&!b.pending_indexing));assert!(x.books.iter().any(|b|b.doc_id.is_none()&&b.pending_indexing));assert_eq!(fs::read(s.join("a.pdf")).unwrap(),bytes);assert!(!l.join("packs").exists());assert_eq!(fs::read(l.join("documents.tsv")).unwrap(),format!("doc-123\t1\tExisting\t{}\t1\t1\n",h).as_bytes());}
+ #[test]fn pause_resume_unlink_and_path_safety(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();assert!(r.register_root("bad/id","Folder".into(),&s,vec![]).is_err());fs::create_dir_all(c.join("nested")).unwrap();assert!(r.register_root("nested","Folder".into(),&c.join("nested"),vec![]).is_err());r.register_root("r","Folder".into(),&s,vec![]).unwrap();r.pause("r").unwrap();assert!(r.local_config().roots[0].paused);r.resume("r").unwrap();r.unlink("r").unwrap();assert!(r.local_config().roots.is_empty());}
+ #[test]fn ambiguous_existing_hash_stays_pending(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}let bytes=b"same";fs::write(s.join("a.pdf"),bytes).unwrap();let h=blake3::hash(bytes).to_hex();fs::write(l.join("documents.tsv"),format!("doc-a\t1\tA\t{}\t1\t1\ndoc-b\t1\tB\t{}\t1\t1\n",h,h)).unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),&s,vec![]).unwrap();let x=r.scan(0).unwrap();assert!(x.books[0].doc_id.is_none());assert_eq!(x.books[0].pending_reason.as_deref(),Some("hash matches multiple existing document identities"));}
+ #[test]fn unavailable_root_keeps_existing_location(){let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.data.books.push(LinkedBook{blake3:"a".repeat(64),doc_id:Some("doc-1".into()),doc_version:Some(1),title:None,pending_indexing:false,pending_reason:None,locations:vec![Location{root_id:"r".into(),relative_path:"old.pdf".into(),blake3:"a".repeat(64),available:true,reason:None,last_seen_ms:None}]});r.data.roots.push(RootConfig{id:"r".into(),label:"Folder".into(),path:s.join("gone"),exclusions:vec![],paused:false,state:ScanState::new()});let x=r.scan(0).unwrap();assert!(!x.books[0].locations[0].available);assert!(x.roots[0].unavailable);}
 
  #[test]
  fn writer_export_reuses_arrival_hashes_without_packs() {
@@ -197,7 +239,7 @@ if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c
   write_library(&library,&LibraryOptions{id:"identity-test".into(),title:"Identity test".into(),version:"1".into(),vector_datatype:Default::default(),archive:false,built_at:0},docs).unwrap();
   assert!(!library.join("packs").exists());
   let mut registry=LinkedRegistry::open(&t.join("cache"),&library).unwrap();
-  registry.register_root("r","Source".into(),BrowseMode::Keep,&source,vec![]).unwrap();
+  registry.register_root("r","Source".into(),&source,vec![]).unwrap();
   let result=registry.scan(0).unwrap();
   assert_eq!(result.books.len(),40);
   for book in result.books {
@@ -253,8 +295,8 @@ if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c
   }
  }
 
- #[test]fn scoped_check_does_not_mark_other_root_unavailable(){let t=temp();let(a,b,l,c)=(t.join("a"),t.join("b"),t.join("lib"),t.join("cache"));for p in [&a,&b,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();fs::write(a.join("a.pdf"),b"a").unwrap();fs::write(b.join("b.pdf"),b"b").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("a","A".into(),BrowseMode::Keep,&a,vec![]).unwrap();r.register_root("b","B".into(),BrowseMode::Keep,&b,vec![]).unwrap();r.scan(0).unwrap();let b_before=r.local_config().roots.iter().find(|x|x.id=="b").unwrap().state.clone();fs::remove_file(a.join("a.pdf")).unwrap();let report=r.scan_scoped(Some("a"),0).unwrap();assert_eq!(report.roots.len(),1);let b_after=r.local_config().roots.iter().find(|x|x.id=="b").unwrap();assert_eq!(b_after.state,b_before);assert!(r.local_config().books.iter().any(|book|book.locations.iter().any(|loc|loc.root_id=="b"&&loc.available)));}
- #[test]fn interrupted_n_file_checkpoint_reuses_completed_hashes(){use std::panic::{catch_unwind,AssertUnwindSafe};let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();for name in ["one.pdf","two.pdf","three.pdf"]{fs::write(s.join(name),vec![name.as_bytes()[0];128*1024]).unwrap()}let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),BrowseMode::Keep,&s,vec![]).unwrap();let registry_path=c.join("linked-registry.json");let mut attempted=0usize;let interrupted=catch_unwind(AssertUnwindSafe(||super::super::linked_source::scan_linked_root_with_progress(&s,&[],&ScanState::new(),10,0,|_,hashed,_,_,state|{attempted=hashed;checkpoint_state(&registry_path,"r",state).unwrap();if state.values().filter(|entry|entry.blake3.is_some()).count()>=2{panic!("simulated interruption after two completed files")}})));assert!(interrupted.is_err());assert_eq!(attempted,2);let resumed=LinkedRegistry::open(&c,&l).unwrap();let prior=resumed.local_config().roots[0].state.clone();assert_eq!(prior.values().filter(|entry|entry.blake3.is_some()).count(),2);let mut attempted_after_restart=0usize;let scan=super::super::linked_source::scan_linked_root_with_progress(&s,&[],&prior,5000,0,|_,hashed,_,_,_|attempted_after_restart=hashed);assert_eq!(attempted_after_restart,1);assert_eq!(scan.candidates.len(),3);for name in ["one.pdf","two.pdf","three.pdf"]{assert_eq!(fs::read(s.join(name)).unwrap().len(),128*1024)}}
+ #[test]fn scoped_check_does_not_mark_other_root_unavailable(){let t=temp();let(a,b,l,c)=(t.join("a"),t.join("b"),t.join("lib"),t.join("cache"));for p in [&a,&b,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();fs::write(a.join("a.pdf"),b"a").unwrap();fs::write(b.join("b.pdf"),b"b").unwrap();let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("a","A".into(),&a,vec![]).unwrap();r.register_root("b","B".into(),&b,vec![]).unwrap();r.scan(0).unwrap();let b_before=r.local_config().roots.iter().find(|x|x.id=="b").unwrap().state.clone();fs::remove_file(a.join("a.pdf")).unwrap();let report=r.scan_scoped(Some("a"),0).unwrap();assert_eq!(report.roots.len(),1);let b_after=r.local_config().roots.iter().find(|x|x.id=="b").unwrap();assert_eq!(b_after.state,b_before);assert!(r.local_config().books.iter().any(|book|book.locations.iter().any(|loc|loc.root_id=="b"&&loc.available)));}
+ #[test]fn interrupted_n_file_checkpoint_reuses_completed_hashes(){use std::panic::{catch_unwind,AssertUnwindSafe};let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}fs::write(l.join("documents.tsv"),"").unwrap();for name in ["one.pdf","two.pdf","three.pdf"]{fs::write(s.join(name),vec![name.as_bytes()[0];128*1024]).unwrap()}let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),&s,vec![]).unwrap();let registry_path=c.join("linked-registry.json");let mut attempted=0usize;let interrupted=catch_unwind(AssertUnwindSafe(||super::super::linked_source::scan_linked_root_with_progress(&s,&[],&ScanState::new(),10,0,|_,hashed,_,_,state|{attempted=hashed;checkpoint_state(&registry_path,"r",state).unwrap();if state.values().filter(|entry|entry.blake3.is_some()).count()>=2{panic!("simulated interruption after two completed files")}})));assert!(interrupted.is_err());assert_eq!(attempted,2);let resumed=LinkedRegistry::open(&c,&l).unwrap();let prior=resumed.local_config().roots[0].state.clone();assert_eq!(prior.values().filter(|entry|entry.blake3.is_some()).count(),2);let mut attempted_after_restart=0usize;let scan=super::super::linked_source::scan_linked_root_with_progress(&s,&[],&prior,5000,0,|_,hashed,_,_,_|attempted_after_restart=hashed);assert_eq!(attempted_after_restart,1);assert_eq!(scan.candidates.len(),3);for name in ["one.pdf","two.pdf","three.pdf"]{assert_eq!(fs::read(s.join(name)).unwrap().len(),128*1024)}}
  #[test]
  fn checkpoints_keep_unvisited_state_and_location_history_until_final_walk() {
      let temp = temp();
@@ -268,7 +310,7 @@ if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c
      fs::write(source.join("visited.pdf"), b"visited").unwrap();
      fs::write(source.join("unvisited.pdf"), b"unvisited").unwrap();
      let mut registry = LinkedRegistry::open(&cache, &library).unwrap();
-     registry.register_root("r", "Folder".into(), BrowseMode::Keep, &source, vec![]).unwrap();
+     registry.register_root("r", "Folder".into(),  &source, vec![]).unwrap();
      registry.scan(0).unwrap();
      let state = &registry.local_config().roots[0].state;
      let observed = [("visited.pdf".into(), state["visited.pdf"].clone())].into_iter().collect();
@@ -284,4 +326,53 @@ if let Some(l)=b.locations.iter_mut().find(|l|l.root_id==rid&&l.relative_path==c
          .any(|location| location.relative_path == "unvisited.pdf" && !location.available)));
  }
 
+
+ #[test]
+ fn an_old_registry_with_a_browse_mode_still_loads_and_the_field_is_dropped() {
+  let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}
+  fs::write(l.join("documents.tsv"),"").unwrap();
+  let hash="a".repeat(64);
+  // a file saved before the modes were removed (and before places had a reason or a last-seen time)
+  let old=serde_json::json!({
+   "roots":[{"id":"r","label":"Folder","mode":"cds","path":s,"exclusions":[],"paused":false,"state":{}}],
+   "books":[{"blake3":hash,"doc_id":null,"pending_indexing":true,"locations":[{"root_id":"r","relative_path":"a.pdf","blake3":hash,"available":true}]}]
+  });
+  fs::write(c.join("linked-registry.json"),serde_json::to_vec(&old).unwrap()).unwrap();
+  assert_eq!(LinkedRegistry::read_saved(&c).unwrap().roots.len(),1);
+  let mut r=LinkedRegistry::open(&c,&l).unwrap();
+  assert_eq!((r.local_config().roots[0].id.as_str(),r.local_config().roots[0].label.as_str()),("r","Folder"));
+  let place=&r.local_config().books[0].locations[0];
+  assert!(place.available&&place.reason.is_none()&&place.last_seen_ms.is_none());
+  r.pause("r").unwrap();
+  let saved=fs::read_to_string(c.join("linked-registry.json")).unwrap();
+  assert!(!saved.contains("\"mode\""),"{saved}");
+ }
+
+ #[test]
+ fn each_place_keeps_why_it_is_not_present_and_when_it_was_last_seen() {
+  let t=temp();let(s,l,c)=(t.join("source"),t.join("lib"),t.join("cache"));for p in [&s,&l,&c]{fs::create_dir_all(p).unwrap()}
+  fs::write(l.join("documents.tsv"),"").unwrap();fs::write(s.join("a.pdf"),b"pdf-a").unwrap();
+  let mut r=LinkedRegistry::open(&c,&l).unwrap();r.register_root("r","Folder".into(),&s,vec![]).unwrap();
+  let place=|r:&LinkedRegistry|r.local_config().books[0].locations[0].clone();
+  r.scan(0).unwrap();
+  let first=place(&r);
+  assert!(first.available&&first.reason.is_none());
+  let seen=first.last_seen_ms.expect("seen at the check");assert!(seen>0);
+  std::thread::sleep(std::time::Duration::from_millis(5));
+  // the file goes: not present, a reason, and the last time it was seen is kept across more checks
+  fs::remove_file(s.join("a.pdf")).unwrap();
+  for _ in 0..2 {r.scan(0).unwrap();let gone=place(&r);assert!(!gone.available);assert_eq!(gone.reason.as_deref(),Some("missing"));assert_eq!(gone.last_seen_ms,Some(seen));}
+  // the file comes back: the reason is cleared and the time is new
+  fs::write(s.join("a.pdf"),b"pdf-a").unwrap();r.scan(0).unwrap();
+  let back=place(&r);
+  assert!(back.available&&back.reason.is_none());assert!(back.last_seen_ms.unwrap()>seen);
+  // the folder is offline
+  let away=t.join("away");fs::rename(&s,&away).unwrap();r.scan(0).unwrap();
+  let offline=place(&r);
+  assert!(!offline.available);assert_eq!(offline.reason.as_deref(),Some("folder_offline"));assert_eq!(offline.last_seen_ms,back.last_seen_ms);
+  // the folder is unlinked
+  r.unlink("r").unwrap();
+  assert_eq!(place(&r).reason.as_deref(),Some("unlinked"));
+  assert_eq!(fs::read(away.join("a.pdf")).unwrap(),b"pdf-a");
+ }
 }
