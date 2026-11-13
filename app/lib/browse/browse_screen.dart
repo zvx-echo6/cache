@@ -26,6 +26,7 @@ import '../library/library_prefs.dart';
 import '../library/shelf_server.dart';
 import '../library/shelf_source.dart';
 import '../regions/regions_state.dart';
+import '../settings/hub.dart';
 import '../sharing/sharing_state.dart';
 import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
@@ -77,6 +78,18 @@ class BrowseScreen extends StatefulWidget {
     this.shelfServer,
     this.structured,
   });
+
+  /// The Library as the app shows it, from every way in (its tab and Settings > Storage > Library): the regions and Sharing come
+  /// from the [hub], so Catalog shows the same places, routing and sync lines wherever it is opened from.
+  BrowseScreen.inHub({super.key, required this.browse, required this.active, this.layout, required SettingsHub hub})
+    : regions = hub.regions,
+      sharing = hub.sharing,
+      shelves = null,
+      files = null,
+      originals = null,
+      looks = null,
+      shelfServer = null,
+      structured = null;
 
   final BrowseState browse;
 

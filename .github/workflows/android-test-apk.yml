@@ -20,6 +20,8 @@ env:
   FLUTTER_VERSION: 3.44.8
   NDK_VERSION: 28.2.13676358
   CARGO_NDK_VERSION: 4.1.2
+  # The Rust toolchain, pinned like tests.yml and native-libs.yml.
+  RUST_VERSION: 1.99.1
 
 jobs:
   routing:
@@ -124,8 +126,8 @@ jobs:
       - name: Rust for Android
         id: rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
           rustup target add aarch64-linux-android
           echo "id=$( { rustc -vV; cat "$ANDROID_NDK_HOME/source.properties"; } | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           rustc --version

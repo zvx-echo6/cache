@@ -44,6 +44,7 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 | `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number does not change; the filed PDF takes the new title in its name. |
 | `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
 | `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to this device's Bookshelves log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
+| `GET /api/build/libraries/{id}/books/{doc}/pdf` | | The book's PDF (its filed device copy), `application/pdf`, `Content-Disposition: inline`, streamed with its `Content-Length`. The browser's reader opens it from these bytes. Needs the session like the rest. 404 `not_found` for a library or book that is not there, or a book whose copy is gone. |
 | `DELETE /api/build/libraries/{id}/books/{doc}` | | `{removed:true,id}`. The person's own PDF is not touched. |
 | `POST /api/build/libraries/{id}/books/{doc}/replace?name=<file name>` | the PDF, streamed, `Content-Length` required | the queue item (`replace` set). The old book stays searchable until the new one is published; `doc_version` + 1. |
 
@@ -101,7 +102,7 @@ does the same from the command line and prints the result.
   "eta": {"low_seconds": 32400, "high_seconds": 46800},   // both null when unknown or paused
   "pieces_per_second": 1.4 | null,
   "items": [ {id, library_id, file_name, title, state, size,
-              progress: {pages, pieces, pieces_total, ocr_pages},
+              progress: {pages, pieces, pieces_total, ocr_pages, ocr_done},
               error, note, replace, compression, doc_id, duplicate_of, drop, position, created_at, started_at, finished_at,
               result, division, call_number, decision} ] }
 ```
@@ -110,9 +111,9 @@ does the same from the command line and prints the result.
 "Exact copy of X", "Already have a better copy", "Replaced: the new copy has 312 text pages vs 298" (or the other deciding reason).
 `division` and `call_number` say where a built book was filed.
 
-`state`: `queued` (Waiting), `reading` (Reading the PDF), `building` (Building passages · `pieces` of `pieces_total`),
+`state`: `queued` (Waiting), `reading` (Reading the PDF; while scanned pages are being read by OCR, `progress.ocr_pages` is how many there are and `ocr_done` how many are done: "Reading scanned pages (OCR) · 3 of 8"), `building` (Building passages · `pieces` of `pieces_total`),
 `done`, `skipped_duplicate` (same content already in this library; `duplicate_of` is that book's title), `failed` (`error` is the
-sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all; `error` says so; Retry works once OCR exists). `note` on a done book is
+sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all and OCR could not read it, or this install has no OCR data (lib/tessdata); `error` says so; Retry works once OCR exists). `note` on a done book is
 `"partial: N pages need OCR"`. `position` is the place among the waiting books. `drop` is true for files from the drop folder.
 The ETA is a range from the pieces per second seen since the service started; show it as an estimate. Items are in queue order;
 finished ones stay (up to 1000) so "x of 214 books done" can be counted: `counts.done + skipped + failed + ocr_needed` over

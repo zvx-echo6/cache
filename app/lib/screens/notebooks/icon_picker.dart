@@ -341,7 +341,7 @@ class NotebookColorRow extends StatelessWidget {
       children: [
         const SizedBox(height: 8),
         Text('Pin color', style: TextStyle(fontSize: 16, color: k.text)),
-        Text('Its places start with this color. A place can have its own.', style: TextStyle(fontSize: 14, color: k.secondary)),
+        Text('Its places use this color unless you give one its own.', style: TextStyle(fontSize: 14, color: k.secondary)),
         Wrap(
           children: [
             for (final c in kMarkerColors)

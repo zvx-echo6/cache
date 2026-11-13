@@ -24,6 +24,7 @@
 //!                                              if the name or a redirect leads to one (checked at connect time; `fetch_scope::guarded_agent`).
 //!                                              The catalog hosts are the only exception.
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
+//!   POST /api/library/jobs/<id>/pause|resume -> a waiting or running download stops and keeps its part file (state "paused"); Resume continues it
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
@@ -183,12 +184,26 @@ fn library_reply(r: Result<Value, ApiErr>) -> Reply {
     }
 }
 
+/// The job id in `/api/library/jobs/{id}{suffix}`; `None` when the path has none (`/api/library/jobs/pause`, where the one slash
+/// is both the prefix's and the suffix's).
+fn job_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix("/api/library/jobs/")?.strip_suffix(suffix).filter(|id| !id.is_empty())
+}
+
 /// `/api/library/...` and `/api/fetch` (the caller has checked the session). `None` when the path is not one of these.
 async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
     let lib = &app.library;
     Some(match (method, path) {
         ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
         ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/pause") => match job_id(p, "/pause") {
+            Some(id) => library_reply(lib.pause_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/resume") => match job_id(p, "/resume") {
+            Some(id) => library_reply(lib.resume_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
@@ -264,6 +279,11 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let (id, doc) = (id.to_string(), doc.to_string());
             library_reply(b.suggestions(&id, &doc))
         }
+        // a book's PDF, for the reader in the browser (which opens it from the bytes)
+        ("GET", ["libraries", id, "books", doc, "pdf"]) => match b.book_pdf(id, doc) {
+            Ok((path, name)) => pdf_reply(&path, &name),
+            Err(e) => api_error(e),
+        },
         ("POST", ["libraries", id, "books", doc, "place"]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.place_book(&id, &doc, &body_owned)).await
@@ -332,6 +352,76 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
         ("POST", ["drop", "retry"]) => blocking(move || b.drop_retry(&body_owned)).await,
         _ => return None,
     })
+}
+
+/// `/api/models/downloads...`, `/api/models/files/...`, `/api/models/upload` and `/api/system/memory` (the caller has checked the session):
+/// the model files of the browser build (see `models`). `None` when the path is not one of these.
+async fn models_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let jobs = app.llm.jobs().clone();
+    let name_of = |rest: &str| crate::fetch::percent_decode(rest).unwrap_or_default();
+    Some(match (method, path) {
+        ("GET", "/api/system/memory") => match crate::models::memory() {
+            Ok(v) => ok(v),
+            Err(e) => api_error(e),
+        },
+        ("GET", "/api/models/downloads") => ok(jobs.list(Some(&app.embed.status()))),
+        ("POST", "/api/models/downloads") => library_reply(jobs.add(body)),
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/pause") => {
+            library_reply(jobs.pause(&name_of(&p["/api/models/downloads/".len()..p.len() - "/pause".len()])))
+        }
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/resume") => {
+            library_reply(jobs.resume(&name_of(&p["/api/models/downloads/".len()..p.len() - "/resume".len()])))
+        }
+        ("DELETE", p) if p.starts_with("/api/models/downloads/") => library_reply(jobs.remove(&name_of(&p["/api/models/downloads/".len()..]))),
+        ("DELETE", p) if p.starts_with("/api/models/files/") => {
+            let (svc, id) = (app.llm.clone(), name_of(&p["/api/models/files/".len()..]));
+            blocking(move || svc.delete_model(&id)).await
+        }
+        // A body that came whole (the real server streams it: see `handle`).
+        ("POST", "/api/models/upload") => library_reply(jobs.upload(query, Some(body.len() as u64), Full::new(Bytes::copy_from_slice(body))).await),
+        _ => return None,
+    })
+}
+
+/// A PDF file as the reply: streamed from disk in pieces, never held whole. The name is cut to plain characters for the header.
+fn pdf_reply(path: &std::path::Path, name: &str) -> Reply {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Reply::error(404, "not_found", "this book has no PDF on the server"),
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' }).collect();
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    tokio::task::spawn_blocking(move || {
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            match f.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    Reply {
+        status: 200,
+        headers: vec![
+            ("Content-Type", "application/pdf".into()),
+            ("Content-Length", len.to_string()),
+            ("Content-Disposition", format!("inline; filename=\"{name}\"")),
+            // data for the reader to open from its bytes, never a page of this origin
+            ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+        ],
+        body: vec![],
+        stream: Some(rx),
+    }
 }
 
 /// `/api/models/embedder...` and `/api/embed` (the caller has checked the session). `None` when the path is not one of these.
@@ -436,6 +526,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
         return r;
     }
     if let Some(r) = settings(app, method, path, body) {
+        return r;
+    }
+    if let Some(r) = models_api(app, method, path, query, body).await {
         return r;
     }
     if let Some(r) = embedder(app, method, path, body).await {
@@ -859,6 +952,11 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.library.upload(&query, len, req.into_body()).await)
+    } else if signed_in && method == "POST" && path == "/api/models/upload" {
+        // A model upload is streamed to disk the same way.
+        let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+        let query = req.uri().query().unwrap_or("").to_string();
+        library_reply(app.llm.jobs().upload(&query, len, req.into_body()).await)
     } else if let (true, "POST", Some((lib, replace))) = (signed_in, method.as_str(), build_upload_target(&path)) {
         // A PDF upload is streamed to disk the same way.
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
@@ -1010,6 +1108,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_books_pdf_is_served_to_a_session_from_the_filed_copy() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-book-pdf");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        assert_eq!(route(&a, "POST", &up, Some(&c), &book("well", 3, Some("Well book"))).await.status, 200);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        let url = format!("/api/build/libraries/{lib}/books/{doc}/pdf");
+        // no session, no PDF
+        assert_eq!(route(&a, "GET", &url, None, b"").await.status, 401);
+        let mut r = route(&a, "GET", &url, Some(&c), b"").await;
+        assert_eq!(r.status, 200);
+        let header = |r: &Reply, k: &str| r.headers.iter().find(|(h, _)| *h == k).map(|(_, v)| v.clone());
+        assert_eq!(header(&r, "Content-Type").as_deref(), Some("application/pdf"));
+        assert!(header(&r, "Content-Disposition").unwrap().starts_with("inline; filename=\""));
+        let mut got = Vec::new();
+        let mut rx = r.stream.take().expect("the PDF is streamed");
+        while let Some(piece) = rx.recv().await {
+            got.extend_from_slice(&piece.unwrap());
+        }
+        assert!(got.starts_with(b"%PDF"), "the body is the PDF");
+        assert_eq!(header(&r, "Content-Length"), Some(got.len().to_string()));
+        // the same bytes as the device copy on the server
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), got);
+        // a library or book that is not there, and a path that tries to leave
+        for p in [
+            format!("/api/build/libraries/nope/books/{doc}/pdf"),
+            format!("/api/build/libraries/{lib}/books/nope/pdf"),
+            format!("/api/build/libraries/{lib}/books/..%2F..%2Fx/pdf"),
+        ] {
+            assert_eq!(route(&a, "GET", &p, Some(&c), b"").await.status, 404, "{p}");
+        }
+        // a book whose copy is gone is not found rather than an error
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(route(&a, "GET", &url, Some(&c), b"").await.status, 404);
+    }
+
+    #[tokio::test]
     async fn the_bookshelves_routes_serve_the_view_and_take_the_events_of_a_book_page() {
         use crate::libbuild::testpdf::book;
         let d = TempDir::new("route-shelves");
@@ -1083,6 +1226,50 @@ mod tests {
         // a good call with no model on the server: asked to wait, and the download has started
         let (s, v) = json_call(&a, "POST", "/api/embed", &c, r#"{"texts":["hello"]}"#).await;
         assert_eq!((s, v["error"]["code"].clone()), (503, json!("model_missing")));
+    }
+
+    #[tokio::test]
+    async fn the_model_file_routes_need_a_session_and_check_their_input() {
+        let d = TempDir::new("route-models");
+        let a = file_app(&d);
+        for (m, p) in [
+            ("GET", "/api/system/memory"),
+            ("GET", "/api/models/downloads"),
+            ("POST", "/api/models/downloads"),
+            ("POST", "/api/models/downloads/x.gguf/pause"),
+            ("DELETE", "/api/models/downloads/x.gguf"),
+            ("DELETE", "/api/models/files/x.gguf"),
+            ("POST", "/api/models/upload?name=x.gguf"),
+        ] {
+            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        }
+        let c = sign_in(&a).await;
+        let (s, v) = json_call(&a, "GET", "/api/system/memory", &c, "").await;
+        assert_eq!(s, 200);
+        assert!(v["result"]["total"].as_u64().unwrap() >= v["result"]["avail"].as_u64().unwrap());
+        let (s, v) = json_call(&a, "GET", "/api/models/downloads", &c, "").await;
+        assert_eq!((s, v["result"]["downloads"].clone()), (200, json!([])));
+        // only Hugging Face and Cache's own address
+        let (s, v) = json_call(&a, "POST", "/api/models/downloads", &c, r#"{"name":"a.gguf","url":"https://evil.example/a.gguf","size":1}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (403, json!("host_not_allowed")));
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads", &c, "nope").await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads/nope.gguf/pause", &c, "").await.0, 404);
+        // delete: by name only, and only what is there
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        std::fs::write(d.0.join("models/bge-m3-Q8_0.gguf"), b"e").unwrap();
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/..%2Fchat.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/bge-m3-Q8_0.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/nope.gguf", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+        // upload: whole body here (the real server streams it)
+        let r = route(&a, "POST", "/api/models/upload?name=up.gguf", Some(&c), b"abcd").await;
+        assert_eq!(r.status, 200);
+        assert_eq!(std::fs::read(d.0.join("models/up.gguf")).unwrap(), b"abcd");
+        assert_eq!(route(&a, "POST", "/api/models/upload?name=up.txt", Some(&c), b"abcd").await.status, 400);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"], json!([{"id": "up.gguf", "size": 4, "loaded": false}]));
     }
 
     #[tokio::test]
@@ -1565,6 +1752,7 @@ mod tests {
             ("POST", "/api/build/queue/x/decide"),
             ("POST", "/api/build/libraries/x/books/y/place"),
             ("GET", "/api/build/libraries/x/books/y/suggestions"),
+            ("GET", "/api/build/libraries/x/books/y/pdf"),
             ("GET", "/api/build/bookshelves"),
             ("GET", "/api/build/bookshelves/stamp"),
             ("GET", "/api/build/bookshelves/facts"),

@@ -498,7 +498,7 @@ class _AskScreenState extends State<AskScreen> {
       }
     }
     final held = app.heldForMemory && app.resting != null && app.failed == null;
-    if (held) return _gateCard(k, app.displayName(app.resting!), onPressed);
+    if (held) return _gateCard(k, app.plainName(app.resting!), onPressed);
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,

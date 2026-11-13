@@ -10,6 +10,9 @@ class FakeSync implements SyncCoreLike {
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
 
+  /// The code `link_code` answers (a test of the QR gives a real-sized one).
+  String codeOverride = 'CACHE1-TESTCODE';
+
   /// The free space and the kept-free reserve `status` answers.
   int freeBytes = 10 << 30;
   int reserveBytes = 1 << 30;
@@ -52,7 +55,7 @@ class FakeSync implements SyncCoreLike {
           'log': [],
         };
       case 'link_code':
-        return {'code': 'CACHE1-TESTCODE', 'valid_secs': 900};
+        return {'code': codeOverride, 'valid_secs': 900};
       case 'link':
         peers.removeWhere((p) => p['id'] == 'peer1');
         // As the engine makes a link: Off, waiting for the answer.

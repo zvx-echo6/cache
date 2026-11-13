@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../car/phone_drive.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
 import '../browse/library_passage_screen.dart';
@@ -43,6 +44,7 @@ import '../maps/maps_state.dart';
 import '../maps/user_layers.dart' show Repeater;
 import '../models/search_model.dart' show SearchModel;
 import '../nav/nav_state.dart';
+import '../nav/elevation/route_elevation.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
@@ -74,6 +76,7 @@ import 'settings/assistant_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/own_source_pages.dart' show OwnSourceFormPage;
+import '../sharing/link_inbox.dart';
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -101,6 +104,8 @@ class Shell extends StatefulWidget {
     required this.video,
     required this.browse,
     required this.nav,
+    this.elevation,
+    this.phoneDrive,
     required this.layout,
     required this.hub,
     this.notebooks,
@@ -130,6 +135,10 @@ class Shell extends StatefulWidget {
   final VideoState video;
   final BrowseState browse;
   final NavState nav;
+  final RouteElevation? elevation;
+
+  /// The car link of the Maps tab's drive screen (null: no car screen on this platform, Maps is always the map).
+  final PhoneDrive? phoneDrive;
   final LayoutState layout;
   final SettingsHub hub;
 
@@ -272,6 +281,20 @@ class _ShellState extends State<Shell> {
     DiscoverState.shared = _discover;
     discoverLinks = _discoverLinks;
     unawaited(_startDiscover());
+    // A cachelink: link from outside (a camera scanning a device's link code) opens Sharing and sync, which fills in the code.
+    linkInbox.addListener(_openIncomingLink);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
+  }
+
+  bool _linkPageUp = false;
+
+  void _openIncomingLink() {
+    final sharing = widget.hub.sharing;
+    if (!mounted || sharing == null || _linkPageUp || linkInbox.pending == null || linkInbox.pageOpen) return;
+    _linkPageUp = true;
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync)))
+        .whenComplete(() => _linkPageUp = false);
   }
 
   /// Discover: what activities added, and whether first run is done. A device with a model, a library or a region on it already
@@ -374,6 +397,7 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
+    linkInbox.removeListener(_openIncomingLink);
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -816,8 +840,8 @@ class _ShellState extends State<Shell> {
             onLeave: _goHome,
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
-        ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, regions: widget.hub.regions, sharing: widget.hub.sharing),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
