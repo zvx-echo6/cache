@@ -251,6 +251,23 @@ struct Unlink {
     /// The device was reached but does not know this message (an older version): tried again only every [`UNLINK_OLD_RETRY`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     old: bool,
+    /// What the last try ran into (kept in memory and saved only with the next write; for the status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
+}
+
+/// Whether `e`, or anything it wraps, is a connection closed by the other device with code 403 (its Gate: "not linked").
+fn closed_403(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if let Some(iroh::endpoint::ConnectionError::ApplicationClosed(c)) = x.downcast_ref::<iroh::endpoint::ConnectionError>() {
+            if c.error_code == VarInt::from_u32(403) {
+                return true;
+            }
+        }
+        cur = x.source();
+    }
+    false
 }
 
 /// What the two devices of a link both hold: a name for it, from the one-time token of the code that made it.
@@ -1361,7 +1378,7 @@ impl Inner {
             sv.peers.retain(|p| p.id != id);
             if let (true, Some(p)) = (tell, &gone) {
                 sv.unlinks.retain(|u| u.id != id);
-                sv.unlinks.push(Unlink { id: id.to_string(), name: p.name.clone(), link_id: p.link_id.clone(), since: now_ms(), tries: 0, last_try: 0, old: false });
+                sv.unlinks.push(Unlink { id: id.to_string(), name: p.name.clone(), link_id: p.link_id.clone(), since: now_ms(), tries: 0, last_try: 0, old: false, last_error: None });
             }
             // Under the same lock as the change, so what is on disk is never older than a later save.
             (gone, write_saved(&self.saved_path(), &sv))
@@ -1449,19 +1466,41 @@ impl Inner {
     /// One try to tell the device in `u`. Whatever it answers about the link ends the wait; an error never ends it, and is never
     /// taken as the other device agreeing: only the device's own answer is.
     async fn deliver_unlink(self: &Arc<Self>, u: &Unlink) {
+        // Set when the other device's own Gate closed the connection with 403 (seen at any step, in whatever form the error takes).
+        let gate_403 = AtomicBool::new(false);
+        let seen = |e: &(dyn std::error::Error + 'static)| {
+            if closed_403(e) {
+                gate_403.store(true, Ordering::Relaxed);
+            }
+        };
         let res: Result<String> = async {
             let id: EndpointId = u.id.parse().map_err(|_| anyhow!("bad device key"))?;
             let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, UNLINK_ALPN))
                 .await
                 .map_err(|_| anyhow!("not reachable"))?
-                .map_err(|e| anyhow!("not reachable: {e:#}"))?;
-            let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e:#}"))?;
-            send.write_all(&serde_json::to_vec(&json!({"link_id": u.link_id}))?).await.map_err(|e| anyhow!("{e:#}"))?;
-            send.finish().map_err(|e| anyhow!("{e:#}"))?;
+                .map_err(|e| {
+                    seen(&e);
+                    anyhow!("not reachable: {e:#}")
+                })?;
+            let (mut send, mut recv) = conn.open_bi().await.map_err(|e| {
+                seen(&e);
+                anyhow!("{e:#}")
+            })?;
+            send.write_all(&serde_json::to_vec(&json!({"link_id": u.link_id}))?).await.map_err(|e| {
+                seen(&e);
+                anyhow!("{e:#}")
+            })?;
+            send.finish().map_err(|e| {
+                seen(&e);
+                anyhow!("{e:#}")
+            })?;
             let bytes = tokio::time::timeout(Duration::from_secs(30), recv.read_to_end(1024))
                 .await
                 .map_err(|_| anyhow!("no answer"))?
-                .map_err(|e| anyhow!("{e:#}"))?;
+                .map_err(|e| {
+                    seen(&e);
+                    anyhow!("{e:#}")
+                })?;
             conn.close(0u32.into(), b"done");
             let reply: Value = serde_json::from_slice(&bytes)?;
             match (reply.get("ok").and_then(|v| v.as_bool()), reply.get("done").and_then(|v| v.as_str())) {
@@ -1473,6 +1512,7 @@ impl Inner {
         let now = now_ms();
         let delivered = res.is_ok()
             // A 403 on cache/unlink/1 from the other device's own Gate clears only the sender's own pending entry; nothing on the receiver ever changes on a 403.
+            || gate_403.load(Ordering::Relaxed)
             || res.as_ref().err().map(|e| format!("{e:#}").to_lowercase().contains("not linked")).unwrap_or(false);
         // The device was reached but has no such protocol: the handshake was refused for want of it (an older version).
         let old = !delivered
@@ -1494,6 +1534,8 @@ impl Inner {
                     let e = &mut sv.unlinks[i];
                     e.tries += 1;
                     e.last_try = now;
+                    // What the last try ran into, for the status (a person never sees it; it says why a waiting unlink is still waiting).
+                    e.last_error = res.as_ref().err().map(|x| format!("{x:#}").chars().take(300).collect());
                     e.old |= old;
                     // On disk when it is an older version, so the slow retry survives a restart; otherwise only in memory.
                     if old {
@@ -2987,7 +3029,7 @@ impl SyncEngine {
             "free_bytes": Inner::free_bytes(&inner.dir),
             "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()),
             "peers": peers,
-            "unlinks": saved.unlinks.iter().map(|u| json!({"id": u.id, "name": u.name, "since": u.since, "tries": u.tries, "old": u.old})).collect::<Vec<_>>(),
+            "unlinks": saved.unlinks.iter().map(|u| json!({"id": u.id, "name": u.name, "since": u.since, "tries": u.tries, "old": u.old, "error": u.last_error})).collect::<Vec<_>>(),
             "shares": shares,
             "offers": offers,
             "transfer": run.transfer,
