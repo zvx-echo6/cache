@@ -33,7 +33,7 @@ void main() {
         ..peers.add({'id': 'peer2', 'name': 'Desk tablet', 'linked': 1, 'last_seen': now - 120000, 'via': 'direct', 'error': null})
         ..unlinks.add({'id': 'peer1', 'name': 'Trail phone', 'old': false})
         ..log.addAll([
-          {'at': now - 60000, 'text': 'Trail phone unlinked this device.'}, // WORDING QUESTION (owner): draft, not yet approved
+          {'at': now - 60000, 'text': 'Field radio unlinked this device.'}, // WORDING QUESTION (owner): draft, not yet approved
           {'at': now - 3 * 3600000, 'text': 'Desk tablet was told it is unlinked.'}, // WORDING QUESTION (owner): draft, not yet approved
           {'at': now - 26 * 3600000, 'text': 'Old spare was not reached within 30 days; it may still show this device.'}, // WORDING QUESTION (owner): draft, not yet approved
         ]);

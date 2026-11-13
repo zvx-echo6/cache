@@ -66,7 +66,7 @@ void main() {
     final sync = FakeSync()
       ..peers.add({'id': 'p2', 'name': 'Desk tablet', 'linked': 1, 'last_seen': now, 'via': 'direct', 'error': null})
       ..log.addAll([
-        {'at': now - 60000, 'text': 'Trail phone unlinked this device.'}, // WORDING QUESTION (owner): draft, not yet approved
+        {'at': now - 60000, 'text': 'Field radio unlinked this device.'}, // WORDING QUESTION (owner): draft, not yet approved
         {'at': now - 120000, 'text': 'Desk tablet was told it is unlinked.'}, // WORDING QUESTION (owner): draft, not yet approved
         {'at': now - 180000, 'text': 'Old spare was not reached within 30 days; it may still show this device.'}, // WORDING QUESTION (owner): draft, not yet approved
       ]);
@@ -75,7 +75,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('Activity'));
     await tester.pumpAndSettle();
-    expect(find.text('Trail phone unlinked this device.'), findsOneWidget);
+    expect(find.text('Field radio unlinked this device.'), findsOneWidget);
     expect(find.text('Desk tablet was told it is unlinked.'), findsOneWidget);
     expect(find.text('Old spare was not reached within 30 days; it may still show this device.'), findsOneWidget);
     s.dispose();
