@@ -1142,6 +1142,8 @@ class _CacheAppState extends State<CacheApp> {
       unawaited(readCarScreenSupport().then((on) {
         if (!on || !mounted) return;
         _car = _newCarBridge();
+        // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
+        _car!.connected.addListener(_onCarScreen);
         unawaited(_car!.start());
       }));
       // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
