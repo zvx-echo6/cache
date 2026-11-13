@@ -20,7 +20,8 @@ import 'car_pins.dart';
 import 'car_trip.dart';
 import 'phone_drive.dart';
 
-/// The car screen's link to the phone's guidance (Android Auto; the native side is app/android/.../car).
+/// The car screen's link to the phone's guidance (Android Auto, the native side is app/android/.../car; and CarPlay in an
+/// iPhone build made with it, the native side is app/ios/Runner/CarPlay).
 ///
 /// One guidance runs, the phone's [NavState]. The car shows it ([carTrip], pushed as it changes) and asks it for things: places
 /// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: searches and routes go to the same core
@@ -128,7 +129,7 @@ class CarBridge {
       final r = await _channel.invokeMethod<Object?>('hello');
       if (r is Map && r['connected'] == true) _setConnected(true);
     } on MissingPluginException {
-      // No car side on this platform (iOS, the tests): nothing to link.
+      // No car side on this platform or in this build (the tests): nothing to link.
     } on PlatformException {
       // Same.
     }
@@ -289,9 +290,20 @@ class CarBridge {
     }
   }
 
-  /// A spoken prompt is about to play: the car side takes navigation audio focus for it.
-  Future<void> prompt(String text) async {
-    if (connected.value) await _send('prompt', {'text': text});
+  /// A spoken prompt is about to play. The Android car side takes navigation audio focus for it and answers nothing. The
+  /// iPhone car side answers how iOS wants a prompt given at this moment (the audio session's prompt style): [kPromptNormal],
+  /// [kPromptShort] or [kPromptNone]; see [CarAwareSpeaker]. Null with no car, or from a car side that does not say.
+  Future<String?> prompt(String text) async {
+    if (!connected.value) return null;
+    try {
+      final answer = await _channel.invokeMethod<Object?>('prompt', {'text': text});
+      return answer is String ? answer : null;
+    } on MissingPluginException {
+      _setConnected(false);
+    } on PlatformException {
+      // The car side went away between the check and the call.
+    }
+    return null;
   }
 
   Future<void> promptStop() async {
@@ -454,8 +466,18 @@ class CarBridge {
   }
 }
 
+/// The iPhone car side's answers to [CarBridge.prompt], iOS's three prompt styles: a spoken prompt is fine; only a short one
+/// without words (a call is on, Siri is up but not listening, a voicemail plays); none at all (something is listening on the
+/// microphone).
+const String kPromptNormal = 'normal';
+const String kPromptShort = 'short';
+const String kPromptNone = 'none';
+
 /// The phone's voice, which also takes the car's navigation audio focus for each prompt while a car screen is attached. The
 /// prompts themselves are the phone's (the [GuidanceEngine] in NavState), said by the phone's text-to-speech.
+///
+/// On an iPhone with its car screen attached the car side says how iOS wants the prompt given. For a short one it has played
+/// a tone itself; for that and for none the phone's voice says nothing. Any other answer, or none, and the prompt is spoken.
 class CarAwareSpeaker implements Speaker {
   CarAwareSpeaker(this.inner, {required this.car});
 
@@ -464,9 +486,11 @@ class CarAwareSpeaker implements Speaker {
 
   @override
   Future<void> speak(String text) async {
+    String? how;
     try {
-      await car()?.prompt(text);
+      how = await car()?.prompt(text);
     } catch (_) {}
+    if (how == kPromptShort || how == kPromptNone) return;
     await inner.speak(text);
   }
 

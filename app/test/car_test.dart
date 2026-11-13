@@ -15,9 +15,11 @@ import 'package:cache/car/car_trip.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/nav/nav_geojson.dart';
 import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/lane_strip.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
@@ -140,6 +142,187 @@ void main() {
       expect(t['currentRoad'], 'Road 0');
     });
 
+    // The iPhone car side (app/ios/Runner/CarPlay) is tested on recorded messages (tools/carplay-harness/recorded). They are
+    // held here to the shape of what carTrip really sends: the same keys, and the same kind of value under each.
+    test('the trips recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      String kind(Object? v) => switch (v) {
+            null => 'null',
+            bool() => 'bool',
+            num() => 'number',
+            String() => 'text',
+            List() => 'list',
+            Map() => 'map',
+            _ => 'other',
+          };
+      void sameShape(Map<dynamic, dynamic> sent, Map<dynamic, dynamic> recorded, String where) {
+        expect(recorded.keys.toSet(), sent.keys.toSet(), reason: '$where: the keys');
+        for (final key in sent.keys) {
+          final a = sent[key], b = recorded[key];
+          if (a == null || b == null) continue;
+          expect(kind(b), kind(a), reason: '$where: $key');
+          if (a is Map && b is Map) sameShape(a, b, '$where.$key');
+          if (a is List && b is List && a.isNotEmpty && b.isNotEmpty && a.first is Map && b.first is Map) {
+            sameShape(a.first as Map, b.first as Map, '$where.$key[0]');
+          }
+        }
+      }
+
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+
+      await preview();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.2), heading: 90), recorded('trip_previewing'), 'previewing');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90), recorded('trip_guiding'), 'guiding');
+    });
+
+    // The same for the recorded route messages: each stretch of the line carries what routeGeoJson marks it with (the car map
+    // draws by those marks), and the bounds are in MapRoute.bounds' order, which the car's camera reads by position.
+    test('the routes recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+      const marks = {'alt', 'kind', 'route'};
+
+      await preview();
+      expect(nav.routes, isNotEmpty);
+      for (final f in routeGeoJson(nav.routes, nav.routeIndex)['features'] as List) {
+        expect(((f as Map)['properties'] as Map).keys.toSet(), marks, reason: 'what routeGeoJson marks a stretch with');
+      }
+      expect(nav.routes[nav.routeIndex].bounds, hasLength(4));
+
+      for (final name in const ['route_previewing', 'route_previewing_alt', 'route_guiding']) {
+        final message = recorded(name);
+        expect(message.keys.toSet(), {'geojson', 'bounds'}, reason: name);
+        final line = jsonDecode(message['geojson'] as String) as Map<String, dynamic>;
+        final features = line['features'] as List;
+        expect(features, isNotEmpty, reason: name);
+        var south = 90.0, west = 180.0, north = -90.0, east = -180.0;
+        for (final f in features) {
+          final properties = (f as Map)['properties'] as Map;
+          final geometry = f['geometry'] as Map;
+          expect(properties.keys.toSet(), marks, reason: '$name: what marks a stretch');
+          expect(properties['alt'], isA<bool>(), reason: name);
+          expect(properties['kind'], isA<String>(), reason: name);
+          expect(geometry['type'], 'LineString', reason: name);
+          if (properties['alt'] == true) continue;
+          for (final c in geometry['coordinates'] as List) {
+            final lon = ((c as List)[0] as num).toDouble();
+            final lat = (c[1] as num).toDouble();
+            if (lat < south) south = lat;
+            if (lat > north) north = lat;
+            if (lon < west) west = lon;
+            if (lon > east) east = lon;
+          }
+        }
+        expect(message['bounds'], [south, west, north, east], reason: '$name: the chosen route, south, west, north, east');
+      }
+
+      final none = recorded('route_none');
+      expect(none['bounds'], isNull);
+      expect(jsonDecode(none['geojson'] as String), routeGeoJson(const [], 0));
+    });
+
+    // The iPhone car side writes distances itself (app/ios/Runner/CarPlay/CarTrip.swift, CarText.distance), in the phone's
+    // words: CarPlay's lists take plain text. Its tests and this one read one table, so the two cannot drift apart.
+    test('the distances recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/distances.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        final fmt = Fmt(r['imperial'] == true ? UnitSystem.imperial : UnitSystem.metric);
+        expect(fmt.distance((r['meters'] as num).toDouble()), r['text'], reason: '${r['meters']} m');
+      }
+    });
+
+    test('the times recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/durations.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        expect(const Fmt(UnitSystem.imperial).duration(r['seconds'] as int), r['text'], reason: '${r['seconds']} s');
+      }
+    });
+
+    test('lanes: the step carries what the phone shows under its banner, and none before the turn is near', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final far = nav.farStageM!;
+      // One lane as the router sends it: Valhalla's bits.
+      Map<String, dynamic> lane(Set<LaneDirection> d, {LaneDirection? active, LaneDirection? valid}) => {
+            'directions': d.fold<int>(0, (a, x) => a | (1 << x.index)),
+            'active': ?(active == null ? null : 1 << active.index),
+            'valid': ?(valid == null ? null : 1 << valid.index),
+          };
+      void turnAhead(double meters, List<Map<String, dynamic>> lanes) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({...j, 'next': {...(j['next'] as Map<String, dynamic>), 'distance_m': meters, 'lanes': lanes}});
+      }
+
+      final lanes = [
+        lane({LaneDirection.left, LaneDirection.through}, valid: LaneDirection.left),
+        lane({LaneDirection.left}, active: LaneDirection.left),
+        lane({LaneDirection.through}),
+        lane({LaneDirection.none}),
+      ];
+      // As close as the first voice prompt: the lanes, as the phone's strip draws them, and the phone's words for them.
+      turnAhead(far - 1, lanes);
+      var t = carTrip(nav);
+      var step = t['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through', 'left'], 'role': 'valid', 'take': 'left'},
+        {'directions': ['left'], 'role': 'active', 'take': 'left'},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use the 2 left lanes');
+      // Never on the maneuver after next.
+      expect((t['then'] as Map)['lanes'], isEmpty);
+      expect((t['then'] as Map)['lanesLabel'], isNull);
+
+      // Further off: none yet, as on the phone.
+      turnAhead(far + 1, lanes);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], isEmpty);
+      expect(step['lanesLabel'], isNull);
+
+      // The road did not say which lanes work: every lane alike.
+      turnAhead(100, [lane({LaneDirection.through}), lane({LaneDirection.through, LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through'], 'role': 'plain', 'take': null},
+        {'directions': ['through', 'right'], 'role': 'plain', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use any lane');
+
+      // A lane to be in that is not marked with a direction takes the straight arrow.
+      turnAhead(100, [lane({LaneDirection.through}, active: LaneDirection.none), lane({LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect((step['lanes'] as List).first, {'directions': ['through'], 'role': 'active', 'take': 'through'});
+
+      // No lanes from the road: none.
+      turnAhead(100, const []);
+      expect((carTrip(nav)['step'] as Map)['lanes'], isEmpty);
+
+      // The lanes recorded for the iPhone car tests are in these words.
+      final near = jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_near.json').readAsStringSync()) as Map<String, dynamic>;
+      final recorded = (near['step'] as Map)['lanes'] as List;
+      expect(recorded, isNotEmpty);
+      expect((near['step'] as Map)['lanesLabel'], isA<String>());
+      for (final l in recorded) {
+        expect((l as Map).keys.toSet(), {'directions', 'role', 'take'});
+        expect([for (final r in LaneRole.values) r.name], contains(l['role']));
+        for (final d in l['directions'] as List) {
+          expect([for (final x in LaneDirection.values) x.name], contains(d));
+        }
+      }
+    });
+
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {
       final m = ProgressManeuver.fromJson({
         'index': 3, 'kind': 'offroad', 'type': 'none', 'instruction': 'Off-road E 0.1 mi', 'street_names': const [], 'lat': 42.5,
@@ -225,6 +408,22 @@ void main() {
       gps.controller.add(fixAt(42.5, -113.8 + 0.3 * fraction, heading: 90));
       await settle();
     }
+
+    // The iPhone car side's tests read a recorded trip with a climb ahead (tools/carplay-harness/recorded): held here to the
+    // shape of what the phone sends for one.
+    test('the trip recorded with a climb for the iPhone car tests has the shape of what the phone sends', () async {
+      final total = (routeJson['distance_m'] as num).toDouble();
+      await guide(0.1);
+      final sent = carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90, elevation: profile(total));
+      final recorded =
+          jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_climb.json').readAsStringSync()) as Map<String, dynamic>;
+      expect(sent['climb'], isNotNull);
+      expect(recorded.keys.toSet(), sent.keys.toSet());
+      expect((recorded['climb'] as Map).keys.toSet(), (sent['climb'] as Map).keys.toSet());
+      final steep = (sent['overview'] as Map)['steep'];
+      expect(steep, isNotNull);
+      expect(((recorded['overview'] as Map)['steep'] as Map).keys.toSet(), (steep as Map).keys.toSet());
+    });
 
     test('no elevation data: no climb block, but the mini map and palette still go', () async {
       await guide(0.1);
@@ -488,6 +687,8 @@ void main() {
     late MapsState maps;
     late List<MethodCall> toCar;
     late CarBridge bridge;
+    // What the car side answers to a prompt (the iPhone's says how iOS wants it given; Android's says nothing).
+    Object? promptAnswer;
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
     Future<Object?> fromCar(String method, [Object? args]) async {
@@ -501,9 +702,11 @@ void main() {
     setUp(() async {
       maps = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir);
       toCar = [];
+      promptAnswer = null;
       messenger.setMockMethodCallHandler(channel, (call) async {
         toCar.add(call);
         if (call.method == 'hello') return {'connected': true};
+        if (call.method == 'prompt') return promptAnswer;
         return null;
       });
       bridge = CarBridge(nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'file:///g/{fontstack}/{range}.pbf');
@@ -1020,6 +1223,35 @@ void main() {
       await s.speak('Turn right.');
       expect(toCar.where((c) => c.method == 'prompt'), hasLength(1));
       expect(speaker.said, ['Turn left.', 'Turn right.']);
+    });
+
+    test('the iPhone car side says how a prompt may be given: spoken, or not by the phone voice', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      // The states recorded for the iPhone car tests (tools/carplay-harness/recorded): what the system says, what the car side
+      // answers, and whether the phone's voice then speaks.
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/prompt_styles.json').readAsStringSync()) as List;
+      expect(rows, hasLength(greaterThanOrEqualTo(3)));
+      expect({for (final r in rows) (r as Map)['answer']}, containsAll([kPromptNormal, kPromptShort, kPromptNone]));
+      var asked = 0;
+      for (final r in rows) {
+        final row = r as Map;
+        speaker.said.clear();
+        promptAnswer = row['answer'];
+        await s.speak('Turn left.');
+        asked++;
+        expect(toCar.where((c) => c.method == 'prompt'), hasLength(asked), reason: 'the car side is asked before every prompt');
+        expect(speaker.said, row['phoneSpeaks'] == true ? ['Turn left.'] : isEmpty, reason: '${row['state']}');
+      }
+      // An answer that is not one of the three, and no answer (the Android car side), are spoken.
+      for (final other in <Object?>[null, 'loud', 3, true]) {
+        speaker.said.clear();
+        promptAnswer = other;
+        await s.speak('Turn right.');
+        expect(speaker.said, ['Turn right.'], reason: '$other');
+      }
+      expect(await bridge.prompt('x'), isNull);
+      promptAnswer = kPromptShort;
+      expect(await bridge.prompt('x'), kPromptShort);
     });
   });
 }

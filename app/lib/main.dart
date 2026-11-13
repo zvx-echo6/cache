@@ -124,6 +124,7 @@ import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
 import 'platform/phone_screen.dart';
+import 'platform/phone_window.dart';
 import 'search/index_scheduler.dart';
 import 'search/index_status.dart' show indexItemDetail;
 import 'search/indexes_share.dart';
@@ -918,6 +919,8 @@ class _CacheAppState extends State<CacheApp> {
             _modelRelease.toBackground();
           case AppLifecycleState.resumed:
             _modelRelease.toFront();
+            // Where the phone's window stands is asked again: a missed message must not leave the phone's map still.
+            if (plat.isIOS) unawaited(phoneWindow.refresh());
           case AppLifecycleState.inactive:
           case AppLifecycleState.detached:
             break;
@@ -1128,7 +1131,29 @@ class _CacheAppState extends State<CacheApp> {
     _mapsRead = maps.init();
     if (plat.isAndroid) {
       unawaited(readCarScreenSupport().then((v) => carScreenSupported.value = v));
-      _car = CarBridge(
+      _car = _newCarBridge();
+      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
+      _car!.connected.addListener(_onCarScreen);
+      unawaited(_car!.start());
+    } else if (plat.isIOS) {
+      // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
+      // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
+      // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
+      unawaited(readCarScreenSupport().then((on) {
+        if (!on || !mounted) return;
+        _car = _newCarBridge();
+        // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
+        _car!.connected.addListener(_onCarScreen);
+        unawaited(_car!.start());
+      }));
+      // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
+      unawaited(phoneWindow.start());
+    }
+    _openHistory();
+  }
+
+  /// The car screen's link to the phone's guidance (Android Auto; CarPlay in an iPhone build made with it).
+  CarBridge _newCarBridge() => CarBridge(
         nav: nav,
         maps: maps,
         drive: carDrive,
@@ -1146,12 +1171,6 @@ class _CacheAppState extends State<CacheApp> {
           await location.request(explain: () async => false);
         },
       );
-      // While a car screen is attached the position keeps coming, whatever the phone's screen does (location_service.dart).
-      _car!.connected.addListener(_onCarScreen);
-      unawaited(_car!.start());
-    }
-    _openHistory();
-  }
 
   void _onCarScreen() {
     final attached = _car?.connected.value ?? false;

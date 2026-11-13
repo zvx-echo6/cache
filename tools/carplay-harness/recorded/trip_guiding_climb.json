@@ -1,0 +1,31 @@
+{
+  "phase": "guiding",
+  "available": true,
+  "units": "imperial",
+  "routing": false,
+  "error": null,
+  "destination": {"name": "Regional Hospital", "address": "1501 Example Ave", "lat": 10.56, "lon": 20.28},
+  "routes": [
+    {"index": 0, "distanceM": 25400.5, "durationS": 1260, "via": "Via Road 0"}
+  ],
+  "stops": [],
+  "routeIndex": 0,
+  "routeId": "route-0",
+  "voiceOn": true,
+  "arrived": false,
+  "rerouting": false,
+  "position": {"lat": 10.5, "lon": 20.23, "heading": 90.0},
+  "step": {"turn": "left", "type": "left", "cue": "Turn left onto Road 1.", "road": "Road 1", "distanceM": 320.4, "lanes": [], "lanesLabel": null},
+  "then": {"turn": "right", "type": "right", "cue": "Turn right onto Road 2.", "road": "Road 2", "distanceM": 2150.0, "lanes": [], "lanesLabel": null},
+  "currentRoad": "Road 0",
+  "remainingM": 22860.45,
+  "remainingS": 1134,
+  "etaMs": 1794168000000,
+  "overlay": {"phoneDrive": false},
+  "palette": {
+    "day": {"theme": "light", "route": "#1f6fa8", "routeDriven": "#8fb3cc", "badge": "#1f6fa8", "badgeGlyph": "#ffffff", "badgeEdge": "#ffffff", "startDot": "#5b6470", "destDot": "#c62e24", "posFill": "#1f6fa8", "posRing": "#ffffff", "hostCard": "#f2f2f2", "card": "#ffffff", "cardText": "#16181d", "cardSecondary": "#5b6470", "hatch": "#c9ced6", "miniBg": "#ffffff", "miniBorder": "#c9ced6"},
+    "night": {"theme": "dark", "route": "#6bb4de", "routeDriven": "#3d6278", "badge": "#6bb4de", "badgeGlyph": "#0f1115", "badgeEdge": "#0f1115", "startDot": "#9aa3ad", "destDot": "#ff6b5e", "posFill": "#6bb4de", "posRing": "#0f1115", "hostCard": "#1a1d23", "card": "#16181d", "cardText": "#f2f4f7", "cardSecondary": "#9aa3ad", "hatch": "#3a4049", "miniBg": "#16181d", "miniBorder": "#3a4049"}
+  },
+  "climb": {"climbAheadM": 148.0, "gradePct": 6.2, "steepestInM": 3250.0, "heightsM": [1000.0, 1002.0, 1004.0, 1006.0, 1008.0, 1010.0, 1012.0, 1014.0, 1016.0, 1018.0, 1020.0, 1022.0, 1024.0, 1026.0, 1028.0, 1030.0, 1032.0, 1034.0, 1036.0, 1038.0, 1040.0, 1049.0, 1058.0, 1067.0, 1076.0, 1085.0, 1094.0, 1103.0, 1112.0, 1121.0, 1130.0, 1139.0, 1148.0, 1148.0, 1148.0, 1148.0, 1148.0, 1148.0, 1148.0, 1148.0], "steepFrom": 20, "steepTo": 32, "windowM": 8000.0},
+  "overview": {"points": [[10.5, 20.2], [10.5, 20.233], [10.52, 20.233], [10.52, 20.28], [10.56, 20.28]], "drivenFraction": 0.1, "steep": {"lat": 10.52, "lon": 20.26, "gradePct": 6.2}, "destination": {"lat": 10.56, "lon": 20.28}}
+}

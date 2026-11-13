@@ -9,6 +9,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
+import '../../platform/phone_window.dart';
 import '../../theme.dart';
 import '../geo.dart';
 import '../maps_state.dart';
@@ -149,6 +150,8 @@ class _PlaceMapState extends State<PlaceMap> {
 
   @override
   void dispose() {
+    final c = _c;
+    if (c != null) phoneMapRest.remove(c);
     _wait?.cancel();
     super.dispose();
   }
@@ -290,7 +293,10 @@ class _PlaceMapState extends State<PlaceMap> {
       styleString: s,
       initialCameraPosition: init,
       onMapCreated: (c) {
+        final old = _c;
+        if (old != null) phoneMapRest.remove(old);
         _c = c;
+        phoneMapRest.add(c, pause: c.pauseMap, resume: c.resumeMap);
         c.forceOnlineMode().catchError((_) {});
       },
       onStyleLoadedCallback: _styleLoaded,
