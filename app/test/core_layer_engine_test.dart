@@ -97,6 +97,10 @@ class _LayersNative implements CsNative {
       case 'server':
         if (arg != null) online = (jsonDecode(arg) as Map)['online'] as bool;
         return jsonEncode({'port': port, 'base_url': 'http://127.0.0.1:$port', 'online': online});
+      case 'test_new_port':
+        // The core's tile server lost its socket and the next 'server' call starts a new one on a new port.
+        port = int.parse(arg!);
+        return jsonEncode({'port': port});
       case 'list':
         return jsonEncode(_list());
       case 'refresh':
@@ -474,6 +478,24 @@ void main() {
     expect(engine.sourcesGeneration, 1);
     expect(engine.tilesUrl('basemap'), 'http://127.0.0.1:${server.port}/layers/basemap/{z}/{x}/{y}?g=1');
     expect(engine.tileJsonUrl('hillshade'), 'http://127.0.0.1:${server.port}/layers/hillshade/tilejson.json?g=1');
+  });
+
+  test('a tile server started again on a new port gives the map new addresses, and listeners hear of it', () async {
+    final other = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => other.close(force: true));
+    // The port each notification shows. The catalogue refresh that start() began may also notify meanwhile (it changes no
+    // address), so the test looks at what the listeners see, not at how many times they are called.
+    final heard = <int>[];
+    engine.addListener(() => heard.add(engine.port));
+    await engine.recheckServer();
+    expect(engine.port, server.port, reason: 'the same port changes nothing');
+    expect(heard.where((p) => p != server.port), isEmpty);
+    await core.layers('test_new_port', '${other.port}');
+    await engine.recheckServer();
+    expect(engine.port, other.port);
+    expect(heard.last, other.port, reason: 'listeners hear of the new port');
+    expect(engine.tilesUrl('basemap'), 'http://127.0.0.1:${other.port}/layers/basemap/{z}/{x}/{y}');
+    expect(engine.tileJsonUrl('hillshade'), 'http://127.0.0.1:${other.port}/layers/hillshade/tilejson.json');
   });
 
   test('a stopped download never shows a server address', () {
