@@ -158,7 +158,9 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
     }
     final st = sources.statusAt(z.path);
     for (final (kind, tag, sub) in [('zim-epub', 'EPUBS', st?.epubIndex), ('zim-captions', 'CAPTIONS', st?.captionsIndex)]) {
-      if (sub == null || (sub.state != 'ready' && sub.needsBuild != true)) continue;
+      // listed while the core opens its snapshot too: a fresh start reports 'opening' (with no needs_build yet) for a while, and
+      // the row (and the Library's count of them) must not come and go with that
+      if (sub == null || (sub.state != 'ready' && sub.state != 'opening' && sub.needsBuild != true)) continue;
       final key = '$kind/${sub.sourceId ?? id ?? z.path}';
       final ready = sub.state == 'ready';
       out.add(
@@ -169,7 +171,7 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
           kind: tag,
           ready: ready,
           tone: ready ? Tone.ok : Tone.warn,
-          state: _scheduled(key) ?? (ready ? 'Ready' : indexWaitingWords(kind)),
+          state: _scheduled(key) ?? (ready ? 'Ready' : (sub.state == 'opening' ? 'Getting ready' : indexWaitingWords(kind))),
         ),
       );
     }
@@ -244,6 +246,17 @@ class CatalogPage extends StatelessWidget {
                     child: s.pausedAll
                         ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: s.resumeAll)
                         : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: s.pauseAll),
+                  ),
+                ),
+              // In a browser the server does the index work; its Pause all and Resume are the same buttons.
+              if (plat.isWeb && d.sources.serverIndexBusy)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                    child: d.sources.serverIndexPaused
+                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: () => d.sources.setServerIndexPaused(false))
+                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: () => d.sources.setServerIndexPaused(true)),
                   ),
                 ),
               if (entries.isEmpty) ...[

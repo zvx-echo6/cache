@@ -40,13 +40,18 @@ fn a_loopback_or_lan_address_is_refused_and_nothing_connects() {
 #[test]
 fn a_redirect_to_a_private_address_is_refused() {
     cache_netguard::install();
-    // the second server is what an unguarded client would reach through ::ffff:127.0.0.1 (the same machine, spelled as an IPv6 address)
-    let (port2, hits2) = listen("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string());
-    let (port1, hits1) = listen(format!("HTTP/1.1 302 Found\r\nLocation: http://[::ffff:127.0.0.1]:{port2}/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
-    // the first hop is allowed for this thread only (a stand-in for a public host); the hop after it is not
-    let _scope = cache_netguard::loopback_here_for_tests();
-    let r = cache_live::request::agent(5).get(&format!("http://127.0.0.1:{port1}/x")).call();
-    assert!(r.is_err());
+    let (port2, hits2) = listen("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_string());
+    let (port1, hits1) = listen(format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port2}/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+    // the first hop is allowed, by its port alone (a stand-in for a public host); the hop after it, which the request code follows
+    // itself and its own rules let through (this machine), is not: the guard refuses it at the connection
+    cache_netguard::loopback_port_for_tests(port1);
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut def: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(fixtures.join("own_source_def.json")).unwrap()).unwrap();
+    def["request"]["url"] = serde_json::json!(format!("http://127.0.0.1:{port1}/x?lat={{lat}}&lon={{lon}}"));
+    def.as_object_mut().unwrap().remove("api_key");
+    let req = serde_json::json!({"definition": def, "place": {"lat": 42.5, "lon": -113.8}, "now": "2026-11-07T12:40:00-07:00"});
+    let e = cache_live::preview::preview(&req.to_string()).unwrap_err();
+    assert_eq!(e.code, "fetch_failed", "{e:?}");
     assert!(hits1.load(Ordering::SeqCst) >= 1, "the first hop was reached");
     assert_eq!(hits2.load(Ordering::SeqCst), 0, "the redirect target must not be connected to");
 }

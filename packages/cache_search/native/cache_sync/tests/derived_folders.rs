@@ -82,6 +82,15 @@ fn patterns_match_by_segment() {
 }
 
 #[test]
+fn a_librarys_own_snapshots_beside_its_index_never_sync() {
+    let p = vec!["*/index".to_string(), "*/index-snapshots".to_string()];
+    assert!(excluded(&p, "lib1/index-snapshots"));
+    assert!(excluded(&p, "lib1/index-snapshots/library/mine/snap/b1/manifest.json"));
+    assert!(!excluded(&p, "lib1/index-snapshots2/x"));
+    assert!(!excluded(&p, "lib1/shard/index-snapshots/x"));
+}
+
+#[test]
 fn globs_within_a_segment_and_at_any_depth() {
     let p: Vec<String> = ["tiles.sqlite*", "**/*-shm", "places/index", "index"].iter().map(|s| s.to_string()).collect();
     for yes in ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "regions.sqlite-shm", "places/2026-10.sqlite-shm", "a/b/c/x-shm", "index", "index/2026-10.tsv", "places/index/2026-10.tsv"] {
@@ -216,6 +225,35 @@ fn a_library_index_never_travels() {
     std::fs::remove_dir_all(fa.join("lib1")).unwrap();
     until("the library gone from B", 60, &a, &b, || !fb.join("lib1").exists());
     assert!(fb.is_dir(), "the shared folder itself stays");
+    a.close();
+    b.close();
+}
+
+/// A library's settings file arrives on the other device byte for byte: sync copies files by hash and never reads or rewrites them,
+/// so a library whose settings say `"own": true` (made on the person's other device) is `own` there too, and one that does not say it
+/// never becomes so.
+#[test]
+fn a_librarys_settings_file_arrives_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (la, lb) = (tmp.path().join("libs-a"), tmp.path().join("libs-b"));
+    let mine = "{\n  \"format\": 1,\n  \"library_id\": \"my-books-x\",\n  \"own\": true,\n  \"own_default\": true\n}\n";
+    let built = "{\"format\":1,\"library_id\":\"field\",\"version\":\"7\"}";
+    write(&la.join("my-books-x/cache-library.json"), mine);
+    write(&la.join("field/cache-library.json"), built);
+    write(&la.join("my-books-x/copies.jsonl"), "{}\n");
+    std::fs::create_dir_all(&lb).unwrap();
+    let a = engine(&da, "Desk", None, true);
+    let b = engine(&db, "Phone", None, true);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    call(&a, "share_add", json!({"id": "libraries", "name": "Libraries", "path": la}));
+    call(&b, "share_add", json!({"id": "libraries", "name": "Libraries", "path": lb}));
+    std::thread::sleep(Duration::from_secs(6));
+    until("both settings files on B", 90, &a, &b, || lb.join("my-books-x/cache-library.json").exists() && lb.join("field/cache-library.json").exists());
+    rounds(&a, &b);
+    assert_eq!(std::fs::read(lb.join("my-books-x/cache-library.json")).unwrap(), mine.as_bytes(), "byte for byte");
+    assert_eq!(std::fs::read(lb.join("field/cache-library.json")).unwrap(), built.as_bytes());
     a.close();
     b.close();
 }

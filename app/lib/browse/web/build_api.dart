@@ -124,12 +124,15 @@ class BuildBook {
 
 /// What the book is doing in the queue.
 class QueueProgress {
-  const QueueProgress({this.pages = 0, this.pieces = 0, this.piecesTotal, this.ocrPages = 0});
+  const QueueProgress({this.pages = 0, this.pieces = 0, this.piecesTotal, this.ocrPages = 0, this.ocrDone = 0});
 
   final int pages;
   final int pieces;
   final int? piecesTotal;
   final int ocrPages;
+
+  /// While scanned pages are being read (state `reading`, `ocrPages` of them): how many are done.
+  final int ocrDone;
 
   static QueueProgress fromJson(Object? j) {
     if (j is! Map) return const QueueProgress();
@@ -138,6 +141,7 @@ class QueueProgress {
       pieces: (j['pieces'] as num?)?.toInt() ?? 0,
       piecesTotal: (j['pieces_total'] as num?)?.toInt(),
       ocrPages: (j['ocr_pages'] as num?)?.toInt() ?? 0,
+      ocrDone: (j['ocr_done'] as num?)?.toInt() ?? 0,
     );
   }
 }

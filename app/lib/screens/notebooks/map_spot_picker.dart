@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../maps/ui/place_map.dart' show PlaceFixScope;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
 import '../../notebook/place_style.dart';
@@ -43,6 +44,13 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
   bool _searching = false;
   String? _note;
 
+  /// The person has touched the map: the position fix that was asked for on opening leaves it where they put it ("Where I am"
+  /// is their own press and always moves it).
+  bool _touched = false;
+
+  /// The opening position fix is still being read (false once it answered that there is none).
+  bool _fixComing = true;
+
   @override
   void initState() {
     super.initState();
@@ -55,7 +63,12 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
     super.dispose();
   }
 
+  /// Bumped when the map is sent to the spot it is already aimed at (the person panned away and pressed "Where I am" again):
+  /// the map is then opened afresh on it, as a changed target is what moves it.
+  int _again = 0;
+
   void _go(NbPlace p, {bool named = false}) => setState(() {
+        if (_target != null && _target!.lat == p.lat && _target!.lon == p.lon) _again++;
         _target = NbPlace(lat: p.lat, lon: p.lon);
         _centre = _target;
         _named = named ? p : null;
@@ -68,11 +81,15 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
       final p = await widget.places.herePlace();
       if (!mounted) return;
       if (p != null) {
+        if (quiet && _touched) return;
         _go(p);
-      } else if (!quiet) {
+      } else if (quiet) {
+        setState(() => _fixComing = false);
+      } else {
         setState(() => _note = 'Where you are is not known yet. Check that location is on.');
       }
     } catch (_) {
+      if (mounted && quiet) setState(() => _fixComing = false);
       if (mounted && !quiet) setState(() => _note = 'Where you are is not known yet. Check that location is on.');
     }
   }
@@ -113,12 +130,20 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: widget.map(
-              context,
-              _target,
-              (p) => setState(() => _centre = p),
-              (p) => setState(() => _centre = p),
-              (p) => _go(p),
+            child: PlaceFixScope(
+              coming: _fixComing && _target == null,
+              child: Listener(
+              key: ValueKey(_again),
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => _touched = true,
+              child: widget.map(
+                context,
+                _target,
+                (p) => setState(() => _centre = p),
+                (p) => setState(() => _centre = p),
+                (p) => _go(p),
+              ),
+            ),
             ),
           ),
           IgnorePointer(

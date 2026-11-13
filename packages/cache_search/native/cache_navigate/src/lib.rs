@@ -51,12 +51,40 @@ const NEAREST_CANDIDATES: usize = 5;
 /// Two places closer than this are the same place.
 const SAME_PLACE_M: f64 = 30.0;
 
+/// How a route's tile fetch ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FetchState {
+    /// The fetch ran to the end, or there was nothing to fetch (a tiles.tar holds its whole region).
+    #[default]
+    Done,
+    /// The network may not be used: nothing was fetched.
+    Offline,
+    /// The fetch failed (or crashed) before the tiles arrived.
+    Failed,
+    /// The time ran out before the tiles arrived.
+    TimedOut,
+}
+
+/// What preparing a route's tiles came to: how the fetch ended, and which stops (by position: 0 the start, the last the end,
+/// the ones between the vias) still have no road tile on the device.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TilePrep {
+    pub state: FetchState,
+    /// Tiles the trip is likely to need that are still not on the device (0 when not known).
+    pub missing: usize,
+    /// Whether the build's tile index is known, so `missing` and `lacking` can be trusted (false: not known; with the fetch not
+    /// done, nothing is known about the tiles between the stops).
+    pub index_known: bool,
+    pub lacking: Vec<usize>,
+}
+
 /// Where the road tiles come from when they are a folder that fills as needed (cache_regions: the downloaded regions, and the
 /// tiles fetched for routes planned online). Not used while the tiles are a tiles.tar, which holds all of its region.
 pub trait TileStream: Send + Sync {
     /// Called with a trip's start, end and via points ([lat, lon]) right before it is routed: fetch what the route is likely
-    /// to need. It may take a while (it has its own timeout); whatever happens, the route then uses the tiles there are.
-    fn prepare(&self, points: &[(f64, f64)]);
+    /// to need. It may take a while (it has its own timeout); whatever happens, the route then uses the tiles there are. What
+    /// it came to is returned.
+    fn prepare(&self, points: &[(f64, f64)]) -> TilePrep;
     /// The folder to route on, when the stream decides it (it moves when an update switches builds). None: the configured
     /// `tiles`.
     fn tile_dir(&self) -> Option<PathBuf> {
@@ -356,13 +384,13 @@ impl NavCore {
     }
 
     /// Before a trip is routed: the stream (if any) fetches the tiles near its points. Skipped when the tiles are a tiles.tar.
-    /// Nothing that happens here fails the route.
-    pub fn prepare_tiles(&self, points: &[(f64, f64)]) {
-        let Some(s) = self.stream() else { return };
+    /// Nothing that happens here fails the route; what it came to is returned (nothing to fetch: `TilePrep::default()`).
+    pub fn prepare_tiles(&self, points: &[(f64, f64)]) -> TilePrep {
+        let Some(s) = self.stream() else { return TilePrep::default() };
         if self.tiles_path().map(|t| Path::new(&t).is_file()).unwrap_or(false) {
-            return;
+            return TilePrep::default();
         }
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.prepare(points)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.prepare(points))).unwrap_or(TilePrep { state: FetchState::Failed, missing: 0, index_known: false, lacking: Vec::new() })
     }
 
     pub(crate) fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {

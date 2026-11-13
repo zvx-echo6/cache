@@ -156,6 +156,12 @@ class IndexThrottle extends ChangeNotifier {
   /// How work may run now.
   IndexDuty get duty => _duty;
 
+  /// The device is hot: the smoothed heat reached [kHeatPause] (the system's thermal status severe or critical) and has not
+  /// fallen below [kHeatResume] since. This is the state where index work is held for heat; other work that should stay off a hot
+  /// device (the prompt read ahead) reads it here, so there is one heat signal and one set of thresholds. It does not depend on
+  /// why else the work is held (a low battery, the model answering).
+  bool get hot => _hot;
+
   /// Heat is slowing the work down or holding it (from the thermal headroom, the system's forecast, or the thermal status).
   bool get warm => _duty.hold == IndexHold.heat;
 

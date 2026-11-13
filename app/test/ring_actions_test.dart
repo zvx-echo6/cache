@@ -9,6 +9,7 @@ import 'package:cache/screens/maps_screen.dart' show MeasurePanel;
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'nav_fakes.dart';
@@ -120,5 +121,25 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('measure-undo')));
     await tester.tap(find.byKey(const ValueKey('measure-done')));
     expect((undo, done), (1, 1));
+  });
+
+  testWidgets('the measuring bar at a phone\'s width shows its hint in full, on more lines', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(CacheThemeId.light),
+      home: Scaffold(
+        body: Padding(
+          padding: const EdgeInsets.all(12),
+          child: MeasurePanel(total: const Fmt(UnitSystem.imperial).distance(966), points: 3, canUndo: true, onUndo: () {}, onDone: () {}),
+        ),
+      ),
+    ));
+    final hint = tester.renderObject<RenderParagraph>(find.text('3 points · tap the map to add more'));
+    // Beside the ruler, Undo and Done the words have less than the bar's width: they were cut at one line.
+    expect(hint.didExceedMaxLines, isFalse, reason: 'the hint is cut');
+    expect(hint.size.height, greaterThan(13 * 1.5), reason: 'the hint did not take a second line');
+    expect(tester.takeException(), isNull);
   });
 }

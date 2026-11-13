@@ -310,6 +310,33 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets('the Latitude and Longitude buttons keep the focus in the address, the cursor after what they put in', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final addr = find.byKey(const ValueKey('own-address'));
+      await tester.tap(addr);
+      await tester.pumpAndSettle();
+      await tester.enterText(addr, '$api?site=12&lat=');
+      await tester.pump();
+      TextField f() => tester.widget<TextField>(addr);
+      await tester.tap(find.byKey(const ValueKey('insert-lat')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue, reason: 'the button did not take the focus');
+      expect(f().controller!.text, '$api?site=12&lat={lat}');
+      expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+      await tester.enterText(addr, '${f().controller!.text}&lon=');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('insert-lon')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue);
+      expect(f().controller!.text, '$api?site=12&lat={lat}&lon={lon}');
+      expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+    });
+
     testWidgets('More sources: Add your own source, the form, Try it, pick what to show, Save source; it is on under Your own', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);

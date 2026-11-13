@@ -493,9 +493,58 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
       });
 
+  /// In a browser: whether the server's index work is paused by the person (Catalog's Pause all) and whether there is any, as the
+  /// server says (`index.pause`). The same Pause and Resume as the phone's, working on the server's work.
+  bool serverIndexPaused = false;
+  bool serverIndexBusy = false;
+  bool _pauseReading = false;
+
+  Future<void> _readServerPause() async {
+    final core = _core;
+    if (core == null || _pauseReading) return;
+    _pauseReading = true;
+    try {
+      final r = await core.indexPause();
+      if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
+        serverIndexPaused = r.paused;
+        serverIndexBusy = r.busy;
+        // Work that began, or a Pause from another tab: the watcher must run to see it change again.
+        _keepServerWatch();
+        notifyListeners();
+      }
+    } on CacheSearchException {
+      // A server older than index.pause: there is nothing to pause.
+    } finally {
+      _pauseReading = false;
+    }
+  }
+
+  /// Pause all (true) or Resume (false) for the server's index work.
+  Future<void> setServerIndexPaused(bool paused) async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      final r = await core.indexPause(paused);
+      serverIndexPaused = r.paused;
+      serverIndexBusy = r.busy;
+    } on CacheSearchException catch (e) {
+      error = _words(e);
+    }
+    _watchServerIndexing();
+    notifyListeners();
+  }
+
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
-    if (!_serverWorkLeft) {
+    unawaited(_readServerPause());
+    _keepServerWatch();
+  }
+
+  /// The 2-second watcher runs while a ZIM waits for its keyword index, and also while the server says it has index work or that
+  /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
+  /// must follow them (each round reads `index.pause` again).
+  void _keepServerWatch() {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;
@@ -1008,7 +1057,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     final core =
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
-    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page);
+    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).

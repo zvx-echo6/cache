@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
-import 'notebook_model.dart';
 import 'pin_image.dart';
 
 /// A place's marker colour: a stored name, the colour drawn, and the name a screen reader says. Red is left out: it is kept for
@@ -31,20 +30,6 @@ const List<MarkerColor> kMarkerColors = [
 
 /// The colour named [id]; the first one for a name this Cache does not know (or none).
 MarkerColor markerColor(String? id) => kMarkerColors.firstWhere((c) => c.id == id, orElse: () => kMarkerColors.first);
-
-/// The colour a new place gets: the one fewest places of [entries] use, the first of those in swatch order.
-MarkerColor defaultMarkerColor(Iterable<NbEntry> entries) {
-  final counts = {for (final c in kMarkerColors) c.id: 0};
-  for (final e in entries) {
-    final c = e.color;
-    if (c != null && counts.containsKey(c)) counts[c] = counts[c]! + 1;
-  }
-  var best = kMarkerColors.first;
-  for (final c in kMarkerColors) {
-    if (counts[c.id]! < counts[best.id]!) best = c;
-  }
-  return best;
-}
 
 /// True in the Tactical theme (red only).
 bool isTactical(BuildContext context) => context.t.accent == cacheTokens[CacheThemeId.tactical]!.accent;

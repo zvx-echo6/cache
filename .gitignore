@@ -20,3 +20,6 @@ key.properties
 
 # macOS
 .DS_Store
+
+# npm packages of the tools (installed from each tool's package-lock.json)
+node_modules/
