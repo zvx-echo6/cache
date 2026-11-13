@@ -942,6 +942,60 @@ fn a_book_removed_after_the_seal_is_pending_once_and_the_extension_clears_it() {
     assert_eq!(again["result"]["unchanged"], true, "and a further look has nothing to do: {again}");
 }
 
+/// A library whose settings leave some points out of the keyword index (so the index always holds fewer documents than the shard has
+/// points), on a file system that refuses hard links (so an extension always falls back to a whole build). Each app start looks at the
+/// status and runs an extension when the words are pending. The whole build records how many points it covered, so the second start
+/// finds nothing pending: one build, not one at every start.
+#[test]
+fn a_whole_build_records_its_point_count_so_left_out_points_do_not_bring_a_build_at_every_start() {
+    let tmp = TempDir::new("whole-build-points");
+    let lib = make_library(&tmp.0);
+    let mut cfg = settings();
+    cfg["leave_out"] = json!([{"field": "title", "equals": "Nebula Guide"}]);
+    std::fs::write(lib.join("cache-library.json"), cfg.to_string()).unwrap();
+    let svc = service();
+    add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let idx = lib.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &idx, heap_mb: 15, checkpoint_docs: 1000 };
+    build_library_index(&p, &|_, _| {}, &|| false).unwrap();
+    let indexes = tmp.0.join("indexes");
+    let h = sealed::open(&lib, &indexes);
+    assert_eq!(sealed::seal(&indexes)["state"], "done");
+    sealed::until_snapshot(h);
+    sealed::close(h);
+
+    // one app start: the status, and the extension the app runs when the words are pending (links refused, so it builds whole)
+    let builds = std::cell::Cell::new(0);
+    let start = || {
+        let h = sealed::open(&lib, &indexes);
+        sealed::until_snapshot(h);
+        let pending = sealed::pending(h);
+        sealed::close(h);
+        if pending == json!(true) {
+            for d in snap_dirs(&indexes) {
+                cache_search::idxsnap::force_no_link_under(&d);
+            }
+            let r = sealed::extend_with(&lib, &indexes, json!({"settings": cfg}));
+            assert_eq!(r["state"], "done", "{r}");
+            if r["result"]["built"] == json!(true) {
+                builds.set(builds.get() + 1);
+            }
+        }
+    };
+    start();
+    assert_eq!(builds.get(), 1, "the sealed snapshot records no point count and holds fewer documents than points: one build");
+    start();
+    assert_eq!(builds.get(), 1, "the build recorded the points it covered: the second start has nothing to do");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_snapshot(h);
+    assert_eq!(sealed::pending(h), json!(false));
+    assert!(sealed::found(h, "quasar") > 0);
+    assert_eq!(sealed::found(h, "nebula"), 0, "the left-out book is not in the keyword index");
+    sealed::close(h);
+}
+
 /// An extension holds the missing pieces, with their text, in memory. Past `max_extend_pieces` the library is built whole instead
 /// (which streams the shard), published as the next generation, and every word is searchable.
 #[test]
