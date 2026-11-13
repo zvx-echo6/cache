@@ -265,6 +265,15 @@ struct Unlink {
 /// write_all or read_to_end instead, as `WriteError::ConnectionLost` (noq send_stream.rs) or `ReadToEndError::Read(ReadError::
 /// ConnectionLost)` (noq recv_stream.rs), whose text is only "connection lost" / "read error: connection lost": the reason is in
 /// the error's source, not in its text. The close code is the same in every case, so it is what is looked for.
+///
+/// What it cannot see, and why that cannot stick: iroh's `ConnectingError::HandshakeFailure` ("Failure finalizing the handshake",
+/// connection.rs conn_from_noq_conn) carries no 403. But it is raised only when the connection has no ALPN or peer certificate AND
+/// no close reason (iroh: "if the authentication error raced with a connection error, the connection error wins"). A close by the
+/// other device's Gate always sets the close reason (noq connection.rs `close_reason`: "when the connection is closed ... is always
+/// true"), and the handshake data is read from the crypto session, which a close does not clear. So a Gate close can never come out
+/// as a HandshakeFailure: it is met at connect, open_bi, write or read, each of which this finds. A HandshakeFailure can only be a
+/// peer whose handshake gave no ALPN or certificate; it is not the Gate's verdict, is never taken for one, and unlinks nothing: the
+/// waiting unlink stays, is tried again in the next round (a new connection each time), and the status shows what the last try ran into.
 fn closed_403(e: &(dyn std::error::Error + 'static)) -> bool {
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(x) = cur {
