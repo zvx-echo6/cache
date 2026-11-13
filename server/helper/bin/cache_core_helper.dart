@@ -12,6 +12,7 @@ import 'host_load.dart';
 import 'index_driver.dart';
 import 'keystore.dart';
 import 'pdf_zim_indexer.dart';
+import 'starter_layers.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'regions_ops.dart';
@@ -19,7 +20,7 @@ import 'sharing_host.dart';
 import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
-/// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
+/// CACHE_STARTER_LAYERS is the web build's folder of starter map layer definitions (see starter_layers.dart). /// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
 /// the core's config work on them. CACHE_DATA is the server's data folder: with it the helper runs the sharing host (bin/sharing_host.dart:
 /// the sync engine, on `<data>/sync`), which starts here when sharing was set up and stops when stdin ends. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
@@ -50,6 +51,9 @@ Future<void> main() async {
   final keystorePath = Platform.environment['CACHE_KEYSTORE'];
   final keys = KeyStore(File(keystorePath != null && keystorePath.isNotEmpty ? keystorePath : '${dirs.support.parent.path}/keystore.json'), log: log);
   final extras = serverCoreExtras(dirs);
+  // The starter map layers, put in place before the core opens and reads them (the phone does this at every start).
+  final starter = Platform.environment['CACHE_STARTER_LAYERS'];
+  if (starter != null && starter.isNotEmpty) installStarterLayers(Directory(starter), Directory('${dirs.support.path}/layer-defs'), log: log);
   // The PDFs inside ZIMs are read by the server program itself (`cache pdf-text`, MuPDF); without it (a helper run by hand) they are
   // not indexed.
   final pdfExe = Platform.environment['CACHE_PDF_TEXT_EXE'];
