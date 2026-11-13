@@ -71,7 +71,8 @@ void main() {
         {'at': now - 180000, 'text': 'Old spare was not reached within 30 days; it may still show this device.'}, // WORDING QUESTION (owner): draft, not yet approved
       ]);
     final (s, _) = await open(tester, sync);
-    await tester.scrollUntilVisible(find.text('Activity'), 300, scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(find.text('Activity'));
+    await tester.pump();
     await tester.tap(find.text('Activity'));
     await tester.pumpAndSettle();
     expect(find.text('Trail phone unlinked this device.'), findsOneWidget);

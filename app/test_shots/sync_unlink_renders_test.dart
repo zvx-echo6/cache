@@ -46,10 +46,11 @@ void main() {
       await snap(tester, _out, '1-sharing-waiting-390-$t');
 
       // The Activity log opened, scrolled into view.
-      await tester.scrollUntilVisible(find.text('Activity'), 300, scrollable: find.byType(Scrollable).first);
+      await tester.ensureVisible(find.text('Activity'));
+    await tester.pump();
       await tester.tap(find.text('Activity'));
       await _settle(tester);
-      await tester.scrollUntilVisible(find.text('Old spare was not reached within 30 days; it may still show this device.'), 300, scrollable: find.byType(Scrollable).first);
+      await tester.ensureVisible(find.text('Old spare was not reached within 30 days; it may still show this device.'));
       await _settle(tester);
       await snap(tester, _out, '2-activity-390-$t');
 
