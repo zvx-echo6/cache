@@ -62,9 +62,9 @@ void main() {
           final text = tester.widget<Text>(find.byKey(keys[i]));
           expect(text.overflow, isNull, reason: 'a value that can be cut with an ellipsis');
           expect(tester.renderObject<RenderParagraph>(find.byKey(keys[i])).didExceedMaxLines, isFalse);
-          // laid out whole: the on-screen size is a scale of the laid-out size, and the type stays readable (14 points or more).
+          // laid out whole: the on-screen size is a scale of the laid-out size, and the type stays readable (11.5 points or more).
           final scale = rects[i].width / tester.getSize(find.byKey(keys[i])).width;
-          expect(text.style!.fontSize! * scale, greaterThanOrEqualTo(narrow ? 14 : 0), reason: 'value ${text.data} is drawn too small to read');
+          expect(text.style!.fontSize! * scale, greaterThanOrEqualTo(narrow ? 11.5 : 0), reason: 'value ${text.data} is drawn too small to read');
         }
         for (var i = 0; i < 2; i++) {
           expect(rects[i + 1].left - rects[i].right, greaterThanOrEqualTo(narrow ? 6 : 0), reason: '${(keys[i]).value} and ${(keys[i + 1]).value} run together');

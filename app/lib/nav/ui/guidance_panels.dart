@@ -222,9 +222,9 @@ class GuidanceBar extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   column(eta == null ? '--' : clockTime(eta), 'arrive', key: const ValueKey('bar-eta'), bigSize: 18, smallSize: 12),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   column(fmt.duration(remainingS), 'left', key: const ValueKey('bar-time'), bigSize: 18, smallSize: 12),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   column(fmt.distance(remainingM), 'to go', key: const ValueKey('bar-distance'), bigSize: 18, smallSize: 12),
                 ],
               ),
