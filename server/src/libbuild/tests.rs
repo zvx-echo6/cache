@@ -2601,7 +2601,8 @@ fn storage_numbers_are_per_linked_folder_across_libraries_and_scan_nothing() {
     check(svc, &lib2);
     let before = (tree(&r.source), tree(&two), tree(&ext3.0));
     let out = linked_api::storage(svc);
-    let row = |lib: &str, folder: &str| out["folders"].as_array().unwrap().iter().find(|f| f["library"] == json!(lib) && f["folder_id"] == json!(folder)).cloned().unwrap_or_else(|| panic!("{out}"));
+    let row_in = |out: &Value, lib: &str, folder: &str| out["folders"].as_array().unwrap().iter().find(|f| f["library"] == json!(lib) && f["folder_id"] == json!(folder)).cloned().unwrap_or_else(|| panic!("{out}"));
+    let row = |lib: &str, folder: &str| row_in(&out, lib, folder);
     assert_eq!(out["folders"].as_array().unwrap().len(), 4, "{out}");
     let (a, b, c, e) = (row(&r.lib, "r1"), row(&r.lib, "r2"), row(&r.lib, "r3"), row(&lib2, "rb"));
     assert_eq!((a["books"].as_u64(), a["bytes"].as_u64(), a["label"].as_str()), (Some(1), Some(r.tanks.len() as u64), Some("Folder")), "{a}");
@@ -2610,9 +2611,9 @@ fn storage_numbers_are_per_linked_folder_across_libraries_and_scan_nothing() {
     assert_eq!((e["books"].as_u64(), e["bytes"].as_u64()), (Some(1), Some(pump.len() as u64)));
     // nothing is scanned: a file that has gone since the last check is still counted until the next check says otherwise
     std::fs::remove_file(r.source.join("tanks.pdf")).unwrap();
-    assert_eq!(row(&r.lib, "r1")["books"], json!(1));
+    assert_eq!(row_in(&linked_api::storage(svc), &r.lib, "r1")["books"], json!(1));
     check(svc, &r.lib);
-    let a = row(&r.lib, "r1");
+    let a = row_in(&linked_api::storage(svc), &r.lib, "r1");
     assert_eq!((a["books"].as_u64(), a["bytes"].as_u64()), (Some(0), Some(0)));
     assert_eq!(tree(&two), before.1);
     assert_eq!(tree(&ext3.0), before.2);

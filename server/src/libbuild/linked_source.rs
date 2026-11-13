@@ -359,7 +359,7 @@ pub fn read_only_source_path(root: &Path, relative: &str, expected_blake3: &str)
         let meta=fs::metadata(root.join("a.pdf")).unwrap();
         let hash=blake3::hash(b"the whole file").to_hex().to_string();
         assert_eq!(read_stable(&root,"a.pdf",&hash).unwrap(),b"the whole file");
-        assert!(read_stable(&root,"a.pdf",&blake3::hash(b"other").to_hex().to_string()).is_err(),"changed since it was checked");
+        assert!(read_stable(&root,"a.pdf",blake3::hash(b"other").to_hex().as_ref()).is_err(),"changed since it was checked");
         assert!(read_stable(&root,"missing.pdf",&hash).is_err());
         assert!(read_stable(&root,"../a.pdf",&hash).is_err());
         let after=fs::metadata(root.join("a.pdf")).unwrap();
