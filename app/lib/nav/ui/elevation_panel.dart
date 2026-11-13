@@ -382,7 +382,7 @@ class ElevationPanel extends StatelessWidget {
         textBaseline: TextBaseline.alphabetic,
         children: [
           Expanded(child: Text('Elevation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: k.text))),
-          if (p != null && p.hasData) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+          if (p != null && p.chartable) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
         ],
       ),
     );
@@ -390,7 +390,7 @@ class ElevationPanel extends StatelessWidget {
     if (p == null || (!p.hasData && elevation.loading)) {
       // Nothing read yet: the frame of the chart (the room it will take), no message and no spinner.
       body = const SizedBox(key: ValueKey('elevation-frame'), height: 142);
-    } else if (!p.hasData) {
+    } else if (!p.chartable) {
       body = Padding(
         padding: const EdgeInsets.only(top: 10, bottom: 4),
         child: Row(
@@ -578,7 +578,7 @@ class RouteElevationSummary extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('Reading the elevation', style: TextStyle(fontSize: 14, color: k.secondary)),
       ));
-    } else if (!p.hasData) {
+    } else if (!p.chartable) {
       children.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('No elevation data for this route.', key: const ValueKey('preview-elevation-none'), style: TextStyle(fontSize: 14, color: k.secondary)),

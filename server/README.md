@@ -101,6 +101,24 @@ Both need a signed-in session. The loaded model takes about 700 MB and is let go
 the library uses AVX2, FMA and F16C; a CPU without them gets `embed_unavailable`. In Rust, the builder calls
 `EmbedService::embed_batch(&[String])`.
 
+### Model files (the Models screens in the browser)
+
+`src/models.rs` keeps the chat-model files for the browser: the server runs the downloads (one at a time, resumable from
+`<data>/models/.partial/`, SHA-256 checked, no tab needed), so a download goes on with the page closed. It fetches only from
+huggingface.co and its file store (`*.huggingface.co`, `*.hf.co`) and from data.cached.info / cache.echo6.co, https only, and every
+redirect hop is checked against that list. All behind the sign-in:
+
+    GET    /api/models/downloads                       -> {downloads: [{name, state: queued|running|verifying|paused|failed|done, done, total, error?}]}
+    POST   /api/models/downloads {name, repo, revision, path | url, size, sha256?, search?}   -> the same; queues or continues one
+    POST   /api/models/downloads/<name>/pause|resume   -> the same
+    DELETE /api/models/downloads/<name>                -> the same; stops it and throws the part file away
+    DELETE /api/models/files/<name>                    -> deletes a model file (409 in_use for the loaded one)
+    POST   /api/models/upload?name=<x.gguf>            -> streams the body (Content-Length needed) into the models folder
+    GET    /api/system/memory                          -> {total, avail, threshold, low} in bytes, from /proc/meminfo
+
+`search: true` makes the server start the search model (above) when that file is done. The embedder's own download is listed
+in `downloads` as one more entry.
+
 ### The chat model (Ask in the browser)
 
 The browser build of Ask runs the whole loop (prompt, tools, citations) in the page; only the model runs on the server, through the
