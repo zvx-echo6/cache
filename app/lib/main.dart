@@ -94,6 +94,7 @@ import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
+import 'settings/token_store_open.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'sharing/share_items.dart';
@@ -106,7 +107,9 @@ import 'package:workmanager/workmanager.dart';
 import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
+import 'weather/browser_notification.dart';
 import 'weather/foreground_updates.dart';
+import 'weather/weather_files.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
@@ -246,13 +249,14 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState(
+    tokens: platformTokenStore(),
     policy: policy,
     captionSearch: CoreCaptionSearch(() => sources.core),
     indexesDir: () async => Directory('${await appSupportPath()}/$kIndexesDirName'),
   );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
-    secrets: const SecureTokenStore(),
+    secrets: platformTokenStore(),
     setWeb: (provider, key, online) async =>
         (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
     // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
@@ -274,13 +278,25 @@ class _CacheAppState extends State<CacheApp> {
     settings: settings,
     policy: policy,
     core: SearchLiveCore(sources.whenCoreReady),
-    secrets: const SecureTokenStore(),
-    catalogueDir: () async => Directory('${await appSupportPath()}/live-catalogues'),
-    liveDir: () async {
-      await sources.whenCoreReady();
-      final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
-      return dir is String ? Directory(dir) : null;
-    },
+    secrets: platformTokenStore(),
+    // A browser keeps these on Cache Server: the catalogues in the support folder, and the core's source folder (the server opens its
+    // core with `<docs>/live-defs`) in the documents folder.
+    catalogueDir: plat.isWeb ? null : () async => Directory('${await appSupportPath()}/live-catalogues'),
+    catalogueFiles: plat.isWeb ? () => AppFsFiles.open(_appFs, AppRoot.support, 'live-catalogues') : null,
+    liveDir: plat.isWeb
+        ? null
+        : () async {
+            await sources.whenCoreReady();
+            final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
+            return dir is String ? Directory(dir) : null;
+          },
+    liveFiles: plat.isWeb
+        ? () async {
+            await sources.whenCoreReady();
+            return AppFsFiles.open(_appFs, AppRoot.docs, 'live-defs');
+          }
+        : null,
+    onPlan: plat.isWeb ? (plan) => _appFs.writeStringAtomic(AppRoot.support, 'live_plan.json', jsonEncode(plan)) : null,
     builtIns: readLiveSourceAssets,
     position: () {
       final f = location.fix;
@@ -289,10 +305,13 @@ class _CacheAppState extends State<CacheApp> {
     regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
-    told: ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
+    told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
   )..placeAlerts = placeAlerts;
+  /// The app's files on Cache Server (a browser only; a phone reaches its own folders directly).
+  late final AppFs _appFs = createAppFs();
   /// Each place's own alert rule (Places notebook, the place's gear).
-  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
+  late final PlaceAlerts placeAlerts =
+      plat.isWeb ? PlaceAlerts.appFs(_appFs) : PlaceAlerts(() async => File('${await appSupportPath()}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -419,7 +438,7 @@ class _CacheAppState extends State<CacheApp> {
       placeNames: () => _placeNames.names,
       recommended: () => RecommendedModels.shared.models,
     ),
-    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: const SecureTokenStore()),
+    keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
@@ -793,7 +812,7 @@ class _CacheAppState extends State<CacheApp> {
   );
   Timer? _shareSync;
   // The optional app PIN: asked when Cache opens.
-  late final AppPin appPin = AppPin(const SecureTokenStore());
+  late final AppPin appPin = AppPin(platformTokenStore());
   // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
   late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
     final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
@@ -1046,9 +1065,14 @@ class _CacheAppState extends State<CacheApp> {
         weather.addListener(_onWeather);
         _onWeather();
         unawaited(weather.updateIfDue(kBackgroundEvery));
-        // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
-        final state = WidgetsBinding.instance.lifecycleState;
-        if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        if (plat.isWeb) {
+          // A browser: the server's own timer fetches with no tab open, so while a tab is open the alerts that arrived are checked.
+          weather.watchWhileOpen(every: const Duration(minutes: 5), due: kBackgroundEvery);
+        } else {
+          // Left open in front, the app updates by itself from here on (not on Android, whose scheduled job does).
+          final state = WidgetsBinding.instance.lifecycleState;
+          if (state == null || state == AppLifecycleState.resumed || state == AppLifecycleState.inactive) _foregroundUpdates.front();
+        }
       });
       await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
@@ -1244,7 +1268,7 @@ class _CacheAppState extends State<CacheApp> {
       await scheduleBackgroundUpdates(anythingOn: on);
       if (on && !_askedNotifications) {
         _askedNotifications = true;
-        await PlatformNotificationAccess().request();
+        await (plat.isWeb ? askBrowserNotifications() : PlatformNotificationAccess().request());
       }
     }
     _rememberPlace();
@@ -1273,7 +1297,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      _store = await openHistoryStore();
+      _store = await openHistoryStore(onChanged: () => chat.historyRevision.value++);
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
