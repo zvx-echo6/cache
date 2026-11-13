@@ -6,6 +6,7 @@
   "error": "Waiting for your position",
   "destination": {"name": "Cabin", "address": null, "lat": 10.7, "lon": 20.1},
   "routes": [],
+  "stops": [],
   "routeIndex": 0,
   "routeId": null,
   "voiceOn": true,

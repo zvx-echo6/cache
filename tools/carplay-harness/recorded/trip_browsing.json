@@ -6,6 +6,7 @@
   "error": null,
   "destination": null,
   "routes": [],
+  "stops": [],
   "routeIndex": 0,
   "routeId": null,
   "voiceOn": true,
