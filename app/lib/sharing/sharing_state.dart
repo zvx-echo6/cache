@@ -29,7 +29,9 @@ class SharingState extends ChangeNotifier {
     this.deviceName = 'Cache device',
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
-  }) : _reserveBytes = reserveBytes ?? _storageReserve,
+    bool? phone,
+  }) : _phone = phone ?? (Platform.isAndroid || Platform.isIOS),
+       _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? _openReal;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
@@ -46,6 +48,10 @@ class SharingState extends ChangeNotifier {
   final List<DataKind> kinds;
   final String deviceName;
   final SyncOpener _opener;
+
+  /// A phone (Android or iOS). The Mainline DHT is off there: its socket can fail and spin a CPU, burning the battery on a drive, and
+  /// linked devices are still found by mDNS, n0's lookup and the relay. Anywhere else (the server, the desktop) the engine's default (on) stands.
+  final bool _phone;
 
   /// What Cache leaves free on the phone, for the volume holding a folder: the same rule Storage shows ([reserveFor]).
   final int Function(String dir) _reserveBytes;
@@ -146,6 +152,7 @@ class SharingState extends ChangeNotifier {
       _core = await _opener({
         'dir': dir.path,
         'name': deviceName,
+        if (_phone) 'dht': false,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': _reserveBytes((await supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
