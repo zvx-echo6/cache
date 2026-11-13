@@ -6,6 +6,10 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 51, test) - 2026-11-12
+
+- If you went from 1.0 to build 49, check Settings > Sharing and sync: it may have switched itself off
+
 ### New
 - Android Auto: a climb-ahead card, a mini map of the whole route, the four themes, and End, Mute and Route overview buttons
 - CarPlay: Cache's map on the car screen with Saved places and Search, a choice of routes, and turn-by-turn guidance with lane arrows, a position arrow that glides, the grade of a climb ahead marked on the route, a mini map of the whole route and the climb ahead drawn on the map on car screens big enough for them, and a Route overview button; spoken prompts give way to a tone during a call
