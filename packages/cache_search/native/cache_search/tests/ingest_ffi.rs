@@ -898,6 +898,50 @@ fn a_book_removed_with_nothing_added_makes_the_keyword_index_pending_until_the_e
     assert!(keyword_hits(&now, "nebula", 20).unwrap().0.is_empty(), "the removed book's documents are gone from the index");
 }
 
+/// A sealed snapshot records no point count of its own (only an extension writes one), so the status compares the shard with the
+/// snapshot's live documents. A book removed after the seal leaves the snapshot covering more than the shard: pending, and one
+/// extension deletes the book's ids and records the count, after which nothing is pending. Pending cannot stay true in this direction.
+#[test]
+fn a_book_removed_after_the_seal_is_pending_once_and_the_extension_clears_it() {
+    let tmp = TempDir::new("sealed-delete-nopoints");
+    let lib = make_library(&tmp.0);
+    let svc = service();
+    add_book(&svc, &tmp.0, &lib, "Quasar Guide", "quasar", 5);
+    add_book(&svc, &tmp.0, &lib, "Nebula Guide", "nebula", 5);
+    let idx = lib.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    let cfg = settings();
+    let p = LibBuildParams { threads: Some(1), pace: None, library_path: &lib.join("shard"), settings: Some(&cfg), index_dir: &idx, heap_mb: 15, checkpoint_docs: 1000 };
+    build_library_index(&p, &|_, _| {}, &|| false).unwrap();
+    let indexes = tmp.0.join("indexes");
+    let h = sealed::open(&lib, &indexes);
+    assert_eq!(sealed::seal(&indexes)["state"], "done");
+    sealed::until_snapshot(h);
+    assert_eq!(sealed::pending(h), json!(false), "the sealed snapshot has every point");
+    sealed::close(h);
+    let g0 = snap_dirs(&indexes);
+    let m: Value = serde_json::from_str(&std::fs::read_to_string(g0[0].join("manifest.json")).unwrap()).unwrap();
+    assert!(m.get("points").is_none() && m.get("extra").and_then(|e| e.get("points")).is_none(), "a seal records no point count: {m}");
+
+    let gone = delete_book(&lib, "Nebula Guide");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_snapshot(h);
+    assert_eq!(sealed::pending(h), json!(true), "the snapshot covers more than the shard");
+    sealed::close(h);
+
+    let r = sealed::extend(&lib, &indexes);
+    assert_eq!(r["result"]["extended"], true, "{r}");
+    assert_eq!(r["result"]["removed"], gone, "{r}");
+    let h = sealed::open(&lib, &indexes);
+    sealed::until_generation(h, 1);
+    assert_eq!(sealed::pending(h), json!(false), "the extension recorded the count: nothing pending");
+    assert_eq!(sealed::found(h, "nebula"), 0);
+    assert!(sealed::found(h, "quasar") > 0);
+    sealed::close(h);
+    let again = sealed::extend(&lib, &indexes);
+    assert_eq!(again["result"]["unchanged"], true, "and a further look has nothing to do: {again}");
+}
+
 /// An extension holds the missing pieces, with their text, in memory. Past `max_extend_pieces` the library is built whole instead
 /// (which streams the shard), published as the next generation, and every word is searchable.
 #[test]
