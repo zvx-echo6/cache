@@ -514,6 +514,9 @@ void main() {
     await show(tester, RegionsScreen(regions: o.regions, initialTab: 1));
     await tester.pump(const Duration(seconds: 5));
     await o.settle(tester);
+    // The row's speed is measured on the real clock (two seconds of data), so the stalled download's "Waiting for the server"
+    // comes after a varying wait: wait for it, so every redraw shows the same row.
+    await _until(tester, find.textContaining('Waiting for the server'), max: 400);
     await shot(tester, 'region-row');
 
     await show(tester, RegionPage(regions: o.regions, id: 'us-id'));
