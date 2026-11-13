@@ -257,6 +257,8 @@ ElevationStarter tileServerElevationJobs(LayerEngine engine, {double Function(Ma
 /// reading or decoding a tile, and with it what it held). The isolate is sent only the address, the zoom and the points, and
 /// hands the profile back as it exits.
 ElevationJob profileJob(String urlTemplate, int zoom, List<(double, double)> points, {double fromM = 0}) {
+  // A browser has no isolates: the sampling runs in the page, from the server's tiles.
+  if (kIsWeb) return profileJobHere(HttpDemTiles(urlTemplate), zoom, points, fromM: fromM);
   final result = Completer<ElevationProfile>();
   final chunks = StreamController<ElevationChunk>();
   final port = RawReceivePort();
@@ -319,4 +321,53 @@ Future<void> _profileIsolate((SendPort, String, int, List<(double, double)>, dou
     tiles.close();
   }
   Isolate.exit(port, profile);
+}
+
+/// The sampling run here, with no isolate of its own (a browser has none): from [tiles], one tile read at a time, so the page
+/// keeps its turn while tiles are read and decoded. The heights come in chunks as in the isolate. [ElevationJob.stop] makes every
+/// later tile read return nothing at once, and the job then ends with [ElevationStopped].
+ElevationJob profileJobHere(DemTiles tiles, int zoom, List<(double, double)> points, {double fromM = 0}) {
+  final chunks = StreamController<ElevationChunk>();
+  final reader = _StoppableTiles(tiles);
+  final clock = Stopwatch()..start();
+  var first = true;
+  Future<ElevationProfile> run() async {
+    try {
+      final profile = await buildRouteProfileInChunks(points, reader, zoom: zoom, fromM: fromM, onChunk: (start, heights) {
+        if (first) {
+          first = false;
+          logInfo('Elevation: the first chunk of the route arrived after ${clock.elapsedMilliseconds} ms');
+        }
+        if (!reader.stopped && !chunks.isClosed) chunks.add((first: start, heights: heights));
+      });
+      if (reader.stopped) throw const ElevationStopped();
+      return profile;
+    } finally {
+      if (!chunks.isClosed) unawaited(chunks.close());
+      if (tiles is HttpDemTiles) tiles.close();
+    }
+  }
+
+  return ElevationJob(run(), chunks: chunks.stream, onStop: reader.stop);
+}
+
+/// [DemTiles] that give nothing more once stopped: a read waiting for its tile ends at once.
+class _StoppableTiles implements DemTiles {
+  _StoppableTiles(this._tiles);
+
+  final DemTiles _tiles;
+  final Completer<Uint8List?> _stop = Completer<Uint8List?>();
+
+  bool get stopped => _stop.isCompleted;
+
+  void stop() {
+    if (!_stop.isCompleted) _stop.complete(null);
+  }
+
+  @override
+  Future<Uint8List?> tile(int z, int x, int y) async {
+    if (stopped) return null;
+    final bytes = await Future.any([_tiles.tile(z, x, y), _stop.future]);
+    return stopped ? null : bytes;
+  }
 }
