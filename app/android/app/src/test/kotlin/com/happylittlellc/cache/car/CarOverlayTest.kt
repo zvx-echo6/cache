@@ -1181,6 +1181,7 @@ class CarOverlayTest {
         // The same card with no grade to show has no shape (the figure alone, which starts 16 from the edge).
         val noShape = drawn(1280, 500, wide, CarTrip.from(mapOf(
             "phase" to "guiding", "units" to "imperial", "overview" to sampleOverview(), "climb" to (sampleClimb() + ("gradePct" to null)),
+            "palette" to palette("light"),
         )))
         // The card's first 16 px, its rounded corners among them, hold nothing of the shape: the same pixels with and without.
         for (x in r.left.toInt() until r.left.toInt() + 16) for (y in r.top.toInt() until r.bottom.toInt()) {
