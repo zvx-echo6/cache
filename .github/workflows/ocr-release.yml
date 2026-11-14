@@ -8,7 +8,8 @@ name: OCR release build
 
 on:
   push:
-    branches-ignore: [main]
+    branches: [rel-1.1, main]
+    tags: ['**']
     paths:
       - packages/cache_ocr/**
       - app/android/app/proguard-rules.pro

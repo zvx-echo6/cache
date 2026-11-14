@@ -1,5 +1,4 @@
-# Routine checks for every pushed branch (except main) and every pull request, so builders push a branch and read the result
-# here instead of running the suites on a shared build machine. No secrets are used.
+# Routine checks: run on rel-1.1, main, tags, pull requests and by hand; branches are checked on the Cache build boxes. No secrets are used.
 #
 #   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
@@ -24,8 +23,10 @@ name: Tests
 
 on:
   push:
-    branches-ignore: [main]
+    branches: [rel-1.1, main]
+    tags: ['**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
