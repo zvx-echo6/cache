@@ -7,6 +7,7 @@ import '../../theme.dart';
 import '../layers/layer_def.dart';
 import '../layers/layer_engine.dart';
 import '../maps_state.dart';
+import 'area_page.dart' show openAreaPage;
 import 'format.dart';
 
 /// "Get more layers": every layer in the catalogue with what it is, its licence, where it covers, and a
@@ -113,35 +114,6 @@ class _AreaRow extends StatelessWidget {
 
   LayerEngine get engine => maps.engine;
 
-  Future<void> _confirmDelete(BuildContext context) async {
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete ${area.label}?'),
-        content: const Text('The downloaded tiles are removed from this device.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (yes == true) await engine.delete(area.id);
-  }
-
-  Future<void> _update(BuildContext context, {bool anyway = false}) async {
-    try {
-      await engine.update(area.id, anyway: anyway);
-    } on MobileDataBlocked catch (e) {
-      if (!context.mounted) return;
-      final m = ScaffoldMessenger.of(context);
-      m.hideCurrentSnackBar();
-      m.showSnackBar(SnackBar(
-        content: Text(e.message),
-        action: SnackBarAction(label: 'Download anyway', onPressed: () => _update(context, anyway: true)),
-      ));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -161,40 +133,43 @@ class _AreaRow extends StatelessWidget {
     if (area.phase != AreaPhase.done) {
       // On its way, paused or stopped: the download pattern, with Pause, Resume and Remove.
       final s = areaDl(area);
-      final a = DlActions(
-        pause: updating ? null : () => engine.pause(area.id),
-        resume: () => _update(context),
-        remove: () => engine.delete(area.id),
-      );
+      final a = areaDlActions(context, engine, area);
+      // A tap opens the area's page, as a downloaded area's row does.
       return Padding(
         padding: const EdgeInsets.only(top: 10),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-          decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(area.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
-                    DlStatus(state: s, actions: a, keyBase: 'area-${area.id}'),
-                  ],
+        child: InkWell(
+          key: ValueKey('area-row-${area.id}'),
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => openAreaPage(context, maps, area.id),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+            decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(area.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
+                      DlStatus(state: s, actions: a, keyBase: 'area-${area.id}'),
+                    ],
+                  ),
                 ),
-              ),
-              dlControl(context, s, a, keyBase: 'area-${area.id}'),
-            ],
+                dlControl(context, s, a, keyBase: 'area-${area.id}'),
+              ],
+            ),
           ),
         ),
       );
     }
-    // A tap on a downloaded area: the Maps tab, the map fitted to the area (Update and Delete stay its buttons).
+    // A tap on a downloaded area opens its page (its map, size, date, what is in it, and Show on map); Update and Delete stay the
+    // row's buttons.
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: InkWell(
         key: ValueKey('area-row-${area.id}'),
         borderRadius: BorderRadius.circular(12),
-        onTap: () => maps.showAreaOnMap(area.bounds),
+        onTap: () => openAreaPage(context, maps, area.id),
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
           decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
@@ -221,12 +196,12 @@ class _AreaRow extends StatelessWidget {
                 IconButton(
                   tooltip: 'Update',
                   icon: Icon(Icons.refresh, color: k.secondary),
-                  onPressed: () => _update(context),
+                  onPressed: () => updateArea(context, engine, area),
                 ),
                 IconButton(
                   tooltip: 'Delete',
                   icon: Icon(Icons.delete_outline, color: k.secondary),
-                  onPressed: () => _confirmDelete(context),
+                  onPressed: () => askDeleteArea(context, engine, area),
                 ),
               ],
             ],
@@ -412,6 +387,50 @@ class _DefinitionEditorState extends State<DefinitionEditor> {
       ),
     );
   }
+}
+
+/// Asks before deleting a downloaded map area ("Delete Home?", Keep or Delete) and deletes it on Delete; true when it was deleted.
+/// The layers screen's area rows and the area's page both ask this way.
+Future<bool> askDeleteArea(BuildContext context, LayerEngine engine, DownloadedArea area) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Delete ${area.label}?'),
+      content: const Text('The downloaded tiles are removed from this device.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+      ],
+    ),
+  );
+  if (yes != true) return false;
+  await engine.delete(area.id);
+  return true;
+}
+
+/// Fetches a downloaded map area again; on mobile data with downloads on mobile data off, says so with "Download anyway".
+Future<void> updateArea(BuildContext context, LayerEngine engine, DownloadedArea area, {bool anyway = false}) async {
+  try {
+    await engine.update(area.id, anyway: anyway);
+  } on MobileDataBlocked catch (e) {
+    if (!context.mounted) return;
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: Text(e.message),
+      action: SnackBarAction(label: 'Download anyway', onPressed: () => updateArea(context, engine, area, anyway: true)),
+    ));
+  }
+}
+
+/// Pause, Resume and Remove of a map area on its way, paused or stopped (Pause only for a first download, not an update).
+DlActions areaDlActions(BuildContext context, LayerEngine engine, DownloadedArea area) {
+  final updating = area.phase == AreaPhase.running && area.fetchedAt != null;
+  return DlActions(
+    pause: updating ? null : () => engine.pause(area.id),
+    resume: () => updateArea(context, engine, area),
+    remove: () => engine.delete(area.id),
+  );
 }
 
 /// A map layer area on its way, paused or stopped, as its row shows it. The core counts tiles, not bytes: the size in all is worked
