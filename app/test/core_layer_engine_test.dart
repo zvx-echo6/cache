@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/core_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
+import 'package:cache/maps/layers/layer_engine.dart' show MapFile;
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -146,6 +147,12 @@ class _LayersNative implements CsNative {
       case 'remove':
         user.remove(arg);
         return jsonEncode({'id': arg, 'removed': true});
+      case 'test_jobs':
+        // The layer_download jobs started so far, each with its request (without the layers config).
+        const tag = 'job:layer_download:';
+        return jsonEncode({
+          'jobs': [for (final c in calls) if (c.startsWith(tag)) jsonDecode(c.substring(tag.length))],
+        });
     }
     throw ArgumentError(op);
   }
@@ -496,6 +503,26 @@ void main() {
     expect(heard.last, other.port, reason: 'listeners hear of the new port');
     expect(engine.tilesUrl('basemap'), 'http://127.0.0.1:${other.port}/layers/basemap/{z}/{x}/{y}');
     expect(engine.tileJsonUrl('hillshade'), 'http://127.0.0.1:${other.port}/layers/hillshade/tilejson.json');
+  });
+
+  test('a pre-cut map file goes to the core with its download and again when a stopped one is carried on; none without', () async {
+    Future<List<Map<String, dynamic>>> jobs() async => [for (final j in (await core.layers('test_jobs'))['jobs'] as List) (j as Map).cast<String, dynamic>()];
+    final file = MapFile(url: 'https://data.test/basemap-regions/20261025/r.pmtiles', bytes: 4096, sha256: 'ef' * 32, planet: '20261025');
+    final a = await engine.download('hillshade', home, label: 'fails', file: file);
+    expect((await jobs()).last['file'], file.toJson());
+    await until(() => a.phase != AreaPhase.running);
+    expect(a.phase, AreaPhase.failed);
+    // the words are those of any download that stopped
+    expect(a.error, contains('No connection'));
+    await engine.update(a.id);
+    expect((await jobs()).last['file'], file.toJson(), reason: 'carried on with the same file');
+    await until(() => a.phase != AreaPhase.running);
+
+    // no file: the request is the one of before
+    final b = await engine.download('hillshade', home, label: 'Box');
+    expect((await jobs()).last.containsKey('file'), isFalse);
+    await until(() => b.phase == AreaPhase.done);
+    expect(b.doneTiles, 20);
   });
 
   test('a stopped download never shows a server address', () {

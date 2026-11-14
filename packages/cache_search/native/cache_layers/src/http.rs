@@ -345,6 +345,158 @@ pub fn timed<T>(f: impl FnOnce() -> T) -> (T, Duration) {
     (v, t.elapsed())
 }
 
+/// The agent for whole files (a region's map file, hundreds of megabytes): no limit on the whole request, which takes minutes,
+/// but at most 30 s with nothing read, so a dead connection is noticed and carried on from where it stopped.
+fn file_agent() -> &'static ureq::Agent {
+    static A: OnceLock<ureq::Agent> = OnceLock::new();
+    A.get_or_init(|| {
+        cache_netguard::guarded(ureq::AgentBuilder::new())
+            .timeout_connect(Duration::from_secs(8))
+            .timeout_read(Duration::from_secs(30))
+            .timeout_write(Duration::from_secs(30))
+            .user_agent(&user_agent())
+            .build()
+    })
+}
+
+/// How [`fetch_to_file`] ended.
+#[derive(Debug, PartialEq)]
+pub enum FileGot {
+    /// `part` holds the whole file (its length is the length asked for; the caller checks its SHA-256).
+    Whole,
+    /// The host has no such file (404 or 410).
+    NotThere,
+    Cancelled,
+}
+
+/// Fetches the `bytes` long file at `url` into `part`, carrying on from what `part` already holds with a Range request, so a
+/// connection that is cut (or a download stopped and started again) continues from the partial file. A server that ignores the
+/// range starts it again from the beginning. `each(bytes in part)` is called as the file grows (about every MiB); `cancelled` is
+/// asked as often. Four attempts in a row that bring nothing new (refusals, 429, 5xx, timeouts, failed connections) are an
+/// error; an attempt that brought bytes starts the count again.
+pub fn fetch_to_file(url: &str, part: &std::path::Path, bytes: u64, each: &mut dyn FnMut(u64), cancelled: &dyn Fn() -> bool) -> Result<FileGot> {
+    if !crate::def::url_ok(url) {
+        return Err(Error::bad_json(format!("{url} is not an https address")));
+    }
+    let len_of = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let mut fails = 0;
+    let mut delay = Duration::from_millis(500);
+    let mut last = String::new();
+    loop {
+        if cancelled() {
+            return Ok(FileGot::Cancelled);
+        }
+        let mut have = len_of(part);
+        if have > bytes {
+            std::fs::write(part, b"").map_err(|e| crate::error::io_at("emptying", part, e))?;
+            have = 0;
+        }
+        if have == bytes && bytes > 0 {
+            return Ok(FileGot::Whole);
+        }
+        if fails >= 4 {
+            return Err(Error::fetch_failed(last));
+        }
+        if network_seems_down() {
+            return Err(Error::fetch_failed("no connection"));
+        }
+        let before = have;
+        let mut retry_after: Option<Duration> = None;
+        match file_agent().get(url).set("Range", &format!("bytes={}-{}", have, bytes.max(1) - 1)).call() {
+            Ok(resp) => {
+                mark_network_up();
+                let status = resp.status();
+                if status == 200 || status == 206 {
+                    if stream_into(url, resp, part, have, bytes, status, each, cancelled, &mut last)?.is_none() {
+                        return Ok(FileGot::Cancelled);
+                    }
+                } else {
+                    last = format!("HTTP {status} from {url}");
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                mark_network_up();
+                if matches!(code, 404 | 410) {
+                    return Ok(FileGot::NotThere);
+                }
+                last = format!("HTTP {code} from {url}");
+                if code == 416 {
+                    // what the partial file holds is not the start of this file: start again
+                    let _ = std::fs::write(part, b"");
+                }
+                retry_after = resp.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok()).map(|s| Duration::from_secs(s.min(10)));
+            }
+            Err(ureq::Error::Transport(t)) => {
+                last = format!("{:?}: {} ({url})", t.kind(), t.message().unwrap_or(""));
+            }
+        }
+        if len_of(part) > before {
+            fails = 0;
+            delay = Duration::from_millis(500);
+            continue;
+        }
+        fails += 1;
+        // wait before the next attempt, still answering a cancel
+        let until = Instant::now() + retry_after.unwrap_or(delay);
+        while Instant::now() < until {
+            if cancelled() {
+                return Ok(FileGot::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        delay = (delay * 2).min(Duration::from_secs(8));
+    }
+}
+
+/// Writes the body of `resp` (status 200: the whole file; 206: from `have` on) into `part`. Returns the bytes `part` holds,
+/// or `None` when cancelled (what arrived is kept). A body cut short is not an error here: the caller carries on from it.
+#[allow(clippy::too_many_arguments)]
+fn stream_into(url: &str, resp: ureq::Response, part: &std::path::Path, mut have: u64, bytes: u64, status: u16, each: &mut dyn FnMut(u64), cancelled: &dyn Fn() -> bool, last: &mut String) -> Result<Option<u64>> {
+    use std::io::{Seek, SeekFrom, Write};
+    let io = |what: &str, e: std::io::Error| crate::error::io_at(what, part, e);
+    let mut f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(part).map_err(|e| io("opening", e))?;
+    if status == 200 {
+        // the whole file, whatever was asked: it starts again
+        have = 0;
+    }
+    f.set_len(have).map_err(|e| io("writing", e))?;
+    f.seek(SeekFrom::Start(have)).map_err(|e| io("writing", e))?;
+    let mut r = resp.into_reader();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut told = have;
+    loop {
+        if cancelled() {
+            let _ = f.sync_data();
+            return Ok(None);
+        }
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                // cut off: what arrived is kept and the next attempt carries on from it
+                *last = format!("reading {url}: {e}");
+                break;
+            }
+        };
+        if have + n as u64 > bytes {
+            drop(f);
+            let _ = std::fs::remove_file(part);
+            return Err(Error::bad_response(format!("{url} is longer than the {bytes} bytes the list gives")));
+        }
+        f.write_all(&buf[..n]).map_err(|e| io("writing", e))?;
+        have += n as u64;
+        if have - told >= 1024 * 1024 || have == bytes {
+            told = have;
+            each(have);
+        }
+    }
+    f.sync_data().map_err(|e| io("writing", e))?;
+    if have < bytes {
+        *last = format!("{url} ended after {have} of {bytes} bytes");
+    }
+    Ok(Some(have))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

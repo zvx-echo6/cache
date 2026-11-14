@@ -5,6 +5,7 @@ import 'dart:isolate';
 import '../app_fs.dart';
 import '../files.dart';
 import '../maps/geo.dart';
+import '../maps/layers/layer_engine.dart' show MapFile;
 import '../platform.dart' as plat;
 import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
@@ -81,6 +82,7 @@ class RegionRecord {
     this.polygon,
     this.country,
     this.sizes,
+    this.basemapFile,
   });
 
   final String id;
@@ -107,6 +109,10 @@ class RegionRecord {
   /// What each part weighs, from the catalogue; null for a region it has no sizes for (and a drawn area).
   final RegionSizes? sizes;
 
+  /// The base map cut to this region (`basemap_file` in the region list), which the base map's download fetches whole; null when
+  /// the list has none or it is not usable ([MapFile.fromJson]): the base map then downloads by range reads, as before.
+  final MapFile? basemapFile;
+
   /// An area drawn on the map ("Draw your own area instead"): a rectangle, downloaded like any region.
   factory RegionRecord.drawn(GeoBounds b, {DateTime? at}) => RegionRecord(
     id: 'drawn-${(at ?? DateTime.now()).millisecondsSinceEpoch}',
@@ -129,6 +135,7 @@ class RegionRecord {
     polygon: j['polygon'] as String?,
     country: j['country'] as String?,
     sizes: RegionSizes.fromJson(j['sizes']),
+    basemapFile: MapFile.fromJson(j['basemap_file']),
   );
 
   /// The box the map layers are downloaded for. The layer engine takes a box, never a polygon, so the map part of a region

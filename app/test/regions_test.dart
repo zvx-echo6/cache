@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
+import 'package:cache/maps/layers/layer_engine.dart' show MapFile;
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -445,6 +446,30 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('part-directions')));
     await tester.pump();
     expect(find.byKey(const ValueKey('part-note')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('a region\'s pre-cut base map file goes with its base map\'s download only; a region without one downloads as before', (tester) async {
+    final r = await _Rig.boot(tester);
+    final c = r.county;
+    final file = MapFile(url: 'https://data.test/basemap-regions/9/c.pmtiles', bytes: 1000, sha256: 'cd' * 32, planet: '9');
+    final withFile = RegionRecord(id: c.id, name: c.name, kind: c.kind, bbox: c.bbox, country: c.country, polygon: c.polygon, sizes: c.sizes, basemapFile: file);
+    await tester.runAsync(() => r.regions.download(withFile, routing: false, map: true, anyway: true));
+    final asked = r.s.engine.fileOf[c.name]!;
+    expect(asked['basemap'], file, reason: 'the base map is given the file');
+    expect({for (final e in asked.entries) if (e.key != 'basemap') e.key: e.value}.values, everyElement(isNull), reason: 'no other layer is');
+    final bases = r.s.engine.areasOf('basemap');
+    expect(bases, hasLength(1));
+    // what the screens show is the same download: its area, label and part
+    expect(bases.single.label, c.name);
+    expect(bases.single.bounds, c.bounds);
+
+    // The region list from before files (and any region without one): every layer downloads with no file, by range reads.
+    expect(c.basemapFile, isNull);
+    final other = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 12));
+    await tester.runAsync(() => r.regions.download(other, routing: false, map: true, anyway: true));
+    expect(r.s.engine.fileOf[other.name]!.containsKey('basemap'), isTrue);
+    expect(r.s.engine.fileOf[other.name]!.values, everyElement(isNull));
     await r.dispose(tester);
   });
 

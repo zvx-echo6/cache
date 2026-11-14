@@ -570,16 +570,21 @@ impl Job {
     }
 
     /// Start a `layer_download` job: parameters are `{"layers": <the cs_open layers config>, "layer", "area"?, "name"?,
-    /// "bbox"|"polygon", "minzoom"?, "maxzoom"?, "update"?}`. A layer that does not exist, one that is online only
+    /// "bbox"|"polygon", "minzoom"?, "maxzoom"?, "update"?, "file"?}`. A layer that does not exist, one that is online only
     /// and a bad area are reported here and no job exists; limits, free space and network errors make the job `failed`.
+    /// `"file"`: the region's pre-cut map file (`{"url","bytes","sha256","planet"}`, see cache_layers' download/precut.rs);
+    /// one that is not usable is left out, and the download reads by ranges as without it.
     fn start_layer_download(params_json: &str) -> Result<Job> {
         #[derive(Deserialize)]
         struct P {
             layers: cache_layers::LayersCfg,
+            #[serde(default)]
+            file: Option<serde_json::Value>,
             #[serde(flatten)]
             req: cache_layers::AreaReq,
         }
         let p: P = serde_json::from_str(params_json)?;
+        let file = p.file.as_ref().and_then(cache_layers::download::RegionFile::from_value);
         let conv = |e: cache_layers::Error| {
             let mut r = Error::new(crate::ErrorCode::from_str_code(e.code), e.message);
             r.space = e.space;
@@ -597,8 +602,9 @@ impl Job {
         let key = format!("{}/{}", base.id, req.area_id().map_err(conv)?);
         let guard = ActiveDownload::acquire(&key)?;
         Self::spawn("cs-layer-download", guard, 0, move |sh| {
-            let r = inner.run_download(
+            let r = inner.run_download_with_file(
                 &req,
+                file.as_ref(),
                 &|d, t, detail| {
                     sh.set_progress(d, t);
                     if let Ok(mut g) = sh.detail.lock() {

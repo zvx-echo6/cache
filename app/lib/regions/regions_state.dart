@@ -11,6 +11,7 @@ import '../chat/ask_focus.dart';
 import '../files.dart';
 import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
+import '../maps/layers/layer_engine.dart' show MapFile;
 import '../maps/maps_state.dart';
 import '../platform.dart' as plat;
 import '../screens/download_confirm.dart' show downloadSpace;
@@ -1134,9 +1135,10 @@ class RegionsState extends ChangeNotifier {
         for (final card in mapLayers) {
           final def = maps.downloadDefFor(card, bounds);
           if (!asked.add(maps.engine.downloadLayerOf(def.id))) continue;
+          final file = mapFileFor(r, def);
           final est = await maps.engine.estimate(def.id, bounds);
           if (!est.allowed) continue;
-          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near);
+          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, file: file);
           k.areas.add(a.id);
         }
       }
@@ -1935,3 +1937,8 @@ class RegionOffer {
 
 /// [s] as safe characters for an id (letters, digits, `-`, `_`, `.`).
 String _safeId(String s) => s.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+
+/// The pre-cut file [def]'s download of region [r] is given: the region's base map file for the base map, nothing for any other
+/// layer. Whether the file fits (cut from the planet build the base map reads now, every zoom asked for) is the core's to say; it
+/// reads by ranges when it does not.
+MapFile? mapFileFor(RegionRecord r, LayerDef def) => def.kind == LayerKind.basemap ? r.basemapFile : null;

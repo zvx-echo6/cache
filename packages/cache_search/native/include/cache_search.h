@@ -1280,6 +1280,13 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   in the store, and starting the same request again fetches only what is missing. "update":true re-fetches the area's
  *   tiles that are older than the layer's version into a staging table and swaps them in, with the new version, in one
  *   transaction when complete; until then the old tiles keep serving.
+ *   "file"?:{"url","bytes","sha256","planet"}: the region's pre-cut map file (the region list's "basemap_file"). When
+ *   "planet" is the layer's update version and the area goes to the layer's top zoom, the file is fetched whole (Range
+ *   requests carry on from a partial file kept under a hidden name in <dir>/region-files/, renamed once its SHA-256
+ *   checks), the tiles of it the area needs and the store lacks are copied in at the layer's version, the file is deleted,
+ *   and what the area needs beyond it is read by ranges. Any problem with the file (404, failed check, another planet,
+ *   too little space) is logged once and the area is read by ranges as without it. Progress counts the same tiles: the
+ *   fetch, then the copy, then the rest; "detail":{"bytes"} counts the file, then the range reads.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);

@@ -27,6 +27,32 @@ void main() {
     expect(ix.searchFiles['us'], 'us.search.json');
   });
 
+  test('a region\'s pre-cut base map file is read from the list; a missing or unusable entry is no file', () {
+    final sha = 'ab' * 32;
+    final file = {'url': 'https://data.test/basemap-regions/20261025/us-id.pmtiles', 'bytes': 461000000, 'sha256': sha.toUpperCase(), 'planet': '20261025'};
+    RegionRecord rec(Object? f) => RegionRecord.fromJson({'id': 'us-id', 'name': 'Idaho', 'kind': 'region', 'basemap_file': ?f});
+    final r = rec(file);
+    final f = r.basemapFile!;
+    expect([f.url, f.bytes, f.sha256, f.planet], ['https://data.test/basemap-regions/20261025/us-id.pmtiles', 461000000, sha, '20261025']);
+    expect(f.toJson(), {...file, 'sha256': sha}, reason: 'what the core is given, the SHA-256 in lower case');
+    // a list from before files: no file, as today
+    expect(rec(null).basemapFile, isNull);
+    for (final bad in <Object>[
+      {...file, 'planet': ''},
+      {...file, 'bytes': 0},
+      {...file, 'bytes': '461000000'},
+      {...file, 'sha256': 'abc'},
+      {...file, 'url': 'http://data.test/x.pmtiles'},
+      {'url': file['url'], 'bytes': 1, 'sha256': sha},
+      'https://data.test/x.pmtiles',
+      [file],
+    ]) {
+      expect(rec(bad).basemapFile, isNull, reason: '$bad');
+    }
+    // the rest of the record reads as before
+    expect(rec({'something': 'else'}).name, 'Idaho');
+  });
+
   test('a shard holds the records and a tree where one region sits under several parents', () async {
     final c = RegionCatalogue(dir: () async => dir, fetch: regionWeb().fetch);
     final s = await c.shard('us');

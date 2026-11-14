@@ -839,3 +839,7 @@ mod near_tests {
         assert_eq!(plain.tiles(10, 12).unwrap().len(), before);
     }
 }
+
+// A region's pre-cut map file, fetched whole and copied into the store (see precut.rs).
+mod precut;
+pub use precut::RegionFile;

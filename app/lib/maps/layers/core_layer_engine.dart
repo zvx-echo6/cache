@@ -417,6 +417,10 @@ class CoreLayerEngine extends LayerEngine {
   /// background, and Update must carry it on after Cache starts again.
   final Map<String, _Saved> _saved = {};
 
+  /// The pre-cut map file each download of this session was given, so one stopped part way carries on with it (a download
+  /// carried on after the app started again reads the rest by ranges).
+  final Map<String, MapFile> _fileOf = {};
+
   File? get _savedFile {
     final dir = layersConfig()['dir'];
     return dir is String && dir.isNotEmpty ? File('$dir/unfinished-downloads.json') : null;
@@ -629,7 +633,7 @@ class CoreLayerEngine extends LayerEngine {
       );
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, MapFile? file}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
@@ -647,6 +651,7 @@ class CoreLayerEngine extends LayerEngine {
     );
     _saved[id] = _Saved(area, minZoom, est.maxZoom);
     await _storeSaved();
+    if (file != null) _fileOf[id] = file;
     await _start(a, {
       'layer': layerId,
       'area': id,
@@ -654,6 +659,7 @@ class CoreLayerEngine extends LayerEngine {
       'bbox': [area.west, area.south, area.east, area.north],
       'minzoom': minZoom,
       'maxzoom': est.maxZoom,
+      if (file != null) 'file': file.toJson(),
       if (near != null) 'near': [near.lat, near.lon],
     }, update: false);
     return a;
@@ -739,6 +745,7 @@ class CoreLayerEngine extends LayerEngine {
       if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
         // Finished, or a first download cancelled: nothing is left to carry on.
         if (_saved.remove(a.id) != null) await _storeSaved();
+        _fileOf.remove(a.id);
       }
       switch (p.state) {
         case JobState.done:
@@ -818,6 +825,7 @@ class CoreLayerEngine extends LayerEngine {
     if (layer == null) return;
     await _core!.layers('delete', jsonEncode({'layer': layer, 'area': areaId}));
     if (_saved.remove(areaId) != null) await _storeSaved();
+    _fileOf.remove(areaId);
     _dropPlanner();
     _areas.removeWhere((k, a) => a.id == areaId);
     await _reload();
@@ -846,6 +854,7 @@ class CoreLayerEngine extends LayerEngine {
                 'minzoom': saved.minZoom,
                 'maxzoom': saved.maxZoom,
               },
+              if (_fileOf[areaId] case final f?) 'file': f.toJson(),
             }
           : {'layer': a.layerId, 'area': areaId, 'update': true},
       update: !partial,
