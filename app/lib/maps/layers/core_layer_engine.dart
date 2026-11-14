@@ -661,7 +661,7 @@ class CoreLayerEngine extends LayerEngine {
       'polygon': ?outline,
       'minzoom': minZoom,
       'maxzoom': est.maxZoom,
-      if (file != null) 'file': file.toJson(),
+      'file': ?file?.toJson(),
       if (near != null) 'near': [near.lat, near.lon],
     }, update: false, totalFromJob: outline != null);
     return a;
@@ -858,7 +858,7 @@ class CoreLayerEngine extends LayerEngine {
                 'minzoom': saved.minZoom,
                 'maxzoom': saved.maxZoom,
               },
-              if (_fileOf[areaId] case final f?) 'file': f.toJson(),
+              'file': ?_fileOf[areaId]?.toJson(),
             }
           : {'layer': a.layerId, 'area': areaId, 'update': true},
       update: !partial,

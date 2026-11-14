@@ -54,6 +54,10 @@ const FETCH_SHARE: f64 = 0.9;
 /// A file left in the folder this long (a download stopped and never carried on, from a region since removed) is deleted.
 const KEEP_LEFTOVERS: std::time::Duration = std::time::Duration::from_secs(2 * 24 * 3600);
 
+/// A tile (z, x, y), and (offset, length) of its bytes in an archive's tile data.
+type Zxy = (u8, u32, u32);
+type Span = (u64, u32);
+
 enum FromFile {
     /// The tiles of the file were copied; what the area needs beyond them comes by ranges.
     Copied { total: u64, file_bytes: u64 },
@@ -134,7 +138,7 @@ impl Inner {
         // never back: the copy can end below where the fetch of the file reached when the file holds less than the area needs
         let shown = AtomicU64::new(0);
         let report = |d: u64, t: u64, detail: Value| progress(shown.fetch_max(d, Ordering::SeqCst).max(d), t, detail);
-        let (total, file_bytes) = match self.from_file(req, f, &report, cancelled) {
+        let (total, file_bytes) = match self.fetch_from_file(req, f, &report, cancelled) {
             Ok(FromFile::Copied { total, file_bytes }) => (total, file_bytes),
             Ok(FromFile::Cancelled) => return Ok(Done::Cancelled),
             Ok(FromFile::Plain) => return self.run_download(req, progress, cancelled),
@@ -160,7 +164,7 @@ impl Inner {
         )
     }
 
-    fn from_file(&self, req: &AreaReq, f: &RegionFile, progress: &dyn Fn(u64, u64, Value), cancelled: &(dyn Fn() -> bool + Sync)) -> Result<FromFile> {
+    fn fetch_from_file(&self, req: &AreaReq, f: &RegionFile, progress: &dyn Fn(u64, u64, Value), cancelled: &(dyn Fn() -> bool + Sync)) -> Result<FromFile> {
         let p = self.prepare(req)?;
         if p.src.kind != "pmtiles" {
             return Ok(FromFile::NotUsed("the layer is not read from a PMTiles archive".into()));
@@ -266,7 +270,8 @@ impl Inner {
         if !need.windows(2).all(|w| w[0].0 <= w[1].0) {
             need.sort_unstable();
         }
-        let mut want: Vec<((u8, u32, u32), (u64, u32))> = Vec::new();
+        // each tile to copy, and where its bytes are in the file
+        let mut want: Vec<(Zxy, Span)> = Vec::new();
         let mut i = 0;
         for t in &need {
             while i < entries.len() && entries[i].0 < t.0 {
