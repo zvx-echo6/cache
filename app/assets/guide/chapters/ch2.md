@@ -254,7 +254,7 @@ Answers show where they came from.
 - A source in an EPUB opens the book at that chapter, with the first words of the passage marked.
 - A source from a video's captions opens the video at that moment, with the line marked "Match". See Captions and the transcript.
 
-"Not from your sources" means the answer came from nothing on your device or a search. Check it before you rely on it.
+"Not from your sources" means the answer came from nothing on your device or a search. "Searched your sources, but cites none of them" means Cache searched your sources, but the answer does not say which one each part comes from. Check either before you rely on it.
 
 The assistant can be wrong, even with sources. For anything about your safety, read the source.
 

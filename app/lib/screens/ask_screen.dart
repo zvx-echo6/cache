@@ -841,10 +841,12 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   Widget _sourcesRow(BuildContext context, ChatMessage m) {
     final k = context.t;
     if (m.sources.isEmpty) {
+      // A turn that searched or read the sources but cites none of them says so (owner, 2026-11-14); "Not from your sources" is
+      // only for an answer that used none.
       return Padding(
         padding: const EdgeInsets.only(top: 6),
         child: Text(
-          'Not from your sources',
+          m.searchedSources ? 'Searched your sources, but cites none of them' : 'Not from your sources',
           style: TextStyle(fontSize: 14, color: k.secondary),
         ),
       );
