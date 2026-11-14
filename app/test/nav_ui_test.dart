@@ -514,6 +514,19 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('guidance banner: a street with a name and a route number shows the name first, the number after it', (tester) async {
+        final route = namedRoadsRouteJson();
+        await _startGuiding(nav, backend, route);
+        nav.progress = MapProgress.fromJson(fakeProgressJson(route, 0.3));
+        nav.poke();
+        await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt))));
+        final spans = (tester.widget<Text>(find.byKey(const ValueKey('banner-distance'))).textSpan! as TextSpan).children!.cast<TextSpan>();
+        expect(spans.last.text, ' · Turn left onto Lakeside Boulevard (US 99 Bus)');
+        // A highway with only a number keeps the number.
+        expect(tester.widget<Text>(find.byKey(const ValueKey('banner-then'))).data, 'Then turn right onto SH 99');
+        expect(tester.takeException(), isNull);
+      });
+
       for (final scale in [1.0, 1.5, 2.0]) {
         testWidgets('guidance banner at text size ${scale}x: the turn, how far and the street on one line, then the next turn', (tester) async {
           final route = fakeRouteJson();
