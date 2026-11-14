@@ -1411,6 +1411,20 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'query': 'place 1', 'start': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r['name'], 'Place 1');
+      expect(r['lat'], 42.6);
+      expect(r['lon'], -113.7);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue);
+    });
+
     Future<void> guide() async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
