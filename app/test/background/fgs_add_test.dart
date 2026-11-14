@@ -309,6 +309,43 @@ void main() {
       expect(queued, isEmpty);
     });
 
+    test("the notification's Resume resumes only what its Pause paused: a PDF paused in the app stays paused", () async {
+      final slow = FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('reading', pages: 100, pagesDone: 1);
+      }});
+      final (s, jobs) = await pending(slow, n: 2);
+      final own = jobs[0]; // the person's own paused book
+      final other = jobs[1];
+      await s.pause(own);
+      final c = FgsAddControl();
+      final running = fgsAddJob(support: support, control: c, lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      c.stop('person'); // the notification's Pause
+      await running;
+      expect(other.pausedByPerson, isTrue);
+      expect(own.pausedByPerson, isTrue);
+
+      // the notification's Resume
+      final c2 = FgsAddControl();
+      final again = fgsAddJob(support: support, control: c2, lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick, resume: true);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      c2.stop('timeout');
+      final out = await again;
+      expect(own.pausedByPerson, isTrue, reason: 'paused in the app: the notification does not resume it');
+      expect(own.status, AddPdfStatus.active);
+      expect(other.pausedByPerson, isFalse, reason: 'the one the notification paused is resumed');
+      expect(out.words, isNot('nothing to add'));
+    });
+
+    test("Resume with nothing paused by the notification resumes nothing", () async {
+      final (s, jobs) = await pending(done);
+      await s.pause(jobs.single);
+      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick, resume: true);
+      expect(jobs.single.pausedByPerson, isTrue);
+      expect(out.words, 'nothing to add');
+    });
+
     test("Android's time limit: it stops, the result says so, and the charging run is queued to pick up", () async {
       final slow = FakeIngestCalls({'step': (_) async {
         await Future<void>.delayed(const Duration(milliseconds: 20));

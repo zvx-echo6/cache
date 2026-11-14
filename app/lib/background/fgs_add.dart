@@ -369,6 +369,42 @@ class FgsAddResult {
 
 File fgsResultFile(String backgroundDirPath) => File('$backgroundDirPath${Platform.pathSeparator}fgs-add-result.json');
 
+File fgsPausedIdsFile(String backgroundDirPath) => File('$backgroundDirPath${Platform.pathSeparator}fgs-paused-ids.json');
+
+/// The jobs the notification's Pause paused (added to what an earlier Pause left).
+Future<void> addFgsPausedIds(String backgroundDirPath, Set<String> ids) async {
+  if (ids.isEmpty) return;
+  try {
+    final f = fgsPausedIdsFile(backgroundDirPath);
+    await f.parent.create(recursive: true);
+    final all = {..._readPausedIds(f), ...ids};
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode(all.toList()), flush: true);
+    await tmp.rename(f.path);
+  } catch (e) {
+    logError('Background add: the jobs the notification paused could not be written', error: e);
+  }
+}
+
+/// The jobs the notification's Pause paused, and forgets them (the notification's Resume lifts them once).
+Future<Set<String>> takeFgsPausedIds(String backgroundDirPath) async {
+  final f = fgsPausedIdsFile(backgroundDirPath);
+  final ids = _readPausedIds(f);
+  try {
+    if (f.existsSync()) await f.delete();
+  } catch (_) {}
+  return ids;
+}
+
+Set<String> _readPausedIds(File f) {
+  try {
+    if (!f.existsSync()) return {};
+    return {for (final e in jsonDecode(f.readAsStringSync()) as List) '$e'};
+  } catch (_) {
+    return {};
+  }
+}
+
 Future<void> writeFgsResult(String backgroundDirPath, FgsAddResult r) async {
   try {
     final f = fgsResultFile(backgroundDirPath);
