@@ -10,7 +10,7 @@ No data, library content or language model ships inside Cache. The maps, library
 
 - OpenStreetMap: street, place, water and land data for the maps, place search and routing. (c) OpenStreetMap contributors, Open Database License (ODbL) 1.0. https://www.openstreetmap.org/copyright
 - Map, place and routing packs built from OpenStreetMap are databases under the ODbL 1.0. Attribution: (c) OpenStreetMap contributors.
-- Protomaps: the base map tiles (Protomaps basemap, version 4) and the PMTiles format. The tiles carry OpenStreetMap data (ODbL 1.0). The Protomaps basemaps style code is BSD-3-Clause, Copyright Protomaps LLC. https://protomaps.com
+- Protomaps: the base map tiles (Protomaps basemap, version 4) and the PMTiles format. The tiles carry OpenStreetMap data (ODbL 1.0). The Protomaps basemaps style code is BSD-3-Clause, Copyright Protomaps LLC. © ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. CC BY 4.0. Data from the Daylight Map Distribution. https://protomaps.com
 - OpenFreeMap and OpenMapTiles: the alternative base map and the style the map is drawn from. The style is derived from OpenFreeMap's "Liberty" style (MIT), a fork of OSM Liberty, itself a fork of OSM Bright, derived from Mapbox Open Styles. Style code: BSD-3-Clause. Style design: CC BY 4.0 (OpenMapTiles). Map data: (c) OpenStreetMap contributors, ODbL 1.0. https://openfreemap.org
 - Material Symbols (Google): the icons notebooks and places have on the map, Apache-2.0. https://fonts.google.com/icons
 - Noto Sans: the map label fonts (glyph ranges as served by OpenFreeMap), SIL Open Font License 1.1. https://openfontlicense.org

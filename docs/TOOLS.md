@@ -78,6 +78,9 @@ unknown); reference article `<ZIM title>: <article title>`; video concept `<vide
 
 Nothing found: `No results found.`
 
+What it searches: every installed source except a saved video's captions, which the app's own search (Home, Videos)
+finds and the assistant does not (decided for 1.1). Captions inside a ZIM are searched.
+
 ### read
 
 ```json
