@@ -385,16 +385,20 @@ const PREFETCH_WORKERS: usize = 16;
 
 /// Leaf directory pages in memory, shared by every reader of the same archive in the process: the size estimate (on the planner
 /// engine) and the download job (on an engine of its own) read an archive's pages once between them.
+/// (archive, page offset) of a leaf directory page, and the page.
+type PageKey = (u64, u64);
+type Page = Arc<Vec<Entry>>;
+
 #[derive(Default)]
 struct LeafCache {
     /// (archive, page offset) -> (entries, last used)
-    pages: HashMap<(u64, u64), (Arc<Vec<Entry>>, u64)>,
+    pages: HashMap<PageKey, (Page, u64)>,
     entries: usize,
     tick: u64,
 }
 
 impl LeafCache {
-    fn get(&mut self, key: (u64, u64)) -> Option<Arc<Vec<Entry>>> {
+    fn get(&mut self, key: PageKey) -> Option<Page> {
         self.tick += 1;
         let t = self.tick;
         self.pages.get_mut(&key).map(|p| {
@@ -403,18 +407,18 @@ impl LeafCache {
         })
     }
 
-    fn has(&self, key: (u64, u64)) -> bool {
+    fn has(&self, key: PageKey) -> bool {
         self.pages.contains_key(&key)
     }
 
-    fn put(&mut self, key: (u64, u64), page: Arc<Vec<Entry>>) {
+    fn put(&mut self, key: PageKey, page: Page) {
         self.tick += 1;
         self.entries += page.len();
         if let Some(old) = self.pages.insert(key, (page, self.tick)) {
             self.entries -= old.0.len();
         }
         if self.entries > LEAF_CACHE_ENTRIES {
-            let mut by_age: Vec<((u64, u64), u64)> = self.pages.iter().map(|(k, v)| (*k, v.1)).collect();
+            let mut by_age: Vec<(PageKey, u64)> = self.pages.iter().map(|(k, v)| (*k, v.1)).collect();
             by_age.sort_by_key(|p| p.1);
             for (k, _) in by_age {
                 if self.entries <= LEAF_CACHE_ENTRIES / 4 * 3 || k == key {
