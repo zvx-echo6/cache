@@ -1152,7 +1152,7 @@ impl Handle {
         let (lib_id, point_id) = library::parse_lib_address(address)?;
         let d = self.find_library(lib_id)?.read_document(point_id, max_chars as usize)?;
         Ok(json!({
-            "address": address, "title": d.title, "at_page": d.at_page, "truncated": d.truncated,
+            "address": address, "title": d.title, "at_page": d.at_page, "more_before": d.more_before, "more_after": d.more_after,
             "pages": d.pages.iter().map(|p| json!({"page": p.page, "text": p.text, "addresses": p.addresses})).collect::<Vec<_>>(),
         })
         .to_string())

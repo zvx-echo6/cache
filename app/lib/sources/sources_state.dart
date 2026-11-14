@@ -1086,7 +1086,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return ReadDocument(
       title: d.title,
       atPage: d.atPage,
-      truncated: d.truncated,
+      moreBefore: d.moreBefore,
+      moreAfter: d.moreAfter,
       pages: [for (final p in d.pages) DocumentPageText(text: p.text, pageLabel: p.pageLabel, addresses: p.addresses)],
     );
   }

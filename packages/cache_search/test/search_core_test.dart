@@ -82,7 +82,8 @@ class _DocumentNative extends FakeNative {
         'address': address,
         'title': '$address:$maxChars',
         'at_page': 1,
-        'truncated': false,
+        'more_before': true,
+        'more_after': false,
         'pages': [
           {'page': 1, 'text': 'A', 'addresses': ['lib:field/1']},
           {'page': 'iv', 'text': 'B', 'addresses': ['lib:field/2']},
@@ -162,7 +163,7 @@ void main() {
     final core = await SearchCore.open(const [], native: _documentNative);
     final d = await core.readDocument('lib:field/2', maxChars: 1234);
     // the fake puts the address and the limit it was called with in the title
-    expect((d.title, d.atPage, d.truncated, d.pages.length), ('lib:field/2:1234', 1, false, 2));
+    expect((d.title, d.atPage, d.moreBefore, d.moreAfter, d.pages.length), ('lib:field/2:1234', 1, true, false, 2));
     expect([for (final p in d.pages) (p.page, p.pageLabel, p.text)], [(1, '1', 'A'), (null, 'iv', 'B')]);
     expect([for (final p in d.pages) p.addresses], [['lib:field/1'], ['lib:field/2']]);
     expect((await core.readDocument('lib:field/2')).title, 'lib:field/2:200000');

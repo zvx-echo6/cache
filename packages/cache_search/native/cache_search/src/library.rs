@@ -805,12 +805,15 @@ pub struct DocPage {
     pub addresses: Vec<String>,
 }
 
-/// A library document read whole: its pages in order, the page holding the opened passage, and whether the text was cut.
+/// A window of a library document: its pages in order, the page holding the opened passage, and whether the document goes on
+/// before and after the window.
 pub struct DocumentOut {
     pub title: String,
     pub pages: Vec<DocPage>,
     pub at_page: usize,
-    pub truncated: bool,
+    /// Whether the document has passages before / after the window that is shown (too long to show whole).
+    pub more_before: bool,
+    pub more_after: bool,
 }
 
 pub struct ReadOut {
@@ -1184,7 +1187,8 @@ impl LibSlot {
                 title: title.clone(),
                 pages: vec![DocPage { page: self.page_value(p), text, addresses: vec![self.address(&id)] }],
                 at_page: 0,
-                truncated,
+                more_before: false,
+                more_after: truncated,
             }
         };
         let Some(doc_field) = f.document.as_ref() else { return Ok(single(p0)) };
@@ -1197,6 +1201,7 @@ impl LibSlot {
         let filter = Filter::new_must(Condition::Field(FieldCondition::new_match(jp, value)));
 
         // every kept point of the document, up to the cap
+        let mut capped = false;
         let mut points: Vec<(PointId, Map<String, Value>)> = Vec::new();
         let mut offset: Option<PointId> = None;
         loop {
@@ -1215,11 +1220,13 @@ impl LibSlot {
             }
             offset = next;
             if offset.is_none() || points.len() >= DOC_MAX_POINTS {
+                capped = offset.is_some();
                 break;
             }
         }
-        if points.is_empty() {
-            return Ok(single(p0));
+        // the opened passage is always in, even when the capped scroll did not reach it
+        if !points.iter().any(|(i, _)| *i == id) {
+            points.push((id, p0.clone()));
         }
 
         let piece_of = |p: &Map<String, Value>| p.get(PIECE_FIELD).and_then(|v| v.as_u64());
@@ -1249,22 +1256,38 @@ impl LibSlot {
             o.then_with(|| sa.cmp(sb))
         });
 
-        let mut pages: Vec<DocPage> = Vec::new();
-        let mut used = 0usize;
-        let mut truncated = false;
-        let mut at_page: Option<usize> = None;
-        for (_, pid, p) in &keyed {
-            let full = main_text(p);
-            let full = full.trim();
-            let remaining = max_chars.saturating_sub(used);
-            let over = full.chars().count() > remaining;
-            let text = if over { html::cut_at_paragraph(full, remaining).0 } else { full.to_string() };
-            if over {
-                truncated = true;
-                if text.is_empty() {
+        // A window of whole passages around the opened one, grown one at a time, after then before, while it fits.
+        let k = keyed.iter().position(|(_, pid, _)| *pid == id).unwrap_or(0);
+        let texts: Vec<String> = keyed.iter().map(|(_, _, p)| main_text(p).trim().to_string()).collect();
+        let len = |i: usize| texts[i].chars().count();
+        let (mut lo, mut hi) = (k, k);
+        let mut cut_first: Option<String> = None;
+        if len(k) > max_chars {
+            cut_first = Some(html::cut_at_paragraph(&texts[k], max_chars).0);
+        } else {
+            let mut used = len(k);
+            loop {
+                let mut grew = false;
+                if hi + 1 < keyed.len() && used + len(hi + 1) + 2 <= max_chars {
+                    hi += 1;
+                    used += len(hi) + 2;
+                    grew = true;
+                }
+                if lo > 0 && used + len(lo - 1) + 2 <= max_chars {
+                    lo -= 1;
+                    used += len(lo) + 2;
+                    grew = true;
+                }
+                if !grew {
                     break;
                 }
             }
+        }
+        let mut pages: Vec<DocPage> = Vec::new();
+        let mut at_page = 0;
+        for i in lo..=hi {
+            let (_, pid, p) = &keyed[i];
+            let text = if i == k { cut_first.clone().unwrap_or_else(|| texts[i].clone()) } else { texts[i].clone() };
             let pv = self.page_value(p);
             if pages.last().map(|l| l.page != pv).unwrap_or(true) {
                 pages.push(DocPage { page: pv, text: String::new(), addresses: vec![] });
@@ -1277,16 +1300,14 @@ impl LibSlot {
                 last.text.push_str(&text);
             }
             last.addresses.push(self.address(pid));
-            used += text.chars().count();
-            if pid == &id {
-                at_page = Some(pages.len() - 1);
-            }
-            if truncated {
-                break;
+            if i == k {
+                at_page = pages.len() - 1;
             }
         }
-        let at_page = at_page.unwrap_or(0).min(pages.len().saturating_sub(1));
-        Ok(DocumentOut { title, pages, at_page, truncated })
+        // a scroll that stopped at the cap left points unseen, anywhere in the order
+        let more_before = lo > 0 || (capped && lo == 0);
+        let more_after = hi + 1 < keyed.len() || (capped && hi + 1 == keyed.len());
+        Ok(DocumentOut { title, pages, at_page, more_before, more_after })
     }
 }
 

@@ -26,15 +26,16 @@ class DocumentPageText {
   final List<String> addresses;
 }
 
-/// A library document read whole: its pages in order, the index of the page holding the passage that was opened, and whether the
-/// text was cut at the size limit.
+/// A window of a library document: its pages in order, the index of the page holding the passage that was opened, and whether the
+/// document goes on before and after them (it is too long to show whole).
 class ReadDocument {
-  const ReadDocument({required this.title, required this.pages, this.atPage = 0, this.truncated = false});
+  const ReadDocument({required this.title, required this.pages, this.atPage = 0, this.moreBefore = false, this.moreAfter = false});
 
   final String title;
   final List<DocumentPageText> pages;
   final int atPage;
-  final bool truncated;
+  final bool moreBefore;
+  final bool moreAfter;
 }
 
 /// What the search and read tools need from the search core, so they can be tested without it.

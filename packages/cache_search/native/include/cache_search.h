@@ -262,11 +262,15 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * equals the opened point's (at most 5000 points, points matching a leave-out rule dropped). Order: by the payload field
  * "piece" (whole number from 0) when every point has one, otherwise by the mapped page (numbers in numeric order, else
  * as text), then by point id. Consecutive passages with the same page are one page; a page's text is its passages' texts
- * joined with a blank line. Text stops after max_chars in total ("truncated":true). With no mapped document field, or no
- * value for it on the opened point, the document is the one passage as a single page.
- * {"address","title","at_page":N,"truncated":bool,
+ * joined with a blank line. The opened passage is always in the answer (even when the 5000-point scroll did not reach it).
+ * Around it the answer takes a window of whole passages, grown one at a time after, then before, while the text (with
+ * 2 characters per joined passage) stays within max_chars; a window that does not reach the start or the end of the
+ * document says so in "more_before" / "more_after". When the opened passage alone is over max_chars it is cut at a paragraph
+ * end. With no mapped document field, or no value for it on the opened point, the document is the one passage as a
+ * single page ("more_after" is true when it was cut).
+ * {"address","title","at_page":N,"more_before":bool,"more_after":bool,
  *  "pages":[{"page":null|number|"text","text","addresses":["lib:<id>/<point-id>",...]}]}
- * (title is the opened point's title without a page suffix; at_page is the index in "pages" of the page holding the opened point) */
+ * (title is the opened point's title without a page suffix; at_page is the index in "pages" of the page holding the opened point, in the window) */
 char *cs_read_document(cs_handle *h, const char *address, int32_t max_chars);
 
 /* --- Browse: raw ZIM entries --- */

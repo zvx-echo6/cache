@@ -4,9 +4,6 @@ import '../layout/adaptive.dart' show ReadingWidth, paneClose;
 import '../search/search_access.dart';
 import '../theme.dart';
 
-/// The wash the PDF reader paints over a cited passage.
-const Color _kPassageMark = Color(0x66FFD54F);
-
 /// What the screen shows: the document, and the text of the passage that was opened (to mark it), when it could be read.
 class _Loaded {
   const _Loaded(this.document, this.passage);
@@ -124,21 +121,27 @@ class _LibraryDocumentScreenState extends State<LibraryDocumentScreen> {
       slivers: [
         SliverPadding(
           padding: EdgeInsets.fromLTRB(side.left, 0, side.right, 0),
-          sliver: SliverList.builder(itemCount: at, itemBuilder: (_, i) => pageAt(at - 1 - i)),
+          sliver: SliverList.builder(
+            itemCount: at + (doc.moreBefore ? 1 : 0),
+            itemBuilder: (_, i) => i < at ? pageAt(at - 1 - i) : _note(colors, 'Earlier pages are not shown: this document is too long to show whole.', bottom: 24),
+          ),
         ),
         SliverPadding(
           key: _centre,
           padding: EdgeInsets.fromLTRB(side.left, 24, side.right, 24),
           sliver: SliverList.builder(
-            itemCount: pages.length - at + (doc.truncated ? 1 : 0),
+            itemCount: pages.length - at + (doc.moreAfter ? 1 : 0),
             itemBuilder: (_, i) => at + i < pages.length
                 ? pageAt(at + i)
-                : Text('The rest of this document is too long to show here.', style: TextStyle(fontSize: 13, color: colors.secondary)),
+                : _note(colors, 'Later pages are not shown: this document is too long to show whole.'),
           ),
         ),
       ],
     );
   }
+
+  Widget _note(CacheTokens colors, String text, {double bottom = 0}) =>
+      Padding(padding: EdgeInsets.only(bottom: bottom), child: Text(text, style: TextStyle(fontSize: 13, color: colors.secondary)));
 
   /// A page's text, selectable. The opened passage, when it is on this page, carries the wash.
   Widget _pageText(int i, DocumentPageText p, String? passage, TextStyle style) {
@@ -147,7 +150,7 @@ class _LibraryDocumentScreenState extends State<LibraryDocumentScreen> {
     if (at < 0) {
       // A page of one passage is that passage, whatever its text, even when the opened copy was cut shorter.
       if (passage != null && passage.isNotEmpty && p.addresses.length == 1) {
-        return SelectableText.rich(TextSpan(text: p.text, style: style.copyWith(backgroundColor: _kPassageMark)), key: key);
+        return SelectableText.rich(TextSpan(text: p.text, style: style.copyWith(backgroundColor: kPassageMark)), key: key);
       }
       return SelectableText(p.text, key: key, style: style);
     }
@@ -156,7 +159,7 @@ class _LibraryDocumentScreenState extends State<LibraryDocumentScreen> {
         style: style,
         children: [
           TextSpan(text: p.text.substring(0, at)),
-          TextSpan(text: passage, style: const TextStyle(backgroundColor: _kPassageMark)),
+          TextSpan(text: passage, style: const TextStyle(backgroundColor: kPassageMark)),
           TextSpan(text: p.text.substring(at + passage!.length)),
         ],
       ),

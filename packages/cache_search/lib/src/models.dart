@@ -220,30 +220,35 @@ class DocumentPage {
 }
 
 /// What cs_read_document returns: a library document's pages in order, [atPage] (the index of the page holding the opened
-/// passage) and whether the text was cut at the size limit.
+/// passage) and whether the document goes on before and after them.
 class LibraryDocument {
-  const LibraryDocument({required this.address, required this.title, required this.pages, required this.atPage, required this.truncated});
+  const LibraryDocument({required this.address, required this.title, required this.pages, required this.atPage, required this.moreBefore, required this.moreAfter});
 
   factory LibraryDocument.fromJson(Map<String, dynamic> j) => LibraryDocument(
         address: (j['address'] ?? '') as String,
         title: (j['title'] ?? '') as String,
         pages: [for (final p in (j['pages'] as List? ?? const [])) DocumentPage.fromJson((p as Map).cast<String, dynamic>())],
         atPage: ((j['at_page'] ?? 0) as num).toInt(),
-        truncated: (j['truncated'] ?? false) as bool,
+        moreBefore: (j['more_before'] ?? false) as bool,
+        moreAfter: (j['more_after'] ?? false) as bool,
       );
 
   final String address;
   final String title;
   final List<DocumentPage> pages;
   final int atPage;
-  final bool truncated;
+
+  /// The document has passages before / after the pages shown (it is too long to show whole).
+  final bool moreBefore;
+  final bool moreAfter;
 
   Map<String, dynamic> toJson() => {
         'address': address,
         'title': title,
         'pages': [for (final p in pages) p.toJson()],
         'at_page': atPage,
-        'truncated': truncated,
+        'more_before': moreBefore,
+        'more_after': moreAfter,
       };
 }
 

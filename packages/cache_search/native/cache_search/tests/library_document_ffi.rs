@@ -70,10 +70,20 @@ fn build_shard(dir: &Path) {
         pt(52, "t", Some(1), json!(2), false, &long("b")),
         pt(53, "t", Some(2), json!(3), false, &long("c")),
     ];
-    let list = pts.into_iter().map(|p| p.0).collect();
-    shard
-        .update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(list))))
-        .unwrap();
+    let mut pts = pts;
+    // doc "w": 300 passages of 100 characters; doc "big": 5,100 short ones
+    for n in 0..300u64 {
+        pts.push(pt(1000 + n, "w", Some(n), json!(n + 1), false, &format!("{n:>4}{}", "w".repeat(96))));
+    }
+    for n in 0..5100u64 {
+        pts.push(pt(20000 + n, "big", Some(n), json!(n + 1), false, &format!("passage {n}")));
+    }
+    for chunk in pts.chunks(500) {
+        let list = chunk.iter().map(|p| p.0.clone()).collect();
+        shard
+            .update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(list))))
+            .unwrap();
+    }
     shard.flush().unwrap();
     drop(shard);
     let _ = std::fs::remove_file(dir.join(MANIFEST_FILE));
@@ -137,7 +147,7 @@ fn ordered_by_piece_and_grouped_by_page() {
     let h = open(true);
     let d = doc(h, "lib:t/1", 100_000);
     assert_eq!(d["title"], "Title a");
-    assert_eq!(d["truncated"], false);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(false), json!(false)));
     assert_eq!(
         pages(&d),
         vec![
@@ -181,7 +191,7 @@ fn no_document_field_is_one_page() {
     assert_eq!(pages(&d), vec![(json!(5), "text one".to_string())]);
     assert_eq!(d["pages"][0]["addresses"], json!(["lib:t/1"]));
     assert_eq!(d["at_page"], 0);
-    assert_eq!(d["truncated"], false);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(false), json!(false)));
     unsafe { cs_close(h) };
 }
 
@@ -195,14 +205,69 @@ fn left_out_points_are_dropped() {
 }
 
 #[test]
-fn long_documents_are_cut() {
+fn long_documents_are_cut_at_whole_passages() {
     let h = open(true);
+    // doc "t": three passages of 100 characters. From the first, only it fits in 150.
     let d = doc(h, "lib:t/51", 150);
-    assert_eq!(d["truncated"], true);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(false), json!(true)));
+    assert_eq!(pages(&d).len(), 1);
+    assert_eq!(pages(&d)[0].1.chars().count(), 100);
+    // from the middle one, a window of the one passage: nothing else fits next to it, both sides are cut off
+    let d = doc(h, "lib:t/52", 150);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(true), json!(true)));
+    assert_eq!(d["pages"][d["at_page"].as_u64().unwrap() as usize]["addresses"], json!(["lib:t/52"]));
+    // a passage longer than the limit is cut itself
+    let d = doc(h, "lib:t/52", 50);
+    assert!(pages(&d)[0].1.chars().count() <= 50);
+    assert_eq!(d["pages"][0]["addresses"], json!(["lib:t/52"]));
+    assert_eq!(d["more_before"], true);
+    assert_eq!(doc(h, "lib:t/51", 100_000)["more_after"], false);
+    unsafe { cs_close(h) };
+}
+
+fn window_of(d: &Value) -> Vec<String> {
+    d["pages"].as_array().unwrap().iter().flat_map(|p| p["addresses"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string())).collect()
+}
+
+#[test]
+fn a_deep_passage_comes_back_in_a_window_around_it() {
+    let h = open(true);
+    // doc "w": 300 passages of 100 characters, ids 1000..1300, in piece order
+    let d = doc(h, "lib:t/1150", 1000);
+    let all = window_of(&d);
+    assert!(all.len() >= 5 && all.len() <= 10, "{}", all.len());
+    assert!(all.contains(&"lib:t/1150".to_string()));
+    let at = d["at_page"].as_u64().unwrap() as usize;
+    assert!(d["pages"][at]["addresses"].as_array().unwrap().contains(&json!("lib:t/1150")));
+    assert!(at > 0 && at < d["pages"].as_array().unwrap().len() - 1, "grows both ways: at_page {at}");
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(true), json!(true)));
     let total: usize = pages(&d).iter().map(|(_, t)| t.chars().count()).sum();
-    assert!(total <= 150 && total >= 100, "{total}");
-    assert!(d["pages"].as_array().unwrap().len() < 3);
-    assert_eq!(doc(h, "lib:t/51", 100_000)["truncated"], false);
+    assert!(total <= 1000, "{total}");
+    // the window is consecutive passages
+    let ids: Vec<u64> = all.iter().map(|a| a.rsplit('/').next().unwrap().parse().unwrap()).collect();
+    assert!(ids.windows(2).all(|w| w[1] == w[0] + 1), "{ids:?}");
+    // the first passage opens at the start: nothing before it
+    let d = doc(h, "lib:t/1000", 1000);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(false), json!(true)));
+    assert_eq!(d["at_page"], 0);
+    assert_eq!(window_of(&d)[0], "lib:t/1000");
+    // the last one ends the document
+    let d = doc(h, "lib:t/1299", 1000);
+    assert_eq!((d["more_before"].clone(), d["more_after"].clone()), (json!(true), json!(false)));
+    assert_eq!(window_of(&d).last().unwrap(), "lib:t/1299");
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn the_opened_passage_is_in_even_when_the_capped_scroll_misses_it() {
+    let h = open(true);
+    // doc "big": 5,100 points, ids 20000.., so the last 100 are past the 5,000 the scroll takes
+    let d = doc(h, "lib:t/25050", 300);
+    let all = window_of(&d);
+    assert!(all.contains(&"lib:t/25050".to_string()), "{all:?}");
+    let at = d["at_page"].as_u64().unwrap() as usize;
+    assert!(d["pages"][at]["addresses"].as_array().unwrap().contains(&json!("lib:t/25050")));
+    assert_eq!(d["more_before"], true);
     unsafe { cs_close(h) };
 }
 

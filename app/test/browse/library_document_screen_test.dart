@@ -32,10 +32,9 @@ String textOf(WidgetTester tester, Key key) {
   return w.data ?? w.textSpan!.toPlainText();
 }
 
-ReadDocument manual({int atPage = 0, bool truncated = false}) => ReadDocument(
+ReadDocument manual({int atPage = 0}) => ReadDocument(
   title: 'Field Manual',
   atPage: atPage,
-  truncated: truncated,
   pages: [
     for (var i = 0; i < 40; i++)
       DocumentPageText(
@@ -94,12 +93,25 @@ void main() {
     expect(other.data, isNotNull);
   });
 
-  testWidgets('a cut document says so at the end', (tester) async {
-    final source = DocumentAccess((_) async => const ReadDocument(title: 'Short', truncated: true, pages: [DocumentPageText(text: 'Only page.', pageLabel: '1')]));
+  testWidgets('a window of a long document says what is not shown, before and after', (tester) async {
+    final source = DocumentAccess(
+      (_) async => const ReadDocument(title: 'Long', moreBefore: true, moreAfter: true, pages: [DocumentPageText(text: 'Only page.', pageLabel: '1')]),
+    );
     await tester.pumpWidget(screen(source));
     await tester.pumpAndSettle();
     expect(find.text('Only page.'), findsOneWidget);
-    expect(find.text('The rest of this document is too long to show here.'), findsOneWidget);
+    expect(find.text('Later pages are not shown: this document is too long to show whole.'), findsOneWidget);
+    // the note above the first page is just above the view; scroll up to it
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 300));
+    await tester.pumpAndSettle();
+    expect(find.text('Earlier pages are not shown: this document is too long to show whole.'), findsOneWidget);
+  });
+
+  testWidgets('a whole document has no such notes', (tester) async {
+    final source = DocumentAccess((_) async => const ReadDocument(title: 'Short', pages: [DocumentPageText(text: 'Only page.', pageLabel: '1')]));
+    await tester.pumpWidget(screen(source));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('not shown'), findsNothing);
   });
 
   testWidgets('a failed read can be retried', (tester) async {
