@@ -891,7 +891,7 @@ void main() {
     },
   );
 
-  Future<(LinkedFolderController, BuildController)> _mountWithQueue(
+  Future<(LinkedFolderController, BuildController)> mountWithQueue(
     WidgetTester tester,
     List<QueueItem> items,
   ) async {
@@ -926,7 +926,7 @@ void main() {
     return (controller, build);
   }
 
-  QueueItem _linkedItem(String state, {String blake3 = 'hash-new'}) =>
+  QueueItem linkedItem(String state, {String blake3 = 'hash-new'}) =>
       QueueItem(
         id: 'item-1',
         libraryId: 'home-library',
@@ -939,8 +939,8 @@ void main() {
     testWidgets('a pending linked book whose file is $state says Being added', (
       tester,
     ) async {
-      final (controller, build) = await _mountWithQueue(tester, [
-        _linkedItem(state),
+      final (controller, build) = await mountWithQueue(tester, [
+        linkedItem(state),
       ]);
       expect(find.text('Being added'), findsOneWidget);
       expect(find.text('Not added to search yet.'), findsNothing);
@@ -954,8 +954,8 @@ void main() {
     testWidgets('a pending linked book whose file is $state keeps Not added', (
       tester,
     ) async {
-      final (controller, build) = await _mountWithQueue(tester, [
-        _linkedItem(state),
+      final (controller, build) = await mountWithQueue(tester, [
+        linkedItem(state),
       ]);
       expect(find.text('Not added to search yet.'), findsOneWidget);
       expect(find.text('Being added'), findsNothing);
@@ -967,8 +967,8 @@ void main() {
 
   testWidgets('a pending linked book with no queue item or another file says '
       'Not added, and the note reads the approved text', (tester) async {
-    final (controller, build) = await _mountWithQueue(tester, [
-      _linkedItem('building', blake3: 'some-other-hash'),
+    final (controller, build) = await mountWithQueue(tester, [
+      linkedItem('building', blake3: 'some-other-hash'),
     ]);
     expect(find.text('Not added to search yet.'), findsOneWidget);
     expect(find.text('Being added'), findsNothing);
