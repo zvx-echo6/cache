@@ -1659,7 +1659,9 @@ impl Inner {
         // The close code of the other device's Gate, whichever step meets it (at connect the text carries it; at write or read
         // only the error's source does).
         let seen = |e: &(dyn std::error::Error + 'static)| {
-            if let Some(c) = closed_code(e) {
+            // 403 is the one that can unlink; any other close code of the Gate only says why this try failed.
+            let c = if closed_403(e) { Some(403) } else { closed_code(e) };
+            if let Some(c) = c {
                 closed.store(c, Ordering::Relaxed);
             }
         };
