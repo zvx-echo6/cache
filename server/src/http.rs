@@ -1740,6 +1740,52 @@ mod tests {
         assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 401);
     }
 
+    const STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+    #[test]
+    fn zim_html_gets_the_storage_script_first_in_head() {
+        let page = br#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1"><script>var a=1</script></HEAD><body>hi</body></html>"#;
+        let out = String::from_utf8(with_frame_script(page)).unwrap();
+        let want = format!(r#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1">{STORAGE_TAG}<script>var a=1</script>"#);
+        assert!(out.starts_with(&want), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+        // the frame script still sits before the last </body>
+        assert!(out.find(ZIM_FRAME_SCRIPT).unwrap() < out.rfind("</body>").unwrap());
+    }
+
+    #[test]
+    fn zim_html_without_head_gets_the_storage_script_after_html() {
+        let out = String::from_utf8(with_frame_script(b"<html lang=\"en\"><body><script>x()</script></body></html>")).unwrap();
+        assert!(out.starts_with(&format!("<html lang=\"en\">{STORAGE_TAG}<body>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[test]
+    fn zim_html_fragment_gets_the_storage_script_at_the_start() {
+        let out = String::from_utf8(with_frame_script(b"<p>hello</p><script>x()</script>")).unwrap();
+        assert!(out.starts_with(&format!("{STORAGE_TAG}<p>hello</p>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_zim_storage_script_is_public() {
+        let d = TempDir::new("zimstorage");
+        let a = file_app(&d);
+        for method in ["GET", "HEAD"] {
+            let r = route(&a, method, "/zim-storage.js", None, b"").await;
+            assert_eq!(r.status, 200, "{method} with no cookie");
+            let h = |k: &str| r.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+            assert_eq!(h("Content-Type"), Some("text/javascript; charset=utf-8"));
+            assert_eq!(h("Access-Control-Allow-Origin"), Some("*"));
+            assert_eq!(h("Cache-Control"), Some("public, max-age=86400"));
+            assert_eq!(h("X-Content-Type-Options"), Some("nosniff"));
+            assert_eq!(r.body.is_empty(), method == "HEAD");
+            if method == "GET" {
+                assert_eq!(r.body, include_str!("zim_storage.js").as_bytes());
+            }
+        }
+    }
+
     #[test]
     fn zim_entries_with_a_generic_type_get_one_from_the_extension() {
         for (mime, entry, want) in [
