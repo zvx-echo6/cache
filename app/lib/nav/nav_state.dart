@@ -10,6 +10,7 @@ import '../location/location_service.dart';
 import '../location/position_source.dart';
 import '../maps/maps_state.dart';
 import '../platform/app_log.dart';
+import 'eta_blend.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
@@ -351,6 +352,19 @@ class NavState extends ChangeNotifier {
   // ---- guidance ----------------------------------------------------------------------------------------------
 
   MapProgress? progress;
+
+  /// The time left that the phone and the car show, in seconds: the plan's time left ([MapProgress.remainingS]) with the pace
+  /// the drive has kept blended in (eta_blend.dart). The plan's own while there is no blended value for this [progress].
+  int? get leftS {
+    final p = progress;
+    if (p == null) return null;
+    return identical(p, _blendFor) ? (_blendLeft ?? p.remainingS) : p.remainingS;
+  }
+
+  final EtaBlend _blend = EtaBlend();
+  MapProgress? _blendFor;
+  int? _blendLeft;
+
   bool voiceOn = true;
   bool rerouting = false;
   bool arrived = false;
@@ -882,6 +896,11 @@ class NavState extends ChangeNotifier {
       _diag.lastProgressAt = _clock();
       if (p.offRoute) _diag.offRouteAnswers++;
       if (!guiding || arrived || route?.routeId != r.routeId) return;
+      // A new plan (the first answer after Start, a re-route, an added stop: each clears the progress first) starts the
+      // measured pace again.
+      if (progress == null || progress!.routeId != p.routeId) _blend.reset();
+      _blendLeft = _blend.update(at: _clock(), distanceAlongM: p.distanceAlongM, planLeftS: p.remainingS);
+      _blendFor = p;
       progress = p;
       // The stops the core has seen reached along this route are passed, so the list of stops ahead (the route panel, the
       // car's overview) and the route being followed are one list.
@@ -903,6 +922,7 @@ class NavState extends ChangeNotifier {
         // ([_handleFix]); before, it was let go here and every map froze on the arrival point until End. The phase stays
         // guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
+        _blend.reset();
         _pendingFix = null;
         _stopGuidanceLog();
         _armArrivalEnd();

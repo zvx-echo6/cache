@@ -334,6 +334,46 @@ void main() {
     expect(lines('INFO', 'Guidance: ended by itself 5 minutes after arrival'), hasLength(1));
   });
 
+  test('the time left takes in the drive\'s pace after a few minutes, and a new route starts it again', () async {
+    // A drive at 70 % of the plan's pace (the fake route's plan is 20 m/s), one fix every 5 s.
+    final r0 = MapRoute.fromJson(routeJson);
+    final start = now;
+    var routeStart = now;
+    MapProgress at(MapRoute r, {bool off = false}) {
+      final m = 14.0 * now.difference(routeStart).inSeconds;
+      final j = fakeProgressJson(r.raw, (m / r.distanceM).clamp(0.0, 0.95), offset: off ? 200 : 0, offRoute: off, offCount: off ? 3 : 0);
+      return MapProgress.fromJson(j);
+    }
+
+    backend.onProgress = (r, lat, lon) async => at(r);
+    await startGuidance();
+    Future<void> driveFor(int seconds) async {
+      for (var s = 0; s < seconds; s += 5) {
+        now = now.add(const Duration(seconds: 5));
+        gps.controller.add(fixNow(-113.7));
+        await settle();
+      }
+    }
+
+    await driveFor(175);
+    expect(nav.leftS, nav.progress!.remainingS, reason: 'before 3 minutes: the plan\'s time');
+    await driveFor(425);
+    expect(now.difference(start).inMinutes, 10);
+    expect(nav.leftS! - nav.progress!.remainingS, greaterThan(120), reason: 'after 10 minutes the slow pace is in the time left');
+    // A re-route: a new plan, and its time as it is.
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-new', name: 'Destination'));
+    backend.onProgress = (r, lat, lon) async => at(r, off: true);
+    now = now.add(const Duration(seconds: 5));
+    gps.controller.add(fixNow(-113.7));
+    await settle(60);
+    expect(nav.route!.routeId, 'r-new');
+    routeStart = now;
+    backend.onProgress = (r, lat, lon) async => at(r);
+    await driveFor(30);
+    expect(nav.route!.routeId, isNot(r0.routeId));
+    expect(nav.leftS, nav.progress!.remainingS, reason: 'the new route: the plan\'s time again');
+  });
+
   test('the route\'s time at the start and the time the drive took are logged, as numbers only', () async {
     // The drive takes 474 s: the clock moves on before the core answers that the fix has arrived.
     backend.onProgress = (r, lat, lon) async {

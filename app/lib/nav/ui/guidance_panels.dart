@@ -200,9 +200,10 @@ class GuidanceBar extends StatelessWidget {
     final p = nav.progress;
     final r = nav.route;
     // The arrival clock that goes with the minutes shown (shownArrival), as the car's.
-    final eta = p == null ? null : shownArrival(p.eta, p.remainingS);
+    final eta = p == null ? null : shownArrival(p.eta, p.remainingS, leftS: nav.leftS);
     final remainingM = p?.remainingM ?? r?.distanceM ?? 0;
-    final remainingS = p?.remainingS ?? r?.durationS ?? 0;
+    // The time left with the drive's pace in it (NavState.leftS), as the car's.
+    final remainingS = nav.leftS ?? r?.durationS ?? 0;
     Widget column(String big, String small, {Key? key, double bigSize = 20, double smallSize = 13}) => Column(
           mainAxisSize: MainAxisSize.min,
           children: [

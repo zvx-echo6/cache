@@ -53,8 +53,8 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
       'remainingM': p.remainingM,
       // The minutes the phone's bar shows, in seconds (shownSeconds; none once arrived), and the arrival clock that goes with
       // them: the car's host writes the time itself, and a whole number of minutes reads the same however it rounds.
-      'remainingS': nav.arrived ? 0 : shownSeconds(p.remainingS),
-      'etaMs': shownArrival(p.eta, p.remainingS)?.millisecondsSinceEpoch,
+      'remainingS': nav.arrived ? 0 : shownSeconds(nav.leftS ?? p.remainingS),
+      'etaMs': shownArrival(p.eta, p.remainingS, leftS: nav.leftS)?.millisecondsSinceEpoch,
       'overlay': overlay ?? carOverlaySwitches(),
       'palette': carOverlayPalette(theme),
       if (r != null) ...{
