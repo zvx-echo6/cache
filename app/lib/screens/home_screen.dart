@@ -47,7 +47,12 @@ class HomeScreen extends StatefulWidget {
     this.onChooseModel,
     this.discover,
     this.onOpenDiscover,
+    this.searchFor,
   });
+
+  /// A search asked for from elsewhere (a step line in Ask): the box takes the words and searches them once, then the value goes
+  /// back to null.
+  final ValueNotifier<String?>? searchFor;
 
   /// Discover: once its first run is done, its card takes the Set up card's place (the same Home block); null keeps Set up Cache.
   final DiscoverState? discover;
@@ -111,6 +116,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     homeSearchRequests.addListener(_focusSearch);
+    widget.searchFor?.addListener(_searchForRequested);
+    if (widget.searchFor?.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _searchForRequested());
     // The cursor is in the search box: the search model loads ahead of the first search.
     _focus.addListener(() {
       if (_focus.hasFocus) SearchModel.aboutToSearch();
@@ -122,8 +129,18 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _focus.requestFocus();
   });
 
+  /// The words another screen asked Home to search: typed into the box and searched now.
+  void _searchForRequested() {
+    final text = widget.searchFor?.value;
+    if (text == null || !mounted) return;
+    widget.searchFor!.value = null;
+    _query.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    _submit(text);
+  }
+
   @override
   void dispose() {
+    widget.searchFor?.removeListener(_searchForRequested);
     homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();

@@ -1,5 +1,6 @@
 import 'package:cache_search/cache_search.dart';
 
+import '../chat/ask_target.dart';
 import '../weather/curated.dart';
 import '../weather/places.dart';
 import 'action_registry.dart';
@@ -117,6 +118,12 @@ class AppActions {
           return _place(saved);
         },
         'places.list': (_) async => {'places': [for (final p in await places.list()) _place(p)]},
+      }, cardTargets: {
+        // The card's place line opens the place, and its Done opens the place that was saved.
+        'places.save': (f, result) {
+          final place = askPlaceOf(f['place'], name: f['name'] is String ? f['name'] as String : null);
+          return CardTargets(lines: {'Place': ?place}, done: result == null ? null : askPlaceOf(result));
+        },
       });
 
   Map<String, dynamic> _place(SavedPlaceRecord p) => {'name': p.name, 'lat': p.lat, 'lon': p.lon, 'label': ?p.label};

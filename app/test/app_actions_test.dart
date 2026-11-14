@@ -1,6 +1,7 @@
 import 'package:cache/actions/action_registry.dart';
 import 'package:cache/actions/app_actions.dart';
 import 'package:cache/actions/setup_status.dart';
+import 'package:cache/chat/ask_target.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache_search/cache_search.dart';
@@ -149,5 +150,15 @@ void main() {
     f.previewOk = false;
     expect((await reg.run('navigation.start', {'route_id': 'r1'}))['error']['type'], 'not_found');
     expect(f.calls, ['preview r1']);
+  });
+
+  test('places.save gives its card the place to open, and its Done the place that was saved', () async {
+    const fields = {'name': 'Elk camp', 'place': {'lat': 44.21, 'lon': -114.93}};
+    final before = reg.cardTargets('places.save', fields, null);
+    expect(before?.lines.keys, ['Place']);
+    expect(before?.done, isNull);
+    final done = reg.cardTargets('places.save', fields, {'name': 'Elk camp', 'lat': 44.21, 'lon': -114.93});
+    expect(done?.done, isA<AskPlace>());
+    expect((done!.done! as AskPlace).title, 'Elk camp');
   });
 }
