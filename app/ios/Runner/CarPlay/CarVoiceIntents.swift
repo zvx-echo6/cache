@@ -7,6 +7,8 @@ import UIKit
 // AppShortcutsProvider, AppShortcutPhrase, EntityStringQuery, "Adding parameters to an app intent", AppIntent.supportedModes
 // and openAppWhenRun). The rules, the words and the way to Dart are in CarVoice.swift.
 //
+// - "Navigate with Cache" names no place: Siri asks "Where to?" (the parameter's requestValueDialog) and the answer is the
+//   place, as a name Siri heard.
 // - Siri understands the sentence; the place reaches Cache as the intent's parameter (CarPlaceEntity). A place Siri knows
 //   before anything is said is a saved place (the parameter's suggested values); any other name Siri heard comes as it is
 //   (EntityStringQuery.entities(matching:)), and Cache's own car search finds it, as a typed name.
@@ -92,6 +94,8 @@ struct CacheShortcuts: AppShortcutsProvider {
       phrases: [
         "Navigate to \(\.$place) with \(.applicationName)",
         "Take me to \(\.$place) with \(.applicationName)",
+        // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way.
+        "Navigate with \(.applicationName)",
       ]
     )
   }
