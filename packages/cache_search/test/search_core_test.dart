@@ -50,6 +50,7 @@ CsNative _kinds() => FakeNative()
     'total_estimate': 3,
     'vector_sources': ['field-library'],
     'keyword_only_sources': ['u'],
+    'meaning_timed_out': ['big-library'],
   });
 
 // Runs inside the worker isolate, so it builds its own fake.
@@ -134,6 +135,7 @@ void main() {
     expect(r.totalEstimate, 3);
     expect(r.vectorSources, ['field-library']);
     expect(r.keywordOnlySources, ['u']);
+    expect(r.meaningTimedOut, ['big-library'], reason: 'through the worker');
     await core.close();
   });
 

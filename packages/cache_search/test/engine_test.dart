@@ -243,6 +243,21 @@ void main() {
       expect(opts, {'k': 3, 'offset': 0, 'sources': ['u1'], 'query_vector': {'model': 'bge', 'vector': [0.5, 1.0]}});
     });
 
+    test('a meaning time limit goes as meaning_ms, and the libraries over it come back in meaningTimedOut', () {
+      final n = FakeNative()
+        ..replies['search'] = jsonEncode({'results': [], 'total_estimate': 0, 'vector_sources': [], 'keyword_only_sources': ['recon'], 'meaning_timed_out': ['recon']});
+      final r = SearchEngine.open(n, [_zim]).search('water', queryVector: const QueryVector('bge', [0.5]), meaningLimit: const Duration(milliseconds: 1500));
+      final opts = jsonDecode(n.calls.last.substring('search:water:'.length)) as Map;
+      expect(opts['meaning_ms'], 1500);
+      expect(r.meaningTimedOut, ['recon']);
+      expect(r.toJson()['meaning_timed_out'], ['recon']);
+      // no limit: no meaning_ms at all (Ask's searches), and an older core's response reads as none timed out
+      final n2 = FakeNative()..replies['search'] = '{"results":[],"total_estimate":0}';
+      final r2 = SearchEngine.open(n2, [_zim]).search('water');
+      expect((jsonDecode(n2.calls.last.substring('search:water:'.length)) as Map).containsKey('meaning_ms'), isFalse);
+      expect(r2.meaningTimedOut, isEmpty);
+    });
+
     test('search without a vector sends nulls', () {
       final n = FakeNative()..replies['search'] = '{"results":[],"total_estimate":0}';
       SearchEngine.open(n, [_zim]).search('x');

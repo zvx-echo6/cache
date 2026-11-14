@@ -16,6 +16,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
+import com.happylittlellc.cache.fgs.FgsAddArm
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -101,6 +102,38 @@ class MainActivity : FlutterActivity() {
     // answers; cleanUpFlutterEngine tells the engine's keeper that this screen has let go.
     override fun shouldDestroyEngineWithHost(): Boolean = false
 
+    // Leaving with adds pending starts the foreground service that carries them on (fgs/FgsAddArm.kt). Home comes here; Back at the
+    // root finishes the activity (onPause sees it); the app switcher (Recents) may give only a pause, so a pause that does not get
+    // its window focus back soon counts; and the stop is the last chance. All while Cache is still just leaving, as Android 12 requires.
+    private val leaveCheck = Runnable { if (!hasWindowFocus() && !isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.PAUSED) }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT) else window.decorView.postDelayed(leaveCheck, 1500)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        window.decorView.removeCallbacks(leaveCheck)
+        FgsAddArm.resumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.STOP)
+    }
+
+    // The app's own launches (the file picker, a permission prompt) make a leave hint that is not the person leaving.
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        FgsAddArm.noteInternalLaunch()
+        super.startActivityForResult(intent, requestCode, options)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) window.decorView.post(restoreSystemBars)
@@ -160,6 +193,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -168,6 +202,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pending = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.INTERNET), REQUEST_CODE)
                         }
                     }
@@ -179,6 +214,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pendingNotifications = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATIONS)
                         }
                     }
@@ -236,6 +272,7 @@ class MainActivity : FlutterActivity() {
         linkChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)

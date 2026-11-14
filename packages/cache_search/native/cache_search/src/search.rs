@@ -65,6 +65,10 @@ struct Opts {
     /// Used only by libraries whose settings `embedding.model` equals `model`; other sources are keyword-only.
     #[serde(default)]
     query_vector: Option<QueryVec>,
+    /// A time limit on each library's meaning (vector) search, in milliseconds: a library not searched in time is searched by its
+    /// keywords only for this query and named in the response's `meaning_timed_out`. No limit when absent (Ask's tool calls).
+    #[serde(default)]
+    meaning_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -769,6 +773,8 @@ impl Handle {
         // Libraries: a vector list for each library whose embedding model matches the query vector.
         let mut keyword_only: Vec<String> = per.iter().map(|p| p.id.clone()).collect();
         let mut vector_sources: Vec<String> = Vec::new();
+        let mut meaning_timed_out: Vec<String> = Vec::new();
+        let meaning_limit = opts.meaning_ms.map(std::time::Duration::from_millis);
         let mut libs: Vec<(usize, Vec<LibHit>)> = Vec::new();
         let base = self.candidates_per_list.max(1) as usize + opts.offset;
         for (src_i, s) in self.sources.iter().enumerate() {
@@ -780,7 +786,15 @@ impl Handle {
             }
             let used = match &opts.query_vector {
                 Some(q) if l.accepts_vector(&q.model, q.vector.len()) => {
-                    l.dense_search(&q.vector, need, base, snippet_chars).ok()
+                    match l.dense_search_within(&q.vector, need, base, snippet_chars, meaning_limit) {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            if e.code == crate::error::ErrorCode::Cancelled {
+                                meaning_timed_out.push(l.id().to_string());
+                            }
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -1085,6 +1099,7 @@ impl Handle {
                 + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
             "vector_sources": vector_sources,
             "keyword_only_sources": keyword_only,
+            "meaning_timed_out": meaning_timed_out,
         })
         .to_string())
     }

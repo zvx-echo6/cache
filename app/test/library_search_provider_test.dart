@@ -67,8 +67,8 @@ class _ThroughCore extends FakeSources {
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) =>
-      worker.search(query, k: k, offset: offset, sources: zimIds);
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) =>
+      worker.search(query, k: k, offset: offset, sources: zimIds, meaningLimit: meaningLimit);
 }
 
 /// Sources whose core answers every search with [hits].
@@ -77,12 +77,20 @@ class _Searched extends FakeSources {
 
   final List<Map<String, dynamic>> hits;
 
+  /// The meaning time limit each search was given (Home's provider passes kHomeMeaningLimit).
+  final limits = <Duration?>[];
+
+  /// Libraries the core says passed the limit, in every answer.
+  List<String> timedOut = const [];
+
   @override
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
-      SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) async {
+    limits.add(meaningLimit);
+    return SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length, 'meaning_timed_out': timedOut});
+  }
 }
 
 void main() {
@@ -166,6 +174,15 @@ void main() {
       ('Field Guide, Wildfire', 'Survival Library'),
     ]);
     expect(rows.every((r) => r.module == 'Library'), isTrue);
+  });
+
+  test('Home gives the meaning search its time limit; a library over it still answers with its keyword hits', () async {
+    final sources = _Searched(dir, [page])..timedOut = ['recon'];
+    final p = LibrarySearchProvider(sources: sources, openZim: (_) {}, openAddress: (_) {});
+    final rows = await p.search('water');
+    expect(sources.limits, [kHomeMeaningLimit], reason: 'every Home search carries the limit');
+    expect(kHomeMeaningLimit, const Duration(milliseconds: 1500));
+    expect(rows.map((r) => r.title), ['Water purification'], reason: 'the keyword results are shown');
   });
 
   test('a PDF passage with its link and words opens as a citation: the page, with the passage marked', () async {

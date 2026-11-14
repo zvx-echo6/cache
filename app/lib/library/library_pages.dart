@@ -15,7 +15,9 @@ import '../theme.dart';
 import '../update/update_ui.dart' show currentWhatsNew, showWhatsNew;
 import '../version.dart';
 import '../video/format.dart' show formatBytes;
+import '../background/fgs_add.dart' show fgsNoticeShared;
 import 'add_pdf/add_pdf_state.dart' show addPdfShared;
+import 'add_pdf/fgs_notice_card.dart';
 import 'book_pages.dart';
 import 'catalog_page.dart';
 import 'library_panes.dart';
@@ -197,6 +199,7 @@ class LibraryRootPage extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
+              if (fgsNoticeShared case final n?) FgsAddNoticeCard(state: n),
               if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
               ...?d.rootTop?.call(context),
               SettingsGroup(

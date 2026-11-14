@@ -62,12 +62,15 @@ class SearchEngine {
           if (t is String) t,
       ];
 
-  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
+  /// [meaningLimit]: a time limit on each library's meaning search (cs_search's `meaning_ms`); a library over it is searched by
+  /// keywords for this query and named in [SearchResponse.meaningTimedOut]. No limit when null.
+  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) {
     final options = {
       'k': k,
       'offset': offset,
       'sources': sources,
       'query_vector': queryVector?.toJson(),
+      'meaning_ms': ?meaningLimit?.inMilliseconds,
     };
     return SearchResponse.fromJson(_object(_ok(native.search(_h, query, jsonEncode(options)))));
   }
