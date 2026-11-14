@@ -167,6 +167,23 @@ class UpdateBanner extends StatelessWidget {
 
 /// Cache on Linux: what the banner's button says. The browser cannot install anything: the update is a new tarball and install.sh on
 /// the computer that runs Cache.
+/// What "Update Cache" in a message does: what the update banner's button does (Linux: how to update the server; Android:
+/// Cache's page in the Play Store; iPhone: TestFlight at the new build). Null when this build cannot say where the update is
+/// (no update source, or on Linux and iPhone no newer release known yet): the words then stay words.
+VoidCallback? updateCacheAction(BuildContext context) {
+  final u = currentAppUpdates;
+  if (u == null) return null;
+  if (u.linux) return u.available == null ? null : () => showHowToUpdate(context, u);
+  if (u.android) return u.open;
+  return u.available?.link == null ? null : u.open;
+}
+
+/// [updateCacheAction] as a message's action, labelled "Update Cache"; null when there is nowhere to go.
+SnackBarAction? updateCacheSnackAction(BuildContext context) {
+  final go = updateCacheAction(context);
+  return go == null ? null : SnackBarAction(label: 'Update Cache', onPressed: go);
+}
+
 Future<void> showHowToUpdate(BuildContext context, AppUpdates updates, {String installedVersion = kAppVersion}) {
   final u = updates.available;
   if (u == null) return Future.value();
