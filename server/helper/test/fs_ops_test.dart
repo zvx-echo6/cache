@@ -187,8 +187,10 @@ void main() {
       'settings': {'name': 'Guide'},
     });
     final x = serverCoreExtras(dirs);
-    expect(x.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'notebook', 'regions'});
+    expect(x.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'video', 'notebook', 'regions'});
     expect((x['live'] as Map)['sources_dir'], '${docs.path}/live-defs');
+    // the saved videos' folder the video ops keep them in, so the core attaches their caption indexes
+    expect(x['video'], {'dir': '${docs.path}/videos'});
     expect((x['notebook'] as Map)['db_path'], '${support.path}/notebook/notebook.sqlite');
     expect(Directory('${docs.path}/live-defs').existsSync(), isTrue);
   });

@@ -1142,7 +1142,11 @@ pub unsafe extern "C" fn cs_sync_call(s: *mut cache_sync::SyncEngine, method: *c
         let e = unsafe { &*s };
         Ok(match e.call(m, &args) {
             Ok(v) => v,
-            Err(err) => serde_json::json!({"error": format!("{err:#}")}),
+            // `kind` is the stable name of a failure the app tells apart (a link code from a newer Cache); the text is for people.
+            Err(err) => match cache_sync::error_kind(&err) {
+                Some(kind) => serde_json::json!({"error": format!("{err:#}"), "kind": kind}),
+                None => serde_json::json!({"error": format!("{err:#}")}),
+            },
         })
     });
     let v = out.unwrap_or_else(|e| serde_json::json!({"error": e.message}));

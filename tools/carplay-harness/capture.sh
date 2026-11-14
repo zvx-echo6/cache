@@ -3,7 +3,8 @@
 # harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
 # up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
 # light one, the panning state and the map's buttons at work, the two lists (Saved places, Search) with the stand-in's
-# recorded places, the routes to a place chosen there, and turn by turn along the stand-in's recorded drive. Then the phone's
+# recorded places, the routes to a place chosen there, turn by turn along the stand-in's recorded drive, and "Navigate to
+# <place> with Cache" through the Navigate intent's own perform() (no Siri can be spoken to in a simulator). Then the phone's
 # window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
@@ -1093,6 +1094,58 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   fi
 }
 
+VOICE=""
+VOICE_MISSING=""
+
+voice_step() {  # voice_step <voice_list|voice_none|voice_saved> <log text to wait for> <picture>: the Navigate intent asked by the harness
+  local before
+  before=$(log_count "$2")
+  notify "$1"
+  if wait_more "$2" "$before" 30; then
+    sleep 3
+    shot_ext "$3"
+    return 0
+  fi
+  shot_ext "$3"
+  VOICE_MISSING="$VOICE_MISSING [$1: no new line '$2']"
+  return 1
+}
+
+voice_pictures() {  # voice_pictures <label>: "Navigate to <place> with Cache", through the intent's perform() (no Siri in a simulator)
+  local label="$1" before
+  VOICE=""
+  VOICE_MISSING=""
+  to_browsing || { VOICE_MISSING=" [the stand-in did not go back to its first trip]"; return 0; }
+  # A name that is no saved place: the places found, listed on the car with the name as the title.
+  before=$(log_count "car voice: Siri says 'Showing places for <query>.'")
+  if voice_step voice_list 'car voice: places shown on the car, 3 rows' "$label-voice-list"; then
+    if wait_more "car voice: Siri says 'Showing places for <query>.'" "$before" 5; then
+      VOICE="a name that is no saved place listed the three places found on the car, and Siri was given 'Showing places for <query>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_list: Siri was not given its words]"
+    fi
+  fi
+  # A name nothing is found for: the car says No places found.
+  before=$(log_count "car voice: Siri says 'Cache found no places for <query>.'")
+  if voice_step voice_none 'car voice: places shown on the car, 0 rows' "$label-voice-none"; then
+    if wait_more "car voice: Siri says 'Cache found no places for <query>.'" "$before" 5; then
+      VOICE="$VOICE; a name with nothing found showed the list's 'No places found', and Siri was given 'Cache found no places for <query>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_none: Siri was not given its words]"
+    fi
+  fi
+  # A saved place's name: guidance begins, and the car is back on its map with CarPlay's guidance panel.
+  before=$(log_count 'car link: trip guiding')
+  if voice_step voice_saved 'car voice: guidance began, the car is back on its map' "$label-voice-started"; then
+    if wait_more 'car link: trip guiding' "$before" 5 && [ "$(log_count "car voice: Siri says 'Starting the route to <name>.'")" -gt 0 ]; then
+      VOICE="$VOICE; a saved place's name started guidance on the car, and Siri was given 'Starting the route to <name>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_saved: no guiding trip, or Siri was not given its words]"
+    fi
+  fi
+  to_browsing || VOICE_MISSING="$VOICE_MISSING [the stand-in did not go back to its first trip after the voice steps]"
+}
+
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
   local try lit=""
   CAR_W=$1
@@ -1263,6 +1316,16 @@ for size in $SIZES; do
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
                 result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-rerouting,-arrived,-ended}.png"
+                # "Navigate to <place> with Cache": the intent's own perform(), asked by the harness.
+                voice_pictures "$label"
+                if grep -q 'car scene disconnected' "$STREAM"; then
+                  result "FAILED $label voice: the car scene was disconnected during the voice steps; $VOICE"
+                  host_crash=1
+                elif [ -n "$VOICE_MISSING" ]; then
+                  result "FAILED $label voice:$VOICE_MISSING; $VOICE"
+                else
+                  result "OK $label voice: the Navigate intent's perform() (CarVoiceIntents.swift), given a place name as Siri hands it over: $VOICE; shots/$label-voice-{list,none,started}.png"
+                fi
               fi
             fi
           fi

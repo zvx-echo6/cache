@@ -52,6 +52,10 @@ Map<String, dynamic> buildCoreExtras({
       // Off-road: the region packs downloaded with regions (regions_state.dart), with elevation from the map's elevation layer.
       'offroad': {'dir': '${supportDir.path}/regions/offroad'},
     },
+    // The saved videos' folder (VideoState keeps them in <files>/videos): the core attaches each saved video's captions index from
+    // it, so caption search (Home and Videos) finds what was said in them. The core only reads it here; downloads run on the
+    // video handle.
+    'video': {'dir': '${filesDir.path}/videos'},
     // Notebooks: their database and the folder of their photos and attached files.
     'notebook': notebookConfig(supportDir),
     // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches road routing and places from.
