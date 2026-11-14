@@ -19,6 +19,7 @@ import 'nav_fakes.dart';
 import 'navigation_camera_test.dart' show CameraController, NoSurface;
 import 'support/guide_anchor.dart';
 import 'support/test_layer_engine.dart';
+import '../test_shots/shot_kit.dart' show loadShotFonts, shotApp;
 
 /// The camera the screen last gave the map (a move with or without animation).
 Map<String, dynamic> lastCamera(CameraController camera) {
@@ -66,9 +67,12 @@ Future<void> guiding(WidgetTester tester, {required Size size, required double r
       await location.init();
       await engine.start();
     });
-    await tester.pumpWidget(MaterialApp(
-      theme: buildTheme(CacheThemeId.dark),
-      home: MapsScreen(location: location, maps: maps, nav: nav, themeId: CacheThemeId.dark, glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf'),
+    // The phone's own font (the test font's square letters are far wider: the position chip shown before Start would not fit
+    // beside the map's buttons on a narrow phone), and no safe area.
+    await tester.pumpWidget(shotApp(
+      MapsScreen(location: location, maps: maps, nav: nav, themeId: CacheThemeId.dark, glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf'),
+      theme: CacheThemeId.dark,
+      insets: EdgeInsets.zero,
     ));
     for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
@@ -134,6 +138,8 @@ class GuideRig {
 }
 
 void main() {
+  setUpAll(loadShotFonts);
+
   group('the free map and the anchor', () {
     test('a phone: between the banner and the guidance bar; centred across, 72% of the way down', () {
       const map = Size(390, 800);
