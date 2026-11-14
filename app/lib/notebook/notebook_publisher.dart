@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../actions/action_registry.dart';
+import '../chat/ask_target.dart';
 import '../actions/notebook_actions.dart';
 import 'notebook_model.dart';
 import 'notebook_state.dart';
@@ -59,14 +60,16 @@ class NotebookPublisher {
     _published = text;
     final handlers = <String, ActionHandler>{'notebook.add_journal_entry': _addJournal};
     final lines = <String, CardLines>{'notebook.add_journal_entry': _journalLines};
+    final targets = <String, CardTargetsOf>{'notebook.add_journal_entry': _journalTargets};
     // defs[1..] are the first logs in order (none is left out: the app never marks one locked).
     for (var i = 1; i < defs.length; i++) {
       final log = logs[i - 1];
       final snapshot = _Snapshot(log, inputs[i - 1]);
       handlers[defs[i]['id'] as String] = (f) => _addToLog(snapshot, f);
       lines[defs[i]['id'] as String] = (f, summary) => _logLines(snapshot, f, summary);
+      targets[defs[i]['id'] as String] = (f, result) => _logTargets(snapshot, f, result);
     }
-    final rejected = registry.publish('notebook', defs, handlers, cardLines: lines);
+    final rejected = registry.publish('notebook', defs, handlers, cardLines: lines, cardTargets: targets);
     if (rejected.isNotEmpty) logInfo('Notebook: actions rejected', detail: '$rejected');
   }
 
@@ -99,7 +102,35 @@ class NotebookPublisher {
     ];
   }
 
+  /// The Journal card: its place line opens the place; the title and the Done open the Journal (the notebook the entry went to).
+  CardTargets _journalTargets(Map<String, dynamic> f, Map<String, dynamic>? result) {
+    final journal = notebook.journal;
+    final place = askPlaceOf(f['place']);
+    final book = journal == null ? null : AskNotebook(notebookId: journal.id);
+    return CardTargets(title: book, lines: {if (place != null) 'Place': place}, done: result == null ? null : book);
+  }
+
   // ---- notebook.log_<slug> ----
+
+  /// A log's card: the title and the Done open the log, and a place of the entry (a place field, or the extra place) opens that
+  /// place.
+  CardTargets _logTargets(_Snapshot s, Map<String, dynamic> f, Map<String, dynamic>? result) {
+    final log = notebook.notebook(s.logId);
+    if (log == null) return const CardTargets();
+    final book = AskNotebook(notebookId: log.id);
+    final places = <String, AskTarget>{};
+    for (final (fid, name) in s.fields) {
+      final field = fid == null ? null : log.def.field(fid);
+      if (field == null || field.type != FieldType.place) continue;
+      final p = askPlaceOf(f[name]);
+      if (p != null) places[field.label] = p;
+    }
+    if (s.placeExtra) {
+      final p = askPlaceOf(f['place']);
+      if (p != null) places['Place'] = p;
+    }
+    return CardTargets(title: book, lines: places, done: result == null ? null : book);
+  }
 
   Future<Map<String, dynamic>> _addToLog(_Snapshot s, Map<String, dynamic> f) async {
     final log = notebook.notebook(s.logId);
