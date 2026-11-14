@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../car/car_overlay.dart' show pointAtFraction;
 import '../location/coords.dart';
 import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
@@ -68,6 +69,14 @@ class PlaceRemoved extends NavEvent {
 /// Something outside the map (the assistant's navigation.start) wants the Maps tab on screen.
 class MapRequested extends NavEvent {
   const MapRequested();
+}
+
+/// What the Maps tab is asked to show ([NavState.mapShow]): a spot, or the whole route.
+class MapShow {
+  const MapShow({this.at, this.route = false});
+
+  final GeoPoint? at;
+  final bool route;
 }
 
 class NavNotice extends NavEvent {
@@ -575,6 +584,54 @@ class NavState extends ChangeNotifier {
   void addToHome(MapPlace p) => _events.add(AddToHomeRequested(p));
 
   void requestMap() => _events.add(const MapRequested());
+
+  // ---- showing a spot on the map -----------------------------------------------------------------------------
+
+  /// What something off the map (a stop's row, a turn of the drive screen, a point of the elevation chart, a saved place's page)
+  /// asked the Maps tab to show, and has not been shown yet: a spot ([MapShow.at]) or the whole route ([MapShow.route]). The
+  /// Maps screen takes it ([takeMapShow]) when its map is ready, brings it into view and marks a spot.
+  MapShow? get mapShow => _mapShow;
+  MapShow? _mapShow;
+
+  /// Takes what is to be shown (the Maps screen, once it has shown it).
+  MapShow? takeMapShow() {
+    final s = _mapShow;
+    _mapShow = null;
+    return s;
+  }
+
+  /// The Maps tab, brought to [at] with the spot marked.
+  void showOnMap(GeoPoint at) {
+    _mapShow = MapShow(at: at);
+    notifyListeners();
+    requestMap();
+  }
+
+  /// The Maps tab, brought to the point [fraction] of the way along the route shown (a point of its elevation chart).
+  void showAlongRoute(double fraction) {
+    final r = route;
+    if (r == null || r.points.isEmpty || fraction.isNaN) return;
+    showOnMap(pointAtFraction(r.points, fraction.clamp(0.0, 1.0).toDouble()));
+  }
+
+  /// The Maps tab with the whole route shown in it (the drive screen's route mini map).
+  void showRouteOnMap() {
+    if (route == null) return;
+    _mapShow = const MapShow(route: true);
+    notifyListeners();
+    requestMap();
+  }
+
+  /// A place from elsewhere in the app (a saved place's page) on the Maps tab: its card while looking at the map; while a route
+  /// is shown or followed (which a card would replace) the spot only.
+  void showPlace(MapPlace p) {
+    if (phase != NavPhase.browsing) {
+      showOnMap(p.point);
+      return;
+    }
+    select(p);
+    requestMap();
+  }
 
   // ---- directions --------------------------------------------------------------------------------------------
 

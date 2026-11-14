@@ -12,7 +12,7 @@ import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry});
 
   final NavState nav;
   final MapPlace place;
@@ -24,6 +24,9 @@ class PlaceCard extends StatelessWidget {
 
   /// The most the card may take (the map's side column); null: 55% of the window, as a bottom card.
   final double? maxHeight;
+
+  /// The place is an entry of a Places notebook: Open, as on the notebook pin's sheet, opens that entry. Null leaves it out.
+  final VoidCallback? onOpenEntry;
 
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
@@ -144,6 +147,17 @@ class PlaceCard extends StatelessWidget {
                     ],
                   ],
                 ),
+                if (onOpenEntry != null) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      key: const ValueKey('place-open-entry'),
+                      onPressed: onOpenEntry,
+                      child: const Text('Open'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,

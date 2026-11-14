@@ -46,6 +46,8 @@ class PlaceNotebookDeps {
     this.map,
     this.pickerMap,
     this.directions,
+    this.show,
+    this.openLink,
     this.regions,
     this.hereOnMap,
     this.setHereOnMap,
@@ -72,6 +74,13 @@ class PlaceNotebookDeps {
   /// Directions on the map to a place. False when they were not opened because a route is being followed: the place's screen
   /// then says so, as the rest of the app does.
   final bool Function(NbPlace place, String name)? directions;
+
+  /// The place on the Maps tab (its card, or the spot while a route is shown or followed): a place's small map and its
+  /// coordinates line. Null: they are not tappable.
+  final void Function(NbPlace place, String name)? show;
+
+  /// Opens a link from a place's notes (the app's way of opening a web link: the system browser). Null: links do nothing.
+  final Future<void> Function(String url)? openLink;
 
   /// The downloaded regions weather can be kept for (watched-place id `region:<name>`). No longer listed in the Places notebook
   /// (1.0.29); kept for the Weather and alerts screen that lists the watched areas.
@@ -491,6 +500,20 @@ class PlaceView extends StatelessWidget {
     );
   }
 
+  /// The place on the Maps tab: the pages over the app's tabs close first, so the map is what shows.
+  void _show(BuildContext context, PlaceNotebookDeps pd, NbPlace p, String name) {
+    Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+    pd.show!(p, name);
+  }
+
+  /// A link in the notes: opened when it is a full address (a link within the notes' own text has nowhere to go).
+  static void _openLink(PlaceNotebookDeps? pd, String? href) {
+    final open = pd?.openLink;
+    final u = href == null ? null : Uri.tryParse(href);
+    if (open == null || u == null || !u.hasScheme) return;
+    open(href!).catchError((Object _) {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final nb = deps.notebook;
@@ -528,7 +551,26 @@ class PlaceView extends StatelessWidget {
             body: LayoutBuilder(builder: (context, cts) => ListView(
               padding: ContentWidth.padFor(cts.maxWidth, min: 16).copyWith(top: 8, bottom: 24),
               children: [
-                if (pd?.map != null && p != null) ClipRRect(borderRadius: BorderRadius.circular(16), child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0), child: pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context))))),
+                if (pd?.map != null && p != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: SizedBox(
+                      height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context))),
+                          // The map is a view here (the page's scroll keeps the drags): a tap opens the place on the Maps tab.
+                          if (pd!.show != null)
+                            Semantics(
+                              button: true,
+                              label: 'Show on map',
+                              child: GestureDetector(key: const ValueKey('place-map-open'), behavior: HitTestBehavior.translucent, onTap: () => _show(context, pd!, p, name)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -549,7 +591,11 @@ class PlaceView extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          InkWell(
+                            key: const ValueKey('place-coords'),
+                            onTap: p == null || pd?.show == null ? null : () => _show(context, pd!, p, name),
+                            child: Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          ),
                           if (icons != null)
                             Text(e.icon == null ? 'Icon: ${iconForPlace(e, book).label} (notebook icon)' : 'Icon: ${iconForPlace(e, book).label} (this place)', style: TextStyle(fontSize: 14, color: k.secondary)),
                         ],
@@ -575,7 +621,7 @@ class PlaceView extends StatelessWidget {
                 ],
                 if ((e.body ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 14),
-                  MarkdownBody(key: const ValueKey('place-notes'), data: e.body!, styleSheet: answerStyle(k), onTapLink: (text, href, title) {}),
+                  MarkdownBody(key: const ValueKey('place-notes'), data: e.body!, styleSheet: answerStyle(k), onTapLink: (text, href, title) => _openLink(pd, href)),
                 ],
                 if (e.photos.isNotEmpty) ...[
                   const SizedBox(height: 14),

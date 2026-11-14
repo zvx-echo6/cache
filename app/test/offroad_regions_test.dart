@@ -8,6 +8,7 @@ import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/region_actions.dart';
+import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -290,6 +291,23 @@ void main() {
     await tester.pump();
     expect(find.text('OFF-ROAD DATA'), findsOneWidget, reason: 'the group, under the regions');
     expect(find.descendant(of: find.byKey(const ValueKey('offroad-pack-Idaho')), matching: find.textContaining('used by ', findRichText: true)), findsOneWidget);
+    // Link audit: the pack's row opens the regions that use it. Two use it: they are listed as the Local tab lists them, and a
+    // row opens its region's page.
+    expect(regions.offroadPacks.single.usedByIds, unorderedEquals([_county, 'us-id']));
+    await tester.tap(find.byKey(const ValueKey('offroad-pack-Idaho')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final sheet = find.byType(BottomSheet);
+    expect(sheet, findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-us-id'))), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-$_county'))), findsOneWidget);
+    await tester.tap(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-us-id'))));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(RegionPage), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
     // removing one keeps what the other uses; removing both removes the pack
     await tester.runAsync(() => regions.remove(_county));
     expect(file.existsSync(), isTrue, reason: 'Idaho still uses the pack');

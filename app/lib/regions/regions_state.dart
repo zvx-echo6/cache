@@ -925,15 +925,15 @@ class RegionsState extends ChangeNotifier {
   /// A region on the phone has [path] among its packs (on the phone, or downloading for it).
   bool _packKept(String path) => _kept.values.any((k) => k.offroad.any((x) => x.path == path));
 
-  /// The off-road packs on the phone or on their way, each with its size and the regions that use it (Storage > Regions lists
-  /// them: a pack stays while one of them is on the phone).
-  List<({String name, int bytes, bool done, List<String> usedBy})> get offroadPacks {
-    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy})>{};
+  /// The off-road packs on the phone or on their way, each with its size and the regions that use it, by name ([usedBy]) and by id
+  /// ([usedByIds], in the same order) (Storage > Regions lists them: a pack stays while one of them is on the phone).
+  List<({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})> get offroadPacks {
+    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})>{};
     for (final k in _kept.values) {
       for (final p in k.offroad) {
         final st = _packState(p);
         final had = byPath[p.path];
-        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name]);
+        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name], usedByIds: [...?had?.usedByIds, k.id]);
       }
     }
     return byPath.values.toList()..sort((a, b) => a.name.compareTo(b.name));

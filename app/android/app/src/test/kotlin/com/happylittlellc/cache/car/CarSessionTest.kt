@@ -920,4 +920,51 @@ class CarSessionTest {
         push("trip", trip("browsing"))
         assertTrue(screens.top is HomeScreen)
     }
+
+    // Link audit: the "Stop N" rows of the route choice and of the route overview show that stop on the car's map.
+    @Test
+    fun routeChoiceStopRowsShowTheirStopOnTheMap() {
+        start()
+        val stops = listOf(
+            mapOf("number" to 1, "name" to "Place 2", "address" to "", "lat" to 10.5, "lon" to 20.25),
+            mapOf("number" to 2, "name" to "Place 1", "address" to "", "lat" to 10.75, "lon" to 20.5),
+        )
+        // The route choice with its stops.
+        val map = CarMapRenderer(car)
+        val route = RoutePreviewScreen(car, map, CarPlace("place:9", "Made Up Clinic", null, 11.0, 21.0, null))
+        screens.push(route)
+        push("trip", trip("previewing", mapOf("stops" to stops)))
+        assertEquals(10.5, CarLink.trip.stops[0].lat!!, 1e-9)
+        assertEquals(20.5, CarLink.trip.stops[1].lon!!, 1e-9)
+        val rows = ((templateOf(route) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals(listOf("Stop 1: Place 2", "Stop 2: Place 1"), rows.drop(1).map { it.title.toString() })
+        assertNull(rows[0].onClickDelegate)
+        assertNotNull(rows[1].onClickDelegate)
+        assertNotNull(rows[2].onClickDelegate)
+        route.showStop(CarLink.trip.stops[1])
+        assertEquals(listOf(10.75, 20.5), map.shownPoint!!.toList())
+    }
+
+    @Test
+    fun routeOverviewStopRowsShowTheirStopOnTheMap() {
+        start()
+        val stops = listOf(
+            mapOf("number" to 1, "name" to "Place 2", "address" to "", "lat" to 10.5, "lon" to 20.25),
+            mapOf("number" to 2, "name" to "Place 1", "address" to "", "lat" to 10.75, "lon" to 20.5),
+        )
+        push("trip", trip("guiding", guiding + mapOf("stops" to stops)))
+        val guidance = screens.top as NavigationScreen
+        guidance.openOverview()
+        val overview = screens.top as RouteOverviewScreen
+        val listed = ((templateOf(overview) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        assertEquals(listOf("Stop 1: Place 2", "Stop 2: Place 1"), listed.take(2).map { it.title.toString() })
+        assertNotNull(listed[0].onClickDelegate)
+        assertNotNull(listed[1].onClickDelegate)
+        overview.showStop(CarLink.trip.stops[0])
+        assertEquals(listOf(10.5, 20.25), overview.mapRenderer.shownPoint!!.toList())
+        // A phone that sends no position for a stop: its row is not tappable.
+        push("trip", trip("guiding", guiding + mapOf("stops" to listOf(mapOf("number" to 1, "name" to "Place 3", "address" to "")))))
+        val bare = ((templateOf(overview) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        assertNull(bare[0].onClickDelegate)
+    }
 }
