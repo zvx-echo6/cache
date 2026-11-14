@@ -33,7 +33,10 @@ VALHALLA_SHIM_API const char* valhalla_shim_version(void);
 VALHALLA_SHIM_API valhalla_shim_t* valhalla_shim_init(const char* config);
 
 /* Each returns a newly allocated NUL-terminated JSON string (free with
- * valhalla_shim_string_free), or NULL on failure (see valhalla_shim_last_error). */
+ * valhalla_shim_string_free), or NULL on failure (see valhalla_shim_last_error).
+ * route adds one thing to Valhalla's JSON: beside each maneuver's street_names and begin_street_names, the map's
+ * route-number flag of each name (street_name_is_route_number, begin_street_name_is_route_number: bool arrays), which
+ * Valhalla's directions carry and its JSON leaves out. */
 VALHALLA_SHIM_API char* valhalla_shim_route(valhalla_shim_t* h, const char* request_json);
 VALHALLA_SHIM_API char* valhalla_shim_matrix(valhalla_shim_t* h, const char* request_json); /* sources_to_targets */
 VALHALLA_SHIM_API char* valhalla_shim_locate(valhalla_shim_t* h, const char* request_json);

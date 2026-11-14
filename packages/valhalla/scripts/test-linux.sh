@@ -38,6 +38,17 @@ r = json.load(open(w + "/route.out.json"))["trip"]
 km = r["summary"]["length"]; mans = len(r["legs"][0]["maneuvers"])
 print("route km", km, "maneuvers", mans)
 assert 200 <= km <= 350 and mans > 0
+# The shim adds the map's route-number flag beside each list of names, one per name; this route runs on a numbered highway.
+flags = []
+for m in r["legs"][0]["maneuvers"]:
+    for names, key in (("street_names", "street_name_is_route_number"), ("begin_street_names", "begin_street_name_is_route_number")):
+        if m.get(names):
+            assert len(m[key]) == len(m[names]) and all(isinstance(f, bool) for f in m[key]), m
+            flags += m[key]
+        else:
+            assert key not in m, m
+print("route-number flags", flags.count(True), "of", len(flags))
+assert True in flags
 m = json.load(open(w + "/matrix.out.json"))["sources_to_targets"]
 d = [x["distance"] for row in m for x in row]
 print("matrix distances", d)

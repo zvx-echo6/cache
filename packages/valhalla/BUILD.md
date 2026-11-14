@@ -11,7 +11,7 @@ Valhalla sources and build outputs are **not** committed. The scripts clone the 
 
 | Path | What |
 |---|---|
-| `shim/valhalla_shim.h`, `shim/valhalla_shim.cc` | C ABI over `valhalla::tyr::actor_t`. Valhalla JSON in, Valhalla JSON out, no interpretation. |
+| `shim/valhalla_shim.h`, `shim/valhalla_shim.cc` | C ABI over `valhalla::tyr::actor_t`. Valhalla JSON in, Valhalla JSON out, no interpretation (route adds the names' route-number flags). |
 | `test/shim_test.c` | Tiny C test program (init, route / matrix / locate, per-call timing). |
 | `CMakeLists.txt`, `vcpkg.json`, `triplets/` | Top-level project: Valhalla via `add_subdirectory`, routing-only modules, vcpkg manifest. |
 | `scripts/build-windows.bat`, `scripts/build-android.bat` | Build scripts (run on a Windows build machine). |
@@ -85,7 +85,9 @@ int         valhalla_shim_last_error_code(valhalla_shim_t*); // Valhalla error_c
 const char* valhalla_shim_version(void);
 ```
 
-Responses are Valhalla's own JSON, malloc'd, freed with `valhalla_shim_string_free`. A failing call returns NULL and
+Responses are Valhalla's own JSON, malloc'd, with one addition on `route`: each maneuver also carries
+`street_name_is_route_number` and `begin_street_name_is_route_number`, one bool per name of `street_names` /
+`begin_street_names`, from Valhalla's directions (`StreetName.is_route_number`; its JSON serializer leaves them out). Responses are freed with `valhalla_shim_string_free`. A failing call returns NULL and
 `last_error` holds Valhalla's message. A handle serialises its calls with a mutex (`actor_t` is not thread-safe);
 use one handle per thread for parallel requests. The actor is created with `auto_cleanup = true` so workers give
 memory back after each request. The config selects the tiles: `mjolnir.tile_extract` (tar) or `mjolnir.tile_dir`.

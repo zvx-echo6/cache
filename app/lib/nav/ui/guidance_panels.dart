@@ -7,6 +7,7 @@ import '../../maps/ui/map_widgets.dart';
 import '../../theme.dart';
 import '../guidance.dart';
 import '../nav_state.dart';
+import '../street_names.dart';
 import '../units.dart';
 import 'lane_strip.dart';
 
@@ -75,7 +76,7 @@ class GuidanceBanner extends StatelessWidget {
           context,
           icon: iconForTurn(icon),
           big: fmt.distance(next.distanceM),
-          small: next.isOffroad ? offroadHint(next, fmt) : next.instruction,
+          small: next.isOffroad ? offroadHint(next, fmt) : next.shownInstruction,
           then: !showThen || p.then == null || p.then!.isArrival && next.isArrival ? null : 'Then ${_thenText(p.then!)}',
         );
       }
@@ -96,7 +97,7 @@ class GuidanceBanner extends StatelessWidget {
 
   String _thenText(ProgressManeuver m) {
     if (m.isOffroad) return offroadHint(m, fmt).toLowerCase();
-    var t = m.instruction.trim();
+    var t = m.shownInstruction.trim();
     if (t.endsWith('.')) t = t.substring(0, t.length - 1);
     return t.isEmpty ? t : t[0].toLowerCase() + t.substring(1);
   }

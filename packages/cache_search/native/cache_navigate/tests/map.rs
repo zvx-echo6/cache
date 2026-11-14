@@ -5,7 +5,7 @@ use cache_navigate::map::{parse_opts, route, ActiveRoute, MapEnd, MapRouteReq, P
 use cache_navigate::{NavCore, NavigateCfg, PlaceSlot};
 use cache_offroad::directions::TravelMode;
 use cache_offroad::router::Boundary;
-use cache_offroad::valhalla::{encode_polyline6, Lane, LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
+use cache_offroad::valhalla::{encode_polyline6, Lane, LocateSnap, Maneuver, StreetName, Trace, Trip, Valhalla, ValhallaError};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -15,6 +15,8 @@ struct Straight {
     alts: usize,
     /// Maneuver 3 carries turn lanes.
     lanes: bool,
+    /// Maneuver 3 turns onto a road with a name and a route number (the map lists the number first), from one with a number only.
+    named: bool,
 }
 
 fn lerp(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
@@ -40,12 +42,15 @@ impl Straight {
                     kind: if i == 0 { 1 } else if last { 4 } else { 15 },
                     length_km: if last { 0.0 } else { length_m / 1000.0 / self.maneuvers as f64 },
                     time_s: if last { 0.0 } else { length_m / 20.0 / self.maneuvers as f64 },
-                    street_names: vec![format!("Road {i}")],
+                    street_names: if self.named && i == 3 { vec!["US 99 Bus".into(), "Lakeside Boulevard".into()] } else { vec![format!("Road {i}")] },
+                    streets: if self.named && i == 3 { vec![StreetName::route_number("US 99 Bus"), StreetName::name("Lakeside Boulevard")] } else { vec![] },
+                    begin_streets: if self.named && i == 3 { vec![StreetName::route_number("SH 99")] } else { vec![] },
                     begin_shape_index: (i * 10) as i64,
                     end_shape_index: (i * 10) as i64 + if last { 0 } else { 10 },
                     bearing_after: Some(90.0),
                     bearing_before: None,
                     lanes: if self.lanes && i == 3 { vec![Lane { directions: 16, active: None, valid: None }, Lane { directions: 48, active: Some(32), valid: None }, Lane { directions: 32, active: None, valid: Some(32) }] } else { vec![] },
+                    ..Default::default()
                 }
             })
             .collect();
@@ -73,7 +78,7 @@ impl Valhalla for Straight {
 }
 
 fn core(maneuvers: usize, alts: usize) -> NavCore {
-    NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers, alts, lanes: false }))
+    NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers, alts, lanes: false, named: false }))
 }
 
 fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
@@ -506,7 +511,7 @@ fn an_off_road_mode_without_the_off_road_data_is_a_failed_route_that_says_so() {
 
 #[test]
 fn turn_lanes_ride_on_the_maneuver_and_into_progress_only_where_there_are_some() {
-    let c = NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers: 6, alts: 0, lanes: true }));
+    let c = NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers: 6, alts: 0, lanes: true, named: false }));
     let (out, active) = route(&c, &req(vec![], 0)).unwrap();
     let m = out["maneuvers"].as_array().unwrap();
     let want = json!([{"directions": 16}, {"directions": 48, "active": 32}, {"directions": 32, "valid": 32}]);
@@ -524,4 +529,26 @@ fn turn_lanes_ride_on_the_maneuver_and_into_progress_only_where_there_are_some()
     assert_eq!(p3["next"]["index"], 3);
     assert_eq!(p3["next"]["lanes"], want);
     assert!(p3["current"].get("lanes").is_none());
+}
+
+#[test]
+fn the_map_says_which_street_names_are_route_numbers_in_the_route_and_the_progress() {
+    let c = NavCore::with_valhalla(NavigateCfg::default(), PlaceSlot::default(), Arc::new(Straight { maneuvers: 6, alts: 0, lanes: false, named: true }));
+    let (out, active) = route(&c, &req(vec![], 0)).unwrap();
+    let m = &out["maneuvers"][3];
+    assert_eq!(m["street_names"], json!(["US 99 Bus", "Lakeside Boulevard"]));
+    assert_eq!(m["streets"], json!([{"text": "US 99 Bus", "is_route_number": true}, {"text": "Lakeside Boulevard", "is_route_number": false}]));
+    assert_eq!(m["begin_streets"], json!([{"text": "SH 99", "is_route_number": true}]));
+    // a maneuver the map gave no flags for: empty lists, not missing
+    assert_eq!(out["maneuvers"][1]["streets"], json!([]));
+    assert_eq!(out["maneuvers"][1]["begin_streets"], json!([]));
+    // a major road carries the flagged names of the maneuver it is named after
+    assert!(out["major_roads"].as_array().unwrap().iter().all(|r| r["streets"].is_array()), "{}", out["major_roads"]);
+    // between turn 2 and turn 3: the next maneuver carries the same flagged names
+    let total = out["distance_m"].as_f64().unwrap();
+    let p = prog(&active[0], fix(&out, total * 0.45, 0.0));
+    assert_eq!(p["next"]["index"], 3);
+    assert_eq!(p["next"]["streets"], m["streets"]);
+    assert_eq!(p["next"]["begin_streets"], m["begin_streets"]);
+    assert_eq!(p["current"]["streets"], json!([]));
 }

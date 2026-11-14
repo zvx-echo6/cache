@@ -24,12 +24,42 @@ pub struct Maneuver {
     pub length_km: f64,
     pub time_s: f64,
     pub street_names: Vec<String>,
+    /// The same names with the map's own word on which are route numbers (Valhalla's `StreetName.is_route_number`, which the
+    /// shim adds to the reply as `street_name_is_route_number`). Empty when the reply did not carry them.
+    pub streets: Vec<StreetName>,
+    /// Valhalla's `begin_street_names` (the names at the start of the maneuver, when they differ), with the same flag.
+    pub begin_streets: Vec<StreetName>,
     pub begin_shape_index: i64,
     pub end_shape_index: i64,
     pub bearing_after: Option<f64>,
     pub bearing_before: Option<f64>,
     /// Turn lanes at the maneuver (Valhalla `turn_lanes`); empty when the tiles or the costing have none.
     pub lanes: Vec<Lane>,
+}
+
+/// One name of a road as the map gives it: the text and whether the map says it is a route number (a highway's ref) rather
+/// than the road's name. Valhalla's `StreetName` (`value`, `is_route_number`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreetName {
+    pub text: String,
+    pub is_route_number: bool,
+}
+
+impl StreetName {
+    pub fn name(text: impl Into<String>) -> Self {
+        StreetName { text: text.into(), is_route_number: false }
+    }
+    pub fn route_number(text: impl Into<String>) -> Self {
+        StreetName { text: text.into(), is_route_number: true }
+    }
+    /// `{"text": ..., "is_route_number": ...}`.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"text": self.text, "is_route_number": self.is_route_number})
+    }
+    /// A list of names as JSON.
+    pub fn list_json(names: &[StreetName]) -> serde_json::Value {
+        serde_json::Value::Array(names.iter().map(StreetName::to_json).collect())
+    }
 }
 
 /// One lane of a maneuver. `directions` is Valhalla's `kTurnLane*` bitmask (baldr/turnlanes.h); `active` is the one bit the

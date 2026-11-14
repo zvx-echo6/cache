@@ -293,6 +293,8 @@ fn build_steps(maneuvers: &[Maneuver], shape: &[(f64, f64)]) -> Vec<Step> {
             type_: maneuver_type_name(m.kind),
             mode: None,
             street_names: m.street_names.clone(),
+            streets: m.streets.clone(),
+            begin_streets: m.begin_streets.clone(),
             distance_m: None,
             distance_km: round_py(km, 2),
             distance_mi: round_py(km * KM_TO_MI, 2),

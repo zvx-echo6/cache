@@ -356,6 +356,8 @@ mod step_tests {
             type_: "x".into(),
             mode: None,
             street_names: vec![],
+            streets: vec![],
+            begin_streets: vec![],
             distance_m: None,
             distance_km: 0.0,
             distance_mi: 0.1,
