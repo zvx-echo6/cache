@@ -6,9 +6,11 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** LinkNdef writes the same bytes the Android framework does for [URI record, Application Record]. */
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class LinkNdefFrameworkTest {
     @Test fun sameBytesAsTheFramework() {
         for (uri in listOf("cachelink://link/CACHE1-ABC234", "cachelink://link/" + "Q".repeat(1100))) {
