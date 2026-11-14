@@ -1256,6 +1256,9 @@ impl Inner {
             changed = true;
         }
         let mut unsettled = false;
+        // The sizes of the files this scan holds back as still being written: a file that went and one of the same size that
+        // is still settling may be a rename, whose delete waits for the scan that also lists the new path (below).
+        let mut settling_sizes: HashSet<u64> = HashSet::new();
         // The files dated in the future that the last rescan held back, and the ones this rescan holds back ([`Inner::settling`]).
         let watched = self.settling.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
         let mut watching: HashMap<String, Settling> = HashMap::new();
@@ -1286,6 +1289,7 @@ impl Inner {
                         watching.insert(rel.clone(), (key, since));
                     }
                     unsettled = true;
+                    settling_sizes.insert(m.len());
                     continue;
                 }
             }
@@ -1335,6 +1339,12 @@ impl Inner {
                 continue;
             }
             let old = idx.files[&p].clone();
+            // Perhaps renamed to a file still being written (a rename of a file that arrived moments ago keeps that file's
+            // time): the delete waits for the next scan, so the other devices learn the new path in the same list and write
+            // it before they delete the old one, while their store can still read the content from it.
+            if settling_sizes.contains(&old.size) {
+                continue;
+            }
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
             seen.remove(&p);
@@ -1781,11 +1791,16 @@ impl Inner {
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
         let remote = &self.remote_view(&sh.id, remote);
         let mut actions = self.merge_from(&sh.id, remote, from);
-        // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
+        // Deletes come after what is fetched: a rename here is a delete of the old path and a fetch of the new one, and the store
+        // may read that content from the old path, so it must still be there when the new one is written (the store is pointed
+        // at the new path once the old one goes, below). What says the rest has come comes after the rest ([`Config::last`]),
+        // deletes included. The sort keeps the order otherwise.
         let last: &[String] = self.last.get(&sh.id).map(|v| v.as_slice()).unwrap_or(&[]);
-        if !last.is_empty() {
-            actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
-        }
+        actions.sort_by_key(|a| match a {
+            Action::Fetch { path, .. } if excluded(last, path) => 2,
+            Action::Delete { .. } => 1,
+            _ => 0,
+        });
         // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
         let mut held = false;
         let mut no_room: Option<anyhow::Error> = None;
@@ -1827,10 +1842,15 @@ impl Inner {
                         }
                         let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
                         seen.remove(&path);
+                        let gone = idx.files.get(&path).filter(|e| !e.deleted).map(|e| e.hash.clone());
                         idx.files.insert(path.clone(), entry);
                         self.store_index(&sh.id, &idx, &seen)?;
                         self.unmark_writing(&sh.id, &path)?;
                         self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        // The content that was here may live on at another path (a rename): the store reads it from there now.
+                        if let Some(h) = gone {
+                            self.repoint(&h, None).await;
+                        }
                         Ok(())
                     }
                     .await;
