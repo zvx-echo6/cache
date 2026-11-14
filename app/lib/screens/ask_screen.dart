@@ -709,6 +709,11 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   VoidCallback? _tapOf(SourceResult r) {
     final video = widget.onOpenVideo;
     if (r.isVideoMoment && video != null) return () => video(r.link!, r.time!, r.lang);
+    // A passage of a library (a book, or the guide) opens through the shell at its own address: the passage screen, or the
+    // guide at its section. It is not the reader's (no "Open the article"), and a #page form of it is not an address the
+    // library reads.
+    final lib = widget.onOpenSource;
+    if (r.address.startsWith('lib:') && lib != null) return () => lib(r.address);
     final a = r.readerAddress;
     if (a == null) return null;
     final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
