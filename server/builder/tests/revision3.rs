@@ -699,7 +699,9 @@ fn an_f16_shard_is_smaller_and_still_finds_the_same_passages() {
     use cache_builder::pack::PackPiece;
     let pieces: Vec<PackPiece> = (0..9000u32)
         .map(|i| {
-            let text = format!("passage number {i} about subject {} and detail {}", i % 97, i % 13);
+            // mostly words of its own: with fake (bag-of-words) vectors that share most words, the approximate index loses its way
+            // (measured: about 1 piece in 3 not found at all), which says nothing about real embeddings
+            let text = format!("alpha{i} bravo{i} charlie{i} delta{i} echo{i} subject{} detail{}", i % 97, i % 13);
             PackPiece {
                 index: i,
                 vector: fake_vector(&text),
@@ -742,16 +744,19 @@ fn an_f16_shard_is_smaller_and_still_finds_the_same_passages() {
     };
     let (la, lb) = (open(&a), open(&b));
     assert_eq!((la.docs, lb.docs), (9000, 9000));
-    for i in [0usize, 777, 4500, 8999] {
-        let mut q = pieces[i].vector.clone();
-        q.iter_mut().step_by(5).for_each(|x| *x *= 1.03);
-        // The index (HNSW) is approximate, and these pieces are near-duplicates (only their numbers differ), so a close neighbour
-        // can come first: each piece must be among the first five, as f32 and as f16.
-        let own = format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32));
-        for (name, l) in [("f32", &la), ("f16", &lb)] {
-            let hits = l.dense_search(&q, 5, 5, 200).unwrap();
-            assert!(hits.iter().any(|h| h.address == own), "{name}: piece {i} is not in its own top 5");
-        }
+    // The index (HNSW) is approximate: each of 200 pieces, queried slightly changed, must be in its own top 5 at least 95% of the
+    // time, as f32 and as f16 (measured 197/200 for both).
+    for (name, l) in [("f32", &la), ("f16", &lb)] {
+        let found = (0..200usize)
+            .filter(|k| {
+                let i = k * 45;
+                let mut q = pieces[i].vector.clone();
+                q.iter_mut().step_by(5).for_each(|x| *x *= 1.03);
+                let own = format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32));
+                l.dense_search(&q, 5, 5, 50).unwrap().iter().any(|h| h.address == own)
+            })
+            .count();
+        assert!(found >= 190, "{name}: {found} of 200 pieces in their own top 5");
     }
 }
 
