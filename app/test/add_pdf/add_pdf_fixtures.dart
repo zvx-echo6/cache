@@ -154,3 +154,20 @@ IndexItem runningItem(AddPdfJob j, {IndexWait why = IndexWait.none, bool slowed 
     IndexItem(key: j.key, state: IndexState.running, title: j.title, why: why, slowed: slowed, step: j.stepWords, progress: ((j.fraction * 1000).round(), 1000));
 
 IndexItem heldItem(AddPdfJob j, IndexWait why, {int position = 1}) => IndexItem(key: j.key, state: IndexState.held, title: j.title, why: why, position: position);
+
+/// Event-loop turns, never time: waits for [ok] by giving the loop turns (each a real turn: timers and I/O get theirs), so a slow
+/// or loaded machine only takes more turns, never a different order. Fails after [turns] turns.
+Future<void> pumpUntil(bool Function() ok, {int turns = 20000, String what = 'the condition'}) async {
+  for (var i = 0; i < turns; i++) {
+    if (ok()) return;
+    await Future<void>.delayed(Duration.zero);
+  }
+  throw StateError('gave up waiting for $what after $turns event-loop turns');
+}
+
+/// [n] event-loop turns, for "nothing more happens".
+Future<void> turns(int n) async {
+  for (var i = 0; i < n; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}

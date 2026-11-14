@@ -143,6 +143,10 @@ flutter:
     # Brand: logo, wordmarks, launch scene and module tiles (made by tool/brand_assets.dart).
     - assets/brand/
     - assets/brand/tiles/
+    # The in-memory IndexedDB and Web Storage that every ZIM page in the readers gets (fake-indexeddb, Apache-2.0; the server serves this same
+    # file at /zim-storage.js, and the phone readers put it inline in each page).
+    - assets/reader/zim_storage.js
+    - assets/reader/fake-indexeddb-LICENSE
     # The credits text (a copy of CREDITS.md at the repository root; a test keeps them equal).
     - assets/credits.md
     # The owner's "What's new" lines for each version (the sheet shown once after an update).

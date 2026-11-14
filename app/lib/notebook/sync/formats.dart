@@ -7,7 +7,7 @@ library;
 import '../notebook_model.dart';
 
 /// Cache's own property names; a field whose name would collide gets `_field`.
-const List<String> kCacheProps = ['cache_id', 'notebook', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private', 'cache_color', 'cache_icon', 'cache_on_map'];
+const List<String> kCacheProps = ['cache_id', 'notebook', 'cache_template', 'title', 'date', 'time', 'place', 'lat', 'lon', 'photos', 'private', 'cache_color', 'cache_icon', 'cache_on_map'];
 const List<String> _reserved = ['tags', 'aliases', 'cssclasses', 'id', 'alias', 'icon', 'template', 'public', 'collapsed', 'filters'];
 
 /// An entry as a file holds it: what Cache owns, field values by property name, and the properties it does not own (their
@@ -25,10 +25,16 @@ class EntryDoc {
     this.private = false,
     this.extra = const [],
     this.props,
+    this.template,
   });
 
   final String id;
   final String notebook;
+
+  /// The built-in template the entry's notebook was made from (`starters/<id>@<n>` or `templates/<id>@<n>`, the notebook's
+  /// template ref), so a device that has no such notebook yet makes it with the template's fields. Null: the notebook was not made
+  /// from one (or the file is older). Only the Cache-to-Cache share writes it.
+  final String? template;
 
   /// Local date and time without an offset (`2026-10-27T16:12:00`).
   final String when;
@@ -206,6 +212,7 @@ String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = con
 
   p('cache_id', d.id);
   if (!imported) p('notebook', d.notebook);
+  if (!imported && d.template != null) p('cache_template', d.template);
   if (d.title != null && d.title!.trim().isNotEmpty && !(imported && d.title!.trim() == titleDefault)) p('title', d.title);
   // Obsidian's Date and Date & time types: written as they are, unquoted.
   if (!imported || d.when != whenDefault) {
@@ -314,6 +321,7 @@ EntryDoc? parseObsidian(String text,
   return EntryDoc(
     id: v('cache_id') is String ? v('cache_id') as String : fallbackId,
     notebook: v('notebook') is String ? v('notebook') as String : fallbackNotebook,
+    template: v('cache_template') is String ? v('cache_template') as String : null,
     when: when,
     title: v('title')?.toString() ?? fallbackTitle,
     body: body.replaceAll('\r\n', '\n').trimRight(),

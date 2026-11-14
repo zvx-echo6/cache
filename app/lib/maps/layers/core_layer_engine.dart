@@ -658,7 +658,7 @@ class CoreLayerEngine extends LayerEngine {
       'name': label,
       'bbox': [area.west, area.south, area.east, area.north],
       // The core downloads only the tiles the outline touches (its box is the outline's own).
-      if (outline != null) 'polygon': outline,
+      'polygon': ?outline,
       'minzoom': minZoom,
       'maxzoom': est.maxZoom,
       if (file != null) 'file': file.toJson(),

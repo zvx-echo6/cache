@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../../../packages/cache_search/lib/src/engine.dart' show CoreJob;
@@ -23,7 +24,7 @@ import 'line_protocol.dart';
 ///                                              every job the helper holds, so a tab opened later sees them
 /// Errors are the core's own ({code, message}).
 class VideoOps implements OpHandler {
-  VideoOps(this.dirs, this.factory, {this.log, this.resolve});
+  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.watchEvery = const Duration(seconds: 5)});
 
   final AppDirs dirs;
   final CsNative Function() factory;
@@ -32,6 +33,13 @@ class VideoOps implements OpHandler {
   /// Swaps the keystore references (`keystore://<name>`) in a value for the stored keys. The core hook never sees `video.*` (this
   /// handler answers it), so the browser's tokens are swapped here, in `video.call`'s request and `video.jobStart`'s token. Null: no swap.
   final Object? Function(Object? value)? resolve;
+
+  /// A download finished: a saved video is new on disk (the index driver is kicked, so its captions are made searchable even
+  /// with no tab open). Told once per job, by [checkFinished], which a timer runs while a download runs.
+  final void Function()? onSaved;
+  final Duration watchEvery;
+  Timer? _watch;
+  final Set<int> _told = {};
 
   /// The finished, cancelled and failed jobs kept at most (a tab frees them as it sees them; this only bounds one that never does).
   static const int keepStopped = 50;
@@ -111,6 +119,31 @@ class VideoOps implements OpHandler {
     return jsonEncode(r(j));
   }
 
+  /// The saved videos, as cs_video_downloads lists them (each with its `captions_index`).
+  List<Map<String, dynamic>> savedVideos() {
+    final n = _open();
+    final r = n.video(_handle, 'downloads', '') ?? (throw CacheSearchException.fromJson(n.lastError(_handle)));
+    return [for (final d in ((jsonDecode(r) as Map)['downloads'] as List? ?? const [])) (d as Map).cast<String, dynamic>()];
+  }
+
+  /// Tells [onSaved] of each download that finished since the last look; the watch stops when none runs.
+  void checkFinished() {
+    var running = false;
+    for (final e in _jobs.entries.toList()) {
+      final state = e.value.job.progress().state;
+      if (state == JobState.running) {
+        running = true;
+      } else if (state == JobState.done && _told.add(e.key)) {
+        log?.call('video saved: ${e.value.instance}/${e.value.video}');
+        onSaved?.call();
+      }
+    }
+    if (!running) {
+      _watch?.cancel();
+      _watch = null;
+    }
+  }
+
   _Entry _entry(Object? id) => _jobs[id] ?? (throw const CacheSearchException('not_found', 'No such download'));
 
   Map<String, dynamic> _progress(_Entry e) {
@@ -152,6 +185,7 @@ class VideoOps implements OpHandler {
     final id = _next++;
     _jobs[id] = _Entry(job, instance, video, choice, (a['title'] as String?) ?? '', (a['label'] as String?) ?? '');
     _prune();
+    if (onSaved != null) _watch ??= Timer.periodic(watchEvery, (_) => checkFinished());
     log?.call('video download started: $instance/$video ($choice)');
     return {'job': id};
   }

@@ -89,23 +89,32 @@ class _Rig {
     return r;
   }
 
-  /// Lets real file writes and the fake engines' timers finish, and draws the result. Real writes (the regions file) can take
-  /// a few hundred milliseconds on a busy machine, so this waits up to about a second.
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
-
   /// [settle] until [done] holds (at most [turns] turns). A widget test lets the app's real file work run only inside runAsync,
   /// and what follows each step only at the next pump, so every file step (open, write, flush, close, rename) takes one turn: a
   /// chain like removing a region (two saves of regions-app.json around a refresh) needs about a dozen turns, more when the
   /// machine is busy and a step misses its turn. A fixed number of turns ran out on a busy CI runner now and then.
-  Future<void> settleUntil(WidgetTester tester, bool Function() done, {int turns = 300}) async {
+  /// Every wait in these tests is one of these: on what the next check reads, never a fixed time (a fixed wait ran out under
+  /// load on the build boxes).
+  /// Then the test's own clock goes on [after] (sheets and pop-ups finish opening, short timers run out): that time is the
+  /// test's, not the machine's, so it is the same under any load.
+  Future<void> settleUntil(WidgetTester tester, bool Function() done, {int turns = 300, Duration after = const Duration(milliseconds: 600)}) async {
     for (var i = 0; i < turns && !done(); i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump(const Duration(milliseconds: 50));
+    }
+    for (var t = Duration.zero; t < after; t += const Duration(milliseconds: 50)) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// Reads the core's status again until [done] holds: what a download started (its saves of the regions file) may still be
+  /// finishing when the fake core says a part is done.
+  Future<void> refreshUntil(WidgetTester tester, bool Function() done, {int turns = 300}) async {
+    for (var i = 0; i < turns; i++) {
+      await tester.runAsync(regions.refresh);
+      await tester.pump();
+      if (done()) return;
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     }
   }
 
@@ -115,6 +124,8 @@ class _Rig {
     await s.dispose(tester);
   }
 }
+
+bool _shown(Finder f) => f.evaluate().isNotEmpty;
 
 Future<void> _openCountySheet(WidgetTester tester) async {
   await tester.enterText(find.byKey(const ValueKey('region-search')), 'twin falls county');
@@ -155,7 +166,7 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     r.core.calls.clear();
     await _openCountySheet(tester);
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
     expect(r.core.calls, isNot(contains('plan')), reason: 'the size comes with the catalogue (1.0.27 worked it out for a minute)');
     final offer = r.regions.offer(r.county);
     expect(offer.kind, RegionOfferKind.download);
@@ -165,7 +176,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pump();
     expect(find.text('Downloading Twin Falls County'), findsOneWidget, reason: 'the tap says what it did');
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.added.isNotEmpty && r.s.engine.areasOf('basemap').isNotEmpty);
     expect(r.core.added.single['id'], _county);
     expect(r.core.added.single['geometry'], isA<Map<String, dynamic>>());
     expect(r.s.engine.areasOf('basemap').single.label, 'Twin Falls County');
@@ -195,11 +206,7 @@ void main() {
     expect(r.s.engine.nearOf['Twin Falls County'], (lat: centre[0], lon: centre[1]));
 
     r.core.finish(_county);
-    await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      await r.regions.refresh();
-    });
-    await tester.pump();
+    await r.refreshUntil(tester, () => _shown(find.textContaining('On this device · ')));
     expect(find.textContaining('On this device · '), findsOneWidget);
     expect(find.textContaining('next time Cache opens'), findsNothing, reason: 'the next route uses it, nothing waits for a restart');
 
@@ -233,12 +240,12 @@ void main() {
     expect(r.core.policies.last, {'network': false, 'hold': false}, reason: 'the same rule as sharing: no mobile data unless downloads may use it');
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('download-mobile'))));
     // The pop-up says so and offers Wait for Wi-Fi first.
     expect(find.byKey(const ValueKey('download-mobile')), findsOneWidget);
     expect(r.core.added, isEmpty, reason: 'nothing starts before the person says so');
     await tester.tap(find.byKey(const ValueKey('download-now')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.added.isNotEmpty && r.core.regions[_county]?['state'] == 'paused' && r.regions.regionOf(_county)?.phase == RegionPhase.paused);
     expect(r.core.added, hasLength(1));
     expect(r.core.regions[_county]!['state'], 'paused');
 
@@ -247,7 +254,7 @@ void main() {
     expect(find.text('Waiting for Wi-Fi'), findsWidgets);
 
     r.s.settings.setMobileForDownloads(true);
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await r.settleUntil(tester, () => r.core.policies.last['network'] == true);
     expect(r.core.policies.last, {'network': true, 'hold': false});
     await tester.runAsync(r.regions.refresh);
     await tester.pump();
@@ -308,12 +315,9 @@ void main() {
 
   testWidgets('Updates groups road routing and maps, and Update all updates both', (tester) async {
     final r = await _Rig.boot(tester);
-    await tester.runAsync(() async {
-      await r.regions.download(r.county, routing: true, map: true);
-      r.core.finish(_county);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      await r.regions.refresh();
-    });
+    await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+    r.core.finish(_county);
+    await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
     await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 2));
     await tester.pump();
     expect(find.text('ROAD ROUTING'), findsOneWidget);
@@ -323,7 +327,7 @@ void main() {
 
     r.core.update = {'build': '2026-11', 'download_bytes': 5 << 20};
     await tester.tap(find.text('Check for updates'));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.calls.contains('check_update') && _shown(find.text('New road routing')));
     expect(r.core.calls, contains('check_update'));
     expect(find.text('New road routing'), findsOneWidget);
     expect(find.text('2026-11 · About 5.0 MB to download'), findsOneWidget);
@@ -332,7 +336,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('update-all')));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('update-all')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.build == '2026-11' && _shown(find.text('Up to date')) && r.s.engine.areasOf('basemap').single.phase.name == 'done');
     expect(r.core.calls, contains('update'));
     expect(r.core.build, '2026-11');
     expect(find.text('Up to date'), findsOneWidget);
@@ -457,7 +461,7 @@ void main() {
     expect(l.parts.single.state, PartState.notAvailable);
     expect(l.phase, RegionPhase.ready);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: RegionPage(regions: r.regions, id: _county)));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.text('Not available yet for this area')));
     expect(find.descendant(of: find.byKey(const ValueKey('part-directions')), matching: find.text('Not available yet for this area')), findsOneWidget);
     expect(find.textContaining('Ready · '), findsNothing, reason: 'it read "Ready · 0 B", with a tick');
     // the same row places have: a tap says why
@@ -628,12 +632,12 @@ void main() {
       await tester.runAsync(r.regions.checkUpdates);
       expect(r.regions.placesNowAvailable(r.regions.regionOf('us-id')!), isTrue, reason: 'check_update read the server: places are published');
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: RegionPage(regions: r.regions, id: 'us-id')));
-      await r.settle(tester);
+      await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('part-places-add'))));
       expect(find.byKey(const ValueKey('part-places-add')), findsOneWidget);
       expect(find.text('Now available'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-places')), findsOneWidget);
       await tester.runAsync(() => r.regions.updateRegion('us-id', anyway: true));
-      await r.settle(tester);
+      await r.settleUntil(tester, () => r.regions.regionOf('us-id')!.hasPlaces && _shown(find.byKey(const ValueKey('part-places'))));
       expect(r.regions.regionOf('us-id')!.hasPlaces, isTrue, reason: 'Update adds the newly published part');
       expect(find.byKey(const ValueKey('part-places-add')), findsNothing);
       expect(find.byKey(const ValueKey('part-places')), findsOneWidget);
@@ -650,10 +654,8 @@ void main() {
       // the state 1.0.28 left: the app keeps the region, the core never listed it (its add failed before places were published)
       r.core.regions.remove('us-id');
       final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
-      await tester.runAsync(() async {
-        await again.init();
-        await Future<void>.delayed(const Duration(milliseconds: 60));
-      });
+      await tester.runAsync(again.init);
+      await r.settleUntil(tester, () => again.regionOf('us-id')?.phase == RegionPhase.stopped);
       final l = again.regionOf('us-id')!;
       expect([for (final p in l.parts) (p.kind, p.state)], [(RegionPartKind.directions, PartState.stopped), (RegionPartKind.places, PartState.stopped)],
           reason: 'not "waiting" for ever: nothing is queued for it');
@@ -700,11 +702,10 @@ void main() {
       await tester.runAsync(() async {
         await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
         await r.regions.download(r.county, routing: true, map: true);
-        r.core.finish('us-id');
-        r.core.finish(_county);
-        await Future<void>.delayed(const Duration(milliseconds: 60));
-        await r.regions.refresh();
       });
+      r.core.finish('us-id');
+      r.core.finish(_county);
+      await r.refreshUntil(tester, () => r.regions.regionOf('us-id')?.phase == RegionPhase.ready && r.regions.regionOf(_county)?.phase == RegionPhase.ready);
       await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
       await tester.pump();
       expect(find.text('On this device · ${formatBytes(140 << 20)}'), findsOneWidget);
@@ -714,7 +715,7 @@ void main() {
       await tester.longPress(find.byKey(const ValueKey('local-$_county')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('region-action-update')));
-      await r.settle(tester);
+      await r.settleUntil(tester, () => r.core.added.last['id'] == _county && (r.core.added.last['parts'] as List).join(',') == 'places');
       expect(r.core.added.last['id'], _county);
       expect(r.core.added.last['parts'], ['places'], reason: 'only the missing part');
       r.core.finish(_county);
@@ -764,14 +765,14 @@ void main() {
 
       r.core.placesUpdate = {'build': 'na-places-2026-12-15', 'download_bytes': 23 << 20, 'downloading': false};
       await tester.tap(find.text('Check for updates'));
-      await r.settle(tester);
+      await r.settleUntil(tester, () => _shown(find.text('New places')));
       expect(find.text('New places'), findsOneWidget);
       expect(find.text('na-places-2026-12-15 · About 23 MB to download'), findsOneWidget);
 
       await tester.ensureVisible(find.byKey(const ValueKey('update-all')));
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('update-all')));
-      await r.settle(tester);
+      await r.settleUntil(tester, () => _shown(find.text('Downloading na-places-2026-12-15')));
       expect(r.core.calls.where((c) => c == 'update'), hasLength(1), reason: 'only places had a new build');
       expect(find.text('Downloading na-places-2026-12-15'), findsOneWidget);
       await r.dispose(tester);
@@ -841,7 +842,7 @@ void main() {
       child: const Text('open'),
     ))));
     await tester.tap(find.text('open'));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.text('Twin Falls County')));
     expect(find.text('Regions'), findsOneWidget);
     expect(find.text('Each region has directions, map, places and off-road.'), findsOneWidget);
     expect(find.textContaining('County · ${formatBytes(r.regions.offer(r.county).bytes!)}'), findsOneWidget, reason: 'sizes at once');
@@ -855,10 +856,10 @@ void main() {
     await tester.pump();
     expect(find.textContaining('Download 1 ·'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('regions-download-picked')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.added.isNotEmpty);
     expect(r.core.added.single['id'], _county);
     await r.dispose(tester);
   });
@@ -868,9 +869,9 @@ void main() {
     await tester.runAsync(() => r.catalogue.readShardAt(42.55, -114.4));
     await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
     await tester.tap(find.text('open'));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('regions-draw'))));
     await tester.tap(find.byKey(const ValueKey('regions-draw')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.s.maps.drawRequest);
     expect(r.s.maps.drawRequest, isTrue, reason: 'the map is asked to draw');
     // what the map does with the rectangle: a region record of it, downloaded like any other
     final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.5, north: 42.6, east: -114.3), at: DateTime(2026, 10, 30));
@@ -883,7 +884,7 @@ void main() {
       ],
     });
     await tester.runAsync(() => r.regions.download(drawn, routing: true, map: true, anyway: true));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => r.core.added.isNotEmpty && r.s.engine.areasOf('basemap').isNotEmpty);
     expect(r.core.added.single['geometry'], g);
     expect(r.s.engine.areasOf('basemap').single.label, 'Drawn area');
     await r.dispose(tester);
@@ -906,9 +907,9 @@ void main() {
     // Home's "Get your area": the Regions sheet over Home, with no map on screen yet.
     await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
     await tester.tap(find.text('open'));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('regions-draw'))));
     await tester.tap(find.byKey(const ValueKey('regions-draw')));
-    await r.settle(tester);
+    await r.settleUntil(tester, () => !_shown(find.text('Draw your own area instead')));
     expect(find.text('Draw your own area instead'), findsNothing, reason: 'the sheet closed');
     // The shell opens the Maps tab for the request; the map screen is built then, after the request was made.
     await r.s.show(tester, MapsScreen(
@@ -935,7 +936,7 @@ void main() {
     final r = await _Rig.boot(tester);
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
-    await r.settle(tester);
+    await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();

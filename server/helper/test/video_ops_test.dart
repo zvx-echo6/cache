@@ -109,6 +109,28 @@ void main() {
     expect(() => ops.handle('video.jobProgress', {'job': a['job']}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'not_found')));
   });
 
+  test('a download that finishes is told once (the index driver is kicked), and the saved videos are listed from cs_video_downloads', () {
+    var told = 0;
+    ops = VideoOps(AppDirs(support, docs), () => fake, onSaved: () => told++);
+    fake.progressScript.add(running(1, 2));
+    ops.handle('video.jobStart', {'instance': 'a', 'video': 'u'});
+    ops.checkFinished();
+    expect(told, 0);
+    fake.progressScript
+      ..clear()
+      ..add(jsonEncode({'state': 'done', 'done': 2, 'total': 2}));
+    ops.checkFinished();
+    ops.checkFinished();
+    expect(told, 1, reason: 'once per finished download');
+    fake.videoReplies['downloads'] = jsonEncode({
+      'downloads': [
+        {'instance': 'a', 'uuid': 'u', 'captions_index': {'source_id': 'a/u', 'needs_build': true}},
+      ],
+    });
+    expect(ops.savedVideos().single['captions_index'], {'source_id': 'a/u', 'needs_build': true});
+    expect(fake.videoCalls.last, 'downloads:');
+  });
+
   test('an unknown video op is an error', () {
     expect(() => ops.handle('video.nope', {}), throwsA(isA<CacheSearchException>()));
   });

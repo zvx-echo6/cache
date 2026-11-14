@@ -59,6 +59,25 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
     return true;
   }
 
+  /// The camera moves made at once (no animation), as [cameras] records them; they are in [cameras] too, in order.
+  final List<dynamic> moves = [];
+
+  @override
+  Future<bool?> moveCamera(CameraUpdate update) async {
+    cameras.add(update.toJson());
+    moves.add(update.toJson());
+    return true;
+  }
+
+  /// The paddings (content insets) the screen gave the map, in order; [padding] is the one it has now (none at first).
+  final List<EdgeInsets> insets = [];
+  EdgeInsets get padding => insets.isEmpty ? EdgeInsets.zero : insets.last;
+
+  @override
+  Future<void> updateContentInsets(EdgeInsets insets, [bool animated = false]) async {
+    this.insets.add(insets);
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

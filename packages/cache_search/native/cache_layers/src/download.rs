@@ -307,7 +307,10 @@ struct Prepared {
 }
 
 /// The tiles of `tiles` (in tile id order, so zoom by zoom) a zoom at a time, with the box they span at that zoom.
-fn by_zoom(tiles: &[(u64, u8, u32, u32)]) -> impl Iterator<Item = (u8, (u32, u32), (u32, u32), &[(u64, u8, u32, u32)])> {
+/// One zoom's tiles: the zoom, the x and y spans, the tiles.
+type ZoomRun<'a> = (u8, (u32, u32), (u32, u32), &'a [Tile]);
+
+fn by_zoom(tiles: &[Tile]) -> impl Iterator<Item = ZoomRun<'_>> {
     tiles.chunk_by(|a, b| a.1 == b.1).map(|run| {
         let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0, u32::MAX, 0);
         for t in run {

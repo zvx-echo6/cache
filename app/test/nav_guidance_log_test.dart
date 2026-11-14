@@ -319,4 +319,18 @@ void main() {
       expect(lines('ERROR', 'Guidance: off the route, working out a new route failed: internal: broken'), hasLength(2));
     });
   });
+
+  test('guidance that ends by itself after arrival says so in one line, then ends as End does', () async {
+    nav.arrivalEndAfter = const Duration(milliseconds: 100);
+    backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(routeJson, 1.0, arrived: true));
+    await startGuidance();
+    expect(nav.arrived, isTrue);
+    expect(lines('INFO', 'Guidance: arrived, the position keeps coming until End'), hasLength(1));
+    await settle(300);
+    expect(nav.guiding, isFalse);
+    expect(lines('INFO', 'Guidance: ended by itself 5 minutes after arrival'), hasLength(1));
+    expect(lines('INFO', 'Guidance: ended, the position service is let go'), hasLength(1));
+    await settle(200);
+    expect(lines('INFO', 'Guidance: ended by itself 5 minutes after arrival'), hasLength(1));
+  });
 }

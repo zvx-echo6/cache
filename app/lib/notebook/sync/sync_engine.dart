@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../files.dart';
 import '../notebook_model.dart';
 import '../notebook_state.dart';
+import '../templates.dart';
 import 'folder.dart';
 import 'formats.dart';
 import 'merge.dart';
@@ -149,7 +150,12 @@ class NotebookSync {
     this.logseqConfig,
     this.importTag = kDefaultImportTag,
     DateTime Function()? clock,
-  }) : _now = clock ?? DateTime.now;
+    Future<Templates> Function()? templates,
+  })  : _now = clock ?? DateTime.now,
+        _templates = templates ?? loadTemplates;
+
+  /// The built-in templates (and starter logs): a notebook that arrives without its definition is made from the one its files name.
+  final Future<Templates> Function() _templates;
 
   /// The tag that imports a note (Obsidian and two-way Logseq).
   final String importTag;
@@ -252,6 +258,7 @@ class NotebookSync {
       photos: [for (final p in e.photos) p.id],
       fields: {for (final f in n.def.fields) if (f.fid != null && e.values.containsKey(f.fid) && m[f.fid] != null) m[f.fid]!: e.values[f.fid]},
       private: e.private,
+      template: kind == SyncKind.share ? templateKeyOf(n) : null,
       extra: _items[e.id]?.extra ?? const [],
       // Only the Cache-to-Cache share carries them: a person's own Obsidian vault or Logseq graph gets no Cache properties it
       // did not have.
@@ -526,6 +533,20 @@ class NotebookSync {
     // (saveNotebook keeps an existing notebook's fields), so every value stays in its field and every file keeps its keys.
     final sharedId = shared?['id'];
     final renamed = sharedId is String && notebook.notebook(sharedId) != null;
+    // No definition from this device's last sync, and the files say which built-in template the notebook was made from: made from
+    // that template, with its fields, so every value lands in its field (the property names come from the labels, the same on both
+    // devices). A template this build does not have is made as before.
+    final built = shared == null && d.template != null ? _builtIn(await _templates(), d.template!) : null;
+    if (built != null) {
+      final made = await notebook.saveNotebook(
+        template: built.template,
+        def: built.def.copyWith(name: d.notebook),
+        map: built.map,
+        templateRef: built.ref,
+      );
+      byName[made.name] = made;
+      return made;
+    }
     final made = await notebook.saveNotebook(
       id: shared?['id'] as String?,
       template: (shared?['template'] as String?) ?? 'notes',
@@ -570,6 +591,14 @@ class NotebookSync {
         ...def,
         'fields': [for (final f in (def['fields'] as List? ?? const [])) if ((f as Map)['hidden'] != true) {...f}..remove('fid')],
       };
+
+  /// The built-in template or starter log a `cache_template` value names, or null (unknown here, or the Places template, whose
+  /// notebooks hold the saved places and are made as before).
+  static NotebookTemplate? _builtIn(Templates t, String key) {
+    final m = RegExp(r'^(starters|templates)/(.+)@\d+$').firstMatch(key);
+    if (m == null || m.group(2) == 'places') return null;
+    return m.group(1) == 'starters' ? t.starters.where((x) => x.id == m.group(2)).firstOrNull : t.byId(m.group(2)!);
+  }
 
   Map<String, dynamic>? _sharedBooks;
 
@@ -797,6 +826,11 @@ class NotebookSync {
           }
         }
       } else if (s != null) {
+        // Not read is not deleted: an entry that is still in the store (and still part of this sync) was left out of the read, so
+        // nothing is removed or written for it this round.
+        final stored = await notebook.entry(id);
+        final home = stored == null ? null : notebook.notebook(stored.notebookId);
+        if (stored != null && home != null && _included(home, stored)) continue;
         if (f == null || kind == SyncKind.logseqExport) {
           // Gone from Cache: gone from the folder too (unless only the folder had it, already gone).
           if (f == null && kind != SyncKind.logseqExport) {
@@ -1116,4 +1150,12 @@ class NotebookSync {
       if (await stateFile.exists()) await stateFile.delete();
     } catch (_) {}
   }
+}
+
+/// What a notebook's files say about its template (`cache_template`): its template ref when it was made from a starter log or a
+/// built-in template, else null. The Places template is left out (see NotebookSync._builtIn).
+String? templateKeyOf(Notebook n) {
+  final r = n.templateRef;
+  if (r == null || !RegExp(r'^(starters|templates)/.+@\d+$').hasMatch(r) || r.startsWith('templates/places@')) return null;
+  return r;
 }
