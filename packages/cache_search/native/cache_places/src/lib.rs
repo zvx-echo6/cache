@@ -98,16 +98,13 @@ pub(crate) struct Center {
     pub lon: f64,
     /// "current location", the saved place's name, or the geocoder's label.
     pub label: String,
-    /// True when `near` named nothing the geocoder could vouch for and the phone's position stands in for it.
-    #[allow(dead_code)]
-    pub fell_back: bool,
 }
 
 pub(crate) fn resolve_center(ctx: &ToolCtx, packs: &PackSet, geo: &dyn Geocoder, near: Option<&str>) -> Result<Center, ToolError> {
     match near {
         Some(name) => {
             if let Some(p) = ctx.places.resolve(name) {
-                return Ok(Center { lat: p.lat, lon: p.lon, label: p.name, fell_back: false });
+                return Ok(Center { lat: p.lat, lon: p.lon, label: p.name });
             }
             if packs.current().is_empty() {
                 return Err(ToolError::new(ToolError::NOT_SET_UP, "no places data is installed, so a place name cannot be looked up"));
@@ -115,20 +112,19 @@ pub(crate) fn resolve_center(ctx: &ToolCtx, packs: &PackSet, geo: &dyn Geocoder,
             let bias = ctx.location.map(|l| (l.lat, l.lon));
             // Only a hit the geocoder itself rates as the place the query named; an any-word match is not one.
             match geo.forward(name, bias, 1).into_iter().next().filter(|h| h.name_match >= geocoder::GOOD_NAME_MATCH) {
-                Some(h) => Ok(Center { lat: h.lat, lon: h.lon, label: h.label, fell_back: false }),
+                Some(h) => Ok(Center { lat: h.lat, lon: h.lon, label: h.label }),
                 None => match ctx.location {
                     Some(l) => Ok(Center {
                         lat: l.lat,
                         lon: l.lon,
                         label: format!("current location (nothing found named \"{}\")", name.trim()),
-                        fell_back: true,
                     }),
                     None => Err(ToolError::new("geocode_empty", format!("no place matches {:?}", name.trim())).with("query", name.trim())),
                 },
             }
         }
         None => match ctx.location {
-            Some(l) => Ok(Center { lat: l.lat, lon: l.lon, label: "current location".into(), fell_back: false }),
+            Some(l) => Ok(Center { lat: l.lat, lon: l.lon, label: "current location".into() }),
             None => Err(ToolError::new(ToolError::NO_LOCATION, "no place was given and the phone's location is not known")),
         },
     }
