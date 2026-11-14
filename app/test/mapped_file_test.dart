@@ -38,4 +38,14 @@ void main() {
   test('an anonymous mapping or a mapping of another file never counts', () {
     expect(mappedFileSummaryOf(_smaps([]), _model), 'model file not mapped');
   });
+
+  test('the allocator report as a log line: what came back, before and after', () {
+    expect(freedMemoryNote('{"what":"anon","before_kb":555008,"after_kb":275456,"result":1}'),
+        'allocator gave back 273 MB (anon 542 MB to 269 MB)');
+    expect(freedMemoryNote('{"what":"footprint","before_kb":810000,"after_kb":520000,"result":296000000}'),
+        'allocator gave back 283 MB (footprint 791 MB to 507 MB)');
+    expect(freedMemoryNote('{"what":"anon","before_kb":-1,"after_kb":-1,"result":1}'), 'allocator asked to give memory back (anon not readable)');
+    expect(freedMemoryNote(null), isNull);
+    expect(freedMemoryNote('not json'), isNull);
+  });
 }

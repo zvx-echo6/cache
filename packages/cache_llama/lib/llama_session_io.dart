@@ -4,6 +4,7 @@ import 'dart:ffi';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'cache_llama_bindings.dart';
 import 'load_options.dart';
@@ -31,6 +32,22 @@ class LlamaSession {
   int _joinedQid = 0;
   CacheLlamaBindings? _mainBindings; // only used for cl_stop
   int _handleAddress = 0;
+  final Map<int, Completer<String?>> _frees = {};
+
+  /// What the allocator gave back after the last [unload] (cl_release_free_memory's JSON), or null (not known, older library).
+  String? lastFreeReport;
+
+  /// The worker's entry point; tests give a stand-in.
+  @visibleForTesting
+  void Function(SendPort toMain) workerEntry = _workerMain;
+
+  /// How long [unload] waits for the worker to say the model is freed.
+  @visibleForTesting
+  Duration freeTimeout = const Duration(seconds: 10);
+
+  /// Starts the background isolate (tests: a stand-in worker without loading a model).
+  @visibleForTesting
+  Future<void> startWorker() => _ensureWorker();
 
   bool get isLoaded => _handleAddress != 0;
 
@@ -45,7 +62,7 @@ class LlamaSession {
     rp.listen(_onMessage);
     final errors = ReceivePort();
     errors.listen((dynamic e) => _failAll('The model engine crashed: ${(e as List).first}'));
-    _isolate = await Isolate.spawn(_workerMain, rp.sendPort, debugName: 'cache_llama', onError: errors.sendPort);
+    _isolate = await Isolate.spawn(workerEntry, rp.sendPort, debugName: 'cache_llama', onError: errors.sendPort);
     return _ready!.future;
   }
 
@@ -58,6 +75,8 @@ class LlamaSession {
     final msg = m as Map;
     final id = msg['id'] as int;
     switch (msg['type']) {
+      case 'freed':
+        _frees.remove(id)?.complete(msg['purge'] as String?);
       case 'loaded':
         _loads.remove(id)?.complete(msg.cast<String, dynamic>());
       case 'partial':
@@ -114,6 +133,10 @@ class LlamaSession {
     }
     _gens.clear();
     _endWarms(why);
+    for (final c in _frees.values) {
+      c.complete(null);
+    }
+    _frees.clear();
     _handleAddress = 0;
   }
 
@@ -231,7 +254,9 @@ class LlamaSession {
     if (_handleAddress != 0) _mainBindings?.clStop(Pointer<Void>.fromAddress(_handleAddress));
   }
 
-  /// Frees the model's memory; the background isolate stays for the next [load]. A running generation is stopped first.
+  /// Frees the model's memory; the background isolate stays for the next [load]. A running generation is stopped first. Completes
+  /// once the worker has freed the handle and asked the allocator to give the memory back ([lastFreeReport]), or after
+  /// [freeTimeout]: what follows (a memory reading, the next load) sees the memory free.
   Future<void> unload() async {
     if (_toWorker == null) return;
     _stopNative();
@@ -241,8 +266,15 @@ class LlamaSession {
     }
     _gens.clear();
     _endWarms('the model was unloaded');
-    // The worker frees the handle once the stopped generation has ended.
-    _toWorker!.send({'type': 'free'});
+    // The worker frees the handle once the stopped generation has ended, then answers.
+    final id = _nextId++;
+    final done = Completer<String?>();
+    _frees[id] = done;
+    _toWorker!.send({'type': 'free', 'id': id});
+    lastFreeReport = await done.future.timeout(freeTimeout, onTimeout: () {
+      _frees.remove(id);
+      return null;
+    });
   }
 
   /// Frees the model and ends the background isolate.
@@ -384,6 +416,11 @@ void _workerMain(SendPort toMain) {
           b.clFree(handle);
           handle = nullptr;
         }
+        // the freed memory back to the system, and what it changed (the app logs it)
+        String? purge;
+        final release = b.clReleaseFreeMemory;
+        if (release != null && release(json, _kJsonBuf) >= 0) purge = json.toDartString();
+        if (id != null) toMain.send({'type': 'freed', 'id': id, 'purge': purge});
     }
   });
 }

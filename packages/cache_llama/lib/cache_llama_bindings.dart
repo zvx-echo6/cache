@@ -48,6 +48,9 @@ class CacheLlamaBindings {
         clReusedTokens = lib.providesSymbol('cl_reused_tokens')
             ? lib.lookupFunction<_IntHC, LlamaHandleIntCall>('cl_reused_tokens')
             : null,
+        clReleaseFreeMemory = lib.providesSymbol('cl_release_free_memory')
+            ? lib.lookupFunction<Int32 Function(Pointer<Utf8>, Int32), int Function(Pointer<Utf8>, int)>('cl_release_free_memory')
+            : null,
         clConfigure = lib.providesSymbol('cl_configure')
             ? lib.lookupFunction<_ConfigureC, LlamaConfigureCall>('cl_configure')
             : null,
@@ -101,6 +104,10 @@ class CacheLlamaBindings {
 
   /// Options for the next load (JSON: prefix_dir, repack_weights, preread_mbps); null in an older library.
   final LlamaConfigureCall? clConfigure;
+
+  /// Gives memory the process has freed back to the system and reports the memory before and after (JSON, see cache_llama.h);
+  /// null in an older library.
+  final int Function(Pointer<Utf8> out, int len)? clReleaseFreeMemory;
 
   /// What the last start did with the saved prompt prefix (one log line, or empty); null in an older library.
   final LlamaBufferCall? clPrefixNote;

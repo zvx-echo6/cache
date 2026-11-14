@@ -128,6 +128,14 @@ CL_API void cl_free(void * h);
 // Not while another handle of the process is generating. cl_free of a handle freed here does nothing.
 CL_API int cl_free_all(void);
 
+// Asks the allocator to give memory the process has freed back to the system, as after a model is freed: on Android
+// mallopt(M_PURGE_ALL) (API 34+, else M_PURGE, API 28+), on Linux glibc malloc_trim(0), on Apple
+// malloc_zone_pressure_relief(NULL, 0); elsewhere nothing. Writes JSON {"what","before_kb","after_kb","result"}: the process's
+// anonymous memory ("anon", Linux and Android RssAnon) or footprint ("footprint", Apple phys_footprint) before and after, -1
+// where unknown, and the call's own result (Apple: bytes released; Android: 1 if done; glibc: 1 if memory was released).
+// Returns the JSON length, or -1.
+CL_API int cl_release_free_memory(char * out_json, int out_len);
+
 // ---- Embeddings (separate handle type: an app may hold a chat handle and an embedding handle at once) ----
 // Not thread-safe per handle: one cl_embed at a time on a given embedding handle.
 // Prefixes some models expect (e.g. "query: " / "passage: ", or an instruction line) are the caller's job:
