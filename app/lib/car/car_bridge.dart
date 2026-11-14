@@ -524,12 +524,13 @@ class CarBridge {
   /// places found, for the driver to pick. [start] begins guidance once the route is ready (`intent=navigation`), otherwise the
   /// route is only shown (`intent=directions`).
   ///
-  /// [stop] (`intent=add_a_stop`) during a drive adds the place as the next stop, as the car's own Add stop does: the route
-  /// keeps its destination, and `added` says whether the stop was added (when not, the phone's notice says why, as for the
-  /// car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to list for Add
-  /// stop. With nothing guided there are no destinations to keep: it is a plain navigation request.
+  /// [stop] (`intent=add_a_stop`) during a drive, or while a route is shown before Start, adds the place as a stop, as the
+  /// car's own Add stop does (the next stop during a drive, after the stops there are before Start): the route keeps its
+  /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
+  /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
+  /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
   Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
-    final asStop = stop && nav.guiding;
+    final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
@@ -545,7 +546,7 @@ class CarBridge {
     if (to == null) return {'places': const [], if (asStop) 'forStop': true};
     _placeOut(to);
     if (asStop) {
-      final added = await nav.addStopWhileGuiding(to);
+      final added = nav.guiding ? await nav.addStopWhileGuiding(to) : await nav.addStop(to);
       if (added) await push();
       return {'started': nav.guiding, 'id': to.id, 'added': added};
     }

@@ -1479,6 +1479,23 @@ void main() {
       expect([for (final c in toCar.where((m) => m.method == 'notice')) (c.arguments as Map)['text']], hasLength(1));
     });
 
+    test('an add-a-stop request while a route is shown before Start adds the stop to it; guidance is not started', () async {
+      await preview();
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isTrue);
+      expect(r['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.guiding, isFalse);
+      expect(nav.selected!.name, 'Cassia Regional Hospital', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, greaterThan(routesBefore));
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+    });
+
     test('an add-a-stop request with nothing guided is a navigation request: guidance starts to the place', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
