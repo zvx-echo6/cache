@@ -29,6 +29,8 @@ for entitlement in com.apple.developer.kernel.increased-memory-limit com.apple.d
   [[ $(/usr/libexec/PlistBuddy -c "Print :$entitlement" "$work/entitlements.plist") == true ]] || fail "missing entitlement: $entitlement"
 done
 [[ $(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$work/entitlements.plist") == "$TEAM_ID.$BUNDLE_ID" ]] || fail 'signed application identity mismatch'
+# Linking by NFC (Core NFC refuses a reader session without it): both entitlement files carry it, so every build must.
+[[ $(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats:0' "$work/entitlements.plist" 2>/dev/null) == NDEF ]] || fail 'missing entitlement: com.apple.developer.nfc.readersession.formats (NDEF)'
 # The car screen (CarPlay). Its entitlement puts the app's icon on every user's CarPlay screen, so it is in the signed app
 # exactly when the build was made with it on (EXPECT_CARPLAY=true, the build setting CACHE_CARPLAY=YES) and never otherwise.
 carplay=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.carplay-maps' "$work/entitlements.plist" 2>/dev/null || true)

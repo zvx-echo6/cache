@@ -10,6 +10,12 @@
 	<true/>
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+	<!-- Reading a link code from another phone or a tag (NFCNDEFReaderSession, lib/sharing/nfc_link.dart); NFC Tag Reading is
+	     enabled on the App ID. Kept in step with Runner.entitlements: a build signs with one file or the other. -->
+	<key>com.apple.developer.nfc.readersession.formats</key>
+	<array>
+		<string>NDEF</string>
+	</array>
 	<!-- The car screen. Only this file has it: a build uses this file when it is made with CACHE_CARPLAY=YES, and
 	     Runner.entitlements otherwise (the Runner target's CODE_SIGN_ENTITLEMENTS). Once the entitlement is in an app,
 	     its icon is on every user's CarPlay screen. -->
