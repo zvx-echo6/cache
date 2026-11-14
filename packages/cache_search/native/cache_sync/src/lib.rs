@@ -158,6 +158,11 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// The engine stops itself this many seconds after it opened, whether or not it was closed: no more rounds, the router and
+    /// the store shut down (so another engine can open the folder). For a background run, whose process may be stopped by the
+    /// system before it can close the engine; absent: no limit (the app's own engine).
+    #[serde(default)]
+    pub lifetime_secs: Option<u64>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -2030,6 +2035,21 @@ impl SyncEngine {
                 let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
             }
         });
+        if let Some(secs) = cfg.lifetime_secs {
+            let inner4 = inner.clone();
+            let router4 = router.clone();
+            rt.spawn(async move {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                // Closed already (close sets `stop` first): nothing left to do.
+                if inner4.stop.swap(true, Ordering::Relaxed) {
+                    return;
+                }
+                inner4.note("Stopped: the time limit of this run was reached");
+                inner4.wake.notify_one();
+                let _ = tokio::time::timeout(Duration::from_secs(5), router4.shutdown()).await;
+                let _ = inner4.store.shutdown().await;
+            });
+        }
         Ok(SyncEngine { rt, inner, router: Some(router) })
     }
 

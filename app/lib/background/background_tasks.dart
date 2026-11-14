@@ -12,16 +12,24 @@ import '../platform/proc_diag.dart';
 ///   also the iPhone's BGTaskScheduler identifier (Info.plist) and existing phones have it scheduled under that name;
 /// - watch-folder-detect: Android, a few times a day, counts new files in the watched folders (no reading, no adding);
 /// - watch-folder-add: Android, once, while charging: adds the new PDFs through Add PDF in slices;
-/// - sync: a slot kept for a background notebook and library sync. Not built: there is no task under that name yet.
+/// - sync: a round with the linked devices (background/sync_background.dart): on Android a periodic WorkManager job, on iPhone
+///   a BGAppRefreshTask (`sync-refresh`) and, while charging, a BGProcessingTask (`sync-processing`), each as far as iOS lets it.
 const String kWeatherTask = 'com.happylittle.cache.live-update';
 const String kWatchDetectTask = 'com.happylittle.cache.watch-folder-detect';
 const String kWatchAddTask = 'com.happylittle.cache.watch-folder-add';
+
+const String kSyncTask = 'com.happylittle.cache.sync';
+const String kSyncRefreshTask = 'com.happylittle.cache.sync-refresh';
+const String kSyncProcessingTask = 'com.happylittle.cache.sync-processing';
 
 /// The short names the log uses.
 const Map<String, String> kBackgroundTaskNames = {
   kWeatherTask: 'weather',
   kWatchDetectTask: 'watch-folder-detect',
   kWatchAddTask: 'watch-folder-add',
+  kSyncTask: 'sync',
+  kSyncRefreshTask: 'sync-refresh',
+  kSyncProcessingTask: 'sync-processing',
 };
 
 /// The constraints the jobs are scheduled with.
@@ -33,6 +41,15 @@ class BackgroundPresets {
 
   /// A light look (listing folders): only not on a low battery.
   static Constraints light() => Constraints(networkType: NetworkType.notRequired, requiresBatteryNotLow: true);
+
+  /// Sync with linked devices: a network (an unmetered one unless the person lets downloads use mobile data, so WorkManager does
+  /// not wake the job on a metered connection the job would refuse), and not on a low battery. Charging is not needed: a round
+  /// is short and bounded; a long fetch waits for the next one.
+  static Constraints sync({required bool mobileData}) =>
+      Constraints(networkType: mobileData ? NetworkType.connected : NetworkType.unmetered, requiresBatteryNotLow: true);
+
+  /// Sync's iPhone processing task: while charging, with a network.
+  static Constraints syncCharging() => Constraints(networkType: NetworkType.connected, requiresCharging: true);
 
   /// Heavy work (adding PDFs): only while charging, and not on a low battery. Heat is checked by the job itself (the same rules
   /// as the app's index work), since WorkManager has no constraint for it.
@@ -51,8 +68,20 @@ abstract class BackgroundScheduler {
   Future<void> cancel(String task);
 }
 
+/// A scheduler that can also ask for an iPhone BGProcessingTask (kept apart so the other schedulers need not).
+abstract class ProcessingScheduler {
+  /// Once, under [constraints] (iOS picks the moment, usually overnight while charging).
+  Future<void> processing(String task, {required Constraints constraints, Duration delay = Duration.zero});
+}
+
+/// Asks the app's scheduler for a processing task; a scheduler without them does nothing.
+Future<void> scheduleProcessing(String task, {required Constraints constraints, Duration delay = Duration.zero}) async {
+  final s = backgroundScheduler;
+  if (s is ProcessingScheduler) await (s as ProcessingScheduler).processing(task, constraints: constraints, delay: delay);
+}
+
 /// [BackgroundScheduler] on WorkManager: each task under its own unique name.
-class WorkmanagerScheduler implements BackgroundScheduler {
+class WorkmanagerScheduler implements BackgroundScheduler, ProcessingScheduler {
   const WorkmanagerScheduler();
 
   @override
@@ -75,6 +104,15 @@ class WorkmanagerScheduler implements BackgroundScheduler {
 
   @override
   Future<void> cancel(String task) => Workmanager().cancelByUniqueName(task);
+
+  @override
+  Future<void> processing(String task, {required Constraints constraints, Duration delay = Duration.zero}) => Workmanager().registerProcessingTask(
+    task,
+    task,
+    initialDelay: delay,
+    networkType: constraints.networkType,
+    requiresCharging: constraints.requiresCharging,
+  );
 }
 
 /// The app's scheduler (tests set their own).

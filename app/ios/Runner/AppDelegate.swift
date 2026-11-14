@@ -31,6 +31,14 @@ import workmanager_apple
       withIdentifier: "com.happylittle.cache.live-update",
       earliestBeginInSeconds: NSNumber(value: 30 * 60)
     )
+    // Background sync with linked devices (lib/background/sync_background.dart): an app-refresh task, and a processing task for
+    // while the phone charges. iOS decides if and when either runs. Same names as kSyncRefreshTask and kSyncProcessingTask and
+    // BGTaskSchedulerPermittedIdentifiers (Info.plist); registered before launch finishes, as the weather update is.
+    WorkmanagerPlugin.registerPeriodicTask(
+      withIdentifier: "com.happylittle.cache.sync-refresh",
+      earliestBeginInSeconds: NSNumber(value: 60 * 60)
+    )
+    WorkmanagerPlugin.registerBGProcessingTask(withIdentifier: "com.happylittle.cache.sync-processing")
     WorkmanagerPlugin.registerLaunchHandlers()
     WorkmanagerPlugin.setPluginRegistrantCallback { registry in
       GeneratedPluginRegistrant.register(with: registry)

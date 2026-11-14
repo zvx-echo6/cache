@@ -4,6 +4,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../maps/ui/format.dart';
+import '../../platform.dart' as plat;
 import '../../settings/data_kinds.dart';
 import '../../sharing/link_inbox.dart';
 import '../../sharing/link_url.dart';
@@ -15,7 +16,10 @@ import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos});
+
+  /// The platform as the page's background-sync note sees it; null: the real one (tests give theirs).
+  final bool? onAndroid, onIos;
 
   final SharingState sharing;
 
@@ -395,6 +399,7 @@ class _SharingPageState extends State<SharingPage> {
               'Tap a kind to choose what of it is shared. Switching a kind or an item off stops sharing it; the files stay, here and on '
               'the other devices. Files and folders whose names start with a dot are never shared.',
             ),
+            if (syncBackgroundNote(android: widget.onAndroid, ios: widget.onIos) case final note?) NoteText(note),
             _Log(entries: [for (final e in (st['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>()]),
           ],
         );
@@ -797,4 +802,18 @@ class _Log extends StatelessWidget {
       ],
     );
   }
+}
+
+/// What the Sharing page says about syncing with Cache closed: on Android about once an hour, on iPhone only when iOS allows it
+/// (iOS decides if and when it runs Cache in the background, and gives it seconds); nothing elsewhere.
+String? syncBackgroundNote({bool? android, bool? ios}) {
+  if (android ?? plat.isAndroid) {
+    // WORDING QUESTION (owner): draft
+    return 'With Cache closed, this phone syncs in the background about once an hour, when a linked device is in reach.';
+  }
+  if (ios ?? plat.isIOS) {
+    // WORDING QUESTION (owner): draft
+    return 'iPhone syncs in the background only when iOS allows it, so it can be late or skipped. Open Cache to sync now.';
+  }
+  return null;
 }

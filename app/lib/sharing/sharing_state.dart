@@ -6,6 +6,8 @@ import 'dart:math';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../background/background_lock.dart';
+import '../background/sync_background.dart' show syncBackgroundDir, writeSyncConfig;
 import '../files.dart';
 import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
@@ -32,7 +34,7 @@ class SharingState extends ChangeNotifier {
     bool? phone,
   }) : _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
-       _opener = opener ?? _openReal;
+       _opener = opener ?? openSyncCore;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -148,8 +150,15 @@ class SharingState extends ChangeNotifier {
     notifyListeners();
     try {
       final dir = Directory('${(await supportDir()).path}/sync');
+      // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
+      // given time to close its engine, before this one opens (two engines on one folder made "Sharing could not start").
+      final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await supportDir()).path)));
+      if (lock.runs(kSyncWork)) {
+        logInfo('Sync: a background round is running; asking it to stop');
+        if (!await lock.takeOver(kSyncWork)) logInfo('Sync: the background round is still stopping; opening anyway');
+      }
       // What each device builds for itself inside a shared folder never syncs (a library's search index).
-      _core = await _opener({
+      final config = <String, Object?>{
         'dir': dir.path,
         'name': deviceName,
         if (_phone) 'dht': false,
@@ -167,7 +176,11 @@ class SharingState extends ChangeNotifier {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
-      });
+      };
+      _lastConfig = config;
+      _core = await _opener(config);
+      lock.engineStarted(kSyncWork);
+      await _writeSnapshot();
       await _applyPolicy();
       await refresh();
       await _retire();
@@ -288,6 +301,7 @@ class SharingState extends ChangeNotifier {
     if (c == null) return;
     try {
       await c.call('set_only', {'id': id, 'only': sorted});
+      unawaited(_writeSnapshot());
     } catch (e) {
       logError('Sync: could not set what a device fetches', error: e, detail: _nameOf(id));
     }
@@ -305,6 +319,7 @@ class SharingState extends ChangeNotifier {
     if (c == null) return;
     try {
       await c.call('set_never_fetch', {'id': id, 'never_fetch': sorted});
+      unawaited(_writeSnapshot());
     } catch (e) {
       logError('Sync: could not set what a device never fetches', error: e, detail: _nameOf(id));
     }
@@ -346,7 +361,30 @@ class SharingState extends ChangeNotifier {
     if (++_ticks % 5 == 0) {
       await refreshItems();
       await _applyOff();
+      await _writeSnapshot();
     }
+    // The mark that this app's engine runs (a background round never opens a second one), written again every 30 s.
+    if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
+  }
+
+  BackgroundLock? _lock;
+  Map<String, Object?>? _lastConfig;
+  String? _snapshot;
+
+  /// The settings the engine runs with now, kept for the background round (which opens the same engine with the app closed): the
+  /// open call's settings, with what was set since (`only`, `never_fetch`, the items switched off).
+  Future<void> _writeSnapshot() async {
+    final c = _lastConfig;
+    if (c == null) return;
+    final snap = jsonEncode({
+      ...c,
+      'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
+      'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
+      'off': {for (final e in _sentOff.entries) e.key: e.value},
+    });
+    if (snap == _snapshot) return;
+    _snapshot = snap;
+    await writeSyncConfig((await supportDir()).path, jsonDecode(snap) as Map<String, Object?>);
   }
 
   /// Shared folders earlier versions had and this one does not: the Shared folder (1.0). Each stops being shared at start; its
@@ -603,6 +641,7 @@ class SharingState extends ChangeNotifier {
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
+    _lock?.engineStopped(kSyncWork);
     _core?.close();
     super.dispose();
   }
@@ -676,7 +715,8 @@ abstract class SyncCoreLike {
 
 typedef SyncOpener = Future<SyncCoreLike> Function(Map<String, Object?> config);
 
-Future<SyncCoreLike> _openReal(Map<String, Object?> config) async => _RealCore(await SyncCore.open(config));
+/// The real engine ([SyncCore]) as the state and the background run use it.
+Future<SyncCoreLike> openSyncCore(Map<String, Object?> config) async => _RealCore(await SyncCore.open(config));
 
 class _RealCore implements SyncCoreLike {
   _RealCore(this._c);
