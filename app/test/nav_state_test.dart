@@ -593,7 +593,49 @@ void main() {
       expect(nav.routeStart!.lon, -113.9);
     });
 
-    test('arrival is final: the position service is let go, and later fixes neither reroute nor speak', () async {
+    test('after arrival the position keeps moving (here, the map\'s fix, follow) with no progress or re-route, until End', () async {
+      final json = await guideTo('Juniper Depot');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(json, 1.0, arrived: true)));
+      gps.controller.add(fixAt(42.5, -113.5));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(nav.phase, NavPhase.guiding, reason: 'the arrived banner stays until End');
+      final progressCalls = backend.calls.where((c) => c.startsWith('progress')).length;
+      final followsBefore = List.of(follows);
+      var notified = 0;
+      void count() => notified++;
+      nav.addListener(count);
+      // The phone moves on after arrival (into a car park).
+      gps.controller.add(fixAt(42.501, -113.502, heading: 180));
+      await settle();
+      expect(nav.lastFix, isNotNull, reason: 'the position after arrival is still the vehicle');
+      expect(nav.lastFix!.lon, -113.502);
+      expect(nav.here!.lat, 42.501);
+      expect(nav.here!.lon, -113.502);
+      expect(location.fix!.lon, -113.502, reason: 'the phone map\'s marker and follow camera read this fix');
+      expect(notified, greaterThan(0), reason: 'the car bridge and the phone UI are told the position moved');
+      gps.controller.add(fixAt(42.502, -113.504, heading: 180));
+      await settle();
+      expect(location.fix!.lon, -113.504);
+      expect(nav.here!.lon, -113.504);
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, progressCalls, reason: 'no progress call after arrival');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'no re-route after arrival');
+      expect(follows, followsBefore, reason: 'the follow camera is not switched at arrival');
+      expect(nav.arrived, isTrue);
+      expect(gps.stops, 0, reason: 'the position service runs until End');
+      nav.removeListener(count);
+      await nav.end();
+      expect(gps.stops, 1, reason: 'End lets the position service go');
+      expect(nav.lastFix, isNull);
+      expect(location.streamHealthy, isTrue, reason: 'End gives the map its own position stream back');
+      final after = backend.calls.length;
+      gps.controller.add(fixAt(42.6, -113.6));
+      await settle();
+      expect(backend.calls.length, after);
+      expect(nav.lastFix, isNull);
+    });
+
+    test('arrival is final: later fixes neither reroute nor speak; the position service is let go at End', () async {
       final json = await guideTo('Juniper Depot');
       expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');
       // The core answers the fix at the door with "arrived", slowly; the next fix, a walk away from the line, is "off route".
@@ -619,9 +661,9 @@ void main() {
       expect(nav.progress!.arrived, isTrue);
       expect(speaker.said.last, 'You have arrived at Juniper Depot.');
       expect(asked, 1, reason: 'the fix that was waiting is not followed after arrival');
-      expect(gps.stops, 1, reason: 'the position service stops at arrival, not at Done');
-      expect(location.streamHealthy, isTrue, reason: 'the map has its own position stream back');
-      // Fixes after arrival go nowhere.
+      expect(gps.stops, 0, reason: 'the position keeps coming after arrival: the service stops at End');
+      expect(location.streamHealthy, isFalse, reason: 'guidance still holds the map\'s own position stream');
+      // Fixes after arrival reach no progress, re-route or prompt.
       gps.controller.add(fixAt(42.504, -113.5));
       await settle(40);
       expect(asked, 1);
@@ -631,6 +673,8 @@ void main() {
       expect(nav.route!.routeId, 'r1');
       expect(nav.arrived, isTrue);
       await nav.finish();
+      expect(gps.stops, 1);
+      expect(location.streamHealthy, isTrue, reason: 'the map has its own position stream back');
       expect(nav.phase, NavPhase.browsing);
       expect(nav.arrived, isFalse);
       expect(nav.selected, isNull);

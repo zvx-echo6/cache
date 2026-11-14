@@ -1024,6 +1024,37 @@ void main() {
       b.dispose();
     });
 
+    test('after arrival the car\'s marker keeps following the phone\'s position until End, with no progress call', () async {
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['arrived'], isTrue);
+      final progressCalls = backend.calls.where((c) => c.startsWith('progress')).length;
+      // The vehicle moves on after arrival.
+      gps.controller.add(fixAt(42.501, -113.502, heading: 180));
+      await settle();
+      var pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.501, reason: 'the car\'s marker is the phone\'s position after arrival, not the last matched point');
+      expect(pos['lon'], -113.502);
+      expect(pos['heading'], 180);
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.502);
+      gps.controller.add(fixAt(42.502, -113.504, heading: 180));
+      await settle();
+      pos = lastTrip()['position'] as Map;
+      expect(pos['lon'], -113.504);
+      expect(lastTrip()['arrived'], isTrue, reason: 'the arrived card stays');
+      expect(lastTrip()['phase'], 'guiding');
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, progressCalls, reason: 'no progress call after arrival');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'no re-route after arrival');
+      await nav.end();
+      await settle();
+      expect(lastTrip()['phase'], 'browsing');
+      expect(nav.lastFix, isNull);
+    });
+
     test('Add stop on the car before Start: the place joins the route shown and the trip names it', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);

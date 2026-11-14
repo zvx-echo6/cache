@@ -823,9 +823,16 @@ class NavState extends ChangeNotifier {
   DateTime? _reroutingSince;
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
+  ///
+  /// After arrival a fix is only the vehicle's position: it is kept as [lastFix] and told (the phone map, the car's marker),
+  /// and nothing else is done with it (no progress, prompt or re-route).
   Future<void> _handleFix(Fix f) async {
-    if (!guiding || arrived) return;
+    if (!guiding) return;
     lastFix = f;
+    if (arrived) {
+      notifyListeners();
+      return;
+    }
     // The next stop, once the phone came within 100 m of it, is passed: a new route after going off the route leaves it out.
     // Only the next one: stops are visited in order, and being near a later stop does not pass it or the ones before it.
     final nextStop = _aheadIndexes().firstOrNull;
@@ -876,12 +883,15 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
-        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
-        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
+        // Arrival is final for this trip: no later fix goes to guidance, so nothing reroutes or speaks again. The position
+        // service keeps running until End: its fixes still move the phone map's marker and camera and the car's marker
+        // ([_handleFix]); before, it was let go here and every map froze on the arrival point until End. The phase stays
+        // guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
+        _pendingFix = null;
+        _stopGuidanceLog();
         notifyListeners();
-        await _stopTracking();
-        logInfo('Guidance: arrived, the position service is let go');
+        logInfo('Guidance: arrived, the position keeps coming until End');
         return;
       }
       if (p.offRoute) await _reroute(f);
