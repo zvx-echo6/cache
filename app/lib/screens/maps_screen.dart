@@ -533,22 +533,24 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   GeoPoint? _spot;
   NavPhase? _spotPhase;
 
-  /// Shows what [NavState.mapShow] asks for once the map is ready: from the drive screen the map comes on first ([_peek]); the
-  /// camera moves after the frame that lays the map out.
+  /// Shows what [NavState.mapShow] asks for, or an area [MapsState.showAreaOnMap] asks for, once the map is ready: from the drive
+  /// screen the map comes on first ([_peek]); the camera moves after the frame that lays the map out.
   void _takeShow() {
     final c = _controller;
-    if (c == null || !_styleReady || nav.mapShow == null) return;
-    final s = nav.takeMapShow()!;
-    if (_driveOn && !_peek) {
-      _peek = true;
-      _followBeforePeek = maps.follow;
-      _driveBuilt = false;
-      _reportDrive();
+    if (c == null || !_styleReady) return;
+    final MapShow s;
+    if (nav.mapShow != null) {
+      s = nav.takeMapShow()!;
+    } else if (maps.areaAsk != null) {
+      s = MapShow(area: maps.takeAreaAsk());
+    } else {
+      return;
     }
+    _startPeek();
     maps.setFollow(FollowMode.free);
     // The view is now the one asked for: a route preview is not fitted again over it.
     _fitTouched = true;
-    if (s.route) {
+    if (s.route || s.area != null) {
       _spot = null;
     } else {
       _spot = s.at;
@@ -558,7 +560,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _controller != c) return;
       final r = nav.route;
-      if (s.route) {
+      if (s.area != null) {
+        _fitArea(c, s.area!);
+      } else if (s.route) {
         if (r != null) _fitWhole(c, r);
       } else if (s.at != null) {
         _focusOn(s.at!.lat, s.at!.lon);
@@ -566,6 +570,49 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     });
     WidgetsBinding.instance.ensureVisualUpdate();
   }
+
+  /// While the drive screen shows, the map comes on the tab instead ([_peek]) until Back; how the map followed is kept for then.
+  void _startPeek() {
+    if (!_driveOn || _peek) return;
+    _peek = true;
+    _followBeforePeek = maps.follow;
+    _driveBuilt = false;
+    _reportDrive();
+  }
+
+  /// The drive screen's Map: the map on the tab, following as it was, until Back.
+  void _peekMap() {
+    if (!_driveOn || _peek) return;
+    _startPeek();
+    setState(() {});
+  }
+
+  /// [area] fitted into view, clear of the search bar above and the panel or bar below.
+  Future<void> _fitArea(MapLibreMapController c, GeoBounds area) async {
+    const pad = EdgeInsets.fromLTRB(32, 96, 32, 120);
+    _camPad = null;
+    try {
+      await c.animateCamera(
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(area.south, area.west), northeast: LatLng(area.north, area.east)),
+            left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (_) {}
+  }
+
+  /// A layer of "Get more layers" asked for ([MapsState.showLayerOnMap]): the layer sheet opens at its switch, once this tab shows.
+  void _takeLayerAsk() {
+    if (!mounted || !widget.active || maps.layerAsk == null) return;
+    final id = maps.takeLayerAsk()!;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openLayers(focus: id);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// The layer sheet ([focus]: the layer whose switch is brought into view).
+  Future<void> _openLayers({String? focus}) => showLayerSheet(context, maps, location,
+      regions: widget.regions, notebooks: widget.notebooks, userLayers: widget.userLayers, onOpenNotebook: widget.onOpenNotebook, onOpenList: widget.onOpenList, focusLayer: focus);
 
   /// The whole of [r] in view, clear of what covers the map (any phase: the route fit of the preview is [_fitRoute]).
   Future<void> _fitWhole(MapLibreMapController c, MapRoute r) async {
@@ -635,6 +682,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       _drawing = widget.regions != null;
     }
     _prepare();
+    // A layer asked for before this screen was first built ("Get more layers" from Settings) opens the layer sheet now.
+    _takeLayerAsk();
   }
 
   @override
@@ -646,6 +695,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       widget.drive?.carConnected.addListener(_onCarLink);
     }
     if (old.active != widget.active) _reportDrive();
+    if (!old.active && widget.active) _takeLayerAsk();
     if (old.active && !widget.active && _peek) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !widget.active) _endPeek();
@@ -710,6 +760,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       maps.clearDrawRequest();
       setState(() => _drawing = widget.regions != null);
     }
+    if (maps.areaAsk != null) _takeShow();
+    _takeLayerAsk();
     setState(() {});
   }
 
@@ -1968,7 +2020,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         Positioned.fill(child: Offstage(offstage: on, child: TickerMode(enabled: !on, child: map))),
         if (on)
           Positioned.fill(
-            child: DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId),
+            child: DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId, onMap: _peekMap),
           ),
       ],
     );
@@ -2160,11 +2212,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       key: _controlsKey,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // The map shown instead of the drive screen while a car guides: Back brings the drive screen again (as the phone's Back does).
+        if (_peek && _driveOn) ...[
+          MapButton(key: const ValueKey('peek-back'), icon: Icons.arrow_back, tooltip: 'Back', onPressed: _endPeek),
+          const SizedBox(height: 12),
+        ],
         if (!nav.guiding)
           MapButton(
             icon: Icons.layers_outlined,
             tooltip: 'Layers',
-            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions, notebooks: widget.notebooks, userLayers: widget.userLayers, onOpenNotebook: widget.onOpenNotebook, onOpenList: widget.onOpenList),
+            onPressed: _openLayers,
           ),
         if (!nav.guiding) const SizedBox(height: 12),
         MapButton(
@@ -2208,7 +2265,17 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final step = _step;
       final rows = step == null ? const <DriveRow>[] : previewStepRows(nav);
       if (step != null && rows.isNotEmpty) return RouteStepCard(nav: nav, rows: rows, index: step, onStep: _goStep, onClose: _closeSteps);
-      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette, onSpot: nav.showAlongRoute), onNextTurn: _openSteps);
+      final regions = widget.regions;
+      return RoutePanel(
+        nav: nav,
+        fmt: nav.fmt,
+        maxHeight: maxHeight,
+        elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette, onSpot: nav.showAlongRoute),
+        onNextTurn: _openSteps,
+        // A route error that names missing data: the download for the route's area.
+        onDownloadArea: regions == null ? null : () => getRouteArea(context, regions, nav.routeEnds),
+        onAddOffroad: regions == null ? null : () => addRouteOffroad(context, regions, nav.routeEnds),
+      );
     }
     if (sel != null && !searching) {
       final open = widget.onOpenEntry;

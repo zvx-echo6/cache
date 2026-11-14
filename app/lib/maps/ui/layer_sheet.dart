@@ -19,7 +19,7 @@ import '../../layout/adaptive.dart' show isShort, showFittedSheet;
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
 Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location,
-    {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers, void Function(String notebookId)? onOpenNotebook, void Function(String listId)? onOpenList}) {
+    {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers, void Function(String notebookId)? onOpenNotebook, void Function(String listId)? onOpenList, String? focusLayer}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -27,12 +27,12 @@ Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationServic
     useSafeArea: true,
     // 560 wide at most, as every sheet; most of the window's height (all of a short window's, a phone held sideways).
     constraints: BoxConstraints(maxWidth: 560, maxHeight: isShort(context) ? double.infinity : MediaQuery.sizeOf(context).height * 0.8),
-    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers, onOpenNotebook: onOpenNotebook, onOpenList: onOpenList),
+    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers, onOpenNotebook: onOpenNotebook, onOpenList: onOpenList, focusLayer: focusLayer),
   );
 }
 
 class LayerSheet extends StatelessWidget {
-  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers, this.onOpenNotebook, this.onOpenList, this.pickRepeaters});
+  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers, this.onOpenNotebook, this.onOpenList, this.pickRepeaters, this.focusLayer});
 
   final MapsState maps;
   final LocationService location;
@@ -52,6 +52,9 @@ class LayerSheet extends StatelessWidget {
 
   /// A repeater list under "My layers" (a tap on its name): the list. Null: the rows only switch.
   final void Function(String listId)? onOpenList;
+
+  /// The layer whose row is brought into view when the sheet opens (a layer tapped in "Get more layers"); null: none.
+  final String? focusLayer;
 
   /// The file picker of Add from a file's repeater list (tests give their own); null: the phone's.
   @visibleForTesting
@@ -224,10 +227,12 @@ class LayerSheet extends StatelessWidget {
     final on = maps.isOn(l.id);
     final held = maps.areasOfCard(l).where((a) => a.phase == AreaPhase.done).isNotEmpty;
     final status = l.onlineOnly ? 'Needs a connection' : (held ? 'Downloaded for offline' : 'Streams when online');
-    return Column(
+    final row = Column(
+      key: ValueKey('layer-row-${l.id}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SwitchListTile(
+          key: ValueKey('layer-switch-${l.id}'),
           contentPadding: EdgeInsets.zero,
           title: Text(l.title, style: const TextStyle(fontSize: 17)),
           subtitle: Text(status, style: TextStyle(fontSize: 14, color: k.secondary)),
@@ -260,7 +265,31 @@ class LayerSheet extends StatelessWidget {
           ),
       ],
     );
+    return l.id == focusLayer ? _BringIntoView(child: row) : row;
   }
+}
+
+/// Brings its child into view in the list around it once, when it is first laid out (the layer tapped in "Get more layers").
+class _BringIntoView extends StatefulWidget {
+  const _BringIntoView({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_BringIntoView> createState() => _BringIntoViewState();
+}
+
+class _BringIntoViewState extends State<_BringIntoView> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Scrollable.ensureVisible(context, duration: const Duration(milliseconds: 300), alignment: 0.3);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// "Add from a file", the same sheet from Notebooks (its + menu) and Maps > Layers > My layers: places (a KML, KMZ, GPX or GeoJSON

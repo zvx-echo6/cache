@@ -261,6 +261,7 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
+    _mapsAsks = widget.maps.asks;
     widget.maps.addListener(_onMaps);
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
@@ -409,7 +410,17 @@ class _ShellState extends State<Shell> {
   /// the map is not on screen, so the request went nowhere: the Maps tab is opened for it.
   void _onMaps() {
     if (widget.maps.drawRequest && _module != ModuleId.maps && mounted) _goModule(ModuleId.maps);
+    // An area or a layer asked for from off the map (a region's Show on map, a layer of "Get more layers"): the pages over the tabs
+    // close and the Maps tab shows it.
+    if (widget.maps.asks != _mapsAsks && mounted) {
+      _mapsAsks = widget.maps.asks;
+      Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+      _goModule(ModuleId.maps);
+    }
   }
+
+  /// The last of [MapsState.asks] answered (those from before this shell are not).
+  int _mapsAsks = 0;
 
   @override
   void dispose() {

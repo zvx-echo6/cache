@@ -1499,6 +1499,33 @@ class RegionsState extends ChangeNotifier {
     );
   }
 
+  /// The box region [id] covers, for showing it on the map: the box it was downloaded for, else the box around its map areas, else
+  /// the catalogue's (when its country's file is read already). Null when none is known.
+  GeoBounds? boundsOf(String id) {
+    final k = _kept[id];
+    final b = k?.bbox ?? _boxOfAreas(k) ?? loadedRecord(id)?.bbox;
+    return b == null ? null : RegionRecord(id: id, name: id, kind: 'region', bbox: b).bounds;
+  }
+
+  /// A region on this phone whose box ([boundsOf]) holds the point: one with directions ([routing]), or one with no off-road yet
+  /// that can have it ([withoutOffroad]: not an area kept from before regions). The smallest when several do; null when none.
+  LocalRegion? regionHolding(double lat, double lon, {bool routing = false, bool withoutOffroad = false}) {
+    LocalRegion? best;
+    var bestSize = double.infinity;
+    for (final l in local) {
+      if (routing && !l.hasRouting) continue;
+      if (withoutOffroad && (l.hasOffroad || l.isArea)) continue;
+      final b = boundsOf(l.id);
+      if (b == null || !b.contains(lat, lon)) continue;
+      final size = (b.east - b.west) * (b.north - b.south);
+      if (size < bestSize) {
+        best = l;
+        bestSize = size;
+      }
+    }
+    return best;
+  }
+
   /// The catalogue's record of [id] when its country's file is read already (no waiting), or null.
   RegionRecord? loadedRecord(String id) {
     for (final s in catalogue.loadedShards) {
