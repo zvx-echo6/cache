@@ -67,7 +67,7 @@ void main() {
       final c = FgsAddControl();
       final running = fgsAddJob(support: support, control: c, lock: lock, battery: () async => const BatteryReading(percent: 80, charging: true, thermal: Thermal.nominal), state: s, queue: ({bool next = false, Duration delay = Duration.zero}) async {}, waitForBack: Duration.zero, lookEvery: const Duration(milliseconds: 10));
       await _until(() => n == 1);
-      c.stop('person'); // the notification's Pause, while the piece is in flight
+      c.stop('person'); // the notification's Pause, while the piece is in flight: the slice is woken at once, no timer is waited for
       await _turns(100);
       gates[0].complete(); // the piece ends
       final out = await running;

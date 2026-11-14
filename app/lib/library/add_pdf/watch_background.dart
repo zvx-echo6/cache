@@ -275,6 +275,11 @@ class FgsAddControl {
   /// Set by a stop message; read by the slice's checks.
   String? stopWhy;
 
+  final Completer<void> _stopped = Completer<void>();
+
+  /// Completes when a stop message comes: the slice looks at once (Pause is heard within the piece the run is in, not after the next poll).
+  Future<void> get stopped => _stopped.future;
+
   /// How the run ended, set when it does (also written to the result file for the in-app notice).
   FgsAddResult? result;
 
@@ -284,7 +289,10 @@ class FgsAddControl {
   /// A change of progress (at most one a second).
   final void Function(FgsProgress p)? onProgress;
 
-  void stop(String why) => stopWhy ??= why;
+  void stop(String why) {
+    stopWhy ??= why;
+    if (!_stopped.isCompleted) _stopped.complete();
+  }
 }
 
 /// How the service's add ended, in a few words for the log (the result is on [FgsAddControl.result]).
@@ -397,6 +405,7 @@ Future<FgsAddEnd> fgsAddJob({
       only: (j) => ids.contains(j.id) && fgsJobMayRun(j, th.reading),
       throttle: th,
       lookEvery: lookEvery,
+      wake: control.stopped,
       held: () async => ok(addPdfHeld(th, unplugged: true)),
     ).run();
     return FgsAddEnd(r.words);
