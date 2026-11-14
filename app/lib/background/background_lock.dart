@@ -46,8 +46,7 @@ class BackgroundLock {
     try {
       final f = _file(name);
       if (!f.existsSync()) return false;
-      final lines = f.readAsStringSync().trim().split('
-');
+      final lines = f.readAsStringSync().trim().split('\n');
       final t = DateTime.tryParse(lines.first.trim());
       if (t == null || _clock().difference(t) >= (within ?? fresh)) return false;
       if (alive && lines.length > 1 && !_processAlive(int.tryParse(lines[1].trim()))) return false;
