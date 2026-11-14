@@ -824,12 +824,10 @@ class _Log extends StatelessWidget {
 /// (iOS decides if and when it runs Cache in the background, and gives it seconds); nothing elsewhere.
 String? syncBackgroundNote({bool? android, bool? ios}) {
   if (android ?? plat.isAndroid) {
-    // WORDING QUESTION (owner): draft
-    return 'With Cache closed, this phone syncs in the background about once an hour, when a linked device is in reach.';
+    return 'When Cache is closed, this phone syncs about once an hour if a linked device is in reach.';
   }
   if (ios ?? plat.isIOS) {
-    // WORDING QUESTION (owner): draft
-    return 'iPhone syncs in the background only when iOS allows it, so it can be late or skipped. Open Cache to sync now.';
+    return 'On iPhone, background sync runs only when iOS allows it, so it can be late. Open Cache to sync now.';
   }
   return null;
 }

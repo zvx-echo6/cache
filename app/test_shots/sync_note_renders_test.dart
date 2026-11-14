@@ -1,5 +1,5 @@
 // Background sync (1.1): the Sharing and sync page with the note about syncing with Cache closed, on Android and on iPhone, at 390
-// points wide, light and dark. The words are drafts (WORDING QUESTION, owner).
+// points wide, light and dark.
 // flutter test test_shots/sync_note_renders_test.dart --update-goldens  (pictures in test_shots/sync_note/)
 
 import 'package:cache/screens/settings/sharing_page.dart';
@@ -32,7 +32,7 @@ void main() {
           await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
           await tester.pump(const Duration(milliseconds: 40));
         }
-        final note = find.textContaining(os == 'ios' ? 'only when iOS allows it' : 'about once an hour');
+        final note = find.textContaining(os == 'ios' ? 'runs only when iOS allows it' : 'syncs about once an hour');
         await tester.ensureVisible(note);
         await tester.pump();
         expect(note, findsOneWidget);

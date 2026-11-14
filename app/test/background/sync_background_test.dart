@@ -485,8 +485,8 @@ void main() {
 
   group('the words on the Sharing page', () {
     test('Android and iPhone get their own sentence, any other platform none', () {
-      expect(syncBackgroundNote(android: true, ios: false), contains('about once an hour'));
-      expect(syncBackgroundNote(android: false, ios: true), contains('only when iOS allows it'));
+      expect(syncBackgroundNote(android: true, ios: false), contains('syncs about once an hour'));
+      expect(syncBackgroundNote(android: false, ios: true), contains('runs only when iOS allows it'));
       expect(syncBackgroundNote(android: false, ios: false), isNull);
     });
   });
