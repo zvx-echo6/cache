@@ -1201,7 +1201,7 @@ impl LibSlot {
         let filter = Filter::new_must(Condition::Field(FieldCondition::new_match(jp, value)));
 
         // every kept point of the document, up to the cap
-        let mut capped = false;
+        let capped;
         let mut points: Vec<(PointId, Map<String, Value>)> = Vec::new();
         let mut offset: Option<PointId> = None;
         loop {
