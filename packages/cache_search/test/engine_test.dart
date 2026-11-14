@@ -294,16 +294,16 @@ void main() {
     test('readDocument parses the pages, sends the size limit, and keeps a text page label', () {
       final n = FakeNative()
         ..replies['readDocument'] =
-            '{"address":"lib:recon/9","title":"Manual","at_page":1,"more_before":false,"more_after":true,"pages":[{"page":"iv","text":"One\\n\\nTwo","addresses":["lib:recon/8","lib:recon/9"]},{"page":47,"text":"Three","addresses":["lib:recon/10"]},{"page":null,"text":"Four","addresses":[]}]}';
+            '{"address":"lib:field/9","title":"Manual","at_page":1,"more_before":false,"more_after":true,"pages":[{"page":"iv","text":"One\\n\\nTwo","addresses":["lib:field/8","lib:field/9"]},{"page":47,"text":"Three","addresses":["lib:field/10"]},{"page":null,"text":"Four","addresses":[]}]}';
       final e = SearchEngine.open(n, [_zim]);
-      final d = e.readDocument('lib:recon/9');
-      expect(n.calls.last, 'readDocument:lib:recon/9:200000');
+      final d = e.readDocument('lib:field/9');
+      expect(n.calls.last, 'readDocument:lib:field/9:200000');
       expect(d.title, 'Manual');
       expect((d.atPage, d.moreBefore, d.moreAfter), (1, false, true));
       expect([for (final p in d.pages) (p.page, p.pageLabel, p.text)], [(null, 'iv', 'One\n\nTwo'), (47, '47', 'Three'), (null, null, 'Four')]);
-      expect(d.pages.first.addresses, ['lib:recon/8', 'lib:recon/9']);
-      e.readDocument('lib:recon/9', maxChars: 500);
-      expect(n.calls.last, 'readDocument:lib:recon/9:500');
+      expect(d.pages.first.addresses, ['lib:field/8', 'lib:field/9']);
+      e.readDocument('lib:field/9', maxChars: 500);
+      expect(n.calls.last, 'readDocument:lib:field/9:500');
       expect(LibraryDocument.fromJson(d.toJson()).toJson(), d.toJson());
     });
 
