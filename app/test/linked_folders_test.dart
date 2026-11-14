@@ -4,6 +4,9 @@ import 'package:cache/linked_folders/linked_folders.dart';
 import 'package:cache/linked_folders/linked_folder_management.dart';
 import 'package:cache/linked_folders/linked_folder_setup.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/browse/web/build_api.dart' show BuildQueue, QueueItem;
+import 'package:cache/browse/web/build_state.dart' show BuildController;
+import 'browse/build_fakes.dart' show FakeBuildApi;
 import 'package:cache/browse/web/build_common.dart' show PanelCard;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -887,4 +890,120 @@ void main() {
       controller.dispose();
     },
   );
+
+  Future<(LinkedFolderController, BuildController)> _mountWithQueue(
+    WidgetTester tester,
+    List<QueueItem> items,
+  ) async {
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      if (request.method == 'GET' && path.endsWith('/checks')) {
+        return _ok({'active': null, 'latest': null});
+      }
+      if (request.method == 'GET' &&
+          path == '/api/linked-folders/home-library') {
+        return _ok(_config());
+      }
+      return _ok({});
+    });
+    final controller = LinkedFolderController(
+      api: LinkedFolderApi(client: client),
+    );
+    final api = FakeBuildApi()..q = BuildQueue(items: items);
+    final build = BuildController(api: api, poll: false);
+    await build.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: LinkedFolderManagementPage(
+          controller: controller,
+          libraryId: 'home-library',
+          build: build,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return (controller, build);
+  }
+
+  QueueItem _linkedItem(String state, {String blake3 = 'hash-new'}) =>
+      QueueItem(
+        id: 'item-1',
+        libraryId: 'home-library',
+        fileName: 'field-notes.pdf',
+        state: state,
+        linkedBlake3: blake3,
+      );
+
+  for (final state in ['queued', 'reading', 'building']) {
+    testWidgets('a pending linked book whose file is $state says Being added', (
+      tester,
+    ) async {
+      final (controller, build) = await _mountWithQueue(tester, [
+        _linkedItem(state),
+      ]);
+      expect(find.text('Being added'), findsOneWidget);
+      expect(find.text('Not added to search yet.'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      build.dispose();
+    });
+  }
+
+  for (final state in ['failed', 'skipped_duplicate', 'ocr_needed', 'done']) {
+    testWidgets('a pending linked book whose file is $state keeps Not added', (
+      tester,
+    ) async {
+      final (controller, build) = await _mountWithQueue(tester, [
+        _linkedItem(state),
+      ]);
+      expect(find.text('Not added to search yet.'), findsOneWidget);
+      expect(find.text('Being added'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      build.dispose();
+    });
+  }
+
+  testWidgets('a pending linked book with no queue item or another file says '
+      'Not added, and the note reads the approved text', (tester) async {
+    final (controller, build) = await _mountWithQueue(tester, [
+      _linkedItem('building', blake3: 'some-other-hash'),
+    ]);
+    expect(find.text('Not added to search yet.'), findsOneWidget);
+    expect(find.text('Being added'), findsNothing);
+    expect(
+      find.text(
+        'New and changed PDFs are found and added to this library automatically. Cache never changes the original files.',
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    build.dispose();
+  });
+
+  test('a queue item reads its linked file hash and a book keeps its own', () {
+    final item = QueueItem.fromJson({
+      'id': 'i',
+      'state': 'queued',
+      'origin': 'linked',
+      'linked': {'root': '/r', 'rel': 'a.pdf', 'blake3': 'abc'},
+    });
+    expect(item.linkedBlake3, 'abc');
+    expect(
+      QueueItem.fromJson({'id': 'j', 'origin': 'upload', 'linked': null})
+          .linkedBlake3,
+      isNull,
+    );
+    expect(
+      LinkedBook.fromJson({
+        'doc_id': null,
+        'blake3': 'hash-new',
+        'pending_indexing': true,
+        'locations': [],
+      }).blake3,
+      'hash-new',
+    );
+  });
 }

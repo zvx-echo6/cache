@@ -2429,6 +2429,26 @@ fn a_linked_pdf_that_is_not_the_one_that_was_checked_is_dropped_not_built() {
 }
 
 #[test]
+fn the_queue_view_says_where_a_linked_item_came_from() {
+    let d = TempDir::new("lk-view");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let ext = TempDir::new("lk-view-source");
+    let source = ext.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("x.pdf"), book("tank", 3, None)).unwrap();
+    let source = source.canonicalize().unwrap();
+    let hash = blake3::hash(&book("tank", 3, None)).to_hex().to_string();
+    assert!(svc.enqueue_linked(&lib, &source, "x.pdf", &hash));
+    let q = svc.queue();
+    let items = q["items"].as_array().unwrap();
+    let it = items.iter().find(|i| i["origin"] == json!("linked")).expect("the linked item is in the view");
+    assert_eq!(it["linked"]["blake3"], json!(hash));
+    assert_eq!(it["linked"]["rel"], json!("x.pdf"));
+    assert_eq!(it["linked"]["root"], json!(source.to_string_lossy()));
+}
+
+#[test]
 fn a_book_the_person_deleted_is_never_added_back_from_the_linked_folder() {
     use super::linked_auto::{Auto, AutoConfig};
     let d = TempDir::new("lk4");
