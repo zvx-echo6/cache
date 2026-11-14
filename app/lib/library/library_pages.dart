@@ -232,8 +232,8 @@ class LibraryRootPage extends StatelessWidget {
                       [if (unsorted > 0) '$unsorted unsorted', if ((addPdfShared?.adding ?? 0) > 0) '${addPdfShared!.adding} being added'].join(' · ').emptyToNullWords,
                       // "N being added" opens the progress page; the rest of the row opens Bookshelves
                       fixWidget: (addPdfShared?.adding ?? 0) > 0
-                          ? Row(
-                              mainAxisSize: MainAxisSize.min,
+                          ? Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
                                 if (unsorted > 0) Text('$unsorted unsorted · ', style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: context.t.accent)),
                                 Semantics(

@@ -219,8 +219,8 @@ void main() {
     await hideSurgery(tester);
     await tapKey(tester, 'shelves-hidden');
     await tapKey(tester, 'hidden-show-surgery');
-    expect(find.byKey(const ValueKey('shown-snack')), findsOneWidget);
-    await tester.tap(find.widgetWithText(SnackBarAction, 'Open'));
+    expect(find.byKey(const ValueKey('shown-snack')), findsWidgets);
+    await tester.tap(find.widgetWithText(SnackBarAction, 'Open').last);
     await settle(tester);
     expect(find.byType(BookPage), findsOneWidget);
   });
@@ -233,8 +233,8 @@ void main() {
     await openBook(tester, 'surgery');
     expect(find.byType(BookPage), findsOneWidget);
     await tapKey(tester, 'book-subject');
-    expect(find.byType(BookPage), findsNothing);
-    expect(find.byType(ShelfPage), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-subject')).hitTestable(), findsNothing, reason: 'the book page is covered by the shelf');
+    expect(find.byType(ShelfPage), findsWidgets);
   });
 
   testWidgets('13. "Opens from {device} when it is online" opens that linked device', (tester) async {

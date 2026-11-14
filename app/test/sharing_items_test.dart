@@ -463,9 +463,13 @@ void main() {
     return (r, s);
   }
 
-  Future<void> settleCalls(WidgetTester tester) async {
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
+  /// Saving a choice writes a file (outside the test's clock): let real time pass until [done], with a bound.
+  Future<void> settleCalls(WidgetTester tester, [bool Function()? done]) async {
+    for (var i = 0; i < 60; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+      await tester.pump();
+      if (done == null || done()) return;
+    }
   }
 
   testWidgets('a row with a target opens it and does not toggle; the Switch still toggles; a row with none toggles as before', (tester) async {
@@ -478,20 +482,21 @@ void main() {
     expect(r.calls('set_off'), hasLength(before), reason: 'opening the item changes nothing');
     final row = find.byKey(const ValueKey('item-notebooks/Journal'));
     await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
-    await settleCalls(tester);
+    await settleCalls(tester, () => r.calls('set_off').length > before);
     expect(opened, ['Journal'], reason: 'the Switch does not open');
     expect((r.calls('set_off').last['off'] as List), contains('Journal'));
     // Health log has no target: its row toggles (a private notebook: its Include in sync and sharing)
     await tester.tap(find.text('Health log'));
-    await settleCalls(tester);
+    await settleCalls(tester, () => r.privateSet.isNotEmpty);
     expect(r.privateSet, [true]);
     expect(opened, ['Journal']);
   });
 
   testWidgets('where nothing is wired the whole row still toggles sharing', (tester) async {
     final (r, _) = await kindPage(tester);
+    final before = r.calls('set_off').length;
     await tester.tap(find.text('Journal'));
-    await settleCalls(tester);
+    await settleCalls(tester, () => r.calls('set_off').length > before);
     expect((r.calls('set_off').last['off'] as List), contains('Journal'));
   });
 }

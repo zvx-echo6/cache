@@ -412,7 +412,7 @@ Widget _factValue(BuildContext context, _Fact f) {
   final linked = f.onTap != null;
   final text = Text(
     f.value,
-    key: f.valueKey == null ? null : ValueKey(f.valueKey),
+    key: f.valueKey == null ? null : ValueKey<String>(f.valueKey!),
     style: TextStyle(
       fontSize: 15,
       color: linked ? k.accent : (f.tone == Tone.normal ? k.text : toneColor(k, f.tone)),
