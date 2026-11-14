@@ -1532,11 +1532,11 @@ void main() {
       expect(WeatherState.placeRequest(h.weather.placeChoicesNow().first)['name'], 'current location');
     });
 
-    test('the town is the one in the address of a point from the places data', () {
-      expect(townOfPointAddress('0.4 mi NE of Cedar Flats, ID'), 'Cedar Flats, ID');
-      expect(townOfPointAddress('12 mi SSW of Pine Hollow, ID'), 'Pine Hollow, ID');
-      expect(townOfPointAddress(''), isNull);
-      expect(townOfPointAddress('somewhere'), isNull);
+    test('the town is the `town` field of the point the core gives, not a reading of its address', () {
+      final p = MapPlace.fromJson({'id': 'loc:40.020000,-100.000000', 'type': 'coordinates', 'name': '40.02000, -100.00000', 'kind': 'Coordinates', 'address': '1.4 mi N of Pine Hollow, ID', 'town': 'Pine Hollow, ID', 'lat': 40.02, 'lon': -100.0});
+      expect(p.town, 'Pine Hollow, ID');
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'town': null, 'lat': 1, 'lon': 2}).town, isNull);
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'lat': 1, 'lon': 2}).town, isNull);
     });
 
     test('"Where I am" moving without settling is fetched for within 5 minutes; still, after 45 seconds; hereGap is kept', () async {
@@ -1549,7 +1549,16 @@ void main() {
       await h.weather.start();
       h.core.fetches.clear();
       List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
-      Future<void> pump() => Future<void>.delayed(const Duration(milliseconds: 150));
+      // Runs what the fired timers started to its end: waits (a real delay of a few ms at a time, at most 5 s) until the fake core has
+      // recorded [want] fetches and no fetch is still running, so nothing depends on how fast the box is.
+      Future<void> pump({int? want}) async {
+        final end = DateTime.now().add(const Duration(seconds: 5));
+        await pumpEventQueue();
+        while (DateTime.now().isBefore(end) && (want != null && h.core.fetches.length < want)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        await pumpEventQueue();
+      }
       // still: one fetch, after 45 s
       h.here = (lat: 42.60, lon: -113.79);
       h.weather.positionChanged();
@@ -1559,7 +1568,7 @@ void main() {
       expect(hereKeys(), isEmpty);
       h.clock = h.clock.add(const Duration(seconds: 2));
       h.timers!.fireDue(h.clock);
-      await pump();
+      await pump(want: 1);
       expect(hereKeys(), ['at:42.60,-113.79']);
       // moving: a new key every 30 s for 6 minutes; the settle wait never ends
       h.clock = h.clock.add(const Duration(minutes: 16));
@@ -1570,7 +1579,7 @@ void main() {
         h.here = (lat: 42.60 + 0.02 * i, lon: -113.79);
         h.weather.positionChanged();
         h.timers!.fireDue(h.clock);
-        await pump();
+        await pump(want: i >= 11 ? 1 : null);
       }
       expect(hereKeys(), hasLength(1), reason: 'a fetch happened while it kept moving');
       // the fetch says when it was asked for; the first move that did not settle was at start + 30 s
@@ -1587,6 +1596,8 @@ void main() {
         h.timers!.fireDue(h.clock);
         await pump();
       }
+      // a fetch that should not happen would still be running on real file IO: give it a moment to show (a wrong pass is the only risk)
+      await Future<void>.delayed(const Duration(milliseconds: 100));
       expect(hereKeys(), hasLength(1), reason: 'not inside hereGap');
     });
 

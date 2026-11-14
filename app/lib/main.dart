@@ -312,13 +312,13 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
-    // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point.
+    // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point (the `town` field of its coordinates result).
     townOf: (lat, lon) async {
       final core = sources.core;
       if (core == null) return null;
       final r = await core.mapSearch('${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}', limit: 1, meaning: false);
       for (final m in r.results) {
-        if (m.isCoordinates) return townOfPointAddress(m.address);
+        if (m.isCoordinates) return m.town;
       }
       return null;
     },
