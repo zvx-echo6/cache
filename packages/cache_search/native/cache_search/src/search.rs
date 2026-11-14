@@ -1135,6 +1135,44 @@ impl Handle {
         main_snippet(&main, an, stems, max)
     }
 
+    /// The open library source `lib_id`; `busy` while it opens or updates, `not_found` otherwise.
+    fn find_library(&self, lib_id: &str) -> Result<&library::LibSlot> {
+        self.sources
+            .iter()
+            .find_map(|s| match s {
+                Source::Library(l) if l.id() == lib_id => Some(l),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
+                    Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
+                } else if self.sources.iter().any(|s| matches!(s, Source::Updating(o) if o.id == lib_id)) {
+                    Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is being updated"))
+                } else {
+                    Error::not_found(format!("no library source {lib_id:?}"))
+                }
+            })
+    }
+
+    /// A library document read whole, as JSON: `{"address","title","pages":[{"page","text","addresses"}],"at_page","truncated"}`.
+    /// Only `lib:` addresses; any other is `bad_json`.
+    pub fn read_document(&mut self, address: &str, max_chars: i32) -> Result<String> {
+        self.poll_opening();
+        if !address.starts_with("lib:") {
+            return Err(Error::bad_json(format!("not a library address: {address:?}")));
+        }
+        if max_chars <= 0 {
+            return Err(Error::bad_json("max_chars must be positive"));
+        }
+        let (lib_id, point_id) = library::parse_lib_address(address)?;
+        let d = self.find_library(lib_id)?.read_document(point_id, max_chars as usize)?;
+        Ok(json!({
+            "address": address, "title": d.title, "at_page": d.at_page, "more_before": d.more_before, "more_after": d.more_after,
+            "pages": d.pages.iter().map(|p| json!({"page": p.page, "text": p.text, "addresses": p.addresses})).collect::<Vec<_>>(),
+        })
+        .to_string())
+    }
+
     /// Plain text of an address, cut to `max_chars` at a paragraph end.
     pub fn read(&mut self, address: &str, max_chars: i32) -> Result<String> {
         self.poll_opening();
@@ -1146,22 +1184,7 @@ impl Handle {
         }
         if address.starts_with("lib:") {
             let (lib_id, point_id) = library::parse_lib_address(address)?;
-            let l = self
-                .sources
-                .iter()
-                .find_map(|s| match s {
-                    Source::Library(l) if l.id() == lib_id => Some(l),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
-                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
-                    } else if self.sources.iter().any(|s| matches!(s, Source::Updating(o) if o.id == lib_id)) {
-                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is being updated"))
-                    } else {
-                        Error::not_found(format!("no library source {lib_id:?}"))
-                    }
-                })?;
+            let l = self.find_library(lib_id)?;
             let (r, truncated) = l.read_point(point_id, max_chars as usize)?;
             return Ok(json!({
                 "address": address, "title": r.title, "text": r.text, "truncated": truncated,

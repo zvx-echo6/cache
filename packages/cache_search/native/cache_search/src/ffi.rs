@@ -302,6 +302,16 @@ pub unsafe extern "C" fn cs_read(h: *mut Handle, address: *const c_char, max_cha
     })
 }
 
+/// # Safety
+/// `h` NULL or live; `address` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_read_document(h: *mut Handle, address: *const c_char, max_chars: i32) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let a = arg_str(address, "address")?;
+        out_string(h.read_document(a, max_chars)?)
+    })
+}
+
 /// Start a job. NULL on error (`cs_last_error(NULL)`): `bad_json`, `not_found`/`io` for an unreadable ZIM,
 /// `busy` if another job is building that `index_dir` (or, for `update_library`, is using that library),
 /// `unsupported` for kind `index_pack`. An `update_library` job finds the library through the process-wide

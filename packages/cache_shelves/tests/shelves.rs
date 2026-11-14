@@ -97,7 +97,7 @@ fn same_book(r: &Resolved, a: &str, b: &str) -> bool {
 #[test]
 fn lines_round_trip_and_have_the_documented_shape() {
     let all = [
-        ev(1793600000000, "phone-7", place("A", "210")).with_loc("recon/wm"),
+        ev(1793600000000, "phone-7", place("A", "210")).with_loc("field/wm"),
         ev(1793600000001, "phone-7", assign("A", "210", 1)),
         ev(1793600000002, "phone-7", same("B", "A", By::Auto, Some(0.921875))),
         ev(1793600000003, "phone-7", notsame("B", "A", By::User)),
@@ -115,7 +115,7 @@ fn lines_round_trip_and_have_the_documented_shape() {
     for e in &all {
         assert_eq!(Event::from_line(&e.to_line()).as_ref(), Some(e), "{}", e.to_line());
     }
-    assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"A","div":"210","by":"auto","loc":"recon/wm"}"#);
+    assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"A","div":"210","by":"auto","loc":"field/wm"}"#);
     assert_eq!(all[1].to_line(), r#"{"v":1,"at":1793600000001,"dev":"phone-7","ev":"assign","copy":"A","div":"210","seq":1}"#);
     assert_eq!(all[2].to_line(), r#"{"v":1,"at":1793600000002,"dev":"phone-7","ev":"same","copy":"B","with":"A","by":"auto","how":"text","score":0.921875}"#);
     assert_eq!(all[3].to_line(), r#"{"v":1,"at":1793600000003,"dev":"phone-7","ev":"notsame","copy":"B","with":"A","by":"user"}"#);
@@ -709,7 +709,7 @@ fn the_ops_take_and_give_json() {
     assert_eq!(view["next"]["610"], json!(2));
     assert_eq!(view["built_from"]["libraries"]["L"]["packs"], json!(2));
     // the view the crate builds is the one the op returns
-    let direct = build_view(&shelves, &[lref.clone()], &reader).unwrap();
+    let direct = build_view(&shelves, std::slice::from_ref(&lref), &reader).unwrap();
     assert_eq!(direct, view);
 
     let det = ops::detect(&json!({"copy": {"copy": "a", "blake3": "h"}, "against": [{"copy": "b", "blake3": "h"}, {"copy": "c", "blake3": "x"}]}).to_string(), &reader).unwrap();
@@ -870,7 +870,7 @@ fn an_unmapped_event_maps_once_its_pack_appears() {
     let lib = old_log_library(tmp.path(), true, &log);
     let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
     assert_eq!((rep.events, rep.files[0].unmapped, rep.files[0].already), (2, 0, false));
-    let r = resolve(&read_logs(&shelves.join("log")).unwrap().events, &[lib.1.clone()]);
+    let r = resolve(&read_logs(&shelves.join("log")).unwrap().events, std::slice::from_ref(&lib.1));
     assert_eq!(r.book_of("WM").unwrap().title, "Mine");
     // and it is now recorded and not repeated
     let rep = import_own(&shelves, "me", std::slice::from_ref(&lib)).unwrap();
@@ -975,7 +975,7 @@ fn a_library_with_copies_and_no_packs_gives_the_same_keys_and_the_same_view_as_o
     assert_eq!(from_file.copies, from_packs.copies, "the keys, hashes, titles, quality and samebook facts come out the same");
     assert_eq!(from_file.unreadable, 0);
     let events = [ev(1, "d", place("WM", "610")), ev(2, "d", assign("WM", "610", 1))];
-    let (a, b) = (resolve(&events, &[from_packs.clone()]), resolve(&events, &[from_file.clone()]));
+    let (a, b) = (resolve(&events, std::slice::from_ref(&from_packs)), resolve(&events, std::slice::from_ref(&from_file)));
     let bytes = |r: &Resolved, l: &LibraryInput| view_bytes(&view_value(r, std::slice::from_ref(l), &[])).unwrap();
     assert_eq!(bytes(&a, &from_packs), bytes(&b, &from_file));
     assert_eq!(b.book_of("WM").unwrap().call.as_ref().map(|c| c.text.as_str()), Some("CDS 610-001"));

@@ -1421,6 +1421,105 @@ void main() {
       expect(lastPhase(), 'browsing');
     });
 
+    // Bug: "add a stop" by voice during a drive ended the route and started a new one to the stop.
+    test('an add-a-stop request while guiding adds the place as the next stop; the route keeps its destination', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['added'], isTrue);
+      expect(r['started'], isTrue);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue, reason: 'guidance carries on');
+      expect(nav.selected!.name, 'Made Up Clinic', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, routesBefore + 1);
+      expect(backend.froms.last!['lon'], -113.77, reason: 'the new route starts where the phone is');
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+      expect(lastTrip()['phase'], 'guiding');
+    });
+
+    test('an add-a-stop request while guiding by a saved name adds it; any other name returns the places for Add stop', () async {
+      backend.saved.add(('Place 2', 42.6, -113.65));
+      backend.onSearch = (q, {near, meaning}) async =>
+          MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:33', 'Place 3', lon: -113.7)]);
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final saved = (await fromCar('navigateTo', {'query': 'Place 2', 'stop': true})) as Map;
+      expect(saved['added'], isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect([for (final s in nav.stops) s.name], ['Place 2']);
+      final other = (await fromCar('navigateTo', {'query': 'place three', 'stop': true})) as Map;
+      expect(other['forStop'], isTrue);
+      expect([for (final p in other['places'] as List) (p as Map)['name']], ['Place 3']);
+      expect([for (final s in nav.stops) s.name], ['Place 2'], reason: 'nothing is added until the driver picks');
+      // The place picked from that list is added as the car's own Add stop adds it.
+      expect(await fromCar('addStop', {'id': ((other['places'] as List).single as Map)['id']}), isTrue);
+      expect([for (final s in nav.stops) s.name], ['Place 3', 'Place 2']);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.guiding, isTrue);
+    });
+
+    test('an add-a-stop request that cannot be added leaves the route as it was, and the phone says why', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      toCar.clear();
+      backend.onRoute = (to, mode, from) async => throw StateError('no route');
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.stops, isEmpty);
+      // The same notice the car's own Add stop shows when no route goes through the stop.
+      expect([for (final c in toCar.where((m) => m.method == 'notice')) (c.arguments as Map)['text']], hasLength(1));
+    });
+
+    test('an add-a-stop request while a route is shown before Start adds the stop to it; guidance is not started', () async {
+      await preview();
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isTrue);
+      expect(r['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.guiding, isFalse);
+      expect(nav.selected!.name, 'Cassia Regional Hospital', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, greaterThan(routesBefore));
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+    });
+
+    test('an add-a-stop request with nothing guided is a navigation request: guidance starts to the place', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r.containsKey('added'), isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+    });
+
+    test('navigation and directions requests while guiding still replace the route, as before', () async {
+      await guide();
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': false})) as Map;
+      expect(r['started'], isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+      final d = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.65, 'query': 'Place 2', 'start': false})) as Map;
+      expect(d['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.selected!.name, 'Place 2');
+    });
+
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Burley Library')]);

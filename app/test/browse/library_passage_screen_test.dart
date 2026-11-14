@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cache/browse/library_document_screen.dart';
 import 'package:cache/browse/library_passage_screen.dart';
 import 'package:cache/chat/tool.dart';
 import 'package:cache/search/search_access.dart';
@@ -10,6 +11,9 @@ class ReaderAccess implements SearchAccess {
   ReaderAccess(this.load);
   final Future<ReadPage> Function(String) load;
   final List<String> addresses = [];
+  Future<ReadDocument> Function(String)? loadDocument;
+  @override
+  Future<ReadDocument> readDocument(String address) => loadDocument!(address);
   @override
   Future<List<SourceResult>> search(String query, {int k = 5}) async => const [];
   @override
@@ -54,6 +58,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Saved text.'), findsOneWidget);
     expect(find.textContaining('Page '), findsNothing);
+  });
+
+  testWidgets('the whole-document button opens the document screen', (tester) async {
+    final source = ReaderAccess((_) async => const ReadPage(title: 'Field Manual', text: 'Saved text.', truncated: false))
+      ..loadDocument = (_) async => const ReadDocument(title: 'Field Manual', pages: [DocumentPageText(text: 'Saved text.', pageLabel: '1')]);
+    await tester.pumpWidget(screen(source, 'lib:field/passage'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read the whole document'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('read-whole-document')));
+    await tester.pumpAndSettle();
+    expect(find.byType(LibraryDocumentScreen), findsOneWidget);
+    expect(find.text('p. 1'), findsOneWidget);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.byType(LibraryDocumentScreen), findsNothing);
+    expect(find.byKey(const ValueKey('library-passage-text')), findsOneWidget);
   });
 
   testWidgets('a failed read can be retried', (tester) async {
