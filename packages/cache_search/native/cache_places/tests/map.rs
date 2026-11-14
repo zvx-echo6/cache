@@ -302,7 +302,7 @@ fn add_pine_hollow(pack: &std::path::Path) {
 
 #[test]
 fn a_coordinates_result_names_its_town_as_data_and_keeps_the_address_text() {
-    let t = Tmp::new("town");
+    let t = Tmp::new("coord-town-field");
     write_fixture_pack(&t.pack());
     add_pine_hollow(&t.pack());
     let c = core(&t);
