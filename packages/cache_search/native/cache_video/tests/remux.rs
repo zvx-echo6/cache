@@ -104,3 +104,34 @@ fn a_damaged_fragment_leaves_the_original_and_no_half_copy() {
     assert!(!d.join(".video.remux").exists(), "no half copy");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn saved_hls_videos_from_before_are_rewritten_once_one_at_a_time_and_their_manifests_say_so() {
+    let d = tmp("repair");
+    let root = d.join("downloads").join("tube.example");
+    let hls = root.join("11111111-1111-4111-8111-111111111111");
+    let web = root.join("22222222-2222-4222-8222-222222222222");
+    std::fs::create_dir_all(&hls).unwrap();
+    std::fs::create_dir_all(&web).unwrap();
+    let samples = fragmented(&hls.join("video.mp4"));
+    std::fs::write(hls.join("manifest.json"), r#"{"source":"hls","file":"video.mp4","size":1,"sha256":"old"}"#).unwrap();
+    std::fs::write(web.join("video.mp4"), b"not an mp4 at all").unwrap();
+    std::fs::write(web.join("manifest.json"), r#"{"source":"web","file":"video.mp4"}"#).unwrap();
+    let video = cache_video::Video::new(&cache_video::VideoCfg { dir: d.to_string_lossy().into_owned() });
+    let mut seen = vec![];
+    let r = cache_video::remux::repair_saved(&video, &|a, b| seen.push((a, b)), &|| false).unwrap();
+    assert_eq!(r, cache_video::remux::Repaired { remuxed: 1, no_room: 0, failed: 0 });
+    assert_eq!(seen.last(), Some(&(1, 1)), "one video to look at");
+    let saved = std::fs::read(hls.join("video.mp4")).unwrap();
+    assert_eq!(kinds(&saved).into_iter().map(|k| k.0).collect::<Vec<_>>(), ["ftyp", "moov", "mdat"]);
+    assert!(saved.windows(samples.concat().len()).any(|w| w == samples.concat().as_slice()));
+    let m: serde_json::Value = serde_json::from_slice(&std::fs::read(hls.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(m["remuxed"], true);
+    assert_eq!(m["size"].as_u64().unwrap(), saved.len() as u64);
+    assert_eq!(m["sha256"].as_str().unwrap(), common::sha_hex(&saved));
+    assert_eq!(std::fs::read(web.join("video.mp4")).unwrap(), b"not an mp4 at all", "a web video is left alone");
+    // the next pass has nothing to do
+    let again = cache_video::remux::repair_saved(&video, &|_, _| {}, &|| false).unwrap();
+    assert_eq!(again, cache_video::remux::Repaired::default());
+    let _ = std::fs::remove_dir_all(&d);
+}
