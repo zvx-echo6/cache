@@ -714,7 +714,8 @@ void main() {
       }
       await b.engine.run();
       final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
-      expect((lb.template, lb.isLog, lb.def.fields), ('notes', false, isEmpty));
+      expect((lb.template, lb.isLog), ('notes', false));
+      expect(lb.def.fields, isEmpty);
       final file = b.folder.text.values.firstWhere((v) => v.contains('Ran fine.'));
       expect(file, contains('run_time: 20'), reason: 'every value stays in the file');
       expect(file, contains('cache_template: starters/starter.from_the_future@3'), reason: 'and so does the line, for a build that knows it');
