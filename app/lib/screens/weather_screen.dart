@@ -17,6 +17,7 @@ import '../weather/place_alerts.dart' show PlaceAlertRule;
 import '../weather/place_summary.dart';
 import '../weather/places.dart';
 import '../weather/source_icon.dart';
+import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/weather_state.dart';
 import '../weather/words.dart';
 import 'home_screen.dart' show weatherIcon;
@@ -72,6 +73,9 @@ class _WeatherScreenState extends State<WeatherScreen> {
     super.initState();
     w.addListener(_changed);
     w.focus.addListener(_onFocus);
+    // The screen is shown: an update that is due runs (due-checked); the screen's own updated / updating lines show it.
+    // (after this build: it tells its listeners, which must not happen while a frame is built)
+    unawaited(Future.microtask(() => w.updateIfDue(kBackgroundEvery)));
     unawaited(_loadRules());
     _load().then((_) => _onFocus());
   }
