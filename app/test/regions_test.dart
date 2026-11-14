@@ -161,6 +161,7 @@ void main() {
     r.core.calls.clear();
     await _openCountySheet(tester);
     await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     expect(r.core.calls, isNot(contains('plan')), reason: 'the size comes with the catalogue (1.0.27 worked it out for a minute)');
     final offer = r.regions.offer(r.county);
     expect(offer.kind, RegionOfferKind.download);
@@ -235,6 +236,7 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
     await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('download-mobile'))));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     // The pop-up says so and offers Wait for Wi-Fi first.
     expect(find.byKey(const ValueKey('download-mobile')), findsOneWidget);
     expect(r.core.added, isEmpty, reason: 'nothing starts before the person says so');
@@ -795,6 +797,7 @@ void main() {
     ))));
     await tester.tap(find.text('open'));
     await r.settleUntil(tester, () => _shown(find.text('Twin Falls County')));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     expect(find.text('Regions'), findsOneWidget);
     expect(find.text('Each region has directions, map, places and off-road.'), findsOneWidget);
     expect(find.textContaining('County · ${formatBytes(r.regions.offer(r.county).bytes!)}'), findsOneWidget, reason: 'sizes at once');
@@ -809,6 +812,7 @@ void main() {
     expect(find.textContaining('Download 1 ·'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('regions-download-picked')));
     await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await r.settleUntil(tester, () => r.core.added.isNotEmpty);
@@ -822,6 +826,7 @@ void main() {
     await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
     await tester.tap(find.text('open'));
     await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('regions-draw'))));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     await tester.tap(find.byKey(const ValueKey('regions-draw')));
     await r.settleUntil(tester, () => r.s.maps.drawRequest);
     expect(r.s.maps.drawRequest, isTrue, reason: 'the map is asked to draw');
@@ -860,8 +865,10 @@ void main() {
     await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
     await tester.tap(find.text('open'));
     await r.settleUntil(tester, () => _shown(find.byKey(const ValueKey('regions-draw'))));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     await tester.tap(find.byKey(const ValueKey('regions-draw')));
     await r.settleUntil(tester, () => !_shown(find.text('Draw your own area instead')));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     expect(find.text('Draw your own area instead'), findsNothing, reason: 'the sheet closed');
     // The shell opens the Maps tab for the request; the map screen is built then, after the request was made.
     await r.s.show(tester, MapsScreen(
@@ -889,6 +896,7 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
     await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
+    await tester.pumpAndSettle(); // the sheet or pop-up has finished opening (or closing) before the next tap
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
