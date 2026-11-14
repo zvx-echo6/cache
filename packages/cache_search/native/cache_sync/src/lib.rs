@@ -158,6 +158,16 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// Shares of things the person made, by share id: with "Don't replace my copies from this device" on for a linked device
+    /// (`set_keep_copies`), that device's newer version of a file held here is written beside it ("notes (from Pixel).md") and
+    /// its new files still come; in every other share that device's changes are not taken at all. For Cache: the notebooks
+    /// (their entries, the saved places notebook and their photos).
+    #[serde(default)]
+    pub beside: Vec<String>,
+    /// Shares the switch never touches, by share id: what each device keeps with its links whatever it holds (the settings and
+    /// Bookshelves logs, the search indexes).
+    #[serde(default)]
+    pub not_copies: Vec<String>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -216,6 +226,11 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
+    /// "Don't replace my copies from this device", switched on here (`set_keep_copies`): what this device takes from that one
+    /// never replaces or removes a file here. This device's own choice, never sent; absent (off) in files saved by older
+    /// versions, which do not read it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keep_copies: bool,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -1945,7 +1960,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, keep_copies: false });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -2520,6 +2535,19 @@ impl SyncEngine {
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
+            "set_keep_copies" => {
+                // "Don't replace my copies from this device", for one linked device: this device's own choice (never sent).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let on = args.get("on").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("on must be true or false"))?;
+                {
+                    let mut sv = inner.saved.lock().unwrap();
+                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
+                    p.keep_copies = on;
+                }
+                inner.save()?;
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
@@ -2569,6 +2597,7 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "keep_copies": p.keep_copies,
                 })
             })
             .collect();
@@ -2741,7 +2770,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, keep_copies: false }
     }
 
     #[test]
