@@ -1410,7 +1410,7 @@ mod tests {
 
     #[test]
     fn address_split() {
-        assert_eq!(parse_lib_address("lib:recon/42").unwrap(), ("recon", "42"));
+        assert_eq!(parse_lib_address("lib:field/42").unwrap(), ("field", "42"));
         assert_eq!(parse_lib_address("lib:a/b/9f1c").unwrap(), ("a/b", "9f1c"));
         for bad in ["lib:", "lib:x", "lib:/1", "lib:x/", "zim:x/1"] {
             assert!(parse_lib_address(bad).is_err(), "{bad}");
