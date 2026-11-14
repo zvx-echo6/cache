@@ -54,6 +54,9 @@ class FakeNotebookBackend implements NotebookBackend {
           },
         'saved_places' => _nbJson(_savedPlaces()),
         'import' => _import(a),
+        'repeaters_import' => _repeatersImport(a),
+        'repeaters_add_back' => {'added': repeatersAddBack},
+        'source_rows' => {'rows': sourceRows},
         _ => throw CacheSearchException('unsupported', 'unknown notebook op $op'),
       };
 
@@ -65,6 +68,20 @@ class FakeNotebookBackend implements NotebookBackend {
     var n = limit ?? 1000;
     if (entryCap != null && entryCap! < n) n = entryCap!;
     return [for (final e in all.take(n)) _entryJson(e)];
+  }
+
+  /// What the core answers to `repeaters_import` (the app's test decides: the merge itself is the core's, tested in Rust), and the
+  /// arguments it was called with.
+  Map<String, dynamic> repeatersAnswer = const {};
+  final List<Map<String, dynamic>> repeatersCalls = [];
+
+  /// What `repeaters_add_back` answers, and the ledger `source_rows` shows.
+  int repeatersAddBack = 0;
+  List<Map<String, dynamic>> sourceRows = [];
+
+  Map<String, dynamic> _repeatersImport(Map<String, dynamic> a) {
+    repeatersCalls.add(a);
+    return repeatersAnswer;
   }
 
   /// The points the next `import` reads (name, lat, lon, notes), standing in for the file.
