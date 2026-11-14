@@ -118,10 +118,10 @@ fn saved_hls_videos_from_before_are_rewritten_once_one_at_a_time_and_their_manif
     std::fs::write(web.join("video.mp4"), b"not an mp4 at all").unwrap();
     std::fs::write(web.join("manifest.json"), r#"{"source":"web","file":"video.mp4"}"#).unwrap();
     let video = cache_video::Video::new(&cache_video::VideoCfg { dir: d.to_string_lossy().into_owned() });
-    let mut seen = vec![];
-    let r = cache_video::remux::repair_saved(&video, &|a, b| seen.push((a, b)), &|| false).unwrap();
+    let seen = std::cell::RefCell::new(vec![]);
+    let r = cache_video::remux::repair_saved(&video, &|a, b| seen.borrow_mut().push((a, b)), &|| false).unwrap();
     assert_eq!(r, cache_video::remux::Repaired { remuxed: 1, no_room: 0, failed: 0 });
-    assert_eq!(seen.last(), Some(&(1, 1)), "one video to look at");
+    assert_eq!(seen.borrow().last(), Some(&(1, 1)), "one video to look at");
     let saved = std::fs::read(hls.join("video.mp4")).unwrap();
     assert_eq!(kinds(&saved).into_iter().map(|k| k.0).collect::<Vec<_>>(), ["ftyp", "moov", "mdat"]);
     assert!(saved.windows(samples.concat().len()).any(|w| w == samples.concat().as_slice()));

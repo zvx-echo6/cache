@@ -242,7 +242,7 @@ fn interrupted_download_resumes_with_range() {
     assert_eq!(gets.len(), 2, "one cut request and one resumed request");
     assert!(gets[0].header("Range").is_none());
     let from: usize = gets[1].header("Range").unwrap().strip_prefix("bytes=").unwrap().strip_suffix('-').unwrap().parse().unwrap();
-    assert!(from >= 500_000 && from < WEB_SIZE, "resumed at {from}");
+    assert!((500_000..WEB_SIZE).contains(&from), "resumed at {from}");
     let f = std::fs::read(t.0.join("downloads").join(&id).join(WEB_UUID).join("video.mp4")).unwrap();
     assert_eq!(sha_hex(&f), sha_hex(&blob(WEB_SIZE, 7)));
 }

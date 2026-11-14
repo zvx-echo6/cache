@@ -217,7 +217,7 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
     hits.lock().unwrap().push(hit.clone());
     let path = hit.path.split('?').next().unwrap().to_string();
     let q = hit.path.split_once('?').map(|x| x.1).unwrap_or("");
-    let ua_ok = hit.header("User-Agent").map_or(false, |u| u.starts_with("Cache/"));
+    let ua_ok = hit.header("User-Agent").is_some_and(|u| u.starts_with("Cache/"));
     if !ua_ok {
         send_json(&mut s, 400, &json!({"detail": "missing Cache user agent"}));
         return Some(());
@@ -324,7 +324,7 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
         }
         ("GET", p) => match file_bytes(p) {
             Some(b) => {
-                if p.contains(&format!("{HLS_UUID}")) && private && !q.contains("videoFileToken=FT1") {
+                if p.contains(HLS_UUID) && private && !q.contains("videoFileToken=FT1") {
                     send_json(&mut s, 403, &json!({"detail": "file token needed"}))
                 } else {
                     serve_file(&mut s, &hit, &b, &knobs, p == WEB_FILE)
