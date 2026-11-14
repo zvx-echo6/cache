@@ -88,10 +88,10 @@ void main() {
 
       // the notebook's menu
       await tester.tap(find.byKey(const ValueKey('notebook-menu')));
-      await _settle(tester, 6);
+      await _settle(tester, 30); // a pop-up menu fades its items in over about 300 ms: wait for all of it
       await snap(tester, _out, '2-list-menu-390-$name');
       await tester.tapAt(const Offset(20, 400));
-      await _settle(tester, 6);
+      await _settle(tester, 12);
 
       // the update summary (the core's answer to a newer file)
       store.repeatersAnswer = {
@@ -110,7 +110,7 @@ void main() {
       await _settle(tester);
       await snap(tester, _out, '4-entry-390-$name');
       await tester.tap(find.byKey(const ValueKey('editor-menu')));
-      await _settle(tester, 6);
+      await _settle(tester, 30);
       await snap(tester, _out, '5-entry-menu-390-$name');
     });
 
@@ -155,6 +155,41 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       sharing.dispose();
       await r.dispose(tester);
+    });
+
+    // A Card, a floating button and a pop-up menu at their default elevation and at elevation 0, side by side: in a test picture the
+    // elevation's shadow is drawn as a hard dark outline; at elevation 0 there is none. (The app's theme gives them no border.)
+    testWidgets('elevation, default and 0: the dark outlines are the test picture\'s shadows, phone-390, $name', (tester) async {
+      phone(tester, size: const Size(390, 844), ratio: 3);
+      Widget card(String text, double? elevation) => Card(
+            elevation: elevation,
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            child: Padding(padding: const EdgeInsets.all(16), child: Text(text, style: const TextStyle(fontSize: 17))),
+          );
+      await tester.pumpWidget(shotApp(
+        Scaffold(
+          appBar: AppBar(title: const Text('Card, button and menu: default, then elevation 0')),
+          body: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              card('Card, default elevation', null),
+              card('Card, elevation 0', 0),
+              const SizedBox(height: 16),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                FloatingActionButton(heroTag: 'a', onPressed: () {}, child: const Icon(Icons.add)),
+                FloatingActionButton(heroTag: 'b', elevation: 0, focusElevation: 0, hoverElevation: 0, highlightElevation: 0, onPressed: () {}, child: const Icon(Icons.add)),
+              ]),
+              const SizedBox(height: 16),
+              Material(elevation: 3, borderRadius: BorderRadius.circular(8), child: const Padding(padding: EdgeInsets.all(16), child: Text('Menu-like surface, elevation 3'))),
+              const SizedBox(height: 12),
+              Material(elevation: 0, borderRadius: BorderRadius.circular(8), color: Theme.of(tester.element(find.byType(Column).first)).colorScheme.surface, child: const Padding(padding: EdgeInsets.all(16), child: Text('The same, elevation 0'))),
+            ]),
+          ),
+        ),
+        theme: theme,
+      ));
+      await _settle(tester);
+      await snap(tester, _out, '7-elevation-compare-390-$name');
     });
   }
 }

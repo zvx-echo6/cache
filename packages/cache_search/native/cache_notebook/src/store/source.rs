@@ -208,10 +208,10 @@ fn make_entry(tx: &Connection, nb: &str, now: &str, base: &Base) -> Result<Strin
 }
 
 /// `source_merge`: `{"notebook_id" | "notebook": {notebook_save args}, "now", "rows": [{"key","title"?,"place"?,"values"?,"source"?}],
-/// "claims"?: {key: entry id}}`. See the module doc. Answers `{"notebook","added","updated","unchanged","kept_edits","not_in_file",
+/// "claims"?: {key: entry id}, "migrated_from"?: text}`. See the module doc. Answers `{"notebook","added","updated","unchanged","kept_edits","not_in_file",
 /// "deleted": [{"key","title"}]}`.
 pub(crate) fn source_merge(c: &mut Connection, args: &Value) -> Result<Value> {
-    check_keys(args, &["notebook_id", "notebook", "now", "rows", "claims"])?;
+    check_keys(args, &["notebook_id", "notebook", "now", "rows", "claims", "migrated_from"])?;
     let now = str_arg(args, "now")?;
     parse_when(now)?;
     let tx = c.transaction()?;
@@ -225,6 +225,11 @@ pub(crate) fn source_merge(c: &mut Connection, args: &Value) -> Result<Value> {
         (None, Some(n)) => notebook_save_in(&tx, n)?["id"].as_str().unwrap_or_default().to_string(),
         _ => return Err(Error::bad("source_merge needs notebook_id or notebook, one of them")),
     };
+    if let Some(from) = opt_text(args, "migrated_from", 100)? {
+        // Where this notebook came from (an older store's list id), kept in the same transaction as the notebook: the next start
+        // finds it by this and does not make it twice.
+        tx.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?1, ?2)", params![format!("migrated:{from}"), nb_id])?;
+    }
     let nb = load_notebook(&tx, &nb_id)?.expect("found or made above");
     let rows = parse_rows(&nb.def, args.get("rows"))?;
     let claims: HashMap<String, String> = match args.get("claims") {
@@ -348,4 +353,17 @@ pub(crate) fn source_rows(c: &mut Connection, args: &Value) -> Result<Value> {
         })
         .collect();
     Ok(json!({"rows": rows}))
+}
+
+/// `source_migrated`: `{"from"}`. The notebook a `source_merge` made with `migrated_from` = `from`, if it is still there:
+/// `{"notebook_id": "<id>" | null}`.
+pub(crate) fn source_migrated(c: &mut Connection, args: &Value) -> Result<Value> {
+    check_keys(args, &["from"])?;
+    let from = str_arg(args, "from")?;
+    let id: Option<String> = c.query_row("SELECT value FROM meta WHERE key=?1", [format!("migrated:{from}")], |r| r.get(0)).optional()?;
+    let id = match id {
+        Some(id) if load_notebook(c, &id)?.is_some() => Some(id),
+        _ => None,
+    };
+    Ok(json!({"notebook_id": id}))
 }

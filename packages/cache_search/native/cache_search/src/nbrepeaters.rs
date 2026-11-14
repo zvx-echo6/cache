@@ -23,6 +23,10 @@ use std::sync::Arc;
 /// The template id of a repeater list's notebook.
 pub const TEMPLATE: &str = "repeaters";
 
+/// The template ref of a notebook made here (as the app writes it for a built-in template), which notebook sync puts in every entry
+/// file so another phone makes the notebook with the template's fields.
+pub const TEMPLATE_REF: &str = "templates/repeaters@1";
+
 /// The fixed fields, in order (their ids are f1 to f7 in a notebook made here). Must match `assets/notebook/templates.json`.
 pub const FIELDS: [(&str, &str); 7] = [
     ("Frequency", "text"),
@@ -211,7 +215,7 @@ impl Ext {
                     Some(n) => n,
                     None => self.free_repeaters_name(&parsed.first_file)?,
                 };
-                (json!({"notebook": {"template": TEMPLATE, "def": def(&name), "map": true}}), fids(None), Value::Null)
+                (json!({"notebook": {"template": TEMPLATE, "def": def(&name), "map": true, "template_ref": TEMPLATE_REF}}), fids(None), Value::Null)
             }
         };
         let rows: Vec<Value> = reps.iter().zip(&keys).map(|(r, k)| row(r, k, &fid, serde_json::to_string(r).unwrap_or_default())).collect();
@@ -275,9 +279,11 @@ impl Ext {
             Ok(())
         };
         for l in lists {
-            let tref = format!("migrated/{}", l.id);
-            let all = self.nbr_call("notebooks", &json!({}))?;
-            let existing = all["notebooks"].as_array().into_iter().flatten().find(|n| n["template_ref"] == tref.as_str()).cloned();
+            let found = self.nbr_call("source_migrated", &json!({"from": l.id}))?;
+            let existing = match found["notebook_id"].as_str() {
+                Some(id) => Some(self.nbr_call("notebook", &json!({"id": id}))?),
+                None => None,
+            };
             let (id, def_v) = match existing {
                 Some(n) => (n["id"].as_str().unwrap_or_default().to_string(), n["def"].clone()),
                 None => {
@@ -291,8 +297,8 @@ impl Ext {
                     let keys = keys_of(reps.iter().map(|r| (r.name.clone(), r.freq_hz, r.town.as_deref())));
                     let rows: Vec<Value> = reps.iter().zip(&keys).zip(&l.rows).map(|((r, k), (_, raw))| row(r, k, &fid, raw.clone())).collect();
                     let a = json!({
-                        "notebook": {"template": TEMPLATE, "def": def(&name), "map": l.visible, "template_ref": tref},
-                        "now": iso_now(), "rows": rows,
+                        "notebook": {"template": TEMPLATE, "def": def(&name), "map": l.visible, "template_ref": TEMPLATE_REF},
+                        "migrated_from": l.id, "now": iso_now(), "rows": rows,
                     });
                     let out = self.nbr_call("source_merge", &a)?;
                     stop(2)?;
@@ -373,9 +379,9 @@ impl NotebookRepeaters {
     fn notebook_points(&self) -> Vec<UserPoint> {
         let Ok(books) = self.nb.books_by_template(TEMPLATE) else { return Vec::new() };
         // A notebook made from a list that is still in the older store (a conversion not finished) is not shown twice.
-        let unfinished: Vec<String> = self.inner.legacy_repeater_lists().map(|l| l.into_iter().map(|x| format!("migrated/{}", x.id)).collect()).unwrap_or_default();
+        let unfinished: Vec<String> = self.inner.legacy_repeater_lists().map(|l| l.into_iter().map(|x| x.id).collect()).unwrap_or_default();
         let mut out = Vec::new();
-        for b in books.into_iter().filter(|b| b["template_ref"].as_str().is_none_or(|r| !unfinished.iter().any(|u| u == r))) {
+        for b in books.into_iter().filter(|b| !b["migrated"].as_array().into_iter().flatten().filter_map(Value::as_str).any(|m| unfinished.iter().any(|u| u == m))) {
             let fid = fids(Some(&b["def"]));
             let list = b["name"].as_str().unwrap_or_default().to_string();
             for e in b["entries"].as_array().into_iter().flatten() {

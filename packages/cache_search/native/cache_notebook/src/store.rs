@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use std::path::Path;
 
 mod source;
-pub(crate) use source::{source_add_back, source_merge, source_rows};
+pub(crate) use source::{source_add_back, source_merge, source_migrated, source_rows};
 
 const SCHEMA_VERSION: &str = "2";
 const DEFAULT_LIMIT: i64 = 1000;
@@ -462,7 +462,7 @@ pub fn places_books(c: &Connection) -> Result<Vec<PlacesBook>> {
 }
 
 /// The notebooks made from `template`, oldest first, each with its entries that are not drafts in the order they were made:
-/// `{"id","name","def","map","template_ref","entries":[...]}`. What the assistant's tools read of a template's notebooks.
+/// `{"id","name","def","map","template_ref","migrated":[older store list ids],"entries":[...]}`. What the assistant's tools read of a template's notebooks.
 pub fn books_by_template(c: &Connection, template: &str) -> Result<Vec<Value>> {
     let mut books: Vec<NotebookRow> = all_notebooks(c)?.into_iter().filter(|n| n.template == template).collect();
     books.sort_by_key(|n| n.created);
@@ -470,7 +470,8 @@ pub fn books_by_template(c: &Connection, template: &str) -> Result<Vec<Value>> {
     for n in books {
         let ids = ids_of(c, "SELECT id FROM entries WHERE notebook_id=?1 AND draft=0 ORDER BY created, rowid", &[&n.id])?;
         let entries = ids.iter().filter_map(|id| entry_json(c, id).transpose()).collect::<Result<Vec<_>>>()?;
-        out.push(json!({"id": n.id, "name": n.def.name, "def": n.def.to_json(), "map": n.map, "template_ref": n.template_ref, "entries": entries}));
+        let migrated = ids_of(c, "SELECT substr(key, 10) FROM meta WHERE key LIKE 'migrated:%' AND value=?1", &[&n.id])?;
+        out.push(json!({"id": n.id, "name": n.def.name, "def": n.def.to_json(), "map": n.map, "template_ref": n.template_ref, "migrated": migrated, "entries": entries}));
     }
     Ok(out)
 }
@@ -597,6 +598,7 @@ pub fn notebook_delete(c: &mut Connection, media: &Path, args: &Value) -> Result
     tx.execute("DELETE FROM entries_fts WHERE rowid IN (SELECT rowid FROM entries WHERE notebook_id=?1)", [id])?;
     tx.execute("DELETE FROM attachments WHERE entry_id IN (SELECT id FROM entries WHERE notebook_id=?1)", [id])?;
     tx.execute("DELETE FROM source_rows WHERE notebook_id=?1", [id])?;
+    tx.execute("DELETE FROM meta WHERE key LIKE 'migrated:%' AND value=?1", [id])?;
     let n = tx.execute("DELETE FROM entries WHERE notebook_id=?1", [id])?;
     tx.execute("DELETE FROM notebooks WHERE id=?1", [id])?;
     tx.commit()?;

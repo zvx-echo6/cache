@@ -149,7 +149,7 @@ fn an_older_list_becomes_a_notebook_with_every_row_and_the_assistant_sees_the_sa
     let books = h.notebooks_named("Repeaters");
     assert_eq!(books.len(), 1);
     let nb = &books[0];
-    assert_eq!((nb["template"].as_str(), nb["def"]["name"].as_str(), nb["template_ref"].as_str(), nb["map"].as_bool()), (Some("repeaters"), Some("Repeaters"), Some("migrated/l1"), Some(true)));
+    assert_eq!((nb["template"].as_str(), nb["def"]["name"].as_str(), nb["template_ref"].as_str(), nb["map"].as_bool()), (Some("repeaters"), Some("Repeaters"), Some("templates/repeaters@1"), Some(true)));
     let entries = h.entries(nb["id"].as_str().unwrap());
     assert_eq!(entries.len(), old_rows.len(), "every row is an entry");
     // every field of every row, as the old list gave it
@@ -212,6 +212,7 @@ fn a_file_is_read_into_a_notebook_and_updated_without_wiping_edits() {
     let out = h.nb_ok("repeaters_import", json!({"paths": paths, "now": NOW}));
     let nb = out["notebook"].clone();
     let id = nb["id"].as_str().unwrap().to_string();
+    assert_eq!(nb["template_ref"], "templates/repeaters@1", "the ref notebook sync writes into every entry file");
     assert_eq!((nb["def"]["name"].as_str(), nb["template"].as_str()), (Some("Repeaters"), Some("repeaters")));
     let n = out["added"].as_i64().unwrap();
     assert!(n >= 4 && out["updated"] == 0);

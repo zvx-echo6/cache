@@ -141,6 +141,7 @@ impl Notebook {
             "source_merge" => store::source_merge(c, &args)?,
             "source_add_back" => store::source_add_back(c, &args)?,
             "source_rows" => store::source_rows(c, &args)?,
+            "source_migrated" => store::source_migrated(c, &args)?,
             _ => return Err(Error { code: "unsupported", message: format!("unknown notebook op {op:?}") }),
         }))?;
         Ok(out.to_string())

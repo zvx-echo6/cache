@@ -744,7 +744,8 @@ void main() {
       await a.journal();
       await b.journal();
       final t = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync()).byId('repeaters')!;
-      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true);
+      // as the core makes one: the template's ref, so notebook sync names the template in every entry file
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true, templateRef: t.ref);
       await a.nb.saveEntry(
         notebookId: la.id,
         occurredAt: '2026-11-14T09:00:00-07:00',
@@ -765,9 +766,15 @@ void main() {
         if (!e.key.split('/').any((c) => c.startsWith('.'))) b.folder.text[e.key] = e.value;
       }
       await b.engine.run();
+      expect(md, contains('cache_template: templates/repeaters@1'));
       final nbB = b.nb.notebooks.firstWhere((n) => n.name == 'Repeaters');
       final eB = (await b.nb.entries(nbB.id)).single;
       expect((eB.title, eB.body, eB.place?.lat), ('W0TST1', 'Checked on the 14th.', 42.54));
+      // phone 2 has the Repeaters template's fields, and every value is in its field
+      expect((nbB.template, nbB.isRepeaters, nbB.def.sort, nbB.def.icon, nbB.def.color), ('repeaters', true, NotebookSort.distance, 'radio_tower', 'purple'));
+      expect([for (final f in nbB.def.visible) (f.label, f.type)], [for (final f in la.def.visible) (f.label, f.type)]);
+      expect(eB.values, {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true},
+          reason: 'frequency, offset, tone, town and on air are in their fields on phone 2');
       // B writes it back unchanged: A's entry keeps every value
       await b.engine.run();
       for (final e in b.folder.text.entries) {

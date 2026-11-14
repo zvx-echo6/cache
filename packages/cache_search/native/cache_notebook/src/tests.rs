@@ -589,3 +589,26 @@ fn books_by_template_lists_entries_in_the_order_they_were_made() {
     let titles: Vec<&str> = books[0]["entries"].as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["KX0AAA", "KX0BBB", "KX0CCC"]);
 }
+
+#[test]
+fn a_notebook_remembers_the_list_it_came_from_in_the_same_step_and_forgets_it_with_the_notebook() {
+    let (nb, _t) = notebook("src-migrated");
+    let out = call(
+        &nb,
+        "source_merge",
+        json!({"notebook": {"template": "repeaters", "def": list_def("Repeaters"), "map": true, "template_ref": "templates/repeaters@1"}, "migrated_from": "l7", "now": NOW, "rows": first_file()}),
+    );
+    let id = out["notebook"]["id"].as_str().unwrap().to_string();
+    assert_eq!(out["notebook"]["template_ref"], "templates/repeaters@1");
+    assert_eq!(call(&nb, "source_migrated", json!({"from": "l7"}))["notebook_id"], id.as_str());
+    assert!(call(&nb, "source_migrated", json!({"from": "l8"}))["notebook_id"].is_null());
+    assert_eq!(nb.books_by_template("repeaters").unwrap()[0]["migrated"], json!(["l7"]));
+    // a step that fails records nothing
+    let mut rows = first_file();
+    rows.push(json!({"key": "z", "title": "X", "values": {"f9": "no such field"}}));
+    let e = nb.call("source_merge", Some(&json!({"notebook": {"template": "repeaters", "def": list_def("Other"), "map": true}, "migrated_from": "l9", "now": NOW, "rows": rows}).to_string()));
+    assert_eq!(e.expect_err("bad row").code, "bad_json");
+    assert!(call(&nb, "source_migrated", json!({"from": "l9"}))["notebook_id"].is_null());
+    call(&nb, "notebook_delete", json!({"id": id}));
+    assert!(call(&nb, "source_migrated", json!({"from": "l7"}))["notebook_id"].is_null(), "the note goes with the notebook");
+}
