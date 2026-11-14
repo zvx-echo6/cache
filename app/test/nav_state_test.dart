@@ -635,6 +635,70 @@ void main() {
       expect(nav.lastFix, isNull);
     });
 
+    Future<void> arriveAt(Map<String, dynamic> json) async {
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(json, 1.0, arrived: true)));
+      gps.controller.add(fixAt(42.5, -113.5));
+      await settle();
+      expect(nav.arrived, isTrue);
+    }
+
+    test('with no End after arrival, guidance ends by itself once, the way End does', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 300);
+      final json = await guideTo('Juniper Depot');
+      await arriveAt(json);
+      expect(nav.guiding, isTrue);
+      await settle(60);
+      expect(nav.guiding, isTrue, reason: 'not before the time is up');
+      expect(gps.stops, 0);
+      await settle(400);
+      expect(nav.phase, NavPhase.browsing);
+      expect(nav.arrived, isFalse);
+      expect(nav.selected!.name, 'Juniper Depot', reason: 'as End: the place stays selected');
+      expect(gps.stops, 1, reason: 'the position service is let go');
+      expect(speaker.stops, 1);
+      expect(nav.lastFix, isNull);
+      expect(location.streamHealthy, isTrue, reason: 'the map has its own position stream back');
+      expect(follows.last, FollowMode.follow);
+      await settle(400);
+      expect(gps.stops, 1, reason: 'once');
+      expect(speaker.stops, 1);
+    });
+
+    test('End before the time is up cancels the end by itself: nothing happens later', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      final json = await guideTo('Juniper Depot');
+      await arriveAt(json);
+      await nav.end();
+      expect(gps.stops, 1);
+      // A new drive at once: the old arrival's timer must not end it.
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.2));
+      await nav.openDirections(spot('place:21', 'Quartz Landing', 42.6, -113.6));
+      await nav.start();
+      await settle(300);
+      expect(nav.guiding, isTrue);
+      expect(nav.arrived, isFalse);
+      expect(gps.stops, 1);
+      expect(speaker.stops, 1);
+      await nav.end();
+    });
+
+    test('a new route after arrival cancels the end by itself', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      final json = await guideTo('Juniper Depot');
+      await arriveAt(json);
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-second', name: 'Quartz Landing'));
+      await nav.openDirections(spot('place:21', 'Quartz Landing', 42.6, -113.6));
+      expect(nav.phase, NavPhase.previewing);
+      expect(gps.stops, 1, reason: 'the new route ended the arrived guidance');
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.2));
+      await nav.start();
+      await settle(300);
+      expect(nav.guiding, isTrue, reason: 'the new drive is not ended by the old arrival');
+      expect(nav.route!.routeId, 'r-second');
+      expect(gps.stops, 1);
+      await nav.end();
+    });
+
     test('arrival is final: later fixes neither reroute nor speak; the position service is let go at End', () async {
       final json = await guideTo('Juniper Depot');
       expect(location.streamHealthy, isFalse, reason: 'guidance holds the map\'s own position stream');

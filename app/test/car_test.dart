@@ -1055,6 +1055,23 @@ void main() {
       expect(nav.lastFix, isNull);
     });
 
+    test('with no End after arrival, guidance ends by itself and the car\'s trip ends as it does on End', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['phase'], 'guiding');
+      await settle(400);
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1, reason: 'the position service is let go');
+      expect(lastTrip()['phase'], 'browsing', reason: 'the car is told guidance ended');
+      expect(lastTrip()['arrived'], isFalse);
+      expect([for (final c in toCar) if (c.method == 'route') c].last.arguments, containsPair('bounds', isNull), reason: 'the route line is taken off');
+    });
+
     test('Add stop on the car before Start: the place joins the route shown and the trip names it', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);
