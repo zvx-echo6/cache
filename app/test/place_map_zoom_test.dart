@@ -12,6 +12,7 @@ import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
