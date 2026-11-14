@@ -1063,18 +1063,33 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     panel_is "$theme" "theme_$theme"
   done
   # Five quick theme changes on the phone, a tenth of a second apart (timed by the stand-in Dart side: the job's notifications
-  # each take a second or more on a busy runner), ending in Tactical: one style load, of the last.
+  # each take a second or more on a busy runner), ending in Tactical. The car waits 0.4 s after a change before it loads a
+  # style, so changes closer together than that give one load, of the last. A slow runner can space them further apart: the
+  # gaps it actually achieved are read from the stand-in's own log times, and each one longer than the wait is one more load.
   before=$(log_count 'car map: style loaded')
+  changes=$(log_count 'harness steps: phone theme ')
   notify themeburst
   if wait_more 'car map: style loaded' "$before" 15; then
     sleep 5
     got=$(( $(log_count 'car map: style loaded') - before ))
     last=$(grep 'car map: style loaded' "$STREAM" | tail -n 1 | sed 's/.*style loaded, //; s/,.*//')
     shot_ext "$label-guide-theme-burst"
-    if [ "$got" = 1 ] && [ "$last" = tactical ]; then
-      GUIDE="$GUIDE; five quick theme changes gave one style load, of the last (tactical)"
+    # The five changes' times (hh:mm:ss.mmm), and the gaps between them in milliseconds.
+    gaps=$(grep 'harness steps: phone theme ' "$STREAM" | tail -n +$((changes + 1)) | head -n 5 | cut -c12-23 \
+      | awk -F'[:.]' '{ t = (($1 * 60 + $2) * 60 + $3) * 1000 + $4; if (NR > 1) printf "%d ", t - p; p = t }')
+    long=0
+    for gap in $gaps; do [ "$gap" -gt 400 ] && long=$((long + 1)); done
+    want=$((long + 1))
+    if [ "$(echo $gaps | wc -w)" != 4 ]; then
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes: the stand-in said $(( $(echo $gaps | wc -w) + 1 )) of them, not five]"
+    elif [ "$got" = "$want" ] && [ "$last" = tactical ]; then
+      if [ "$long" = 0 ]; then
+        GUIDE="$GUIDE; five quick theme changes (gaps ${gaps% } ms) gave one style load, of the last (tactical)"
+      else
+        GUIDE="$GUIDE; five quick theme changes gave $got style loads, the last of tactical: the runner was slow, $long of the gaps (${gaps% } ms) were longer than the car's 0.4 s wait"
+      fi
     else
-      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes gave $got style load(s), the last of $last: one, of tactical, was wanted]"
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes (gaps ${gaps% } ms, $long longer than the car's 0.4 s wait) gave $got style load(s), the last of $last: $want, the last of tactical, was wanted]"
     fi
   else
     GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes loaded no style]"
