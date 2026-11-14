@@ -64,14 +64,14 @@ class FgsAddTest {
     fun setUp() {
         runner = FakeRunner()
         FgsAddService.runnerFactory = { runner }
-        FgsAddArm.armed = false
+        FgsAddArm.reset()
     }
 
     @After
     fun tearDown() {
         controller?.destroy()
         FgsAddService.runnerFactory = { DartFgsAddRunner(it) }
-        FgsAddArm.armed = false
+        FgsAddArm.reset()
     }
 
     private fun start(): FgsAddService {
@@ -317,5 +317,51 @@ class FgsAddTest {
         val started = shadowOf(a.application).nextStartedService
         assertEquals(FgsAddService::class.java.name, started.component?.className)
         assertEquals(FgsAddNotifications.ACTION_START, started.action)
+    }
+
+    // ---- leaving: what counts (Pixel, 2026-11-14)
+
+    @Test
+    fun theAppsOwnPicker_isNotALeave_butAHomeLaterIs() {
+        val a = activity()
+        FgsAddArm.armed = true
+        FgsAddArm.noteInternalLaunch(now = 1_000)
+        // the leave hint that the launch itself causes, right after it
+        assertFalse(FgsAddArm.onLeave(a, FgsAddArm.Leave.HINT, now = 1_400))
+        // the pause and stop that follow, while the picker is up
+        assertFalse(FgsAddArm.onLeave(a, FgsAddArm.Leave.STOP, now = 2_000))
+        assertFalse(FgsAddArm.onLeave(a, FgsAddArm.Leave.PAUSED, now = 9_000))
+        assertNull(shadowOf(a.application).nextStartedService)
+        // the person is back (onResume), and later presses Home
+        FgsAddArm.resumed()
+        assertTrue(FgsAddArm.onLeave(a, FgsAddArm.Leave.HINT, now = 20_000))
+    }
+
+    @Test
+    fun aHintLongAfterTheLaunch_isARealLeave_evenIfTheLaunchNeverPausedTheApp() {
+        val a = activity()
+        FgsAddArm.armed = true
+        FgsAddArm.noteInternalLaunch(now = 1_000)
+        assertTrue(FgsAddArm.onLeave(a, FgsAddArm.Leave.HINT, now = 10_000))
+    }
+
+    @Test
+    fun recents_startsTheService_fromThePausedAppOrItsStop_andTellsTheAppToHandOff() {
+        val a = activity()
+        var told = 0
+        FgsAddArm.tellApp = { told++ }
+        FgsAddArm.armed = true
+        assertTrue(FgsAddArm.onLeave(a, FgsAddArm.Leave.PAUSED))
+        assertEquals(FgsAddService::class.java.name, shadowOf(a.application).nextStartedService.component?.className)
+        assertEquals(1, told)
+    }
+
+    @Test
+    fun notArmed_nothingStarts_andTheAppIsNotTold() {
+        val a = activity()
+        var told = 0
+        FgsAddArm.tellApp = { told++ }
+        assertFalse(FgsAddArm.onLeave(a, FgsAddArm.Leave.STOP))
+        assertEquals(0, told)
     }
 }

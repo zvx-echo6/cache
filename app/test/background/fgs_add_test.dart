@@ -13,6 +13,7 @@ import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/add_pdf/watch_background.dart';
 import 'package:cache/platform/battery.dart';
 import 'package:cache/search/index_throttle.dart';
+import 'package:flutter/services.dart' show MethodCall;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../add_pdf/add_pdf_fixtures.dart';
@@ -242,7 +243,7 @@ void main() {
       final (s, jobs) = await pending(done);
       // the charging run holds it
       expect(lock.hold(kAddPdfWork), isTrue);
-      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: const Duration(seconds: 5), look: const Duration(milliseconds: 10));
+      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: const Duration(seconds: 5), takeOverWait: const Duration(milliseconds: 150), look: const Duration(milliseconds: 10));
       expect(out.words, 'skipped: another run is adding');
       expect(jobs.single.status, AddPdfStatus.active);
       lock.release(kAddPdfWork);
@@ -371,6 +372,131 @@ void main() {
       final bad = Directory('${tmp.path}/bad')..createSync();
       File('${bad.path}/cache-library.json').writeAsStringSync('not json');
       expect(libraryIsDefaultOnDisk(bad.path), isFalse);
+    });
+  });
+
+  group('the service takes the add over from the app and from a charging run (Pixel, 2026-11-14: it used to skip and stall)', () {
+    late Directory tmp;
+    late String support;
+    late BackgroundLock lock;
+
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('fgs-take');
+      support = '${tmp.path}/support';
+      lock = BackgroundLock(Directory(backgroundDir(support)));
+    });
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    /// A WorkManager charging run that holds the lock and, as the real one does at its next look, stops when asked.
+    Timer chargingRunHolding({Duration lookEvery = const Duration(milliseconds: 20)}) {
+      expect(lock.hold(kAddPdfWork), isTrue);
+      return Timer.periodic(lookEvery, (t) {
+        if (lock.stopAsked(kAddPdfWork)) {
+          t.cancel();
+          lock.release(kAddPdfWork);
+        }
+      });
+    }
+
+    Future<AddPdfState> pendingOne(FakeIngestCalls calls) async {
+      final s = testAddPdfState(Directory('$support/ingest'), calls: calls);
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/p.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'p.pdf', bytes: 4, title: 'Manual', target: const AddPdfTarget(title: 'My books', path: '/tmp/my-books'));
+      return s;
+    }
+
+    FakeIngestCalls stepping() => FakeIngestCalls({'step': steps([
+      for (var i = 1; i <= 4; i++) progress('reading', pages: 5, pagesDone: i),
+      progress('done', result: {'copy': 'c' * 64}),
+    ])});
+
+    test('a charging run holds the lock: the service asks it to stop, waits, takes over, and the add carries on', () async {
+      final s = await pendingOne(stepping());
+      final run = chargingRunHolding();
+      addTearDown(run.cancel);
+      final sent = <FgsProgress>[];
+      final out = await fgsAddJob(
+        support: support,
+        control: FgsAddControl(onProgress: sent.add),
+        lock: lock,
+        battery: () async => _charging,
+        state: s,
+        queue: ({bool next = false, Duration delay = Duration.zero}) async {},
+        waitForBack: Duration.zero,
+        takeOverWait: const Duration(seconds: 5),
+        look: const Duration(milliseconds: 10),
+        lookEvery: _quick,
+        progressEvery: const Duration(milliseconds: 5),
+      );
+      expect(out.words, 'added 1');
+      expect(s.jobs.single.status, AddPdfStatus.done);
+      expect(lock.runs(kAddPdfWork), isFalse);
+      expect(sent, isNotEmpty);
+    });
+
+    test('progress continues under the service after the hand-off: the bar only goes forward, to the end', () async {
+      final inner = stepping();
+      final slow = FakeIngestCalls({'step': (a) async {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        return inner.on['step']!(a);
+      }});
+      final s = await pendingOne(slow);
+      final sent = <FgsProgress>[];
+      // Cache is still in front as the service starts; the hand-off lets go a moment later and a charging run grabs the lock first
+      lock.appOpened();
+      Timer(const Duration(milliseconds: 60), () {
+        lock.appClosed();
+        chargingRunHolding();
+      });
+      final out = await fgsAddJob(
+        support: support,
+        control: FgsAddControl(onProgress: sent.add),
+        lock: lock,
+        battery: () async => _charging,
+        state: s,
+        queue: ({bool next = false, Duration delay = Duration.zero}) async {},
+        waitForBack: const Duration(seconds: 5),
+        takeOverWait: const Duration(seconds: 5),
+        look: const Duration(milliseconds: 10),
+        lookEvery: _quick,
+        progressEvery: const Duration(milliseconds: 5),
+      );
+      expect(out.words, 'added 1');
+      final bars = [for (final p in sent) if (p.bar != null) p.bar!];
+      expect(bars.length, greaterThan(2), reason: 'progress was reported while it ran');
+      for (var i = 1; i < bars.length; i++) {
+        expect(bars[i], greaterThanOrEqualTo(bars[i - 1]));
+      }
+      expect(sent.last.done, 1);
+    });
+
+    test('a charging run that never lets go: the service gives up after its bounded wait, and says so', () async {
+      final s = await pendingOne(stepping());
+      expect(lock.hold(kAddPdfWork), isTrue);
+      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, waitForBack: Duration.zero, takeOverWait: const Duration(milliseconds: 100), look: const Duration(milliseconds: 10), lookEvery: _quick);
+      expect(out.words, 'skipped: another run is adding');
+      expect(s.jobs.single.status, AddPdfStatus.active);
+    });
+
+    test('while the service starts, the hand-off does not queue the unprotected charging run at once', () async {
+      final q = <(bool, Duration)>[];
+      Future<void> queue({bool next = false, Duration delay = Duration.zero}) async => q.add((next, delay));
+      await queueAddAfterHandOff(serviceStarting: true, queue: queue);
+      expect(q.single.$2, kFgsHandOffRetry);
+      expect(kFgsHandOffRetry, greaterThanOrEqualTo(const Duration(minutes: 5)));
+      q.clear();
+      await queueAddAfterHandOff(serviceStarting: false, queue: queue);
+      expect(q.single, (false, Duration.zero));
+    });
+
+    test('Android says the person left (Recents, a Home the app did not see): the app hands off', () async {
+      var left = 0;
+      final c = FgsAddCoordinator(platform: _Platform(), jobs: () => const [], battery: () async => null, askedFile: () => File('${tmp.path}/asked'), onLeft: () => left++);
+      expect(await c.handleCall(const MethodCall('left')), isNull);
+      expect(left, 1);
+      expect(await c.handleCall(const MethodCall('something else')), isNull);
+      expect(left, 1);
     });
   });
 
