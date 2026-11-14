@@ -31,6 +31,43 @@ class CoreNotebookBackend implements NotebookBackend {
   }
 }
 
+/// What reading a repeater file into a notebook did: how many repeaters were added, followed the file, were left as they were
+/// ([unchanged]), kept a hand edit ([keptEdits]) or are no longer in the file ([notInFile], they stay), and which ones the person had
+/// deleted ([deleted] titles: not made again; "Add them back").
+class RepeaterUpdate {
+  const RepeaterUpdate({
+    required this.notebookId,
+    this.added = 0,
+    this.updated = 0,
+    this.unchanged = 0,
+    this.keptEdits = 0,
+    this.notInFile = 0,
+    this.deleted = const [],
+    this.repeaters = 0,
+    this.withoutPosition = 0,
+  });
+
+  final String notebookId;
+  final int added, updated, unchanged, keptEdits, notInFile;
+  final List<String> deleted;
+  final int repeaters, withoutPosition;
+
+  static RepeaterUpdate fromJson(Map j) {
+    int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    return RepeaterUpdate(
+      notebookId: '${(j['notebook'] as Map?)?['id']}',
+      added: n('added'),
+      updated: n('updated'),
+      unchanged: n('unchanged'),
+      keptEdits: n('kept_edits'),
+      notInFile: n('not_in_file'),
+      deleted: [for (final d in (j['deleted'] as List? ?? const [])) '${(d as Map)['title'] ?? ''}'],
+      repeaters: n('repeaters'),
+      withoutPosition: n('without_position'),
+    );
+  }
+}
+
 /// A search hit: the entry, its notebook's name and the snippet with the matched words between U+0002 and U+0003.
 class NbHit {
   const NbHit(this.entry, this.notebook, this.snippet);
@@ -251,6 +288,28 @@ class NotebookState extends ChangeNotifier {
   }
 
   Future<void> deleteEntry(String id) => _change(() => backend.call('entry_delete', {'id': id}));
+
+
+  // ---- repeater lists ----
+
+  /// A RepeaterBook KML and/or a CHIRP CSV into a new Repeaters notebook, or (with [notebookId]) as an update of that one: the file's
+  /// changes arrive, what the person changed stays (see RepeaterUpdate).
+  Future<RepeaterUpdate> importRepeaters(List<String> paths, {String? notebookId, required String now}) =>
+      _change(() async => RepeaterUpdate.fromJson(await backend.call('repeaters_import', {'paths': paths, 'notebook_id': ?notebookId, 'now': now})));
+
+  /// The repeaters the person deleted that the file still has, made again; returns how many.
+  Future<int> addBackRepeaters(String notebookId, {required String now}) =>
+      _change(() async => ((await backend.call('repeaters_add_back', {'notebook_id': notebookId, 'now': now}))['added'] as num?)?.toInt() ?? 0);
+
+  /// The entries of [notebookId] the latest file no longer lists ("Not in the latest file"), kept on this device only.
+  Future<Set<String>> notInLatestFile(String notebookId) async {
+    try {
+      final r = await backend.call('source_rows', {'notebook_id': notebookId, 'brief': true});
+      return {for (final x in (r['rows'] as List? ?? const [])) if ((x as Map)['state'] == 'gone' && x['entry_id'] is String) x['entry_id'] as String};
+    } catch (_) {
+      return const {};
+    }
+  }
 
   // ---- search and map ----
 

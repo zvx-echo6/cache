@@ -19,11 +19,14 @@ import 'quick_add_sheet.dart' show deleteWithUndo;
 /// formatted as it is typed; a checklist is `- [ ]` lines in it); then only what applies: the notebook's fields when it has
 /// some, photos, the documents once something is attached, the place, Private. Saves as you type: a new entry is an unfinished draft until Done; [x] keeps it.
 class EntryEditor extends StatefulWidget {
-  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.at, this.now = DateTime.now, this.connections});
+  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.at, this.now = DateTime.now, this.connections, this.onShowOnMap});
 
   /// Obsidian and Logseq: an entry imported from a note by its tag offers "Stop syncing this note"; one that stopped shows the
   /// sync-off icon. Null leaves both out.
   final NotebookConnections? connections;
+
+  /// "Show on map" in the entry's menu (a repeater's page); null leaves it out. Called with the entry's place.
+  final void Function(NbPlace place)? onShowOnMap;
 
   final NotebookState notebook;
   final Notebook book;
@@ -116,6 +119,8 @@ class _EntryEditorState extends State<EntryEditor> {
           files: _files,
           draft: _draft && !done,
           private: _private,
+          // the entry's own icon, colour and map switch are not the editor's to drop
+          props: widget.entry?.props ?? const {},
         );
         _id = saved.id;
         _occurredAt = saved.occurredAt;
@@ -225,8 +230,13 @@ class _EntryEditorState extends State<EntryEditor> {
             if (!_isNew)
               PopupMenuButton<String>(
                 key: const ValueKey('editor-menu'),
-                onSelected: (v) => v == 'stop' ? _stopSyncing() : _delete(),
+                onSelected: (v) => switch (v) {
+                  'stop' => _stopSyncing(),
+                  'map' => _place == null ? null : widget.onShowOnMap?.call(_place!),
+                  _ => _delete(),
+                },
                 itemBuilder: (_) => [
+                  if (widget.onShowOnMap != null && _place != null) const PopupMenuItem(key: ValueKey('editor-show-on-map'), value: 'map', child: Text('Show on map')),
                   if (_id != null && widget.connections?.importedFrom(_id!) != null)
                     const PopupMenuItem(key: ValueKey('editor-stop-sync'), value: 'stop', child: Text('Stop syncing this note')),
                   const PopupMenuItem(value: 'delete', child: Text('Delete')),

@@ -4,6 +4,7 @@ import '../../layout/adaptive.dart';
 
 import '../../desktop/desktop.dart';
 import '../../layout/layout_state.dart';
+import '../../maps/ui/layer_sheet.dart' show importRepeatersIntoNotebook;
 import '../../maps/user_layers.dart';
 import '../../nav/units.dart';
 import '../../notebook/sync/connections.dart';
@@ -35,12 +36,13 @@ class NotebookDeps {
     this.now = DateTime.now,
     this.onShowRepeater,
     this.onRepeaterDirections,
+    this.onShowEntry,
     this.fmt,
     this.icons,
   });
 
   /// The same deps with the repeater lists' map actions (the shell's: they switch to Maps).
-  NotebookDeps withRepeaterActions({void Function(Repeater)? onShow, void Function(Repeater)? onDirections, Fmt? fmt}) => NotebookDeps(
+  NotebookDeps withRepeaterActions({void Function(Repeater)? onShow, void Function(Repeater)? onDirections, void Function(NbEntry, Notebook)? onShowEntry, Fmt? fmt}) => NotebookDeps(
     notebook: notebook,
     places: places,
     layout: layout,
@@ -52,6 +54,7 @@ class NotebookDeps {
     now: now,
     onShowRepeater: onShow,
     onRepeaterDirections: onDirections,
+    onShowEntry: onShowEntry,
     fmt: fmt,
     icons: icons,
   );
@@ -61,6 +64,9 @@ class NotebookDeps {
 
   /// Directions to a repeater (a row's press-and-hold menu); null leaves it out.
   final void Function(Repeater repeater)? onRepeaterDirections;
+
+  /// "Show on map" on a repeater's page (the shell's: it switches to Maps on that repeater); null leaves it out.
+  final void Function(NbEntry entry, Notebook book)? onShowEntry;
 
   /// Distances in the person's units (the map's).
   final Fmt? fmt;
@@ -102,7 +108,15 @@ void openNotebookEntry(BuildContext context, NotebookDeps deps, Notebook book, N
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceView(deps: deps, book: book, entryId: e.id)));
   } else {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now, connections: deps.connections),
+      builder: (_) => EntryEditor(
+        notebook: deps.notebook,
+        book: book,
+        places: deps.places,
+        entry: e,
+        now: deps.now,
+        connections: deps.connections,
+        onShowOnMap: book.isRepeaters && deps.onShowEntry != null ? (_) => deps.onShowEntry!(e, book) : null,
+      ),
     ));
   }
 }
@@ -136,6 +150,9 @@ class _NotebookScreenState extends State<NotebookScreen> {
   int _readAt = -1;
   ({double lat, double lon})? _here;
 
+  /// A repeater list's entries the latest file no longer lists (kept on this device).
+  Set<String> _gone = const {};
+
   @override
   void initState() {
     super.initState();
@@ -167,7 +184,13 @@ class _NotebookScreenState extends State<NotebookScreen> {
     _readAt = nb.revision;
     try {
       final list = await nb.entries(widget.notebookId);
-      if (mounted) setState(() => _entries = list);
+      final gone = nb.notebook(widget.notebookId)?.isRepeaters == true ? await nb.notInLatestFile(widget.notebookId) : const <String>{};
+      if (mounted) {
+        setState(() {
+          _entries = list;
+          _gone = gone;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _entries = const []);
     }
@@ -178,8 +201,17 @@ class _NotebookScreenState extends State<NotebookScreen> {
       showQuickAdd(context, notebook: nb, log: book, places: widget.deps.places, entry: e, now: widget.deps.now);
       return;
     }
+    final show = widget.deps.onShowEntry;
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => EntryEditor(notebook: nb, book: book, places: widget.deps.places, entry: e, now: widget.deps.now, connections: widget.deps.connections),
+      builder: (_) => EntryEditor(
+        notebook: nb,
+        book: book,
+        places: widget.deps.places,
+        entry: e,
+        now: widget.deps.now,
+        connections: widget.deps.connections,
+        onShowOnMap: book.isRepeaters && e != null && show != null ? (_) => show(e, book) : null,
+      ),
     ));
   }
 
@@ -189,6 +221,8 @@ class _NotebookScreenState extends State<NotebookScreen> {
         await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookEditor(notebook: nb, existing: book, icons: widget.deps.icons)));
       case 'map':
         await nb.setOnMap(book, !book.map);
+      case 'update':
+        await importRepeatersIntoNotebook(ScaffoldMessenger.of(context), nb, notebookId: book.id, now: widget.deps.now);
       case 'home':
         final l = widget.deps.layout;
         if (l == null) return;
@@ -250,6 +284,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
             onSelected: (c) => _menu(book, c),
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'edit', child: Text('Edit notebook')),
+              if (book.isRepeaters) const PopupMenuItem(key: ValueKey('repeaters-update'), value: 'update', child: Text('Update from a file')),
               if (book.placeCount > 0) PopupMenuItem(value: 'map', child: Text(book.map ? 'Hide on map' : 'Show on map')),
               if (widget.deps.layout != null) const PopupMenuItem(value: 'home', child: Text('Add to Home')),
               const PopupMenuItem(value: 'delete', child: Text('Delete notebook')),
@@ -371,10 +406,57 @@ class _NotebookScreenState extends State<NotebookScreen> {
           child: const Text('Delete', style: TextStyle(color: Colors.white, fontSize: 16)),
         ),
         onDismissed: (_) => deleteWithUndo(ScaffoldMessenger.of(context), nb, e, 'Entry deleted'),
-        child: book.isLog ? _logRow(book, e, now, k) : _entryRow(book, e, now, k),
+        child: book.isLog ? _logRow(book, e, now, k) : book.isRepeaters ? _repeaterRow(book, e, k) : _entryRow(book, e, now, k),
       ));
     }
     return out;
+  }
+
+  /// A repeater: "146.880 MHz · Idaho Falls", the callsign under it, how far away it is, and "Not in the latest file" when the file
+  /// that was loaded last no longer lists it.
+  Widget _repeaterRow(Notebook book, NbEntry e, CacheTokens k) {
+    String? value(String label) {
+      for (final f in book.def.visible) {
+        if (f.label == label && f.fid != null) {
+          final v = e.values[f.fid];
+          if (v is String && v.trim().isNotEmpty) return v.trim();
+        }
+      }
+      return null;
+    }
+
+    final h = _here;
+    final dist = h == null || e.place == null ? null : distanceText(distanceM(h.lat, h.lon, e.place!.lat, e.place!.lon));
+    final first = [?value('Frequency'), ?value('Town')].join(' · ');
+    final callsign = entryTitle(e);
+    final gone = _gone.contains(e.id);
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: InkWell(
+        key: ValueKey('repeater-row-${e.id}'),
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _open(book, e),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(first.isEmpty ? callsign : first, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                    Text(first.isEmpty ? '' : callsign, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
+                    if (gone) Text('Not in the latest file', key: const ValueKey('not-in-latest-file'), style: TextStyle(fontSize: 13, color: k.warning)),
+                  ],
+                ),
+              ),
+              if (dist != null) Text(dist, style: TextStyle(fontSize: 13, color: k.secondary)),
+              if (e.photos.isNotEmpty) ...[const SizedBox(width: 10), NbThumb(notebook: nb, id: e.photos.first.id, size: 44)],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _logRow(Notebook book, NbEntry e, DateTime now, CacheTokens k) {

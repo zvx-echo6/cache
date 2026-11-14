@@ -8,6 +8,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
+mod source;
+pub(crate) use source::{source_add_back, source_merge, source_rows};
+
 const SCHEMA_VERSION: &str = "2";
 const DEFAULT_LIMIT: i64 = 1000;
 const MAX_TITLE: usize = 200;
@@ -51,6 +54,10 @@ pub fn open(path: &Path) -> Result<Connection> {
              id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('photo','file')), field_id TEXT,
              ord INTEGER NOT NULL, name TEXT, mime TEXT, width INTEGER, height INTEGER, bytes INTEGER, created INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS attachments_by_entry ON attachments(entry_id, ord);
+         CREATE TABLE IF NOT EXISTS source_rows(
+             notebook_id TEXT NOT NULL, key TEXT NOT NULL, entry_id TEXT, source TEXT NOT NULL, base TEXT NOT NULL,
+             state TEXT NOT NULL DEFAULT 'ok', PRIMARY KEY(notebook_id, key));
+         CREATE INDEX IF NOT EXISTS source_rows_by_entry ON source_rows(entry_id);
          CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(title, body, values_text, place_label, notebook_name, file_names,
              tokenize = 'porter unicode61 remove_diacritics 2');",
     )?;
@@ -454,6 +461,20 @@ pub fn places_books(c: &Connection) -> Result<Vec<PlacesBook>> {
     Ok(out)
 }
 
+/// The notebooks made from `template`, oldest first, each with its entries that are not drafts in the order they were made:
+/// `{"id","name","def","map","template_ref","entries":[...]}`. What the assistant's tools read of a template's notebooks.
+pub fn books_by_template(c: &Connection, template: &str) -> Result<Vec<Value>> {
+    let mut books: Vec<NotebookRow> = all_notebooks(c)?.into_iter().filter(|n| n.template == template).collect();
+    books.sort_by_key(|n| n.created);
+    let mut out = Vec::new();
+    for n in books {
+        let ids = ids_of(c, "SELECT id FROM entries WHERE notebook_id=?1 AND draft=0 ORDER BY created, rowid", &[&n.id])?;
+        let entries = ids.iter().filter_map(|id| entry_json(c, id).transpose()).collect::<Result<Vec<_>>>()?;
+        out.push(json!({"id": n.id, "name": n.def.name, "def": n.def.to_json(), "map": n.map, "template_ref": n.template_ref, "entries": entries}));
+    }
+    Ok(out)
+}
+
 /// `notebooks`: every notebook, most recently used first (then newest made).
 pub fn notebooks(c: &mut Connection, args: &Value) -> Result<Value> {
     check_keys(args, &[])?;
@@ -482,6 +503,14 @@ fn field_has_values(c: &Connection, nb: &str, fid: &str) -> Result<bool> {
 /// used; `template` is then required) or replaces one's definition and switches (see `NotebookDef::merge`); a switch left out
 /// keeps its value. Names are unique, ignoring case.
 pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
+    let tx = c.transaction()?;
+    let out = notebook_save_in(&tx, args)?;
+    tx.commit()?;
+    Ok(out)
+}
+
+/// [`notebook_save`] inside a transaction the caller owns (and commits).
+pub(crate) fn notebook_save_in(tx: &Connection, args: &Value) -> Result<Value> {
     check_keys(args, &["id", "template", "def", "private", "map", "template_ref"])?;
     let given = NotebookDef::parse(args.get("def").ok_or_else(|| Error::bad("def is missing"))?)?;
     let template = match args.get("template") {
@@ -497,17 +526,16 @@ pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
         Some(Value::String(s)) if valid_id(s) => s.clone(),
         Some(_) => return Err(Error::bad("id must be letters, digits and -")),
     };
-    let tx = c.transaction()?;
-    let old = load_notebook(&tx, &id)?;
+    let old = load_notebook(tx, &id)?;
     let lower = given.name.to_lowercase();
-    for other in all_notebooks(&tx)? {
+    for other in all_notebooks(tx)? {
         if other.id != id && other.def.name.to_lowercase() == lower {
             return Err(Error::bad(format!("a notebook named {:?} already exists", other.def.name)));
         }
     }
     let has_entries: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE notebook_id=?1)", [&id], |r| r.get(0))?;
     let mut probe_err = None;
-    let def = given.merge(old.as_ref().map(|o| &o.def), has_entries, |fid| match field_has_values(&tx, &id, fid) {
+    let def = given.merge(old.as_ref().map(|o| &o.def), has_entries, |fid| match field_has_values(tx, &id, fid) {
         Ok(b) => b,
         Err(e) => {
             probe_err = Some(e);
@@ -544,16 +572,15 @@ pub fn notebook_save(c: &mut Connection, args: &Value) -> Result<Value> {
                     now
                 ],
             )?;
-            for e in ids_of(&tx, "SELECT id FROM entries WHERE notebook_id=?1", &[&id])? {
-                index_entry(&tx, &e)?;
+            for e in ids_of(tx, "SELECT id FROM entries WHERE notebook_id=?1", &[&id])? {
+                index_entry(tx, &e)?;
             }
         }
     }
-    let n = load_notebook(&tx, &id)?.expect("saved above");
-    let out = notebook_json(&tx, &n)?;
-    tx.commit()?;
-    Ok(out)
+    let n = load_notebook(tx, &id)?.expect("saved above");
+    notebook_json(tx, &n)
 }
+
 
 /// `notebook_delete`: `{"id"}`. The notebook, its entries and their photos and files. `{"deleted":"<id>","entries":n}`.
 pub fn notebook_delete(c: &mut Connection, media: &Path, args: &Value) -> Result<Value> {
@@ -569,6 +596,7 @@ pub fn notebook_delete(c: &mut Connection, media: &Path, args: &Value) -> Result
     let gone = attached_of(&tx, "entry_id IN (SELECT id FROM entries WHERE notebook_id=?1)", id)?;
     tx.execute("DELETE FROM entries_fts WHERE rowid IN (SELECT rowid FROM entries WHERE notebook_id=?1)", [id])?;
     tx.execute("DELETE FROM attachments WHERE entry_id IN (SELECT id FROM entries WHERE notebook_id=?1)", [id])?;
+    tx.execute("DELETE FROM source_rows WHERE notebook_id=?1", [id])?;
     let n = tx.execute("DELETE FROM entries WHERE notebook_id=?1", [id])?;
     tx.execute("DELETE FROM notebooks WHERE id=?1", [id])?;
     tx.commit()?;
@@ -750,6 +778,16 @@ fn index_entry(c: &Connection, id: &str) -> Result<()> {
 /// that entry (rev + 1). An entry of a private notebook is private. Saving an entry that is not a draft makes its notebook the
 /// most recently used. Photos and files the entry no longer has are deleted from `media_dir`.
 pub fn entry_save(c: &mut Connection, media: &Path, args: &Value) -> Result<Value> {
+    let tx = c.transaction()?;
+    let (out, gone) = entry_save_in(&tx, args)?;
+    tx.commit()?;
+    delete_files(media, &gone);
+    Ok(out)
+}
+
+/// [`entry_save`] inside a transaction the caller owns (and commits): the entry as saved, and the photos and files it no
+/// longer has, `(id, kind)`, for the caller to delete once the transaction is committed.
+pub(crate) fn entry_save_in(tx: &Connection, args: &Value) -> Result<(Value, Vec<(String, String)>)> {
     check_keys(args, &["id", "notebook_id", "occurred_at", "title", "body", "values", "place", "photos", "files", "draft", "private", "props"])?;
     let id = match args.get("id") {
         None | Some(Value::Null) => new_id(),
@@ -775,8 +813,7 @@ pub fn entry_save(c: &mut Connection, media: &Path, args: &Value) -> Result<Valu
     let files = list("files", true)?;
     let props = parse_props(args.get("props"))?;
 
-    let tx = c.transaction()?;
-    let nb = load_notebook(&tx, nb_id)?.ok_or_else(|| Error::not_found(format!("no notebook with id {nb_id:?}")))?;
+    let nb = load_notebook(tx, nb_id)?.ok_or_else(|| Error::not_found(format!("no notebook with id {nb_id:?}")))?;
     let values = check_values(&nb.def, args.get("values").unwrap_or(&Value::Null))?;
     let mut field_photos: Vec<(String, String)> = Vec::new();
     for f in nb.def.fields.iter().filter(|f| f.kind == "photo") {
@@ -786,7 +823,7 @@ pub fn entry_save(c: &mut Connection, media: &Path, args: &Value) -> Result<Valu
     }
     let values_text = (!values.is_empty()).then(|| Value::Object(values).to_string());
     let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE id=?1)", [&id], |r| r.get(0))?;
-    let old_attached = attached_of(&tx, "entry_id=?1", &id)?;
+    let old_attached = attached_of(tx, "entry_id=?1", &id)?;
     let now = now_ms();
     let (lat, lon, label, key) = match &place {
         Some(p) => (Some(p.lat), Some(p.lon), p.label.clone(), p.key.clone()),
@@ -828,16 +865,15 @@ pub fn entry_save(c: &mut Connection, media: &Path, args: &Value) -> Result<Valu
             add(&a, "photo", Some(fid), ord)?;
         }
     }
-    index_entry(&tx, &id)?;
+    index_entry(tx, &id)?;
     if !draft {
         tx.execute("UPDATE notebooks SET last_used=?2 WHERE id=?1", params![nb_id, now])?;
     }
-    let out = entry_json(&tx, &id)?.expect("saved above");
-    tx.commit()?;
+    let out = entry_json(tx, &id)?.expect("saved above");
     let gone: Vec<(String, String)> = old_attached.into_iter().filter(|(a, _)| !kept.contains(a)).collect();
-    delete_files(media, &gone);
-    Ok(out)
+    Ok((out, gone))
 }
+
 
 /// `entry_delete`: `{"id"}`. The entry and its photos and files. `{"deleted":"<id>"}`.
 pub fn entry_delete(c: &mut Connection, media: &Path, args: &Value) -> Result<Value> {
