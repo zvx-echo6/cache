@@ -71,6 +71,15 @@ impl WorkShard {
     pub fn flush(&self) -> Result<()> {
         self.shard.flush().map_err(|e| Error::ctx("flushing the work shard", e))
     }
+
+    /// Build the vector index (HNSW) of every segment big enough to need one, and vacuum deleted points. Qdrant Edge never does
+    /// it by itself, and without it a meaning search reads every vector. Already indexed segments are left as they are.
+    pub fn optimize(&self) -> Result<()> {
+        let t = std::time::Instant::now();
+        let changed = self.shard.optimize().map_err(|e| Error::ctx("indexing the work shard's vectors (HNSW)", e))?;
+        eprintln!("work shard: vectors indexed (optimize) in {:.1} s, changed {changed}", t.elapsed().as_secs_f64());
+        Ok(())
+    }
 }
 
 /// Copy the (closed) work shard `src` to `dst` (which must not exist) and finish it as a library shard: every file is synced and

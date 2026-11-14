@@ -391,6 +391,11 @@ impl LibraryWriter {
     /// archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
         let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, identities, copies, .. } = self;
+        // The vector index (HNSW): Qdrant Edge never builds it by itself, and without it a meaning search reads every vector
+        // (a 6.6 GB library took 4.5 s a search on an 8 GB server). It needs the vectors in memory and takes minutes for millions.
+        let t = std::time::Instant::now();
+        shard.optimize().map_err(|e| Error::ctx("indexing the library's vectors (HNSW)", e))?;
+        eprintln!("library {}: vectors indexed (optimize) in {:.1} s, {points} points", opts.id, t.elapsed().as_secs_f64());
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
