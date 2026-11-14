@@ -17,7 +17,10 @@ import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.onOpenItem});
+
+  /// What an item's row opens (see [ShareItemOpener]); null: rows only toggle sharing.
+  final ShareItemOpener? onOpenItem;
 
   /// The platform as the page's background-sync note sees it; null: the real one (tests give theirs).
   final bool? onAndroid, onIos;
@@ -278,7 +281,7 @@ class _SharingPageState extends State<SharingPage> {
   Future<void> _peer(Map<String, dynamic> p) =>
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: s, peer: p['id'] as String, settingsSync: widget.settingsSync)));
 
-  Future<void> _kind(DataKind k) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingKindPage(sharing: s, kind: k)));
+  Future<void> _kind(DataKind k) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingKindPage(sharing: s, kind: k, onOpenItem: widget.onOpenItem)));
 
   Future<void> _toggle(DataKind k, bool on) => toggleKind(context, s, k, on, _run);
 
@@ -484,7 +487,9 @@ Future<void> toggleKind(BuildContext context, SharingState s, DataKind k, bool o
 /// Settings > Sharing and sync > a kind (Library, Maps, ...): the kind's switch, Sync all, and every item with its own switch
 /// and Sync now. New items follow the kind's switch; a private notebook starts off.
 class SharingKindPage extends StatefulWidget {
-  const SharingKindPage({super.key, required this.sharing, required this.kind});
+  const SharingKindPage({super.key, required this.sharing, required this.kind, this.onOpenItem});
+
+  final ShareItemOpener? onOpenItem;
 
   final SharingState sharing;
   final DataKind kind;
@@ -592,6 +597,7 @@ class _SharingKindPageState extends State<SharingKindPage> {
                           busy: _busy,
                           onChanged: (v) => _run(() => s.setItem(k, i.item, v)),
                           onSync: () => _sync(() => s.syncItem(i.item), 'Syncing ${i.item.name}'),
+                          onOpen: widget.onOpenItem?.call(context, k, i.item),
                         ),
                     ],
                   ),
@@ -606,13 +612,16 @@ class _SharingKindPageState extends State<SharingKindPage> {
 }
 
 class _ItemRow extends StatelessWidget {
-  const _ItemRow({super.key, required this.item, required this.on, required this.busy, required this.onChanged, required this.onSync});
+  const _ItemRow({super.key, required this.item, required this.on, required this.busy, required this.onChanged, required this.onSync, this.onOpen});
+
+  /// The row opens the item; null: the row toggles sharing (the Switch always does).
 
   final SharedItem item;
   final bool on;
   final bool busy;
   final ValueChanged<bool> onChanged;
   final VoidCallback onSync;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -620,7 +629,7 @@ class _ItemRow extends StatelessWidget {
     return SettingsRow(
       title: name,
       status: _itemDetail(item),
-      onTap: busy ? null : () => onChanged(!on),
+      onTap: onOpen ?? (busy ? null : () => onChanged(!on)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

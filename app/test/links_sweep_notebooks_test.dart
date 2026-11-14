@@ -17,7 +17,6 @@ import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart' show MarkdownBody;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/notebook_fake.dart';
@@ -98,11 +97,15 @@ void main() {
   testWidgets('16. A link in a place\'s notes opens in the browser (http and https only)', (tester) async {
     final r = _Rig();
     final book = await r.savedPlaces();
-    final e = await r.placeIn(book, 'Trailhead', body: '[the trail guide](https://example.com/guide)');
+    final e = await r.placeIn(book, 'Trailhead', body: '[the trail guide](https://example.com/guide)\n\n[mail us](mailto:a@example.com)');
     await r.pump(tester, PlaceView(deps: r.deps, book: book, entryId: e.id));
-    final notes = tester.widget<MarkdownBody>(find.byKey(const ValueKey('place-notes')));
-    notes.onTapLink!('the trail guide', 'https://example.com/guide', '');
-    notes.onTapLink!('mail', 'mailto:a@example.com', '');
+    // the rendered links themselves are tapped
+    for (final text in ['the trail guide', 'mail us']) {
+      final link = find.descendant(of: find.byKey(const ValueKey('place-notes')), matching: find.text(text, findRichText: true));
+      await tester.ensureVisible(link);
+      await tester.tap(link);
+      await tester.pumpAndSettle();
+    }
     expect(r.urls, ['https://example.com/guide']);
   });
 
