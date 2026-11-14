@@ -333,4 +333,17 @@ void main() {
     await settle(200);
     expect(lines('INFO', 'Guidance: ended by itself 5 minutes after arrival'), hasLength(1));
   });
+
+  test('the route\'s time at the start and the time the drive took are logged, as numbers only', () async {
+    // The drive takes 474 s: the clock moves on before the core answers that the fix has arrived.
+    backend.onProgress = (r, lat, lon) async {
+      now = now.add(const Duration(seconds: 474));
+      return MapProgress.fromJson(fakeProgressJson(routeJson, 1.0, arrived: true));
+    };
+    await startGuidance();
+    expect(nav.arrived, isTrue);
+    final r = MapRoute.fromJson(routeJson);
+    expect(lines('INFO', 'Guidance: the route\'s time is ${r.durationS} s for ${r.distanceM.round()} m'), hasLength(1));
+    expect(lines('INFO', 'Guidance: arrived after 474 s; the route\'s time at the start was ${r.durationS} s'), hasLength(1));
+  });
 }

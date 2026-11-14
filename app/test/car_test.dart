@@ -368,6 +368,55 @@ void main() {
       }
     });
 
+    // One time left on the phone and in the car. CarPlay (CPTravelEstimates) and Android Auto (TravelEstimate, DurationSpan)
+    // write the time themselves, and neither says how it rounds: the car is sent the phone's minutes as a whole number of
+    // minutes in seconds, which reads the same rounded down, to the nearest or up. The arrival clock is the fix's moment plus
+    // those minutes, on the phone and in the car.
+    test('the time left and the arrival clock are the phone bar\'s in the car, at every rounding edge', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      const fmt = Fmt(UnitSystem.imperial);
+      final fixAtMoment = DateTime.utc(2026, 11, 13, 14, 40, 50);
+      const shown = {0: 1, 20: 1, 59: 1, 61: 1, 89: 1, 91: 2, 179: 3, 181: 3, 209: 3, 211: 4, 239: 4, 241: 4, 269: 4, 271: 5, 3569: 59, 3571: 60};
+      for (final MapEntry(key: s, value: minutes) in shown.entries) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({
+          ...j,
+          'remaining': {...(j['remaining'] as Map<String, dynamic>), 'duration_s': s, 'eta': fixAtMoment.add(Duration(seconds: s)).toIso8601String()},
+        });
+        final t = carTrip(nav);
+        final sent = t['remainingS'] as int;
+        expect(shownMinutes(s), minutes, reason: '$s s: the minutes the phone shows');
+        expect(sent, minutes * 60, reason: '$s s: the car is sent the phone\'s minutes');
+        // However the car's host rounds the seconds to minutes, it gets the phone's minutes.
+        expect([(sent / 60).floor(), (sent / 60).round(), (sent / 60).ceil()], everyElement(minutes), reason: '$s s');
+        expect(fmt.duration(sent), fmt.duration(s), reason: '$s s: the same words');
+        final arrival = fixAtMoment.add(Duration(minutes: minutes));
+        expect(t['etaMs'], arrival.millisecondsSinceEpoch, reason: '$s s: the car\'s arrival is the fix plus the minutes shown');
+        expect(shownArrival(nav.progress!.eta, s), arrival, reason: '$s s: the phone bar\'s arrival clock');
+      }
+      // The route list's times too: the phone's minutes, in seconds.
+      final routes = carTrip(nav)['routes'] as List;
+      expect(routes, isNotEmpty);
+      for (final (i, r) in routes.indexed) {
+        expect((r as Map)['durationS'], shownMinutes(nav.routes[i].durationS) * 60);
+      }
+    });
+
+    test('arrived: the car is sent no time left', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(routeJson, 0.99, arrived: true));
+      nav.arrived = true;
+      expect(carTrip(nav)['remainingS'], 0);
+    });
+
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {
       final m = ProgressManeuver.fromJson({
         'index': 3, 'kind': 'offroad', 'type': 'none', 'instruction': 'Off-road E 0.1 mi', 'street_names': const [], 'lat': 42.5,

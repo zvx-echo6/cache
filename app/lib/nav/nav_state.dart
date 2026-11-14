@@ -742,10 +742,19 @@ class NavState extends ChangeNotifier {
     _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix, onError: _onFixError);
     _simulated = simulatedDrive?.call() ?? false;
     _startGuidanceLog();
+    // The route's own time at the start, and at arrival the time the drive took (numbers only): a drive in the log then says
+    // how far the router's estimate was from the drive.
+    _startedAt = _clock();
+    _plannedS = r.durationS;
+    logInfo('Guidance: the route\'s time is ${r.durationS} s for ${r.distanceM.round()} m');
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
     if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
   }
+
+  /// When this guidance started, and the time the route said then (see [start]).
+  DateTime? _startedAt;
+  int? _plannedS;
 
   /// True while the guidance that is running is a simulated drive (asked once, when it starts).
   bool _simulated = false;
@@ -899,6 +908,8 @@ class NavState extends ChangeNotifier {
         _armArrivalEnd();
         notifyListeners();
         logInfo('Guidance: arrived, the position keeps coming until End');
+        final began = _startedAt;
+        if (began != null) logInfo('Guidance: arrived after ${_clock().difference(began).inSeconds} s; the route\'s time at the start was $_plannedS s');
         return;
       }
       if (p.offRoute) await _reroute(f);
