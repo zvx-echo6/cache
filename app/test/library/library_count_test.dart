@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/guide/app_links.dart' show AppPlace, openAppPlace;
+import 'package:cache/guide/guide_reader.dart' show appPlaceScreen;
 import 'package:cache/library/catalog_page.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
@@ -147,13 +148,19 @@ void main() {
     expect(find.text('Not synced: sharing is off'), findsNWidgets(3));
     expect(find.text('ROUTING'), findsOneWidget);
     // the line names Sharing and sync, and goes there (everything that points to something links to it)
-    final opened = <AppPlace>[];
-    final before = openAppPlace;
-    openAppPlace = opened.add;
-    addTearDown(() => openAppPlace = before);
+    // as the shell wires it: appPlaceScreen builds a place's screen; openAppPlace itself only draws an area on the map
+    final asked = <AppPlace>[];
+    final (beforeScreen, beforeOpen) = (appPlaceScreen, openAppPlace);
+    appPlaceScreen = (p) {
+      asked.add(p);
+      return const Scaffold(body: Text('the Sharing and sync page'));
+    };
+    openAppPlace = (_) {};
+    addTearDown(() => (appPlaceScreen, openAppPlace) = (beforeScreen, beforeOpen));
     await tester.tap(find.text('Not synced: sharing is off').first);
-    await tester.pump();
-    expect(opened, [AppPlace.sharing]);
+    await tester.pumpAndSettle();
+    expect(asked, [AppPlace.sharing]);
+    expect(find.text('the Sharing and sync page'), findsOneWidget, reason: 'the link opens the page');
   });
 
   test('every way into the Library is built by BrowseScreen.inHub, so Storage cannot lose Regions or Sharing', () {
