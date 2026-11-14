@@ -358,7 +358,7 @@ void main() {
       expect(cam.initial!.target.latitude, 44.1);
     });
 
-    testWidgets('the picker: "Where I am" goes to the place zoom; a tap keeps the zoom', (tester) async {
+    testWidgets('the picker: "Current location" goes to the place zoom; a tap keeps the zoom', (tester) async {
       bigView(tester);
       final cam = _Cam();
       final d = await deps(tester, cam, fixAfter: const Duration(seconds: 5));
@@ -366,10 +366,12 @@ void main() {
         theme: buildTheme(CacheThemeId.light),
         home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
       ));
-      // The opening position fix is slow; the person has the map open on the fallback and presses "Where I am".
+      // The opening position fix is slow; the person has the map open on the fallback and presses "Current location".
       await tester.pump(const Duration(seconds: 4));
       await tester.pump();
       expect(cam.initial!.zoom, kPlaceWideView.zoom);
+      expect(find.descendant(of: find.byKey(const ValueKey('picker-here')), matching: find.text('Current location')), findsOneWidget);
+      expect(find.text('Where I am'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('picker-here')));
       await tester.pump(const Duration(seconds: 6));
       await tester.pump(const Duration(milliseconds: 100));

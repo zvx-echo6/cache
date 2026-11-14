@@ -216,7 +216,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        OutlinedButton.icon(key: const ValueKey('picker-here'), onPressed: _here, icon: const Icon(Icons.my_location), label: const Text('Where I am')),
+                        OutlinedButton.icon(key: const ValueKey('picker-here'), onPressed: _here, icon: const Icon(Icons.my_location), label: const Text('Current location')),
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton(key: const ValueKey('picker-use'), onPressed: c == null ? null : () => Navigator.pop(context, _answer()), child: const Text('Use this spot')),

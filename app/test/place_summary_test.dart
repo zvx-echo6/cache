@@ -12,7 +12,7 @@ import 'support/weather_screen_kit.dart';
 // What the Weather screen says about one place, worked out from stored data alone: the order of "Happening nearby" and the top
 // card's picks. No widgets here; the screen's own tests are in weather_screen_test.dart.
 
-const _here = WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Where I am', subtitle: '', lat: 42.54, lon: -113.79, key: kHereKey);
+const _here = WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Current location', subtitle: '', lat: 42.54, lon: -113.79, key: kHereKey);
 
 Connector _source(String id, String category) =>
     Connector.parse(miniDefinition(id), entry: CatalogueEntry.fromJson(entry(id, category, id)), origin: const Origin.catalogue('cache-connectors', 'Cache connectors'));

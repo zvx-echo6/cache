@@ -312,6 +312,16 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
+    // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point.
+    townOf: (lat, lon) async {
+      final core = sources.core;
+      if (core == null) return null;
+      final r = await core.mapSearch('${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}', limit: 1, meaning: false);
+      for (final m in r.results) {
+        if (m.isCoordinates) return townOfPointAddress(m.address);
+      }
+      return null;
+    },
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
