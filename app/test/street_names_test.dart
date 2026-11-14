@@ -26,6 +26,17 @@ void main() {
       expect(shownRoad(const []), isNull);
       expect(spokenRoad(const []), isNull);
     });
+
+    test('two numbers and no name keep both numbers, on screen and spoken; with a name, the first number goes in the brackets', () {
+      const second = StreetName('SH 98', isRouteNumber: true);
+      expect(shownRoad(const [second, highway]), 'SH 98/SH 99');
+      expect(spokenRoad(const [second, highway]), 'SH 98/SH 99');
+      const text = 'Turn right onto SH 98/SH 99.';
+      expect(instructionWith(text, const [second, highway], const [], shownRoad), text);
+      expect(instructionWith(text, const [second, highway], const [], spokenRoad), text);
+      expect(shownRoad(const [second, highway, name]), 'Lakeside Boulevard (SH 98)');
+      expect(spokenRoad(const [second, highway, name]), 'Lakeside Boulevard');
+    });
   });
 
   group('the instruction', () {

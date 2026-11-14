@@ -2,8 +2,9 @@
 /// Auto (the car gets the words the phone sends).
 ///
 /// On screen: the road's name first, with its route number after it in brackets when it has both
-/// ("Lakeside Boulevard (US 99 Bus)"); a road with only a number keeps the number. Spoken: the name alone, or the number when
-/// it has only a number. A road with more than one name keeps its first, as the map orders them. Which is a name and which a
+/// ("Lakeside Boulevard (US 99 Bus)", the first number only, so the banner stays short); a road with only numbers keeps all of
+/// them as Valhalla joins them ("SH 98/SH 99"), on screen and spoken, so none is lost. Spoken: the name alone, or the numbers
+/// when it has only numbers. A road with more than one name keeps its first, as the map orders them. Which is a name and which a
 /// number is the map's own word ([StreetName.isRouteNumber], from Valhalla); nothing here reads the text to decide.
 library;
 
@@ -16,15 +17,21 @@ StreetName? _first(List<StreetName> s, {required bool routeNumber}) {
   return null;
 }
 
+/// A road with no name: all its numbers, joined as Valhalla joins them; null when it has none either.
+String? _numbers(List<StreetName> s) {
+  final n = [for (final x in s) if (x.isRouteNumber) x.text];
+  return n.isEmpty ? null : n.join('/');
+}
+
 /// The road as the screens show it, or null when it has no name or number.
 String? shownRoad(List<StreetName> s) {
   final name = _first(s, routeNumber: false), number = _first(s, routeNumber: true);
-  if (name != null && number != null) return '${name.text} (${number.text})';
-  return (name ?? number)?.text;
+  if (name == null) return _numbers(s);
+  return number == null ? name.text : '${name.text} (${number.text})';
 }
 
 /// The road as the voice says it, or null when it has no name or number.
-String? spokenRoad(List<StreetName> s) => (_first(s, routeNumber: false) ?? _first(s, routeNumber: true))?.text;
+String? spokenRoad(List<StreetName> s) => _first(s, routeNumber: false)?.text ?? _numbers(s);
 
 /// Valhalla's [instruction] with the road worded by [word] ([shownRoad] or [spokenRoad]); the rest stays as Valhalla wrote it.
 ///
