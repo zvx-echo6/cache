@@ -7,6 +7,8 @@ import 'package:cache/background/fgs_refused_note.dart';
 import 'package:cache/library/add_pdf/add_pdf_state.dart';
 import 'package:cache/library/add_pdf/watch_background.dart';
 import 'package:cache/platform/battery.dart';
+import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/settings/space.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,6 +75,69 @@ void main() {
       expect(job.pausedByPerson, isTrue);
       expect(c.result?.why, 'person');
       expect(out.words, isNotEmpty);
+    });
+  });
+
+  group('the hand-off waits for the app's own run (Pixel round 3)', () {
+    test("Android's 'left' reaches Dart before 'hidden': the hand-off closes the index work itself and waits for the step", () async {
+      final gate = Completer<void>();
+      var n = 0;
+      final calls = FakeIngestCalls({
+        'step': (_) async {
+          n++;
+          await gate.future; // the piece in flight
+          return progress('embedding', pages: 100, pagesDone: 100, pieces: 50, piecesDone: 1);
+        },
+      });
+      final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls);
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/a.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'a.pdf', bytes: 3, title: 'A', target: const AddPdfTarget(title: 'My books', path: '/tmp/my-books', isDefault: true));
+      final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(hours: 1));
+      addTearDown(sched.dispose);
+      sched.setOpen(true);
+      await _until(() => n == 1 && sched.running != null);
+
+      // before the fix: the scheduler was never closed on this path, and its 'closed' was already finished
+      var bare = false;
+      unawaited(sched.closed.then((_) => bare = true));
+      await _turns(20);
+      expect(bare, isTrue, reason: 'the old hand-off saw "index work stopped" at once, with the run still in its step');
+
+      var closed = false;
+      unawaited(closeIndexForHandOff(sched).then((_) => closed = true));
+      await _turns(200);
+      expect(closed, isFalse, reason: 'the hand-off waits for the piece the run is in');
+      gate.complete();
+      await _until(() => closed);
+    });
+
+    test('a closed scheduler never asks the lock for the work (it did, and ended the service)', () async {
+      var asked = 0;
+      final s = AddPdfState(
+        calls: FakeIngestCalls(),
+        dir: () async => Directory('${tmp.path}/ingest'),
+        engines: () async => {'pdfium_version': 'chromium/7811'},
+        permit: (_) async {},
+        mayRun: () async {
+          asked++;
+          return true;
+        },
+      );
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/a.pdf')..writeAsStringSync('pdf');
+      await s.add(pdfPath: f.path, fileName: 'a.pdf', bytes: 3, title: 'A', target: const AddPdfTarget(title: 'My books', path: '/tmp/my-books', isDefault: true));
+      final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(hours: 1));
+      addTearDown(sched.dispose);
+      sched.setOpen(true);
+      await sched.kick();
+      sched.setOpen(false);
+      await sched.closed;
+      final before = asked;
+      for (var i = 0; i < 5; i++) {
+        await sched.kick();
+      }
+      expect(asked, before, reason: 'a scheduler that is closed does not look at the work, so it does not touch the lock');
     });
   });
 

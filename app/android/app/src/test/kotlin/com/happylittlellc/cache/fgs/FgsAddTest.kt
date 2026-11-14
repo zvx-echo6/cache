@@ -248,6 +248,30 @@ class FgsAddTest {
     }
 
     @Test
+    fun testHook_isNotInTheReleaseManifest_andTheServiceIsNotExported() {
+        // the unit tests merge the manifest of a build without -PcacheTestApk: the hook is declared only in the test APK
+        val pm = context.packageManager
+        try {
+            pm.getReceiverInfo(ComponentName(context, FgsAddTestHook::class.java), 0)
+            org.junit.Assert.fail("the test hook receiver is in the release manifest")
+        } catch (_: PackageManager.NameNotFoundException) {
+        }
+        assertFalse(pm.getServiceInfo(ComponentName(context, FgsAddService::class.java), 0).exported)
+    }
+
+    @Test
+    fun testHook_sendsTheServiceTheNotificationsPause_andResume() {
+        FgsAddTestHook().onReceive(context, android.content.Intent(FgsAddTestHook.ACTION_PAUSE))
+        val app = shadowOf(RuntimeEnvironment.getApplication())
+        assertEquals(FgsAddNotifications.ACTION_PAUSE, app.nextStartedService.action)
+        FgsAddTestHook().onReceive(context, android.content.Intent(FgsAddTestHook.ACTION_RESUME_ANYWAY))
+        val resume = app.nextStartedService
+        assertEquals(FgsAddNotifications.ACTION_START, resume.action)
+        assertTrue(resume.getBooleanExtra(FgsAddNotifications.EXTRA_RESUME, false))
+        assertTrue(resume.getBooleanExtra(FgsAddNotifications.EXTRA_ANYWAY, false))
+    }
+
+    @Test
     fun pause_inTheNotification_asksTheRunToStopAsPerson() {
         val s = start()
         s.onStartCommand(android.content.Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_PAUSE), 0, 2)

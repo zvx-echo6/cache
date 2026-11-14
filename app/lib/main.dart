@@ -621,7 +621,7 @@ class _CacheAppState extends State<CacheApp> {
   Future<void> _toBackAfterPause() async {
     try {
       await backgroundHandOff(
-        closed: indexing.closed,
+        closed: closeIndexForHandOff(indexing),
         save: () async {
           await addPdf.save();
           await watchFolders.save();

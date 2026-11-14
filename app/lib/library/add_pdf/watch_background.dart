@@ -11,6 +11,7 @@ import '../../background/fgs_add.dart';
 import '../../notebook/sync/folder.dart' show FolderFile;
 import '../../pdf/pdfium_init.dart' show installNativePdfFonts;
 import '../../platform/app_log.dart';
+import '../../search/index_scheduler.dart' show IndexScheduler;
 import '../../platform/battery.dart';
 import '../../search/index_throttle.dart';
 import '../../settings/app_settings.dart';
@@ -88,6 +89,16 @@ Future<void> scheduleWatchAdd({bool next = false, Duration delay = Duration.zero
 /// How long Cache, going to the back, waits for its index work to stop before handing off anyway (a PDF step in flight cannot
 /// be cut short; a job folder still in use is then a hold and a retry for the background run, never a failure).
 const Duration kHandOffWait = Duration(seconds: 30);
+
+/// Closes the app's index work for the hand-off and says when it has really stopped. The hand-off must close it itself: Android's
+/// "left" (Recents, Home) reaches Dart before the lifecycle's "hidden" (the only other place that closes it), and the scheduler's
+/// `closed` is the old, finished one until then, so the hand-off saw "index work stopped" in 3 ms while the run was still in its
+/// step, released the lock, and the service started beside a run that went on and ended it ("added 0, more to do (app)") when the
+/// run's step ended and the still-open scheduler asked for the lock back (Pixel round 3, 2026-11-14).
+Future<void> closeIndexForHandOff(IndexScheduler indexing) {
+  indexing.setOpen(false);
+  return indexing.closed;
+}
 
 /// Cache going to the back hands Add PDF's work to the background: it waits for its index work to stop (at most [wait]), saves,
 /// lets go of the lock and queues the background add when the watched folders have PDFs still to add. Each step is logged.
