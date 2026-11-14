@@ -48,6 +48,25 @@ TextPainter _glyph(IconData icon, double fontSize, {Color? color, Paint? foregro
 
 void _paintGlyph(Canvas canvas, Offset centre, TextPainter tp) => tp.paint(canvas, centre - Offset(tp.width / 2, tp.height / 2));
 
+double _ringGrow(double size, bool tactical) => size * (tactical ? 0.08 : 0.05);
+
+/// The teardrop's head for a pin of [size] whose point is [at]: the centre of its round head and the radius of the coloured fill
+/// (the white ring and the dark edge go [pinOutline] beyond it). The icon is drawn centred on this centre.
+({Offset centre, double radius}) teardropHead(Offset at, double size) => (centre: at + Offset(0, -size * 0.95), radius: size * 0.5);
+
+/// How far the ring and the edge of a teardrop or a badge reach beyond its coloured fill.
+double pinOutline(double size, {bool tactical = false}) => _ringGrow(size, tactical) + size * 0.05;
+
+/// The font size of the icon in a teardrop of [size]: its square sits inside the head's fill with room to spare.
+double teardropGlyphSize(double size) => size * 0.52;
+
+/// Where the icon of a teardrop of [size] (point [at]) is drawn: its box of [glyph] (the laid-out icon's size), centred on the
+/// head's centre ([teardropHead]), not on the image's.
+Rect teardropIconBox(Offset at, double size, Size glyph) => Rect.fromCenter(center: teardropHead(at, size).centre, width: glyph.width, height: glyph.height);
+
+/// The laid-out icon as the pins draw it (Material Symbols filled, a little heavier), at [fontSize]: for the tests that measure it.
+TextPainter pinGlyph(IconData icon, double fontSize, {Color color = const Color(0xFFFFFFFF)}) => _glyph(icon, fontSize, color: color);
+
 /// A map pin of [size] points in [style]: [at] is the place (the centre; for the teardrop, its point). On the light and dark
 /// themes the shape or halo is white with a dark edge and the shape is filled with [tint]. In [tactical] (red only) there is no
 /// white: the halo and the inner fill are dark, and the glyph, the shape's ring and the icon are [tint] (the theme's red).
@@ -57,7 +76,7 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
   final fill = tactical ? const Color(0xFF160505) : tint;
   final ring = tactical ? tint : const Color(0xFFFFFFFF);
   final glyphColor = tactical ? tint : glyphOn(tint);
-  final ringGrow = size * (tactical ? 0.08 : 0.05);
+  final ringGrow = _ringGrow(size, tactical);
   switch (style) {
     case PinStyle.icon:
       final fs = size * 1.0;
@@ -66,8 +85,9 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       }
       _paintGlyph(canvas, at, _glyph(icon, fs, color: tint));
     case PinStyle.teardrop:
-      final r = size * 0.5;
-      final c = at + Offset(0, -size * 0.95);
+      final head = teardropHead(at, size);
+      final r = head.radius;
+      final c = head.centre;
       Path drop(double grow) {
         final rr = r + grow;
         return Path()
@@ -80,7 +100,8 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       canvas.drawPath(drop(ringGrow + size * 0.05), Paint()..color = edge);
       canvas.drawPath(drop(ringGrow), Paint()..color = ring);
       canvas.drawPath(drop(0), Paint()..color = fill);
-      _paintGlyph(canvas, c, _glyph(icon, size * 0.52, color: glyphColor));
+      final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
+      tp.paint(canvas, teardropIconBox(at, size, tp.size).topLeft);
     case PinStyle.badge:
       final rect = Rect.fromCenter(center: at, width: size, height: size);
       RRect rr(double grow) => RRect.fromRectAndRadius(rect.inflate(grow), Radius.circular(size * 0.26 + grow));
@@ -112,14 +133,25 @@ double pinImageRatio(double devicePixelRatio, {bool web = kIsWeb}) => web ? kPin
 /// The `icon-size` of the symbol layers that draw the pin images ([web]: in a browser).
 double pinIconSize({bool web = kIsWeb}) => web ? 1 / kPinImageRatio : 1;
 
-/// The pin as PNG bytes in a square of [size] points at [ratio] pixels per point (room for the edge, the teardrop's point at the
+/// The size in points of the image of a pin of [size]: a square half as wide again for the icon and the badge; for the teardrop
+/// as wide, and tall enough for the whole head above its point (in a square the image's top edge cut the top off the head).
+Size pinImageSize(PinStyle style, double size) => style == PinStyle.teardrop ? Size(size * 1.5, size * 1.85) : Size.square(size * 1.5);
+
+/// Where the pin of [size] is placed in its image ([paintMapPin]'s `at`): the teardrop's point near the bottom middle (room for
+/// its edge below), the others in the middle.
+Offset pinImageAt(PinStyle style, double size, {bool tactical = false}) {
+  final box = pinImageSize(style, size);
+  return style == PinStyle.teardrop ? Offset(box.width / 2, box.height - size * (tactical ? 0.2 : 0.17)) : box.center(Offset.zero);
+}
+
+/// The pin as PNG bytes of [pinImageSize] points at [ratio] pixels per point (room for the edge, the teardrop's point at the
 /// bottom middle), for `addImage` with the anchor at the bottom for the teardrop and the centre for the others.
 Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false}) async {
-  final box = size * 1.5;
+  final box = pinImageSize(style, size);
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  paintMapPin(c, style == PinStyle.teardrop ? Offset(box / 2, box - size * (tactical ? 0.2 : 0.17)) : Offset(box / 2, box / 2), size, icon, tint, style, tactical: tactical);
-  final img = await rec.endRecording().toImage((box * ratio).round(), (box * ratio).round());
+  paintMapPin(c, pinImageAt(style, size, tactical: tactical), size, icon, tint, style, tactical: tactical);
+  final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
 
