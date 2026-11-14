@@ -3,6 +3,7 @@
 import 'dart:io';
 
 import 'package:cache/browse/browse_state.dart';
+import 'package:cache/guide/app_links.dart' show AppPlace, openAppPlace;
 import 'package:cache/library/catalog_page.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
@@ -145,6 +146,14 @@ void main() {
     expect(find.byType(CatalogRow), findsNWidgets(3));
     expect(find.text('Not synced: sharing is off'), findsNWidgets(3));
     expect(find.text('ROUTING'), findsOneWidget);
+    // the line names Sharing and sync, and goes there (everything that points to something links to it)
+    final opened = <AppPlace>[];
+    final before = openAppPlace;
+    openAppPlace = opened.add;
+    addTearDown(() => openAppPlace = before);
+    await tester.tap(find.text('Not synced: sharing is off').first);
+    await tester.pump();
+    expect(opened, [AppPlace.sharing]);
   });
 
   test('every way into the Library is built by BrowseScreen.inHub, so Storage cannot lose Regions or Sharing', () {
