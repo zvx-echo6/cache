@@ -8,6 +8,7 @@ import '../../../packages/cache_search/lib/src/models.dart';
 import 'guide_install.dart';
 import 'index_driver.dart';
 import 'line_protocol.dart';
+import 'own_libraries.dart';
 
 /// The helper's own `open`. The Rust server sends `open {"sources": <array or null>}` when it starts the helper; this builds the
 /// rest of the core's config on the server's app folders and opens the core with it.
@@ -19,7 +20,7 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide, this.own});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -35,6 +36,9 @@ class OpenOp implements OpHandler {
   /// Installs the guide library after the core is open, when the sources are found on disk rather than given by a sources.json
   /// (null: no guide package on this server, or a test).
   final GuideInstaller? guide;
+
+  /// Makes the person's own libraries (My books) match their packs after the core is open (null in tests that do not).
+  final OwnLibrarySync? own;
 
   @override
   bool handles(String op) => op == 'open';
@@ -61,6 +65,8 @@ class OpenOp implements OpHandler {
     final g = guide;
     // A sources.json is the operator's own list: the guide is not added to it.
     if (g != null && given is! List) unawaited(g.ensure());
+    final o = own;
+    if (o != null && given is! List) unawaited(o.run());
     onOpened?.call();
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
@@ -72,7 +78,7 @@ class OpenOp implements OpHandler {
 /// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.
 /// Replies `{"sources": N}` and logs "sources rescanned (N)".
 class RescanOp implements OpHandler {
-  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer});
+  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.own});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -80,6 +86,9 @@ class RescanOp implements OpHandler {
 
   /// Starts the index jobs of the sources just listed (null in tests that do not index).
   final IndexDriver? indexer;
+
+  /// Makes the person's own libraries match their packs after a rescan (null in tests that do not).
+  final OwnLibrarySync? own;
 
   @override
   bool handles(String op) => op == 'sources.rescan';
@@ -95,6 +104,8 @@ class RescanOp implements OpHandler {
     }
     dispatcher.handle('setSources', {'sources': sources, 'extra': serverCoreExtras(dirs)});
     indexer?.useSources(sources);
+    final o = own;
+    if (o != null && given is! List) unawaited(o.run());
     log?.call('sources rescanned (${sources.length})');
     return {'sources': sources.length};
   }

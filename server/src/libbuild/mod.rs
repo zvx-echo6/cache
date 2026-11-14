@@ -580,10 +580,17 @@ fn make_library_id(title: &str) -> String {
     let suffix = &random_hex()[..6];
     if slug.is_empty() {
         format!("library-{suffix}")
+    } else if slug.starts_with(OWN_LIBRARY_PREFIX) {
+        // only a person's own libraries are named my-books... (the share keeps their shard to each device by that name)
+        format!("library-{slug}-{suffix}")
     } else {
         format!("{slug}-{suffix}")
     }
 }
+
+/// The folder-name prefix of a person's own libraries (app/lib/sharing/share_rules.dart `kOwnLibraryPrefix`, the core's
+/// `ownlib::OWN_PREFIX`): a library built here never takes it.
+const OWN_LIBRARY_PREFIX: &str = "my-books";
 
 
 /// The reader child: this program as `extract-pdf`. In the unit tests this program is the test binary, which has no such command, so
