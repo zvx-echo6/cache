@@ -339,6 +339,15 @@ class DeviceLibrary extends ChangeNotifier {
   Future<DeviceJob> downloadLibrary(String link) => _download({'url': link, 'kind': 'library'});
 
   Future<DeviceJob> _download(Map<String, dynamic> req) async {
+    // A paused transfer of the same link goes on from its part file. Asking the server again would answer that paused job as it
+    // is (it is still the active one for the link), so the press did nothing: the Discover card's Resume comes here in a browser,
+    // where the app holds no transfer of its own.
+    final paused = jobForUrl(req['url'] as String);
+    if (paused != null && paused.paused) {
+      _requests[paused.url] = req;
+      await resumeJob(paused);
+      return jobForUrl(paused.url) ?? paused;
+    }
     final job = await api.download(
       url: req['url'] as String,
       kind: req['kind'] as String,
