@@ -182,7 +182,7 @@ void main() {
               const SizedBox(height: 16),
               Material(elevation: 3, borderRadius: BorderRadius.circular(8), child: const Padding(padding: EdgeInsets.all(16), child: Text('Menu-like surface, elevation 3'))),
               const SizedBox(height: 12),
-              Material(elevation: 0, borderRadius: BorderRadius.circular(8), color: Theme.of(tester.element(find.byType(Column).first)).colorScheme.surface, child: const Padding(padding: EdgeInsets.all(16), child: Text('The same, elevation 0'))),
+              Builder(builder: (context) => Material(elevation: 0, borderRadius: BorderRadius.circular(8), color: Theme.of(context).colorScheme.surface, child: const Padding(padding: EdgeInsets.all(16), child: Text('The same, elevation 0')))),
             ]),
           ),
         ),
