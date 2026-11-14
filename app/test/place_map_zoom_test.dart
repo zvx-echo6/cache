@@ -365,8 +365,11 @@ void main() {
         tester.view.devicePixelRatio = 3;
         addTearDown(tester.view.reset);
         final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+        // Tests draw text in the Ahem font, where every letter is a full em wide, about twice a real font's width: the text is scaled
+        // by half so its width is what a phone draws.
         await tester.pumpWidget(MaterialApp(
           theme: buildTheme(CacheThemeId.light),
+          builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(0.5)), child: child!),
           home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
         ));
         await tester.pump(const Duration(seconds: 1));

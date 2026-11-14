@@ -218,6 +218,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                       children: [
                         // "Current location" is wider than the label it replaced: the button gives way before the row overflows.
                         Flexible(
+                          flex: 3,
                           child: OutlinedButton.icon(
                             key: const ValueKey('picker-here'),
                             onPressed: _here,
@@ -227,6 +228,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                         ),
                         const SizedBox(width: 12),
                         Expanded(
+                          flex: 2,
                           child: FilledButton(key: const ValueKey('picker-use'), onPressed: c == null ? null : () => Navigator.pop(context, _answer()), child: const Text('Use this spot')),
                         ),
                       ],

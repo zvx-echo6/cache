@@ -74,6 +74,7 @@ void main() {
     await tester.pump(kBackgroundEvery);
     expect(updates, greaterThanOrEqualTo(2));
     expect(updates, lessThanOrEqualTo(3), reason: 'one per interval, not one per tick');
+    f.dispose();
   });
 
   testWidgets('it does nothing while nothing is switched on, and nothing at all where a scheduled job does it', (tester) async {
