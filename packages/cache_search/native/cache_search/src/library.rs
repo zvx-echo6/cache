@@ -29,6 +29,41 @@ pub type Shard = ReadOnlyEdgeShard<MmapFile>;
 pub const HNSW_EF: usize = 64;
 /// How many payloads are sampled to guess settings.
 const GUESS_SAMPLE: usize = 20;
+/// The size past which Qdrant Edge gives a segment's vectors an HNSW graph when the shard is optimized, in KB (Edge's default
+/// `indexing_threshold`, which the library builders use). A segment below it is searched by reading its vectors, which is fast.
+pub const INDEXING_THRESHOLD_KB: u64 = 10_000;
+
+/// How many KB of the library shard's vectors at `dir` are in no HNSW graph: (points - indexed vectors) x the vector's size (its
+/// dimensions times the bytes of its datatype, from the segments' config), from the read-only shard's own counts. Past
+/// [`INDEXING_THRESHOLD_KB`] a meaning search reads all of them: a shard built without `EdgeShard::optimize()` has every vector
+/// there. 0 for a shard with no vectors.
+pub fn unindexed_vectors_kb(dir: &Path) -> Result<u64> {
+    let shard = open_shard_for_scroll(dir)?;
+    let info = EdgeShardRead::info(&shard).map_err(|e| op_internal("reading the shard's counts", e))?;
+    let unindexed = info.points_count.saturating_sub(info.indexed_vectors_count) as u64;
+    if unindexed == 0 {
+        return Ok(0);
+    }
+    // the vector's size from any segment's config (every segment of a library shard has the same vector)
+    let mut bytes_per_vector = 0u64;
+    if let Ok(rd) = std::fs::read_dir(dir.join("segments")) {
+        for e in rd.flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path().join("segment.json")) else { continue };
+            let Ok(j) = serde_json::from_str::<Value>(&text) else { continue };
+            let Some(v) = j["config"]["vector_data"].as_object().and_then(|m| m.values().next()) else { continue };
+            let dims = v["size"].as_u64().unwrap_or(0);
+            let width = match v["datatype"].as_str() {
+                Some("float16") => 2,
+                Some("uint8") => 1,
+                _ => 4,
+            };
+            bytes_per_vector = dims * width;
+            break;
+        }
+    }
+    Ok(unindexed * bytes_per_vector / 1024)
+}
+
 /// The segment manifest file Qdrant Edge's read-only open requires, at the shard root.
 pub const MANIFEST_FILE: &str = "segments_manifest.json";
 

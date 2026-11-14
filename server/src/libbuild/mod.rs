@@ -1661,7 +1661,12 @@ impl BuildService {
             for d in [&new, &newtmp, &old, &oldindex] {
                 let _ = std::fs::remove_dir_all(d);
             }
-            // Close the work shard (it is not held open between operations) and copy it.
+            // Index the work shard's vectors (HNSW), then close it (it is not held open between operations) and copy it.
+            {
+                let w = self.open_work(id)?;
+                w.optimize().map_err(|e| e.to_string())?;
+                w.flush().map_err(|e| e.to_string())?;
+            }
             publish_copy(&self.work_dir(id), &newtmp).map_err(|e| e.to_string())?;
             std::fs::rename(&newtmp, &new).map_err(|e| io("finishing the copy", e))?;
             let had_old = shard.exists();
