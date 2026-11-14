@@ -269,6 +269,16 @@ check(uphill.climb?.steepFrom == 20 && uphill.climb?.steepTo == 32, "a climb ahe
 check(near(uphill.steepLat, 10.52) && near(uphill.steepLon, 20.26) && near(uphill.steepGradePct, 6.2), "the steepest point and its grade")
 // The palette is one theme, the phone's chosen one (the recorded trips are in Dark), for day and night alike.
 check(uphill.palette?.theme == "dark" && uphill.palette?.card == "#2a3036" && uphill.palette?.miniBg == "#1a1d1f", "the palette: the phone's theme")
+// The turn panel's colour (the Android host's turn card) and whether it is a light one, from the colour alone: the four themes'
+// cards as carOverlayColors makes them. The text on each, black or white, reads at 4.5:1 or better.
+check(uphill.palette?.hostCard == "#2a3036" && uphill.palette?.hostCardIsLight == false, "the turn panel: the theme's card, a dark one")
+for (card, light) in [("#2a3036", false), ("#fffdf8", true), ("#e8dbbc", true), ("#3a0b07", false)] {
+  check(CarValue.lightColor(card) == light, "the turn panel \(card) is \(light ? "light" : "dark")")
+  if let l = CarValue.luminance(card) {
+    check(CarValue.contrast(l, light ? 0 : 1) >= 4.5, "the text on the turn panel \(card) reads at 4.5:1 or better")
+  }
+}
+check(CarValue.lightColor("nope") == false, "a colour that does not read: not light")
 check(uphill.badge?.badge == "#f4f6f8" && uphill.badge?.glyph == "#161b20" && uphill.badge?.edge == "#1a1d1f", "the grade marker's colours, from the theme")
 var oneMissing = map("trip_guiding_climb.json")
 if var pal = oneMissing["palette"] as? [String: Any] {

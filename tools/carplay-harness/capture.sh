@@ -903,6 +903,10 @@ guide_step() {  # guide_step <notification> <log text to wait for, or ""> <pictu
   shot_ext "$3"
 }
 
+panel_is() {  # panel_is <theme> <step>: the last turn panel colour the app gave CarPlay was that theme's
+  grep 'car guidance: the panel takes' "$STREAM" | tail -n 1 | grep -q "the $1 theme's" || GUIDE_MISSING="$GUIDE_MISSING [$2: the turn panel was not given the $1 theme's colour: $(grep 'car guidance: the panel takes' "$STREAM" | tail -n 1 | sed 's/.*car guidance: //')]"
+}
+
 guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
   local label="$1" at before got rows began ended told
   EXTRAS=""
@@ -1053,8 +1057,10 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # follow each one, with the car in its dark setting all the while.
   notify climb
   sleep 2
+  # CarPlay's turn panel and trip estimates take the theme's turn panel colour too (the app says which it gave CarPlay).
   for theme in light parchment tactical dark; do
     guide_step "theme_$theme" "car map: style loaded, $theme" "$label-guide-theme-$theme"
+    panel_is "$theme" "theme_$theme"
   done
   # Five quick theme changes on the phone, a tenth of a second apart (timed by the stand-in Dart side: the job's notifications
   # each take a second or more on a busy runner), ending in Tactical: one style load, of the last.
@@ -1077,6 +1083,18 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   notify theme_dark
   wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [theme_dark: the Dark style did not come back]"
   sleep 2
+  # No theme picked on the phone: the car's own day and night decide, Light by day and Dark by night, the map and the turn
+  # panel alike (the car sits in its dark setting here). Then Dark is picked again.
+  guide_step theme_none 'car map: style loaded, dark' ""
+  guide_step day 'car map: style loaded, light' "$label-guide-nopick-day"
+  panel_is light "no theme picked, day"
+  guide_step night 'car map: style loaded, dark' "$label-guide-nopick-night"
+  panel_is dark "no theme picked, night"
+  before=$(log_count 'car map: style loaded, dark')
+  notify theme_dark
+  wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [theme_dark after none picked: the Dark style did not come back]"
+  sleep 2
+  GUIDE="$GUIDE; the turn panel: $(grep 'car guidance: the panel takes' "$STREAM" | sed 's/.*the panel takes the //' | tr '\n' ';')"
   # Off the route (the phone looks for a new one), then arrived.
   guide_step drive 'car guidance: rerouting' "$label-guide-rerouting"
   guide_step drive 'car guidance: arrived' "$label-guide-arrived"
@@ -1262,7 +1280,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes and no theme picked by day and by night (the map and the turn panel), looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-nopick-day,-nopick-night,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi

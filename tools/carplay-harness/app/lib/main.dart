@@ -26,6 +26,8 @@ const List<String> _phases = <String>['browsing', 'previewing', 'guiding'];
 // The recorded drive, moved along by the job while guiding.
 const List<String> _drive = <String>['trip_guiding', 'trip_guiding_near', 'trip_guiding_next', 'trip_rerouting', 'trip_arrived'];
 // The phone's four themes; the job changes the chosen one (`theme_dark` and the others), or five times quickly (`themeburst`).
+// `theme_none`: as a phone where no theme has been picked yet, the car's own day and night decide (car_overlay.dart, carTheme:
+// Light by day, Dark by night) until the job picks one again.
 const List<String> _themes = <String>['dark', 'light', 'parchment', 'tactical'];
 const List<String> _burst = <String>['light', 'parchment', 'dark', 'light', 'tactical'];
 
@@ -53,6 +55,10 @@ class _HarnessAppState extends State<HarnessApp> {
   int _frame = 0;
   bool _voiceOn = true;
   String _theme = 'dark';
+  // Whether a theme is picked on the phone (the stand-in starts with Dark picked), and the car's day or night as it last said
+  // it with its style request (most cars start in their dark setting).
+  bool _picked = true;
+  bool _carDark = true;
 
   @override
   void initState() {
@@ -163,6 +169,14 @@ class _HarnessAppState extends State<HarnessApp> {
         case 'theme_parchment':
         case 'theme_tactical':
           await _setTheme(call.method.substring('theme_'.length));
+        case 'theme_none':
+          _picked = false;
+          _theme = _carDark ? 'dark' : 'light';
+          await _steps.invokeMethod<void>('say', 'phone theme none picked, the car decides: $_theme');
+          await _car.invokeMethod<void>('styleChanged');
+          final String? noneTrip = _lastTrip;
+          final String? noneRoute = _lastRoute;
+          if (noneTrip != null && noneRoute != null) await _pushRaw(noneTrip, noneRoute);
         case 'themeburst':
           // Five theme changes a tenth of a second apart, timed here: the job's notifications each take a second or more.
           for (final String t in _burst) {
@@ -248,13 +262,26 @@ class _HarnessAppState extends State<HarnessApp> {
         if (_phase == 2) await _pushRaw(recorded[_drive[_frame]]!, recorded['route_guiding']!);
         return _voiceOn;
       case 'style':
-        // As car_bridge.dart answers once the person has picked a theme (the stand-in phone has): the style of that theme as
-        // text, its name, the colours of what the car draws on top, and that the car's day or night does not decide it.
+        // As car_bridge.dart answers: the style of the theme the car shows as text, its name, the colours of what the car draws
+        // on top, and whether the car's day or night decides it (no theme picked). Then the car's day or night, said with the
+        // request, chooses the theme, and a new one sends the trip out again with its palette.
+        final Object? asked = call.arguments;
+        if (asked is Map && asked['dark'] is bool) _carDark = asked['dark'] as bool;
+        if (!_picked) {
+          final String now = _carDark ? 'dark' : 'light';
+          if (now != _theme) {
+            _theme = now;
+            await _steps.invokeMethod<void>('say', 'phone theme none picked, the car decides: $_theme');
+            final String? last = _lastTrip;
+            final String? route = _lastRoute;
+            if (last != null && route != null) unawaited(_pushRaw(last, route));
+          }
+        }
         return <String, Object?>{
           'style': recorded['style_$_theme'],
           'theme': _theme,
           'colors': jsonDecode(recorded['colors_$_theme']!),
-          'followsCar': false,
+          'followsCar': !_picked,
         };
     }
     return null;
@@ -264,6 +291,7 @@ class _HarnessAppState extends State<HarnessApp> {
   /// change), and the trip goes out again with the new theme's palette.
   Future<void> _setTheme(String theme) async {
     if (!_themes.contains(theme)) return;
+    _picked = true;
     _theme = theme;
     await _steps.invokeMethod<void>('say', 'phone theme $theme');
     await _car.invokeMethod<void>('styleChanged');
