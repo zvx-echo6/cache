@@ -59,7 +59,7 @@ fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().map_or(false, |n| SKIP_DIRS.iter().any(|s| n == *s)) {
+            if path.file_name().is_some_and(|n| SKIP_DIRS.iter().any(|s| n == *s)) {
                 continue;
             }
             walk(root, &path, files);
