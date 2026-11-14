@@ -632,14 +632,37 @@ if(u.origin===location.origin&&(u.protocol==='https:'||u.protocol==='http:'))ret
 e.preventDefault();if(u.protocol==='https:'||u.protocol==='http:'||u.protocol==='mailto:')post({cacheZim:'external',url:u.href})},true);
 })();</script>"#;
 
-/// `html` with [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
+/// The tag that loads the storage stand-in (see `zim_storage.js`): the sandboxed frame has no origin, so the browser denies the page
+/// IndexedDB and Web Storage; the script installs in-memory ones where that is so.
+const ZIM_STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+/// The index just past the end of the first `<name ...>` tag in `text` (`lower` is its lower-cased copy), if there is one.
+fn after_open_tag(lower: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&format!("<{name}")) {
+        let start = from + i;
+        let next = lower.as_bytes().get(start + name.len() + 1).copied();
+        if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n' | 0x0c)) {
+            return lower[start..].find('>').map(|e| start + e + 1);
+        }
+        from = start + 1;
+    }
+    None
+}
+
+/// `html` with [ZIM_STORAGE_TAG] first in its `<head>` (after `<html>` with no head, at the very start with neither), so it runs
+/// before the page's own scripts, and [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
 fn with_frame_script(html: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(html);
-    let at = text.to_ascii_lowercase().rfind("</body").unwrap_or(text.len());
-    let mut out = String::with_capacity(text.len() + ZIM_FRAME_SCRIPT.len());
-    out.push_str(&text[..at]);
+    let lower = text.to_ascii_lowercase();
+    let first = after_open_tag(&lower, "head").or_else(|| after_open_tag(&lower, "html")).unwrap_or(0);
+    let end = lower.rfind("</body").unwrap_or(text.len()).max(first);
+    let mut out = String::with_capacity(text.len() + ZIM_STORAGE_TAG.len() + ZIM_FRAME_SCRIPT.len());
+    out.push_str(&text[..first]);
+    out.push_str(ZIM_STORAGE_TAG);
+    out.push_str(&text[first..end]);
     out.push_str(ZIM_FRAME_SCRIPT);
-    out.push_str(&text[at..]);
+    out.push_str(&text[end..]);
     out.into_bytes()
 }
 
@@ -928,6 +951,18 @@ pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, 
             Reply::empty(204).with("Set-Cookie", app.auth.cookie("", 0))
         }
         ("GET", "/auth/check") => Reply::empty(if signed_in { 204 } else { 401 }),
+        // The storage stand-in for ZIM pages: public, because the sandboxed frame that loads it has no cookies. Same for every caller.
+        ("GET" | "HEAD", "/zim-storage.js") => Reply {
+            status: 200,
+            headers: vec![
+                ("Content-Type", "text/javascript; charset=utf-8".into()),
+                ("Access-Control-Allow-Origin", "*".into()),
+                ("Cache-Control", "public, max-age=86400".into()),
+                ("X-Content-Type-Options", "nosniff".into()),
+            ],
+            body: if method == "HEAD" { vec![] } else { include_str!("zim_storage.js").as_bytes().to_vec() },
+            stream: None,
+        },
         // ZIM pages: the token in the path is the credential; the session cookie plays no part.
         _ if path.starts_with("/zim/") => zim(app, method, path, query).await,
         _ if path == "/api" || path.starts_with("/api/") => {
