@@ -358,6 +358,30 @@ void main() {
       expect(cam.initial!.target.latitude, 44.1);
     });
 
+    testWidgets('the picker at a phone width of 430 shows "Current location" in full, and at 360 the row does not overflow', (tester) async {
+      for (final width in [430.0, 360.0]) {
+        tester.view.physicalSize = Size(width * 3, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+        ));
+        await tester.pump(const Duration(seconds: 1));
+        final label = find.descendant(of: find.byKey(const ValueKey('picker-here')), matching: find.text('Current location'));
+        expect(label, findsOneWidget, reason: 'at $width');
+        final paragraph = tester.renderObject<RenderParagraph>(find.descendant(of: label, matching: find.byType(RichText)).first);
+        if (width == 430) {
+          expect(paragraph.size.width, greaterThanOrEqualTo(paragraph.getMaxIntrinsicWidth(double.infinity) - 0.5), reason: 'not cut short at 430');
+          expect(paragraph.didExceedMaxLines, isFalse);
+        }
+        expect(tester.takeException(), isNull, reason: 'no overflow at $width');
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
     testWidgets('the picker: "Current location" goes to the place zoom; a tap keeps the zoom', (tester) async {
       bigView(tester);
       final cam = _Cam();
