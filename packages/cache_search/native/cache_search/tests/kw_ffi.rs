@@ -415,6 +415,34 @@ fn media_entries(epubs: &[(&str, Vec<u8>)]) -> Vec<(&'static str, &'static str, 
 // ---------------------------------------------------------------------------------------------------------
 // captions (a saved video)
 
+/// A saved video's captions are found by the app's own search (Home, Videos) but not by Ask's search tool: what the model
+/// reads stays as it was until the owner decides otherwise (1.1).
+#[test]
+fn asks_search_tool_leaves_out_saved_video_captions_the_apps_search_finds_them() {
+    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000002";
+    let t = TempDir::new("vidask");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    save_video(&vdir, VIDEO, "Flood Safety Basics", &[("en", vtt_of("sandbag barriers", 30))]);
+    let source = format!("{HOST}/{VIDEO}");
+    let mut h = open(&[], &idx, &vdir);
+    let done = run(job_params(&idx, "captions", &source));
+    assert_eq!(done["phase"], "publish", "{done}");
+    let started = Instant::now();
+    let r = loop {
+        let r = search(&mut h, "sandbag barriers", json!({"k": 3}));
+        if !r["results"].as_array().unwrap().is_empty() || started.elapsed() > Duration::from_secs(30) {
+            break r;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(r["results"][0]["source_kind"], "video", "the app's search finds the caption: {r}");
+
+    let mut conv = cache_search::conv::Conversation::new();
+    let out = h.call_tool(&mut conv, "search", &json!({"query": "sandbag barriers"}).to_string(), "2026-11-14T12:00:00-07:00").unwrap();
+    assert!(!out.contains("Flood Safety Basics") && !out.contains("cap:"), "Ask's search tool shows no caption: {out}");
+}
+
+
 #[test]
 fn saved_video_captions_build_publish_attach_search_cite_read_and_resume() {
     const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000001";

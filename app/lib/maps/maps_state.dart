@@ -23,6 +23,29 @@ String shortAttribution(String credit) {
   return t.length > 80 ? '${t.substring(0, 79).trimRight()}…' : t;
 }
 
+/// The credit for the Protomaps base map's land cover (its `landcover` layer is Daylight's landcover, made from
+/// ESA WorldCover 2020, CC BY 4.0). Wording from Overture's attribution guideline.
+const List<String> kWorldCoverCredit = [
+  '© ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. CC BY 4.0.',
+  'Data from the Daylight Map Distribution',
+];
+
+/// The lines at the end of the full map credits (the sheet the credit line on the map opens), after each layer's
+/// own credit and licence. The WorldCover credit is there only while a Protomaps-layout base map is drawn.
+List<String> mapCreditNotes(List<StyleLayerUse> uses) {
+  final protomaps = uses.any((u) => u.def.isBase && MapLayout.parse(u.def.raw['layout']) == MapLayout.protomapsV4);
+  return [
+    'Map data © OpenStreetMap contributors, ODbL 1.0 (openstreetmap.org/copyright).',
+    if (protomaps) ...[
+      'Base map: Protomaps basemap tiles and the @protomaps/basemaps style layers (BSD-3-Clause). '
+          'Map fonts: Noto Sans, SIL Open Font License 1.1.',
+      ...kWorldCoverCredit,
+    ] else
+      'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
+          'Map fonts: Noto Sans, SIL Open Font License 1.1.',
+  ];
+}
+
 /// How the camera follows the phone.
 enum FollowMode {
   /// The map stays where the user put it.

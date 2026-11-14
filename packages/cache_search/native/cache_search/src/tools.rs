@@ -22,6 +22,10 @@ pub const TOOL_ORDER: [&str; 9] = ["search", "read", "navigate", "nearby", "loca
 
 /// Results of the built-in search.
 const SEARCH_K: usize = 5;
+/// The kinds of index Ask's search tool reads: everything but a saved video's captions (`captions`), which the app's own search
+/// (Home, Videos) finds and Ask does not, by the owner's decision for 1.1. A kind added later is not read by Ask until it is listed
+/// here, since adding one changes what the model reads.
+const ASK_SEARCH_KINDS: [&str; 5] = ["zim", "library", "zim-pdf", "zim-captions", "zim-epub"];
 /// Characters of text the built-in read returns.
 const READ_MAX_CHARS: i32 = 6000;
 
@@ -415,7 +419,7 @@ impl Handle {
     /// (`query_vector` sent with the call), else the handle's embedder's; without either the search is keyword-only.
     fn run_search(&mut self, args: &Value, host_vector: Option<Value>) -> std::result::Result<ToolOutput, ToolError> {
         let query = args["query"].as_str().unwrap_or("");
-        let mut opts = json!({"k": SEARCH_K});
+        let mut opts = json!({"k": SEARCH_K, "kinds": ASK_SEARCH_KINDS});
         if let Some(v) = host_vector.filter(|v| !v.is_null()) {
             opts["query_vector"] = v;
         } else if let Some((model, vector)) = self.embedder.as_ref().and_then(|embed| embed(query)) {
