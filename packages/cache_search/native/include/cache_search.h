@@ -1113,7 +1113,7 @@ char *cs_layers_remove(cs_handle *h, const char *id);
  * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
 char *cs_layers_server(cs_handle *h, const char *options_json);
 
-/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..] or [[[lon,lat],..],..] (rings, even-odd),
  * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
  * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
  * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",
@@ -1334,6 +1334,11 @@ typedef struct cs_sync cs_sync;
  * "relay" (bools, default true), "lookup_url", "relay_urls", "reserve_bytes", "interval_secs", "port"}.
  * NULL on failure (reason in cs_last_error(NULL)). Independent of any cs_handle; runs on its own threads. */
 cs_sync *cs_sync_open(const char *config_json);
+
+/* Sets the function that gets one short line per step of cs_sync_open, or clears it with NULL. Each line is a string the function
+ * owns: free it with cs_free_string (it may be read later, on another thread). Called from any thread; must not block. Nothing is
+ * said while none is set. */
+void cs_sync_set_log(void (*cb)(const char *line));
 
 /* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
  * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */

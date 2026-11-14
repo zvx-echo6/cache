@@ -107,6 +107,16 @@ class AssistantPage extends StatelessWidget {
     }
   }
 
+  /// A reported answer's row: the chat it came from, shown in Ask (a chat that was deleted since says so).
+  void _openReportChat(BuildContext context, int id) {
+    if (!deps.chat.hasConversation(id)) {
+      say(context, 'That chat is gone');
+      return;
+    }
+    deps.chat.openConversation(id);
+    deps.onOpenAsk?.call();
+  }
+
   void _openConversations(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -193,7 +203,7 @@ class AssistantPage extends StatelessWidget {
                     title: 'Reported answers',
                     status: [Part(snap.hasData ? (snap.data == 0 ? 'None' : '${snap.data} on this device') : '…')],
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports)),
+                      MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports, onOpenChat: (id) => _openReportChat(context, id))),
                     ),
                   ),
                 ),

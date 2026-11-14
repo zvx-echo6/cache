@@ -123,4 +123,7 @@ class VideoJob {
       await _core._call('video.jobFree', {'job': _id});
     } catch (_) {}
   }
+
+  /// In a browser the server rewrites its own saved HLS videos after it starts (its helper's video ops): nothing to start here.
+  Future<VideoJob?> startRepair() async => null;
 }
