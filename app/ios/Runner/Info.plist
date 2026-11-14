@@ -20,6 +20,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NFCReaderUsageDescription</key>
+	<string>Cache reads a link code from another device or a tag.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cache connects to map, video and other data sources you choose on your local network.</string>
 	<key>NSCameraUsageDescription</key>

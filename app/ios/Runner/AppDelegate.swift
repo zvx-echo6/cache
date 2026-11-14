@@ -1,4 +1,5 @@
 import CarPlay
+import CoreNFC
 import Flutter
 import Darwin
 import MapLibre
@@ -13,6 +14,7 @@ import workmanager_apple
 @objc class AppDelegate: FlutterAppDelegate {
   let folderAccess = FolderAccess()
   let routeSnapshot = RouteSnapshot()
+  let nfcLinkReader = NfcLinkReader()
   /// The app's one Flutter engine. It is made by the first scene that needs it (obtainFlutterEngine), not by a storyboard's
   /// view controller, so that it does not belong to one window: a window is built around it (SceneDelegate.swift).
   private var flutterEngine: FlutterEngine?
@@ -135,6 +137,11 @@ import workmanager_apple
     link.setMethodCallHandler { call, result in
       if call.method == "take" { result(LinkBridge.shared.take()) } else { result(FlutterMethodNotImplemented) }
     }
+    // Linking by NFC (NfcLinkReader below, lib/sharing/nfc_link.dart): reading only. An iPhone cannot act as a tag, so "serve" and the
+    // reader mode Android has are answered with nothing.
+    let nfc = FlutterMethodChannel(name: "co.cache/nfc", binaryMessenger: messenger)
+    let nfcReader = nfcLinkReader
+    nfc.setMethodCallHandler { call, result in nfcReader.handle(call, result: result) }
     // Notebooks > Connections: a folder the person picks for Obsidian or Logseq, kept as a security-scoped bookmark.
     let folders = FlutterMethodChannel(name: "co.cache/folders", binaryMessenger: messenger)
     let access = folderAccess
@@ -435,5 +442,75 @@ final class RouteSnapshot {
     active = nil
     activeResult?(FlutterError(code: "cancelled", message: "a newer picture was asked for", details: nil))
     activeResult = nil
+  }
+}
+
+/// Reads a link from another phone or a tag (Core NFC). "status" answers {available, enabled, hce}; "read" starts one reading
+/// session and answers the first URI record's text, nil when the person cancelled, or an error whose code is "unavailable",
+/// "busy" or "failed". Starting a session needs the NFC Tag Reading entitlement (Runner.entitlements) and NFCReaderUsageDescription
+/// (Info.plist); without the entitlement the session fails at runtime, which answers "failed". Core NFC links without it.
+final class NfcLinkReader: NSObject, NFCNDEFReaderSessionDelegate {
+  private var session: NFCNDEFReaderSession?
+  private var pending: FlutterResult?
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "status":
+      let available = NFCNDEFReaderSession.readingAvailable
+      result(["available": available, "enabled": available, "hce": false])
+    case "read":
+      read(result)
+    case "serve", "startReader", "stopReader":
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func read(_ result: @escaping FlutterResult) {
+    guard NFCNDEFReaderSession.readingAvailable else {
+      result(FlutterError(code: "unavailable", message: "NFC reading is not available on this iPhone", details: nil))
+      return
+    }
+    if pending != nil {
+      result(FlutterError(code: "busy", message: "A reading is already open", details: nil))
+      return
+    }
+    pending = result
+    let made = NFCNDEFReaderSession(delegate: self, queue: nil, invalidateAfterFirstRead: true)
+    made.alertMessage = "Hold your iPhone near the other phone or the tag."
+    session = made
+    made.begin()
+  }
+
+  private func finish(_ answer: Any?) {
+    let result = pending
+    pending = nil
+    session = nil
+    DispatchQueue.main.async { result?(answer) }
+  }
+
+  func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
+    for message in messages {
+      for record in message.records {
+        if let url = record.wellKnownTypeURIPayload() {
+          finish(url.absoluteString)
+          return
+        }
+      }
+    }
+    // Something was read but it holds no link: nothing to give.
+    finish(nil)
+  }
+
+  func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
+    // A first read ends the session by itself; its answer was given already (pending is nil then).
+    guard pending != nil else { return }
+    let code = (error as? NFCReaderError)?.code
+    if code == .readerSessionInvalidationErrorUserCanceled {
+      finish(nil)
+    } else {
+      finish(FlutterError(code: "failed", message: error.localizedDescription, details: nil))
+    }
   }
 }
