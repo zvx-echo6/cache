@@ -248,11 +248,51 @@ class FgsAddTest {
     }
 
     @Test
+    fun testHook_isNotInTheReleaseManifest_andTheServiceIsNotExported() {
+        // the unit tests merge the manifest of a build without -PcacheTestApk: the hook is declared only in the test APK
+        val pm = context.packageManager
+        try {
+            pm.getReceiverInfo(ComponentName(context, FgsAddTestHook::class.java), 0)
+            org.junit.Assert.fail("the test hook receiver is in the release manifest")
+        } catch (_: PackageManager.NameNotFoundException) {
+        }
+        assertFalse(pm.getServiceInfo(ComponentName(context, FgsAddService::class.java), 0).exported)
+    }
+
+    @Test
+    fun testHook_sendsTheServiceTheNotificationsPause_andResume() {
+        FgsAddTestHook().onReceive(context, android.content.Intent(FgsAddTestHook.ACTION_PAUSE))
+        val app = shadowOf(RuntimeEnvironment.getApplication())
+        assertEquals(FgsAddNotifications.ACTION_PAUSE, app.nextStartedService.action)
+        FgsAddTestHook().onReceive(context, android.content.Intent(FgsAddTestHook.ACTION_RESUME_ANYWAY))
+        val resume = app.nextStartedService
+        assertEquals(FgsAddNotifications.ACTION_START, resume.action)
+        assertTrue(resume.getBooleanExtra(FgsAddNotifications.EXTRA_RESUME, false))
+        assertTrue(resume.getBooleanExtra(FgsAddNotifications.EXTRA_ANYWAY, false))
+    }
+
+    @Test
     fun pause_inTheNotification_asksTheRunToStopAsPerson() {
         val s = start()
         s.onStartCommand(android.content.Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_PAUSE), 0, 2)
         assertEquals(listOf("person"), runner.stops)
         assertEquals(1, runner.started)
+    }
+
+    @Test
+    fun pause_inTheNotification_saysPausedAtOnce_andProgressDoesNotPutAddingBack() {
+        val s = start()
+        runner.events!!.onProgress(progress)
+        s.onStartCommand(android.content.Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_PAUSE), 0, 2)
+        val n = posted(FgsAddNotifications.ID_ADDING)!!
+        assertEquals("Paused · 2 of 5 PDFs", title(n))
+        assertEquals("Paused by you", text(n))
+        assertTrue(n.actions == null || n.actions.isEmpty())
+        SystemClock.sleep(1100)
+        runner.events!!.onProgress(progress.copy(done = 3, current = "Garden notes"))
+        assertEquals("Paused · 2 of 5 PDFs", title(posted(FgsAddNotifications.ID_ADDING)!!))
+        runner.events!!.onFinished(FgsFinish("paused", "person", 2, 5, 0, 0, null, false, "Bookshelves", null, null, null))
+        assertEquals("Paused · 2 of 5 PDFs", title(posted(FgsAddNotifications.ID_RESULT)!!))
     }
 
     @Test

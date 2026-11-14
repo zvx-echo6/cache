@@ -11,6 +11,7 @@ import '../../background/fgs_add.dart';
 import '../../notebook/sync/folder.dart' show FolderFile;
 import '../../pdf/pdfium_init.dart' show installNativePdfFonts;
 import '../../platform/app_log.dart';
+import '../../search/index_scheduler.dart' show IndexScheduler;
 import '../../platform/battery.dart';
 import '../../search/index_throttle.dart';
 import '../../settings/app_settings.dart';
@@ -88,6 +89,16 @@ Future<void> scheduleWatchAdd({bool next = false, Duration delay = Duration.zero
 /// How long Cache, going to the back, waits for its index work to stop before handing off anyway (a PDF step in flight cannot
 /// be cut short; a job folder still in use is then a hold and a retry for the background run, never a failure).
 const Duration kHandOffWait = Duration(seconds: 30);
+
+/// Closes the app's index work for the hand-off and says when it has really stopped. The hand-off must close it itself: Android's
+/// "left" (Recents, Home) reaches Dart before the lifecycle's "hidden" (the only other place that closes it), and the scheduler's
+/// `closed` is the old, finished one until then, so the hand-off saw "index work stopped" in 3 ms while the run was still in its
+/// step, released the lock, and the service started beside a run that went on and ended it ("added 0, more to do (app)") when the
+/// run's step ended and the still-open scheduler asked for the lock back (Pixel round 3, 2026-11-14).
+Future<void> closeIndexForHandOff(IndexScheduler indexing) {
+  indexing.setOpen(false);
+  return indexing.closed;
+}
 
 /// Cache going to the back hands Add PDF's work to the background: it waits for its index work to stop (at most [wait]), saves,
 /// lets go of the lock and queues the background add when the watched folders have PDFs still to add. Each step is logged.
@@ -213,7 +224,7 @@ Future<String> watchAddJob({
       // only what the watched folders found: a PDF added by hand is added while Cache is open, as always
       only: (j) => j.watchId != null,
       throttle: th,
-      lookEvery: const Duration(seconds: 5),
+      lookEvery: kFgsLookEvery,
       held: () async => addPdfHeld(th),
     ).run();
     // more to do: the next slice, unless Cache took over (it carries on itself)
@@ -239,6 +250,9 @@ const Duration kFgsAddBudget = Duration(hours: 7);
 /// hand-off then lets go of the lock) before it gives up.
 const Duration kFgsWaitForBack = Duration(seconds: 90);
 
+/// How often the service's run looks for a Pause (or a stop): the Pause waits at most this and then one piece of the core's work.
+const Duration kFgsLookEvery = Duration(seconds: 1);
+
 /// How long the service waits for a charging run that holds the lock to stop when asked (it looks at the stop every few seconds).
 const Duration kFgsTakeOverWait = Duration(seconds: 45);
 
@@ -261,6 +275,11 @@ class FgsAddControl {
   /// Set by a stop message; read by the slice's checks.
   String? stopWhy;
 
+  final Completer<void> _stopped = Completer<void>();
+
+  /// Completes when a stop message comes: the slice looks at once (Pause is heard within the piece the run is in, not after the next poll).
+  Future<void> get stopped => _stopped.future;
+
   /// How the run ended, set when it does (also written to the result file for the in-app notice).
   FgsAddResult? result;
 
@@ -270,7 +289,10 @@ class FgsAddControl {
   /// A change of progress (at most one a second).
   final void Function(FgsProgress p)? onProgress;
 
-  void stop(String why) => stopWhy ??= why;
+  void stop(String why) {
+    stopWhy ??= why;
+    if (!_stopped.isCompleted) _stopped.complete();
+  }
 }
 
 /// How the service's add ended, in a few words for the log (the result is on [FgsAddControl.result]).
@@ -297,7 +319,7 @@ Future<FgsAddEnd> fgsAddJob({
   Duration look = const Duration(milliseconds: 500),
   Duration progressEvery = const Duration(seconds: 1),
   // how often it looks at the stop, the battery and the heat: Pause answers within this
-  Duration lookEvery = const Duration(seconds: 5),
+  Duration lookEvery = kFgsLookEvery,
   bool resume = false,
   bool anyway = false,
   Future<void> Function({bool next, Duration delay})? queue,
@@ -383,6 +405,7 @@ Future<FgsAddEnd> fgsAddJob({
       only: (j) => ids.contains(j.id) && fgsJobMayRun(j, th.reading),
       throttle: th,
       lookEvery: lookEvery,
+      wake: control.stopped,
       held: () async => ok(addPdfHeld(th, unplugged: true)),
     ).run();
     return FgsAddEnd(r.words);
