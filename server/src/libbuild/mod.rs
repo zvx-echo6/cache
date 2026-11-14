@@ -1777,6 +1777,7 @@ impl BuildService {
             "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
             "decision": it.decision.as_ref().map(decision_view),
             "compression": it.compression,
+            "origin": it.origin, "linked": it.linked,
         })
     }
 
