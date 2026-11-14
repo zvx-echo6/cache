@@ -286,7 +286,7 @@ impl State {
 enum OnServer {
     There,
     /// Gone; the current.json that names the build to move to.
-    Gone(Current),
+    Gone(Box<Current>),
     /// No answer, or one that does not tell.
     Unknown,
 }
@@ -788,7 +788,7 @@ impl Inner {
         let url = format!("{}{}", self.base, Self::index_path_of(build, &c));
         match http::probe(&self.agent, &url, timeout) {
             Ok(()) => OnServer::There,
-            Err(http::Fail::Status(404 | 410, _)) => OnServer::Gone(c),
+            Err(http::Fail::Status(404 | 410, _)) => OnServer::Gone(Box::new(c)),
             Err(_) => OnServer::Unknown,
         }
     }
