@@ -500,6 +500,8 @@ class _CacheAppState extends State<CacheApp> {
     bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    // the person's own Pause or Resume wins over the notification's: it forgets the PDF
+    onPauseDecided: (job) => forgetFgsPausedId(backgroundDir(_supportPath ?? '.'), job.id),
     wordsPending: (path) => libraries.wordsPendingAt(path),
   );
 

@@ -353,6 +353,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.ocrEngine,
     this.battery,
     this.onDone,
+    this.onPauseDecided,
     this.wordsPending,
     this.permit,
     this.copyIn,
@@ -394,6 +395,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   /// After a book is saved: the Library and Bookshelves read again.
   final Future<void> Function(AddPdfJob job)? onDone;
+
+  /// The person paused or resumed [job] in the app (Pause, Resume, Start now, Resume anyway): the foreground service's notification
+  /// forgets that it paused it, so the app's own choice always wins over a later notification Resume.
+  final Future<void> Function(AddPdfJob job)? onPauseDecided;
 
   /// Whether the library at a path has points its keyword index lacks (their words are not searchable yet): true, false, or null
   /// when not known. The app's reads the libraries' index status.
@@ -734,6 +739,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     job.pausedByPerson = true;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     await _runs[job.id]?.stop();
     unawaited(indexSchedulerShared?.kick());
   }
@@ -743,6 +749,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     job.pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
@@ -753,6 +760,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       ..pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
@@ -764,6 +772,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       ..pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
