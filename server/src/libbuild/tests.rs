@@ -2358,6 +2358,55 @@ fn a_new_pdf_in_a_folder_linked_to_a_built_library_is_built_in_place_without_a_c
 }
 
 #[test]
+fn a_linked_pdf_that_finishes_building_is_matched_by_a_follow_up_check_without_check_now() {
+    use super::linked_auto::{Auto, AutoConfig};
+    let d = TempDir::new("lk2b");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    add(&svc, &lib, "wells.pdf", &book("well", 3, Some("Wells")));
+    drain(&svc);
+    svc.publish(&lib).unwrap();
+    let ext = TempDir::new("lk-source"); // a linked folder may not be inside the data folder
+    let source = ext.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    register_folder(&svc, &lib, "r1", &source);
+    let cfg = AutoConfig { settle_ms: 300, quiet_ms: 100, rescan_ms: 3_600_000, poll_ms: 50, sync_ms: 100, retry_ms: 100 };
+    let mut auto = Auto::new(cfg, super::linked_watch::system_notifier());
+    let turn = |auto: &mut Auto, ms: u64| {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < end {
+            auto.tick(&svc);
+        }
+    };
+    turn(&mut auto, 300);
+    std::fs::write(source.join("tanks.pdf"), book("tank", 3, None)).unwrap();
+    let end = Instant::now() + Duration::from_secs(20);
+    while linked_items(&svc).is_empty() && Instant::now() < end {
+        auto.tick(&svc);
+    }
+    assert_eq!(linked_items(&svc).len(), 1, "queued by the automatic check");
+    turn(&mut auto, 500); // let the check that queued it finish
+    drain(&svc);
+    assert_eq!(linked_items(&svc)[0].state, S::Done);
+    let target = linked_api::library_path(&svc.data, &lib).unwrap();
+    let matched = || {
+        super::linked_registry::LinkedRegistry::read_saved(&target.join(".local")).unwrap().books.iter().any(|b| {
+            b.doc_id.is_some() && !b.pending_indexing && b.locations.iter().any(|l| l.relative_path == "tanks.pdf" && l.available)
+        })
+    };
+    assert!(!matched(), "nothing has looked at the folder since the build");
+    let before = auto.jobs_started;
+    // no Check now, no rescan (an hour away): only the scheduler
+    let end = Instant::now() + Duration::from_secs(20);
+    while !matched() && Instant::now() < end {
+        auto.tick(&svc);
+    }
+    assert!(matched(), "the folder was checked again after the build and shows the book as matched");
+    assert!(auto.jobs_started > before, "a follow-up check ran");
+    assert_eq!(linked_items(&svc).len(), 1, "nothing queued again");
+}
+
+#[test]
 fn a_linked_pdf_that_is_not_the_one_that_was_checked_is_dropped_not_built() {
     let d = TempDir::new("lk3");
     let (svc, _) = rig(&d);
@@ -2377,6 +2426,26 @@ fn a_linked_pdf_that_is_not_the_one_that_was_checked_is_dropped_not_built() {
     assert!(linked_items(&svc).is_empty(), "dropped, to be found again once stable");
     assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
     assert_eq!(tree(&source), before);
+}
+
+#[test]
+fn the_queue_view_says_where_a_linked_item_came_from() {
+    let d = TempDir::new("lk-view");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let ext = TempDir::new("lk-view-source");
+    let source = ext.0.join("linked");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("x.pdf"), book("tank", 3, None)).unwrap();
+    let source = source.canonicalize().unwrap();
+    let hash = blake3::hash(&book("tank", 3, None)).to_hex().to_string();
+    assert!(svc.enqueue_linked(&lib, &source, "x.pdf", &hash));
+    let q = svc.queue();
+    let items = q["items"].as_array().unwrap();
+    let it = items.iter().find(|i| i["origin"] == json!("linked")).expect("the linked item is in the view");
+    assert_eq!(it["linked"]["blake3"], json!(hash));
+    assert_eq!(it["linked"]["rel"], json!("x.pdf"));
+    assert_eq!(it["linked"]["root"], json!(source.to_string_lossy()));
 }
 
 #[test]

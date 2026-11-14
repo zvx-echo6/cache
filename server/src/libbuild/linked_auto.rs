@@ -242,6 +242,14 @@ impl Auto {
         let now = self.now();
         let cfg = self.cfg;
         let Auto { notifier, libs, jobs_started, .. } = self;
+        // A linked PDF was built: look at that library's folders again (one coalesced check, not one per book).
+        for name in svc.take_linked_rechecks() {
+            if let Some(lib) = libs.get_mut(&name) {
+                for r in lib.roots.values_mut() {
+                    r.plan.changed(now);
+                }
+            }
+        }
         for change in changes {
             if let Some((lib, root)) = change.root_id.split_once(':') {
                 if let Some(r) = libs.get_mut(lib).and_then(|l| l.roots.get_mut(root)) {

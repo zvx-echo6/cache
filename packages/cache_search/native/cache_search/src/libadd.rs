@@ -58,10 +58,29 @@ pub fn check_library(dir: &Path, given: Option<&Value>) -> Result<Value> {
         Ok(s) => (s.to_json(), Value::Null, library::detect_own_scoring(&shard, &s)),
         Err(e) => (Value::Null, json!({"code": e.code.as_str(), "message": e.message}), false),
     };
+    // reported, not refused: libraries on devices may be unindexed (built before the builders optimized); only a build fails on it
+    // (`require_vectors_indexed`)
+    let unindexed_kb = library::unindexed_vectors_kb(dir).unwrap_or(0);
     Ok(json!({
         "segments": segments, "docs": docs, "settings": given.cloned().unwrap_or(Value::Null),
         "resolved": resolved, "settings_error": error, "whole_library_only": whole, "own_text_index": own,
+        "unindexed_vectors_kb": unindexed_kb,
     }))
+}
+
+/// For a library build: an error when more of the shard's vectors at `dir` than the indexing threshold are in no HNSW graph
+/// ([`library::unindexed_vectors_kb`]); call `EdgeShard::optimize()` before packing. A meaning search of such a library reads all
+/// those vectors (gigabytes from disk on a phone or a small box).
+pub fn require_vectors_indexed(dir: &Path) -> Result<()> {
+    let kb = library::unindexed_vectors_kb(dir)?;
+    if kb <= library::INDEXING_THRESHOLD_KB {
+        return Ok(());
+    }
+    Err(Error::unsupported(format!(
+        "the library's vectors are not indexed: {} MB of vectors have no HNSW graph; optimize the shard (EdgeShard::optimize) \
+         before packing it",
+        kb / 1024
+    )))
 }
 
 // ---------------------------------------------------------------------------------------------------------

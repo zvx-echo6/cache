@@ -55,7 +55,7 @@ use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -517,6 +517,9 @@ pub struct BuildService {
     /// scan ends as `ocr_needed`). Set by the server at start from the install folder (`cache_builder::ocr::OcrSettings::discover`).
     ocr: Mutex<Option<OcrSettings>>,
     pub(crate) removed: Mutex<Vec<RemovedEntry>>,
+    /// Libraries in which a linked-folder PDF has been built since the scheduler last looked: their linked folders are checked
+    /// again (through the scheduler, so quiet-time coalescing applies). Taken while `st` is held, never the other way round.
+    linked_recheck: Mutex<BTreeSet<String>>,
     class_cache: Mutex<ClassCache>,
     /// The classifier model files in `<data>/models/`.
     models: ModelStore,
@@ -719,6 +722,7 @@ impl BuildService {
             extractor: Mutex::new(default_extractor(data_for_tmp)),
             ocr: Mutex::new(None),
             removed: Mutex::new(removed::load(&data_for_removed)),
+            linked_recheck: Mutex::new(BTreeSet::new()),
             class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()) }),
             models: ModelStore::new(&data_for_models),
             last_maintenance: Mutex::new(Instant::now()),
@@ -1519,6 +1523,9 @@ impl BuildService {
                             },
                         });
                         it.state = S::Done;
+                        if item.origin == Origin::Linked {
+                            lock(&self.linked_recheck).insert(item.library_id.clone());
+                        }
                         it.doc_id = Some(pack.header.doc_id.clone());
                         it.pages = Some(pack.header.page_count as u32);
                         it.pieces_total = Some(pack.header.pieces as u32);
@@ -1661,7 +1668,12 @@ impl BuildService {
             for d in [&new, &newtmp, &old, &oldindex] {
                 let _ = std::fs::remove_dir_all(d);
             }
-            // Close the work shard (it is not held open between operations) and copy it.
+            // Index the work shard's vectors (HNSW), then close it (it is not held open between operations) and copy it.
+            {
+                let w = self.open_work(id)?;
+                w.optimize().map_err(|e| e.to_string())?;
+                w.flush().map_err(|e| e.to_string())?;
+            }
             publish_copy(&self.work_dir(id), &newtmp).map_err(|e| e.to_string())?;
             std::fs::rename(&newtmp, &new).map_err(|e| io("finishing the copy", e))?;
             let had_old = shard.exists();
@@ -1770,6 +1782,7 @@ impl BuildService {
             "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
             "decision": it.decision.as_ref().map(decision_view),
             "compression": it.compression,
+            "origin": it.origin, "linked": it.linked,
         })
     }
 
@@ -2284,6 +2297,11 @@ impl BuildService {
         let mut item = Item::new(random_hex(), lib.to_string(), path.to_string_lossy().into_owned(), name, size, Origin::Linked);
         item.linked = Some(LinkedSource { root: root.to_string_lossy().into_owned(), rel: rel.to_string(), blake3: blake3.to_string() });
         self.enqueue(item).is_ok()
+    }
+
+    /// Libraries whose linked folders should be checked again because a linked PDF was built (the list is emptied).
+    pub(crate) fn take_linked_rechecks(&self) -> BTreeSet<String> {
+        std::mem::take(&mut *lock(&self.linked_recheck))
     }
 
     pub(crate) fn has_library(&self, id: &str) -> bool {
