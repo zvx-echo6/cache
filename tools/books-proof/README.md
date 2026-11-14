@@ -61,6 +61,20 @@ book (stage `1-one-book-synced`). Then:
 
 Each run writes `verdict.json` for its last stage: PASS, or the failing checks.
 
+Delete from all your devices (owner decisions, 2026-11-14), both devices on `fix/`. The device's `delete` removes what the app's
+`CdsShelfSource.deleteTargets` names, the one definition (app/test/library/delete_everywhere_test.dart checks that the real delete
+removes exactly that), so `device.dart` on this branch compiles only against a build that has it. For runs with older builds
+(b51/, new/), use the device.dart of test/books-two-writer. The verdicts check the list row, the PDF, the pack and a search hit. Campfire stays throughout. The device's `delete` does
+what the app's CdsShelfSource.deleteOwnBook does: it removes the book's packs and its PDF, then runs own_library_sync.
+- `del-apart`: A adds Water and both have it. B goes offline, A deletes Water, and B comes back. Water must be gone on both (no list
+  row, no PDF, no search hit) and no conflict copies may be left.
+- `del-keep`: as before, with "Don't replace my copies from this device" on at B for A. A loses Water and B keeps it, searchable.
+- `del-readd`: A deletes Water, then adds the same PDF again. It is back on both, with the same call number as before (checked
+  against the Bookshelves view).
+- (`del-keep` also syncs a second time, later, and B's copy must still stand.)
+- `del-rule3`: B is offline before it ever sees Water. A adds Water and deletes it, and B adds the same PDF without having seen the
+  delete. Water must stay on both: the sync never deletes what was changed meanwhile.
+
 ## Evidence
 
 The evidence goes to `evidence/<scenario>/<stage>/`:

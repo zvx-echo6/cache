@@ -138,7 +138,21 @@ class FakeBookFiles extends ChangeNotifier implements BookFiles {
   @override
   bool get canDeleteEverywhere => deleteAll;
   @override
-  Future<void> deleteEverywhere(ShelfBook book) async => deleted.add(book.id);
+  bool canDeleteBook(ShelfBook book) => deleteAll && !notYours.contains(book.id);
+
+  /// Books of a library the person did not make ([canDeleteBook] false).
+  final Set<String> notYours = {};
+
+  /// Makes the next [deleteEverywhere] fail (a file could not be removed).
+  bool failDelete = false;
+  @override
+  Future<void> deleteEverywhere(ShelfBook book) async {
+    if (failDelete) {
+      failDelete = false;
+      throw const FileSystemException('busy');
+    }
+    deleted.add(book.id);
+  }
 }
 
 /// The Library's pages over [shelves], with the rest stood in.

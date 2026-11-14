@@ -23,6 +23,7 @@ import '../library/cds_shelf_source.dart';
 import '../library/library_pages.dart';
 import '../library/library_panes.dart';
 import '../library/library_prefs.dart';
+import '../library/own_book_files.dart';
 import '../library/shelf_server.dart';
 import '../library/shelf_source.dart';
 import '../regions/regions_state.dart';
@@ -141,7 +142,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
   CdsShelfSource? _ownShelves;
   late final ShelfSource _shelves = widget.shelves ??
       (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10), server: b.device == null ? null : (widget.shelfServer ?? (plat.isWeb ? HttpShelfServer() : null))));
-  late final BookFiles _files = widget.files ?? BookFilesUnavailable();
+  // On this device (not a browser on a Cache device): "Delete from all your devices" for books in the person's own libraries.
+  late final BookFiles _files = widget.files ?? _ownFiles();
+
+  BookFiles _ownFiles() {
+    final s = _shelves;
+    return s is CdsShelfSource && b.device == null && !plat.isWeb ? OwnBookFiles(s) : BookFilesUnavailable();
+  }
   late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
 
   /// The Library's root page's context in the panes (citations open from it).

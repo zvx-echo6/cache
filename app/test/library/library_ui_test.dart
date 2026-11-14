@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/layout/adaptive.dart' show PanePrefs;
+import 'package:cache/library/book_pages.dart' show DeleteBookSheet;
 import 'package:cache/library/catalog_page.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
@@ -408,7 +409,8 @@ void main() {
       await tapKey(tester, 'book-delete');
       expect(find.byKey(const ValueKey('delete-here')), findsOneWidget);
       expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
-      expect(find.textContaining('its call number CDS 210-001 on every device you have linked. This cannot be undone.'), findsOneWidget);
+      expect(find.textContaining("A device set to keep its own copies from this one keeps it. This can't be undone."), findsOneWidget);
+      expect(find.textContaining('call number'), findsNothing, reason: 'the shelf place and the call number are kept (owner, 2026-11-14)');
       await tapKey(tester, 'delete-here-button');
       expect(find.text("No other device has this book right now, so it can't be removed from just this device. Delete it instead."), findsOneWidget);
       expect(files.removed, isEmpty, reason: 'nothing is removed');
@@ -426,12 +428,49 @@ void main() {
       expect(find.byKey(const ValueKey('delete-here')), findsNothing);
     });
 
-    testWidgets('on a phone without offload or delete-everywhere yet, both choices say so and do nothing', (tester) async {
+    testWidgets('where nothing can be deleted yet, the one choice says so and does nothing', (tester) async {
       await openBook(tester, BookFilesUnavailable());
       await tapKey(tester, 'book-delete');
-      expect(find.text('Not available on this device yet.'), findsNWidgets(2));
-      expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('delete-here-button'))).onPressed, isNull);
+      expect(find.byKey(const ValueKey('delete-here')), findsNothing, reason: 'Remove from this device only where this device can do it');
+      expect(find.text('Not available on this device yet.'), findsOneWidget);
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('delete-all-button'))).onPressed, isNull);
+    });
+
+    testWidgets('on a phone: one red button, with the title, the size and "can\'t be undone"; it deletes, closes and says so', (tester) async {
+      final files = FakeBookFiles(remove: false);
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      expect(find.byKey(const ValueKey('delete-here')), findsNothing, reason: 'only Delete from all your devices in 1.1');
+      expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
+      expect(find.descendant(of: find.byType(DeleteBookSheet), matching: find.byType(FilledButton)), findsOneWidget, reason: 'one red button');
+      expect(find.descendant(of: find.byType(DeleteBookSheet), matching: find.byType(OutlinedButton)), findsNothing);
+      expect(tester.widget<Text>(find.byKey(const ValueKey('delete-title'))).data, 'Wilderness first aid');
+      expect(find.byKey(const ValueKey('delete-size')), findsOneWidget);
+      expect(find.textContaining("This can't be undone."), findsOneWidget);
+      await tapKey(tester, 'delete-all-button');
+      expect(files.deleted, ['aid']);
+      expect(find.byKey(const ValueKey('delete-all')), findsNothing, reason: 'the sheet closes');
+      expect(find.text('Deleted. Your other devices remove it when they next connect.'), findsOneWidget);
+    });
+
+    testWidgets("a book of a library the person didn't make cannot be deleted here, and the sheet says why", (tester) async {
+      final files = FakeBookFiles(remove: false)..notYours.add('aid');
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      expect(find.text("This book came with a library you didn't make, so it can't be deleted here."), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-all-button')), findsNothing, reason: 'no greyed button for an action they cannot take');
+      expect(find.textContaining("This can't be undone."), findsNothing, reason: 'no explanation of it either');
+    });
+
+    testWidgets('a delete that fails says so and the sheet stays, ready to try again', (tester) async {
+      final files = FakeBookFiles(remove: false)..failDelete = true;
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      await tapKey(tester, 'delete-all-button');
+      expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
+      expect(find.text("The book couldn't be deleted. Try again."), findsOneWidget);
+      await tapKey(tester, 'delete-all-button');
+      expect(files.deleted, ['aid']);
     });
   });
 

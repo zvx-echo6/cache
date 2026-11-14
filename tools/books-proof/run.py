@@ -4,7 +4,7 @@
 Usage: run.py <scenario> [...]
   before-fix runs (A and B on new/): apart, midflight, b51 (B on b51/)
   fixed runs (fix/books-own-shard in fix/): fix-apart, fix-midflight, fix-b51 (B on b51/), fix-recover (apart on new/, then
-  both devices updated to fix/ one at a time)
+  both devices updated to fix/ one at a time); delete scenarios on fix/: del-apart, del-keep, del-readd, del-rule3
 Layout under P=~/proof/booksbug: new/, fix/ and b51/ checkouts, work/<scenario>/<device>/, evidence/<scenario>/, logs/.
 """
 import json, os, subprocess, sys, time, shutil, signal
@@ -218,6 +218,7 @@ def checks(ev, stage, ds, expect_titles, added):
                         'copies_line': any((x or '').startswith(t) for x in lines),
                         'on_bookshelves': any((x or '').startswith(t) for x in shelf),
                         'pdf': any(f'/bookshelf/{copy}.pdf (' in f for f in files),
+                        'pack': any(f'/packs/{copy}@' in f and '(conflict' not in f for f in files),
                         'vector_hit': any((x or '').startswith(t) for x in (s.get(vec, {}).get('vector') or [])),
                         'keyword_hit': any((x or '').startswith(t) for x in (s.get(kw, {}).get('keyword') or []))})
         out.append({'device': d.name, 'build': d.build, 'own_libraries': j.get('own_libraries'), 'shard_points': j.get('shard_points'),
@@ -255,6 +256,133 @@ def verdict(ev, stage, c, devices):
         json.dump(v, f, indent=1)
     say(f'VERDICT {stage} {devices}: {"PASS" if not bad else "FAIL"} {bad}')
     return v
+
+
+def expect_verdict(ev, stage, c, want, added):
+    """PASS when each device has exactly the books [want] says ({device: {title: present}}): a present one is listed, has its PDF
+    and is found by meaning; an absent one is none of these; the points are those of the present books; no conflict copies."""
+    bad = []
+    for r in c:
+        dev = r['device']
+        if dev not in want:
+            continue
+        if 'book' in r:
+            if r['book'] not in want[dev]:
+                continue
+            present = want[dev][r['book']]
+            for k in ('copies_line', 'pdf', 'pack', 'vector_hit'):
+                if r[k] != present:
+                    bad.append(f"{dev} {r['book']}: {k} is {r[k]}, wanted {present}")
+        else:
+            pts = sum(added[t].get('pieces') or 0 for t, p in want[dev].items() if p and t in added)
+            if r['shard_points'] != pts:
+                bad.append(f"{dev}: points {r['shard_points']} of {pts}")
+            if r['conflict_files']:
+                bad.append(f"{dev}: conflict copies {r['conflict_files']}")
+            if r['library_error'] or r['search_error']:
+                bad.append(f"{dev}: {r['library_error'] or r['search_error']}")
+    v = {'stage': stage, 'want': want, 'pass': not bad, 'failures': bad}
+    with open(f'{ev}/{stage}/verdict.json', 'w') as f:
+        json.dump(v, f, indent=1)
+    say(f'VERDICT {stage}: {"PASS" if not bad else "FAIL"} {bad}')
+    return v
+
+
+def calls_of(ev, stage, dev):
+    j = json.load(open(f'{ev}/{stage}/{dev}.json'))
+    return {b.get('title'): (b.get('call') or {}).get('text') for b in (j.get('bookshelves') or [])}
+
+
+DELETES = ['del-apart', 'del-keep', 'del-readd', 'del-rule3']
+
+
+def del_scenario(name):
+    """Delete from all your devices (owner decisions, 2026-11-14), both devices on fix/. Campfire stays throughout."""
+    ev = f'{P}/evidence/{name}'
+    shutil.rmtree(ev, ignore_errors=True)
+    shutil.rmtree(f'{P}/work/{name}', ignore_errors=True)
+    os.makedirs(ev)
+    base = 48100 + 100 * DELETES.index(name)
+    a = Dev(name, 'A', 'fix', base + 1)
+    b = Dev(name, 'B', 'fix', base + 2)
+    W, C = 'Water purification manual', 'Campfire safety guide'
+    try:
+        a.start()
+        b.start()
+        link(a, b)
+        a.call('make_own')
+        a.call('share_library')
+        b.call('share_library')
+        rounds([a, b])
+        added = {C: a.call('add', {'title': C, 'lines': FIRE})}
+        rounds([a, b])
+        if name == 'del-rule3':
+            # B is apart before it ever sees Water: A adds Water and deletes it; B adds the same PDF without having seen the delete
+            b.call('pause')
+            added[W] = a.call('add', {'title': W, 'lines': WATER})
+            deleted_at = time.time()
+            a.call('delete', {'title': W})
+            # B's add is a new write made after A's delete (its own, later version stamp): a gap makes the stamps differ
+            time.sleep(2)
+            added_at = time.time()
+            added[W] = b.call('add', {'title': W, 'lines': WATER})
+            b.call('resume')
+            with open(f'{ev}/stamps.json', 'w') as f:
+                json.dump({'a_deleted_at': deleted_at, 'b_added_at': added_at, 'b_after_a': added_at > deleted_at}, f, indent=1)
+            rounds([a, b], 4)
+            time.sleep(10)
+            rounds([a, b], 2)
+            c = checks(ev, '3-after-sync', [a, b], [W, C], added)
+            v = expect_verdict(ev, '3-after-sync', c, {'A': {W: True, C: True}, 'B': {W: True, C: True}}, added)
+        else:
+            added[W] = a.call('add', {'title': W, 'lines': WATER})
+            rounds([a, b])
+            c = checks(ev, '1-both-books', [a, b], [W, C], added)
+            expect_verdict(ev, '1-both-books', c, {'A': {W: True, C: True}, 'B': {W: True, C: True}}, added)
+            before = calls_of(ev, '1-both-books', 'A').get(W)
+            if name == 'del-keep':
+                b.call('keep_copies', {'on': True})
+            if name == 'del-apart':
+                b.call('pause')
+            a.call('delete', {'title': W})
+            if name == 'del-apart':
+                b.call('resume')
+            rounds([a, b], 4)
+            time.sleep(10)
+            rounds([a, b], 2)
+            c = checks(ev, '2-after-delete', [a, b], [W, C], added)
+            want_b = name == 'del-keep'
+            v = expect_verdict(ev, '2-after-delete', c, {'A': {W: False, C: True}, 'B': {W: want_b, C: True}}, added)
+            if name == 'del-keep':
+                # a second sync later (A's delete offered again): B's copy must still stand
+                time.sleep(15)
+                rounds([a, b], 4)
+                c = checks(ev, '2b-second-sync', [a, b], [W, C], added)
+                v2 = expect_verdict(ev, '2b-second-sync', c, {'A': {W: False, C: True}, 'B': {W: True, C: True}}, added)
+                v = {**v2, 'pass': v['pass'] and v2['pass'], 'first': v}
+            if name == 'del-readd':
+                added[W] = a.call('add', {'title': W, 'lines': WATER})
+                rounds([a, b], 4)
+                c = checks(ev, '3-after-readd', [a, b], [W, C], added)
+                v = expect_verdict(ev, '3-after-readd', c, {'A': {W: True, C: True}, 'B': {W: True, C: True}}, added)
+                after = {d: calls_of(ev, '3-after-readd', d).get(W) for d in ('A', 'B')}
+                same = before is not None and all(x == before for x in after.values())
+                say(f'CALL NUMBER {W}: before {before}, after {after}: {"SAME" if same else "DIFFERENT"}')
+                v['call_number'] = {'before': before, 'after': after, 'same': same}
+                v['pass'] = v['pass'] and same
+                with open(f'{ev}/3-after-readd/verdict.json', 'w') as f:
+                    json.dump(v, f, indent=1)
+        a.call('status')
+        b.call('status')
+        with open(f'{ev}/added.json', 'w') as f:
+            json.dump(added, f, indent=1)
+        return v
+    finally:
+        a.stop()
+        b.stop()
+        for d in (a, b):
+            if os.path.exists(f'{d.dir}/log.txt'):
+                shutil.copy(f'{d.dir}/log.txt', f'{ev}/{d.name}-log.txt')
 
 
 SCENARIOS = {
@@ -352,7 +480,7 @@ if __name__ == '__main__':
     try:
         for s in sys.argv[1:]:
             say(f'=== scenario {s}')
-            scenario(s)
+            del_scenario(s) if s in DELETES else scenario(s)
     finally:
         for p in started:
             if p.poll() is None:

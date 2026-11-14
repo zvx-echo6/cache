@@ -949,22 +949,50 @@ Future<void> _removeHere(BuildContext context, LibraryDeps d, List<ShelfBook> bo
     ..showSnackBar(SnackBar(content: Text(text)));
 }
 
-/// Delete book: two clearly separate choices. "Remove from this device" takes the book, its PDF and its search entry off this
-/// device only, after checking right now that another device has it; "Delete from all your devices" deletes it everywhere and
-/// cannot be undone. A choice this device cannot do yet says so.
-Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) => showModalBottomSheet<void>(
-  context: context,
-  showDragHandle: true,
-  isScrollControlled: true,
-  builder: (ctx) => DeleteBookSheet(deps: d, book: b, onDeleted: () => LibraryNav.of(context).goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!))),
-);
+/// The words of the Delete book sheet (drafts until the owner has seen the renders; owner decisions 2026-11-14: one red button with
+/// the title, the size and "can't be undone"; the shelf place and the call number are kept, so the text does not promise to delete
+/// them).
+String deleteEverywhereText(ShelfBook b) =>
+    'Deletes this book, its PDF and its search entries on this device and on your linked devices that get ${b.libraryName ?? 'My books'} '
+    "from it. A device set to keep its own copies from this one keeps it. This can't be undone.";
+const String kDeletedEverywhere = 'Deleted. Your other devices remove it when they next connect.';
+// WORDING QUESTION: a book of a library the person did not make (a downloaded or shared one) cannot be deleted from here.
+const String kNotYoursToDelete = "This book came with a library you didn't make, so it can't be deleted here.";
+// WORDING QUESTION: the delete failed (a file could not be removed).
+const String kDeleteFailed = "The book couldn't be deleted. Try again.";
+
+/// Delete book (owner decisions, 2026-11-14): "Delete from all your devices", one red button, with the book's title, its size and
+/// "can't be undone". It is permanent in 1.1 (Recently deleted is 1.2). "Remove from this device" is shown only where this device
+/// can do it (offload: 1.2 on phones).
+Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => DeleteBookSheet(
+      files: d.files,
+      book: b,
+      onDeleted: (everywhere) {
+        if (everywhere) {
+          messenger
+            ?..hideCurrentSnackBar()
+            ..showSnackBar(const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere)));
+        }
+        LibraryNav.of(context).goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
+      },
+    ),
+  );
+}
 
 class DeleteBookSheet extends StatefulWidget {
-  const DeleteBookSheet({super.key, required this.deps, required this.book, this.onDeleted});
+  const DeleteBookSheet({super.key, required this.files, required this.book, this.onDeleted});
 
-  final LibraryDeps deps;
+  final BookFiles files;
   final ShelfBook book;
-  final VoidCallback? onDeleted;
+
+  /// After the sheet closed on a delete: true for "Delete from all your devices", false for "Remove from this device".
+  final void Function(bool everywhere)? onDeleted;
 
   @override
   State<DeleteBookSheet> createState() => _DeleteBookSheetState();
@@ -972,18 +1000,20 @@ class DeleteBookSheet extends StatefulWidget {
 
 class _DeleteBookSheetState extends State<DeleteBookSheet> {
   bool _asking = false;
+  bool _deleting = false;
   String? _refused;
+  String? _failed;
 
   Future<void> _remove() async {
     setState(() {
       _asking = true;
       _refused = null;
     });
-    final (outcome, _, _) = await widget.deps.files.removeFromDevice([widget.book]);
+    final (outcome, _, _) = await widget.files.removeFromDevice([widget.book]);
     if (!mounted) return;
     if (outcome == RemoveOutcome.removed) {
       Navigator.of(context).pop();
-      widget.onDeleted?.call();
+      widget.onDeleted?.call(false);
       return;
     }
     setState(() {
@@ -993,17 +1023,34 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
   }
 
   Future<void> _deleteEverywhere() async {
-    await widget.deps.files.deleteEverywhere(widget.book);
+    setState(() {
+      _deleting = true;
+      _failed = null;
+    });
+    try {
+      await widget.files.deleteEverywhere(widget.book);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _deleting = false;
+          _failed = kDeleteFailed;
+        });
+      }
+      return;
+    }
     if (!mounted) return;
     Navigator.of(context).pop();
-    widget.onDeleted?.call();
+    widget.onDeleted?.call(true);
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final f = widget.deps.files;
+    final f = widget.files;
     final b = widget.book;
+    final busy = _asking || _deleting;
+    final canDelete = f.canDeleteEverywhere && f.canDeleteBook(b);
+    final deleteNote = !f.canDeleteEverywhere ? 'Not available on this device yet.' : _failed;
     Widget choice({required String title, required String text, required Widget button, bool danger = false, String? note, Key? key}) => Container(
       key: key,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -1016,11 +1063,10 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           Text(text, style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
           const SizedBox(height: 10),
           button,
-          if (note != null) ...[const SizedBox(height: 6), Text(note, style: TextStyle(fontSize: 13, color: k.secondary))],
+          if (note != null) ...[const SizedBox(height: 6), Text(note, key: ValueKey('$key-note'), style: TextStyle(fontSize: 13, color: k.secondary))],
         ],
       ),
     );
-    const unavailable = 'Not available on this device yet.';
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1029,32 +1075,45 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           children: [
             Text('Delete book', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
             const SizedBox(height: 2),
-            Text(b.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
+            Text(b.title, key: const ValueKey('delete-title'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+            if (b.bytes case final n? when n > 0)
+              Text(formatBytes(n), key: const ValueKey('delete-size'), style: TextStyle(fontSize: 13, color: k.secondary)),
             const SizedBox(height: 12),
-            choice(
-              key: const ValueKey('delete-here'),
-              title: 'Remove from this device',
-              text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
-              button: OutlinedButton(
-                key: const ValueKey('delete-here-button'),
-                onPressed: !f.canRemove || _asking ? null : _remove,
-                child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+            if (f.canRemove) ...[
+              choice(
+                key: const ValueKey('delete-here'),
+                title: 'Remove from this device',
+                text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
+                button: OutlinedButton(
+                  key: const ValueKey('delete-here-button'),
+                  onPressed: busy ? null : _remove,
+                  child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+                ),
+                note: _refused,
               ),
-              note: !f.canRemove ? unavailable : _refused,
-            ),
-            const SizedBox(height: 10),
+              const SizedBox(height: 10),
+            ],
+            if (f.canDeleteEverywhere && !f.canDeleteBook(b))
+              // not theirs to delete: only why, no explanation of an action they cannot take and no greyed button
+              Container(
+                key: const ValueKey('delete-all'),
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(color: k.background, borderRadius: BorderRadius.circular(16)),
+                child: Text(kNotYoursToDelete, key: const ValueKey('delete-all-note'), style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
+              )
+            else
             choice(
               key: const ValueKey('delete-all'),
               danger: true,
               title: 'Delete from all your devices',
-              text: 'Deletes the book, its search index and its call number ${b.callNumber ?? ''} on every device you have linked. This cannot be undone.'.replaceAll('number  on', 'number on'),
+              text: deleteEverywhereText(b),
               button: FilledButton(
                 key: const ValueKey('delete-all-button'),
                 style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background),
-                onPressed: f.canDeleteEverywhere && !_asking ? _deleteEverywhere : null,
-                child: const Text('Delete from all your devices'),
+                onPressed: canDelete && !busy ? _deleteEverywhere : null,
+                child: Text(_deleting ? 'Deleting...' : 'Delete from all your devices'),
               ),
-              note: f.canDeleteEverywhere ? null : unavailable,
+              note: deleteNote,
             ),
           ],
         ),

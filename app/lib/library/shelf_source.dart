@@ -367,6 +367,10 @@ abstract class BookFiles implements Listenable {
   /// Whether "Delete from all your devices" can be done here.
   bool get canDeleteEverywhere;
 
+  /// Whether [book] can be deleted from all the person's devices from here: it has a copy in one of their own libraries on this
+  /// device (a book of a downloaded or shared library is not theirs to delete).
+  bool canDeleteBook(ShelfBook book);
+
   /// Deletes the book, its search index and its call number on every linked device.
   Future<void> deleteEverywhere(ShelfBook book);
 }
@@ -385,6 +389,8 @@ class BookFilesUnavailable extends ChangeNotifier implements BookFiles {
   Future<(RemoveOutcome, int, int)> removeFromDevice(List<ShelfBook> books) => throw UnsupportedError('not on this device yet');
   @override
   bool get canDeleteEverywhere => false;
+  @override
+  bool canDeleteBook(ShelfBook book) => false;
   @override
   Future<void> deleteEverywhere(ShelfBook book) => throw UnsupportedError('not on this device yet');
 }

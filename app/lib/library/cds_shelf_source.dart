@@ -9,6 +9,7 @@ import '../browse/web/build_api.dart' show BuildBook;
 import '../browse/web/build_compression.dart' show compressionOutcomeWords;
 import '../browse/web/device_files.dart';
 import '../sharing/settings_sync.dart' show kBookshelvesDir;
+import '../sharing/share_rules.dart' show isOwnLibraryFolderName;
 import '../sources/libraries_state.dart';
 import 'cds.dart';
 import 'library_device.dart';
@@ -1171,6 +1172,88 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   }
 
   _ViewBook _vb(ShelfBook b) => _view[b.id] ?? _view[_byCopy[b.id]] ?? (throw StateError('the book is not on the Bookshelves'));
+
+  /// What "Delete from all your devices" removes of one document in an own library at [libraryDir] (paths relative to it, `/`):
+  /// every version of the document's pack (`packs/<doc>@<version>.cdoc`, those on disk now) and its PDF (`bookshelf/<pdfHash>.pdf`,
+  /// named by the file's BLAKE3: the `source_blake3` of its `documents.tsv` row, as [localPdfOf] finds it). The one definition:
+  /// [deleteOwnBook] and the two-device harness (tools/books-proof) both remove exactly these.
+  static List<String> deleteTargets(String libraryDir, String docId, String pdfHash) {
+    final sep = Platform.pathSeparator;
+    final packs = <String>[];
+    try {
+      for (final f in Directory('$libraryDir${sep}packs').listSync().whereType<File>()) {
+        final name = f.uri.pathSegments.last;
+        if (name.startsWith('$docId@') && name.endsWith('.cdoc')) packs.add('packs/$name');
+      }
+    } catch (_) {}
+    packs.sort();
+    return [...packs, 'bookshelf/$pdfHash.pdf'];
+  }
+
+  /// The files of [book] in the person's own libraries on this device (My books), which "Delete from all your devices" removes:
+  /// each copy's packs (every version of its document) and its PDF (`bookshelf/<copy>.pdf`). A copy in a downloaded or shared
+  /// library is not the person's to delete and is not listed. Empty when the book has none here.
+  List<({LibraryItem library, String docId, String copy, List<File> packs, File pdf})> ownFilesOf(ShelfBook book) {
+    final _ViewBook vb;
+    try {
+      vb = _vb(book);
+    } catch (_) {
+      return const [];
+    }
+    final sep = Platform.pathSeparator;
+    final out = <({LibraryItem library, String docId, String copy, List<File> packs, File pdf})>[];
+    for (final c in vb.copies) {
+      final copy = c['copy'] as String?;
+      if (copy == null) continue;
+      for (final loc in (c['locs'] as List? ?? const [])) {
+        final l = '$loc';
+        final slash = l.indexOf('/');
+        if (slash <= 0) continue;
+        final (lid, doc) = (l.substring(0, slash), l.substring(slash + 1));
+        final lb = _libs.where((x) => x.id == lid).firstOrNull;
+        if (lb == null || lb.item.settings?['own'] != true || !isOwnLibraryFolderName(lb.item.folderName)) continue;
+        final targets = deleteTargets(lb.item.path, doc, lb.docs[doc]?.hash ?? copy);
+        File at(String rel) => File('${lb.item.path}$sep${rel.replaceAll('/', sep)}');
+        out.add((library: lb.item, docId: doc, copy: copy, packs: [for (final t in targets) if (t.startsWith('packs/')) at(t)], pdf: at(targets.last)));
+      }
+    }
+    return out;
+  }
+
+  /// "Delete from all your devices" (owner decisions, 2026-11-14): removes the book's packs and PDFs from the person's own libraries
+  /// here. Those two files are what syncs of an own library (kLibraryNotShared), so the deletes reach the person's other devices as
+  /// the sync's own deletes, and each device rebuilds its shard and lists from the packs that are left (own_library_sync), which
+  /// takes the book out of search and off the shelves there too. A device that keeps its own copies from this one keeps it, and a
+  /// copy another device added without having seen the delete stays (the sync never deletes what was changed meanwhile). The
+  /// Bookshelves events are kept: the shelf place and the call number come back if the book is added again. The packs go first:
+  /// a kill before the PDF leaves only a PDF nothing lists, and the rebuild runs at the next start if it did not here.
+  /// Returns the number of copies deleted.
+  Future<int> deleteOwnBook(ShelfBook book) async {
+    final files = ownFilesOf(book);
+    if (files.isEmpty) throw StateError('the book has no copy in your own libraries on this device');
+    for (final f in files) {
+      for (final p in f.packs) {
+        try {
+          if (p.existsSync()) p.deleteSync();
+        } catch (e) {
+          _log('Delete: a pack could not be removed: $e');
+          rethrow;
+        }
+      }
+    }
+    for (final f in files) {
+      try {
+        if (f.pdf.existsSync()) f.pdf.deleteSync();
+      } catch (e) {
+        _log('Delete: a PDF could not be removed: $e');
+      }
+    }
+    // the shard and the lists follow the packs (LibrariesState.rescan runs own_library_sync, then reads the folder again)
+    await libraries?.rescan();
+    _signature = '';
+    await _read();
+    return files.length;
+  }
 
   /// Writes the events of a set of moves (each book: to a division, or back to Unsorted with null) and reads the books again.
   /// Each move is against the book's numbered copy: `place`, `retire` (its old number), `assign`; Unsorted is `unsort`, `retire`.
