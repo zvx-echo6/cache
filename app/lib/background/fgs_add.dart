@@ -180,6 +180,7 @@ class FgsAddCoordinator {
     this.sdk,
     this.ask,
     this.onRefused,
+    this.onLeft,
   });
 
   final FgsPlatform platform;
@@ -198,6 +199,15 @@ class FgsAddCoordinator {
 
   /// Notifications are not allowed after the question (or were refused before it).
   final void Function()? onRefused;
+
+  /// Android says the person left (Recents, or a Home the app has not seen yet): the app hands its work off at once.
+  final void Function()? onLeft;
+
+  /// What Android's side calls on [kFgsAppChannel].
+  Future<Object?> handleCall(MethodCall call) async {
+    if (call.method == 'left') onLeft?.call();
+    return null;
+  }
 
   bool _armed = false;
   bool get armed => _armed;

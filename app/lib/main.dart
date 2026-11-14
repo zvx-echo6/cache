@@ -526,6 +526,10 @@ class _CacheAppState extends State<CacheApp> {
     battery: readBattery,
     askedFile: () => File('${backgroundDir(_supportPath ?? '.')}${Platform.pathSeparator}fgs-notify-asked'),
     ask: _askFgsNotifications,
+    // Recents (and any leave the app's own lifecycle has not reported yet): Android says so, and the work is handed off now
+    onLeft: () {
+      if (_atFront) _toBack();
+    },
     onRefused: () {
       final c = _navKey.currentContext;
       if (c != null && c.mounted) ScaffoldMessenger.maybeOf(c)?.showSnackBar(const SnackBar(content: Text(FgsWords.refused)));
@@ -600,8 +604,13 @@ class _CacheAppState extends State<CacheApp> {
   /// earlier let a background slice start a PDF the app was still pausing (the job folder was still held; Pixel, 2026-11-10).
   void _toBack() {
     _atFront = false;
-    unawaited(_toBackAfterPause());
+    // one hand-off at a time (Android's "left" and the lifecycle's "hidden" both come for one leave)
+    if (_handingOff != null) return;
+    _handingOff = _toBackAfterPause().whenComplete(() => _handingOff = null);
+    unawaited(_handingOff);
   }
+
+  Future<void>? _handingOff;
 
   Future<void> _toBackAfterPause() async {
     try {
@@ -618,7 +627,8 @@ class _CacheAppState extends State<CacheApp> {
           _bgLock?.appClosed();
         },
         hasWork: () => Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson),
-        queueAdd: scheduleWatchAdd,
+        // while the add service is starting it holds the lock; the unprotected charging run waits (it was taking the lock first)
+        queueAdd: () => queueAddAfterHandOff(serviceStarting: _fgsArm.armed),
       );
       await _writeBackgroundContext();
     } catch (e, st) {
@@ -1086,6 +1096,7 @@ class _CacheAppState extends State<CacheApp> {
           await addPdf.load();
           _fgsNotice.load();
           addPdf.addListener(_onAddsForFgs);
+          kFgsAppChannel.setMethodCallHandler(_fgsArm.handleCall);
         }
         await watchFolders.load();
         _onWatchFolders();

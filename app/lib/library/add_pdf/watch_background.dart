@@ -213,6 +213,7 @@ Future<String> watchAddJob({
       // only what the watched folders found: a PDF added by hand is added while Cache is open, as always
       only: (j) => j.watchId != null,
       throttle: th,
+      lookEvery: const Duration(seconds: 5),
       held: () async => addPdfHeld(th),
     ).run();
     // more to do: the next slice, unless Cache took over (it carries on itself)
@@ -237,6 +238,21 @@ const Duration kFgsAddBudget = Duration(hours: 7);
 /// How long the service waits for Cache to finish going to the back (it is started while Cache is still in front, and the app's
 /// hand-off then lets go of the lock) before it gives up.
 const Duration kFgsWaitForBack = Duration(seconds: 90);
+
+/// How long the service waits for a charging run that holds the lock to stop when asked (it looks at the stop every few seconds).
+const Duration kFgsTakeOverWait = Duration(seconds: 45);
+
+/// When Cache has gone to the back and the add service is starting, the unprotected charging run is queued this far ahead, as
+/// the service's own safety net (it holds the lock; the run is skipped while it does, and the service queues one when it ends
+/// with work left). Without the service (it could not start) the charging run picks the work up after this wait.
+const Duration kFgsHandOffRetry = Duration(minutes: 10);
+
+/// What the hand-off queues for the background: the charging run at once, or, while the service is starting, only later
+/// ([kFgsHandOffRetry]) so the unprotected run does not take the lock before the service.
+Future<void> queueAddAfterHandOff({required bool serviceStarting, Future<void> Function({bool next, Duration delay})? queue}) {
+  final q = queue ?? ({bool next = false, Duration delay = Duration.zero}) => scheduleWatchAdd(next: next, delay: delay);
+  return serviceStarting ? q(delay: kFgsHandOffRetry) : q();
+}
 
 /// The service's side of a run: what it is told (stop, with why: "person" Pause, "timeout" Android's limit) and what it tells.
 class FgsAddControl {
@@ -277,6 +293,7 @@ Future<FgsAddEnd> fgsAddJob({
   IndexThrottle? throttle,
   Duration budget = kFgsAddBudget,
   Duration waitForBack = kFgsWaitForBack,
+  Duration takeOverWait = kFgsTakeOverWait,
   Duration look = const Duration(milliseconds: 500),
   Duration progressEvery = const Duration(seconds: 1),
   // how often it looks at the stop, the battery and the heat: Pause answers within this
@@ -301,12 +318,18 @@ Future<FgsAddEnd> fgsAddJob({
     control.result = FgsAddResult(at: DateTime.now(), why: first, total: 0, added: 0, failedIds: const [], leftIds: const [], batteryPercent: th.reading?.percent, warm: th.reading?.thermal.hot ?? false);
     return FgsAddEnd('held: $first');
   }
-  // the one lock: the charging run holds it, or Cache is still in front (the hand-off lets go of it in a moment)
+  // The one lock. Cache is still in front as the service starts (its hand-off lets go in a moment), and the hand-off may have
+  // queued a charging run that took the lock first: the service never skips for that. It asks that run to stop (the same way the
+  // app does when it comes to the front: `stop-pdf-add`), waits for it to let go (at most [takeOverWait]), and takes over. Pixel,
+  // 2026-11-14: the old skip left the add to the unprotected run, in the background CPU group, with no notification.
   final end = DateTime.now().add(waitForBack);
   while (!l.hold(kAddPdfWork)) {
     if (l.runs(kAddPdfWork)) {
-      dispose();
-      return const FgsAddEnd('skipped: another run is adding');
+      if (!await l.takeOver(kAddPdfWork, wait: takeOverWait, look: look)) {
+        dispose();
+        return const FgsAddEnd('skipped: another run is adding');
+      }
+      continue;
     }
     if (control.stopWhy != null || !DateTime.now().isBefore(end)) {
       dispose();
