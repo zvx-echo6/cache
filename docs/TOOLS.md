@@ -515,7 +515,12 @@ list's town), `distance_mi`, `direction`, then
 - `details`: `"full page on RepeaterBook (opens in the browser; needs a connection)"` when the pin had a details link. The
   link itself stays with the repeater and is opened by the app (map card, the answer's source row); the model never writes it.
 
-The address is `repeater:<list id>/<row>` (`repeater:l1/3`). A result with a repeater row ends with
+Since 1.1 a repeater list is a notebook of the Repeaters template (one entry per repeater, seven fixed text fields holding the words
+above), and `nearby` reads those notebooks: a row has the same keys, in the same order, with the same words as before. Exactly four
+things differ for a list that was converted: `list` is the notebook's name ("Repeaters"); the address is `repeater:<entry id>`;
+repeaters the person made or edited by hand appear (an edited setting is shown as written); and repeaters the latest file no longer
+lists ("Not in the latest file") still appear. A repeater list the app could not convert stays as it was and keeps the address
+`repeater:<list id>/<row>` (`repeater:l1/3`). A result with a repeater row ends with
 `"repeater_note": "From the user's imported repeater list; check the settings before transmitting."`. The model never fills
 in a missing offset or tone from band conventions; it says the list does not state it.
 

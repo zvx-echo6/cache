@@ -809,13 +809,44 @@ class _ShellState extends State<Shell> {
   };
 
   /// The Notebooks' deps with the repeater lists' map actions (a row opens Maps on its repeater).
-  late final NotebookDeps? _notebookDeps = widget.notebooks?.withRepeaterActions(onShow: _showRepeater, onDirections: _repeaterDirections, fmt: widget.nav.fmt);
+  late final NotebookDeps? _notebookDeps = widget.notebooks?.withRepeaterActions(onShow: _showRepeater, onDirections: _repeaterDirections, onShowEntry: _showRepeaterEntry, fmt: widget.nav.fmt);
 
   /// A repeater list's row: Maps, on the repeater, with its card.
   void _showRepeater(Repeater r) {
     Navigator.of(context).popUntil((route) => route.isFirst);
     widget.notebooks?.userLayers?.showRepeater(r);
     _goModule(ModuleId.maps);
+  }
+
+  /// "Show on map" on a repeater notebook's page: Maps, on the repeater, with its card (the same card a list's repeater had).
+  void _showRepeaterEntry(NbEntry e, Notebook book) {
+    final p = e.place;
+    if (p == null) return;
+    String? value(String label) {
+      for (final f in book.def.visible) {
+        if (f.label == label && f.fid != null && e.values[f.fid] is String && (e.values[f.fid] as String).trim().isNotEmpty) return e.values[f.fid] as String;
+      }
+      return null;
+    }
+
+    final onAir = book.def.visible.where((f) => f.label == 'On air').firstOrNull;
+    final air = onAir?.fid == null ? null : e.values[onAir!.fid];
+    _showRepeater(Repeater(
+      listId: book.id,
+      listName: book.name,
+      item: 0,
+      address: 'repeater:${e.id}',
+      name: e.title ?? value('Frequency') ?? 'Repeater',
+      town: value('Town'),
+      lat: p.lat,
+      lon: p.lon,
+      frequency: value('Frequency'),
+      offset: value('Offset'),
+      tone: value('Tone'),
+      mode: value('Mode'),
+      onAir: air is bool ? (air ? 'yes' : 'no') : null,
+      detailsLink: value('Details link'),
+    ));
   }
 
   /// Directions to a repeater (its row's menu): the way there on the map, as from its card.
@@ -834,6 +865,10 @@ class _ShellState extends State<Shell> {
   void _openRepeaterList(Repeater r) {
     final deps = _notebookDeps;
     if (deps == null) return;
+    if (deps.notebook.notebook(r.listId) != null) {
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: r.listId)));
+      return;
+    }
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RepeaterListScreen(deps: deps, listId: r.listId, focusItem: r.item)));
   }
 

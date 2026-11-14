@@ -109,7 +109,16 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     );
     if (!mounted) return;
     if (choice == 'new') _new();
-    if (choice == 'file') await addMapFile(context, notebooks: nb, userLayers: widget.deps.userLayers, onShowList: _openRepeaters);
+    if (choice == 'file') {
+      await addMapFile(context, notebooks: nb, userLayers: widget.deps.userLayers, onShowList: (id) {
+        final made = nb.notebook(id);
+        if (made != null) {
+          _open(made);
+        } else {
+          _openRepeaters(id);
+        }
+      });
+    }
   }
 
   void _new() {

@@ -49,7 +49,7 @@ fn iso_utc(secs: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     iso_utc(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
 }
 
@@ -74,7 +74,7 @@ fn resave_args(entry: &Value) -> Value {
 impl Ext {
     fn nb(&self) -> Result<&cache_notebook::Notebook> {
         self.notebook
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "Notebooks need \"notebook\": {\"db_path\", \"media_dir\"} in the cs_open config"))
     }
 
@@ -91,8 +91,9 @@ impl Ext {
                 eprintln!("cache_search: saved places and notebooks not in step yet: {}", e.message);
             }
         }
+        self.migrate_repeaters_once();
         let out = match op {
-            "entry_save" | "entry_delete" | "import" => {
+            "entry_save" | "entry_delete" | "import" | "repeaters_import" | "repeaters_add_back" => {
                 let args: Value = match args_json.map(str::trim).filter(|a| !a.is_empty()) {
                     Some(a) => serde_json::from_str(a).map_err(|e| Error::bad_json(format!("args: {e}")))?,
                     None => json!({}),
@@ -103,6 +104,7 @@ impl Ext {
                 match op {
                     "entry_save" => self.entry_save(&args)?.to_string(),
                     "entry_delete" => self.entry_delete(&args)?.to_string(),
+                    "repeaters_import" | "repeaters_add_back" => self.repeaters_op(op, &args)?.to_string(),
                     _ => self.import(&args)?.to_string(),
                 }
             }
