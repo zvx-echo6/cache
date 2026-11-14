@@ -249,7 +249,7 @@ void main() {
   });
 
   group('the job', () {
-    Future<String> run(RoundCore core, {SyncOpener? opener, Duration budget = const Duration(minutes: 4), BatteryReader? battery, ConnectionKind kind = ConnectionKind.wifi, bool mobile = false, FakeTime? tm}) {
+    Future<String> run(SyncCoreLike core, {SyncOpener? opener, Duration budget = const Duration(minutes: 4), BatteryReader? battery, ConnectionKind kind = ConnectionKind.wifi, bool mobile = false, FakeTime? tm}) {
       tm ??= FakeTime();
       return syncBackgroundJob(
         support: support.path,

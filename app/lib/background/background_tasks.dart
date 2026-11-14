@@ -110,8 +110,7 @@ class WorkmanagerScheduler implements BackgroundScheduler, ProcessingScheduler {
     task,
     task,
     initialDelay: delay,
-    networkType: constraints.networkType,
-    requiresCharging: constraints.requiresCharging,
+    constraints: constraints,
   );
 }
 
