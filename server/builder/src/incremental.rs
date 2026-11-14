@@ -89,6 +89,7 @@ pub fn publish_copy(src: &Path, dst: &Path) -> Result<usize> {
         copy_dir_synced(src, dst)?;
         cache_search::library::write_segments_manifest(dst).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
         let c = cache_search::libadd::check_library(dst, None).map_err(|e| Error::ctx("checking the copy", e.message))?;
+        cache_search::libadd::require_vectors_indexed(dst).map_err(|e| Error::ctx("checking the copy", e.message))?;
         Ok(c["docs"].as_u64().unwrap_or(0) as usize)
     })();
     if r.is_err() {

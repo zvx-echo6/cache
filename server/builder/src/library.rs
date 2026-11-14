@@ -684,5 +684,8 @@ fn write_archive(shard_dir: &Path, settings: &str, library: &Path, out: &Path) -
 pub fn check_library_dir(dir: &Path) -> Result<Value> {
     let settings: Value = serde_json::from_slice(&std::fs::read(dir.join(SETTINGS_FILE)).map_err(|e| Error::ctx("reading cache-library.json", e))?)
         .map_err(|e| Error::ctx("cache-library.json", e))?;
-    cache_search::libadd::check_library(&dir.join("shard"), Some(&settings)).map_err(|e| Error::ctx("library check", e.message))
+    let c = cache_search::libadd::check_library(&dir.join("shard"), Some(&settings)).map_err(|e| Error::ctx("library check", e.message))?;
+    // A library this builder writes has its vector index (HNSW) once it is past Qdrant's threshold.
+    cache_search::libadd::require_vectors_indexed(&dir.join("shard")).map_err(|e| Error::ctx("library check", e.message))?;
+    Ok(c)
 }
