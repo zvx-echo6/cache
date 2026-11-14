@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/settings_rig.dart';
 import 'package:cache/update/app_update.dart' show AppUpdate, AppUpdateSource;
 import 'package:cache/update/update_ui.dart' show AppUpdates, currentAppUpdates;
+import 'package:cache/platform/share_or_copy.dart' show systemShareAvailable;
 
 const _newer = 'This link code is from a newer Cache. Update Cache here, then try again.';
 const _b32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -157,11 +158,14 @@ void main() {
   group('the Sharing page', () {
     const ch = MethodChannel('co.cache/link-page');
     late List<String> clipReads;
+    late List<String> clipWrites;
 
     Future<SettingsRig> openPage(WidgetTester tester, LinkInbox inbox, {List<String>? shared}) async {
       tall(tester);
       clipReads = [];
+      clipWrites = [];
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') clipWrites.add('${(call.arguments as Map)['text']}');
         if (call.method == 'Clipboard.getData') {
           clipReads.add('read');
           return {'text': 'CACHE1-FROMCLIPBOARD'};
@@ -310,6 +314,22 @@ void main() {
       await tester.pump();
       expect(shared, ['cachelink://link/CACHE1-TESTCODE']);
       expect(clipReads, isEmpty);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a browser with no share sheet (navigator.share): Share link copies the link and says Link copied', (tester) async {
+      final before = systemShareAvailable;
+      systemShareAvailable = () => false;
+      addTearDown(() => systemShareAvailable = before);
+      final shared = <String>[];
+      final r = await openPage(tester, fresh(), shared: shared);
+      await tester.tap(find.byKey(const ValueKey('show-code')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('share-link')));
+      await tester.pump();
+      expect(shared, isEmpty, reason: 'nothing to hand it to');
+      expect(clipWrites, ['cachelink://link/CACHE1-TESTCODE']);
+      expect(find.text('Link copied'), findsOneWidget);
       await r.dispose(tester);
     });
 
