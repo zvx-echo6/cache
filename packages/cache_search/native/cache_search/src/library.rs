@@ -15,7 +15,7 @@ use crate::libindex::{self, LibOpenIndex};
 use crate::libreg::{self, LibEntry, ShardCell};
 use common::universal_io::{MmapFile, MmapFs};
 use edge::{
-    CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
+    Condition, CountRequest, EdgeShard, EdgeShardRead, FieldCondition, Filter, JsonPath, LoadProfile, Match, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
     QueryRequest, QueryRequestBuilder, ReadOnlyEdgeShard, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams,
     TextIndexParams, TextQueryBuilder, VectorInternal, WithPayloadInterface, WithVector,
 };
@@ -232,6 +232,7 @@ impl LibrarySettings {
         for r in &self.leave_out {
             v.push(r.field().to_string());
         }
+        v.push(PIECE_FIELD.to_string());
         v.sort();
         v.dedup();
         v
@@ -590,6 +591,11 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
 /// The payload field every point of a Cache library carries: the stable id of its source document (a non-empty
 /// string, the same across versions of the document). See docs/LIBRARY-FORMAT.md.
 pub const DOC_ID_FIELD: &str = "doc_id";
+/// The optional payload field with the passage's position in its document: a whole number from 0 (the `index` in the
+/// point id formula). Read by `read_document` to put a document's passages in order. See docs/LIBRARY-FORMAT.md.
+pub const PIECE_FIELD: &str = "piece";
+/// Most points `read_document` collects for one document.
+pub const DOC_MAX_POINTS: usize = 5000;
 /// The payload field with the document's version: a whole number, 1 for the first.
 pub const DOC_VERSION_FIELD: &str = "doc_version";
 
@@ -849,6 +855,24 @@ pub struct LibKwHit {
     pub raw: f32,
     pub coverage: f32,
     pub hit: Option<LibHit>,
+}
+
+/// One page of a whole-document read.
+pub struct DocPage {
+    pub page: Value,
+    pub text: String,
+    pub addresses: Vec<String>,
+}
+
+/// A window of a library document: its pages in order, the page holding the opened passage, and whether the document goes on
+/// before and after the window.
+pub struct DocumentOut {
+    pub title: String,
+    pub pages: Vec<DocPage>,
+    pub at_page: usize,
+    /// Whether the document has passages before / after the window that is shown (too long to show whole).
+    pub more_before: bool,
+    pub more_after: bool,
 }
 
 pub struct ReadOut {
@@ -1220,6 +1244,154 @@ impl LibSlot {
             },
             truncated,
         ))
+    }
+
+    /// Read the whole document the point `point_id` belongs to: its passages in order, grouped into pages, cut after
+    /// `max_chars` of text. A library without a document field, or a point without a document value, gives one page
+    /// holding just that passage.
+    pub fn read_document(&self, point_id: &str, max_chars: usize) -> Result<DocumentOut> {
+        let id: PointId = point_id.parse().map_err(|_| Error::bad_json(format!("bad point id {point_id:?} in library address")))?;
+        let mut req = RetrieveRequest::new(vec![id]);
+        req.with_payload = Some(self.payload_selector());
+        req.with_vector = Some(WithVector::Bool(false));
+        let shard = self.shard.get()?;
+        let recs = EdgeShardRead::retrieve(&*shard, req).map_err(|e| op_internal("reading point", e))?;
+        let rec = recs
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_found(format!("point {point_id} is not in library {}", self.settings.library_id)))?;
+        let empty = Map::new();
+        let p0 = rec.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
+        let f = &self.settings.fields;
+        let title = self.base_title(p0);
+        let main_text = |p: &Map<String, Value>| get_path(p, &f.text).and_then(scalar_text).unwrap_or_default();
+        let single = |p: &Map<String, Value>| {
+            let (text, truncated) = html::cut_at_paragraph(main_text(p).trim(), max_chars);
+            DocumentOut {
+                title: title.clone(),
+                pages: vec![DocPage { page: self.page_value(p), text, addresses: vec![self.address(&id)] }],
+                at_page: 0,
+                more_before: false,
+                more_after: truncated,
+            }
+        };
+        let Some(doc_field) = f.document.as_ref() else { return Ok(single(p0)) };
+        let Some(key) = self.text_field(p0, &f.document) else { return Ok(single(p0)) };
+        let value = match get_path(p0, doc_field) {
+            Some(Value::Number(n)) if n.is_i64() => Match::from(n.as_i64().unwrap_or_default()),
+            _ => Match::from(key),
+        };
+        let jp: JsonPath = doc_field.parse().map_err(|_| Error::bad_json(format!("bad document field {doc_field:?}")))?;
+        let filter = Filter::new_must(Condition::Field(FieldCondition::new_match(jp, value)));
+
+        // every kept point of the document, up to the cap
+        let capped;
+        let mut points: Vec<(PointId, Map<String, Value>)> = Vec::new();
+        let mut offset: Option<PointId> = None;
+        loop {
+            let mut sr = ScrollRequest::new();
+            sr.limit = Some(500.min(DOC_MAX_POINTS - points.len()));
+            sr.offset = offset;
+            sr.filter = Some(filter.clone());
+            sr.with_payload = Some(self.payload_selector());
+            sr.with_vector = WithVector::Bool(false);
+            let (recs, next) = EdgeShardRead::scroll(&*shard, sr).map_err(|e| op_internal("reading document", e))?;
+            for r in recs {
+                let p = r.payload.map(|p| p.0).unwrap_or_default();
+                if !self.left_out(&p) {
+                    points.push((r.id, p));
+                }
+            }
+            offset = next;
+            if offset.is_none() || points.len() >= DOC_MAX_POINTS {
+                capped = offset.is_some();
+                break;
+            }
+        }
+        // the opened passage is always in, even when the capped scroll did not reach it
+        if !points.iter().any(|(i, _)| *i == id) {
+            points.push((id, p0.clone()));
+        }
+
+        let piece_of = |p: &Map<String, Value>| p.get(PIECE_FIELD).and_then(|v| v.as_u64());
+        let by_piece = points.iter().all(|(_, p)| piece_of(p).is_some());
+        let page_num = |p: &Map<String, Value>| match self.page_value(p) {
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        };
+        let numeric_pages = points.iter().all(|(_, p)| matches!(self.page_value(p), Value::Number(_) | Value::Null));
+        let mut keyed: Vec<(String, PointId, Map<String, Value>)> = points.into_iter().map(|(i, p)| (i.to_string(), i, p)).collect();
+        keyed.sort_by(|(sa, _, a), (sb, _, b)| {
+            use std::cmp::Ordering;
+            if by_piece {
+                return piece_of(a).cmp(&piece_of(b)).then_with(|| sa.cmp(sb));
+            }
+            let o = if numeric_pages {
+                // a point with no page sorts first
+                match (page_num(a), page_num(b)) {
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                }
+            } else {
+                self.page_text(a).unwrap_or_default().cmp(&self.page_text(b).unwrap_or_default())
+            };
+            o.then_with(|| sa.cmp(sb))
+        });
+
+        // A window of whole passages around the opened one, grown one at a time, after then before, while it fits.
+        let k = keyed.iter().position(|(_, pid, _)| *pid == id).unwrap_or(0);
+        let texts: Vec<String> = keyed.iter().map(|(_, _, p)| main_text(p).trim().to_string()).collect();
+        let len = |i: usize| texts[i].chars().count();
+        let (mut lo, mut hi) = (k, k);
+        let mut cut_first: Option<String> = None;
+        if len(k) > max_chars {
+            cut_first = Some(html::cut_at_paragraph(&texts[k], max_chars).0);
+        } else {
+            let mut used = len(k);
+            loop {
+                let mut grew = false;
+                if hi + 1 < keyed.len() && used + len(hi + 1) + 2 <= max_chars {
+                    hi += 1;
+                    used += len(hi) + 2;
+                    grew = true;
+                }
+                if lo > 0 && used + len(lo - 1) + 2 <= max_chars {
+                    lo -= 1;
+                    used += len(lo) + 2;
+                    grew = true;
+                }
+                if !grew {
+                    break;
+                }
+            }
+        }
+        let mut pages: Vec<DocPage> = Vec::new();
+        let mut at_page = 0;
+        for i in lo..=hi {
+            let (_, pid, p) = &keyed[i];
+            let text = if i == k { cut_first.clone().unwrap_or_else(|| texts[i].clone()) } else { texts[i].clone() };
+            let pv = self.page_value(p);
+            if pages.last().map(|l| l.page != pv).unwrap_or(true) {
+                pages.push(DocPage { page: pv, text: String::new(), addresses: vec![] });
+            }
+            let last = pages.last_mut().unwrap();
+            if !text.is_empty() {
+                if !last.text.is_empty() {
+                    last.text.push_str("\n\n");
+                }
+                last.text.push_str(&text);
+            }
+            last.addresses.push(self.address(pid));
+            if i == k {
+                at_page = pages.len() - 1;
+            }
+        }
+        // a scroll that stopped at the cap left points unseen, anywhere in the order
+        let more_before = lo > 0 || (capped && lo == 0);
+        let more_after = hi + 1 < keyed.len() || (capped && hi + 1 == keyed.len());
+        Ok(DocumentOut { title, pages, at_page, more_before, more_after })
     }
 }
 

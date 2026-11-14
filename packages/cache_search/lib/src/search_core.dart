@@ -74,6 +74,9 @@ class SearchCore {
   Future<ReadResult> read(String address, {int maxChars = 6000}) async =>
       ReadResult.fromJson(((await _call('read', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
 
+  Future<LibraryDocument> readDocument(String address, {int maxChars = 200000}) async =>
+      LibraryDocument.fromJson(((await _call('readDocument', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
+
   Future<ZimBytes> zimGet(String address) async {
     final r = await _call('zimGet', {'address': address}) as List;
     return ZimBytes(r[0] as Uint8List, r[1] as String);

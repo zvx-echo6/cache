@@ -79,6 +79,13 @@ class SearchEngine {
   ReadResult read(String address, {int maxChars = 6000}) =>
       ReadResult.fromJson(_object(_ok(native.read(_h, address, maxChars))));
 
+  /// A library document read whole, page by page, cut to [maxChars] of text in all (cs_read_document). Only `lib:` addresses.
+  LibraryDocument readDocument(String address, {int maxChars = 200000}) {
+    final n = native is CsDocumentNative ? native as CsDocumentNative : null;
+    if (n == null || !n.hasReadDocument) throw const CacheSearchException('unsupported', 'This build of the core cannot read a whole document yet');
+    return LibraryDocument.fromJson(_object(_ok(n.readDocument(_h, address, maxChars))));
+  }
+
   /// Raw bytes of a ZIM entry (HTML, CSS, images), following redirects.
   ZimBytes zimGet(String address) =>
       native.zimGet(_h, address) ?? (throw CacheSearchException.fromJson(native.lastError(_h)));
