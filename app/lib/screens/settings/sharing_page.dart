@@ -1,3 +1,4 @@
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -104,13 +105,13 @@ class _SharingPageState extends State<SharingPage> {
 
   /// [code] when it can be linked; throws [BadLinkCode] for this device's own code or one already linked, and, when [strict] (a
   /// link from outside), for a code that cannot be read. A typed or pasted code that cannot be read here is left to the sync
-  /// engine, which gives the same messages.
+  /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
     try {
       info = decodeLinkCode(code);
-    } on BadLinkCode {
-      if (strict) rethrow;
+    } on BadLinkCode catch (e) {
+      if (strict || e.newer) rethrow;
       return code;
     }
     if (info.id.toLowerCase() == s.myId?.toLowerCase()) throw const BadLinkCode("that is this device's own code");
@@ -125,7 +126,8 @@ class _SharingPageState extends State<SharingPage> {
     try {
       await f();
     } catch (e) {
-      if (mounted) say(context, '$e');
+      // The engine names a code from a newer Cache by its kind, never by its text.
+      if (mounted) say(context, e is CacheSearchException && e.code == kNewerCodeKind ? kNewerCode : '$e');
     } finally {
       if (mounted) {
         setState(() => _busy = false);

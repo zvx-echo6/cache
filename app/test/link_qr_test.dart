@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/sharing/link_inbox.dart';
 import 'package:cache/sharing/link_url.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
 
+const _newer = 'This link code is from a newer Cache. Update Cache here, then try again.';
 const _b32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 /// A link code as the sync engine writes it: `CACHE1-` and the unpadded Base32 of the JSON.
@@ -98,6 +100,16 @@ void main() {
       expect(() => decodeLinkCode('CACHE1-!!!!'), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', kDamagedCode)));
       expect(() => decodeLinkCode('CACHE1-TESTCODE'), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', kDamagedCode)));
       expect(() => decodeLinkCode('CACHE1-'), throwsA(isA<BadLinkCode>()));
+    });
+
+    test('a code from a newer Cache (CACHE2- and up, any case) says so; other codes keep their messages', () {
+      for (final c in ['CACHE2-ABC', 'cache3-abc', ' CACHE12-\nAB ', 'CACHE2-', 'CACHE99999999999999999999999-X']) {
+        expect(() => decodeLinkCode(c), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', _newer)), reason: c);
+      }
+      for (final c in ['HELLO', 'CACHE-ABC', 'CACHE0-ABC', 'CACHE2ABC']) {
+        expect(() => decodeLinkCode(c), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', kNotACode)), reason: c);
+      }
+      expect(linkCodeFrom('cachelink://link/CACHE2-ABC'), 'CACHE2-ABC');
     });
   });
 
@@ -310,6 +322,49 @@ void main() {
       });
       await tester.pump(const Duration(milliseconds: 300));
       expect(r.sync.argsOf['link']!.single['code'], 'CACHE1-TESTCODE');
+      await r.dispose(tester);
+    });
+
+    for (final typed in ['CACHE2-ABCDEF', 'cache3-abcdef', 'cachelink://link/CACHE2-ABCDEF']) {
+      testWidgets('a pasted or typed $typed shows the newer-Cache sentence and links nothing', (tester) async {
+        final r = await openPage(tester, fresh());
+        await tester.tap(find.text('Enter a link code'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), typed);
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Link'));
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        });
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text(_newer), findsOneWidget);
+        expect(r.sync.calls, isNot(contains('link')));
+        await r.dispose(tester);
+      });
+    }
+
+    testWidgets('a cachelink://link/CACHE2-... link offered through the inbox shows the sentence and links nothing', (tester) async {
+      final inbox = fresh();
+      final r = await openPage(tester, inbox);
+      inbox.offer('cachelink://link/CACHE2-ABCDEF');
+      await tester.pumpAndSettle();
+      expect(find.text(_newer), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(r.sync.calls, isNot(contains('link')));
+      await r.dispose(tester);
+    });
+
+    testWidgets('the engine naming the kind (not its text) gives the sentence too', (tester) async {
+      final r = await openPage(tester, fresh());
+      r.sync.linkError = const CacheSearchException('link_code_newer', 'whatever words the engine uses');
+      await tester.tap(find.text('Enter a link code'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'CACHE1-TESTCODE');
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Link'));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text(_newer), findsOneWidget);
       await r.dispose(tester);
     });
   });
