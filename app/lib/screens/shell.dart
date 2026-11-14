@@ -253,7 +253,12 @@ class _ShellState extends State<Shell> {
     _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
-      if (e is MapRequested && mounted) _goModule(ModuleId.maps);
+      // Maps asked for (a place's Directions, the assistant's route): the Maps tab, over any screen opened above the tabs (a
+      // notebook and its place), so the phone shows the route preview with Start whether or not a car is connected.
+      if (e is MapRequested && mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        _goModule(ModuleId.maps);
+      }
     });
     // An alert pop-up tapped while the app runs, or the one that started it: open the Weather screen on that alert.
     _alertTaps = LocalAlertNotifier.instance.taps.listen(_openAlert);
