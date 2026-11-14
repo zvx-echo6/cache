@@ -278,7 +278,8 @@ class CarBridge {
     // trip that says guidance has started goes out before the drive itself is running, so the car's request for a test
     // drive ([CarDriveSource.simulate]) counts here as well as a drive that runs.
     final f = nav.lastFix ?? (nav.guiding && (drive.simulating || drive.simulate) ? null : nav.fix);
-    final onRoute = nav.guiding && p != null && p.onRoute;
+    // After arrival no progress comes: its matched point is where the vehicle arrived, not where it is, so the fix is drawn.
+    final onRoute = nav.guiding && !nav.arrived && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
