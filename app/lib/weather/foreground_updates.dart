@@ -13,8 +13,9 @@ bool foregroundUpdatesWanted({bool? android}) => !(android ?? plat.isAndroid);
 /// the screen got no new alerts: updates started only when the app opened or came back to the front, by the system's scheduled
 /// job, or when "Where I am" settled somewhere new.
 ///
-/// [front] starts it (the app is in front), [back] stops it (the app left the front); starting again when it runs changes
-/// nothing. One update at a time: a tick that finds the last one still running does nothing.
+/// Two things hold it: the phone's own screen in front ([front], [back]) and a car screen attached ([car]). With a car on
+/// CarPlay or Android Auto the phone's screen stays in the back, so the car counts as showing the app. It runs while either
+/// holds it and stops when neither does; starting again when it runs changes nothing. One update at a time: a tick that finds the last one still running does nothing.
 class ForegroundUpdates {
   ForegroundUpdates({required this.every, required this.on, required this.update, this.wanted = true});
 
@@ -30,20 +31,39 @@ class ForegroundUpdates {
   final bool wanted;
 
   Timer? _timer;
+  bool _phone = false;
+  bool _car = false;
   bool _running = false;
   bool _disposed = false;
 
   /// The app is in front and the updates are timed.
   bool get ticking => _timer != null;
 
+  /// The phone's screen is in front.
   void front() {
-    if (!wanted || _disposed || _timer != null) return;
-    _timer = Timer.periodic(every, (_) => unawaited(_tick()));
+    _phone = true;
+    _sync();
   }
 
+  /// The phone's screen left the front; the timer goes on while a car is attached.
   void back() {
-    _timer?.cancel();
-    _timer = null;
+    _phone = false;
+    _sync();
+  }
+
+  /// A car screen is attached ([attached] true) or gone; the timer goes on while the phone's screen is in front.
+  void car(bool attached) {
+    _car = attached;
+    _sync();
+  }
+
+  void _sync() {
+    if (!wanted || _disposed || !(_phone || _car)) {
+      _timer?.cancel();
+      _timer = null;
+      return;
+    }
+    _timer ??= Timer.periodic(every, (_) => unawaited(_tick()));
   }
 
   Future<void> _tick() async {
@@ -60,6 +80,6 @@ class ForegroundUpdates {
 
   void dispose() {
     _disposed = true;
-    back();
+    _sync();
   }
 }

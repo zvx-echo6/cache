@@ -1378,7 +1378,8 @@ class WeatherState extends ChangeNotifier {
     if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
-    final last = _lastRunAt;
+    // Only a run that got something counts as recent: a run where every fetch failed must not hold the next one back.
+    final last = _lastOkAt;
     if (last != null && _now().difference(last) < every) return null;
     return updateNow();
   }

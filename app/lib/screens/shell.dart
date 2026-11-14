@@ -58,6 +58,7 @@ import '../update/update_ui.dart';
 import '../video/video_state.dart';
 import '../video/zim_video.dart' show openZimMediaInPlayer;
 import '../weather/alert_notifier.dart';
+import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/alert_watch.dart';
 import 'ask_off.dart';
 import 'ask_screen.dart';
@@ -424,6 +425,8 @@ class _ShellState extends State<Shell> {
   }
 
   void _goHome() {
+    // Home is shown again: its weather card's update, if due, runs (the kept page does not build the card again).
+    unawaited(widget.hub.weather.updateIfDue(kBackgroundEvery));
     _changeModule(() {
       _module = null;
       _onModules = false;
@@ -437,6 +440,8 @@ class _ShellState extends State<Shell> {
       });
 
   void _goModule(ModuleId m) {
+    // The Weather screen is shown again (kept in the stack): an update that is due runs.
+    if (m == ModuleId.weather) unawaited(widget.hub.weather.updateIfDue(kBackgroundEvery));
     // Ask opens: the chosen model, let go to leave memory free, loads again.
     if (m == ModuleId.ask) unawaited(_wakeAsk());
     // Ask is shown (with a chat model to ask): its search tool will want the search model, which loads now, not at app start.

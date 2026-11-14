@@ -1313,6 +1313,11 @@ class _CacheAppState extends State<CacheApp> {
   void _onCarScreen() {
     final attached = _car?.connected.value ?? false;
     _phoneDrive.carConnected.value = attached;
+    // A car on screen counts as the app shown: weather updates now if due and by the timer. On leaving, the timer stops unless
+    // the phone's screen is in front (ForegroundUpdates holds both). _carLeft then also says back() for the phone's side, which
+    // changes nothing more.
+    _foregroundUpdates.car(attached);
+    if (attached) unawaited(weather.updateIfDue(kBackgroundEvery));
     location.carScreen(attached);
     if (!attached) _carLeft();
   }

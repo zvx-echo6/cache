@@ -101,4 +101,50 @@ void main() {
     f.dispose();
     g.dispose();
   });
+
+  // A car on CarPlay or Android Auto leaves the phone's screen in the back: the car counts as the app shown.
+  testWidgets('a car attached with the phone in the back starts the timer; leaving stops it', (tester) async {
+    var runs = 0;
+    final f = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async => runs++);
+    addTearDown(f.dispose);
+    f.car(true);
+    expect(f.ticking, isTrue);
+    await tester.pump(kBackgroundEvery);
+    expect(runs, 1);
+    f.car(false);
+    expect(f.ticking, isFalse);
+    await tester.pump(const Duration(hours: 3));
+    expect(runs, 1);
+  });
+
+  testWidgets('a car leaving with the phone in front keeps the timer; the phone leaving with a car attached keeps it', (tester) async {
+    var runs = 0;
+    final f = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async => runs++);
+    addTearDown(f.dispose);
+    f.front();
+    f.car(true);
+    f.car(false);
+    expect(f.ticking, isTrue, reason: 'the phone is still in front');
+    await tester.pump(kBackgroundEvery);
+    expect(runs, 1, reason: 'one timer, not two');
+    f.car(true);
+    f.back();
+    expect(f.ticking, isTrue, reason: 'the car is still attached');
+    await tester.pump(kBackgroundEvery);
+    expect(runs, 2);
+    f.car(false);
+    expect(f.ticking, isFalse);
+    // the car's release and the phone's back() together (the car leaving with no phone screen) stop it once and nothing restarts it
+    f.car(true);
+    f.car(false);
+    f.back();
+    expect(f.ticking, isFalse);
+  });
+
+  testWidgets('where a scheduled job updates (Android), a car does not start the timer either', (tester) async {
+    final f = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async {}, wanted: false);
+    addTearDown(f.dispose);
+    f.car(true);
+    expect(f.ticking, isFalse);
+  });
 }

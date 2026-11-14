@@ -19,7 +19,8 @@ Map<String, BackgroundJob> backgroundJobs() => {
   kWatchDetectTask: (_) async => watchDetectJob(support: await appSupportPath()),
   kWatchAddTask: (_) async => watchAddJob(support: await appSupportPath()),
   kSyncTask: (_) async => syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetAndroid),
-  kSyncRefreshTask: (_) async => syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetRefresh),
+  kSyncRefreshTask: (_) async =>
+      syncRefreshRun(sync: () async => syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetRefresh)),
   kSyncProcessingTask: (_) async {
     try {
       return await syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetProcessing);

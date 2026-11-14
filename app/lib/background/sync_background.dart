@@ -9,7 +9,8 @@ import '../search/index_throttle.dart' show kHeatPause;
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
 import '../sharing/sharing_state.dart' show SyncCoreLike, SyncOpener, openSyncCore;
-import '../weather/background.dart' show backgroundReady;
+import '../platform.dart' as plat;
+import '../weather/background.dart' show backgroundReady, runBackgroundUpdate;
 import 'background_lock.dart';
 import 'background_tasks.dart';
 
@@ -353,4 +354,28 @@ Future<void> scheduleBackgroundSync({required bool enabled, required bool mobile
   } catch (e) {
     logError('Background sync could not be scheduled', error: e);
   }
+}
+
+/// The iPhone's refresh task (the one background run iOS gives for the app, no new task name): the sync round, then the weather
+/// update if it is due (nothing else runs weather on an iPhone with Cache closed). Android has its own weather job, so there
+/// this is only the sync round. A weather update that throws is logged and never changes how the sync round ends.
+/// [sync], [weather] and [ios] are a test's stand-ins.
+Future<String> syncRefreshRun({
+  required Future<String> Function() sync,
+  Future<void> Function()? weather,
+  bool? ios,
+}) async {
+  String outcome;
+  try {
+    outcome = await sync();
+  } finally {
+    if (ios ?? plat.isIOS) {
+      try {
+        await (weather ?? () => runBackgroundUpdate(onlyIfDue: true))();
+      } catch (e, st) {
+        logError('Background weather update (with the sync round) failed', error: e, stack: st);
+      }
+    }
+  }
+  return outcome;
 }
