@@ -43,6 +43,7 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 - "Cache's search couldn't start, so this wasn't answered.": tap "Try again". If it repeats, restart Cache.
 - "No answer was produced." or "The model stopped without an answer": ask again in other words, or tap "New chat". Try another model if it repeats.
 - "Not from your sources": the answer isn't from your device or a search. Check it.
+- "Searched your sources, but cites none of them": Cache searched, but the answer doesn't name a source. Check it.
 - "Navigation unavailable: this route snapshot is no longer available.": ask for directions again.
 - "Report saved on this device. Find it in Settings > Assistant.": saved. That page is now "Cache model and web search".
 - "Ask needs a model on this device.": you have no model. Tap "Choose a model". See Use Cache with no model in chapter 2.

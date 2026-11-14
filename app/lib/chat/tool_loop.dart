@@ -55,6 +55,7 @@ class TurnUpdate {
     this.generatedTokens = 0,
     this.chatFull = false,
     this.cutShort = false,
+    this.searchedSources = false,
   });
 
   final TurnPhase phase;
@@ -85,6 +86,28 @@ class TurnUpdate {
 
   /// Only with [phase] done: the answer ended because the context filled up, so it is cut off.
   final bool cutShort;
+
+  /// Only with [phase] done: this turn searched or read the person's sources ([usesSources]). With nothing [cited] the answer is
+  /// then labelled as searched but citing none, not as "Not from your sources".
+  final bool searchedSources;
+}
+
+/// Whether the tool [name] searches or reads the person's sources (the library, ZIMs, documents): `search` and `read`.
+bool usesSources(String name) => name == 'search' || name == 'read';
+
+/// Whether a stored turn's transcript ([turn]: its messages after the question) has a tool call that [usesSources]. A reopened
+/// chat labels its answers from it, as the live turn did.
+bool turnUsedSources(Iterable<Map<String, dynamic>> turn) {
+  for (final m in turn) {
+    final calls = m['tool_calls'];
+    if (calls is! List) continue;
+    for (final c in calls) {
+      final f = c is Map ? c['function'] : null;
+      final name = f is Map ? f['name'] : null;
+      if (name is String && usesSources(name)) return true;
+    }
+  }
+  return false;
 }
 
 /// Runs one conversation: sends messages and tool schemas, runs the tools the model asks for (at most
@@ -254,9 +277,11 @@ class ToolLoop {
     var promptTokens = 0, generatedTokens = 0;
     final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
     var finalAnswer = false;
+    var searched = false;
     try {
       await _loadSchemas();
       if (seed != null) {
+        if (usesSources(seed.name)) searched = true;
         final call = _numbered(seed.name, seed.arguments);
         final step = _stepOf(call);
         yield TurnUpdate(phase: TurnPhase.searching, activeTool: seed.name, step: step);
@@ -334,6 +359,7 @@ class ToolLoop {
           for (final call in calls) {
             final step = _stepOf(call);
             yield TurnUpdate(phase: TurnPhase.searching, activeTool: call.name, step: step);
+            if (usesSources(call.name)) searched = true;
             await _addResult(call);
             yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
           }
@@ -351,6 +377,7 @@ class ToolLoop {
           promptTokens: promptTokens,
           generatedTokens: generatedTokens,
           cutShort: last.cutByContext,
+          searchedSources: searched,
         );
         return;
       }
