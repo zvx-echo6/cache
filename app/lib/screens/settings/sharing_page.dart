@@ -146,7 +146,13 @@ class _SharingPageState extends State<SharingPage> {
     if (sync == null || !mounted || s.peerOf(peer) == null) return;
     await sync.markNew(peer);
     if (!mounted) return;
-    await askSettingsLink(context, sync, peer, s.peerOf(peer)?['name'] as String? ?? 'the other device');
+    await askSettingsLink(
+      context,
+      sync,
+      peer,
+      s.peerOf(peer)?['name'] as String? ?? 'the other device',
+      openDevice: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: s, peer: peer, settingsSync: widget.settingsSync))),
+    );
   }
 
   /// Shows the link code until the other device links with it (the sheet then closes and the question follows) or it is closed.
