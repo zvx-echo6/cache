@@ -179,6 +179,7 @@ class QueueItem {
     this.createdAt,
     this.startedAt,
     this.finishedAt,
+    this.linkedBlake3,
   });
 
   final String id;
@@ -200,6 +201,9 @@ class QueueItem {
   final DateTime? createdAt;
   final DateTime? startedAt;
   final DateTime? finishedAt;
+
+  /// For a PDF in a linked folder: the BLAKE3 the folder check recorded for it; null for any other book.
+  final String? linkedBlake3;
 
   String get name => (title != null && title!.isNotEmpty) ? title! : fileName;
   bool get active => state == 'reading' || state == 'building';
@@ -226,6 +230,7 @@ class QueueItem {
         createdAt: DateTime.tryParse((j['created_at'] ?? '') as String),
         startedAt: DateTime.tryParse((j['started_at'] ?? '') as String),
         finishedAt: DateTime.tryParse((j['finished_at'] ?? '') as String),
+        linkedBlake3: j['linked'] is Map ? (j['linked'] as Map)['blake3'] as String? : null,
       );
 }
 
