@@ -177,7 +177,7 @@ void main() {
   });
 
   test('Home gives the meaning search its time limit; a library over it still answers with its keyword hits', () async {
-    final sources = _Searched(dir, [page])..timedOut = ['recon'];
+    final sources = _Searched(dir, [page])..timedOut = ['field'];
     final p = LibrarySearchProvider(sources: sources, openZim: (_) {}, openAddress: (_) {});
     final rows = await p.search('water');
     expect(sources.limits, [kHomeMeaningLimit], reason: 'every Home search carries the limit');

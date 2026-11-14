@@ -152,9 +152,9 @@ void main() {
     });
 
     test('a library carries its settings object', () {
-      final j = const SourceConfig.library(path: '/l', indexDir: '/li', settings: {'library_id': 'recon', 'format': 1}).toJson();
+      final j = const SourceConfig.library(path: '/l', indexDir: '/li', settings: {'library_id': 'field', 'format': 1}).toJson();
       expect(j['kind'], 'library');
-      expect(j['settings'], {'library_id': 'recon', 'format': 1});
+      expect(j['settings'], {'library_id': 'field', 'format': 1});
     });
 
     test('a failed cs_open raises the thread error', () {
@@ -237,12 +237,12 @@ void main() {
 
     test('a meaning time limit goes as meaning_ms, and the libraries over it come back in meaningTimedOut', () {
       final n = FakeNative()
-        ..replies['search'] = jsonEncode({'results': [], 'total_estimate': 0, 'vector_sources': [], 'keyword_only_sources': ['recon'], 'meaning_timed_out': ['recon']});
+        ..replies['search'] = jsonEncode({'results': [], 'total_estimate': 0, 'vector_sources': [], 'keyword_only_sources': ['field'], 'meaning_timed_out': ['field']});
       final r = SearchEngine.open(n, [_zim]).search('water', queryVector: const QueryVector('bge', [0.5]), meaningLimit: const Duration(milliseconds: 1500));
       final opts = jsonDecode(n.calls.last.substring('search:water:'.length)) as Map;
       expect(opts['meaning_ms'], 1500);
-      expect(r.meaningTimedOut, ['recon']);
-      expect(r.toJson()['meaning_timed_out'], ['recon']);
+      expect(r.meaningTimedOut, ['field']);
+      expect(r.toJson()['meaning_timed_out'], ['field']);
       // no limit: no meaning_ms at all (Ask's searches), and an older core's response reads as none timed out
       final n2 = FakeNative()..replies['search'] = '{"results":[],"total_estimate":0}';
       final r2 = SearchEngine.open(n2, [_zim]).search('water');
@@ -272,9 +272,9 @@ void main() {
 
     test('read parses a ZIM article and a library page', () {
       final n = FakeNative()
-        ..replies['read'] = '{"address":"lib:recon/9","title":"Tourniquets","text":"Apply...","truncated":true,"author":"Army","page":42,"source_type":"book"}';
-      final r = SearchEngine.open(n, [_zim]).read('lib:recon/9', maxChars: 1000);
-      expect(n.calls.last, 'read:lib:recon/9:1000');
+        ..replies['read'] = '{"address":"lib:field/9","title":"Tourniquets","text":"Apply...","truncated":true,"author":"Army","page":42,"source_type":"book"}';
+      final r = SearchEngine.open(n, [_zim]).read('lib:field/9', maxChars: 1000);
+      expect(n.calls.last, 'read:lib:field/9:1000');
       expect(r.truncated, isTrue);
       expect(r.author, 'Army');
       expect(r.page, 42);

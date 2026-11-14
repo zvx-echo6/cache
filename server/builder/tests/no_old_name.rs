@@ -32,9 +32,7 @@ const SKIP_DIRS: &[&str] = &[
 
 // Paths (relative to the repository root) that are not scanned.
 fn skipped(rel: &Path) -> bool {
-    // Renamed in a following change.
-    rel.starts_with("packages/cache_search")
-        || rel.components().any(|c| c.as_os_str() == "third_party")
+    rel.components().any(|c| c.as_os_str() == "third_party")
 }
 
 // Every file git tracks, relative to the root; None if git cannot be run.

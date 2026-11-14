@@ -1,5 +1,5 @@
 {
- "about": "Search-quality queries for search_eval.py: the two from the 2026-10-26 check plus 13 from heldout-v1 (questions that were never used for training). Expectations were written by reading what the recon library and the ZIMs contain (each source searched alone), not from any ranking output.",
+ "about": "Search-quality queries for search_eval.py: the two from the 2026-10-26 check plus 13 from heldout-v1 (questions that were never used for training). Expectations were written by reading what the field library and the ZIMs contain (each source searched alone), not from any ranking output.",
  "queries": [
   {
    "id": "iphone-battery",
@@ -17,7 +17,7 @@
    "query": "flood",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "flood"
     },
     {
@@ -44,7 +44,7 @@
    "query": "how to treat a snakebite",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "snake ?bite"
     },
     {
@@ -59,7 +59,7 @@
    "query": "dry heat sterilization temp and how long",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "dry heat|sterili"
     }
    ],
@@ -70,7 +70,7 @@
    "query": "is a 3 inch gap between soil and wood siding enough against termites",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "termite"
     }
    ],
@@ -81,7 +81,7 @@
    "query": "how do you thresh bean pods at smal scale",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "thresh"
     }
    ],
@@ -95,14 +95,14 @@
      "title": "currant|gooseberr"
     }
    ],
-   "note": "from heldout-v1 (practical); Recon, Appropedia and Wikipedia all have it"
+   "note": "from heldout-v1 (practical); Field, Appropedia and Wikipedia all have it"
   },
   {
    "id": "salvaged-concrete",
    "query": "If using salvaged concrete for rainwater tank paving, what thickness should the pieces be?",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "concrete|paver"
     }
    ],
@@ -113,7 +113,7 @@
    "query": "compass accuracy metal interference tilting parallax error",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "compass|bearing"
     }
    ],
@@ -124,7 +124,7 @@
    "query": "sere water purification boil how long and aerate",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "boil"
     }
    ],
@@ -171,14 +171,14 @@
      "title": "dehydrat"
     }
    ],
-   "note": "from heldout-v1 (practical); Recon has 'Dehydration Symptoms', Wikipedia has 'Dehydration'"
+   "note": "from heldout-v1 (practical); Field has 'Dehydration Symptoms', Wikipedia has 'Dehydration'"
   },
   {
    "id": "jerky",
    "query": "jerky how long to dehydrate and marinate and how long it keeps",
    "expect": [
     {
-     "source": "Recon",
+     "source": "Field",
      "title": "jerky"
     }
    ],
