@@ -1,8 +1,6 @@
 // Weather shown: opening the Weather screen or Home's weather card runs an update that is due (and only that), and the iPhone's
 // background sync round also updates weather when due.
 
-import 'dart:async';
-
 import 'package:cache/background/sync_background.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/screens/home_screen.dart';

@@ -238,7 +238,9 @@ void main() {
     await _open(tester, r);
     expect(find.text('Where I am'), findsOneWidget);
     expect(find.text('No forecast yet'), findsOneWidget);
-    expect(_textAt(tester, 'weather-freshness'), 'Not updated yet');
+    // Opening the screen runs the update that is due (never updated: due); the fake core has nothing to give, so what is
+    // not known stays unknown.
+    expect(_textAt(tester, 'weather-freshness'), 'Updated just now');
     expect(find.text('Update now'), findsOneWidget);
     expect(find.text('Not checked yet'), findsOneWidget);
     expect(find.text('No alerts or fires nearby'), findsNothing, reason: 'nothing was checked');
