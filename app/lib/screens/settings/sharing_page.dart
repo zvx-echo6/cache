@@ -632,7 +632,8 @@ class _ItemRow extends StatelessWidget {
 }
 
 /// Settings > Sharing and sync > a linked device: how it is connected and when it was last seen, its free space when it says,
-/// how settings go between the two (Settings), Sync now with it alone, Rename (what this device calls it) and Unlink.
+/// how settings go between the two (Settings), "Don't replace my copies from this device", Sync now with it alone, Rename (what
+/// this device calls it) and Unlink.
 class SharingDevicePage extends StatefulWidget {
   const SharingDevicePage({super.key, required this.sharing, required this.peer, this.settingsSync});
 
@@ -738,6 +739,21 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 known: p['link_known'] == true || p['last_seen'] == null,
                 busy: _busy,
               ),
+            SettingsGroup(
+              rows: [
+                SettingsRow(
+                  key: const ValueKey('device-no-replace'),
+                  title: "Don't replace my copies from this device",
+                  titleLines: 2,
+                  status: [Part('Newer versions from $name never replace yours. Notebooks, places and photos arrive beside yours.')],
+                  statusLines: null,
+                  trailing: Switch(
+                    value: s.keepsCopies(widget.peer),
+                    onChanged: _busy ? null : (on) => _run(() => s.setKeepCopies(widget.peer, on)),
+                  ),
+                ),
+              ],
+            ),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
