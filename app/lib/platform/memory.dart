@@ -265,3 +265,20 @@ String mappedFileSummaryOf(String smaps, String path) {
   if (size == 0) return 'model file not mapped';
   return 'model file mapped: ${size ~/ 1024} MB, resident ${rss ~/ 1024} MB';
 }
+
+/// The log text of cl_release_free_memory's JSON ([report]): "allocator gave back 274 MB (anon 543 MB to 269 MB)"; null when there is
+/// no report or it cannot be read.
+String? freedMemoryNote(String? report) {
+  if (report == null) return null;
+  try {
+    final j = jsonDecode(report);
+    if (j is! Map) return null;
+    final what = j['what'] is String ? j['what'] as String : 'anon';
+    final before = j['before_kb'], after = j['after_kb'];
+    if (before is! int || after is! int || before < 0 || after < 0) return 'allocator asked to give memory back ($what not readable)';
+    final back = (before - after) ~/ 1024;
+    return 'allocator gave back $back MB ($what ${before ~/ 1024} MB to ${after ~/ 1024} MB)';
+  } catch (_) {
+    return null;
+  }
+}

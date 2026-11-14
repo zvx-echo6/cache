@@ -4,15 +4,20 @@ import '../video/format.dart' show formatBytes;
 import '../browse/web/build_common.dart' show pageBar, PanelCard, Small;
 import 'linked_folders.dart';
 import '../browse/web/two_column.dart';
+import '../browse/web/build_state.dart' show BuildController;
 
 class LinkedFolderManagementPage extends StatefulWidget {
   const LinkedFolderManagementPage({
     super.key,
     required this.controller,
     required this.libraryId,
+    this.build,
   });
   final LinkedFolderController controller;
   final String libraryId;
+
+  /// The library build queue, to tell a file being added from one that is not.
+  final BuildController? build;
   @override
   State<LinkedFolderManagementPage> createState() =>
       _LinkedFolderManagementPageState();
@@ -71,6 +76,18 @@ class _LinkedFolderManagementPageState
     super.dispose();
   }
 
+  /// A pending file is being added while the build queue has it waiting or in progress.
+  bool _beingAdded(LinkedBook b) {
+    final hash = b.blake3;
+    final queue = widget.build?.queue;
+    if (hash == null || queue == null) return false;
+    return queue.items.any(
+      (i) =>
+          i.linkedBlake3 == hash &&
+          (i.state == 'queued' || i.state == 'reading' || i.state == 'building'),
+    );
+  }
+
   String _stage(LinkedJob j) =>
       j.state == 'queued' ? 'Waiting to check' : 'Checking files';
   Future<void> _unlink(LinkedRoot r) async {
@@ -105,7 +122,7 @@ class _LinkedFolderManagementPageState
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: c,
+    listenable: Listenable.merge([c, widget.build]),
     builder: (context, _) {
       final k = context.t;
       final snap = _watchStarted ? c.snapshot : null;
@@ -166,7 +183,7 @@ class _LinkedFolderManagementPageState
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(b.title),
-                      const Small('Not added to search yet.'),
+                      Small(_beingAdded(b) ? 'Being added' : 'Not added to search yet.'),
                       for (final location in b.locations)
                         Small(
                           '${location.available ? 'Available location' : 'Unavailable location'} · ${location.path}',
@@ -186,7 +203,7 @@ class _LinkedFolderManagementPageState
             ),
           const SizedBox(height: 10),
           const Small(
-            'New and changed PDFs are listed here when found. They are not added to search in this release. Original PDFs are never opened from this page.',
+            'New and changed PDFs are found and added to this library automatically. Cache never changes the original files.',
           ),
         ],
       );
