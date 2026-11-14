@@ -128,6 +128,7 @@ class LibrariesState extends ChangeNotifier {
     PickPath? pickFile,
     SaveBytes? saveBytes,
     this.pollInterval = const Duration(milliseconds: 250),
+    this.ownBusyRetry = const Duration(seconds: 30),
     this.bundledGuide,
     this.device,
     AppFs? appFs,
@@ -161,6 +162,12 @@ class LibrariesState extends ChangeNotifier {
   final PickPath _pickFile;
   final SaveBytes _saveBytes;
   final Duration pollInterval;
+
+  /// How long after an own library answered `busy` [syncOwnLibraries] looks at it once more ([rescan]). The core refuses the rebuild
+  /// while a keyword index job of that library runs (one a pack's arrival started, or the one the last rebuild started), or an
+  /// update or Add PDF writes it; nothing else would look again until the next sync change or start. One delayed look, not a loop.
+  final Duration ownBusyRetry;
+  Timer? _ownRetry;
 
   /// The guide library shipped in the app, as a file to add (copied out of the assets); null leaves it out (tests).
   final Future<File?> Function()? bundledGuide;
@@ -654,6 +661,7 @@ class LibrariesState extends ChangeNotifier {
     final base = dir;
     if (core == null || base == null || _dev != null || _disposed) return false;
     var rebuilt = false;
+    var busy = false;
     final List<Directory> folders;
     try {
       folders = base.listSync().whereType<Directory>().toList();
@@ -684,14 +692,29 @@ class LibrariesState extends ChangeNotifier {
           if (bad.isNotEmpty) logError('My books: packs that could not be read', detail: bad.join('; '));
         } else {
           ownSyncResults[d.path] = {'error': p.errorCode ?? p.state.name, 'message': p.errorMessage};
-          if (p.errorCode != 'busy') logError('My books could not be made from its packs', error: p.errorMessage, detail: name);
+          if (p.errorCode == 'busy') {
+            busy = true;
+          } else {
+            logError('My books could not be made from its packs', error: p.errorMessage, detail: name);
+          }
         }
       } on CacheSearchException catch (e) {
         ownSyncResults[d.path] = {'error': e.code, 'message': e.message};
-        if (e.code != 'busy') logError('My books could not be made from its packs', error: e, detail: name);
+        if (e.code == 'busy') {
+          busy = true;
+        } else {
+          logError('My books could not be made from its packs', error: e, detail: name);
+        }
       } finally {
         _owning.remove(d.path);
       }
+    }
+    if (busy && _ownRetry == null && !_disposed) {
+      logInfo('My books: busy; looking again in ${ownBusyRetry.inSeconds} s');
+      _ownRetry = Timer(ownBusyRetry, () {
+        _ownRetry = null;
+        if (!_disposed) unawaited(rescan());
+      });
     }
     return rebuilt;
   }
@@ -1342,6 +1365,8 @@ class LibrariesState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _ownRetry?.cancel();
+    _ownRetry = null;
     device?.removeListener(_onDeviceChanged);
     sources.removeListener(_onSources);
     super.dispose();
