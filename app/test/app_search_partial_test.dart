@@ -1,8 +1,6 @@
 // AppSearch hands each module's answer over as it arrives (PM, 2026-11-14), so Home can show a fast module's results while a slow
 // one is still searching.
 
-import 'dart:async';
-
 import 'package:cache/search/app_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
