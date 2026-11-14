@@ -20,6 +20,7 @@ import 'package:cache/nav/nav_geojson.dart';
 import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/speaker.dart';
 import 'package:cache/nav/ui/lane_strip.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
@@ -1638,6 +1639,22 @@ void main() {
       expect(await bridge.prompt('x'), kPromptShort);
     });
 
+    test('when the phone\'s voice has said its prompts the car side is told at once, so the other apps\' sound comes back', () async {
+      final voice = _IdleVoice();
+      final s = CarAwareSpeaker(voice, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      await s.speak('Turn left.');
+      expect(toCar.where((c) => c.method == 'promptDone'), isEmpty);
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+      // With no car attached nothing is sent.
+      await fromCar('connected', {'on': false});
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+    });
+
     test('an empty prompt asks nothing of the car side (it would make the audio session active for nothing) and says nothing', () async {
       final s = CarAwareSpeaker(speaker, car: () => bridge);
       promptAnswer = kPromptNormal;
@@ -1715,4 +1732,15 @@ void main() {
       expect(opens, 0);
     });
   });
+}
+
+/// A voice that says when it has said its prompts, as the phone's real one does.
+class _IdleVoice implements Speaker, IdleSpeaker {
+  final List<String> said = [];
+  @override
+  void Function()? onIdle;
+  @override
+  Future<void> speak(String text) async => said.add(text);
+  @override
+  Future<void> stop() async {}
 }

@@ -337,6 +337,12 @@ class CarBridge {
     if (connected.value) await _send('promptStop', null);
   }
 
+  /// The phone's voice has said every prompt it was given: the car side lets the audio session (iPhone) or the navigation
+  /// focus (Android) go at once.
+  Future<void> promptDone() async {
+    if (connected.value) await _send('promptDone', null);
+  }
+
   // ---- the car asking --------------------------------------------------------------------------------------
 
   Future<Object?> _onCall(MethodCall call) async {
@@ -574,7 +580,16 @@ const String kPromptNone = 'none';
 /// On an iPhone with its car screen attached the car side says how iOS wants the prompt given. For a short one it has played
 /// a tone itself; for that and for none the phone's voice says nothing. Any other answer, or none, and the prompt is spoken.
 class CarAwareSpeaker implements Speaker {
-  CarAwareSpeaker(this.inner, {required this.car});
+  CarAwareSpeaker(this.inner, {required this.car}) {
+    final idle = inner;
+    if (idle is IdleSpeaker) {
+      idle.onIdle = () {
+        try {
+          unawaited(car()?.promptDone());
+        } catch (_) {}
+      };
+    }
+  }
 
   final Speaker inner;
   final CarBridge? Function() car;

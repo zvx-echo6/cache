@@ -229,9 +229,11 @@ for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
 check(((recorded("prompt_styles.json") as? [Any]) ?? []).count >= 4, "the recorded prompt states are there")
 // The session held for the phone's voice is let go by the car side only if the voice never does: never before the prompt,
 // and the ones queued before it, could have been said at the guidance rate (about 14 letters a second); never past 40 s.
-check(CarPromptHold.seconds(characters: 0) == 20, "an empty prompt: the session is held 20 s at most")
-check(CarPromptHold.seconds(characters: 60) > 20 + 60.0 / 14, "a usual prompt: held longer than it takes to say it, with room for one queued before it")
-check(CarPromptHold.seconds(characters: 2000) == 40 && CarPromptHold.seconds(characters: -5) == 20, "held 40 s at most, 20 s at least")
+check(CarPromptHold.seconds(characters: 0) == 12, "an empty prompt: the safety lets the session go after 12 s")
+check(CarPromptHold.seconds(characters: 60) >= 2 + 60.0 / 14 + 10, "a usual prompt: the safety waits 10 s past the time it takes to say it")
+check(CarPromptHold.seconds(characters: 2000) == 30 && CarPromptHold.seconds(characters: -5) == 12, "the safety waits 30 s at most")
+check(CarPromptDone.letsGo(tonePlaying: false), "the voice finished: the session is let go")
+check(!CarPromptDone.letsGo(tonePlaying: true), "the voice finished while the tone plays: the tone's end lets it go")
 let tone: [Int16] = CarPromptTone.samples()
 check(tone.count == Int(44100 * 0.28), "the tone is 0.28 s long")
 check(tone.first == 0 && abs(Int(tone.last ?? 99)) < 40, "the tone starts and ends without a click")
@@ -567,6 +569,8 @@ link.onPrompt = {
   return "short"
 }
 link.onPromptStop = { stops += 1 }
+var dones = 0
+link.onPromptDone = { dones += 1 }
 reply = []
 let promptText: [String: Any] = ["text": "Turn left"]
 let promptKnown = link.handle(method: "prompt", arguments: promptText, reply: { reply.append($0) })
@@ -576,6 +580,8 @@ check(promptAnswer == "short", "a prompt is answered with what the hook says abo
 let stopKnown = link.handle(method: "promptStop", arguments: nil, reply: { reply.append($0) })
 check(stopKnown && reply.count == 2, "the end of a prompt is answered")
 check(prompts == ["Turn left"] && stops == 1, "the prompt and its end reach the audio hook")
+let doneKnown = link.handle(method: "promptDone", arguments: nil, reply: { reply.append($0) })
+check(doneKnown && reply.count == 3 && dones == 1, "the phone's voice finishing is answered and reaches the audio hook")
 
 // what is not the channel's
 reply = []

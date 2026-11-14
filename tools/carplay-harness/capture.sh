@@ -956,6 +956,22 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     fi
     sleep 1
   done
+  # Another app takes the audio (posted as iOS posts it: began, then ended), and the next prompt must still be spoken: the
+  # session is made active again and the answer is normal.
+  before=$(log_count 'harness steps: prompt answered')
+  notify promptinterrupted
+  if wait_more 'harness steps: prompt answered' "$before" 8; then
+    got=$(grep 'harness steps: prompt answered' "$STREAM" | tail -n 1 | sed 's/.*prompt answered //')
+    asked=$(grep 'car prompts: asked with' "$STREAM" | tail -n 1 | sed 's/.*car prompts: asked with //')
+    grep -q 'car prompts: the audio session was interrupted' "$STREAM" || GUIDE_MISSING="$GUIDE_MISSING [the app did not say its audio session was interrupted]"
+    grep -q 'car prompts: the interruption ended' "$STREAM" || GUIDE_MISSING="$GUIDE_MISSING [the app did not say the interruption ended]"
+    case "$asked" in
+      *"the session made active,"*"the answer is normal") PROMPTS="$PROMPTS; after another app's interruption the next prompt was answered '$got' ($asked)" ;;
+      *) GUIDE_MISSING="$GUIDE_MISSING [after an interruption a prompt was answered '$got': ${asked:-no line from the app}]" ;;
+    esac
+  else
+    GUIDE_MISSING="$GUIDE_MISSING [prompt after an interruption: the stand-in Dart side got no answer]"
+  fi
   grep -q "car prompts: ready, the system's three style codes are the known ones: true" "$STREAM" || GUIDE_MISSING="$GUIDE_MISSING [the prompt style codes were not confirmed at start]"
   TONE=$(grep 'car prompts: the tone' "$STREAM" | sed 's/.*car prompts: //' | tr '\n' ';')
   # A moving vehicle: five positions a second apart. The marker glides between them and the camera goes with it; a picture

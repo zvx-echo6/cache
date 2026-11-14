@@ -49,13 +49,18 @@ enum CarPromptSession: Equatable {
   }
 }
 
-/// How long the car side waits, after a spoken prompt was answered, before it lets the session go itself: only for a voice that
-/// never spoke or never finished (the voice lets it go as soon as it is done). Long enough for the prompt and the ones queued
-/// before it at the guidance rate, so a prompt is never cut; at most 40 seconds.
+/// How long the car side waits, after a spoken prompt was answered, before it lets the session go itself. Only a safety: the
+/// session is let go as soon as the phone's voice says it has said its prompts (`promptDone`). It is the time the prompt takes
+/// at the guidance rate (about 14 letters a second, with 2 s to start) and 10 s more; at most 30 seconds.
 enum CarPromptHold {
   static func seconds(characters: Int) -> Double {
-    min(40, 20 + 0.12 * Double(max(0, characters)))
+    min(30, 12 + 0.08 * Double(max(0, characters)))
   }
+}
+
+/// When the phone's voice has said its prompts, the session is let go, unless the tone is playing (its own end lets it go).
+enum CarPromptDone {
+  static func letsGo(tonePlaying: Bool) -> Bool { !tonePlaying }
 }
 
 /// The short prompt without words: one soft note, as sound samples. Pure sums, so the Mac tests can hold its length and
@@ -129,11 +134,41 @@ final class CarPrompts: NSObject, AVAudioPlayerDelegate {
   func start() {
     CarLink.shared.onPrompt = { [weak self] text in self?.asked(text) }
     CarLink.shared.onPromptStop = { [weak self] in self?.stopped() }
+    CarLink.shared.onPromptDone = { [weak self] in self?.voiceDone() }
     // The three codes this file knows are the system's own.
     let known = CarPromptStyle(code: AVAudioSession.PromptStyle.normal.rawValue) == .spoken
       && CarPromptStyle(code: AVAudioSession.PromptStyle.short.rawValue) == .tone
       && CarPromptStyle(code: AVAudioSession.PromptStyle.none.rawValue) == .silent
     Self.log.info("car prompts: ready, the system's three style codes are the known ones: \(known, privacy: .public)")
+    // Another app taking the audio (an assistant, a call) interrupts this session. Nothing is resumed here: the next prompt
+    // makes the session active again (asked), and the phone's voice clears itself if it was left paused (FlutterTtsSpeaker
+    // in lib/nav/speaker.dart). The lines say when it happened, for a drive's log.
+    let center = NotificationCenter.default
+    observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+      self?.interrupted(note)
+    })
+    observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { note in
+      let raw = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.uintValue ?? 0
+      Self.log.info("car prompts: the audio route changed (reason \(raw, privacy: .public))")
+    })
+  }
+
+  private var observers: [NSObjectProtocol] = []
+
+  private func interrupted(_ note: Notification) {
+    let raw = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue ?? 99
+    if raw == AVAudioSession.InterruptionType.began.rawValue {
+      // A tone cut by it is let go with the session; the held time for the voice is not needed any more.
+      hold?.cancel()
+      hold = nil
+      player?.stop()
+      player = nil
+      Self.log.info("car prompts: the audio session was interrupted by other audio; the next prompt makes it active again")
+    } else if raw == AVAudioSession.InterruptionType.ended.rawValue {
+      let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber)?.uintValue ?? 0
+      let resume = AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume)
+      Self.log.info("car prompts: the interruption ended (the system says resume: \(resume, privacy: .public))")
+    }
   }
 
   private func style(_ session: AVAudioSession) -> CarPromptStyle {
@@ -182,6 +217,16 @@ final class CarPrompts: NSObject, AVAudioPlayerDelegate {
     guard player == nil else { return }
     release()
     Self.log.info("car prompts: the session held for the phone's voice is let go")
+  }
+
+  /// The phone's voice has said every prompt it was given: the session held for it is let go now, telling the other apps, so
+  /// their sound comes back as the prompt ends.
+  private func voiceDone() {
+    hold?.cancel()
+    hold = nil
+    guard CarPromptDone.letsGo(tonePlaying: player != nil) else { return }
+    release()
+    Self.log.info("car prompts: the phone's voice finished, the audio session is let go")
   }
 
   /// Dart stopped the prompts (the voice switched off, the route ended): the tone stops and the session is let go.
