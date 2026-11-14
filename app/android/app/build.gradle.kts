@@ -6,6 +6,9 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// ABIs the APK carries. Default arm64-v8a (every store build); -PcacheAbis=x86_64 builds the emulator test APK.
+val cacheAbis: List<String> = ((project.findProperty("cacheAbis") as String?) ?: "arm64-v8a").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
 android {
     namespace = "com.happylittlellc.cache"
     compileSdk = flutter.compileSdkVersion
@@ -37,7 +40,8 @@ android {
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
         // 64-bit ARM only: the search core, llama, libzim, Valhalla and iroh are built for arm64-v8a only, so an x86_64 slice would load but not work.
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // -PcacheAbis=x86_64 (default arm64-v8a) is the emulator TEST build only (ci/emulator-x86_64): no store build sets it.
+        ndk { abiFilters += cacheAbis }
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -53,7 +57,7 @@ android {
             excludes += "**/libggml-cpu-android_armv9*.so"
             // arm64-v8a only. abiFilters does not drop the prebuilt libraries inside plugin AARs (libdartjni, libmaplibre,
             // libmlkit_google_ocr_pipeline), which would leave x86_64 and armeabi-v7a folders holding only those, so exclude them outright.
-            excludes += listOf("**/x86_64/**", "**/x86/**", "**/armeabi-v7a/**", "**/armeabi/**")
+            excludes += listOf("x86_64", "x86", "armeabi-v7a", "armeabi", "arm64-v8a").filter { it !in cacheAbis }.map { "**/$it/**" }
         }
     }
 

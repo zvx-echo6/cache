@@ -24,6 +24,9 @@ rootProject.allprojects {
 
 apply plugin: "com.android.library"
 
+// -PcacheLlama=false (the x86_64 emulator test build only) builds no native code: libcache_llama.so is then absent from the APK.
+def buildLlama = (project.findProperty("cacheLlama") ?: "true").toString() != "false"
+
 android {
     namespace = "co.cache.cache_llama"
 
@@ -38,7 +41,7 @@ android {
     ndkVersion = android.ndkVersion
 
     // Invoke the shared CMake build with the Android Gradle Plugin.
-    externalNativeBuild {
+    if (buildLlama) externalNativeBuild {
         cmake {
             path = "../src/CMakeLists.txt"
             // Debug llama.cpp is unusably slow, so every variant builds it as Release.
@@ -66,7 +69,7 @@ android {
             abiFilters "arm64-v8a" // arm64 only; the app ships no x86_64 slice
         }
 
-        externalNativeBuild {
+        if (buildLlama) externalNativeBuild {
             cmake {
                 // c++_shared: on arm64 the native code is several .so files (the CPU variants are
                 // loaded at run time) that must share one C++ runtime.
