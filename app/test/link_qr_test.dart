@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
+import 'package:cache/update/app_update.dart' show AppUpdate, AppUpdateSource;
+import 'package:cache/update/update_ui.dart' show AppUpdates, currentAppUpdates;
 
 const _newer = 'This link code is from a newer Cache. Update Cache here, then try again.';
 const _b32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -367,7 +369,28 @@ void main() {
       expect(find.text(_newer), findsOneWidget);
       await r.dispose(tester);
     });
+
+    testWidgets('"Update Cache here" goes to the update: the sentence carries Update Cache, which opens what the update banner opens', (tester) async {
+      final opened = <String>[];
+      final before = currentAppUpdates;
+      currentAppUpdates = AppUpdates(source: _NoUpdate(), openUrl: (u) async => opened.add(u), android: true);
+      addTearDown(() => currentAppUpdates = before);
+      final inbox = fresh();
+      final r = await openPage(tester, inbox);
+      inbox.offer('cachelink://link/CACHE2-ABCDEF');
+      await tester.pumpAndSettle();
+      expect(find.text(_newer), findsOneWidget);
+      await tester.tap(find.widgetWithText(SnackBarAction, 'Update Cache'));
+      await tester.pump();
+      expect(opened.single, startsWith('market://details?id='));
+      await r.dispose(tester);
+    });
   });
+}
+
+class _NoUpdate implements AppUpdateSource {
+  @override
+  Future<AppUpdate?> check() async => null;
 }
 
 /// The native side pushing a link while the app runs.
