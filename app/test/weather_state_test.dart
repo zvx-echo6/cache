@@ -757,6 +757,26 @@ void main() {
       expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4);
     });
 
+    test('a run where every fetch failed does not hold the next one back; a good one does', () async {
+      h = await Harness.create();
+      await setUp3(h);
+      for (final c in h.weather.enabledSources) {
+        h.core.fetchErrors[c.id] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      }
+      final failed = await h.weather.updateIfDue(const Duration(minutes: 30));
+      expect(failed?.fetched, 0);
+      expect(failed?.upToDate, 0);
+      expect(failed?.failures, isNotEmpty, reason: 'every fetch failed');
+      h.core.fetches.clear();
+      h.core.fetchErrors.clear();
+      h.clock = h.clock.add(const Duration(minutes: 5));
+      expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4, reason: 'a failed run is not recent');
+      h.core.fetches.clear();
+      h.clock = h.clock.add(const Duration(minutes: 5));
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'a good run within 30 minutes is');
+      expect(h.core.fetches, isEmpty);
+    });
+
     test('on mobile data, updates still fetch, also with mobile data downloads off', () async {
       h = await Harness.create();
       await setUp3(h);
