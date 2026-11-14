@@ -11,6 +11,12 @@ import UIKit
 /// turn after it, and what is left of the trip (distance, time, arrival). Arriving and looking for a new route are told to
 /// CarPlay as its own states for them, with Android's words; so is waiting for the first turn.
 ///
+/// The panel's colour: the car follows the phone's theme, so the guidance panel and the trip estimates take the trip palette's
+/// `hostCard` (the theme the car shows now), as the Android host's turn card does. CarPlay picks the panel's text colour for
+/// it itself; the estimates are told light or dark from the colour (CarThemeColors.hostCardIsLight). A new palette (a theme
+/// picked, or the car's day or night while none is) is given to the guidance that runs: the turns are handed over again with
+/// the colour, without starting guidance again.
+///
 /// Lanes: while the phone shows lanes under its turn banner, the car shows them in CarPlay's one form for lanes, the panel's
 /// second place as a picture with no words (the phone's lane strip, drawn by CarIcons); the turn after next waits meanwhile.
 ///
@@ -43,6 +49,9 @@ final class CarGuidance: CarLinkListener {
   private var shownTurnDistance: String?
   private var shownLeft: String?
   private var shownState: String?
+  /// The panel's colour last given to CarPlay ("#rrggbb"), and as a colour; nil until the trip's palette has come.
+  private var shownCard: String?
+  private var cardColor: UIColor?
   /// The lane data last given to CarPlay for the vehicle (a CPLaneGuidance, iOS 17.4).
   private var vehicleLanes: AnyObject?
   private var wasArrived = false
@@ -127,6 +136,7 @@ final class CarGuidance: CarLinkListener {
   // ---- the phone's trip --------------------------------------------------------------------------------------------------
 
   func carLinkTrip(_ t: CarTrip) {
+    paintPanel(t)
     if !t.guiding {
       stopping = false
       if guiding {
@@ -164,6 +174,25 @@ final class CarGuidance: CarLinkListener {
     shownState = nil
     showTurns(t, step, session)
     showLeft(t, map, trip)
+  }
+
+  /// The guidance panel and the trip estimates in the palette's turn panel colour, given to CarPlay when it changes. While
+  /// guidance runs, the turns (or the paused state) are handed over again with it at once.
+  private func paintPanel(_ t: CarTrip) {
+    guard let palette = t.palette, palette.hostCard != shownCard, let map = mapTemplate else { return }
+    shownCard = palette.hostCard
+    let color = CarIcons.color(palette.hostCard)
+    cardColor = color
+    map.guidanceBackgroundColor = color
+    let light = palette.hostCardIsLight
+    map.tripEstimateStyle = light ? .light : .dark
+    Self.log.info("car guidance: the panel takes the \(palette.theme, privacy: .public) theme's \(palette.hostCard, privacy: .public), its estimates \(light ? "light" : "dark", privacy: .public)")
+    if session != nil {
+      shownTurns = nil
+      shownTurnDistance = nil
+      shownLeft = nil
+      shownState = nil
+    }
   }
 
   private func begin(_ t: CarTrip, on map: CPMapTemplate) {
@@ -223,7 +252,7 @@ final class CarGuidance: CarLinkListener {
     shownState = state
     shownTurns = nil
     shownTurnDistance = nil
-    session.pauseTrip(for: reason, description: words)
+    session.pauseTrip(for: reason, description: words, turnCardColor: cardColor)
     Self.log.info("car guidance: \(state, privacy: .public)")
   }
 
@@ -247,15 +276,15 @@ final class CarGuidance: CarLinkListener {
     if turns != shownTurns {
       shownTurns = turns
       shownTurnDistance = distance
-      let first = Self.maneuver(step)
+      let first = Self.maneuver(step, cardColor)
       first.initialTravelEstimates = estimates
       var list: [CPManeuver] = [first]
       if !secondRowFits {
         // The next turn alone.
       } else if !step.lanes.isEmpty {
-        list.append(Self.laneManeuver(step.lanes))
+        list.append(Self.laneManeuver(step.lanes, cardColor))
       } else if let then = t.then {
-        list.append(Self.maneuver(then))
+        list.append(Self.maneuver(then, cardColor))
       }
       tellVehicleLanes(step, first, session)
       maneuvers = list
@@ -284,11 +313,12 @@ final class CarGuidance: CarLinkListener {
   /// The lanes in CarPlay's form for them: a maneuver in the panel's second place that is a picture and no words. CarPlay
   /// lays it out as a picture across the panel only when its delegate says so for this maneuver (isLanes, asked by the car
   /// scene); without that it leaves the place empty.
-  private static func laneManeuver(_ lanes: [CarLane]) -> CPManeuver {
+  private static func laneManeuver(_ lanes: [CarLane], _ color: UIColor?) -> CPManeuver {
     let maneuver = CPManeuver()
     maneuver.instructionVariants = []
     maneuver.symbolImage = CarIcons.laneStrip(lanes)
     maneuver.userInfo = lanesMark
+    maneuver.cardBackgroundColor = color
     return maneuver
   }
 
@@ -351,8 +381,11 @@ final class CarGuidance: CarLinkListener {
     return guidance
   }
 
-  private static func maneuver(_ step: CarStep) -> CPManeuver {
+  private static func maneuver(_ step: CarStep, _ color: UIColor?) -> CPManeuver {
     let maneuver = CPManeuver()
+    // The panel's colour on the maneuver too (it takes precedence over the template's): a turn handed over after a new palette
+    // carries the new colour whatever CarPlay keeps of the template's.
+    maneuver.cardBackgroundColor = color
     let blank = step.cue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     maneuver.instructionVariants = [blank ? " " : step.cue]
     maneuver.symbolImage = CarIcons.maneuver(step.turn)
