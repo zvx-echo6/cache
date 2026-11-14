@@ -938,6 +938,12 @@ class _CacheAppState extends State<CacheApp> {
       nav.requestMap();
       return true;
     },
+    // Show on map: Maps focused on the place (its card), the way Directions gets there, without a route
+    showOnMap: (p, name) {
+      nav.select(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+      nav.requestMap();
+    },
+    openUrl: hub.openUrl,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.

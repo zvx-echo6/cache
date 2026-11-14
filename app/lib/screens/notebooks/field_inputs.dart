@@ -132,7 +132,10 @@ class _PlaceField extends StatelessWidget {
 
 /// "Place: Home  [Change]": the entry's place (or "No place"), changed through the place picker.
 class PlaceRow extends StatelessWidget {
-  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false});
+  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false, this.onShowOnMap});
+
+  /// "Show on map" beside the place (Maps, focused on it); null leaves it out.
+  final VoidCallback? onShowOnMap;
 
   final NbPlace? place;
   final PlaceChoices places;
@@ -151,6 +154,8 @@ class PlaceRow extends StatelessWidget {
         Icon(Icons.place_outlined, size: 20, color: k.secondary),
         const SizedBox(width: 8),
         Expanded(child: Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.text))),
+        if (onShowOnMap != null && place != null)
+          IconButton(key: const ValueKey('place-show-on-map'), tooltip: 'Show on map', icon: Icon(Icons.map_outlined, size: 20, color: k.accent), onPressed: onShowOnMap),
         TextButton(
           key: const ValueKey('place-change'),
           onPressed: () async {

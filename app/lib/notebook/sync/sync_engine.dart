@@ -59,6 +59,9 @@ class SyncReport {
   final List<String> imported = [];
   final Set<String> importedBooks = {};
 
+  /// The entries those notes became (so one note added can be opened).
+  final List<String> importedIds = [];
+
   /// Tagged notes Cache could not import (it could not write its id into them: a read-only folder).
   int notAdded = 0;
 
@@ -1035,8 +1038,10 @@ class NotebookSync {
       return;
     }
     _items[id] = _Item(u.path, unitText, 0, extra: doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
+    String? savedId;
     try {
       final saved = await _apply(id, doc, byName);
+      savedId = saved.id;
       _items[id] = _Item(u.path, unitText, saved.rev, extra: _items[id]?.extra ?? doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
     } catch (e) {
       _items.remove(id);
@@ -1049,6 +1054,7 @@ class NotebookSync {
     }
     r.imported.add((doc.title ?? '').trim().isEmpty ? _baseName(u.path) : doc.title!.trim());
     r.importedBooks.add(book.id);
+    if (savedId != null) r.importedIds.add(savedId);
     await _save();
   }
 
