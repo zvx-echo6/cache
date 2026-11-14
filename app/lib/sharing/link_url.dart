@@ -25,10 +25,20 @@ const kLinkMaxPayload = 2048;
 const kNotACode = 'this is not a Cache link code';
 const kDamagedCode = 'the link code is damaged';
 
+/// What the engine's `kind` is for a code made by a newer Cache (`CACHE2-` and up), and what the person is told for it.
+const kNewerCodeKind = 'link_code_newer';
+const kNewerCode = 'This link code is from a newer Cache. Update Cache here, then try again.';
+
 /// Thrown for a link or code that cannot be read; [message] is the person-facing text.
 class BadLinkCode implements Exception {
-  const BadLinkCode(this.message);
+  const BadLinkCode(this.message, {this.newer = false});
+
+  /// For a code made by a newer Cache.
+  const BadLinkCode.newer() : this(kNewerCode, newer: true);
   final String message;
+
+  /// True when the code is from a newer Cache (not damaged, not something else).
+  final bool newer;
 
   @override
   String toString() => message;
@@ -103,7 +113,12 @@ List<int>? _base32(String s) {
 /// The device a `CACHE1-` link code belongs to. Throws [BadLinkCode] with the engine's own messages when it is not one.
 LinkCodeInfo decodeLinkCode(String code) {
   final s = code.replaceAll(RegExp(r'\s'), '').toUpperCase();
-  if (!s.startsWith('CACHE1-')) throw const BadLinkCode(kNotACode);
+  if (!s.startsWith('CACHE1-')) {
+    // `CACHE<n>-` with n above 1 is made by a newer Cache; a number too big to read is newer too.
+    final n = RegExp(r'^CACHE(\d+)-').firstMatch(s)?.group(1);
+    if (n != null && (BigInt.parse(n) > BigInt.one)) throw const BadLinkCode.newer();
+    throw const BadLinkCode(kNotACode);
+  }
   final bytes = _base32(s.substring(7));
   if (bytes == null) throw const BadLinkCode(kDamagedCode);
   try {
