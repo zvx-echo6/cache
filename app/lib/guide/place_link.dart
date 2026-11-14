@@ -31,9 +31,7 @@ class LinkText extends StatelessWidget {
   }
 }
 
-/// A [LinkText] to an [AppPlace], or the words alone when the app cannot open places here (a test without a shell).
-Widget placeLink(String text, AppPlace place, {Key? key, TextStyle? style}) {
-  final open = openAppPlace;
-  if (open == null) return Text(text, key: key, style: style);
-  return LinkText(text, key: key, style: style, onTap: () => open(place));
-}
+/// A [LinkText] to an [AppPlace]. The shell's [openAppPlace] is read when it is tapped, not when it is built, so a link drawn
+/// before the shell set it still goes there.
+Widget placeLink(String text, AppPlace place, {Key? key, TextStyle? style}) =>
+    LinkText(text, key: key, style: style, onTap: () => openAppPlace?.call(place));
