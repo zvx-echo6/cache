@@ -119,7 +119,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
             if (v == 'rename') unawaited(_renameLibrary(lib));
             if (v == 'delete') unawaited(_deleteLibrary(lib));
             if (v == 'linked-folders' && widget.build.linkedFolders != null) {
-              Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId)));
+              Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId, build: widget.build)));
             }
           },
           itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library')),

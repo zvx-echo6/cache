@@ -101,6 +101,9 @@ class _HomeScreenState extends State<HomeScreen> {
   List<AppSearchResult>? _results;
   int _generation = 0;
 
+  /// True while a module is still searching: Home then shows what has arrived, with a thin bar, and not "Nothing found".
+  bool _searching = false;
+
   LayoutState get layout => widget.layout;
 
   @override
@@ -134,12 +137,32 @@ class _HomeScreenState extends State<HomeScreen> {
   void _changed(String text) {
     _debounce?.cancel();
     final gen = ++_generation;
-    setState(() => _results = null);
-    if (text.trim().isEmpty) return;
-    _debounce = Timer(const Duration(milliseconds: 250), () async {
-      final found = await widget.search?.search(text) ?? const <AppSearchResult>[];
-      if (mounted && gen == _generation) setState(() => _results = found);
+    setState(() {
+      _results = null;
+      _searching = false;
     });
+    if (text.trim().isEmpty) return;
+    _debounce = Timer(const Duration(milliseconds: 250), () => _run(text, gen));
+  }
+
+  /// One search: each module's results show as they arrive (a slow module does not hide a fast one's); the search is over when
+  /// every module has answered or run out of time.
+  Future<void> _run(String text, int gen) async {
+    final search = widget.search;
+    if (search == null) {
+      setState(() => _results = const []);
+      return;
+    }
+    setState(() => _searching = true);
+    final found = await search.search(text, onPartial: (soFar) {
+      if (mounted && gen == _generation) setState(() => _results = soFar);
+    });
+    if (mounted && gen == _generation) {
+      setState(() {
+        _results = found;
+        _searching = false;
+      });
+    }
   }
 
   void _clear() {
@@ -155,13 +178,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _debounce?.cancel();
     final gen = ++_generation;
     if (text.trim().isEmpty) {
-      setState(() => _results = null);
+      setState(() {
+        _results = null;
+        _searching = false;
+      });
       return;
     }
-    unawaited(() async {
-      final found = await widget.search?.search(text) ?? const <AppSearchResult>[];
-      if (mounted && gen == _generation) setState(() => _results = found);
-    }());
+    unawaited(_run(text, gen));
   }
 
   void _ask() {
@@ -380,7 +403,9 @@ class _HomeScreenState extends State<HomeScreen> {
             // no "Enter" hint: Enter searches; this row is the way to ask (owner, 2026-11-13)
             onTap: _ask,
           ),
-          if (results != null && results.isEmpty && !widget.askOn)
+          if (_searching && (results == null || results.isEmpty))
+            const SizedBox.shrink()
+          else if (results != null && results.isEmpty && !widget.askOn)
             _nothingOnDevice(k)
           else if (results != null && results.isEmpty)
             row(
@@ -398,6 +423,8 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => _open(r),
             ),
           ],
+          if (_searching)
+            LinearProgressIndicator(key: const ValueKey('search-searching'), minHeight: 2, color: k.accent, backgroundColor: k.surface),
         ],
       ),
     );

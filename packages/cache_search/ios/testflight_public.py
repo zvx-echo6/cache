@@ -2,6 +2,7 @@
 """Hands an uploaded build to a TestFlight group (the public testers by default), through the App Store Connect API.
 
 Usage: testflight_public.py <build number> [group name, default "Public"]
+       (a build number is one to three whole numbers separated by periods: 52, or 51.1 for a round build)
        testflight_public.py --check-newer <build number>   (fails unless it is higher than every build already uploaded)
 Environment: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_B64 (the API key the upload uses), BUNDLE_ID, and optionally WHATS_NEW (the
 "What to test" text). Without WHATS_NEW the text is the "Unreleased" section of CHANGELOG.md, as plain text.
@@ -17,6 +18,7 @@ left as it is, so it can run again. Standard library and openssl only: nothing t
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -126,30 +128,45 @@ def app_id(asc: Asc) -> str:
     return apps["data"][0]["id"]
 
 
-def highest_build(asc: Asc, app: str) -> int:
-    """The highest build number uploaded for the app, of any version (0 when there is none)."""
-    best, path = 0, f"/v1/builds?filter[app]={app}&fields[builds]=version&limit=200"
+def parse_build(number: str):
+    """A build number such as "51", "51.1" or "51.1.2" (one to three whole numbers) as a tuple of three ints, padded with
+    zeros so that they compare the way Apple compares them (51 < 51.1 < 51.2 < 51.10 < 52). None when it is not one."""
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+){0,2}", number):
+        return None
+    parts = [int(p) for p in number.split(".")]
+    return tuple(parts + [0] * (3 - len(parts)))
+
+
+def highest_build(asc: Asc, app: str):
+    """The highest build number uploaded for the app, of any version, dotted or not, as a tuple (0, 0, 0) when there is none."""
+    best, path = (0, 0, 0), f"/v1/builds?filter[app]={app}&fields[builds]=version&limit=200"
     while path:
         st, page = asc.call("GET", path)
         if st != 200:
             fail(f"listing the builds: {st} {page}")
-        for b in page.get("data", []):
-            v = b["attributes"].get("version", "")
-            if v.isdigit():
-                best = max(best, int(v))
+        best = max([best] + [t for t in (parse_build(b["attributes"].get("version", "")) for b in page.get("data", [])) if t])
         nxt = page.get("links", {}).get("next")
         path = nxt[len(API):] if nxt and nxt.startswith(API) else None
     return best
 
 
+def show_build(t) -> str:
+    """A parsed build number as text: (51, 1, 0) is 51.1, (52, 0, 0) is 52."""
+    parts = list(t)
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return ".".join(str(p) for p in parts)
+
+
 def check_newer(number: str):
-    if not number.isdigit():
-        fail(f"the build number must be a whole number, not {number!r}")
+    wanted = parse_build(number)
+    if wanted is None:
+        fail(f"the build number must be one to three whole numbers separated by periods, such as 52 or 51.1, not {number!r}")
     asc = Asc()
     last = highest_build(asc, app_id(asc))
-    if int(number) <= last:
-        fail(f"build {number} is not higher than the last TestFlight build ({last}): raise the build number (after the +) in app/pubspec.yaml")
-    print(f"build {number} is higher than the last TestFlight build ({last})")
+    if wanted <= last:
+        fail(f"build {number} is not higher than the last TestFlight build ({show_build(last)}): raise the build number (after the +) in app/pubspec.yaml")
+    print(f"build {number} is higher than the last TestFlight build ({show_build(last)})")
 
 
 def main():

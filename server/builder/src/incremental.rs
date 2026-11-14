@@ -71,6 +71,15 @@ impl WorkShard {
     pub fn flush(&self) -> Result<()> {
         self.shard.flush().map_err(|e| Error::ctx("flushing the work shard", e))
     }
+
+    /// Build the vector index (HNSW) of every segment big enough to need one, and vacuum deleted points. Qdrant Edge never does
+    /// it by itself, and without it a meaning search reads every vector. Already indexed segments are left as they are.
+    pub fn optimize(&self) -> Result<()> {
+        let t = std::time::Instant::now();
+        let changed = self.shard.optimize().map_err(|e| Error::ctx("indexing the work shard's vectors (HNSW)", e))?;
+        eprintln!("work shard: vectors indexed (optimize) in {:.1} s, changed {changed}", t.elapsed().as_secs_f64());
+        Ok(())
+    }
 }
 
 /// Copy the (closed) work shard `src` to `dst` (which must not exist) and finish it as a library shard: every file is synced and
@@ -80,6 +89,7 @@ pub fn publish_copy(src: &Path, dst: &Path) -> Result<usize> {
         copy_dir_synced(src, dst)?;
         cache_search::library::write_segments_manifest(dst).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
         let c = cache_search::libadd::check_library(dst, None).map_err(|e| Error::ctx("checking the copy", e.message))?;
+        cache_search::libadd::require_vectors_indexed(dst).map_err(|e| Error::ctx("checking the copy", e.message))?;
         Ok(c["docs"].as_u64().unwrap_or(0) as usize)
     })();
     if r.is_err() {

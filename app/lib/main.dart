@@ -45,6 +45,7 @@ import 'library/add_pdf/watch_background.dart';
 import 'library/add_pdf/watch_folders.dart';
 import 'background/background_dispatcher.dart';
 import 'background/background_lock.dart';
+import 'background/fgs_add.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -120,7 +121,7 @@ import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'settings/space.dart' show Space;
 import 'search/pdf_index_work.dart';
-import 'platform/battery.dart' show kBatteryChannel;
+import 'platform/battery.dart' show kBatteryChannel, readBattery;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
@@ -519,9 +520,57 @@ class _CacheAppState extends State<CacheApp> {
 
   /// The one lock with the background runs (background/background_lock.dart), once the support folder is known.
   BackgroundLock? _bgLock;
+
+  /// The foreground service for adding PDFs in the background (background/fgs_add.dart): whether leaving starts it, the one
+  /// question about notifications, and the in-app notice of how the last background add ended.
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+  late final FgsAddNoticeState _fgsNotice = FgsAddNoticeState(backgroundDir: () => backgroundDir(_supportPath ?? '.'), jobs: () => addPdf.jobs);
+  late final FgsAddCoordinator _fgsArm = FgsAddCoordinator(
+    platform: const MethodChannelFgsPlatform(),
+    android: !plat.isWeb && Platform.isAndroid,
+    jobs: () => addPdf.jobs,
+    battery: readBattery,
+    askedFile: () => File('${backgroundDir(_supportPath ?? '.')}${Platform.pathSeparator}fgs-notify-asked'),
+    ask: _askFgsNotifications,
+    // Recents (and any leave the app's own lifecycle has not reported yet): Android says so, and the work is handed off now
+    onLeft: () {
+      if (_atFront) _toBack();
+    },
+    onRefused: () {
+      final c = _navKey.currentContext;
+      if (c != null && c.mounted) ScaffoldMessenger.maybeOf(c)?.showSnackBar(const SnackBar(content: Text(FgsWords.refused)));
+    },
+  );
   Timer? _bgOpenTimer;
   int _bgSeen = 0;
   int _watchCount = -1;
+
+  /// "Show how adding is going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
+  Future<bool> _askFgsNotifications() async {
+    final c = _navKey.currentContext;
+    if (c == null || !c.mounted) return false;
+    return await showDialog<bool>(
+          context: c,
+          builder: (ctx) => AlertDialog(
+            title: const Text(FgsWords.askTitle),
+            content: const Text(FgsWords.askText),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text(FgsWords.askNotNow)),
+              TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text(FgsWords.askAllow)),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// The adds changed: whether leaving now starts the service is told to Android again.
+  void _onAddsForFgs() {
+    if (_bgLock == null) return;
+    unawaited(_fgsArm.update().catchError((Object e) {
+      logError('Background add (service): the start decision failed', error: e);
+      return FgsStart.nothingToAdd;
+    }));
+  }
 
   /// The app is open: the lock says so (and keeps saying so while it is).
   void _bgAppOpen() {
@@ -545,6 +594,9 @@ class _CacheAppState extends State<CacheApp> {
       }
     }
     if (!mounted) return;
+    // a background add that failed or ended before it was done is said in the app (the service's own notifications are silent)
+    _fgsNotice.load();
+    _onAddsForFgs();
     indexing.setOpen(true);
     // watched folders are checked each time Cache comes back to the front (not again within a minute)
     unawaited(watchFolders.checkAll(minGap: const Duration(minutes: 1)));
@@ -558,8 +610,13 @@ class _CacheAppState extends State<CacheApp> {
   /// earlier let a background slice start a PDF the app was still pausing (the job folder was still held; Pixel, 2026-11-10).
   void _toBack() {
     _atFront = false;
-    unawaited(_toBackAfterPause());
+    // one hand-off at a time (Android's "left" and the lifecycle's "hidden" both come for one leave)
+    if (_handingOff != null) return;
+    _handingOff = _toBackAfterPause().whenComplete(() => _handingOff = null);
+    unawaited(_handingOff);
   }
+
+  Future<void>? _handingOff;
 
   Future<void> _toBackAfterPause() async {
     try {
@@ -576,7 +633,8 @@ class _CacheAppState extends State<CacheApp> {
           _bgLock?.appClosed();
         },
         hasWork: () => Platform.isAndroid && addPdf.active.any((j) => j.watchId != null && !j.pausedByPerson),
-        queueAdd: scheduleWatchAdd,
+        // while the add service is starting it holds the lock; the unprotected charging run waits (it was taking the lock first)
+        queueAdd: () => queueAddAfterHandOff(serviceStarting: _fgsArm.armed),
       );
       await _writeBackgroundContext();
     } catch (e, st) {
@@ -1050,6 +1108,13 @@ class _CacheAppState extends State<CacheApp> {
           await watchFolders.reload();
         }
         watchFolders.addListener(_onWatchFolders);
+        if (Platform.isAndroid) {
+          fgsNoticeShared = _fgsNotice;
+          await addPdf.load();
+          _fgsNotice.load();
+          addPdf.addListener(_onAddsForFgs);
+          kFgsAppChannel.setMethodCallHandler(_fgsArm.handleCall);
+        }
         await watchFolders.load();
         _onWatchFolders();
         await _writeBackgroundContext();
@@ -1381,6 +1446,8 @@ class _CacheAppState extends State<CacheApp> {
     indexing.dispose();
     _bgOpenTimer?.cancel();
     watchFolders.removeListener(_onWatchFolders);
+    addPdf.removeListener(_onAddsForFgs);
+    _fgsNotice.dispose();
     watchFolders.dispose();
     indexThrottle.dispose();
     if (identical(askFocusShared, askFocus)) askFocusShared = null;
@@ -1446,6 +1513,7 @@ class _CacheAppState extends State<CacheApp> {
     return ListenableBuilder(
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
+        navigatorKey: _navKey,
         title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),

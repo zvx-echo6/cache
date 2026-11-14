@@ -54,11 +54,15 @@ class LinkedBook {
     this.locations, {
     this.pendingIndexing = false,
     this.pendingReason,
+    this.blake3,
   });
   final String id, title;
   final List<LinkedLocation> locations;
   final bool pendingIndexing;
   final String? pendingReason;
+
+  /// The hash of the file, as the folder check recorded it.
+  final String? blake3;
   factory LinkedBook.fromJson(Map<String, dynamic> j) {
     final locations = [
       for (final x in _maps(j['locations'])) LinkedLocation.fromJson(x),
@@ -83,6 +87,7 @@ class LinkedBook {
       locations,
       pendingIndexing: j['pending_indexing'] == true,
       pendingReason: j['pending_reason']?.toString(),
+      blake3: hash is String && hash.isNotEmpty ? hash : null,
     );
   }
 }
