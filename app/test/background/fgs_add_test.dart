@@ -338,6 +338,71 @@ void main() {
       expect(out.words, isNot('nothing to add'));
     });
 
+    test("the app's own Pause always wins: notification Pause, Resume, app Pause, notification Pause and Resume: it stays paused", () async {
+      final slow = FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('reading', pages: 100, pagesDone: 1);
+      }});
+      final s = AddPdfState(
+        calls: slow,
+        dir: () async => Directory('$support/ingest'),
+        engines: () async => {'pdfium_version': 'chromium/7811'},
+        permit: (_) async {},
+        busyWait: const Duration(milliseconds: 1),
+        onPauseDecided: (j) => forgetFgsPausedId(backgroundDir(support), j.id),
+      );
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/p.pdf')..writeAsStringSync('pdf');
+      final job = await s.add(pdfPath: f.path, fileName: 'p.pdf', bytes: 3, title: 'Manual', target: const AddPdfTarget(title: 'My books', path: '/tmp/my-books', isDefault: true));
+
+      Future<void> run({bool resume = false}) async {
+        final c = FgsAddControl();
+        final r = fgsAddJob(support: support, control: c, lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick, resume: resume);
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        c.stop(resume ? 'timeout' : 'person');
+        await r;
+      }
+
+      await run(); // the notification's Pause
+      expect(job.pausedByPerson, isTrue);
+      await run(resume: true); // the notification's Resume
+      expect(job.pausedByPerson, isFalse);
+      await s.pause(job); // the person's own Pause, in the app
+      expect(job.pausedByPerson, isTrue);
+      await run(); // nothing runs: nothing for the notification to pause
+      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick, resume: true);
+      expect(job.pausedByPerson, isTrue);
+      expect(out.words, 'nothing to add');
+    });
+
+    test("a Pause the notification made and the person then took over in the app is not lifted by the notification's Resume", () async {
+      final slow = FakeIngestCalls({'step': (_) async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return progress('reading', pages: 100, pagesDone: 1);
+      }});
+      final s = AddPdfState(
+        calls: slow,
+        dir: () async => Directory('$support/ingest'),
+        engines: () async => {'pdfium_version': 'chromium/7811'},
+        permit: (_) async {},
+        busyWait: const Duration(milliseconds: 1),
+        onPauseDecided: (j) => forgetFgsPausedId(backgroundDir(support), j.id),
+      );
+      addTearDown(s.dispose);
+      final f = File('${tmp.path}/q.pdf')..writeAsStringSync('pdf');
+      final job = await s.add(pdfPath: f.path, fileName: 'q.pdf', bytes: 3, title: 'Manual', target: const AddPdfTarget(title: 'My books', path: '/tmp/my-books', isDefault: true));
+      final c = FgsAddControl();
+      final r = fgsAddJob(support: support, control: c, lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      c.stop('person'); // the notification's Pause
+      await r;
+      await s.resume(job); // the person resumes in the app...
+      await s.pause(job); // ...and pauses it again
+      final out = await fgsAddJob(support: support, control: FgsAddControl(), lock: lock, battery: () async => _charging, state: s, queue: queue, waitForBack: Duration.zero, lookEvery: _quick, resume: true);
+      expect(job.pausedByPerson, isTrue);
+      expect(out.words, 'nothing to add');
+    });
+
     test("Resume with nothing paused by the notification resumes nothing", () async {
       final (s, jobs) = await pending(done);
       await s.pause(jobs.single);

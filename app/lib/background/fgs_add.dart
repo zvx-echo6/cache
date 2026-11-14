@@ -386,6 +386,24 @@ Future<void> addFgsPausedIds(String backgroundDirPath, Set<String> ids) async {
   }
 }
 
+/// The person paused or resumed [id] in the app: the notification no longer holds it as one it paused.
+Future<void> forgetFgsPausedId(String backgroundDirPath, String id) async {
+  try {
+    final f = fgsPausedIdsFile(backgroundDirPath);
+    final ids = _readPausedIds(f);
+    if (!ids.remove(id)) return;
+    if (ids.isEmpty) {
+      await f.delete();
+      return;
+    }
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode(ids.toList()), flush: true);
+    await tmp.rename(f.path);
+  } catch (e) {
+    logError('Background add: the jobs the notification paused could not be updated', error: e);
+  }
+}
+
 /// The jobs the notification's Pause paused, and forgets them (the notification's Resume lifts them once).
 Future<Set<String>> takeFgsPausedIds(String backgroundDirPath) async {
   final f = fgsPausedIdsFile(backgroundDirPath);
