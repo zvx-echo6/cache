@@ -56,7 +56,7 @@ Future<(AppState, ChatController)> _app(WidgetTester tester, Directory dir, Chat
   return (app, chat);
 }
 
-Future<void> _show(WidgetTester tester, AppState app, ChatController chat, List<String> log, {ActionRegistry? actions}) async {
+Future<void> _show(WidgetTester tester, AppState app, ChatController chat, List<String> log) async {
   await tester.pumpWidget(MaterialApp(
     theme: buildTheme(CacheThemeId.dark),
     home: AskScreen(

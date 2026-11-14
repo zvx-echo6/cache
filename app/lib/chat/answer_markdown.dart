@@ -19,7 +19,7 @@ int? citeNumberOfLink(String? href) {
 /// Escapes citation markers like [1] so markdown shows them as plain text and never as a link.
 /// Text inside code (fenced or inline) is left alone.
 ///
-/// With [linked], a mark whose first number it accepts becomes a link to that source ([kCiteScheme]<n>), shown as the same text:
+/// With [linked], a mark whose first number it accepts becomes a link to that source (`cite:` and the number), shown as the same text:
 /// the mark of a list or range ([1-3]) points at its first number, as the sources list's first row of it. The tap is the answer
 /// widget's; web links stay off.
 String protectCitations(String text, {bool Function(int n)? linked}) {

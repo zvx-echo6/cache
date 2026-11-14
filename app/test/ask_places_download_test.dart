@@ -62,6 +62,9 @@ void main() {
     // The action goes to the regions route: this test's hub has no regions, which that route answers.
     await tester.tap(find.text('Download places'));
     await settle();
+    // (the first message leaves, then the answer to the route comes in)
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
     expect(find.text('Regions are not available on this device'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());

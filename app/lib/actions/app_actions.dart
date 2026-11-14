@@ -122,7 +122,7 @@ class AppActions {
         // The card's place line opens the place, and its Done opens the place that was saved.
         'places.save': (f, result) {
           final place = askPlaceOf(f['place'], name: f['name'] is String ? f['name'] as String : null);
-          return CardTargets(lines: {if (place != null) 'Place': place}, done: result == null ? null : askPlaceOf(result));
+          return CardTargets(lines: {'Place': ?place}, done: result == null ? null : askPlaceOf(result));
         },
       });
 

@@ -107,7 +107,7 @@ class NotebookPublisher {
     final journal = notebook.journal;
     final place = askPlaceOf(f['place']);
     final book = journal == null ? null : AskNotebook(notebookId: journal.id);
-    return CardTargets(title: book, lines: {if (place != null) 'Place': place}, done: result == null ? null : book);
+    return CardTargets(title: book, lines: {'Place': ?place}, done: result == null ? null : book);
   }
 
   // ---- notebook.log_<slug> ----
