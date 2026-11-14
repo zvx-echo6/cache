@@ -1024,6 +1024,54 @@ void main() {
       b.dispose();
     });
 
+    test('after arrival the car\'s marker keeps following the phone\'s position until End, with no progress call', () async {
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['arrived'], isTrue);
+      final progressCalls = backend.calls.where((c) => c.startsWith('progress')).length;
+      // The vehicle moves on after arrival.
+      gps.controller.add(fixAt(42.501, -113.502, heading: 180));
+      await settle();
+      var pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.501, reason: 'the car\'s marker is the phone\'s position after arrival, not the last matched point');
+      expect(pos['lon'], -113.502);
+      expect(pos['heading'], 180);
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.502);
+      gps.controller.add(fixAt(42.502, -113.504, heading: 180));
+      await settle();
+      pos = lastTrip()['position'] as Map;
+      expect(pos['lon'], -113.504);
+      expect(lastTrip()['arrived'], isTrue, reason: 'the arrived card stays');
+      expect(lastTrip()['phase'], 'guiding');
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, progressCalls, reason: 'no progress call after arrival');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'no re-route after arrival');
+      await nav.end();
+      await settle();
+      expect(lastTrip()['phase'], 'browsing');
+      expect(nav.lastFix, isNull);
+    });
+
+    test('with no End after arrival, guidance ends by itself and the car\'s trip ends as it does on End', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['phase'], 'guiding');
+      await settle(400);
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1, reason: 'the position service is let go');
+      expect(lastTrip()['phase'], 'browsing', reason: 'the car is told guidance ended');
+      expect(lastTrip()['arrived'], isFalse);
+      expect([for (final c in toCar) if (c.method == 'route') c].last.arguments, containsPair('bounds', isNull), reason: 'the route line is taken off');
+    });
+
     test('Add stop on the car before Start: the place joins the route shown and the trip names it', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);
@@ -1433,6 +1481,105 @@ void main() {
       await nav.end();
       await settle();
       expect(lastPhase(), 'browsing');
+    });
+
+    // Bug: "add a stop" by voice during a drive ended the route and started a new one to the stop.
+    test('an add-a-stop request while guiding adds the place as the next stop; the route keeps its destination', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['added'], isTrue);
+      expect(r['started'], isTrue);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue, reason: 'guidance carries on');
+      expect(nav.selected!.name, 'Made Up Clinic', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, routesBefore + 1);
+      expect(backend.froms.last!['lon'], -113.77, reason: 'the new route starts where the phone is');
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+      expect(lastTrip()['phase'], 'guiding');
+    });
+
+    test('an add-a-stop request while guiding by a saved name adds it; any other name returns the places for Add stop', () async {
+      backend.saved.add(('Place 2', 42.6, -113.65));
+      backend.onSearch = (q, {near, meaning}) async =>
+          MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:33', 'Place 3', lon: -113.7)]);
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final saved = (await fromCar('navigateTo', {'query': 'Place 2', 'stop': true})) as Map;
+      expect(saved['added'], isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect([for (final s in nav.stops) s.name], ['Place 2']);
+      final other = (await fromCar('navigateTo', {'query': 'place three', 'stop': true})) as Map;
+      expect(other['forStop'], isTrue);
+      expect([for (final p in other['places'] as List) (p as Map)['name']], ['Place 3']);
+      expect([for (final s in nav.stops) s.name], ['Place 2'], reason: 'nothing is added until the driver picks');
+      // The place picked from that list is added as the car's own Add stop adds it.
+      expect(await fromCar('addStop', {'id': ((other['places'] as List).single as Map)['id']}), isTrue);
+      expect([for (final s in nav.stops) s.name], ['Place 3', 'Place 2']);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.guiding, isTrue);
+    });
+
+    test('an add-a-stop request that cannot be added leaves the route as it was, and the phone says why', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      toCar.clear();
+      backend.onRoute = (to, mode, from) async => throw StateError('no route');
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.stops, isEmpty);
+      // The same notice the car's own Add stop shows when no route goes through the stop.
+      expect([for (final c in toCar.where((m) => m.method == 'notice')) (c.arguments as Map)['text']], hasLength(1));
+    });
+
+    test('an add-a-stop request while a route is shown before Start adds the stop to it; guidance is not started', () async {
+      await preview();
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isTrue);
+      expect(r['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.guiding, isFalse);
+      expect(nav.selected!.name, 'Cassia Regional Hospital', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, greaterThan(routesBefore));
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+    });
+
+    test('an add-a-stop request with nothing guided is a navigation request: guidance starts to the place', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r.containsKey('added'), isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+    });
+
+    test('navigation and directions requests while guiding still replace the route, as before', () async {
+      await guide();
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': false})) as Map;
+      expect(r['started'], isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+      final d = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.65, 'query': 'Place 2', 'start': false})) as Map;
+      expect(d['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.selected!.name, 'Place 2');
     });
 
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {

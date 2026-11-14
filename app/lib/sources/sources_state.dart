@@ -1079,6 +1079,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
   }
 
+  @override
+  Future<ReadDocument> readDocument(String address) async {
+    final core =
+        _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
+    final d = await core.readDocument(address);
+    return ReadDocument(
+      title: d.title,
+      atPage: d.atPage,
+      moreBefore: d.moreBefore,
+      moreAfter: d.moreAfter,
+      pages: [for (final p in d.pages) DocumentPageText(text: p.text, pageLabel: p.pageLabel, addresses: p.addresses)],
+    );
+  }
+
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).
   Future<CoreConversation> newConversation() async =>
       (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet')))

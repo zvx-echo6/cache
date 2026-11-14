@@ -89,12 +89,13 @@ Unknown keys are ignored, so a newer file still opens in an older Cache.
 ## Entries
 
 Each entry (point) is one passage. Its payload holds the fields the field map names, plus two fields with fixed
-names that every entry of a Cache library carries:
+names that every entry of a Cache library carries (and `piece`, which is optional):
 
 | Field | Type | Meaning |
 |---|---|---|
 | `doc_id` | string, not empty | The stable id of the source document the passage came from, the same in every version of the document. |
 | `doc_version` | whole number, from 1 | The document's version. A new edition of a document gets the next number. |
+| `piece` | whole number, from 0, optional | The passage's position in its document: the same `index` as in the point id formula below. With it on every passage of a document, "Read the whole document" puts the passages in order by it; without it Cache falls back to the page field, then the point id, which can misorder a document. |
 
 They let a document be replaced or removed as a unit later. A library whose entries lack them still loads and
 searches, but Cache marks it "whole library only": a newer copy replaces the whole library. (Cache checks a sample of

@@ -226,6 +226,15 @@ abstract class CsZimIconNative {
   String? zimIllustration(int handle, String zimId);
 }
 
+/// A library document read whole (cs_read_document; cache_search.h). Kept apart from [CsNative] like the PDF indexes;
+/// [hasReadDocument] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsDocumentNative {
+  bool get hasReadDocument;
+
+  /// cs_read_document: {"address","title","pages":[...],"at_page","truncated"}, or null on error (ask [CsNative.lastError]).
+  String? readDocument(int handle, String address, int maxChars);
+}
+
 /// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
 /// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
 abstract class CsCaptionsNative {

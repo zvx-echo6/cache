@@ -8,6 +8,9 @@ import '../app_fs.dart';
 import '../platform.dart' as plat;
 import '../platform/app_log.dart';
 
+/// A limit no notebook reaches: `entries` with it answers every entry.
+const int kAllEntries = 100000000;
+
 /// The core's Notebook calls (cs_notebook): one op with its arguments, the answer as JSON. Tests use an in-memory one.
 abstract class NotebookBackend {
   Future<Map<String, dynamic>> call(String op, [Map<String, dynamic> args = const {}]);
@@ -190,9 +193,10 @@ class NotebookState extends ChangeNotifier {
 
   // ---- entries ----
 
-  /// A notebook's entries, newest first, drafts included.
+  /// A notebook's entries, newest first, drafts included: all of them. (The core answers 1000 when a call gives no limit, and
+  /// notebook sync takes an entry it did not read for a deleted one, so the app always asks for every entry.)
   Future<List<NbEntry>> entries(String notebookId) async =>
-      [for (final e in (await backend.call('entries', {'notebook_id': notebookId}))['entries'] as List) NbEntry.fromJson(e as Map)];
+      [for (final e in (await backend.call('entries', {'notebook_id': notebookId, 'limit': kAllEntries}))['entries'] as List) NbEntry.fromJson(e as Map)];
 
   Future<NbEntry?> entry(String id) async {
     try {

@@ -27,7 +27,7 @@ class ReadyLibrarySources extends FakeSources {
   }
 }
 
-/// Two libraries of books with different counts: "Recon library" holds 7 and none is shelved, "Field library" holds 3 and two are.
+/// Two libraries of books with different counts: "Trail library" holds 7 and none is shelved, "Field library" holds 3 and two are.
 class CatalogCountWorld {
   late Directory tmp;
   late ReadyLibrarySources sources;
@@ -38,13 +38,13 @@ class CatalogCountWorld {
   Future<void> make() async {
     tmp = Directory.systemTemp.createTempSync('catalog-count');
     final root = Directory('${tmp.path}/libraries');
-    writeBookLibrary(root, 'recon', [for (var i = 1; i <= 7; i++) ('r$i', 'Recon book $i', null, null)]);
+    writeBookLibrary(root, 'trail', [for (var i = 1; i <= 7; i++) ('r$i', 'Trail book $i', null, null)]);
     writeBookLibrary(root, 'field', const [('f1', 'Wilderness first aid', '210', null), ('f2', 'Emergency war surgery', '210', null), ('f3', 'Small engine repair', '670', null)]);
-    for (final (id, title) in [('recon', 'Recon library'), ('field', 'Field library')]) {
+    for (final (id, title) in [('trail', 'Trail library'), ('field', 'Field library')]) {
       File('${root.path}/$id/cache-library.json').writeAsStringSync('{"format":1,"library_id":"$id","title":"$title","version":"1"}');
     }
     sources = ReadyLibrarySources(Directory('${tmp.path}/zims')..createSync(recursive: true))
-      ..titles0['recon'] = 'Recon library'
+      ..titles0['trail'] = 'Trail library'
       ..titles0['field'] = 'Field library';
     libs = await librariesAt(root, sources);
     final dir = writeShelves(Directory('${tmp.path}/bookshelves'),
