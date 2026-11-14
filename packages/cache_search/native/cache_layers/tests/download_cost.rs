@@ -152,6 +152,21 @@ struct Cost {
     leaf_before_first_tile: usize,
     /// of those, how many ran one after another (each started after every earlier one had ended)
     leaf_rounds_before_first_tile: usize,
+    /// tile reads that ran one after another: a batch whose reads wait for the slowest read of the batch before it adds one
+    data_rounds: usize,
+}
+
+/// How many of `reqs` (sorted by start) ran one after another: each round starts after every earlier request had ended.
+fn rounds(reqs: &[&Req]) -> usize {
+    let mut n = 0;
+    let mut ended: Option<Instant> = None;
+    for r in reqs {
+        if ended.map(|e| r.start >= e).unwrap_or(true) {
+            n += 1;
+        }
+        ended = Some(ended.map(|e| e.max(r.end)).unwrap_or(r.end));
+    }
+    n
 }
 
 fn cost(log: &[Req]) -> Cost {
@@ -159,20 +174,14 @@ fn cost(log: &[Req]) -> Cost {
     v.sort_by_key(|r| r.start);
     let first_tile = v.iter().filter(|r| r.kind == Kind::Data).map(|r| r.start).min();
     let before: Vec<&Req> = v.iter().filter(|r| r.kind == Kind::Leaf && first_tile.map(|t| r.start < t).unwrap_or(true)).collect();
-    let mut rounds = 0;
-    let mut ended: Option<Instant> = None;
-    for r in &before {
-        if ended.map(|e| r.start >= e).unwrap_or(true) {
-            rounds += 1;
-        }
-        ended = Some(ended.map(|e| e.max(r.end)).unwrap_or(r.end));
-    }
+    let data: Vec<&Req> = v.iter().filter(|r| r.kind == Kind::Data).collect();
     Cost {
         requests: v.len(),
         leaf: v.iter().filter(|r| r.kind == Kind::Leaf).count(),
         data: v.iter().filter(|r| r.kind == Kind::Data).count(),
         leaf_before_first_tile: before.len(),
-        leaf_rounds_before_first_tile: rounds,
+        leaf_rounds_before_first_tile: rounds(&before),
+        data_rounds: rounds(&data),
     }
 }
 
@@ -256,6 +265,9 @@ fn a_region_download_plans_once_and_reads_the_directory_in_parallel() {
     // The job plans with the pages the estimate read: no directory request before its first tile, and none at all.
     assert_eq!(dl.leaf_before_first_tile, 0, "{report}");
     assert_eq!(dl.leaf, 0, "{report}");
+    // The next batches' reads are in flight while a batch waits for its last one: far fewer rounds of reads than batches.
+    let batches = cover.len().div_ceil(1024);
+    assert!(dl.data_rounds * 2 <= batches, "{batches} batches\n{report}");
 }
 
 #[test]
