@@ -78,7 +78,7 @@ fn a_work_shard_optimized_before_publishing_has_its_vector_index() {
         w.flush().unwrap();
     }
     let published = tmp.path().join("published");
-    assert_eq!(publish_copy(&work, &published).unwrap(), 30);
+    assert_eq!(publish_copy(&work, &published).unwrap(), 3000, "points");
     let kinds = segment_indexes(&published);
     assert!(kinds.iter().any(|k| k == "hnsw"), "the published copy has the vector index: {kinds:?}");
     // more books after it go on in the same work shard
