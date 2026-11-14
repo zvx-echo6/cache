@@ -116,6 +116,18 @@ void main() {
     expect(s.location, 'https://example.org/v.mp4');
   });
 
+  test('a saved HLS video from before is rewritten as a plain MP4 in the background after start, and the list says so', () async {
+    final hls = {...savedManifest(uuid: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Saved as HLS'), 'source': 'hls'};
+    final w = VideoState(dirOverride: dir, nativeFactory: seededVideoNative([hls]), tokens: tokens)..repairAfter = Duration.zero;
+    await w.init();
+    expect(w.saved.single.source, 'hls');
+    for (var i = 0; i < 100 && !w.saved.single.remuxed; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(w.saved.single.remuxed, isTrue, reason: 'the repair ran on its own after start and the list was read again');
+    w.dispose();
+  });
+
   test('error texts are for people', () {
     expect(videoErrorText(const CacheSearchException('fetch_failed', 'x')), contains("Can't reach"));
     expect(videoErrorText(const CacheSearchException('no_space', 'x')), contains('free space'));
