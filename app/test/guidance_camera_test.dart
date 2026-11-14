@@ -91,7 +91,9 @@ Future<void> guiding(WidgetTester tester, {required Size size, required double r
     }
     await tester.runAsync(() async {
       await nav.start();
-      gps.controller.add(fixAt(42.5, -113.79, heading: 90));
+      // Standing still, the position stream gives nothing after Start (a fix here is published to the location too, and the
+      // map would follow it as any fix, not from Start): the last fix stays the one from before, at 42.5, -113.8.
+      if (fixesAfterStart) gps.controller.add(fixAt(42.5, -113.79, heading: 90));
       await Future<void>.delayed(const Duration(milliseconds: 30));
     });
     final rig = GuideRig(tester, camera, location, nav, maps, gps, backend, route);
