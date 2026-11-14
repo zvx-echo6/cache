@@ -20,8 +20,8 @@ import 'dart:math' as math;
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
-import 'package:cache/maps/style/style_generator.dart' show kPinSelectedEdge, kPinSelectedRadius, kPinSelectedReach, kPositionDotEdge, kPositionDotRadius;
-import 'package:cache/maps/ui/map_assets.dart';
+import 'package:cache/maps/style/style_generator.dart' show kPinSelectedEdge, kPinSelectedRadius, kPinSelectedReach;
+import 'package:cache/maps/ui/vehicle_arrow.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/elevation/route_elevation.dart';
@@ -106,33 +106,13 @@ class _RoutePainter extends CustomPainter {
     // The ends as the map's style draws them. The destination: the chosen place's pin, with its edge around it.
     canvas.drawCircle(pts.last, kPinSelectedRadius + kPinSelectedEdge + 0.0, Paint()..color = palette['routeCasing']);
     canvas.drawCircle(pts.last, kPinSelectedRadius + 0.0, Paint()..color = palette['pin']);
-    // The start: the position dot with its ring, and over it the heading marker (the phone heads north), whose image is
-    // _kHeadingPoints square on this phone (MapAssets.headingMarker draws the same triangle).
-    canvas.drawCircle(pts.first, kPositionDotRadius + kPositionDotEdge + 0.0, Paint()..color = palette['positionRing']);
-    canvas.drawCircle(pts.first, kPositionDotRadius + 0.0, Paint()..color = palette['position']);
-    const s = _kHeadingPoints;
-    final corner = pts.first - const Offset(s / 2, s / 2);
-    final arrow = Path()
-      ..moveTo(corner.dx + s / 2, corner.dy + s * 0.04)
-      ..lineTo(corner.dx + s / 2 + s * 0.13, corner.dy + s * 0.2)
-      ..lineTo(corner.dx + s / 2 - s * 0.13, corner.dy + s * 0.2)
-      ..close();
-    canvas.drawPath(
-        arrow,
-        Paint()
-          ..color = palette['positionRing']
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = s * 0.05
-          ..strokeJoin = StrokeJoin.round);
-    canvas.drawPath(arrow, Paint()..color = palette['position']);
+    // The start: the car's arrow (the phone heads north), as the map's style draws it once a heading is known.
+    VehicleArrow.paintTurned(canvas, pts.first, 0, palette['position'], palette['positionRing'], 1);
   }
 
   @override
   bool shouldRepaint(_RoutePainter old) => old.view != view;
 }
-
-/// The screen of these pictures has 3 pixels per point: the heading marker's image is this many points square on it.
-const double _kHeadingPoints = MapAssets.headingMarkerSize / 3;
 
 /// The Maps screen with Off-road chosen and a route on foot, its elevation read: first as the screen fitted the route into view,
 /// then with the panel's choices scrolled to their end.
@@ -225,7 +205,7 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     // What is drawn at the route's ends is wholly on the map and clear of everything over it too: the position dot with its
     // heading marker at the start (the foot of the column) and the destination's pin at the end (its top, under the header).
     final ends = {
-      'the position dot with its heading marker': Rect.fromCircle(center: on.first, radius: MapAssets.headingMarkerReach(3)),
+      'the position dot with its heading marker': Rect.fromCircle(center: on.first, radius: VehicleArrow.reach),
       'the destination\'s pin': Rect.fromCircle(center: on.last, radius: kPinSelectedReach),
     };
     for (final MapEntry(key: end, value: disc) in ends.entries) {

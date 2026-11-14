@@ -5,7 +5,7 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart' show Fix;
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/style/style_generator.dart' show kPinSelectedReach, kPositionDotReach;
-import 'package:cache/maps/ui/map_assets.dart';
+import 'package:cache/maps/ui/vehicle_arrow.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/overview/overview_camera.dart';
@@ -461,10 +461,9 @@ void main() {
     const free = Rect.fromLTRB(208, 130, 354, 461);
     final room = EdgeInsets.fromLTRB(free.left, free.top, map.width - free.right, map.height - free.bottom);
     expect((kPinSelectedReach, kPositionDotReach), (15.0, 11.0));
-    // The heading marker is a 96 pixel image: 32 points on a 3x phone, where its triangle and outline reach 15.52 points.
-    expect(MapAssets.headingMarkerReach(3, web: false), closeTo(15.52, 0.001));
-    expect(MapAssets.headingMarkerReach(2.625, web: false), closeTo(17.74, 0.01));
-    expect(MapAssets.headingMarkerReach(3, web: true), closeTo(46.56, 0.001));
+    // The heading marker is the car's arrow (VehicleArrow): the farthest of its tip and its tails from the position, 21.2 points
+    // on every screen (a picture drawn at the map's own density).
+    expect(VehicleArrow.reach, closeTo(21.21, 0.01));
 
     // Where the disc of [m] falls on the map after [fit].
     Rect disc(({List<double> bounds, EdgeInsets padding}) fit, RouteEndMark m) {
@@ -548,7 +547,7 @@ void main() {
       expect(chip.right, lessThan(layers.left - 2 * kRouteFitGap), reason: 'there is no column between the chip and the buttons to test');
       final cam = _cameraAfter(fit, map);
       // On this 3x phone the heading marker reaches further than the dot it turns around.
-      final dotReach = MapAssets.headingMarkerReach(3);
+      final dotReach = VehicleArrow.reach;
       expect(dotReach, greaterThan(kPositionDotReach));
       final dot = Rect.fromCircle(center: cam.project(start.lat, start.lon), radius: dotReach);
       final pin = Rect.fromCircle(center: cam.project(end.lat, end.lon), radius: kPinSelectedReach);
