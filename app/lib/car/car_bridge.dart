@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../maps/maps_state.dart';
 import '../nav/elevation/route_elevation.dart';
@@ -580,11 +581,21 @@ class CarAwareSpeaker implements Speaker {
 
   @override
   Future<void> speak(String text) async {
+    // Nothing to say: the car side is not asked, so it neither makes the audio session active nor plays a tone for it.
+    if (text.trim().isEmpty) return;
+    final bridge = car();
     String? how;
     try {
-      how = await car()?.prompt(text);
+      how = await bridge?.prompt(text);
     } catch (_) {}
-    if (how == kPromptShort || how == kPromptNone) return;
+    final silent = how == kPromptShort || how == kPromptNone;
+    // What the car side answered, and where the phone app was (no words of the prompt: roads, places). Only with a car
+    // attached.
+    if (bridge != null && bridge.connected.value) {
+      logInfo("Car prompts: the car side answered ${how ?? 'nothing'} with the app ${WidgetsBinding.instance.lifecycleState?.name ?? 'not started'}; "
+          "the phone's voice ${silent ? 'stays silent' : 'speaks'}");
+    }
+    if (silent) return;
     await inner.speak(text);
   }
 

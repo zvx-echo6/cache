@@ -217,6 +217,9 @@ for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
   check(style.answer == row["answer"] as? String, "prompts while \(state): the answer to Dart")
   check((style == .tone) == (row["tone"] as? Bool ?? false), "prompts while \(state): the tone only when a short prompt is asked for")
   check((style == .spoken) == (row["phoneSpeaks"] as? Bool ?? false), "prompts while \(state): the phone speaks only when a spoken prompt is fine")
+  // The session, made active to read the style, is kept for the phone's voice or the tone, and let go at once otherwise.
+  let kept: CarPromptSession = (row["phoneSpeaks"] as? Bool ?? false) ? .heldForVoice : (row["tone"] as? Bool ?? false) ? .heldForTone : .letGo
+  check(CarPromptSession(style) == kept, "prompts while \(state): the session is \(kept)")
   if let letters = row["fourCC"] as? String, letters.count == 4 {
     var number: UInt = 0
     for byte in Array(letters.utf8) { number = number << 8 | UInt(byte) }
@@ -224,6 +227,11 @@ for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
   }
 }
 check(((recorded("prompt_styles.json") as? [Any]) ?? []).count >= 4, "the recorded prompt states are there")
+// The session held for the phone's voice is let go by the car side only if the voice never does: never before the prompt,
+// and the ones queued before it, could have been said at the guidance rate (about 14 letters a second); never past 40 s.
+check(CarPromptHold.seconds(characters: 0) == 20, "an empty prompt: the session is held 20 s at most")
+check(CarPromptHold.seconds(characters: 60) > 20 + 60.0 / 14, "a usual prompt: held longer than it takes to say it, with room for one queued before it")
+check(CarPromptHold.seconds(characters: 2000) == 40 && CarPromptHold.seconds(characters: -5) == 20, "held 40 s at most, 20 s at least")
 let tone: [Int16] = CarPromptTone.samples()
 check(tone.count == Int(44100 * 0.28), "the tone is 0.28 s long")
 check(tone.first == 0 && abs(Int(tone.last ?? 99)) < 40, "the tone starts and ends without a click")

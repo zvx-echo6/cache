@@ -26,6 +26,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'nav_fakes.dart';
@@ -1635,6 +1636,37 @@ void main() {
       expect(await bridge.prompt('x'), isNull);
       promptAnswer = kPromptShort;
       expect(await bridge.prompt('x'), kPromptShort);
+    });
+
+    test('an empty prompt asks nothing of the car side (it would make the audio session active for nothing) and says nothing', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      for (final empty in ['', '  ']) {
+        await s.speak(empty);
+      }
+      expect(toCar.where((c) => c.method == 'prompt'), isEmpty);
+      expect(speaker.said, isEmpty);
+    });
+
+    test('with the phone app in front, in the back and hidden, a prompt the car side answers normal is spoken; short and none are not', () async {
+      Future<void> lifecycle(AppLifecycleState state) async {
+        await messenger.handlePlatformMessage('flutter/lifecycle', const StringCodec().encodeMessage(state.toString()), (_) {});
+      }
+
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      final phoneOnly = CarAwareSpeaker(speaker, car: () => null);
+      for (final state in [AppLifecycleState.resumed, AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused, AppLifecycleState.resumed]) {
+        await lifecycle(state);
+        for (final answer in [kPromptNormal, kPromptShort, kPromptNone]) {
+          speaker.said.clear();
+          promptAnswer = answer;
+          await s.speak('Turn left.');
+          expect(speaker.said, answer == kPromptNormal ? ['Turn left.'] : isEmpty, reason: '$state, the car side answering $answer');
+        }
+        speaker.said.clear();
+        await phoneOnly.speak('Turn left.');
+        expect(speaker.said, ['Turn left.'], reason: '$state, no car');
+      }
     });
   });
 

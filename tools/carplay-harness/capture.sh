@@ -936,7 +936,19 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     if wait_more 'harness steps: prompt answered' "$before" 8; then
       got=$(grep 'harness steps: prompt answered' "$STREAM" | tail -n 1 | sed 's/.*prompt answered //')
       case "$at" in
-        normal) PROMPTS="the system's own style here answers '$got'" ;;
+        normal)
+          # The app's own line for this ask: where the phone's window was, whether the session was made active, the style
+          # read before and the answer. With the phone's window in front (Cache open on the phone) the system's own style
+          # here must be answered normal: the phone's voice then speaks.
+          asked=$(grep 'car prompts: asked with' "$STREAM" | tail -n 1 | sed 's/.*car prompts: asked with //')
+          PROMPTS="the system's own style here answers '$got' (${asked:-no line from the app})"
+          case "$asked" in
+            "the phone's window in front, the session made active,"*"the answer is normal") ;;
+            "the phone's window in front"*) GUIDE_MISSING="$GUIDE_MISSING [a prompt with the phone's window in front: $asked]" ;;
+            "") GUIDE_MISSING="$GUIDE_MISSING [the app did not say how it answered a prompt]" ;;
+          esac
+          [ "$got" = normal ] || GUIDE_MISSING="$GUIDE_MISSING [a prompt with the system's own style was answered '$got']"
+          ;;
         *) [ "$got" = "$at" ] || GUIDE_MISSING="$GUIDE_MISSING [a prompt with the style told as $at was answered '$got']" ;;
       esac
     else
