@@ -47,6 +47,7 @@ import 'background/background_dispatcher.dart';
 import 'background/background_lock.dart';
 import 'background/fgs_add.dart';
 import 'background/fgs_refused_note.dart';
+import 'background/sync_background.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -140,6 +141,7 @@ import 'sources/sources_state.dart';
 import 'video/caption_search.dart' show CoreCaptionSearch;
 import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
+import 'browse/reader_resources.dart' show kFakeIndexedDbLicenseAsset;
 import 'browse/browse_screen.dart';
 import 'regions/ui/regions_screen.dart';
 import 'screens/models_screen.dart';
@@ -161,6 +163,10 @@ void main() {
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
+  });
+  // fake-indexeddb (inside every ZIM page the readers show) is Apache-2.0: its licence text, kept at third_party/fake-indexeddb/LICENSE.
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(['fake-indexeddb'], await rootBundle.loadString(kFakeIndexedDbLicenseAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
@@ -646,6 +652,19 @@ class _CacheAppState extends State<CacheApp> {
     final s = _supportPath;
     if (s == null || !Platform.isAndroid) return;
     await writeWatchAddContext(support: s, bookshelves: await _addPdfShelves());
+  }
+
+  bool? _syncScheduledFor, _syncMobile;
+  bool _sharingReadByBackground = false;
+
+  /// Background sync is scheduled while sharing is set up (and its network rule follows "mobile data for downloads").
+  void _onSharingForBackground() {
+    if (!_sharingReadByBackground) return; // what sharing.json says is not read yet: not 'off'
+    final on = sharing.enabled, mobile = settings.mobileForDownloads;
+    if (_syncScheduledFor == on && _syncMobile == mobile) return;
+    _syncScheduledFor = on;
+    _syncMobile = mobile;
+    unawaited(scheduleBackgroundSync(enabled: on, mobileData: mobile));
   }
 
   /// The watched folders changed: the background count runs while any are watched (Android).
@@ -1225,7 +1244,12 @@ class _CacheAppState extends State<CacheApp> {
     video.addListener(_kickIndexing);
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
-      Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
+      sharing.addListener(_onSharingForBackground);
+      settings.addListener(_onSharingForBackground);
+      Future.wait([settingsRead, supportRead]).then((_) => sharing.init()).whenComplete(() {
+        _sharingReadByBackground = true;
+        _onSharingForBackground();
+      });
     }
     // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
     settingsRead.then((_) => regions.init());
@@ -1443,6 +1467,8 @@ class _CacheAppState extends State<CacheApp> {
     chat.removeListener(_onChatForIndexing);
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
+    settings.removeListener(_onSharingForBackground);
+    sharing.removeListener(_onSharingForBackground);
     indexing.dispose();
     _bgOpenTimer?.cancel();
     watchFolders.removeListener(_onWatchFolders);

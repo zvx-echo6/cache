@@ -1,9 +1,11 @@
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../maps/ui/format.dart';
+import '../../platform.dart' as plat;
 import '../../settings/data_kinds.dart';
 import '../../sharing/link_inbox.dart';
 import '../../sharing/link_url.dart';
@@ -15,7 +17,10 @@ import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos});
+
+  /// The platform as the page's background-sync note sees it; null: the real one (tests give theirs).
+  final bool? onAndroid, onIos;
 
   final SharingState sharing;
 
@@ -104,13 +109,13 @@ class _SharingPageState extends State<SharingPage> {
 
   /// [code] when it can be linked; throws [BadLinkCode] for this device's own code or one already linked, and, when [strict] (a
   /// link from outside), for a code that cannot be read. A typed or pasted code that cannot be read here is left to the sync
-  /// engine, which gives the same messages.
+  /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
     try {
       info = decodeLinkCode(code);
-    } on BadLinkCode {
-      if (strict) rethrow;
+    } on BadLinkCode catch (e) {
+      if (strict || e.newer) rethrow;
       return code;
     }
     if (info.id.toLowerCase() == s.myId?.toLowerCase()) throw const BadLinkCode("that is this device's own code");
@@ -125,7 +130,8 @@ class _SharingPageState extends State<SharingPage> {
     try {
       await f();
     } catch (e) {
-      if (mounted) say(context, '$e');
+      // The engine names a code from a newer Cache by its kind, never by its text.
+      if (mounted) say(context, e is CacheSearchException && e.code == kNewerCodeKind ? kNewerCode : '$e');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -395,6 +401,7 @@ class _SharingPageState extends State<SharingPage> {
               'Tap a kind to choose what of it is shared. Switching a kind or an item off stops sharing it; the files stay, here and on '
               'the other devices. Files and folders whose names start with a dot are never shared.',
             ),
+            if (syncBackgroundNote(android: widget.onAndroid, ios: widget.onIos) case final note?) NoteText(note),
             _Log(entries: [for (final e in (st['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>()]),
           ],
         );
@@ -813,4 +820,16 @@ class _Log extends StatelessWidget {
       ],
     );
   }
+}
+
+/// What the Sharing page says about syncing with Cache closed: on Android about once an hour, on iPhone only when iOS allows it
+/// (iOS decides if and when it runs Cache in the background, and gives it seconds); nothing elsewhere.
+String? syncBackgroundNote({bool? android, bool? ios}) {
+  if (android ?? plat.isAndroid) {
+    return 'When Cache is closed, this phone syncs about once an hour if a linked device is in reach.';
+  }
+  if (ios ?? plat.isIOS) {
+    return 'On iPhone, background sync runs only when iOS allows it, so it can be late. Open Cache to sync now.';
+  }
+  return null;
 }

@@ -1,9 +1,11 @@
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
 import '../../notebook/notebook_map.dart';
 import '../../notebook/media.dart';
 import '../../notebook/notebook_state.dart';
+import '../../notebook/notebook_text.dart' show isoLocal;
 import '../../screens/notebooks/places_screen.dart' show importPlacesInto;
 import '../../regions/regions_state.dart';
 import '../../regions/ui/regions_list_sheet.dart';
@@ -229,7 +231,7 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
               subtitle: const Text('KML, KMZ, GPX or GeoJSON. They go into your Places notebook.'),
               onTap: () => Navigator.pop(ctx, 'places'),
             ),
-          if (userLayers != null)
+          if (notebooks != null || userLayers != null)
             ListTile(
               key: const ValueKey('add-file-repeaters'),
               minTileHeight: 56,
@@ -248,6 +250,10 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
     final nb = notebooks!;
     final mine = nb.notebooks.where((n) => n.savedPlaces).firstOrNull;
     await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now);
+    return;
+  }
+  if (notebooks != null) {
+    await importRepeatersIntoNotebook(ScaffoldMessenger.of(context), notebooks, onShow: onShowList);
     return;
   }
   await importRepeaterFile(ScaffoldMessenger.of(context), userLayers!, onShowList: onShowList);
@@ -323,4 +329,67 @@ Future<String?> updateRepeaterList(BuildContext context, UserLayersState u, User
   final id = await importRepeaterFile(ScaffoldMessenger.of(context), u, name: list.name);
   if (id != null && id != list.id) await u.delete(list);
   return id;
+}
+
+String _repeatersWord(int n) => n == 1 ? '1 repeater' : '$n repeaters';
+
+/// Picks a repeater file (a KML and/or a CSV) and reads it into a Repeaters notebook: a new one, or [notebookId] as an update. Says
+/// what happened: "Added 214 repeaters to Notebooks." (with Show), or for an update what changed, what stayed as the person had it and,
+/// when they had deleted some the file still lists, "Add them back". Returns the notebook's id, or null when nothing came in.
+Future<String?> importRepeatersIntoNotebook(
+  ScaffoldMessengerState m,
+  NotebookState nb, {
+  String? notebookId,
+  void Function(String notebookId)? onShow,
+  DateTime Function() now = DateTime.now,
+  Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pick,
+}) async {
+  void tellAgain(String text) {
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('repeaters-failed'),
+      content: Text(text),
+      action: SnackBarAction(label: 'Choose another file', onPressed: () => importRepeatersIntoNotebook(m, nb, notebookId: notebookId, onShow: onShow, now: now, pick: pick)),
+    ));
+  }
+
+  try {
+    final r = await (pick ?? withPickedFiles<RepeaterUpdate>)((paths) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(readingFileBar());
+      return nb.importRepeaters(paths, notebookId: notebookId, now: isoLocal(now()));
+    });
+    if (r == null) return null;
+    m.hideCurrentSnackBar();
+    if (notebookId == null) {
+      m.showSnackBar(SnackBar(
+        key: const ValueKey('repeaters-added'),
+        content: Text('Added ${_repeatersWord(r.added)} to Notebooks.${r.withoutPosition > 0 ? ' ${r.withoutPosition} have no position and are not on the map.' : ''}'),
+        action: onShow == null ? null : SnackBarAction(label: 'Show', onPressed: () => onShow(r.notebookId)),
+      ));
+      return r.notebookId;
+    }
+    final parts = [
+      if (r.added > 0) '${r.added} added',
+      if (r.updated > 0) '${r.updated} changed',
+      if (r.keptEdits > 0) 'your edits kept on ${r.keptEdits}',
+      if (r.notInFile > 0) '${r.notInFile} not in the latest file',
+    ];
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('repeaters-updated'),
+      duration: const Duration(seconds: 10),
+      content: Text([
+        parts.isEmpty ? 'Nothing changed: the file matches your list.' : 'Updated: ${parts.join(', ')}.',
+        if (r.deleted.isNotEmpty) '${_repeatersWord(r.deleted.length)} you deleted ${r.deleted.length == 1 ? 'is still in the file and stays' : 'are still in the file and stay'} deleted.',
+      ].join(' ')),
+      action: r.deleted.isEmpty
+          ? null
+          : SnackBarAction(label: 'Add them back', onPressed: () => nb.addBackRepeaters(r.notebookId, now: isoLocal(now()))),
+    ));
+    return r.notebookId;
+  } catch (e) {
+    final empty = e is CacheSearchException && e.message.contains('no repeaters');
+    tellAgain(empty ? 'No repeaters found in that file.' : 'Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.');
+    return null;
+  }
 }

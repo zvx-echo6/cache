@@ -1024,6 +1024,54 @@ void main() {
       b.dispose();
     });
 
+    test('after arrival the car\'s marker keeps following the phone\'s position until End, with no progress call', () async {
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['arrived'], isTrue);
+      final progressCalls = backend.calls.where((c) => c.startsWith('progress')).length;
+      // The vehicle moves on after arrival.
+      gps.controller.add(fixAt(42.501, -113.502, heading: 180));
+      await settle();
+      var pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.501, reason: 'the car\'s marker is the phone\'s position after arrival, not the last matched point');
+      expect(pos['lon'], -113.502);
+      expect(pos['heading'], 180);
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.502);
+      gps.controller.add(fixAt(42.502, -113.504, heading: 180));
+      await settle();
+      pos = lastTrip()['position'] as Map;
+      expect(pos['lon'], -113.504);
+      expect(lastTrip()['arrived'], isTrue, reason: 'the arrived card stays');
+      expect(lastTrip()['phase'], 'guiding');
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, progressCalls, reason: 'no progress call after arrival');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'no re-route after arrival');
+      await nav.end();
+      await settle();
+      expect(lastTrip()['phase'], 'browsing');
+      expect(nav.lastFix, isNull);
+    });
+
+    test('with no End after arrival, guidance ends by itself and the car\'s trip ends as it does on End', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['phase'], 'guiding');
+      await settle(400);
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1, reason: 'the position service is let go');
+      expect(lastTrip()['phase'], 'browsing', reason: 'the car is told guidance ended');
+      expect(lastTrip()['arrived'], isFalse);
+      expect([for (final c in toCar) if (c.method == 'route') c].last.arguments, containsPair('bounds', isNull), reason: 'the route line is taken off');
+    });
+
     test('Add stop on the car before Start: the place joins the route shown and the trip names it', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);
@@ -1361,6 +1409,20 @@ void main() {
       expect(nav.guiding, isFalse);
       expect(gps.stops, greaterThan(0));
       expect(speaker.stops, greaterThan(0));
+    });
+
+    test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'query': 'place 1', 'start': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r['name'], 'Place 1');
+      expect(r['lat'], 42.6);
+      expect(r['lon'], -113.7);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue);
     });
 
     Future<void> guide() async {

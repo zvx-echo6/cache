@@ -513,6 +513,7 @@ If a device's files are bigger than your space, Cache fetches what fits and paus
 
 When linking fails, the sharing engine says why:
 - "this is not a Cache link code" or "the link code is damaged": copy the whole code again.
+- "This link code is from a newer Cache. Update Cache here, then try again.": the code starts with a number above 1 (CACHE2-, CACHE3-), made by a newer version of Cache. Update Cache on this device.
 - "that is this device's own code": enter it on the other device.
 - "the other device did not answer" or "could not reach the other device: [reason]": open Cache on both, make sure both are online, and try a new code.
 - "the other device refused the link": make a fresh code on the other device.

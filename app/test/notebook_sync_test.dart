@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
+import 'package:cache/notebook/templates.dart';
 import 'package:cache/notebook/sync/folder.dart';
 import 'package:cache/notebook/sync/folder_access.dart';
 import 'package:cache/notebook/sync/formats.dart';
@@ -64,6 +65,9 @@ class MemFolder implements SyncFolder {
   Future<bool> exists(String path) async => text.containsKey(path) || bytes.containsKey(path);
 }
 
+/// The templates and starter logs the app ships (the engine loads them from the asset bundle; a test reads the files).
+Templates builtInTemplates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
+
 class _Rig {
   _Rig(this.kind, {this.includePrivate = true}) {
     nb = fakeNotebook(store);
@@ -76,7 +80,8 @@ class _Rig {
   final MemFolder folder = MemFolder();
   final File state = File('${Directory.systemTemp.createTempSync('cache-nbsync-').path}/state.json');
 
-  NotebookSync get engine => NotebookSync(notebook: nb, kind: kind, folder: folder, stateFile: state, includePrivate: includePrivate, clock: () => DateTime(2026, 10, 29, 17, 2));
+  NotebookSync get engine => NotebookSync(
+      notebook: nb, kind: kind, folder: folder, stateFile: state, includePrivate: includePrivate, clock: () => DateTime(2026, 10, 29, 17, 2), templates: () async => builtInTemplates());
 
   Future<Notebook> journal() async {
     await nb.start();
@@ -647,6 +652,138 @@ void main() {
       expect(files(a), 300, reason: 'no file is removed for an entry that was only not read');
       expect(a.store.entries.where((e) => e['notebook_id'] == ida).length, 300);
     }, timeout: const Timeout(Duration(minutes: 3)));
+  });
+
+  group('a notebook made from a built-in template reaches the other phone with its fields', () {
+    void carry(_Rig from, _Rig to) {
+      for (final e in from.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.text[e.key] = e.value;
+      }
+    }
+
+    test('a starter log: phone 2 makes the Log with its fields, and every value is in its field', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran fine.', values: {'f1': 20, 'f2': true, 'f3': 'Half'});
+      await a.engine.run();
+      expect(a.folder.text.values.firstWhere((v) => v.contains('Ran fine.')), contains('cache_template: starters/starter.generator_test@1'));
+      carry(a, b);
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
+      expect((lb.template, lb.isLog, lb.def.dueEvery, lb.templateRef), ('log', true, 'month', 'starters/starter.generator_test@1'));
+      expect([for (final f in lb.def.visible) (f.label, f.type)], [('Run time', FieldType.number), ('Under load', FieldType.yesNo), ('Fuel level', FieldType.choice)]);
+      final eb = (await b.nb.entries(lb.id)).single;
+      expect(eb.values, {'f1': 20, 'f2': true, 'f3': 'Half'}, reason: 'the values are in the template\'s fields, not left in the file');
+      expect(eb.body, 'Ran fine.');
+      // phone 2 changes the fuel level; phone 1 reads it into its field
+      await b.nb.saveEntry(id: eb.id, notebookId: lb.id, occurredAt: eb.occurredAt, body: eb.body, values: {...eb.values, 'f3': 'Low'});
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect((await a.nb.entries(la.id)).single.values['f3'], 'Low');
+    });
+
+    test('a built-in template: phone 2 makes the notebook from it (shape, icon, colour, map switch)', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().byId('notes')!;
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def.copyWith(name: 'Family plan'), templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', title: 'Meeting spot', body: 'The old mill.');
+      await a.engine.run();
+      carry(a, b);
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Family plan');
+      expect((lb.template, lb.templateRef, lb.def.sort, lb.map), ('notes', t.ref, NotebookSort.recent, false));
+    });
+
+    test('a template this build does not have is made as before: a notes notebook that keeps every value', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran fine.', values: {'f1': 20, 'f2': true, 'f3': 'Half'});
+      await a.engine.run();
+      for (final e in a.folder.text.entries) {
+        if (e.key.split('/').any((c) => c.startsWith('.'))) continue; // a hidden file never leaves the device
+        b.folder.text[e.key] = e.value.replaceFirst('starters/starter.generator_test@1', 'starters/starter.from_the_future@3');
+      }
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
+      expect((lb.template, lb.isLog), ('notes', false));
+      expect(lb.def.fields, isEmpty);
+      final file = b.folder.text.values.firstWhere((v) => v.contains('Ran fine.'));
+      expect(file, contains('run_time: 20'), reason: 'every value stays in the file');
+      expect(file, contains('cache_template: starters/starter.from_the_future@3'), reason: 'and so does the line, for a build that knows it');
+    });
+
+    test('a notebook with its own fields (not from a template) arrives as before, and the person\'s own vault gets no template line', () async {
+      final a = _Rig(SyncKind.share), vault = _Rig(SyncKind.obsidian);
+      await a.journal();
+      await vault.journal();
+      const def = NotebookDef(name: 'Hikes', fields: [LogField(label: 'Trail', type: FieldType.text)], sort: NotebookSort.recent);
+      final la = await a.nb.saveNotebook(template: 'log', def: def);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Dry.', values: {'f1': 'Ridge'});
+      await a.engine.run();
+      expect(a.folder.text.values.firstWhere((v) => v.contains('Dry.')), isNot(contains('cache_template')));
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final lv = await vault.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await vault.nb.saveEntry(notebookId: lv.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran.', values: {'f1': 20});
+      await vault.engine.run();
+      expect(vault.folder.text.values.firstWhere((v) => v.contains('Ran.')), isNot(contains('cache_template')));
+    });
+  });
+
+  group('a repeater list syncs as a notebook with one .md entry per repeater', () {
+    test('its entries are files with the callsign, the settings and the position; another device reads them as a notebook and loses nothing', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync()).byId('repeaters')!;
+      // as the core makes one: the template's ref, so notebook sync names the template in every entry file
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true, templateRef: t.ref);
+      await a.nb.saveEntry(
+        notebookId: la.id,
+        occurredAt: '2026-11-14T09:00:00-07:00',
+        title: 'W0TST1',
+        body: 'Checked on the 14th.',
+        values: {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true},
+        place: const NbPlace(lat: 42.54, lon: -113.8),
+      );
+      await a.engine.run();
+      final md = a.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && e.value.contains('title: W0TST1')).value;
+      expect(md, contains('notebook: Repeaters'));
+      expect(md, contains('frequency: 146.940 MHz'));
+      expect(md, contains('on_air: true'));
+      expect(md, contains('lat: 42.54'));
+      expect(md, contains('Checked on the 14th.'));
+      // what cache_sync carries (never a hidden file) reaches B, which has no such notebook yet
+      for (final e in a.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) b.folder.text[e.key] = e.value;
+      }
+      await b.engine.run();
+      expect(md, contains('cache_template: templates/repeaters@1'));
+      final nbB = b.nb.notebooks.firstWhere((n) => n.name == 'Repeaters');
+      final eB = (await b.nb.entries(nbB.id)).single;
+      expect((eB.title, eB.body, eB.place?.lat), ('W0TST1', 'Checked on the 14th.', 42.54));
+      // phone 2 has the Repeaters template's fields, and every value is in its field
+      expect((nbB.template, nbB.isRepeaters, nbB.def.sort, nbB.def.icon, nbB.def.color), ('repeaters', true, NotebookSort.distance, 'radio_tower', 'purple'));
+      expect([for (final f in nbB.def.visible) (f.label, f.type)], [for (final f in la.def.visible) (f.label, f.type)]);
+      expect(eB.values, {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true},
+          reason: 'frequency, offset, tone, town and on air are in their fields on phone 2');
+      // B writes it back unchanged: A's entry keeps every value
+      await b.engine.run();
+      for (final e in b.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) a.folder.text[e.key] = e.value;
+      }
+      await a.engine.run();
+      final eA = (await a.nb.entries(la.id)).single;
+      expect(eA.values, {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true});
+    });
   });
 
   group('the app PIN', () {

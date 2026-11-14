@@ -160,6 +160,11 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// The engine stops itself this many seconds after it opened, whether or not it was closed: no more rounds, the router and
+    /// the store shut down (so another engine can open the folder). For a background run, whose process may be stopped by the
+    /// system before it can close the engine; absent: no limit (the app's own engine).
+    #[serde(default)]
+    pub lifetime_secs: Option<u64>,
     /// Shares of things the person made, by share id: with "Don't replace my copies from this device" on for a linked device
     /// (`set_keep_copies`), that device's newer version of a file held here is written beside it ("notes (from Pixel).md",
     /// [`index::beside_name`]) and its new files still come; in every other share that device's changes are not taken at all
@@ -655,11 +660,59 @@ fn encode_code(c: &LinkCode) -> Result<String> {
     Ok(format!("{CODE_PREFIX}{}", data_encoding::BASE32_NOPAD.encode(&serde_json::to_vec(c)?)))
 }
 
+/// Why a link code cannot be read. The text is what the person may be shown; [`LinkCodeError::kind`] is the stable name the app
+/// tells the cases apart by (the answer's `kind`, never the text).
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinkCodeError {
+    /// Not a Cache link code at all.
+    NotACode,
+    /// A `CACHE1-` code whose body cannot be read.
+    Damaged,
+    /// `CACHE<n>-` with n above 1: made by a newer Cache.
+    Newer,
+}
+
+impl LinkCodeError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotACode => "link_code_not_a_code",
+            Self::Damaged => "link_code_damaged",
+            Self::Newer => "link_code_newer",
+        }
+    }
+}
+
+impl std::fmt::Display for LinkCodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotACode => "this is not a Cache link code",
+            Self::Damaged => "the link code is damaged",
+            Self::Newer => "this link code is from a newer version of Cache",
+        })
+    }
+}
+
+impl std::error::Error for LinkCodeError {}
+
+/// The kind of a failure that is a [`LinkCodeError`], for the answer to the app.
+pub fn error_kind(e: &anyhow::Error) -> Option<&'static str> {
+    e.downcast_ref::<LinkCodeError>().map(LinkCodeError::kind)
+}
+
 fn decode_code(s: &str) -> Result<LinkCode> {
     let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
-    let body = s.strip_prefix(CODE_PREFIX).ok_or_else(|| anyhow!("this is not a Cache link code"))?;
-    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| anyhow!("the link code is damaged"))?;
-    serde_json::from_slice(&bytes).map_err(|_| anyhow!("the link code is damaged"))
+    let Some(body) = s.strip_prefix(CODE_PREFIX) else {
+        return Err(if made_by_newer(&s) { LinkCodeError::Newer } else { LinkCodeError::NotACode }.into());
+    };
+    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| LinkCodeError::Damaged)?;
+    Ok(serde_json::from_slice(&bytes).map_err(|_| LinkCodeError::Damaged)?)
+}
+
+/// `CACHE<n>-` (already upper-cased) with n above 1: a code from a later format. A number too big to read is later too.
+fn made_by_newer(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("CACHE") else { return false };
+    let Some((n, _)) = rest.split_once('-') else { return false };
+    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().map_or(true, |n| n > 1)
 }
 
 fn token() -> String {
@@ -2422,6 +2475,21 @@ impl SyncEngine {
                 let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
             }
         });
+        if let Some(secs) = cfg.lifetime_secs {
+            let inner4 = inner.clone();
+            let router4 = router.clone();
+            rt.spawn(async move {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                // Closed already (close sets `stop` first): nothing left to do.
+                if inner4.stop.swap(true, Ordering::Relaxed) {
+                    return;
+                }
+                inner4.note("Stopped: the time limit of this run was reached");
+                inner4.wake.notify_one();
+                let _ = tokio::time::timeout(Duration::from_secs(5), router4.shutdown()).await;
+                let _ = inner4.store.shutdown().await;
+            });
+        }
         Ok(SyncEngine { rt, inner, router: Some(router) })
     }
 
@@ -3285,5 +3353,42 @@ mod gate_refusal_tests {
         assert!(d.path().join("links-recovered-at").exists());
         // A later healthy start reads it back: the same grace.
         assert_eq!(links_grace_until(d.path(), false).unwrap() / 1000, until / 1000);
+    }
+}
+
+#[cfg(test)]
+mod link_code_tests {
+    use super::*;
+
+    fn kind(s: &str) -> Option<&'static str> {
+        decode_code(s).err().as_ref().and_then(error_kind)
+    }
+
+    #[test]
+    fn a_code_from_a_newer_cache_is_told_apart() {
+        for s in ["CACHE2-ABCDEF", "cache3-abcdef", "  CACHE12-\nAB CD ", "CACHE2-", "CACHE99999999999999999999999-X"] {
+            assert_eq!(kind(s), Some("link_code_newer"), "{s}");
+        }
+        assert_eq!(decode_code("CACHE2-ABC").unwrap_err().to_string(), "this link code is from a newer version of Cache");
+    }
+
+    #[test]
+    fn the_other_cases_keep_their_kinds() {
+        assert_eq!(kind("CACHE1-"), Some("link_code_damaged"));
+        assert_eq!(kind("CACHE1-!!!!"), Some("link_code_damaged"));
+        assert_eq!(kind("cache1-TESTCODE"), Some("link_code_damaged"));
+        for s in ["HELLO", "", "CACHE-ABC", "CACHE0-ABC", "CACHEX-ABC", "CACHE2ABC"] {
+            assert_eq!(kind(s), Some("link_code_not_a_code"), "{s}");
+        }
+        assert_eq!(decode_code("HELLO").unwrap_err().to_string(), "this is not a Cache link code");
+    }
+
+    #[test]
+    fn a_real_code_still_decodes() {
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into() };
+        let code = encode_code(&c).unwrap();
+        assert!(code.starts_with("CACHE1-"));
+        let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();
+        assert_eq!((back.t, back.n, back.a.id), ("TOK".to_string(), "Desk".to_string(), c.a.id));
     }
 }

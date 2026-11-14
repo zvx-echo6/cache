@@ -11,16 +11,27 @@ import '../platform/app_log.dart';
 import 'fgs_add.dart';
 import '../weather/background.dart';
 import 'background_tasks.dart';
+import 'sync_background.dart';
 
-/// The jobs of the shared background layer, by task name. A future `sync` task gets its entry here (none yet).
+/// The jobs of the shared background layer, by task name.
 Map<String, BackgroundJob> backgroundJobs() => {
   kWeatherTask: weatherBackgroundJob,
   kWatchDetectTask: (_) async => watchDetectJob(support: await appSupportPath()),
   kWatchAddTask: (_) async => watchAddJob(support: await appSupportPath()),
+  kSyncTask: (_) async => syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetAndroid),
+  kSyncRefreshTask: (_) async => syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetRefresh),
+  kSyncProcessingTask: (_) async {
+    try {
+      return await syncBackgroundJob(support: await appSupportPath(), budget: kSyncBudgetProcessing);
+    } finally {
+      // a processing task runs once: the next is asked for as this one ends
+      await scheduleProcessing(kSyncProcessingTask, constraints: BackgroundPresets.syncCharging(), delay: kSyncEvery);
+    }
+  },
 };
 
 /// The one entry point the system starts for every background run (WorkManager on Android, BGTaskScheduler on iPhone, which
-/// only ever runs the weather task). It opens the app's log, so each run's one line lands where the app's lines do.
+/// runs the weather and the sync tasks). It opens the app's log, so each run's one line lands where the app's lines do.
 @pragma('vm:entry-point')
 void cacheBackgroundDispatcher() {
   Workmanager().executeTask((task, input) async {

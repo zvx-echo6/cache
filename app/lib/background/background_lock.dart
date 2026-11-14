@@ -6,6 +6,11 @@ import 'dart:io' as io show pid;
 /// doing it itself.
 const String kAddPdfWork = 'pdf-add';
 
+/// The sync work: a background round with the linked devices (background/sync_background.dart). The app's own sync engine and a
+/// background round never run together (the sync engine's store and identity belong to one engine at a time): the app writes
+/// `engine-sync` while its engine runs, and a background round holds `run-sync`.
+const String kSyncWork = 'sync';
+
 /// The one lock between the app and the background runs (WorkManager's engine, which may run in the app's own process while
 /// the app is in the background, or in a process of its own). Small files in `<support>/background/`:
 /// - `app-open`: the app is open (the time, written when it comes to the front and every [refreshEvery] while it is);
@@ -14,12 +19,18 @@ const String kAddPdfWork = 'pdf-add';
 /// - `generation`: a count every background run adds one to, so the app knows to read its kept state again.
 /// A time older than [fresh] is stale (a run or an app that was killed): it no longer holds anything.
 class BackgroundLock {
-  BackgroundLock(this.dir, {DateTime Function()? clock, this.fresh = const Duration(minutes: 2), int? pid}) : _clock = clock ?? DateTime.now, _pid = pid ?? io.pid;
+  BackgroundLock(this.dir, {DateTime Function()? clock, this.fresh = const Duration(minutes: 2), this.engineFresh = const Duration(minutes: 5), int? pid})
+    : _clock = clock ?? DateTime.now,
+      _pid = pid ?? io.pid;
 
   final int _pid;
 
   final Directory dir;
   final Duration fresh;
+
+  /// How long the app's engine mark holds without being written again (the app's timers may be held back while it is in the
+  /// background, so it is longer than [fresh]).
+  final Duration engineFresh;
   final DateTime Function() _clock;
 
   /// How often the holder writes its time again.
@@ -27,15 +38,18 @@ class BackgroundLock {
 
   File _file(String name) => File('${dir.path}${Platform.pathSeparator}$name');
 
-  /// A run's file is its time, and on a second line the process that wrote it: a run whose process is gone (Cache was force-stopped
-  /// while the service ran: Android 15 emulator, 2026-11-14) holds nothing, and need not be waited for until its time is stale.
-  bool _isFresh(String name, {bool alive = false}) {
+  /// A mark's file is its time, and on a second line the process that wrote it (every mark a holder writes: `run-<work>` for every
+  /// work, `engine-<work>`): a holder whose process is gone (Cache was force-stopped while the service ran: Android 15 emulator,
+  /// 2026-11-14) holds nothing, and need not be waited for until its time is stale. [within]: how old the time may be (default
+  /// [fresh]); [alive]: also needs the writing process to be there, where the file names one. `app-open` names none.
+  bool _isFresh(String name, {Duration? within, bool alive = false}) {
     try {
       final f = _file(name);
       if (!f.existsSync()) return false;
-      final lines = f.readAsStringSync().trim().split('\n');
+      final lines = f.readAsStringSync().trim().split('
+');
       final t = DateTime.tryParse(lines.first.trim());
-      if (t == null || _clock().difference(t) >= fresh) return false;
+      if (t == null || _clock().difference(t) >= (within ?? fresh)) return false;
       if (alive && lines.length > 1 && !_processAlive(int.tryParse(lines[1].trim()))) return false;
       return true;
     } catch (_) {
@@ -79,6 +93,15 @@ class BackgroundLock {
 
   bool get appOpen => _isFresh('app-open');
 
+  /// The app's own engine for [work] runs (it may do so with the app in the background, after [appClosed]): a background run of
+  /// [work] does not start. Written again every [refreshEvery] while it runs.
+  void engineStarted(String work) => _touch('engine-$work', withProcess: true);
+
+  /// The app's engine for [work] has stopped.
+  void engineStopped(String work) => _delete('engine-$work');
+
+  bool engineRuns(String work) => _isFresh('engine-$work', within: engineFresh, alive: true);
+
   /// A background run is doing [work] now.
   bool runs(String work) => _isFresh('run-$work', alive: true);
 
@@ -110,12 +133,14 @@ class BackgroundLock {
 
   // ---- a background run
 
-  /// A background run may do [work]: the app is not open and no other run does it. True: the run holds it (and the generation
-  /// goes up) until [release].
-  bool hold(String work) {
-    if (appOpen || runs(work)) return false;
+  /// A background run may do [work]: the app is not open, its own engine for [work] does not run and no other run does it.
+  /// True: the run holds it (and the generation goes up, unless [bump] is false: a run that changes nothing the app keeps in
+  /// state) until [release].
+  bool hold(String work, {bool bump = true}) {
+    if (appOpen || runs(work) || engineRuns(work)) return false;
     _delete('stop-$work');
     _touch('run-$work', withProcess: true);
+    if (!bump) return true;
     try {
       dir.createSync(recursive: true);
       _file('generation').writeAsStringSync('${generation + 1}', flush: true);

@@ -15,7 +15,7 @@ pub mod store;
 mod xml;
 mod zip;
 
-pub use store::{MapStore, NotebookLayer, NotebookPoint};
+pub use store::{parse_repeater_files, LegacyRepeaterList, MapStore, NotebookLayer, NotebookPoint, ParsedRepeaters};
 
 use serde::{Deserialize, Serialize};
 

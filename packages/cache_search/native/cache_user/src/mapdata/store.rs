@@ -140,6 +140,64 @@ pub fn notes_shown(notes: &str) -> Option<String> {
     (!cut.is_empty()).then_some(cut)
 }
 
+/// The repeaters of one or more files, merged (a KML and a CHIRP CSV of the same export), read but not stored.
+#[derive(Clone, Debug)]
+pub struct ParsedRepeaters {
+    /// The first KML's file name, else the first CSV's (what a list was named after).
+    pub first_file: String,
+    pub repeaters: Vec<Repeater>,
+    /// Pins the KML had no usable frequency for.
+    pub skipped: usize,
+}
+
+/// A RepeaterBook-style KML (or KMZ) and/or a CHIRP CSV as one merged list, in file order. The same reading `import` stores.
+pub fn parse_repeater_files(paths: &[String]) -> Result<ParsedRepeaters> {
+    let files: Vec<String> = paths.iter().map(|p| file_name(p)).collect();
+    let (mut pins, mut rows, mut skipped) = (Vec::new(), Vec::new(), 0);
+    let (mut first_kml, mut first_csv) = (None, None);
+    for (p, f) in paths.iter().zip(&files) {
+        let bytes = read_file(p)?;
+        let at = |e: Error| bad(format!("{f}: {}", e.message));
+        match file_kind(f, &bytes) {
+            Some(FileKind::Kml) | Some(FileKind::Kmz) => {
+                let text = if file_kind(f, &bytes) == Some(FileKind::Kmz) { utf8(&super::zip::kml_of_kmz(&bytes).map_err(at)?, "KML in the KMZ").map_err(at)? } else { utf8(&bytes, "KML").map_err(at)? };
+                let (p, s) = kml::parse_repeaters(&text).map_err(at)?;
+                pins.extend(p);
+                skipped += s;
+                first_kml.get_or_insert(f.clone());
+            }
+            Some(FileKind::ChirpCsv) => {
+                rows.extend(chirp::parse(&utf8(&bytes, "CSV").map_err(at)?).map_err(at)?);
+                first_csv.get_or_insert(f.clone());
+            }
+            _ => return Err(bad(format!("{f}: a repeater list is a RepeaterBook-style .kml (or .kmz) or a CHIRP .csv"))),
+        }
+    }
+    let merged = super::repeater::merge(pins, rows);
+    if merged.is_empty() {
+        return Err(bad("no repeaters in the imported files"));
+    }
+    Ok(ParsedRepeaters { first_file: first_kml.or(first_csv).unwrap_or_default(), repeaters: merged, skipped })
+}
+
+/// A repeater list as the store keeps it, for turning it into a notebook (see cache_search's nbrepeaters).
+#[derive(Clone, Debug)]
+pub struct LegacyRepeaterList {
+    /// `l<n>`.
+    pub id: String,
+    pub name: String,
+    pub visible: bool,
+    /// Each row's stored JSON exactly as it is in the store, with its number in the list.
+    pub rows: Vec<(u32, String)>,
+}
+
+impl LegacyRepeaterList {
+    /// A stored row as a repeater.
+    pub fn repeater(raw: &str) -> Result<Repeater> {
+        serde_json::from_str(raw).map_err(|e| io(format!("stored repeater: {e}")))
+    }
+}
+
 impl MapStore {
     pub fn new(db_path: impl AsRef<Path>) -> MapStore {
         MapStore { path: db_path.as_ref().to_path_buf() }
@@ -319,32 +377,9 @@ impl MapStore {
                 if a.private.is_some() {
                     return Err(bad("private: only for a layer"));
                 }
-                let (mut pins, mut rows, mut skipped) = (Vec::new(), Vec::new(), 0);
-                let (mut first_kml, mut first_csv) = (None, None);
-                for (p, f) in a.paths.iter().zip(&files) {
-                    let bytes = read_file(p)?;
-                    let at = |e: Error| bad(format!("{f}: {}", e.message));
-                    match file_kind(f, &bytes) {
-                        Some(FileKind::Kml) | Some(FileKind::Kmz) => {
-                            let text = if file_kind(f, &bytes) == Some(FileKind::Kmz) { utf8(&super::zip::kml_of_kmz(&bytes).map_err(at)?, "KML in the KMZ").map_err(at)? } else { utf8(&bytes, "KML").map_err(at)? };
-                            let (p, s) = kml::parse_repeaters(&text).map_err(at)?;
-                            pins.extend(p);
-                            skipped += s;
-                            first_kml.get_or_insert(f.clone());
-                        }
-                        Some(FileKind::ChirpCsv) => {
-                            rows.extend(chirp::parse(&utf8(&bytes, "CSV").map_err(at)?).map_err(at)?);
-                            first_csv.get_or_insert(f.clone());
-                        }
-                        _ => return Err(bad(format!("{f}: a repeater list is a RepeaterBook-style .kml (or .kmz) or a CHIRP .csv"))),
-                    }
-                }
-                let merged = super::repeater::merge(pins, rows);
-                if merged.is_empty() {
-                    return Err(bad("no repeaters in the imported files"));
-                }
-                let name = given.clone().or(first_kml).or(first_csv).unwrap_or_default();
-                (name, false, merged.into_iter().map(|r| Item::Repeater(Box::new(r))).collect(), Some(skipped))
+                let p = parse_repeater_files(&a.paths)?;
+                let name = given.clone().unwrap_or(p.first_file);
+                (name, false, p.repeaters.into_iter().map(|r| Item::Repeater(Box::new(r))).collect(), Some(p.skipped))
             }
         };
         let mut c = self.db()?;
@@ -387,6 +422,20 @@ impl MapStore {
         tx.commit()?;
         let l = Self::list_by_id(&c, &format!("{}{id}", kind.prefix()))?;
         Ok(Self::summary(&c, &l, skipped.map(|s| ("skipped", json!(s))))?.to_string())
+    }
+
+    /// Every repeater list (oldest first) with its rows' stored JSON, for the conversion to notebooks.
+    pub fn legacy_repeater_lists(&self) -> Result<Vec<LegacyRepeaterList>> {
+        let c = self.db()?;
+        let mut lists: Vec<List> = Self::lists(&c)?.into_iter().filter(|l| l.kind == Kind::Repeaters).collect();
+        lists.sort_by_key(|l| l.id);
+        let mut out = Vec::new();
+        for l in lists {
+            let mut st = c.prepare("SELECT ord, data FROM map_items WHERE list_id=?1 AND data IS NOT NULL ORDER BY ord")?;
+            let rows = st.query_map([l.id], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            out.push(LegacyRepeaterList { id: l.sid(), name: l.name.clone(), visible: l.visible, rows });
+        }
+        Ok(out)
     }
 
     /// `cs_userlayers_list`: `{"layers":[...],"repeater_lists":[...]}`, most recently used first.

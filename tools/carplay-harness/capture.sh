@@ -3,7 +3,8 @@
 # harness app started from the car side by a click on its icon, and pictures of the CarPlay display: the screen as it comes
 # up, then the map in its three phases (looking at the map, choosing a route, guiding) in the car's dark setting and in the
 # light one, the panning state and the map's buttons at work, the two lists (Saved places, Search) with the stand-in's
-# recorded places, the routes to a place chosen there, and turn by turn along the stand-in's recorded drive. Then the phone's
+# recorded places, the routes to a place chosen there, turn by turn along the stand-in's recorded drive, and "Navigate to
+# <place> with Cache" through the Navigate intent's own perform() (no Siri can be spoken to in a simulator). Then the phone's
 # window is opened once, to see it join. Every command and what it printed goes to harness-out/steps.log; results.txt has one line
 # per answer, starting with OK or FAILED.
 #
@@ -903,6 +904,10 @@ guide_step() {  # guide_step <notification> <log text to wait for, or ""> <pictu
   shot_ext "$3"
 }
 
+panel_is() {  # panel_is <theme> <step>: the last turn panel colour the app gave CarPlay was that theme's
+  grep 'car guidance: the panel takes' "$STREAM" | tail -n 1 | grep -q "the $1 theme's" || GUIDE_MISSING="$GUIDE_MISSING [$2: the turn panel was not given the $1 theme's colour: $(grep 'car guidance: the panel takes' "$STREAM" | tail -n 1 | sed 's/.*car guidance: //')]"
+}
+
 guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along the stand-in's recorded drive, and the bar's two buttons
   local label="$1" at before got rows began ended told
   EXTRAS=""
@@ -944,14 +949,22 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # A moving vehicle: five positions a second apart. The marker glides between them and the camera goes with it; a picture
   # is taken as fast as they come while it does.
   before=$(log_count 'car map: the marker glides')
+  local rolled waited
+  rolled=$(log_count 'harness steps: roll done')
   notify roll
   for at in 1 2 3 4 5; do shot_ext "$label-guide-roll-$at"; done
-  sleep 2
+  # The glides are counted from the app's own lines, once they have come: the stand-in says when it has pushed the last
+  # position, and the job then waits up to 8 s more for the four glides between the five (a busy runner can be slow to log
+  # them), and says how long it waited.
+  wait_more 'harness steps: roll done' "$rolled" 20 || GUIDE_MISSING="$GUIDE_MISSING [the stand-in did not say it pushed the five positions]"
+  waited=$SECONDS
+  while [ $(( $(log_count 'car map: the marker glides') - before )) -lt 4 ] && [ $((SECONDS - waited)) -lt 8 ]; do sleep 0.5; done
+  waited=$((SECONDS - waited))
   at=$(( $(log_count 'car map: the marker glides') - before ))
   if [ "$at" -ge 3 ]; then
-    GUIDE="prompts: a short one and none were answered as told, $PROMPTS (the tone on this runner: ${TONE:-no line}); the marker glided between $at of five positions a second apart"
+    GUIDE="prompts: a short one and none were answered as told, $PROMPTS (the tone on this runner: ${TONE:-no line}); the marker glided between $at of five positions a second apart (counted ${waited} s after the last position)"
   else
-    GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
+    GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart, counted ${waited} s after the last position]"
   fi
   # The two extras on the map: the route mini map and the climb ahead. The app measures the room CarPlay reports and says
   # the screen's class (small: never on the car; big: always; in-between: on the car except while the phone's drive screen
@@ -1053,22 +1066,43 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # follow each one, with the car in its dark setting all the while.
   notify climb
   sleep 2
+  # CarPlay's turn panel and trip estimates take the theme's turn panel colour too (the app says which it gave CarPlay).
   for theme in light parchment tactical dark; do
     guide_step "theme_$theme" "car map: style loaded, $theme" "$label-guide-theme-$theme"
+    panel_is "$theme" "theme_$theme"
   done
   # Five quick theme changes on the phone, a tenth of a second apart (timed by the stand-in Dart side: the job's notifications
-  # each take a second or more on a busy runner), ending in Tactical: one style load, of the last.
+  # each take a second or more on a busy runner), ending in Tactical. The car waits 0.4 s after a change before it loads a
+  # style, so changes closer together than that give one load, of the last. A slow runner can space them further apart: the
+  # gaps it actually achieved are read from the stand-in's own log times, and each one longer than the wait is one more load.
   before=$(log_count 'car map: style loaded')
+  changes=$(log_count 'harness steps: phone theme ')
   notify themeburst
   if wait_more 'car map: style loaded' "$before" 15; then
     sleep 5
     got=$(( $(log_count 'car map: style loaded') - before ))
     last=$(grep 'car map: style loaded' "$STREAM" | tail -n 1 | sed 's/.*style loaded, //; s/,.*//')
     shot_ext "$label-guide-theme-burst"
-    if [ "$got" = 1 ] && [ "$last" = tactical ]; then
-      GUIDE="$GUIDE; five quick theme changes gave one style load, of the last (tactical)"
+    # The five changes' times (hh:mm:ss.mmm), and the gaps between them in milliseconds.
+    gaps=$(grep 'harness steps: phone theme ' "$STREAM" | tail -n +$((changes + 1)) | head -n 5 | cut -c12-23 \
+      | awk -F'[:.]' '{ t = (($1 * 60 + $2) * 60 + $3) * 1000 + $4; if (NR > 1) printf "%d ", t - p; p = t }')
+    long=0
+    count=0
+    for gap in $gaps; do
+      count=$((count + 1))
+      [ "$gap" -gt 400 ] && long=$((long + 1))
+    done
+    want=$((long + 1))
+    if [ "$count" -ne 4 ]; then
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes: the stand-in said $((count + 1)) of them, not five]"
+    elif [ "$got" = "$want" ] && [ "$last" = tactical ]; then
+      if [ "$long" = 0 ]; then
+        GUIDE="$GUIDE; five quick theme changes (gaps ${gaps% } ms) gave one style load, of the last (tactical)"
+      else
+        GUIDE="$GUIDE; five quick theme changes gave $got style loads, the last of tactical: the runner was slow, $long of the gaps (${gaps% } ms) were longer than the car's 0.4 s wait"
+      fi
     else
-      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes gave $got style load(s), the last of $last: one, of tactical, was wanted]"
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes (gaps ${gaps% } ms, $long longer than the car's 0.4 s wait) gave $got style load(s), the last of $last: $want, the last of tactical, was wanted]"
     fi
   else
     GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes loaded no style]"
@@ -1077,6 +1111,18 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   notify theme_dark
   wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [theme_dark: the Dark style did not come back]"
   sleep 2
+  # No theme picked on the phone: the car's own day and night decide, Light by day and Dark by night, the map and the turn
+  # panel alike (the car sits in its dark setting here). Then Dark is picked again.
+  guide_step theme_none 'car map: style loaded, dark' ""
+  guide_step day 'car map: style loaded, light' "$label-guide-nopick-day"
+  panel_is light "no theme picked, day"
+  guide_step night 'car map: style loaded, dark' "$label-guide-nopick-night"
+  panel_is dark "no theme picked, night"
+  before=$(log_count 'car map: style loaded, dark')
+  notify theme_dark
+  wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [theme_dark after none picked: the Dark style did not come back]"
+  sleep 2
+  GUIDE="$GUIDE; the turn panel: $(grep 'car guidance: the panel takes' "$STREAM" | sed 's/.*the panel takes the //' | tr '\n' ';')"
   # Off the route (the phone looks for a new one), then arrived.
   guide_step drive 'car guidance: rerouting' "$label-guide-rerouting"
   guide_step drive 'car guidance: arrived' "$label-guide-arrived"
@@ -1091,6 +1137,58 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     shot_ext "$label-guide-not-ended"
     GUIDE_MISSING="$GUIDE_MISSING [End route did not answer taps in the bar]"
   fi
+}
+
+VOICE=""
+VOICE_MISSING=""
+
+voice_step() {  # voice_step <voice_list|voice_none|voice_saved> <log text to wait for> <picture>: the Navigate intent asked by the harness
+  local before
+  before=$(log_count "$2")
+  notify "$1"
+  if wait_more "$2" "$before" 30; then
+    sleep 3
+    shot_ext "$3"
+    return 0
+  fi
+  shot_ext "$3"
+  VOICE_MISSING="$VOICE_MISSING [$1: no new line '$2']"
+  return 1
+}
+
+voice_pictures() {  # voice_pictures <label>: "Navigate to <place> with Cache", through the intent's perform() (no Siri in a simulator)
+  local label="$1" before
+  VOICE=""
+  VOICE_MISSING=""
+  to_browsing || { VOICE_MISSING=" [the stand-in did not go back to its first trip]"; return 0; }
+  # A name that is no saved place: the places found, listed on the car with the name as the title.
+  before=$(log_count "car voice: Siri says 'Showing places for <query>.'")
+  if voice_step voice_list 'car voice: places shown on the car, 3 rows' "$label-voice-list"; then
+    if wait_more "car voice: Siri says 'Showing places for <query>.'" "$before" 5; then
+      VOICE="a name that is no saved place listed the three places found on the car, and Siri was given 'Showing places for <query>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_list: Siri was not given its words]"
+    fi
+  fi
+  # A name nothing is found for: the car says No places found.
+  before=$(log_count "car voice: Siri says 'Cache found no places for <query>.'")
+  if voice_step voice_none 'car voice: places shown on the car, 0 rows' "$label-voice-none"; then
+    if wait_more "car voice: Siri says 'Cache found no places for <query>.'" "$before" 5; then
+      VOICE="$VOICE; a name with nothing found showed the list's 'No places found', and Siri was given 'Cache found no places for <query>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_none: Siri was not given its words]"
+    fi
+  fi
+  # A saved place's name: guidance begins, and the car is back on its map with CarPlay's guidance panel.
+  before=$(log_count 'car link: trip guiding')
+  if voice_step voice_saved 'car voice: guidance began, the car is back on its map' "$label-voice-started"; then
+    if wait_more 'car link: trip guiding' "$before" 5 && [ "$(log_count "car voice: Siri says 'Starting the route to <name>.'")" -gt 0 ]; then
+      VOICE="$VOICE; a saved place's name started guidance on the car, and Siri was given 'Starting the route to <name>.'"
+    else
+      VOICE_MISSING="$VOICE_MISSING [voice_saved: no guiding trip, or Siri was not given its words]"
+    fi
+  fi
+  to_browsing || VOICE_MISSING="$VOICE_MISSING [the stand-in did not go back to its first trip after the voice steps]"
 }
 
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
@@ -1262,7 +1360,17 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes and no theme picked by day and by night (the map and the turn panel), looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-nopick-day,-nopick-night,-rerouting,-arrived,-ended}.png"
+                # "Navigate to <place> with Cache": the intent's own perform(), asked by the harness.
+                voice_pictures "$label"
+                if grep -q 'car scene disconnected' "$STREAM"; then
+                  result "FAILED $label voice: the car scene was disconnected during the voice steps; $VOICE"
+                  host_crash=1
+                elif [ -n "$VOICE_MISSING" ]; then
+                  result "FAILED $label voice:$VOICE_MISSING; $VOICE"
+                else
+                  result "OK $label voice: the Navigate intent's perform() (CarVoiceIntents.swift), given a place name as Siri hands it over: $VOICE; shots/$label-voice-{list,none,started}.png"
+                fi
               fi
             fi
           fi

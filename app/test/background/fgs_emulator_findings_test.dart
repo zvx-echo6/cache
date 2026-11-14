@@ -154,6 +154,28 @@ void main() {
       expect(await app.takeOver(kAddPdfWork, wait: Duration.zero), isTrue);
     });
 
+    test("the sync work's own marks follow the same rule: a dead process holds nothing, and sync still yields to a live Add PDF run only", () async {
+      if (!(Platform.isLinux || Platform.isAndroid)) return;
+      final dir = Directory('${tmp.path}/background');
+      // a round of sync held in a process that is gone, and the app's own sync engine mark from a process that is gone
+      final goneRound = BackgroundLock(dir, pid: dead);
+      expect(goneRound.hold(kSyncWork, bump: false), isTrue);
+      goneRound.engineStarted(kSyncWork);
+      final other = BackgroundLock(dir);
+      expect(other.runs(kSyncWork), isFalse, reason: 'the round that held it is gone');
+      expect(other.engineRuns(kSyncWork), isFalse, reason: 'so is the engine that marked it');
+      expect(other.hold(kSyncWork, bump: false), isTrue, reason: 'a new round may go ahead');
+      other.release(kSyncWork);
+
+      // sync yields to a live Add PDF run (the service's), not to one left by a force-stop
+      final service = BackgroundLock(dir);
+      expect(service.hold(kAddPdfWork), isTrue);
+      expect(BackgroundLock(dir, pid: 1).runs(kAddPdfWork), isTrue, reason: 'a live Add PDF run: sync yields');
+      service.release(kAddPdfWork);
+      expect(BackgroundLock(dir, pid: dead).hold(kAddPdfWork), isTrue);
+      expect(BackgroundLock(dir).runs(kAddPdfWork), isFalse, reason: 'an Add PDF run left by a force-stop does not hold sync off');
+    });
+
     test('a run in a live process, or an old file without a process, still holds as before', () async {
       final dir = Directory('${tmp.path}/background');
       final live = BackgroundLock(dir, pid: pid);

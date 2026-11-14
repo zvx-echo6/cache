@@ -74,10 +74,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('New notebook'));
     await tester.pumpAndSettle();
-    for (final t in ['Journal', 'Log', 'Notes', 'Places']) {
+    for (final t in ['Journal', 'Log', 'Notes', 'Places', 'Repeaters']) {
+      await tester.ensureVisible(find.byKey(ValueKey('template-${t.toLowerCase()}')));
       expect(find.byKey(ValueKey('template-${t.toLowerCase()}')), findsOneWidget);
     }
     expect(find.textContaining('Quick add, last done, due again.'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Starter logs'), 300, scrollable: find.byType(Scrollable).last);
     expect(find.text('Starter logs'), findsOneWidget);
     await tester.tap(find.text('Starter logs'));
     await tester.pumpAndSettle();

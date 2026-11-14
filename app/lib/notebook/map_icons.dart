@@ -201,6 +201,7 @@ String defaultNotebookIcon(Notebook n) => defaultIconFor(n.template, log: n.isLo
 /// [defaultNotebookIcon] for a template id ([log]: it is a log, with quick add).
 String defaultIconFor(String template, {bool log = false}) => switch (template) {
       'places' => kPlacesIcon,
+      'repeaters' => kRepeaterIcon,
       'journal' => 'journal',
       'notes' => 'notes',
       _ => log ? 'log' : 'book',

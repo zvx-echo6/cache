@@ -116,8 +116,8 @@ struct CarTrip: Equatable {
   /// The whole route for the mini map, as [latitude, longitude] points, and how much of it is driven (0 to 1).
   let overviewPoints: [[Double]]
   let drivenFraction: Double
-  /// The colours of the phone's chosen theme for what the car draws itself (the grade marker, the route mini map, the climb
-  /// card), day and night alike; nil before the palette has come.
+  /// The colours of the theme the car shows for what the car draws itself (the grade marker, the route mini map, the climb
+  /// card) and for CarPlay's turn panel; nil before the palette has come.
   let palette: CarThemeColors?
 
   /// The grade marker's colours, from the palette.
@@ -262,6 +262,8 @@ struct CarThemeColors: Equatable {
   let destDot: String
   let posFill: String
   let posRing: String
+  /// The turn panel's colour (the Android host's guidance card; CarPlay's guidance panel and its trip estimates).
+  let hostCard: String
   let card: String
   let cardText: String
   let cardSecondary: String
@@ -271,6 +273,10 @@ struct CarThemeColors: Equatable {
 
   var badgeColors: CarBadgeColors { CarBadgeColors(badge: badge, glyph: badgeGlyph, edge: badgeEdge) }
 
+  /// Whether the turn panel's colour is a light one: black text reads better on it than white (by the colours' contrast, as
+  /// WCAG measures it). CarPlay picks the panel's text colour itself; the trip estimates are told their style from this.
+  var hostCardIsLight: Bool { CarValue.lightColor(hostCard) }
+
   static func from(_ v: Any?) -> CarThemeColors? {
     guard let m = CarValue.map(v) else { return nil }
     func c(_ key: String) -> String? {
@@ -279,11 +285,11 @@ struct CarThemeColors: Equatable {
     }
     guard let route = c("route"), let routeDriven = c("routeDriven"), let badge = c("badge"), let badgeGlyph = c("badgeGlyph"),
           let badgeEdge = c("badgeEdge"), let startDot = c("startDot"), let destDot = c("destDot"), let posFill = c("posFill"),
-          let posRing = c("posRing"), let card = c("card"), let cardText = c("cardText"), let cardSecondary = c("cardSecondary"),
+          let posRing = c("posRing"), let hostCard = c("hostCard"), let card = c("card"), let cardText = c("cardText"), let cardSecondary = c("cardSecondary"),
           let hatch = c("hatch"), let miniBg = c("miniBg"), let miniBorder = c("miniBorder") else { return nil }
     return CarThemeColors(
       theme: m["theme"] as? String ?? "", route: route, routeDriven: routeDriven, badge: badge, badgeGlyph: badgeGlyph,
-      badgeEdge: badgeEdge, startDot: startDot, destDot: destDot, posFill: posFill, posRing: posRing, card: card,
+      badgeEdge: badgeEdge, startDot: startDot, destDot: destDot, posFill: posFill, posRing: posRing, hostCard: hostCard, card: card,
       cardText: cardText, cardSecondary: cardSecondary, hatch: hatch, miniBg: miniBg, miniBorder: miniBorder)
   }
 }
@@ -461,6 +467,25 @@ enum CarValue {
   static func text(_ v: Any?) -> String? {
     guard let s = v as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return s
+  }
+
+  /// A colour's relative luminance, as WCAG defines it (0 black, 1 white); nil for what does not read as a colour.
+  static func luminance(_ css: String) -> Double? {
+    guard let c = rgba(css) else { return nil }
+    func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+    return 0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2])
+  }
+
+  /// The contrast of two luminances, as WCAG measures it (1 to 21).
+  static func contrast(_ a: Double, _ b: Double) -> Double {
+    (max(a, b) + 0.05) / (min(a, b) + 0.05)
+  }
+
+  /// True when black text has more contrast on the colour than white text; false for a dark colour, and for what does not
+  /// read as a colour.
+  static func lightColor(_ css: String) -> Bool {
+    guard let l = luminance(css) else { return false }
+    return contrast(l, 0) > contrast(l, 1)
   }
 
   /// A colour as Dart writes it for the map (MapPalette.css): "#rrggbb", or "rgba(r,g,b,a)" with red, green and blue from 0

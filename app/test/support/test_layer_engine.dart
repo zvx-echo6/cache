@@ -161,7 +161,25 @@ class TestLayerEngine extends LayerEngine {
     return a;
   }
 
+  /// Whether a download finishes by itself, 20 ms after it starts (in real time). A test that checks a download while it runs
+  /// turns this off and calls [finishAll] when it wants them done: under load the 20 ms ran out before the check.
+  bool autoFinish = true;
+
+  /// Finishes every running download now (with [autoFinish] off).
+  void finishAll() {
+    for (final a in _areas) {
+      if (a.phase != AreaPhase.running) continue;
+      a
+        ..doneTiles = a.totalTiles
+        ..bytes = a.totalTiles * 1000
+        ..phase = AreaPhase.done
+        ..fetchedAt = clock();
+    }
+    notifyListeners();
+  }
+
   void _finish(DownloadedArea a) {
+    if (!autoFinish) return;
     Timer(const Duration(milliseconds: 20), () {
       if (!_areas.contains(a) || a.phase != AreaPhase.running) return;
       a

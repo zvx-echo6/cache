@@ -7,6 +7,7 @@ use cache_live::{Live, LiveCfg};
 use cache_user::UserStore;
 use cache_video::{Video, VideoCfg};
 use serde::Deserialize;
+use std::sync::Arc;
 
 /// Embeds a search query: the model id and the vector, or None when it cannot.
 type QueryEmbedder = dyn Fn(&str) -> Option<(String, Vec<f32>)>;
@@ -44,9 +45,14 @@ pub struct Ext {
     /// The regions engine from the `regions` section: the same one `cs_regions_open` gives for that folder.
     pub regions: Option<std::sync::Arc<cache_regions::Regions>>,
     /// Notebooks from the `notebook` section (`cs_notebook`).
-    pub notebook: Option<cache_notebook::Notebook>,
+    pub notebook: Option<Arc<cache_notebook::Notebook>>,
     /// The saved places and the Places notebooks were brought in step since the notebook was configured (nbplaces.rs).
     pub places_synced: std::sync::atomic::AtomicBool,
+    /// The repeater lists of the older store were turned into notebooks since the notebook was configured (nbrepeaters.rs).
+    pub repeaters_migrated: std::sync::atomic::AtomicBool,
+    /// Test hook for the conversion of repeater lists: 0 runs it whole; 1, 2, 3 make it stop (as an error) before the notebook is
+    /// written, after it is written and before it is read back, and after the read-back before the old list is deleted.
+    pub migrate_stop: std::sync::atomic::AtomicU8,
 }
 
 /// The regions engine as the navigate tool's tile stream: its folder is the one to route on, and a route's tiles are fetched
@@ -145,6 +151,7 @@ impl crate::handle::Handle {
                 let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
                 *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
                 self.ext.map_data = Some(store);
+                self.ext.plug_repeater_points();
             }
         }
         if let Some(l) = live {
@@ -279,9 +286,22 @@ impl Ext {
     pub fn configure_notebook(&mut self, cfg: Option<cache_notebook::NotebookCfg>) {
         if let Some(c) = cfg {
             if self.notebook.as_ref().map(|n| n.cfg() != &c).unwrap_or(true) {
-                self.notebook = Some(cache_notebook::Notebook::new(c));
+                self.notebook = Some(Arc::new(cache_notebook::Notebook::new(c)));
                 self.places_synced.store(false, std::sync::atomic::Ordering::SeqCst);
+                self.repeaters_migrated.store(false, std::sync::atomic::Ordering::SeqCst);
             }
+        }
+        self.plug_repeater_points();
+    }
+
+    /// Turns the repeater lists of the older store into notebooks, once per opened notebook. A list that cannot be converted
+    /// stays as it is (and is logged).
+    pub(crate) fn migrate_repeaters_once(&self) {
+        if self.notebook.is_none() || self.repeaters_migrated.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        if let Err(e) = self.migrate_repeater_lists() {
+            eprintln!("cache_search: a repeater list was not turned into a notebook: {}", e.message);
         }
     }
 
@@ -302,6 +322,7 @@ impl Ext {
     }
 
     pub fn userlayers_list(&self) -> Result<String> {
+        self.migrate_repeaters_once();
         self.map_data()?.list_json().map_err(user_err)
     }
 

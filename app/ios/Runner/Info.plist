@@ -35,12 +35,15 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.happylittle.cache.live-update</string>
+		<string>com.happylittle.cache.sync-refresh</string>
+		<string>com.happylittle.cache.sync-processing</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>processing</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

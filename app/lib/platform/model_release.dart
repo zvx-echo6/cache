@@ -20,10 +20,14 @@ class BackgroundModelRelease {
     required this.release,
     Listenable? changes,
     this.grace = kBackgroundReleaseGrace,
+    this.timer = Timer.new,
   }) {
     _changes = changes;
     changes?.addListener(_onChange);
   }
+
+  /// Makes the grace timer. Tests pass a fake they fire by hand; the app uses a real [Timer].
+  final Timer Function(Duration, void Function()) timer;
 
   /// An answer is being written.
   final bool Function() busy;
@@ -60,7 +64,7 @@ class BackgroundModelRelease {
   void _arm() {
     _timer?.cancel();
     _heldByAnswer = false;
-    _timer = Timer(grace, _fire);
+    _timer = timer(grace, _fire);
   }
 
   void _fire() {

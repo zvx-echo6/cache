@@ -61,7 +61,12 @@ Future<void> main() async {
   final pdf = pdfExe != null && pdfExe.isNotEmpty && indexes is String
       ? PdfWork(core: DispatcherPdfCore(dispatcher), read: PdfTextProcess(pdfExe, '${dirs.support.path}/tmp/pdf-text').read, indexesDir: indexes)
       : null;
-  final indexer = IndexDriver(dispatcher, log: log, extra: extras, load: HostLoad(), pdf: pdf);
+  // The saved videos (the browser's downloads, kept in <docs>/videos): their captions are indexed by the driver, and a finished
+  // download kicks it.
+  late final VideoOps videoOps;
+  final indexer = IndexDriver(dispatcher,
+      log: log, extra: extras, load: HostLoad(), pdf: pdf, savedVideos: () => videoOps.savedVideos(), videoDir: '${dirs.docs.path}/videos');
+  videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: indexer.kick);
   // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
   final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
   final guide = guidePath != null && guidePath.isNotEmpty
@@ -102,7 +107,7 @@ Future<void> main() async {
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs),
       regionsOps,
-      VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve),
+      videoOps,
       HistoryOps(Directory('${dirs.support.path}/history'), log: log),
       keys,
       if (sharing != null) SharingOps(sharing),

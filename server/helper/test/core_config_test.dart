@@ -45,7 +45,7 @@ void main() {
       useLinkedRouter: false,
     );
     expect(jsonEncode(server), jsonEncode(phone));
-    expect(server.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'notebook', 'regions'});
+    expect(server.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'video', 'notebook', 'regions'});
   });
 
   test('CACHE_VALHALLA_SHIM from the environment; without it the bare name', () {

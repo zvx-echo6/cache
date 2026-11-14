@@ -104,6 +104,18 @@ impl Notebook {
         })
     }
 
+    /// Test support, not used by the app: runs SQL on the notebook database (a trigger that fails an insert, a tamper), to
+    /// simulate what a crash or damage leaves behind.
+    #[doc(hidden)]
+    pub fn raw_sql(&self, sql: &str) -> Result<()> {
+        self.with_conn(|c| Ok(c.execute_batch(sql)?))
+    }
+
+    /// The notebooks of one template (see `store::books_by_template`), for tools that read them.
+    pub fn books_by_template(&self, template: &str) -> Result<Vec<serde_json::Value>> {
+        self.with_conn(|c| store::books_by_template(c, template))
+    }
+
     /// Runs `op` with `args_json` (an object; empty or absent = `{}`).
     pub fn call(&self, op: &str, args_json: Option<&str>) -> Result<String> {
         let args: serde_json::Value = match args_json.map(str::trim).filter(|a| !a.is_empty()) {
@@ -126,6 +138,10 @@ impl Notebook {
             "search" => store::search(c, &args)?,
             "pins" => store::pins(c, &args)?,
             "saved_places" => store::saved_places(c, &args)?,
+            "source_merge" => store::source_merge(c, &args)?,
+            "source_add_back" => store::source_add_back(c, &args)?,
+            "source_rows" => store::source_rows(c, &args)?,
+            "source_migrated" => store::source_migrated(c, &args)?,
             _ => return Err(Error { code: "unsupported", message: format!("unknown notebook op {op:?}") }),
         }))?;
         Ok(out.to_string())

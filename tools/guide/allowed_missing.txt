@@ -12,6 +12,11 @@ Log
 Alerts for
 2 of 3
 
+# Maps > Follow a route: the Siri phrases on an iPhone with CarPlay. They are App Shortcut phrases in Swift
+# (app/ios/Runner/CarPlay/CarVoiceIntents.swift), said to Siri, not text of app/lib.
+Hey Siri, navigate to <place> with Cache
+Hey Siri, navigate with Cache
+
 # Maps > Layers section heading: the code has MY LAYERS (shown in capitals); the guide quotes it in normal case.
 My layers
 
