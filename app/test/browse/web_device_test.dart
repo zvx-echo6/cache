@@ -246,6 +246,35 @@ void main() {
       d.dispose();
     });
 
+    test('downloading a link whose transfer is paused resumes it: the part file goes on, not a second request that does nothing', () async {
+      // The Discover card calls download when the app holds no transfer of its own for the entry, which in a browser is always:
+      // the server runs it. Asking the server again for a paused job's link answers that job as it is, so Resume did nothing.
+      final d = make();
+      await d.start();
+      final e = CatalogEntry(
+        id: 'p2',
+        title: 'TED prize',
+        summary: '',
+        language: 'eng',
+        name: 'ted_en_prize',
+        flavour: '',
+        category: 'ted',
+        tags: const [],
+        updated: '2026-09-01',
+        size: 557 << 20,
+        articleCount: 1,
+        downloadUrl: Uri.parse('https://download.kiwix.org/zim/ted/ted_mul_ted-prize_2026-09.zim'),
+      );
+      api.jobList = [job('p2', 'paused', url: e.downloadUrl.toString(), bytes: 17, total: 557)];
+      await d.refresh();
+      final j = await d.downloadZim(e);
+      expect(api.resumed, ['p2']);
+      expect(api.downloads, isEmpty, reason: 'no second download request');
+      expect(j.id, 'p2');
+      expect(d.jobForUrl(e.downloadUrl.toString())!.state, 'queued');
+      d.dispose();
+    });
+
     test('a Pause or Resume that fails says why until the next press, in the device\'s words when the download has ended', () async {
       final d = make();
       await d.start();
