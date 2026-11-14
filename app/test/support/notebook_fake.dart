@@ -39,7 +39,7 @@ class FakeNotebookBackend implements NotebookBackend {
         'notebook' => _nbJson(_nb(a['id'] as String)),
         'notebook_save' => _nbJson(_save(a)),
         'notebook_delete' => _deleteNb(a['id'] as String),
-        'entries' => {'entries': [for (final e in _entriesOf(_nb(a['notebook_id'] as String)['id'] as String)) _entryJson(e)]},
+        'entries' => {'entries': _page(_entriesOf(_nb(a['notebook_id'] as String)['id'] as String), a['limit'] as int?)},
         'entry' => _entryJson(_entry(a['id'] as String)),
         'entry_save' => _entryJson(_saveEntry(a)),
         'entry_delete' => _deleteEntry(a['id'] as String),
@@ -56,6 +56,16 @@ class FakeNotebookBackend implements NotebookBackend {
         'import' => _import(a),
         _ => throw CacheSearchException('unsupported', 'unknown notebook op $op'),
       };
+
+  /// Like the core: `entries` answers at most `limit` entries (1000 when the call gives none), and never more than [entryCap] when
+  /// that is set (a page, a limit or a timeout: whatever stops a read short).
+  int? entryCap;
+
+  List<Map<String, dynamic>> _page(List<Map<String, dynamic>> all, int? limit) {
+    var n = limit ?? 1000;
+    if (entryCap != null && entryCap! < n) n = entryCap!;
+    return [for (final e in all.take(n)) _entryJson(e)];
+  }
 
   /// The points the next `import` reads (name, lat, lon, notes), standing in for the file.
   List<Map<String, dynamic>> importPoints = const [];

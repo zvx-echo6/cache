@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../location/coords.dart';
@@ -310,7 +311,7 @@ class MapsScreen extends StatefulWidget {
   State<MapsScreen> createState() => _MapsScreenState();
 }
 
-class _MapsScreenState extends State<MapsScreen> {
+class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateMixin {
   MapLibreMapController? _controller;
   String? _initialStyle;
   String? _glyphs;
@@ -328,6 +329,29 @@ class _MapsScreenState extends State<MapsScreen> {
 
   /// The map's size on the screen (for where the position sits while guiding).
   Size _mapSize = Size.zero;
+
+  // ---- the camera while guiding (lib/nav/guidance_camera.dart) ----
+
+  /// The padding (content insets) the map was last given; null when not known: a route fitted into view gives the map that
+  /// fit's padding on Android, and it stays until changed. Every camera move that works out its own centre sets it to none first.
+  EdgeInsets? _camPad;
+
+  /// The glide from one fix to the next while guiding ([GuideGlide]), driven by [_glideTicker]; where the map shows the phone
+  /// now ([_shownPose]); when the last fix came; the zoom of the glide; a camera move still on its way to the map.
+  /// Made at the first glide (never in [dispose], where the screen can no longer look up the ticker mode above it).
+  Ticker? _glideTicker;
+  GuideGlide? _glide;
+  Duration _glideStart = Duration.zero;
+  Duration _glideClock = Duration.zero;
+  GuidePose? _shownPose;
+  DateTime? _lastFixAt;
+  double _glideZoom = 16;
+  bool _glideBusy = false;
+
+  /// The lowest the turn banner has reached during this guidance at this map size: the banner grows and shrinks with the turn
+  /// it shows (a second line, lane arrows), and the position must not move with it at each turn.
+  double? _bannerFoot;
+  Size? _bannerFootFor;
 
   // ---- guidance: the elevation panel and the route mini map ----
 
@@ -500,6 +524,8 @@ class _MapsScreenState extends State<MapsScreen> {
     _fullPicture?.image.dispose();
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
+    _glideTicker?.dispose();
+    _glideTicker = null;
     super.dispose();
   }
 
@@ -663,21 +689,25 @@ class _MapsScreenState extends State<MapsScreen> {
     final fix = location.fix;
     final features = <Map<String, dynamic>>[];
     if (fix != null) {
+      // While the camera glides from fix to fix the marker is drawn where the camera has got to, so it stays on its spot.
+      final shown = _gliding ? _shownPose : null;
+      final lat = shown?.lat ?? fix.lat, lon = shown?.lon ?? fix.lon;
       features.add({
         'type': 'Feature',
         'geometry': {
           'type': 'Polygon',
-          'coordinates': [circleRing(fix.lat, fix.lon, fix.accuracyM)],
+          'coordinates': [circleRing(lat, lon, fix.accuracyM)],
         },
         'properties': <String, dynamic>{},
       });
-      final heading = fix.heading ?? _lastHeading;
       if (fix.heading != null) _lastHeading = fix.heading;
+      // Heading up, the map turns to the heading as it glides; the arrow turns with it.
+      final heading = shown != null && maps.follow == FollowMode.headingUp && (fix.heading ?? _lastHeading) != null ? shown.bearing : fix.heading ?? _lastHeading;
       features.add({
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
-          'coordinates': [fix.lon, fix.lat],
+          'coordinates': [lon, lat],
         },
         'properties': {'heading': ?heading},
       });
@@ -695,22 +725,136 @@ class _MapsScreenState extends State<MapsScreen> {
     final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
     final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
     final zoom = math.max(_zoom, guiding ? 16 : 14).toDouble();
-    var target = LatLng(fix.lat, fix.lon);
-    // Guiding heading-up, the position sits low on the map so more of the road ahead shows (lib/nav/guidance_camera.dart).
-    if (guiding && maps.follow == FollowMode.headingUp && !_mapSize.isEmpty && mounted) {
-      final side = MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null && !_swapped;
-      final anchor = guidanceAnchor(_mapSize, side: side, leftInset: MediaQuery.paddingOf(context).left);
-      final (lat, lon) = cameraCentreFor(fix.lat, fix.lon, bearing: bearing, zoom: zoom, map: _mapSize, anchor: anchor);
-      target = LatLng(lat, lon);
-    }
+    if (guiding && !_mapSize.isEmpty && mounted) return _guideTo(c, fix, bearing, zoom);
+    _stopGlide();
+    await _padTo(c, EdgeInsets.zero);
     await c.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
-        target: target,
+        target: LatLng(fix.lat, fix.lon),
         zoom: zoom,
         bearing: bearing,
       )),
-      duration: Duration(milliseconds: guiding ? 900 : 400),
+      duration: const Duration(milliseconds: 400),
     );
+  }
+
+  /// Gives the map [pad] as its padding (content insets, in logical points: the map package turns them into the screen's
+  /// pixels with the screen's pixel ratio), unless it already has it. A platform without them keeps what it has.
+  Future<void> _padTo(MapLibreMapController c, EdgeInsets pad) async {
+    final was = _camPad;
+    if (was != null && (was.left - pad.left).abs() < 0.5 && (was.top - pad.top).abs() < 0.5 && (was.right - pad.right).abs() < 0.5 && (was.bottom - pad.bottom).abs() < 0.5) return;
+    try {
+      await c.updateContentInsets(pad);
+      _camPad = pad;
+    } catch (_) {}
+  }
+
+  /// What is over the map while guiding, measured from the layout ([GuideCovers]); in the map's points, as the live map fills
+  /// the stack.
+  GuideCovers _guideCovers() {
+    final map = _mapSize;
+    if (_coveredLeft() != null) {
+      // Side by side: the banner and the bar are in the column on the left; the scale, the credits, the mini map and the buttons
+      // are in the map's corners.
+      return GuideCovers(left: _coveredLeft(), tiles: [?_boxOf(_scaleKey), ?_boxOf(_creditsKey), ?_boxOf(_insetKey), ?_boxOf(_controlsKey)]);
+    }
+    if (map != _bannerFootFor) {
+      _bannerFootFor = map;
+      _bannerFoot = null;
+    }
+    final banner = _boxOf(_headerKey)?.bottom;
+    if (banner != null) _bannerFoot = math.max(_bannerFoot ?? banner, banner);
+    return GuideCovers(
+      top: _bannerFoot,
+      bottom: _boxOf(_panelKey)?.top,
+      tiles: [?_boxOf(_scaleKey), ?_boxOf(_creditsKey), ?_boxOf(_insetKey), ?_boxOf(_controlsKey)],
+    );
+  }
+
+  /// Where the position sits on the live map while guiding: heading up, low in the free map ([guidanceAnchor]); north up, or
+  /// with the live map in the corner, in its middle.
+  Offset _guideAnchor() {
+    final map = _mapSize;
+    if (maps.follow != FollowMode.headingUp || _swapped || _measure != null) return map.center(Offset.zero);
+    final covers = _guideCovers();
+    final free = guidanceFreeMap(map, covers, safe: MediaQuery.paddingOf(context));
+    return guidanceAnchor(free, tiles: covers.tiles, reach: math.max(kPositionDotReach, VehicleArrow.reach));
+  }
+
+  /// Whether the camera and the marker are gliding from fix to fix (guiding and following).
+  bool get _gliding => _shownPose != null && nav.guiding && maps.follow != FollowMode.free;
+
+  void _stopGlide() {
+    _glide = null;
+    _shownPose = null;
+    _lastFixAt = null;
+    _glideTicker?.stop();
+  }
+
+  /// Guiding: the map follows the phone from fix to fix with the position on its anchor ([_guideAnchor]). The map has no padding
+  /// of its own (the centre is worked out here), the first fix (or one far from the last) moves it with the map's animation, and
+  /// each fix after that is a glide of the camera and the marker together ([GuideGlide]).
+  Future<void> _guideTo(MapLibreMapController c, Fix fix, double bearing, double zoom) async {
+    await _padTo(c, EdgeInsets.zero);
+    if (!mounted) return;
+    final to = (lat: fix.lat, lon: fix.lon, bearing: bearing);
+    final now = DateTime.now();
+    final since = _lastFixAt == null ? null : now.difference(_lastFixAt!);
+    _lastFixAt = now;
+    final g = _glide;
+    final from = g != null ? g.at(_glideClock - _glideStart) : _shownPose;
+    final ticker = _glideTicker ??= createTicker(_onGlideTick);
+    final ticking = !ticker.muted; // The map is not drawn (the drive screen shows): no frames to glide in.
+    if (from == null || !ticking || poseDistanceM(from, to) >= kGlideFarthestM || (zoom - _glideZoom).abs() > 0.01) {
+      _glide = null;
+      ticker.stop();
+      _shownPose = to;
+      _glideZoom = zoom;
+      final (lat, lon) = cameraCentreFor(to.lat, to.lon, bearing: to.bearing, zoom: zoom, map: _mapSize, anchor: _guideAnchor());
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: zoom, bearing: to.bearing)), duration: const Duration(milliseconds: 900));
+      return;
+    }
+    _glide = GuideGlide(from: from, to: to, duration: glideDuration(since));
+    _glideStart = _glideClock;
+    if (!ticker.isActive) {
+      _glideClock = Duration.zero;
+      _glideStart = Duration.zero;
+      ticker.start();
+    }
+  }
+
+  /// A frame of the glide: the camera and the marker move to where the glide has got to, together (a frame is skipped while the
+  /// last move is still on its way to the map).
+  void _onGlideTick(Duration elapsed) {
+    _glideClock = elapsed;
+    final g = _glide, c = _controller;
+    if (g == null || c == null || !mounted || !nav.guiding || maps.follow == FollowMode.free || _mapSize.isEmpty) {
+      _stopGlide();
+      return;
+    }
+    if (_glideBusy) return;
+    final t = elapsed - _glideStart;
+    final p = g.at(t);
+    final done = g.doneAt(t);
+    _shownPose = p;
+    if (done) {
+      _glide = null;
+      _glideTicker?.stop();
+    }
+    _glideBusy = true;
+    final (lat, lon) = cameraCentreFor(p.lat, p.lon, bearing: p.bearing, zoom: _glideZoom, map: _mapSize, anchor: _guideAnchor());
+    unawaited(() async {
+      try {
+        // Both are sent before either is waited for, so the map draws them in the same frame.
+        final moved = c.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: _glideZoom, bearing: p.bearing)));
+        final pushed = _pushPosition();
+        await moved;
+        await pushed;
+      } catch (_) {
+      } finally {
+        _glideBusy = false;
+      }
+    }());
   }
 
   // ---- navigation: route, pins, camera --------------------------------------------------------------------
@@ -743,6 +887,10 @@ class _MapsScreenState extends State<MapsScreen> {
     }
     _pushNav();
     _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
+    if (!nav.guiding) {
+      _bannerFoot = null;
+      if (_shownPose != null) _stopGlide();
+    }
     if (!nav.guiding || nav.arrived) {
       _swapped = false;
       if (!nav.guiding) _elevation.setOpen(false);
@@ -868,6 +1016,9 @@ class _MapsScreenState extends State<MapsScreen> {
     final room = _fitPad = _fitPaddingFor(r);
     final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: r.bounds, marks: _phoneCovers() == null ? const [] : _routeEndMarks());
     final b = fit.bounds, pad = fit.padding;
+    // On Android the map keeps the fit's padding for the moves after it (MapLibre's camera for bounds carries it): whatever moves
+    // the camera next sets the padding it means ([_padTo]).
+    _camPad = null;
     try {
       await c.animateCamera(
         CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
@@ -953,6 +1104,7 @@ class _MapsScreenState extends State<MapsScreen> {
     final anchor = Offset((room.left + map.width - room.right) / 2, (room.top + map.height - room.bottom) / 2);
     final (lat, lon) = cameraCentreFor(at.lat, at.lon, bearing: 0, zoom: kStepZoom, map: map, anchor: anchor);
     try {
+      await _padTo(c, EdgeInsets.zero);
       await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: kStepZoom, bearing: 0)), duration: const Duration(milliseconds: 500));
     } catch (_) {}
   }
@@ -962,6 +1114,7 @@ class _MapsScreenState extends State<MapsScreen> {
     if (c == null) return;
     maps.setFollow(FollowMode.free);
     try {
+      await _padTo(c, EdgeInsets.zero);
       await c.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lon), math.max(_zoom, 14)), duration: const Duration(milliseconds: 500));
     } catch (_) {}
   }
@@ -1405,17 +1558,10 @@ class _MapsScreenState extends State<MapsScreen> {
               Text(u.def.licence, style: TextStyle(fontSize: 14, color: k.secondary)),
               const SizedBox(height: 12),
             ],
-            Text('Map data © OpenStreetMap contributors, ODbL 1.0 (openstreetmap.org/copyright).',
-                style: TextStyle(fontSize: 14, color: k.secondary)),
-            const SizedBox(height: 8),
-            Text(
-              maps.uses.any((u) => u.def.isBase && u.def.layout == 'protomaps-v4')
-                  ? 'Base map: Protomaps basemap tiles and the @protomaps/basemaps style layers (BSD-3-Clause). '
-                      'Map fonts: Noto Sans, SIL Open Font License 1.1.'
-                  : 'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
-                      'Map fonts: Noto Sans, SIL Open Font License 1.1.',
-              style: TextStyle(fontSize: 14, color: k.secondary),
-            ),
+            for (final (i, line) in mapCreditNotes(maps.uses).indexed) ...[
+              if (i > 0) const SizedBox(height: 8),
+              Text(line, style: TextStyle(fontSize: 14, color: k.secondary)),
+            ],
           ],
         ),
       ),
@@ -1952,13 +2098,13 @@ class _MapsScreenState extends State<MapsScreen> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
                             if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                           ],
                         ),
                         // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                         const SizedBox(height: 6),
-                        Align(alignment: Alignment.centerLeft, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits))),
+                        Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
                       ],
                     ),
                 ],

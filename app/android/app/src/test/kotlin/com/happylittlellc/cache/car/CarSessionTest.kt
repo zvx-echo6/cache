@@ -523,6 +523,7 @@ class CarSessionTest {
         val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
         assertEquals("Made Up Clinic", a["query"])
         assertEquals(false, a["start"])
+        assertEquals(false, a["stop"])
         assertNull(a["lat"])
     }
 
@@ -540,10 +541,69 @@ class CarSessionTest {
         val first = asked.single { it.first == "navigateTo" }.second as Map<*, *>
         assertEquals(42.5, first["lat"])
         assertEquals(true, first["start"])
+        assertEquals(false, first["stop"])
         asked.clear()
         session.onNewIntent(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic")))
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("Made Up Clinic", (asked.single { it.first == "navigateTo" }.second as Map<*, *>)["query"])
+    }
+
+    // Bug: "add a stop" by voice during a drive ended the route and started a new one to the stop. The request says it is a
+    // stop; a name the phone does not know as saved comes back as places for Add stop, listed over guidance, and the place
+    // picked is added as the car's own Add stop adds it: guidance carries on, back on the same guidance screen.
+    @Test
+    fun anAddAStopRequestDuringADriveListsThePlacesForAddStopOverGuidance() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            when (method) {
+                "navigateTo" -> done(mapOf("places" to listOf(place(1), place(2)), "forStop" to true))
+                "addStop" -> done(true)
+                else -> done(null)
+            }
+        }
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        push("trip", trip("guiding", guiding))
+        val guidance = screens.top as NavigationScreen
+        session.onNewIntent(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Place+1&intent=add_a_stop")))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("Place 1", a["query"])
+        assertEquals(true, a["stop"])
+        assertEquals(true, a["start"])
+        val search = screens.top as SearchScreen
+        assertTrue(search.overGuidance)
+        assertEquals(listOf("Place 1", "Place 2"), searchRows(search))
+        // Trip updates while driving leave the list up.
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top === search)
+        search.open(CarPlace.list(listOf(place(2))).single())
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(mapOf("id" to "place:2"), asked.last { it.first == "addStop" }.second)
+        assertTrue(screens.top === guidance)
+        assertEquals(1, nav.navigationStartedCount)
+    }
+
+    // Coordinates, or a name the phone added as a stop at once: the phone answers that guidance carries on; the car stays on
+    // guidance (no route preview, no list).
+    @Test
+    fun anAddAStopRequestThePhoneAddedLeavesTheGuidanceScreen() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            if (method == "navigateTo") done(mapOf("started" to true, "id" to "pin:1", "added" to true)) else done(null)
+        }
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        push("trip", trip("guiding", guiding))
+        val guidance = screens.top as NavigationScreen
+        session.onNewIntent(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:42.6,-113.6?q=Place+1&intent=add_a_stop")))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals(42.6, a["lat"])
+        assertEquals(true, a["stop"])
+        assertTrue(screens.top === guidance)
     }
 
     // Bug: place rows showed the distance and never the address.

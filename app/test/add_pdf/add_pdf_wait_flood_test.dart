@@ -57,20 +57,21 @@ void main() {
     });
     final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls, onDone: (_) async => done++);
     await s.add(pdfPath: pdf.path, fileName: 'Water purification manual.pdf', bytes: 4096, title: 'Water purification manual', target: AddPdfTarget(title: 'My books', path: lib.path, isDefault: true), ownsFile: true);
-    final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(milliseconds: 2));
+    final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(hours: 1));
     addTearDown(sched.dispose);
     sched.setOpen(true);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await pumpUntil(() => n == 1 && sched.running != null, what: 'the first step');
     expect(sched.running, isNotNull);
     sched.setOpen(false); // to the back: the run stops after its step
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await turns(50);
     sched.setOpen(true); // to the front again, the step still going
     for (var i = 0; i < 100; i++) {
       unawaited(sched.kick());
-      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await turns(2);
     }
     gate.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await pumpUntil(() => done == 1, what: 'the job done');
+    await turns(200);
     final said = await logLines('waiting for the earlier run of this PDF');
     expect(said, lessThanOrEqualTo(1), reason: 'the wait is said once');
     expect(done, 1);

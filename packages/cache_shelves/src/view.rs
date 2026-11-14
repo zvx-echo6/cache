@@ -4,13 +4,13 @@
 //! ```json
 //! {
 //!   "format": 1,
-//!   "built_from": {"libraries": {"recon": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
+//!   "built_from": {"libraries": {"field": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
 //!   "books": {
 //!     "<id: the smallest copy key>": {
 //!       "title": "Wilderness Medicine", "title_from": "log" | "seed" | "pack",
 //!       "aka": ["Other pack title"],
 //!       "reading": "<copy key>",
-//!       "copies": [{"copy": "...", "locs": ["recon/wm"], "available": true, "title": "pack title" | null,
+//!       "copies": [{"copy": "...", "locs": ["field/wm"], "available": true, "title": "pack title" | null,
 //!                   "own_call": {"div","seq","suffix","text"} | null,
 //!                   "locations": [{"dev","folder_id","relpath","version","source_blake3"}]}],
 //!       "shelf": "610" | null, "shelved": true, "by": "auto" | "user" | null,

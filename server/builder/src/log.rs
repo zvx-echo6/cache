@@ -638,8 +638,8 @@ mod tests {
     #[test]
     fn lines_round_trip_and_have_the_documented_shape() {
         let all = [
-            ev(1793600000000, "builder-recon", place("b3f1", "210")),
-            ev(1793600000001, "builder-recon", assign("b3f1", "210", 1)),
+            ev(1793600000000, "builder-field", place("b3f1", "210")),
+            ev(1793600000001, "builder-field", assign("b3f1", "210", 1)),
             ev(1793600000002, "phone-7", Kind::Unsort { doc: "b3f1".into(), by: By::User }),
             ev(1793600000003, "phone-7", retire("b3f1", "210", 1)),
             ev(1793600000004, "phone-7", Kind::Title { doc: "b3f1".into(), title: "Well \"Water\" Handbook".into() }),
@@ -649,8 +649,8 @@ mod tests {
         for e in &all {
             assert_eq!(Event::from_line(&e.to_line()).as_ref(), Some(e), "{}", e.to_line());
         }
-        assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"builder-recon","ev":"place","doc":"b3f1","div":"210","by":"auto"}"#);
-        assert_eq!(all[1].to_line(), r#"{"v":1,"at":1793600000001,"dev":"builder-recon","ev":"assign","doc":"b3f1","div":"210","seq":1}"#);
+        assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"builder-field","ev":"place","doc":"b3f1","div":"210","by":"auto"}"#);
+        assert_eq!(all[1].to_line(), r#"{"v":1,"at":1793600000001,"dev":"builder-field","ev":"assign","doc":"b3f1","div":"210","seq":1}"#);
         assert_eq!(all[2].to_line(), r#"{"v":1,"at":1793600000002,"dev":"phone-7","ev":"unsort","doc":"b3f1","by":"user"}"#);
         assert_eq!(all[3].to_line(), r#"{"v":1,"at":1793600000003,"dev":"phone-7","ev":"retire","doc":"b3f1","div":"210","seq":1}"#);
         assert_eq!(all[5].to_line(), r#"{"v":1,"at":1793600000005,"dev":"phone-7","ev":"remove","doc":"b3f1"}"#);

@@ -17,3 +17,5 @@ https://github.com/protomaps/basemaps), for Protomaps basemap tiles v4, with eve
 field (tool/make_protomaps_template.cjs). Layers that need the sprite sheet are left out.
   - Package code: BSD 3-Clause License, Copyright (c) Protomaps LLC.
   - Map data: (c) OpenStreetMap contributors, ODbL 1.0.
+  - © ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. CC BY 4.0.
+  - Data from the Daylight Map Distribution

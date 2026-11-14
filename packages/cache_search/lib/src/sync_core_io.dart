@@ -71,7 +71,8 @@ class SyncCore {
     });
     final j = out == null ? null : jsonDecode(out);
     if (j is! Map<String, dynamic>) throw CacheSearchException('sync', 'No answer from the sync engine');
-    if (j['error'] is String) throw CacheSearchException('sync', j['error'] as String);
+    // `kind` (when the engine gives one) is the stable name of a failure the app tells apart; the text is only for people.
+    if (j['error'] is String) throw CacheSearchException(j['kind'] is String ? j['kind'] as String : 'sync', j['error'] as String);
     return j;
   }
 

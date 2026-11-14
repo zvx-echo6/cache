@@ -10,6 +10,9 @@ class FakeSync implements SyncCoreLike {
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
 
+  /// When set, `link` fails with it (as the engine does).
+  Object? linkError;
+
   /// The code `link_code` answers (a test of the QR gives a real-sized one).
   String codeOverride = 'CACHE1-TESTCODE';
 
@@ -57,6 +60,7 @@ class FakeSync implements SyncCoreLike {
       case 'link_code':
         return {'code': codeOverride, 'valid_secs': 900};
       case 'link':
+        if (linkError != null) throw linkError!;
         peers.removeWhere((p) => p['id'] == 'peer1');
         // As the engine makes a link: Off, waiting for the answer.
         peers.add({
@@ -83,6 +87,11 @@ class FakeSync implements SyncCoreLike {
         final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
         if (p == null) throw Exception('that device is not linked');
         p['name'] = args['name'];
+        return {'ok': true};
+      case 'set_keep_copies':
+        final k = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+        if (k == null) throw Exception('that device is not linked');
+        k['keep_copies'] = args['on'];
         return {'ok': true};
       case 'unlink':
         peers.removeWhere((p) => p['id'] == args['peer']);

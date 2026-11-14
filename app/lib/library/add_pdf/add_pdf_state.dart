@@ -149,7 +149,18 @@ class AddPdfJob {
   final Set<int> _scanPages = {};
 
   /// Paused by the person (Pause); Start now / Resume anyway lift the wait for charging and the battery.
-  bool pausedByPerson = false;
+  bool _pausedByPerson = false;
+
+  /// This copy of the job had its pause decided since it was read from disk or last written (by the person, or by a background
+  /// run): only then does its copy of the flag win over the file's. A copy that only carries what it read never undoes a Pause
+  /// made elsewhere (the Pixel, 2026-11-14: a Pause lost to a later whole-file write, and the PDF resumed itself after an update).
+  bool pauseTouched = false;
+  bool get pausedByPerson => _pausedByPerson;
+  set pausedByPerson(bool v) {
+    _pausedByPerson = v;
+    pauseTouched = true;
+  }
+
   bool startNow = false;
   bool anyway = false;
 
@@ -286,6 +297,7 @@ class AddPdfJob {
       // the core's job number holds only in the process that started it
       ..coreJob = j['core_proc'] == addPdfProcessToken ? (j['core_job'] as num?)?.toInt() : null;
     job.coreFromDisk = job.coreJob != null;
+    job.pauseTouched = false;
     if (j['error'] case final Map e) {
       job
         ..errorCode = e['code'] as String?
@@ -309,6 +321,12 @@ class AddPdfTarget {
   /// My books, not made yet: the confirm screen says so once.
   bool get isNew => path == null;
 }
+
+/// How long a start waits for an earlier run of the same PDF to stop (the foreground service waits the same, 45 s, for a charging run).
+const Duration kAddPdfStopWait = Duration(seconds: 45);
+
+/// The wait for an earlier run is said once, and again no sooner than this.
+const Duration kAddPdfWaitSayEvery = Duration(minutes: 5);
 
 /// About how long a PDF takes on a phone while charging, before anything is known of its pages: about six seconds a megabyte
 /// (the owner's mockup: 41 MB about 4 minutes). Corrected while it runs.
@@ -335,6 +353,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.ocrEngine,
     this.battery,
     this.onDone,
+    this.onPauseDecided,
     this.wordsPending,
     this.permit,
     this.copyIn,
@@ -342,12 +361,17 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.busyWait = const Duration(seconds: 4),
     this.mayRun,
     this.inUseTries = 15,
+    this.startWait = kAddPdfStopWait,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
   /// How many times a start waits [busyWait] for another run of this process to let go of the job folder (the app's run that is
   /// pausing, or a background slice stopping) before the job is left for later. Never a failure.
   final int inUseTries;
+
+  /// How long a start waits for an earlier run of the same PDF to stop (it is mid-step and cannot be interrupted) before it gives
+  /// up for now and the work is tried again by the scheduler's own timer. The same wait as the foreground service's take-over.
+  final Duration startWait;
 
   /// Asked before the jobs are offered as work: false while a background run is adding PDFs (the app asks it to stop and offers
   /// them again at its next look). Null: always.
@@ -371,6 +395,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
 
   /// After a book is saved: the Library and Bookshelves read again.
   final Future<void> Function(AddPdfJob job)? onDone;
+
+  /// The person paused or resumed [job] in the app (Pause, Resume, Start now, Resume anyway): the foreground service's notification
+  /// forgets that it paused it, so the app's own choice always wins over a later notification Resume.
+  final Future<void> Function(AddPdfJob job)? onPauseDecided;
 
   /// Whether the library at a path has points its keyword index lacks (their words are not searchable yet): true, false, or null
   /// when not known. The app's reads the libraries' index status.
@@ -507,10 +535,16 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
           final f = await _listFile();
           if (f == null) return;
           await f.parent.create(recursive: true);
-          final tmp = File('${f.path}.tmp');
+          await _adoptPausesFromDisk(f);
+          final tmp = File('${f.path}.${identityHashCode(this).toRadixString(36)}.tmp');
           // the 20 newest finished jobs are kept for their result cards; every job not finished is kept
           final done = [for (final j in _jobs) if (j.status == AddPdfStatus.done) j].take(20).toSet();
-          await tmp.writeAsString(jsonEncode({'jobs': [for (final j in _jobs) if (j.status != AddPdfStatus.done || done.contains(j)) j.toJson()]}), flush: true);
+          final text = jsonEncode({'jobs': [for (final j in _jobs) if (j.status != AddPdfStatus.done || done.contains(j)) j.toJson()]});
+          // what is written now carries every pause decided so far; one decided while it is written is written by the next turn
+          for (final j in _jobs) {
+            j.pauseTouched = false;
+          }
+          await tmp.writeAsString(text, flush: true);
           await tmp.rename(f.path);
         } while (_saveAgain);
       } catch (e) {
@@ -519,6 +553,25 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
         _saving = null;
       }
     }();
+  }
+
+  /// The jobs file is written whole from this copy of the jobs; another copy (a background run, the foreground service) may have
+  /// paused or resumed a job since this one read it. A job whose pause this copy has not decided keeps the file's.
+  Future<void> _adoptPausesFromDisk(File f) async {
+    try {
+      if (!f.existsSync()) return;
+      final j = jsonDecode(await f.readAsString()) as Map;
+      final onDisk = <String, bool>{
+        for (final e in (j['jobs'] as List? ?? const []))
+          if (e is Map && e['id'] is String) e['id'] as String: e['paused'] == true,
+      };
+      for (final job in _jobs) {
+        final p = onDisk[job.id];
+        if (p != null && !job.pauseTouched && job.status == AddPdfStatus.active) job._pausedByPerson = p;
+      }
+    } catch (_) {
+      // an unreadable file is written over, as before
+    }
   }
 
   void _changed() {
@@ -640,17 +693,26 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     });
   }
 
+  /// When the wait for an earlier run was last said, for each job: said once, then at most once in [kAddPdfWaitSayEvery].
+  final Map<String, DateTime> _saidWaitAt = {};
+
   Future<AddPdfRun> _startRunOnce(AddPdfJob j) async {
-    var said = false;
+    final end = _clock().add(startWait);
     for (;;) {
       final old = _runs[j.id];
       if (old == null) break;
-      // said once, and the wait is on the earlier run's end (its finished future), never a poll
-      if (!said) {
-        said = true;
+      final said = _saidWaitAt[j.id];
+      if (said == null || _clock().difference(said) >= kAddPdfWaitSayEvery) {
+        _saidWaitAt[j.id] = _clock();
         logInfo('Add PDF: waiting for the earlier run of this PDF to stop', job: j.key);
       }
-      await old.stop();
+      // the wait is on the earlier run's end (its finished future), never a poll, and it has an end of its own: a run in a step
+      // that does not return leaves this start undone (the scheduler tries again on its own timer), never a spin
+      final left = end.difference(_clock());
+      if (left > Duration.zero) await old.stop().timeout(left, onTimeout: () {});
+      if (!old.isDone) {
+        throw StateError('Add PDF: the earlier run of this PDF did not stop within ${startWait.inSeconds} s; left for later');
+      }
       // its end took its own entry away; one that is still there is dropped, never waited on again
       if (identical(_runs[j.id], old)) _runs.remove(j.id);
     }
@@ -677,6 +739,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     job.pausedByPerson = true;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     await _runs[job.id]?.stop();
     unawaited(indexSchedulerShared?.kick());
   }
@@ -686,6 +749,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     job.pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
@@ -696,6 +760,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       ..pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
@@ -707,6 +772,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       ..pausedByPerson = false;
     _changed();
     await save();
+    await onPauseDecided?.call(job);
     unawaited(indexSchedulerShared?.kick());
   }
 
@@ -1004,6 +1070,9 @@ class AddPdfRun implements IndexRun {
 
   @override
   Future<bool> get finished => _done.future;
+
+  /// The run has ended.
+  bool get isDone => _done.isCompleted;
 
   void _finish(bool ok) {
     if (_done.isCompleted) return;

@@ -1,3 +1,4 @@
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -104,13 +105,13 @@ class _SharingPageState extends State<SharingPage> {
 
   /// [code] when it can be linked; throws [BadLinkCode] for this device's own code or one already linked, and, when [strict] (a
   /// link from outside), for a code that cannot be read. A typed or pasted code that cannot be read here is left to the sync
-  /// engine, which gives the same messages.
+  /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
     try {
       info = decodeLinkCode(code);
-    } on BadLinkCode {
-      if (strict) rethrow;
+    } on BadLinkCode catch (e) {
+      if (strict || e.newer) rethrow;
       return code;
     }
     if (info.id.toLowerCase() == s.myId?.toLowerCase()) throw const BadLinkCode("that is this device's own code");
@@ -125,7 +126,8 @@ class _SharingPageState extends State<SharingPage> {
     try {
       await f();
     } catch (e) {
-      if (mounted) say(context, '$e');
+      // The engine names a code from a newer Cache by its kind, never by its text.
+      if (mounted) say(context, e is CacheSearchException && e.code == kNewerCodeKind ? kNewerCode : '$e');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -632,7 +634,8 @@ class _ItemRow extends StatelessWidget {
 }
 
 /// Settings > Sharing and sync > a linked device: how it is connected and when it was last seen, its free space when it says,
-/// how settings go between the two (Settings), Sync now with it alone, Rename (what this device calls it) and Unlink.
+/// how settings go between the two (Settings), "Don't replace my copies from this device", Sync now with it alone, Rename (what
+/// this device calls it) and Unlink.
 class SharingDevicePage extends StatefulWidget {
   const SharingDevicePage({super.key, required this.sharing, required this.peer, this.settingsSync});
 
@@ -738,6 +741,21 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 known: p['link_known'] == true || p['last_seen'] == null,
                 busy: _busy,
               ),
+            SettingsGroup(
+              rows: [
+                SettingsRow(
+                  key: const ValueKey('device-no-replace'),
+                  title: "Don't replace my copies from this device",
+                  titleLines: 2,
+                  status: [Part('Newer versions from $name never replace yours. Notebooks, places and photos arrive beside yours.')],
+                  statusLines: null,
+                  trailing: Switch(
+                    value: s.keepsCopies(widget.peer),
+                    onChanged: _busy ? null : (on) => _run(() => s.setKeepCopies(widget.peer, on)),
+                  ),
+                ),
+              ],
+            ),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [

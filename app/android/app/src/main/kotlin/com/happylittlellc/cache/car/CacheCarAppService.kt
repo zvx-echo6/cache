@@ -131,16 +131,27 @@ class CarSession(
         if (ready) renderer.setDark(carContext.isDarkMode)
     }
 
-    /** A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found. */
+    /**
+     * A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found.
+     * An add-a-stop request during a drive, or while a route is shown before Start, adds the place as a stop instead (the
+     * route keeps its destination; the trip update shows it); a name that is not saved lists the places found for Add stop,
+     * as the car's own Add stop search does. With no route it is a plain navigation request (the phone answers so).
+     */
     private fun handle(req: NavRequest) {
-        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start)) { r ->
+        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start, "stop" to req.addStop)) { r ->
             val res = r.asMap() ?: return@call
             val places = res["places"]
             if (places != null) {
                 val sm = screenManager
-                sm.popToRoot()
-                sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
-            } else if (res["started"] != true) {
+                if (res["forStop"] == true) {
+                    // Back to the guidance or route screen (Add stop returns there once a place is picked), with the places over it.
+                    sm.popTo(STOP_RETURN)
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places), forStop = true))
+                } else {
+                    sm.popToRoot()
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
+                }
+            } else if (res["started"] != true && !res.containsKey("added")) {
                 val id = res["id"] as? String ?: return@call
                 val t = CarLink.trip
                 screenManager.push(RoutePreviewScreen(carContext, renderer, CarPlace(id, t.destinationName ?: req.query ?: "", t.destinationAddress, t.destinationLat ?: 0.0, t.destinationLon ?: 0.0, null)))

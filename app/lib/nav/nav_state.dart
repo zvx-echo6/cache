@@ -92,6 +92,7 @@ class NavState extends ChangeNotifier {
     this.rerouteCooldown = const Duration(seconds: 8),
     this.guidanceLogEvery,
     this.rerouteTimeout = const Duration(seconds: 25),
+    this.arrivalEndAfter = const Duration(minutes: 5),
   }) : _clock = clock ?? DateTime.now;
 
   final MapBackend backend;
@@ -109,6 +110,10 @@ class NavState extends ChangeNotifier {
 
   /// How long a re-route waits for the core before it is given up (see [_reroute]).
   final Duration rerouteTimeout;
+
+  /// How long after arrival guidance ends by itself if End is not tapped ([_armArrivalEnd]); the app keeps five minutes.
+  /// Settable so a test can make it short.
+  Duration arrivalEndAfter;
   final DateTime Function() _clock;
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
@@ -711,6 +716,7 @@ class NavState extends ChangeNotifier {
   Future<void> start() async {
     final r = route;
     if (r == null || phase != NavPhase.previewing) return;
+    _cancelArrivalEnd();
     phase = NavPhase.guiding;
     arrived = false;
     _rerouteGen++;
@@ -823,9 +829,16 @@ class NavState extends ChangeNotifier {
   DateTime? _reroutingSince;
 
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
+  ///
+  /// After arrival a fix is only the vehicle's position: it is kept as [lastFix] and told (the phone map, the car's marker),
+  /// and nothing else is done with it (no progress, prompt or re-route).
   Future<void> _handleFix(Fix f) async {
-    if (!guiding || arrived) return;
+    if (!guiding) return;
     lastFix = f;
+    if (arrived) {
+      notifyListeners();
+      return;
+    }
     // The next stop, once the phone came within 100 m of it, is passed: a new route after going off the route leaves it out.
     // Only the next one: stops are visited in order, and being near a later stop does not pass it or the ones before it.
     final nextStop = _aheadIndexes().firstOrNull;
@@ -876,12 +889,16 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
-        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
-        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
+        // Arrival is final for this trip: no later fix goes to guidance, so nothing reroutes or speaks again. The position
+        // service keeps running until End: its fixes still move the phone map's marker and camera and the car's marker
+        // ([_handleFix]); before, it was let go here and every map froze on the arrival point until End. The phase stays
+        // guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
+        _pendingFix = null;
+        _stopGuidanceLog();
+        _armArrivalEnd();
         notifyListeners();
-        await _stopTracking();
-        logInfo('Guidance: arrived, the position service is let go');
+        logInfo('Guidance: arrived, the position keeps coming until End');
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -1006,8 +1023,30 @@ class NavState extends ChangeNotifier {
     }
   }
 
+  /// Ends guidance by itself [arrivalEndAfter] after arrival if End was not tapped, the same way End does ([end]), so the
+  /// position service (its notification and wake lock on Android) is not left running for a trip that is over. End, a new
+  /// route or a new destination (each goes through [end] or [start]) cancels it; the generation check is a second guard.
+  void _armArrivalEnd() {
+    _arrivalEndTimer?.cancel();
+    final gen = _rerouteGen;
+    _arrivalEndTimer = Timer(arrivalEndAfter, () {
+      _arrivalEndTimer = null;
+      if (_disposed || !guiding || !arrived || gen != _rerouteGen) return;
+      logInfo('Guidance: ended by itself 5 minutes after arrival');
+      unawaited(end());
+    });
+  }
+
+  Timer? _arrivalEndTimer;
+
+  void _cancelArrivalEnd() {
+    _arrivalEndTimer?.cancel();
+    _arrivalEndTimer = null;
+  }
+
   /// End guidance: stop the position service and the voice, back to the map with the place still selected.
   Future<void> end() async {
+    _cancelArrivalEnd();
     if (!guiding) return;
     await _stopTracking();
     logInfo('Guidance: ended, the position service is let go');
@@ -1056,6 +1095,7 @@ class NavState extends ChangeNotifier {
     _meaningTimer?.cancel();
     _guidanceLogTimer?.cancel();
     _guidanceLogTimer = null;
+    _cancelArrivalEnd();
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);

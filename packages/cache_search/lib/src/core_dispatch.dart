@@ -102,6 +102,8 @@ class CoreDispatcher {
         result = r.toJson();
       case 'read':
         result = eng().read(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
+      case 'readDocument':
+        result = eng().readDocument(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
       case 'zimGet':
         final z = eng().zimGet(a['address'] as String);
         result = [z.bytes, z.mime];

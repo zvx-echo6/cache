@@ -160,6 +160,16 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// Shares of things the person made, by share id: with "Don't replace my copies from this device" on for a linked device
+    /// (`set_keep_copies`), that device's newer version of a file held here is written beside it ("notes (from Pixel).md",
+    /// [`index::beside_name`]) and its new files still come; in every other share that device's changes are not taken at all
+    /// ([`index::keep_mine`]). For Cache: the notebooks (their entries, the saved places notebook and their photos).
+    #[serde(default)]
+    pub beside: Vec<String>,
+    /// Shares the switch never touches, by share id: what each device keeps with its links whatever it holds (the settings and
+    /// Bookshelves logs, the search indexes).
+    #[serde(default)]
+    pub not_copies: Vec<String>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -218,6 +228,11 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
+    /// "Don't replace my copies from this device", switched on here (`set_keep_copies`): what this device takes from that one
+    /// never replaces or removes a file here ([`index::keep_mine`], [`Inner::merge_from`]). This device's own choice, never
+    /// sent; absent (off) in files saved by older versions, which do not read it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keep_copies: bool,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -338,6 +353,18 @@ type Seen = BTreeMap<String, (u64, i64)>;
 /// seconds), and if Cache is stopped meanwhile the next start finds a half-written file here: it is replaced, never taken for an
 /// edit and sent to the other devices. While a path is listed, its file being missing is not a delete either.
 type Writes = BTreeMap<String, Entry>;
+
+/// The copies a share holds of linked devices' newer versions, each written beside the file it is newer than
+/// ([`index::Action::Beside`]), kept in `index/<share>.beside.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Besides {
+    /// By the path of the file kept here: the versions already written beside it (never written twice).
+    #[serde(default)]
+    taken: BTreeMap<String, Vec<Ver>>,
+    /// By the path of each copy: the device whose version it is (never offered back to it).
+    #[serde(default)]
+    from: BTreeMap<String, String>,
+}
 
 /// What [`Inner::relocate`] calls the original while the store hands the same content back.
 const ASIDE_SUFFIX: &str = ".cache-sync-old";
@@ -593,6 +620,10 @@ struct Inner {
     refetch: Mutex<HashMap<String, Vec<String>>>,
     /// [`Config::with`], as `set_share_with` last left it.
     with: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::beside`].
+    beside: Vec<String>,
+    /// [`Config::not_copies`].
+    not_copies: Vec<String>,
     /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
     /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
@@ -624,11 +655,59 @@ fn encode_code(c: &LinkCode) -> Result<String> {
     Ok(format!("{CODE_PREFIX}{}", data_encoding::BASE32_NOPAD.encode(&serde_json::to_vec(c)?)))
 }
 
+/// Why a link code cannot be read. The text is what the person may be shown; [`LinkCodeError::kind`] is the stable name the app
+/// tells the cases apart by (the answer's `kind`, never the text).
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinkCodeError {
+    /// Not a Cache link code at all.
+    NotACode,
+    /// A `CACHE1-` code whose body cannot be read.
+    Damaged,
+    /// `CACHE<n>-` with n above 1: made by a newer Cache.
+    Newer,
+}
+
+impl LinkCodeError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotACode => "link_code_not_a_code",
+            Self::Damaged => "link_code_damaged",
+            Self::Newer => "link_code_newer",
+        }
+    }
+}
+
+impl std::fmt::Display for LinkCodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotACode => "this is not a Cache link code",
+            Self::Damaged => "the link code is damaged",
+            Self::Newer => "this link code is from a newer version of Cache",
+        })
+    }
+}
+
+impl std::error::Error for LinkCodeError {}
+
+/// The kind of a failure that is a [`LinkCodeError`], for the answer to the app.
+pub fn error_kind(e: &anyhow::Error) -> Option<&'static str> {
+    e.downcast_ref::<LinkCodeError>().map(LinkCodeError::kind)
+}
+
 fn decode_code(s: &str) -> Result<LinkCode> {
     let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
-    let body = s.strip_prefix(CODE_PREFIX).ok_or_else(|| anyhow!("this is not a Cache link code"))?;
-    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| anyhow!("the link code is damaged"))?;
-    serde_json::from_slice(&bytes).map_err(|_| anyhow!("the link code is damaged"))
+    let Some(body) = s.strip_prefix(CODE_PREFIX) else {
+        return Err(if made_by_newer(&s) { LinkCodeError::Newer } else { LinkCodeError::NotACode }.into());
+    };
+    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| LinkCodeError::Damaged)?;
+    Ok(serde_json::from_slice(&bytes).map_err(|_| LinkCodeError::Damaged)?)
+}
+
+/// `CACHE<n>-` (already upper-cased) with n above 1: a code from a later format. A number too big to read is later too.
+fn made_by_newer(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("CACHE") else { return false };
+    let Some((n, _)) = rest.split_once('-') else { return false };
+    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().map_or(true, |n| n > 1)
 }
 
 fn token() -> String {
@@ -1225,6 +1304,9 @@ impl Inner {
             changed = true;
         }
         let mut unsettled = false;
+        // The sizes of the files this scan holds back as still being written: a file that went and one of the same size that
+        // is still settling may be a rename, whose delete waits for the scan that also lists the new path (below).
+        let mut settling_sizes: HashSet<u64> = HashSet::new();
         // The files dated in the future that the last rescan held back, and the ones this rescan holds back ([`Inner::settling`]).
         let watched = self.settling.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
         let mut watching: HashMap<String, Settling> = HashMap::new();
@@ -1255,6 +1337,7 @@ impl Inner {
                         watching.insert(rel.clone(), (key, since));
                     }
                     unsettled = true;
+                    settling_sizes.insert(m.len());
                     continue;
                 }
             }
@@ -1304,6 +1387,12 @@ impl Inner {
                 continue;
             }
             let old = idx.files[&p].clone();
+            // Perhaps renamed to a file still being written (a rename of a file that arrived moments ago keeps that file's
+            // time): the delete waits for the next scan, so the other devices learn the new path in the same list and write
+            // it before they delete the old one, while their store can still read the content from it.
+            if settling_sizes.contains(&old.size) {
+                continue;
+            }
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
             seen.remove(&p);
@@ -1341,7 +1430,7 @@ impl Inner {
                 .shares
                 .iter()
                 .filter(|sh| self.shares_with(&sh.id, peer))
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered_to(&sh.id, peer) })
                 .collect(),
             link,
             links: true,
@@ -1354,6 +1443,42 @@ impl Inner {
         let Some(modes) = self.with.lock().unwrap().get(share).cloned() else { return true };
         let mode = link_mode(self.saved.lock().unwrap().peers.iter().find(|p| p.id == peer).and_then(|p| p.link.as_ref()));
         modes.contains(&mode)
+    }
+
+    /// What to do with `remote` (a linked device's view of `share`, [`Inner::remote_view`]): [`index::merge`] with this device's
+    /// index, less what would replace or remove a file here when "Don't replace my copies from this device" is on for `peer`
+    /// ([`index::keep_mine`], [`Config::beside`], [`Config::not_copies`]), and less a version already written beside the file
+    /// it is newer than. What is left out is not done and does not wait.
+    fn merge_from(&self, share: &str, remote: &Index, peer: &str) -> Vec<Action> {
+        let local = self.load_index(share);
+        let actions = index::merge(&local, remote);
+        let keep = !self.not_copies.iter().any(|s| s == share) && self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer && p.keep_copies);
+        if !keep {
+            return actions;
+        }
+        let beside = self.beside.iter().any(|s| s == share);
+        let done = self.load_besides(share);
+        index::keep_mine(&local, actions, beside)
+            .into_iter()
+            .filter(|a| !matches!(a, Action::Beside { path, entry } if done.taken.get(path).map(|v| v.contains(&entry.ver)).unwrap_or(false)))
+            .collect()
+    }
+
+    fn besides_path(&self, share: &str) -> PathBuf {
+        self.dir.join("index").join(format!("{share}.beside.json"))
+    }
+
+    fn load_besides(&self, share: &str) -> Besides {
+        read_json(&self.besides_path(share)).unwrap_or_default()
+    }
+
+    /// This device's file list for `share` as `peer` gets it: [`Inner::offered`], less the copies written beside files here from
+    /// `peer`'s own versions (it has them already, under their own names).
+    fn offered_to(&self, share: &str, peer: &str) -> Index {
+        let mut idx = self.offered(share);
+        let b = self.load_besides(share);
+        idx.files.retain(|p, _| b.from.get(p).map(|f| f != peer).unwrap_or(true));
+        idx
     }
 
     /// The linked device `peer` has shown that it holds the link too: the link is no longer waiting ([`Peer::unconfirmed`]).
@@ -1713,12 +1838,17 @@ impl Inner {
     /// comes back as the error at the end, so the status still says sync is paused.
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
         let remote = &self.remote_view(&sh.id, remote);
-        let mut actions = index::merge(&self.load_index(&sh.id), remote);
-        // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
+        let mut actions = self.merge_from(&sh.id, remote, from);
+        // Deletes come after what is fetched: a rename here is a delete of the old path and a fetch of the new one, and the store
+        // may read that content from the old path, so it must still be there when the new one is written (the store is pointed
+        // at the new path once the old one goes, below). What says the rest has come comes after the rest ([`Config::last`]),
+        // deletes included. The sort keeps the order otherwise.
         let last: &[String] = self.last.get(&sh.id).map(|v| v.as_slice()).unwrap_or(&[]);
-        if !last.is_empty() {
-            actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
-        }
+        actions.sort_by_key(|a| match a {
+            Action::Fetch { path, .. } if excluded(last, path) => 2,
+            Action::Delete { .. } => 1,
+            _ => 0,
+        });
         // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
         let mut held = false;
         let mut no_room: Option<anyhow::Error> = None;
@@ -1760,10 +1890,15 @@ impl Inner {
                         }
                         let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
                         seen.remove(&path);
+                        let gone = idx.files.get(&path).filter(|e| !e.deleted).map(|e| e.hash.clone());
                         idx.files.insert(path.clone(), entry);
                         self.store_index(&sh.id, &idx, &seen)?;
                         self.unmark_writing(&sh.id, &path)?;
                         self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        // The content that was here may live on at another path (a rename): the store reads it from there now.
+                        if let Some(h) = gone {
+                            self.repoint(&h, None).await;
+                        }
                         Ok(())
                     }
                     .await;
@@ -1772,6 +1907,24 @@ impl Inner {
                         self.note(format!("{} from {}: {e:#}", sh.name, self.peer_name(from)));
                     }
                 }
+                Action::Beside { path, entry } => match self.fetch_beside(sh, &path, entry, from).await {
+                    Ok(true) => {}
+                    Ok(false) => held = true,
+                    Err(e) => {
+                        held = true;
+                        let msg = format!("{e:#}");
+                        if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
+                            return Err(e);
+                        }
+                        if msg.starts_with("Paused:") {
+                            if no_room.is_none() {
+                                no_room = Some(e);
+                            }
+                        } else {
+                            self.note(format!("{} from {}: {msg}", sh.name, self.peer_name(from)));
+                        }
+                    }
+                },
                 Action::Fetch { path, entry, conflict } => {
                     // Not while anything before it is missing: it stays for a later round.
                     if held && excluded(last, &path) {
@@ -1806,26 +1959,9 @@ impl Inner {
         }
     }
 
-    /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
-    /// the caller knows it has not come yet.
-    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<bool> {
-        #[cfg(feature = "test-hooks")]
-        if std::fs::read_to_string(self.dir.join("fail-fetch")).map(|v| v.trim() == path).unwrap_or(false) {
-            // A file that cannot be fetched: the one `<dir>/fail-fetch` names, for as long as it names it.
-            bail!("test: could not fetch {path}");
-        }
-        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
-            self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
-            return Ok(true);
-        };
-        // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
-        // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
-        if let Ok(m) = std::fs::metadata(&full) {
-            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
-                self.settle_again.store(true, Ordering::Relaxed);
-                return Ok(false);
-            }
-        }
+    /// Makes sure the store holds `entry`'s content (fetched from the devices that have it), to be written at `full` (`path` in
+    /// `sh`): the room needed is checked where the store is and where `full` is.
+    async fn ensure_blob(self: &Arc<Self>, sh: &Share, path: &str, full: &Path, entry: &Entry) -> Result<Hash> {
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
         let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
         if !have {
@@ -1836,7 +1972,7 @@ impl Inner {
             let need = entry.size;
             // The store takes it first; where the shared folder is on another file system (a phone's internal and shared
             // storage) the copy into place needs the room there too.
-            for at in [&self.dir, &full] {
+            for at in [self.dir.as_path(), full] {
                 if let Some(free) = Self::allowed_bytes(at) {
                     if free < need.saturating_add(reserve) {
                         bail!(
@@ -1906,6 +2042,80 @@ impl Inner {
                 bail!("{path}: {f} (will resume)");
             }
         }
+        Ok(hash)
+    }
+
+    /// Writes `from`'s newer version of `path` beside the file here, which stays as it is ([`index::Action::Beside`]): as
+    /// "<name> (from <device>)", or with the time added when that name is taken. The copy is a new file of this device's,
+    /// offered to the others but never back to `from`. False when it was put off (the file here is not what was last indexed).
+    async fn fetch_beside(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, from: &str) -> Result<bool> {
+        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else { return Ok(true) };
+        // As for an in-place fetch: a file here not yet scanned waits for the scan, so the copy is of what is newer than it.
+        if let Ok(m) = std::fs::metadata(&full) {
+            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
+                self.settle_again.store(true, Ordering::Relaxed);
+                return Ok(false);
+            }
+        }
+        let device = self.peer_name(from);
+        let idx = self.load_index(&sh.id);
+        let free = |name: &str| safe_join(&sh.path, name).map(|p| !p.exists()).unwrap_or(false) && idx.files.get(name).map(|e| e.deleted).unwrap_or(true);
+        let mut copy = index::beside_name(path, &device, None);
+        if !free(&copy) {
+            copy = index::beside_name(path, &device, Some(&chrono_stamp()));
+            if !free(&copy) {
+                // A second one within the same minute: the next round.
+                return Ok(false);
+            }
+        }
+        let Some(cfull) = safe_join(&sh.path, &copy) else { return Ok(true) };
+        let hash = self.ensure_blob(sh, &copy, &cfull, &entry).await?;
+        if let Some(parent) = cfull.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mine = Entry { hash: entry.hash.clone(), size: entry.size, deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![] };
+        self.mark_writing(&sh.id, &copy, &mine)?;
+        if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: cfull.clone() }).finish().await {
+            if std::fs::remove_file(&cfull).is_err() && cfull.exists() {
+                self.recovered.store(false, Ordering::Relaxed);
+            }
+            if is_no_space(&e) {
+                bail!("Paused: no room to write {copy} ({} needed). Free up space and it carries on.", human(entry.size));
+            }
+            bail!("could not write {copy}: {e}");
+        }
+        self.wanted.lock().unwrap().remove(&hash);
+        // Recorded before the index takes the copy, so the copy is never offered back to `from`.
+        let mut b = self.load_besides(&sh.id);
+        b.taken.entry(path.to_string()).or_default().push(entry.ver.clone());
+        b.from.insert(copy.clone(), from.to_string());
+        write_json(&self.besides_path(&sh.id), &b)?;
+        self.written(sh, &copy, &cfull, mine).await?;
+        self.note(format!("{}: {device}'s newer {path} kept beside yours as {copy}", sh.name));
+        Ok(true)
+    }
+
+    /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
+    /// the caller knows it has not come yet.
+    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<bool> {
+        #[cfg(feature = "test-hooks")]
+        if std::fs::read_to_string(self.dir.join("fail-fetch")).map(|v| v.trim() == path).unwrap_or(false) {
+            // A file that cannot be fetched: the one `<dir>/fail-fetch` names, for as long as it names it.
+            bail!("test: could not fetch {path}");
+        }
+        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
+            self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
+            return Ok(true);
+        };
+        // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
+        // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
+        if let Ok(m) = std::fs::metadata(&full) {
+            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
+                self.settle_again.store(true, Ordering::Relaxed);
+                return Ok(false);
+            }
+        }
+        let hash = self.ensure_blob(sh, path, &full, &entry).await?;
         // In place: a conflicting local file first becomes a copy beside it.
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)?;
@@ -2175,7 +2385,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, keep_copies: false });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -2359,6 +2569,8 @@ impl SyncEngine {
             off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
+            beside: cfg.beside.clone(),
+            not_copies: cfg.not_copies.clone(),
             secrets: Mutex::new(HashMap::new()),
             received: Mutex::new(HashMap::new()),
         });
@@ -2751,6 +2963,19 @@ impl SyncEngine {
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
+            "set_keep_copies" => {
+                // "Don't replace my copies from this device", for one linked device: this device's own choice (never sent).
+                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let on = args.get("on").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("on must be true or false"))?;
+                {
+                    let mut sv = inner.saved.lock().unwrap();
+                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
+                    p.keep_copies = on;
+                }
+                inner.save()?;
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
@@ -2800,6 +3025,7 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "keep_copies": p.keep_copies,
                 })
             })
             .collect();
@@ -2817,8 +3043,8 @@ impl SyncEngine {
                         continue;
                     }
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &inner.remote_view(&sh.id, &rs.index)) {
-                            if let Action::Fetch { entry, .. } = a {
+                        for a in inner.merge_from(&sh.id, &inner.remote_view(&sh.id, &rs.index), pid) {
+                            if let Action::Fetch { entry, .. } | Action::Beside { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;
                             }
@@ -2972,7 +3198,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, keep_copies: false }
     }
 
     #[test]
@@ -3107,5 +3333,42 @@ mod gate_refusal_tests {
         assert!(d.path().join("links-recovered-at").exists());
         // A later healthy start reads it back: the same grace.
         assert_eq!(links_grace_until(d.path(), false).unwrap() / 1000, until / 1000);
+    }
+}
+
+#[cfg(test)]
+mod link_code_tests {
+    use super::*;
+
+    fn kind(s: &str) -> Option<&'static str> {
+        decode_code(s).err().as_ref().and_then(error_kind)
+    }
+
+    #[test]
+    fn a_code_from_a_newer_cache_is_told_apart() {
+        for s in ["CACHE2-ABCDEF", "cache3-abcdef", "  CACHE12-\nAB CD ", "CACHE2-", "CACHE99999999999999999999999-X"] {
+            assert_eq!(kind(s), Some("link_code_newer"), "{s}");
+        }
+        assert_eq!(decode_code("CACHE2-ABC").unwrap_err().to_string(), "this link code is from a newer version of Cache");
+    }
+
+    #[test]
+    fn the_other_cases_keep_their_kinds() {
+        assert_eq!(kind("CACHE1-"), Some("link_code_damaged"));
+        assert_eq!(kind("CACHE1-!!!!"), Some("link_code_damaged"));
+        assert_eq!(kind("cache1-TESTCODE"), Some("link_code_damaged"));
+        for s in ["HELLO", "", "CACHE-ABC", "CACHE0-ABC", "CACHEX-ABC", "CACHE2ABC"] {
+            assert_eq!(kind(s), Some("link_code_not_a_code"), "{s}");
+        }
+        assert_eq!(decode_code("HELLO").unwrap_err().to_string(), "this is not a Cache link code");
+    }
+
+    #[test]
+    fn a_real_code_still_decodes() {
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into() };
+        let code = encode_code(&c).unwrap();
+        assert!(code.starts_with("CACHE1-"));
+        let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();
+        assert_eq!((back.t, back.n, back.a.id), ("TOK".to_string(), "Desk".to_string(), c.a.id));
     }
 }
