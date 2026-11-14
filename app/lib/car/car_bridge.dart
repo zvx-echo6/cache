@@ -400,6 +400,7 @@ class CarBridge {
           lon: (a['lon'] as num?)?.toDouble(),
           query: a['query'] as String?,
           start: a['start'] != false,
+          stop: a['stop'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -522,7 +523,13 @@ class CarBridge {
   /// address): coordinates go straight to directions; a name that is a saved place does too; any other name comes back as the
   /// places found, for the driver to pick. [start] begins guidance once the route is ready (`intent=navigation`), otherwise the
   /// route is only shown (`intent=directions`).
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true}) async {
+  ///
+  /// [stop] (`intent=add_a_stop`) during a drive adds the place as the next stop, as the car's own Add stop does: the route
+  /// keeps its destination, and `added` says whether the stop was added (when not, the phone's notice says why, as for the
+  /// car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to list for Add
+  /// stop. With nothing guided there are no destinations to keep: it is a plain navigation request.
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
+    final asStop = stop && nav.guiding;
     final q = (query ?? '').trim();
     MapPlace? to;
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
@@ -532,11 +539,16 @@ class CarBridge {
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
-        return {'places': [for (final p in await search(q)) _placeOut(p)]};
+        return {'places': [for (final p in await search(q)) _placeOut(p)], if (asStop) 'forStop': true};
       }
     }
-    if (to == null) return {'places': const []};
+    if (to == null) return {'places': const [], if (asStop) 'forStop': true};
     _placeOut(to);
+    if (asStop) {
+      final added = await nav.addStopWhileGuiding(to);
+      if (added) await push();
+      return {'started': nav.guiding, 'id': to.id, 'added': added};
+    }
     if (nav.guiding) await nav.end();
     await nav.openDirections(to);
     if (start && nav.route != null) await nav.start();

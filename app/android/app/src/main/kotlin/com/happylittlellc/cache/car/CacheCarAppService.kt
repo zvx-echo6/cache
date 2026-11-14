@@ -131,15 +131,26 @@ class CarSession(
         if (ready) renderer.setDark(carContext.isDarkMode)
     }
 
-    /** A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found. */
+    /**
+     * A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found.
+     * An add-a-stop request during a drive adds the place as the next stop instead (the route keeps its destination); a name
+     * that is not saved lists the places found for Add stop, as the car's own Add stop search does. With nothing guided it is
+     * a plain navigation request (the phone answers so).
+     */
     private fun handle(req: NavRequest) {
-        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start)) { r ->
+        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start, "stop" to req.addStop)) { r ->
             val res = r.asMap() ?: return@call
             val places = res["places"]
             if (places != null) {
                 val sm = screenManager
-                sm.popToRoot()
-                sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
+                if (res["forStop"] == true) {
+                    // Back to the guidance screen (Add stop returns there once a place is picked), with the places over it.
+                    sm.popTo(STOP_RETURN)
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places), forStop = true))
+                } else {
+                    sm.popToRoot()
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
+                }
             } else if (res["started"] != true) {
                 val id = res["id"] as? String ?: return@call
                 val t = CarLink.trip
