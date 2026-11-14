@@ -629,7 +629,7 @@ class CoreLayerEngine extends LayerEngine {
       );
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
@@ -645,21 +645,24 @@ class CoreLayerEngine extends LayerEngine {
       maxZoom: est.maxZoom,
       totalTiles: est.tiles,
     );
-    _saved[id] = _Saved(area, minZoom, est.maxZoom);
+    _saved[id] = _Saved(area, minZoom, est.maxZoom, outline: outline);
     await _storeSaved();
     await _start(a, {
       'layer': layerId,
       'area': id,
       'name': label,
       'bbox': [area.west, area.south, area.east, area.north],
+      // The core downloads only the tiles the outline touches (its box is the outline's own).
+      'polygon': ?outline,
       'minzoom': minZoom,
       'maxzoom': est.maxZoom,
       if (near != null) 'near': [near.lat, near.lon],
-    }, update: false);
+    }, update: false, totalFromJob: outline != null);
     return a;
   }
 
-  Future<void> _start(DownloadedArea a, Map<String, dynamic> request, {required bool update}) async {
+  /// [totalFromJob]: the tiles to fetch are the job's count, not the estimate's (which is of the box, and an outline has fewer).
+  Future<void> _start(DownloadedArea a, Map<String, dynamic> request, {required bool update, bool totalFromJob = false}) async {
     final core = _core!;
     _estimates.clear();
     final job = await core.startJob('layer_download', {'layers': layersConfig(), ...request});
@@ -670,7 +673,7 @@ class CoreLayerEngine extends LayerEngine {
       ..paused = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
-    _running[a.id] = _Run(a, job, update);
+    _running[a.id] = _Run(a, job, update, totalFromJob: totalFromJob);
     _areas[_key(a.layerId, a.id)] = a;
     _poll ??= Timer.periodic(pollEvery, (_) => _tick());
     notifyListeners();
@@ -709,7 +712,7 @@ class CoreLayerEngine extends LayerEngine {
       if (p.total > 0) {
         if (!r.update) {
           a
-            ..totalTiles = a.totalTiles == 0 ? p.total : a.totalTiles
+            ..totalTiles = a.totalTiles == 0 || r.totalFromJob ? p.total : a.totalTiles
             ..doneTiles = p.done;
         } else {
           a
@@ -843,6 +846,7 @@ class CoreLayerEngine extends LayerEngine {
               'name': a.label,
               if (saved != null) ...{
                 'bbox': [saved.bounds.west, saved.bounds.south, saved.bounds.east, saved.bounds.north],
+                if (saved.outline != null) 'polygon': saved.outline,
                 'minzoom': saved.minZoom,
                 'maxzoom': saved.maxZoom,
               },
@@ -854,7 +858,10 @@ class CoreLayerEngine extends LayerEngine {
 }
 
 class _Run {
-  _Run(this.area, this.job, this.update);
+  _Run(this.area, this.job, this.update, {this.totalFromJob = false});
+
+  /// The job's count of tiles to fetch is the total (see `_start`).
+  final bool totalFromJob;
 
   /// Completes when the download has ended and been cleaned up (or the engine is disposed).
   final Completer<void> done = Completer<void>();
@@ -864,18 +871,41 @@ class _Run {
 }
 
 class _Saved {
-  _Saved(this.bounds, this.minZoom, this.maxZoom);
+  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline});
   final GeoBounds bounds;
   final int minZoom;
   final int maxZoom;
 
-  Map<String, dynamic> toJson() => {'bbox': [bounds.west, bounds.south, bounds.east, bounds.north], 'minzoom': minZoom, 'maxzoom': maxZoom};
+  /// The outline it was asked for, when not just the box: an unfinished download carries on with the same shape.
+  final List<List<List<double>>>? outline;
+
+  Map<String, dynamic> toJson() => {
+        'bbox': [bounds.west, bounds.south, bounds.east, bounds.north],
+        'minzoom': minZoom,
+        'maxzoom': maxZoom,
+        if (outline != null) 'polygon': outline,
+      };
 
   static _Saved? fromJson(Object? j) {
     if (j is! Map) return null;
     final b = j['bbox'], lo = j['minzoom'], hi = j['maxzoom'];
     if (b is! List || b.length != 4 || b.any((v) => v is! num) || lo is! int || hi is! int) return null;
     final v = [for (final x in b) (x as num).toDouble()];
-    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi);
+    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']));
+  }
+
+  static List<List<List<double>>>? _rings(Object? p) {
+    if (p is! List) return null;
+    final out = <List<List<double>>>[];
+    for (final ring in p) {
+      if (ring is! List) return null;
+      final pts = <List<double>>[];
+      for (final q in ring) {
+        if (q is! List || q.length < 2 || q[0] is! num || q[1] is! num) return null;
+        pts.add([(q[0] as num).toDouble(), (q[1] as num).toDouble()]);
+      }
+      out.add(pts);
+    }
+    return out.isEmpty ? null : out;
   }
 }
