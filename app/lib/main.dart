@@ -46,6 +46,7 @@ import 'library/add_pdf/watch_folders.dart';
 import 'background/background_dispatcher.dart';
 import 'background/background_lock.dart';
 import 'background/fgs_add.dart';
+import 'background/sync_background.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -655,6 +656,19 @@ class _CacheAppState extends State<CacheApp> {
     await writeWatchAddContext(support: s, bookshelves: await _addPdfShelves());
   }
 
+  bool? _syncScheduledFor, _syncMobile;
+  bool _sharingReadByBackground = false;
+
+  /// Background sync is scheduled while sharing is set up (and its network rule follows "mobile data for downloads").
+  void _onSharingForBackground() {
+    if (!_sharingReadByBackground) return; // what sharing.json says is not read yet: not 'off'
+    final on = sharing.enabled, mobile = settings.mobileForDownloads;
+    if (_syncScheduledFor == on && _syncMobile == mobile) return;
+    _syncScheduledFor = on;
+    _syncMobile = mobile;
+    unawaited(scheduleBackgroundSync(enabled: on, mobileData: mobile));
+  }
+
   /// The watched folders changed: the background count runs while any are watched (Android).
   void _onWatchFolders() {
     final n = watchFolders.folders.length;
@@ -1232,7 +1246,12 @@ class _CacheAppState extends State<CacheApp> {
     video.addListener(_kickIndexing);
     if (!plat.isWeb) {
       // The folders shared from the start (the indexes, the settings and Bookshelves logs) are in the support folder.
-      Future.wait([settingsRead, supportRead]).then((_) => sharing.init());
+      sharing.addListener(_onSharingForBackground);
+      settings.addListener(_onSharingForBackground);
+      Future.wait([settingsRead, supportRead]).then((_) => sharing.init()).whenComplete(() {
+        _sharingReadByBackground = true;
+        _onSharingForBackground();
+      });
     }
     // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
     settingsRead.then((_) => regions.init());
@@ -1450,6 +1469,8 @@ class _CacheAppState extends State<CacheApp> {
     chat.removeListener(_onChatForIndexing);
     app.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
+    settings.removeListener(_onSharingForBackground);
+    sharing.removeListener(_onSharingForBackground);
     indexing.dispose();
     _bgOpenTimer?.cancel();
     watchFolders.removeListener(_onWatchFolders);
