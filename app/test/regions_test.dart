@@ -190,6 +190,9 @@ void main() {
 
   testWidgets('a region downloads, shows its progress, is ready, points routing at the tile folder, and is removed', (tester) async {
     final r = await _Rig.boot(tester);
+    // The map part runs until this test finishes it: by itself it finished 20 ms (real time) after it started, which on a busy
+    // machine was before "Starting…" was checked.
+    r.s.engine.autoFinish = false;
     await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
     await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
     await tester.pump();
@@ -205,6 +208,7 @@ void main() {
     expect(r.s.engine.nearOf['Twin Falls County'], (lat: centre[0], lon: centre[1]));
 
     r.core.finish(_county);
+    r.s.engine.finishAll();
     await r.refreshUntil(tester, () => _shown(find.textContaining('On this device · ')));
     expect(find.textContaining('On this device · '), findsOneWidget);
     expect(find.textContaining('next time Cache opens'), findsNothing, reason: 'the next route uses it, nothing waits for a restart');
