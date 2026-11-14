@@ -40,7 +40,7 @@ class Fakes {
         ),
         watch: WatchDeps(
           choices: () async => [
-            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Current location', subtitle: ''),
+            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Pine Hollow, ID', subtitle: ''),
             for (final s in saved) WatchPlace(id: 'place:${s.key}', kind: PlaceKind.saved, name: s.name, subtitle: '', lat: s.lat, lon: s.lon, key: s.key),
           ],
           watched: () => watched,
@@ -81,7 +81,7 @@ void main() {
     expect(reg.definition('places.save')!.json['effect'], 'change');
     expect(reg.definition('places.list')!.json['effect'], 'read');
     expect(reg.definition('navigation.start')!.json['effect'], 'open');
-    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Current location', 'Home']);
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home']);
     expect((reg.definition('home.source_switch')!.json['fields'] as Map)['source']['enum'], [for (final r in kCurated) sourceValue(r)]);
   });
 
@@ -99,7 +99,7 @@ void main() {
     expect(r['status'], 'done');
     expect(r['result'], {'name': 'Elk camp', 'lat': 44.21, 'lon': -114.93, 'label': 'Near Stanley'});
     expect(f.saved.last.name, 'Elk camp');
-    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Current location', 'Home', 'Elk camp']);
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home', 'Elk camp']);
     await reg.run('places.save', {'name': 'Spring', 'place': {'lat': 44.0, 'lon': -115.0}, 'note': 'Good water'});
     expect(f.saved.last.label, 'Good water');
   });
@@ -113,10 +113,16 @@ void main() {
     });
   });
 
+  // The screens name "Where I am" after its town; the assistant's list keeps the old label (model input, undecided).
+  test('the assistant still sees "Where I am" whatever the screens call it', () async {
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home']);
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], isNot(contains('Pine Hollow, ID')));
+  });
+
   test('watch add and remove change the Places list', () async {
     expect((await reg.run('weather.watch_add', {'place': 'Home'}))['result'], {'place': 'Home', 'watched': true});
     expect(f.watched, {'here', 'place:k1'});
-    await reg.run('weather.watch_remove', {'place': 'Current location'});
+    await reg.run('weather.watch_remove', {'place': 'Where I am'});
     expect(f.watched, {'place:k1'});
     f.saved.clear();
     final gone = (await reg.run('weather.watch_add', {'place': 'Home'}))['error'];
