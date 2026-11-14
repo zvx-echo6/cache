@@ -1727,7 +1727,7 @@ class _HitSources extends FakeSources {
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) async =>
       SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
 }
 

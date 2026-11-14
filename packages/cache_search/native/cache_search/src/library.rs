@@ -5,7 +5,9 @@
 //! and reading a point.
 
 use crate::conv::Cite;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use crate::html;
 use crate::idxsnap::{self, SnapSlot};
 use crate::index::{self, IndexState};
@@ -39,6 +41,28 @@ pub fn ensure_init() {
 
 fn op_io(what: &str, e: impl std::fmt::Display) -> Error {
     Error::io(format!("{what}: {e}"))
+}
+
+/// Runs `f` with a stop flag that is set once `limit` has passed (never with `None`; at once with a zero limit). A timer thread
+/// waits on a channel and is told to end as soon as `f` returns, so a search that finishes in time costs no wait.
+pub fn with_time_limit<T>(limit: Option<Duration>, f: impl FnOnce(&Arc<AtomicBool>) -> T) -> T {
+    let stop = Arc::new(AtomicBool::new(false));
+    let Some(limit) = limit else { return f(&stop) };
+    if limit.is_zero() {
+        stop.store(true, Ordering::Relaxed);
+        return f(&stop);
+    }
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    let flag = stop.clone();
+    let timer = std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = wait.recv_timeout(limit) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
+    let out = f(&stop);
+    let _ = done.send(());
+    let _ = timer.join();
+    out
 }
 
 fn op_internal(what: &str, e: impl std::fmt::Display) -> Error {
@@ -906,6 +930,8 @@ impl LibSlot {
     /// Run a query at widths `base`, 2x, 4x (stopping early), drop left-out points, and return the survivors in
     /// rank order (score descending, ties by address). Stops widening once `need` distinct hits survive or the
     /// shard returned fewer than asked.
+    /// `stop`: set by the caller's time limit ([`with_time_limit`]); once the engine sees it, the query ends with an error of code
+    /// `cancelled` and no partial list.
     fn ranked(
         &self,
         make: &dyn Fn(usize) -> QueryRequest,
@@ -913,11 +939,20 @@ impl LibSlot {
         need: usize,
         base: usize,
         snippet_chars: usize,
+        stop: &Arc<AtomicBool>,
     ) -> Result<Vec<LibHit>> {
         let base = base.max(need).max(1);
         let mut hits: Vec<LibHit> = Vec::new();
         for width in [base, base * 2, base * 4] {
-            let mut res = EdgeShardRead::query(&*self.shard.get()?, make(width)).map_err(|e| op_internal(what, e))?;
+            let res = <Shard as edge::EdgeShardReadWithCancellation>::query(&*self.shard.get()?, make(width), stop.clone());
+            // an error once the flag is set is the engine seeing it (it ends a stopped query with an error, never a partial list)
+            let mut res = res.map_err(|e| {
+                if stop.load(Ordering::Relaxed) {
+                    Error::new(ErrorCode::Cancelled, format!("{what}: stopped at its time limit"))
+                } else {
+                    op_internal(what, e)
+                }
+            })?;
             let returned = res.len();
             // equal scores: the smaller address (string compare) first
             res.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.to_string().cmp(&b.id.to_string())));
@@ -945,6 +980,20 @@ impl LibSlot {
     /// Dense search with `vector`. Fetches `base` candidates, drops left-out points, and if fewer than `need`
     /// distinct hits survive, widens to 2x then 4x `base` and stops. Hits are in rank order.
     pub fn dense_search(&self, vector: &[f32], need: usize, base: usize, snippet_chars: usize) -> Result<Vec<LibHit>> {
+        self.dense_search_within(vector, need, base, snippet_chars, None)
+    }
+
+    /// [`Library::dense_search`] that stops at `limit` (no limit with `None`) with an error of code `cancelled`: on a library
+    /// whose vectors are one unindexed segment of gigabytes, a search reads all of them, which on a phone or a small box means
+    /// seconds from disk. A zero limit stops it before it starts.
+    pub fn dense_search_within(
+        &self,
+        vector: &[f32],
+        need: usize,
+        base: usize,
+        snippet_chars: usize,
+        limit: Option<Duration>,
+    ) -> Result<Vec<LibHit>> {
         let name = &self.settings.embedding.vector;
         let selector = self.payload_selector();
         let make = |width: usize| {
@@ -960,7 +1009,7 @@ impl LibSlot {
                 .with_payload(selector.clone())
                 .build()
         };
-        self.ranked(&make, "dense search", need, base, snippet_chars)
+        with_time_limit(limit, |stop| self.ranked(&make, "dense search", need, base, snippet_chars, stop))
     }
 
     /// BM25 over the library's own scored text index on the mapped text field (Edge's text scoring query).
@@ -975,7 +1024,7 @@ impl LibSlot {
                 .with_payload(selector.clone())
                 .build()
         };
-        self.ranked(&make, "text search", need, base, snippet_chars)
+        self.ranked(&make, "text search", need, base, snippet_chars, &Arc::new(AtomicBool::new(false)))
     }
 
     /// Replace the settings (a later `set_sources` with other settings for the same folder).

@@ -953,9 +953,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     List<String>? zimIds,
     int k = 20,
     int offset = 0,
+    Duration? meaningLimit,
   }) async {
     final core = _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
-    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds));
+    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds), meaningLimit: meaningLimit);
   }
 
   /// The embedding models the searchable sources in [ids] (every source when null) name, the search model first.

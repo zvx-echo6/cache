@@ -111,13 +111,20 @@ class SearchHit {
 }
 
 class SearchResponse {
-  const SearchResponse({required this.results, required this.totalEstimate, this.vectorSources = const [], this.keywordOnlySources = const []});
+  const SearchResponse({
+    required this.results,
+    required this.totalEstimate,
+    this.vectorSources = const [],
+    this.keywordOnlySources = const [],
+    this.meaningTimedOut = const [],
+  });
 
   factory SearchResponse.fromJson(Map<String, dynamic> j) => SearchResponse(
         results: [for (final r in (j['results'] as List? ?? const [])) SearchHit.fromJson((r as Map).cast<String, dynamic>())],
         totalEstimate: (j['total_estimate'] ?? 0) as int,
         vectorSources: ((j['vector_sources'] as List?) ?? const []).cast<String>(),
         keywordOnlySources: ((j['keyword_only_sources'] as List?) ?? const []).cast<String>(),
+        meaningTimedOut: ((j['meaning_timed_out'] as List?) ?? const []).cast<String>(),
       );
 
   final List<SearchHit> results;
@@ -125,12 +132,16 @@ class SearchResponse {
   final List<String> vectorSources;
   final List<String> keywordOnlySources;
 
+  /// Libraries whose meaning search passed its time limit (the search's meaningLimit): searched by their keywords only this time.
+  final List<String> meaningTimedOut;
+
   /// The response as [SearchResponse.fromJson] reads it (what the worker sends to the app).
   Map<String, dynamic> toJson() => {
         'results': [for (final h in results) h.toJson()],
         'total_estimate': totalEstimate,
         'vector_sources': vectorSources,
         'keyword_only_sources': keywordOnlySources,
+        'meaning_timed_out': meaningTimedOut,
       };
 }
 

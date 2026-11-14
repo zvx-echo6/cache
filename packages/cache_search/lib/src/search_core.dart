@@ -60,13 +60,14 @@ class SearchCore {
         for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];
 
-  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
+  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) async =>
       SearchResponse.fromJson(((await _call('search', {
         'query': query,
         'k': k,
         'offset': offset,
         'sources': sources,
         'queryVector': queryVector?.toJson(),
+        'meaningMs': ?meaningLimit?.inMilliseconds,
       })) as Map)
           .cast<String, dynamic>());
 
