@@ -650,4 +650,16 @@ void main() {
     expect(opened, ['Rally point 1']);
     expect((await books.search('jour')).map((x) => x.title), contains('Journal'));
   });
+
+  test("Home search: a saved place found by its name is the Places search's (listed once); another notebook's place stays here", () async {
+    final r = _Rig();
+    final saved = await r.saved();
+    await r.place(saved, 'Alder Home', 42.5630, -114.4610);
+    final other = await r.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Trail spots', fields: [], sort: NotebookSort.distance));
+    await r.place(other, 'Alder Spring', 42.5640, -114.4620);
+    NotebookPlacesSearchProvider spots({required bool savedByName}) =>
+        NotebookPlacesSearchProvider(notebook: r.nb, open: (n, e) {}, savedByName: savedByName);
+    expect((await spots(savedByName: false).search('alder')).map((x) => x.title), containsAll(['Alder Home', 'Alder Spring']));
+    expect((await spots(savedByName: true).search('alder')).map((x) => x.title), ['Alder Spring']);
+  });
 }

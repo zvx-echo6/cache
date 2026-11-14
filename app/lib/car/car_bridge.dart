@@ -11,6 +11,7 @@ import '../maps/palette/map_palette.dart';
 import '../maps/ui/map_assets.dart';
 import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
+import '../nav/saved_first.dart';
 import '../nav/speaker.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
@@ -460,7 +461,7 @@ class CarBridge {
     try {
       final saved = await _saved();
       logInfo('Car: ${saved.length} saved places');
-      return [for (final s in saved) _savedPlace(s)];
+      return [for (final s in saved) savedAsPlace(s)];
     } catch (e, st) {
       logError('Car: saved places could not be read', error: e, stack: st);
       return const [];
@@ -495,29 +496,19 @@ class CarBridge {
     return nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
   }
 
-  static MapPlace _savedPlace(SavedPlaceRecord s) => MapPlace(
-      id: 'place:${s.lat.toStringAsFixed(6)},${s.lon.toStringAsFixed(6)}',
-      type: 'place',
-      name: s.name,
-      kind: 'Saved place',
-      address: s.label ?? '',
-      lat: s.lat,
-      lon: s.lon,
-      matched: 'saved');
-
-  /// Saved places whose name is the query come first, then the map search by name, address and category word only: the car never
-  /// asks for a query vector, so the search model is not loaded for it (owner's decision). The phone's own search panel is left as
-  /// it is. Every car search path (the car's search box, a name in a navigation request) comes through here.
+  /// The saved places that match come first, by the phone's rule (saved_first.dart), then the map search by name, address and
+  /// category word only: the car never asks for a query vector, so the search model is not loaded for it (owner's decision).
+  /// Every car search path (the car's search box, a name in a navigation request) comes through here.
   Future<List<MapPlace>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
-    final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
+    final saved = await savedPlaces();
     List<MapPlace> found = const [];
     try {
       final r = await _search(q);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
-    return [...saved, ...found].take(12).toList();
+    return savedFirst(q, saved, found).take(12).toList();
   }
 
   /// A navigation request from another app or the assistant (Android Auto's `androidx.car.app.action.NAVIGATE` with a `geo:`
@@ -539,7 +530,7 @@ class CarBridge {
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
       to = MapPlace.pin(lat, lon, name: q.isEmpty ? 'Dropped pin' : q);
     } else if (q.isNotEmpty) {
-      final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
+      final saved = [for (final s in await savedPlaces()) if (savedMatch(s.name, q) == 0) s];
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
