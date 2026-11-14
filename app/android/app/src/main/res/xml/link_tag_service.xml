@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cache's link code sent by touching two phones: the phone acts as a read-only NFC Forum Type 4 tag (nfc/LinkTagService.kt).
+     The AID is the NFC Forum NDEF Tag Application. Only while the link-code sheet is open, and only with the phone unlocked. -->
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/link_tag_service_description"
+    android:requireDeviceUnlock="true">
+    <aid-group
+        android:category="other"
+        android:description="@string/link_tag_aid_description">
+        <aid-filter android:name="D2760000850101" />
+    </aid-group>
+</host-apdu-service>

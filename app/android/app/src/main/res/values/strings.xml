@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="link_tag_service_description">Cache link code</string>
+    <string name="link_tag_aid_description">Sends the link code shown in Cache to another phone</string>
+</resources>

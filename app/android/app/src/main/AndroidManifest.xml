@@ -15,6 +15,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Linking two devices by touching two phones (nfc/): reading a link from another phone or a tag, and acting as a read-only tag
+         while the link-code sheet is open. Phones with no NFC still install Cache. -->
+    <uses-permission android:name="android.permission.NFC"/>
+    <uses-feature android:name="android.hardware.nfc" android:required="false"/>
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
@@ -55,6 +60,34 @@
                 <data android:scheme="cachelink"/>
             </intent-filter>
         </activity>
+        <!-- A touched tag or phone with a cachelink: link, while Cache is in the background or closed (nfc/NfcLinkActivity.kt). Only the
+             system may send it (DISPATCH_NFC_MESSAGE); it has no screen and hands the link to MainActivity. -->
+        <activity
+            android:name=".nfc.NfcLinkActivity"
+            android:exported="true"
+            android:permission="android.permission.DISPATCH_NFC_MESSAGE"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="cachelink"/>
+            </intent-filter>
+        </activity>
+        <!-- This phone as a read-only NFC tag holding its link code, only while the link-code sheet is open (nfc/LinkTagService.kt). -->
+        <service
+            android:name=".nfc.LinkTagService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/link_tag_service"/>
+        </service>
         <service
             android:name=".fgs.FgsAddService"
             android:exported="false"

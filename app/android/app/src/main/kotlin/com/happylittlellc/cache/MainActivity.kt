@@ -18,6 +18,11 @@ import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import com.happylittlellc.cache.fgs.FgsAddArm
 import io.flutter.plugin.common.MethodChannel
+import android.content.pm.PackageManager as Pm
+import android.nfc.NfcAdapter
+import android.nfc.NdefRecord
+import android.nfc.tech.Ndef
+import com.happylittlellc.cache.nfc.LinkTag
 
 class MainActivity : FlutterActivity() {
     private var systemUiChannel: MethodChannel? = null
@@ -114,11 +119,17 @@ class MainActivity : FlutterActivity() {
 
     override fun onPause() {
         super.onPause()
+        nfcInFront = false
+        LinkTag.apply(this, false)
+        applyReader()
         if (isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT) else window.decorView.postDelayed(leaveCheck, 1500)
     }
 
     override fun onResume() {
         super.onResume()
+        nfcInFront = true
+        LinkTag.apply(this, true)
+        applyReader()
         window.decorView.removeCallbacks(leaveCheck)
         FgsAddArm.resumed()
     }
@@ -148,6 +159,62 @@ class MainActivity : FlutterActivity() {
         else controller.show(WindowInsetsCompat.Type.statusBars())
     }
 
+    // NFC (nfc/): the link-entry box asks for reader mode while it is on screen; the link-code sheet asks for this phone's link to be
+    // served as a tag. Both stop with the app going to the background and come back if still wanted.
+    private var nfcChannel: MethodChannel? = null
+    private var nfcInFront = false
+    private var nfcReaderWanted = false
+    private var nfcReaderOn = false
+
+    private fun applyReader() {
+        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return
+        val want = nfcReaderWanted && nfcInFront
+        if (want == nfcReaderOn) return
+        try {
+            if (want) {
+                adapter.enableReaderMode(this, { tag -> readTag(tag) }, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B, null)
+            } else {
+                adapter.disableReaderMode(this)
+            }
+            nfcReaderOn = want
+        } catch (_: Exception) {
+            nfcReaderOn = false
+        }
+    }
+
+    // Runs on a binder thread: the first URI record of the tag's message goes to Dart on the main thread.
+    private fun readTag(tag: android.nfc.Tag) {
+        var uri: String? = null
+        try {
+            val ndef = Ndef.get(tag) ?: return
+            ndef.connect()
+            try {
+                val message = ndef.ndefMessage
+                for (r in message?.records ?: emptyArray()) {
+                    if (r.tnf != NdefRecord.TNF_WELL_KNOWN && r.tnf != NdefRecord.TNF_ABSOLUTE_URI) continue
+                    val u = r.toUri() ?: continue
+                    uri = u.toString()
+                    break
+                }
+            } finally {
+                try { ndef.close() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {
+            return
+        }
+        val found = uri ?: return
+        runOnUiThread { nfcChannel?.invokeMethod("tag", found) }
+    }
+
+    private fun nfcStatus(): Map<String, Boolean> {
+        val adapter = NfcAdapter.getDefaultAdapter(this)
+        return mapOf(
+            "available" to (adapter != null),
+            "enabled" to (adapter?.isEnabled == true),
+            "hce" to packageManager.hasSystemFeature(Pm.FEATURE_NFC_HOST_CARD_EMULATION),
+        )
+    }
+
     private var memoryChannel: MethodChannel? = null
     private var routeSnapshot: RouteSnapshot? = null
     private var pending: MethodChannel.Result? = null
@@ -165,6 +232,29 @@ class MainActivity : FlutterActivity() {
                         val link = pendingLink
                         pendingLink = null
                         result.success(link)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        nfcChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/nfc").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "status" -> result.success(nfcStatus())
+                    // {link: String?}: the link to hand out as a tag while the link-code sheet is open; null stops it.
+                    "serve" -> {
+                        LinkTag.serve(this, call.argument<String>("link"), nfcInFront)
+                        result.success(null)
+                    }
+                    "startReader" -> {
+                        nfcReaderWanted = true
+                        applyReader()
+                        result.success(null)
+                    }
+                    "stopReader" -> {
+                        nfcReaderWanted = false
+                        applyReader()
+                        result.success(null)
                     }
                     else -> result.notImplemented()
                 }
@@ -268,6 +358,11 @@ class MainActivity : FlutterActivity() {
         memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
         // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
+        nfcReaderWanted = false
+        applyReader()
+        LinkTag.serve(this, null, false)
+        nfcChannel?.setMethodCallHandler(null)
+        nfcChannel = null
         linkChannel?.setMethodCallHandler(null)
         linkChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
