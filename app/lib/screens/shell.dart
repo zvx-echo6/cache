@@ -256,7 +256,7 @@ class _ShellState extends State<Shell> {
       // Maps asked for (a place's Directions, the assistant's route): the Maps tab, over any screen opened above the tabs (a
       // notebook and its place), so the phone shows the route preview with Start whether or not a car is connected.
       if (e is MapRequested && mounted) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
         _goModule(ModuleId.maps);
       }
     });

@@ -97,15 +97,23 @@ void main() {
     expect(find.byType(PlaceView), findsOneWidget);
     final button = find.byKey(const ValueKey('place-directions'));
     await tester.ensureVisible(button);
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    // Nothing over the button (a notice at the foot of the screen would take the tap).
+    ScaffoldMessenger.of(tester.element(button)).removeCurrentSnackBar();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(button.hitTestable(), findsOneWidget, reason: 'Directions can be tapped');
     await tester.tap(button);
+    await settle(tester);
+    // The tap reached Directions: the preview for the place is being worked out.
+    expect(nav.phase, NavPhase.previewing);
+    expect(nav.selected?.name, 'Fernwood Trailhead');
+    // The place screen's closing animation runs to its end.
+    await tester.pump(const Duration(seconds: 1));
     await settle(tester);
 
     // The phone: Maps, the route preview for the place, with Start; the place screen is closed.
     expect(find.byType(PlaceView), findsNothing, reason: 'the place screen does not stay over the preview');
     expect(selectedTab(tester), 'Maps');
-    expect(nav.phase, NavPhase.previewing);
-    expect(nav.selected?.name, 'Fernwood Trailhead');
     expect(nav.guiding, isFalse, reason: 'guidance starts only with Start');
     expect(routeAsks, 1, reason: 'the route is asked for once');
     expect(find.byKey(const ValueKey('route-start')).hitTestable(), findsOneWidget);
@@ -193,6 +201,8 @@ void main() {
     await settle(tester);
     expect(find.byKey(const ValueKey('over-tabs')), findsOneWidget);
     nav.requestMap();
+    await settle(tester);
+    await tester.pump(const Duration(seconds: 1));
     await settle(tester);
     expect(find.byKey(const ValueKey('over-tabs')), findsNothing);
     expect(selectedTab(tester), 'Maps');
