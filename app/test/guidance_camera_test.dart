@@ -10,6 +10,7 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -44,6 +45,9 @@ Future<void> guiding(WidgetTester tester, {required Size size, required double r
   tester.view.physicalSize = size * ratio;
   tester.view.devicePixelRatio = ratio;
   addTearDown(tester.view.reset);
+  // The style template is read through the asset bundle, which keeps the read an earlier test started (it never finishes in
+  // this one): read it afresh, or the map never appears.
+  rootBundle.clear();
   final dir = Directory.systemTemp.createTempSync('guidance-camera-');
   final originalPlatform = MapLibrePlatform.createInstance;
   MapLibrePlatform.createInstance = () => NoSurface();
@@ -66,9 +70,9 @@ Future<void> guiding(WidgetTester tester, {required Size size, required double r
       theme: buildTheme(CacheThemeId.dark),
       home: MapsScreen(location: location, maps: maps, nav: nav, themeId: CacheThemeId.dark, glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf'),
     ));
-    for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
-      await tester.pump();
+    for (var i = 0; i < 600 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
     }
     final map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
     map.onMapCreated!(camera);

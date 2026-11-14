@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../location/coords.dart';
@@ -337,7 +338,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// The glide from one fix to the next while guiding ([GuideGlide]), driven by [_glideTicker]; where the map shows the phone
   /// now ([_shownPose]); when the last fix came; the zoom of the glide; a camera move still on its way to the map.
-  late final _glideTicker = createTicker(_onGlideTick);
+  /// Made at the first glide (never in [dispose], where the screen can no longer look up the ticker mode above it).
+  Ticker? _glideTicker;
   GuideGlide? _glide;
   Duration _glideStart = Duration.zero;
   Duration _glideClock = Duration.zero;
@@ -522,7 +524,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _fullPicture?.image.dispose();
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
-    _glideTicker.dispose();
+    _glideTicker?.dispose();
+    _glideTicker = null;
     super.dispose();
   }
 
@@ -785,7 +788,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _glide = null;
     _shownPose = null;
     _lastFixAt = null;
-    if (_glideTicker.isActive) _glideTicker.stop();
+    _glideTicker?.stop();
   }
 
   /// Guiding: the map follows the phone from fix to fix with the position on its anchor ([_guideAnchor]). The map has no padding
@@ -800,10 +803,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _lastFixAt = now;
     final g = _glide;
     final from = g != null ? g.at(_glideClock - _glideStart) : _shownPose;
-    final ticking = !_glideTicker.muted; // The map is not drawn (the drive screen shows): no frames to glide in.
+    final ticker = _glideTicker ??= createTicker(_onGlideTick);
+    final ticking = !ticker.muted; // The map is not drawn (the drive screen shows): no frames to glide in.
     if (from == null || !ticking || poseDistanceM(from, to) >= kGlideFarthestM || (zoom - _glideZoom).abs() > 0.01) {
       _glide = null;
-      if (_glideTicker.isActive) _glideTicker.stop();
+      ticker.stop();
       _shownPose = to;
       _glideZoom = zoom;
       final (lat, lon) = cameraCentreFor(to.lat, to.lon, bearing: to.bearing, zoom: zoom, map: _mapSize, anchor: _guideAnchor());
@@ -812,10 +816,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     _glide = GuideGlide(from: from, to: to, duration: glideDuration(since));
     _glideStart = _glideClock;
-    if (!_glideTicker.isActive) {
+    if (!ticker.isActive) {
       _glideClock = Duration.zero;
       _glideStart = Duration.zero;
-      _glideTicker.start();
+      ticker.start();
     }
   }
 
@@ -835,7 +839,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _shownPose = p;
     if (done) {
       _glide = null;
-      _glideTicker.stop();
+      _glideTicker?.stop();
     }
     _glideBusy = true;
     final (lat, lon) = cameraCentreFor(p.lat, p.lon, bearing: p.bearing, zoom: _glideZoom, map: _mapSize, anchor: _guideAnchor());
