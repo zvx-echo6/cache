@@ -616,17 +616,8 @@ class _ShellState extends State<Shell> {
 
   /// Home's search across Cache: one provider per module (Notebooks add theirs here).
   late final AppSearch _search = AppSearch([
-    LibrarySearchProvider(
-      sources: widget.sources,
-      openZim: (z) async {
-        final id = widget.sources.idOf(z);
-        if (id != null) _openSource(await widget.sources.zimMainPage(id));
-      },
-      openAddress: _openSource,
-      // Words said in a video and passages of EPUB books open as their citations in Ask do.
-      openVideo: _openVideo,
-      openPassage: _openSource,
-    ),
+    // Places first: a server answers one core call at a time, and a library's meaning search can take seconds, so the place
+    // search (milliseconds) goes ahead of it.
     PlacesSearchProvider(
       backend: widget.nav.backend,
       near: () => _here,
@@ -639,6 +630,17 @@ class _ShellState extends State<Shell> {
         widget.nav.select(p);
         _goModule(ModuleId.maps);
       },
+    ),
+    LibrarySearchProvider(
+      sources: widget.sources,
+      openZim: (z) async {
+        final id = widget.sources.idOf(z);
+        if (id != null) _openSource(await widget.sources.zimMainPage(id));
+      },
+      openAddress: _openSource,
+      // Words said in a video and passages of EPUB books open as their citations in Ask do.
+      openVideo: _openVideo,
+      openPassage: _openSource,
     ),
     LayersSearchProvider(
       maps: widget.maps,

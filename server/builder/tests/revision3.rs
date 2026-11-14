@@ -689,16 +689,19 @@ fn an_f16_library_opens_and_answers_like_the_f32_one_in_less_space() {
     assert_eq!(out.status.code(), Some(2));
 }
 
-/// Edge keeps vectors in 32 MiB chunks it creates whole, so a small library is the same size either way; f16 holds twice the
-/// vectors per chunk (16384 against 8192 of 1024 dimensions). 9000 pieces need two chunks as f32 and one as f16.
+/// Past Qdrant's indexing threshold the builder indexes the vectors (HNSW), which writes them out compactly, so f16 saves its
+/// real half: 9000 pieces of 1024 dimensions are 36.9 MB as f32 and 18.4 MB as f16. (Before, Edge kept them in 32 MiB chunks
+/// it creates whole, and the saving showed only once a chunk filled.)
 #[test]
-fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_same_top_1() {
+fn an_f16_shard_is_smaller_and_still_finds_the_same_passages() {
     use cache_builder::embed::fake_vector;
     use cache_builder::library::{write_library, LibDoc, VectorDatatype};
     use cache_builder::pack::PackPiece;
     let pieces: Vec<PackPiece> = (0..9000u32)
         .map(|i| {
-            let text = format!("passage number {i} about subject {} and detail {}", i % 97, i % 13);
+            // mostly words of its own: with fake (bag-of-words) vectors that share most words, the approximate index loses its way
+            // (measured: about 1 piece in 3 not found at all), which says nothing about real embeddings
+            let text = format!("alpha{i} bravo{i} charlie{i} delta{i} echo{i} subject{} detail{}", i % 97, i % 13);
             PackPiece {
                 index: i,
                 vector: fake_vector(&text),
@@ -733,20 +736,27 @@ fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_sam
     };
     let (a, b) = (mk("f32", VectorDatatype::F32), mk("f16", VectorDatatype::F16));
     let (sa, sb) = (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")));
-    assert!(sb + 30 * 1024 * 1024 < sa, "f16 {sb} bytes, f32 {sa} bytes");
+    // at least 90% of the 18.4 MB the vectors save
+    assert!(sb + 9000 * 1024 * 2 * 9 / 10 < sa, "f16 {sb} bytes, f32 {sa} bytes");
     let open = |d: &Path| {
         let s: Value = serde_json::from_slice(&std::fs::read(d.join(SETTINGS_FILE)).unwrap()).unwrap();
         cache_search::library::open_library(&d.join("shard"), None, Some(&s)).unwrap()
     };
     let (la, lb) = (open(&a), open(&b));
     assert_eq!((la.docs, lb.docs), (9000, 9000));
-    for i in [0usize, 777, 4500, 8999] {
-        let mut q = pieces[i].vector.clone();
-        q.iter_mut().step_by(5).for_each(|x| *x *= 1.03);
-        let ha = la.dense_search(&q, 1, 1, 200).unwrap();
-        let hb = lb.dense_search(&q, 1, 1, 200).unwrap();
-        assert_eq!(ha[0].address, hb[0].address, "top-1 differs for piece {i}");
-        assert_eq!(ha[0].address, format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32)), "piece {i} is its own nearest");
+    // The index (HNSW) is approximate: each of 200 pieces, queried slightly changed, must be in its own top 5 at least 95% of the
+    // time, as f32 and as f16 (measured 197/200 for both).
+    for (name, l) in [("f32", &la), ("f16", &lb)] {
+        let found = (0..200usize)
+            .filter(|k| {
+                let i = k * 45;
+                let mut q = pieces[i].vector.clone();
+                q.iter_mut().step_by(5).for_each(|x| *x *= 1.03);
+                let own = format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32));
+                l.dense_search(&q, 5, 5, 50).unwrap().iter().any(|h| h.address == own)
+            })
+            .count();
+        assert!(found >= 190, "{name}: {found} of 200 pieces in their own top 5");
     }
 }
 

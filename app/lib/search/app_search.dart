@@ -33,23 +33,37 @@ abstract class AppSearchProvider {
   Future<List<AppSearchResult>> search(String query, {int limit = 8});
 }
 
-/// Home's search across every module: each provider is asked at once, and the results come back as one list, best match first. A
-/// provider that fails or is slow does not hold the others back for longer than [timeout].
+/// Home's search across every module: each provider is asked at once (in list order), and the results come back as one list, best
+/// match first. A provider that fails, or runs past [timeout], adds nothing.
 class AppSearch {
   AppSearch(this.providers, {this.timeout = const Duration(seconds: 4)});
 
   final List<AppSearchProvider> providers;
   final Duration timeout;
 
-  Future<List<AppSearchResult>> search(String query, {int limit = 12}) async {
+  /// [onPartial] gets the list so far each time a provider answers with something, so a fast module's results show while a slow
+  /// one is still searching (a library's meaning search on a small server took 4.6 s and hid the places found in 6 ms). The
+  /// returned list is the last of them, once every provider has answered or run out of time.
+  Future<List<AppSearchResult>> search(String query, {int limit = 12, void Function(List<AppSearchResult> soFar)? onPartial}) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
-    final lists = await Future.wait([
+    final found = <AppSearchResult>[];
+    List<AppSearchResult> best() {
+      // equal scores keep the order they arrived in
+      final order = {for (var i = 0; i < found.length; i++) found[i]: i};
+      final all = [...found]..sort((a, b) => b.score == a.score ? order[a]!.compareTo(order[b]!) : b.score.compareTo(a.score));
+      return all.take(limit).toList();
+    }
+
+    await Future.wait([
       for (final p in providers)
-        p.search(q).timeout(timeout, onTimeout: () => const <AppSearchResult>[]).catchError((Object _) => const <AppSearchResult>[]),
+        p.search(q).timeout(timeout, onTimeout: () => const <AppSearchResult>[]).catchError((Object _) => const <AppSearchResult>[]).then((l) {
+          if (l.isEmpty) return;
+          found.addAll(l);
+          onPartial?.call(best());
+        }),
     ]);
-    final all = [for (final l in lists) ...l]..sort((a, b) => b.score.compareTo(a.score));
-    return all.take(limit).toList();
+    return best();
   }
 }
 

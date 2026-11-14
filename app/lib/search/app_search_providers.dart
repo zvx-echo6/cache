@@ -10,6 +10,12 @@ import '../sources/sources_state.dart';
 import 'app_search.dart';
 import '../platform/app_log.dart';
 
+/// The time Home's Library search gives the meaning (vector) part of each library's search. A library whose vectors are one big
+/// unindexed segment reads all of them; on a phone or a small box with less free memory than that, from disk, which takes seconds,
+/// and Home drops a module after [AppSearch]'s 4 s. Past this limit the library is searched by its keywords only for that query.
+/// The query's embedding and the keyword search take well under a second, so this leaves room. Ask's searches have no limit.
+const Duration kHomeMeaningLimit = Duration(milliseconds: 1500);
+
 /// A result found by a search that ranks its own results: the best keeps most of its place, later ones less, and a name that
 /// matches what was typed counts as much as its own rank.
 double _ranked(int i, String title, String query) {
@@ -95,9 +101,13 @@ class LibrarySearchProvider implements AppSearchProvider {
     ];
     if (!sources.coreReady) return out;
     final sw = Stopwatch()..start();
-    final r = await sources.searchIn(query, k: limit);
+    final r = await sources.searchIn(query, k: limit, meaningLimit: kHomeMeaningLimit);
     // the timing and count (Detailed); the words searched only at Everything
     logDetail('Library search: ${r.results.length} results in ${sw.elapsedMilliseconds} ms');
+    if (r.meaningTimedOut.isNotEmpty) {
+      logInfo('Library search: the meaning search of ${r.meaningTimedOut.join(', ')} passed ${kHomeMeaningLimit.inMilliseconds} ms; '
+          'keyword results only for it');
+    }
     logContent('Library search for "$query"');
     final hits = [
       for (final h in r.results)
