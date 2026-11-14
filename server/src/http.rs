@@ -632,8 +632,8 @@ if(u.origin===location.origin&&(u.protocol==='https:'||u.protocol==='http:'))ret
 e.preventDefault();if(u.protocol==='https:'||u.protocol==='http:'||u.protocol==='mailto:')post({cacheZim:'external',url:u.href})},true);
 })();</script>"#;
 
-/// The tag that loads the storage stand-in (see `zim_storage.js`): the sandboxed frame has no origin, so the browser denies the page
-/// IndexedDB and Web Storage; the script installs in-memory ones where that is so.
+/// The tag that loads the storage stand-in (`app/assets/reader/zim_storage.js`, one copy for the server and the phones). The sandboxed
+/// frame has no origin, so the browser denies the page IndexedDB and Web Storage; the script gives it in-memory ones, always.
 const ZIM_STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
 
 /// The index just past the end of the first `<name ...>` tag in `text` (`lower` is its lower-cased copy), if there is one.
@@ -960,7 +960,7 @@ pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, 
                 ("Cache-Control", "public, max-age=86400".into()),
                 ("X-Content-Type-Options", "nosniff".into()),
             ],
-            body: if method == "HEAD" { vec![] } else { include_str!("zim_storage.js").as_bytes().to_vec() },
+            body: if method == "HEAD" { vec![] } else { include_str!("../../app/assets/reader/zim_storage.js").as_bytes().to_vec() },
             stream: None,
         },
         // ZIM pages: the token in the path is the credential; the session cookie plays no part.
@@ -1816,7 +1816,7 @@ mod tests {
             assert_eq!(h("X-Content-Type-Options"), Some("nosniff"));
             assert_eq!(r.body.is_empty(), method == "HEAD");
             if method == "GET" {
-                assert_eq!(r.body, include_str!("zim_storage.js").as_bytes());
+                assert_eq!(r.body, include_str!("../../app/assets/reader/zim_storage.js").as_bytes());
             }
         }
     }

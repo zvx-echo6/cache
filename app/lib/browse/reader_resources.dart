@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'zim_urls.dart';
@@ -78,8 +79,40 @@ String withoutPicturePlaceholders(String html) {
   return html.replaceRange(at, at, kNoPicturePlaceholderStyle);
 }
 
-String _offlineHtml(String html) {
-  html = withoutPicturePlaceholders(html);
+/// The in-memory IndexedDB and Web Storage every ZIM page gets (the reader's frame has no storage of its own, and pages built on
+/// PouchDB would stay on "Loading"). One file for the server and both phone readers; nothing it holds is kept.
+const String kZimStorageAsset = 'assets/reader/zim_storage.js';
+
+/// Its licence text (a copy of third_party/fake-indexeddb/LICENSE; a test keeps them equal), listed under Open-source licenses.
+const String kFakeIndexedDbLicenseAsset = 'assets/reader/fake-indexeddb-LICENSE';
+
+Future<String>? _zimStorage;
+
+/// The stand-in's text, read once. The reader screen starts it when it opens, so the first page does not wait.
+Future<String> zimStorageScript() => _zimStorage ??= rootBundle.loadString(kZimStorageAsset);
+
+/// The index just past the end of the first `<name ...>` tag in [lower] (the page in lower case), or null.
+int? _afterOpenTag(String lower, String name) {
+  final m = RegExp('<$name(?=[\\s/>])').firstMatch(lower);
+  if (m == null) return null;
+  final end = lower.indexOf('>', m.end);
+  return end < 0 ? null : end + 1;
+}
+
+/// [html] with [js] as an inline script first in its head (after `<html>` when it has no head, at the start with neither), so it
+/// runs before the page's own scripts. Both phone readers use it, as the server does for the browser.
+String withZimStorage(String html, String js) {
+  final lower = html.toLowerCase();
+  final at = _afterOpenTag(lower, 'head') ?? _afterOpenTag(lower, 'html') ?? 0;
+  final safe = js.replaceAll(RegExp('</script', caseSensitive: false), r'<\/script');
+  return html.replaceRange(at, at, '<script>$safe</script>');
+}
+
+/// What the Android reader gives a page: the stand-in first, the no-picture style at the end of the head.
+String androidReaderHtml(String html, String js) => withoutPicturePlaceholders(withZimStorage(html, js));
+
+String _offlineHtml(String html, String? storageScript) {
+  html = withoutPicturePlaceholders(storageScript == null ? html : withZimStorage(html, storageScript));
   const meta =
       '<meta http-equiv="Content-Security-Policy" content="$_offlinePolicy">';
   // Prefix the policy before any archive markup can execute or load resources.
@@ -92,11 +125,12 @@ String _offlineHtml(String html) {
 }
 
 /// Always completes the native scheme task, even for a missing entry. The pinned
-/// API takes raw Uint8List bytes and exposes no HTTP status/header fields.
+/// API takes raw Uint8List bytes and exposes no HTTP status/header fields. [storageScript] is the text of [zimStorageScript].
 Future<CustomSchemeResponse> serveCustomZimResource(
   ZimPageServer server,
-  Uri url,
-) async {
+  Uri url, {
+  String? storageScript,
+}) async {
   final entry = isReaderUrl(url, customScheme: true)
       ? await server.serve(url)
       : const ServedEntry(404, 'text/plain', []);
@@ -113,7 +147,7 @@ Future<CustomSchemeResponse> serveCustomZimResource(
   }
   if (mime == 'text/html') {
     bytes = Uint8List.fromList(
-      utf8.encode(_offlineHtml(utf8.decode(bytes, allowMalformed: true))),
+      utf8.encode(_offlineHtml(utf8.decode(bytes, allowMalformed: true), storageScript)),
     );
   }
   final text =

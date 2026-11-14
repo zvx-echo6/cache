@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cache/browse/reader_resources.dart';
@@ -43,6 +44,10 @@ void main() {
     final js = await rootBundle.loadString(kZimStorageAsset);
     expect(js.length, greaterThan(10000));
     expect(js.toLowerCase().contains('</script'), false);
+  });
+
+  test('the licence the app lists is the one kept in third_party', () {
+    expect(File('assets/reader/fake-indexeddb-LICENSE').readAsStringSync(), File('../third_party/fake-indexeddb/LICENSE').readAsStringSync());
   });
 
   test('iOS: the policy meta stays first, then the stand-in first in the head', () async {
