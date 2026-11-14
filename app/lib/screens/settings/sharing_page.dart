@@ -15,6 +15,7 @@ import '../../theme.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
 import '../../update/update_ui.dart' show updateCacheSnackAction;
+import '../../platform/share_or_copy.dart' show shareOrCopy;
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
@@ -219,7 +220,8 @@ class _SharingPageState extends State<SharingPage> {
                   key: const ValueKey('share-link'),
                   icon: const Icon(Icons.share),
                   label: const Text('Share link'),
-                  onPressed: () => (widget.share ?? _systemShare)(buildLinkUrl(code)),
+                  // a browser with no share sheet copies it instead, and says so
+                  onPressed: () => shareOrCopy(context, buildLinkUrl(code), share: widget.share ?? _systemShare, copied: 'Link copied'),
                 ),
               ],
             ),
