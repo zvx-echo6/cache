@@ -4,6 +4,17 @@ import '../regions/regions_state.dart' show LocalRegion;
 
 enum PlaceKind { here, saved, region }
 
+/// What a button or a choice that uses the phone's position says, and what "Where I am" is called while no town is known for it.
+const String kCurrentLocation = 'Current location';
+
+/// The town in the address the core gives a point ("0.4 mi NE of Burley, ID": the places tools' form, a machine format of the
+/// core's own), or null when the address has none.
+String? townOfPointAddress(String address) {
+  final m = RegExp(r'^[\d.]+ mi [NESW]{1,3} of (.+)$').firstMatch(address.trim());
+  final t = m?.group(1)?.trim();
+  return t == null || t.isEmpty ? null : t;
+}
+
 /// A place weather, alerts and fires can be kept for.
 class WatchPlace {
   const WatchPlace({required this.id, required this.kind, required this.name, required this.subtitle, this.lat, this.lon, this.key, this.area});
