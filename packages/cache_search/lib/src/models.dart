@@ -190,6 +190,63 @@ class ReadResult {
       };
 }
 
+/// A page as the core prints it: a number, or its printed label when that is not a number ("iv", "A-3").
+({int? number, String? label}) _pageOf(Object? p) {
+  final number = p is int ? p : (p is double && p.isFinite && p == p.truncateToDouble() ? p.toInt() : null);
+  return (number: number, label: number != null ? '$number' : (p is String && p.trim().isNotEmpty ? p : (p is num ? '$p' : null)));
+}
+
+/// One page of a [LibraryDocument]: the text of its passages and their addresses. [page] is the page when it is a number,
+/// [pageLabel] the page as printed; both are null when the library has no page for it.
+class DocumentPage {
+  const DocumentPage({this.page, this.pageLabel, required this.text, required this.addresses});
+
+  factory DocumentPage.fromJson(Map<String, dynamic> j) {
+    final p = _pageOf(j['page']);
+    return DocumentPage(
+      page: p.number,
+      pageLabel: p.label,
+      text: (j['text'] ?? '') as String,
+      addresses: [for (final a in (j['addresses'] as List? ?? const [])) a as String],
+    );
+  }
+
+  final int? page;
+  final String? pageLabel;
+  final String text;
+  final List<String> addresses;
+
+  Map<String, dynamic> toJson() => {'page': page ?? pageLabel, 'text': text, 'addresses': addresses};
+}
+
+/// What cs_read_document returns: a library document's pages in order, [atPage] (the index of the page holding the opened
+/// passage) and whether the text was cut at the size limit.
+class LibraryDocument {
+  const LibraryDocument({required this.address, required this.title, required this.pages, required this.atPage, required this.truncated});
+
+  factory LibraryDocument.fromJson(Map<String, dynamic> j) => LibraryDocument(
+        address: (j['address'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        pages: [for (final p in (j['pages'] as List? ?? const [])) DocumentPage.fromJson((p as Map).cast<String, dynamic>())],
+        atPage: ((j['at_page'] ?? 0) as num).toInt(),
+        truncated: (j['truncated'] ?? false) as bool,
+      );
+
+  final String address;
+  final String title;
+  final List<DocumentPage> pages;
+  final int atPage;
+  final bool truncated;
+
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'pages': [for (final p in pages) p.toJson()],
+        'at_page': atPage,
+        'truncated': truncated,
+      };
+}
+
 class Suggestion {
   const Suggestion({required this.title, required this.address, required this.sourceId});
 

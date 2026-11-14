@@ -257,6 +257,18 @@ char *cs_search(cs_handle *h, const char *query, const char *options_json);
  *          (fields are null when the library's settings do not map them) */
 char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
 
+/* A library document read whole, page by page: "lib:<library-id>/<point-id>" only (any other address returns NULL with code
+ * "bad_json"; not_found and busy as for cs_read). The document is every point of the library whose mapped document field
+ * equals the opened point's (at most 5000 points, points matching a leave-out rule dropped). Order: by the payload field
+ * "piece" (whole number from 0) when every point has one, otherwise by the mapped page (numbers in numeric order, else
+ * as text), then by point id. Consecutive passages with the same page are one page; a page's text is its passages' texts
+ * joined with a blank line. Text stops after max_chars in total ("truncated":true). With no mapped document field, or no
+ * value for it on the opened point, the document is the one passage as a single page.
+ * {"address","title","at_page":N,"truncated":bool,
+ *  "pages":[{"page":null|number|"text","text","addresses":["lib:<id>/<point-id>",...]}]}
+ * (title is the opened point's title without a page suffix; at_page is the index in "pages" of the page holding the opened point) */
+char *cs_read_document(cs_handle *h, const char *address, int32_t max_chars);
+
 /* --- Browse: raw ZIM entries --- */
 
 /* Raw bytes of a ZIM entry (HTML, CSS, image, ...), following redirects.

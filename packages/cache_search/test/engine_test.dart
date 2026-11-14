@@ -5,7 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A stand-in for the native library: answers from canned JSON and records what it was given.
-class FakeNative implements CsNative, CsLiveNative, CsZimIconNative {
+class FakeNative implements CsNative, CsLiveNative, CsZimIconNative, CsDocumentNative {
   // The tool, location, places and live calls are not used by these tests.
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -74,6 +74,14 @@ class FakeNative implements CsNative, CsLiveNative, CsZimIconNative {
   String? read(int handle, String address, int maxChars) {
     calls.add('read:$address:$maxChars');
     return replies['read'];
+  }
+
+  @override
+  bool get hasReadDocument => replies.containsKey('readDocument');
+  @override
+  String? readDocument(int handle, String address, int maxChars) {
+    calls.add('readDocument:$address:$maxChars');
+    return replies['readDocument'];
   }
 
   @override
@@ -266,6 +274,26 @@ void main() {
       n.replies['read'] = '{"address":"zim:u1/A","title":"A","text":"t","truncated":false,"author":null,"page":null,"source_type":null}';
       final z = SearchEngine.open(n, [_zim]).read('zim:u1/A');
       expect(z.author, isNull);
+    });
+
+    test('readDocument parses the pages, sends the size limit, and keeps a text page label', () {
+      final n = FakeNative()
+        ..replies['readDocument'] =
+            '{"address":"lib:recon/9","title":"Manual","at_page":1,"truncated":true,"pages":[{"page":"iv","text":"One\\n\\nTwo","addresses":["lib:recon/8","lib:recon/9"]},{"page":47,"text":"Three","addresses":["lib:recon/10"]},{"page":null,"text":"Four","addresses":[]}]}';
+      final e = SearchEngine.open(n, [_zim]);
+      final d = e.readDocument('lib:recon/9');
+      expect(n.calls.last, 'readDocument:lib:recon/9:200000');
+      expect(d.title, 'Manual');
+      expect((d.atPage, d.truncated), (1, true));
+      expect([for (final p in d.pages) (p.page, p.pageLabel, p.text)], [(null, 'iv', 'One\n\nTwo'), (47, '47', 'Three'), (null, null, 'Four')]);
+      expect(d.pages.first.addresses, ['lib:recon/8', 'lib:recon/9']);
+      e.readDocument('lib:recon/9', maxChars: 500);
+      expect(n.calls.last, 'readDocument:lib:recon/9:500');
+      expect(LibraryDocument.fromJson(d.toJson()).toJson(), d.toJson());
+    });
+
+    test('readDocument says unsupported on a core without the call', () {
+      expect(() => SearchEngine.open(FakeNative(), [_zim]).readDocument('lib:r/1'), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'unsupported')));
     });
 
     test('zimGet returns the bytes and mime, or the error', () {
