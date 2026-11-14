@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +11,7 @@ import '../../platform.dart' as plat;
 import '../../settings/data_kinds.dart';
 import '../../sharing/link_inbox.dart';
 import '../../sharing/link_url.dart';
+import '../../sharing/nfc_link.dart';
 import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
@@ -17,7 +20,7 @@ import 'widgets.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.nfc});
 
   /// The platform as the page's background-sync note sees it; null: the real one (tests give theirs).
   final bool? onAndroid, onIos;
@@ -32,6 +35,9 @@ class SharingPage extends StatefulWidget {
 
   /// Sends text through the phone's share sheet; the real one unless a test gives one.
   final Future<void> Function(String text)? share;
+
+  /// Linking by NFC; the app's own unless a test gives one.
+  final NfcLink? nfc;
 
   @override
   State<SharingPage> createState() => _SharingPageState();
@@ -60,6 +66,7 @@ String _ago(int? ms) {
 class _SharingPageState extends State<SharingPage> {
   SharingState get s => widget.sharing;
   LinkInbox get _inbox => widget.inbox ?? linkInbox;
+  NfcLink get _nfc => widget.nfc ?? nfcLink;
   bool _busy = false;
   bool _incomingOpen = false;
 
@@ -166,9 +173,12 @@ class _SharingPageState extends State<SharingPage> {
       }
 
       s.addListener(onSharing);
+      // This phone is a tag holding the link while the sheet is open (Android; nothing elsewhere).
+      unawaited(_nfc.serve(buildLinkUrl(code)));
       try {
         await _codeSheet(code, (ctx) => sheet = ctx);
       } finally {
+        unawaited(_nfc.serve(null));
         s.removeListener(onSharing);
       }
     });
@@ -196,6 +206,11 @@ class _SharingPageState extends State<SharingPage> {
                   child: LinkQr(link: buildLinkUrl(code)),
                 ),
                 const SizedBox(height: 12),
+                _NfcLine(
+                  key: const ValueKey('nfc-give'),
+                  available: _nfc.canGive,
+                  text: 'Or hold another phone to the back of this one.',
+                ),
                 SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
                 const SizedBox(height: 8),
                 TextButton.icon(
@@ -228,12 +243,11 @@ class _SharingPageState extends State<SharingPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Enter a link code'),
-        content: TextField(
+        content: _CodeEntry(
           controller: ctl,
-          autofocus: true,
-          minLines: 3,
-          maxLines: 6,
-          decoration: const InputDecoration(hintText: 'CACHE1-…', border: OutlineInputBorder()),
+          nfc: _nfc,
+          // A link read by NFC is taken as a link from outside is: read strictly, and its message said in the box.
+          check: (link) => _checked(linkCodeFrom(link), strict: true),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -832,4 +846,129 @@ String? syncBackgroundNote({bool? android, bool? ios}) {
     return 'On iPhone, background sync runs only when iOS allows it, so it can be late. Open Cache to sync now.';
   }
   return null;
+}
+
+/// A line shown only when [available] answers true (the phone's NFC can do it).
+class _NfcLine extends StatefulWidget {
+  const _NfcLine({super.key, required this.available, required this.text});
+
+  final Future<bool> Function() available;
+  final String text;
+
+  @override
+  State<_NfcLine> createState() => _NfcLineState();
+}
+
+class _NfcLineState extends State<_NfcLine> {
+  bool _show = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.available().then((v) {
+      if (mounted && v) setState(() => _show = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => _show
+      ? Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Text(widget.text, textAlign: TextAlign.center, style: TextStyle(color: context.t.secondary)),
+        )
+      : const SizedBox.shrink();
+}
+
+/// The box of "Enter a link code": the text field, and NFC reading while it is on screen. Android reads tags the phone is held to
+/// (the line says so); an iPhone with reading switched on has a "Read by NFC" button. A link read goes through [check], the same as
+/// a link from a camera; what it throws is said under the box and the box is left as it was.
+class _CodeEntry extends StatefulWidget {
+  const _CodeEntry({required this.controller, required this.nfc, required this.check});
+
+  final TextEditingController controller;
+  final NfcLink nfc;
+  final String Function(String link) check;
+
+  @override
+  State<_CodeEntry> createState() => _CodeEntryState();
+}
+
+class _CodeEntryState extends State<_CodeEntry> {
+  String? _error;
+  bool _reader = false;
+  bool _iosButton = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_start());
+  }
+
+  Future<void> _start() async {
+    if (await widget.nfc.canReceive()) {
+      if (!mounted) return;
+      await widget.nfc.startReader(_got);
+      if (!mounted) {
+        unawaited(widget.nfc.stopReader());
+        return;
+      }
+      setState(() => _reader = true);
+    } else if (await widget.nfc.canReadIos()) {
+      if (mounted) setState(() => _iosButton = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(widget.nfc.stopReader());
+    super.dispose();
+  }
+
+  void _got(String link) {
+    if (!mounted) return;
+    try {
+      final code = widget.check(link);
+      setState(() {
+        _error = null;
+        widget.controller.text = code;
+      });
+    } on BadLinkCode catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _readIos() async {
+    final link = await widget.nfc.readOnce();
+    if (link != null) _got(link);
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: widget.controller,
+            autofocus: true,
+            minLines: 3,
+            maxLines: 6,
+            decoration: InputDecoration(hintText: 'CACHE1-…', border: const OutlineInputBorder(), errorText: _error),
+          ),
+          if (_reader)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text('Or hold the phones back to back.', key: const ValueKey('nfc-receive'), style: TextStyle(color: context.t.secondary)),
+            ),
+          if (_iosButton)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                key: const ValueKey('nfc-read-ios'),
+                icon: const Icon(Icons.nfc),
+                label: const Text('Read by NFC'),
+                onPressed: _readIos,
+              ),
+            ),
+        ],
+      );
 }
