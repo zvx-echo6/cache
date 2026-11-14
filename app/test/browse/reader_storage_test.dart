@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cache/browse/reader_resources.dart';
 import 'package:cache/browse/zim_urls.dart';
+import 'package:cache_search/cache_search.dart' show ZimBytes;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 
