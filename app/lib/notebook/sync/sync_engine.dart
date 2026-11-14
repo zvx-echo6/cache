@@ -1054,7 +1054,7 @@ class NotebookSync {
     }
     r.imported.add((doc.title ?? '').trim().isEmpty ? _baseName(u.path) : doc.title!.trim());
     r.importedBooks.add(book.id);
-    if (savedId != null) r.importedIds.add(savedId);
+    r.importedIds.add(savedId);
     await _save();
   }
 
