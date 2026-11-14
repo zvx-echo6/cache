@@ -709,6 +709,7 @@ void main() {
       await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran fine.', values: {'f1': 20, 'f2': true, 'f3': 'Half'});
       await a.engine.run();
       for (final e in a.folder.text.entries) {
+        if (e.key.split('/').any((c) => c.startsWith('.'))) continue; // a hidden file never leaves the device
         b.folder.text[e.key] = e.value.replaceFirst('starters/starter.generator_test@1', 'starters/starter.from_the_future@3');
       }
       await b.engine.run();
