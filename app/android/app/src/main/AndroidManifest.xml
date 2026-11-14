@@ -60,12 +60,14 @@
                 <data android:scheme="cachelink"/>
             </intent-filter>
         </activity>
-        <!-- A touched tag or phone with a cachelink: link, while Cache is in the background or closed (nfc/NfcLinkActivity.kt). Only the
-             system may send it (DISPATCH_NFC_MESSAGE); it has no screen and hands the link to MainActivity. -->
+        <!-- A touched tag or phone with a cachelink: link, while Cache is in the background or closed (nfc/NfcLinkActivity.kt). It has no
+             screen and hands the link to MainActivity, which already takes cachelink: links from any app, so this opens nothing new.
+             When targetSdk goes above 36 (Android 17), add android:permission="android.permission.DISPATCH_NFC_MESSAGE" here, as Android
+             then requires; not before, since the permission does not exist on Android 16 and earlier and the NFC service could not hold
+             it, which would block every tap. -->
         <activity
             android:name=".nfc.NfcLinkActivity"
             android:exported="true"
-            android:permission="android.permission.DISPATCH_NFC_MESSAGE"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true"
             android:noHistory="true"
