@@ -32,17 +32,12 @@ const int kClimbSamples = 56;
 /// The most points the mini map's route line is simplified to.
 const int kOverviewMaxPoints = 150;
 
-/// The day theme the car uses by day (the phone has no day/night pair setting): the chosen theme if it is Light or Parchment,
-/// else Light.
-CacheThemeId carDayTheme(CacheThemeId chosen) => chosen == CacheThemeId.light || chosen == CacheThemeId.parchment ? chosen : CacheThemeId.light;
-
-/// The night theme: the chosen theme if it is Dark or Tactical, else Dark.
-CacheThemeId carNightTheme(CacheThemeId chosen) => chosen == CacheThemeId.dark || chosen == CacheThemeId.tactical ? chosen : CacheThemeId.dark;
-
-/// The theme whose map style the car map draws: by day Light's, by night Dark's, except that a chosen Tactical gets the full
-/// Tactical map style at night, the same palette the phone's map uses for Tactical (mapPaletteFor).
-CacheThemeId carMapTheme({required bool dark, required CacheThemeId chosen}) =>
-    !dark ? CacheThemeId.light : (chosen == CacheThemeId.tactical ? CacheThemeId.tactical : CacheThemeId.dark);
+/// The theme the car screens show: the car map's style (CarBridge.style), the route line, the grade badge, the route mini map,
+/// the climb card and the pins' pictures all take it. Once the person has picked a theme on the phone ([themeChosen], set by
+/// Settings > Appearance), always that theme ([chosen]), day and night (the owner's decision of 2026-11-13). Until then the
+/// car's own setting decides, as Android for Cars' quality rule MR-1 asks by default: Light by day, Dark by night ([carDark]).
+CacheThemeId carTheme({required CacheThemeId chosen, required bool themeChosen, required bool carDark}) =>
+    themeChosen ? chosen : (carDark ? CacheThemeId.dark : CacheThemeId.light);
 
 /// The `climb` block, or null (the card is then not drawn): with no elevation data, and with no climb ahead that is at least
 /// [kCarClimbMinGrade] steep ([carClimbAhead]). A flat road, a gentle rise and a route whose climbs are all behind get no card.
@@ -211,13 +206,12 @@ String _hex(Color c) {
 Color _mix(Color a, Color b, double t) => Color.lerp(a, b, t)!;
 
 /// The overlay's colors for one theme, as `#rrggbb`. They come from the Dart tokens and the map palette, so the car side holds no
-/// palette. The route is the palette's own route color (never a traffic green, yellow, orange or red); Tactical is all on its red
-/// ramp, no white anywhere.
+/// palette. The route is the theme's own map route color, as on the phone's map (never a traffic green, yellow, orange or red);
+/// Tactical is all on its red ramp, no white anywhere.
 Map<String, String> carOverlayColors(CacheThemeId id) {
   final k = cacheTokens[id]!;
-  // Parchment's route is brown on the phone; on the car screen it uses Light's blue (route, mini map, climb shape and badge edge
-  // all come from this one color). The phone's Parchment is unchanged.
-  final route = mapPaletteFor(id == CacheThemeId.parchment ? CacheThemeId.light : id).css('route');
+  // The route, the mini map's line, the climb's shape and the badge edge all come from this one color.
+  final route = mapPaletteFor(id).css('route');
   final r = Color(int.parse('FF${route.substring(1)}', radix: 16));
   Map<String, Color> c;
   switch (id) {
@@ -284,14 +278,8 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
   return {for (final e in c.entries) e.key: _hex(e.value)};
 }
 
-/// The `palette` block: the colors for the car's day (carDayTheme) and night (carNightTheme), each with the theme it came from.
-Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) {
-  final day = carDayTheme(chosen), night = carNightTheme(chosen);
-  return {
-    'day': {'theme': day.name, ...carOverlayColors(day)},
-    'night': {'theme': night.name, ...carOverlayColors(night)},
-  };
-}
+/// The `palette` block: the colors of the theme the car shows ([carTheme]), with the theme's name. One theme.
+Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) => {'theme': chosen.name, ...carOverlayColors(chosen)};
 
 /// The `overlay` part of the trip: the one fact the phone tells the car, `phoneDrive`. It is true only while the phone's drive
 /// screen is actually showing to a person (a car screen is guiding, the phone is unlocked with Cache in front, the Maps tab is

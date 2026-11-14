@@ -38,6 +38,7 @@ class CarBridge {
     required this.drive,
     this.elevation,
     this.theme,
+    this.themeChosen,
     this.overlay,
     this.settings,
     this.phoneDrive,
@@ -59,8 +60,17 @@ class CarBridge {
   /// The app-level elevation of the route shown (one for the phone's Maps screen and the car); null: the car draws no climb card.
   final RouteElevation? elevation;
 
-  /// The phone's chosen theme (the car picks its day or night one, car_overlay.dart).
+  /// The phone's chosen theme, and whether the person has picked one (AppState.themeChosen; null: picked). Picked, the car's
+  /// map style and its pieces follow the theme day and night; not yet, the car's own day and night (car_overlay.dart, carTheme).
   final CacheThemeId Function()? theme;
+  final bool Function()? themeChosen;
+
+  /// The car's own day or night, as the car last said it with its style request (most cars start in their dark setting).
+  bool _carDark = true;
+
+  /// The theme the car shows now ([carTheme]).
+  CacheThemeId get carShows =>
+      carTheme(chosen: theme?.call() ?? CacheThemeId.dark, themeChosen: themeChosen?.call() ?? true, carDark: _carDark);
 
   /// The `overlay` part of the trip ([carOverlaySwitches]); null: `phoneDrive` false. [settings] tells the bridge when they may have changed, so the car
   /// has the new trip within one update.
@@ -128,7 +138,7 @@ class CarBridge {
     elevation?.addListener(_schedule);
     settings?.addListener(_onSettings);
     phoneDrive?.addListener(_onPhoneDrive);
-    _lastTheme = theme?.call();
+    _lastTheme = carShows;
     maps.addListener(_onMaps);
     _events = nav.events.listen(_onEvent);
     pins?.bind(connected: connected, send: _send);
@@ -222,10 +232,10 @@ class CarBridge {
         for (final l in maps.engine.layers) l.styleSignature,
       ].join(',');
 
-  /// A phone setting changed: a new theme reloads the car's map style (the car asks for it again with the same request it always
-  /// uses), and the trip goes out again for the switches and the palette.
+  /// A phone setting changed: a new theme reloads the car's map style (one `styleChanged` for each change; the car asks for the
+  /// style again, and a later change replaces a reload still pending there), and the trip goes out again with the new palette.
   void _onSettings() {
-    final t = theme?.call();
+    final t = carShows;
     if (t != _lastTheme) {
       _lastTheme = t;
       if (connected.value) unawaited(_send('styleChanged', null));
@@ -275,7 +285,7 @@ class CarBridge {
     elevation?.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
     // Keeps where the position is on the profile current, so a re-route carries the chart over from the right place.
     if (p != null && nav.route != null) elevation?.positionOnProfile(p.distanceAlongM, nav.route!.distanceM);
-    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, climbAhead: elevation?.climbAhead, theme: theme?.call() ?? CacheThemeId.dark, overlay: overlay?.call());
+    return carTrip(nav, position: pos, heading: heading, elevation: elevation?.profile, climbAhead: elevation?.climbAhead, theme: carShows, overlay: overlay?.call());
   }
 
   Future<void> push() async {
@@ -344,7 +354,9 @@ class CarBridge {
       case 'snapshot':
         return snapshot();
       case 'style':
-        return style(dark: a['dark'] == true);
+        // The car says its day or night (`dark`) with each style request: it decides the theme until one is picked.
+        final dark = a['dark'];
+        return style(dark: dark is bool ? dark : null);
       case 'saved':
         return [for (final p in await savedPlaces()) _placeOut(p)];
       case 'search':
@@ -399,9 +411,21 @@ class CarBridge {
     return {'id': p.id, 'name': p.name, 'address': p.address.isNotEmpty ? p.address : p.kind, 'lat': p.lat, 'lon': p.lon, 'distanceM': d};
   }
 
-  /// The style the car map draws: the same layers as the phone's map in the light or dark map palette (the car says which),
-  /// with the colors of the route and the position for the lines the car adds on top.
-  Future<Map<String, Object?>?> style({required bool dark}) async {
+  /// The style the car map draws: the same layers as the phone's map in the map palette of the theme the car shows ([carShows];
+  /// [dark] is the car's own day or night, when it says it), with the colors of the route and the position for the lines the car
+  /// adds on top, the theme's name, and `followsCar`: whether the car's day or night decides the theme now (no theme picked),
+  /// so the car asks for its style again when its day or night changes, and only then.
+  Future<Map<String, Object?>?> style({bool? dark}) async {
+    if (dark != null && dark != _carDark) {
+      _carDark = dark;
+      final t = carShows;
+      if (t != _lastTheme) {
+        // The car's day or night changed the theme (none picked): the trip goes out with the new palette. The car is already
+        // loading its style, so no `styleChanged`.
+        _lastTheme = t;
+        _schedule();
+      }
+    }
     if (!maps.engine.ready) return null;
     // The style must point at a tile server that answers (iOS can take its socket away while the app is in the back). A new port
     // found here is in the style being answered, so it does not also send styleChanged.
@@ -411,7 +435,7 @@ class CarBridge {
     } finally {
       _answeringStyle = false;
     }
-    final palette = mapPaletteFor(carMapTheme(dark: dark, chosen: theme?.call() ?? CacheThemeId.dark));
+    final palette = mapPaletteFor(carShows);
     // The pins' pictures follow the map's look (Tactical has its own).
     pins?.setTactical(palette.id == CacheThemeId.tactical);
     final String glyphs;
@@ -423,6 +447,8 @@ class CarBridge {
     _lastStyleKey = _carStyleKey;
     return {
       'style': await maps.styleJson(palette, glyphs),
+      'theme': palette.id.name,
+      'followsCar': !(themeChosen?.call() ?? true),
       'colors': {for (final r in const ['route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'position', 'positionRing', 'pin']) r: palette.css(r)},
     };
   }

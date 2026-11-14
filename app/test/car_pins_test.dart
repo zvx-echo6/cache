@@ -321,6 +321,8 @@ void main() {
     late NavState nav;
     late MapsState maps;
     late CarBridge bridge;
+    // The phone's chosen theme, as the bridge reads it.
+    var chosen = CacheThemeId.tactical;
     late List<MethodCall> toCar;
     late CarPins bridged;
 
@@ -334,6 +336,7 @@ void main() {
 
     setUp(() async {
       dir = Directory.systemTemp.createTempSync('car-pins');
+      chosen = CacheThemeId.tactical;
       location = LocationService(source: _NoSource(), settingsDirOverride: dir);
       await location.init();
       final gps = FakeNavPosition();
@@ -366,7 +369,7 @@ void main() {
         nav: nav,
         maps: maps,
         drive: drive,
-        theme: () => CacheThemeId.tactical,
+        theme: () => chosen,
         pins: bridged,
         throttle: const Duration(milliseconds: 5),
         glyphs: () async => 'file:///g/{fontstack}/{range}.pbf',
@@ -398,19 +401,35 @@ void main() {
       expect(pinCalls(), hasLength(1));
     });
 
-    test("the car's night style in Tactical turns the pictures Tactical; its day style turns them back", () async {
+    test("the pictures are Tactical whenever the phone's theme is, by day and by night; the theme changing switches them once", () async {
       await maps.engine.start();
       await fromCar('connected', {'on': true});
       await settle();
       expect(((pinCalls().last.arguments as Map)['images'] as Map).keys, everyElement(isNot(contains('-t-'))));
-      await fromCar('style', {'dark': true});
+      // The car's style in the chosen Tactical (the car says day): Tactical pictures, one push.
+      await fromCar('style', {'dark': false});
       await settle();
       expect(pinCalls(), hasLength(2));
       expect(((pinCalls().last.arguments as Map)['images'] as Map).keys, everyElement(contains('-t-')));
-      await fromCar('style', {'dark': false});
+      // Its night style is the same Tactical: nothing new to send.
+      await fromCar('style', {'dark': true});
+      await settle();
+      expect(pinCalls(), hasLength(2));
+      // The phone's theme changes to Dark: the next style turns them back, one push, by night as by day.
+      chosen = CacheThemeId.dark;
+      await fromCar('style', {'dark': true});
       await settle();
       expect(pinCalls(), hasLength(3));
       expect(((pinCalls().last.arguments as Map)['images'] as Map).keys, everyElement(isNot(contains('-t-'))));
+      await fromCar('style', {'dark': false});
+      await settle();
+      expect(pinCalls(), hasLength(3));
+      // And to Tactical again: Tactical, one push.
+      chosen = CacheThemeId.tactical;
+      await fromCar('style', {'dark': true});
+      await settle();
+      expect(pinCalls(), hasLength(4));
+      expect(((pinCalls().last.arguments as Map)['images'] as Map).keys, everyElement(contains('-t-')));
     });
 
     test('the pin style changing sends the pins again in it, beside the style reload', () async {

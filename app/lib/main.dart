@@ -1203,6 +1203,7 @@ class _CacheAppState extends State<CacheApp> {
         drive: carDrive,
         elevation: routeElevation,
         theme: () => app.theme,
+        themeChosen: () => app.themeChosen,
         overlay: () => carOverlaySwitches(phoneDrive: _phoneDrive.signal.value),
         phoneDrive: _phoneDrive.signal,
         carries: _phoneDrive.extras,

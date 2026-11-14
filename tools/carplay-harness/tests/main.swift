@@ -267,7 +267,17 @@ let uphill = CarTrip.from(map("trip_guiding_climb.json"))
 check(uphill.climb?.climbAheadM == 148 && uphill.climb?.heightsM.count == 40, "a climb ahead: how much, and the heights of the road")
 check(uphill.climb?.steepFrom == 20 && uphill.climb?.steepTo == 32, "a climb ahead: where the steep stretch is among the heights")
 check(near(uphill.steepLat, 10.52) && near(uphill.steepLon, 20.26) && near(uphill.steepGradePct, 6.2), "the steepest point and its grade")
-check(uphill.badgeDay?.badge == "#1f6fa8" && uphill.badgeNight?.glyph == "#0f1115", "the grade marker's colours for day and night")
+// The palette is one theme, the phone's chosen one (the recorded trips are in Dark), for day and night alike.
+check(uphill.palette?.theme == "dark" && uphill.palette?.card == "#2a3036" && uphill.palette?.miniBg == "#1a1d1f", "the palette: the phone's theme")
+check(uphill.badge?.badge == "#f4f6f8" && uphill.badge?.glyph == "#161b20" && uphill.badge?.edge == "#1a1d1f", "the grade marker's colours, from the theme")
+var oneMissing = map("trip_guiding_climb.json")
+if var pal = oneMissing["palette"] as? [String: Any] {
+  pal["miniBg"] = "nope"
+  oneMissing["palette"] = pal
+}
+check(CarTrip.from(oneMissing).palette == nil, "a palette with a colour that does not read: none")
+let oldShape: [String: Any] = ["phase": "guiding", "palette": ["day": ["route": "#1f6fa8"], "night": ["route": "#6bb4de"]]]
+check(CarTrip.from(oldShape).palette == nil, "the old day and night blocks are not a palette")
 check(guiding.climb == nil && guiding.steepGradePct == nil, "no climb ahead: none")
 
 // ---- the two extras on the map: the phone's word, the screen's class, the fade --------------------------------------

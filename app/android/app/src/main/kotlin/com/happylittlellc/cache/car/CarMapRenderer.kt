@@ -51,7 +51,9 @@ import kotlin.math.roundToInt
  * own SurfaceView or TextureView. So the surface becomes a VirtualDisplay, and a Presentation on that display holds an ordinary
  * MapLibre MapView, as Google's car documentation shows for drawing Views to the car surface. This MapView is the car's own: the
  * phone's Flutter map is not touched or moved, and both read the same offline tiles from the core's tile server on 127.0.0.1
- * with the same style, which Dart builds (the light or dark map palette, as the car asks).
+ * with the same style, which Dart builds in the map palette of the theme the car shows. Dart decides it (car_overlay.dart,
+ * carTheme): the theme the person picked on the phone, day and night; until one is picked, Light by day and Dark by night by the
+ * car's own setting (quality rule MR-1). The car only reports its day or night with each style request.
  *
  * Quality rule NF-2 says only map content is drawn on the surface: the base map, the route, the destination and the position,
  * with the turn, distances and arrival time left to the templates. Two things here are deliberately drawn on the surface anyway:
@@ -92,6 +94,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     private var styleAttempt = 0
     private var colors: Map<String, String> = DEFAULT_COLORS
     private var dark = carContext.isDarkMode
+
+    /** Whether the car's day or night decides the theme now (Dart's `followsCar`, with each style; no theme picked yet). */
+    private var followsCar = true
     private var stable: Rect? = null
     private var visible: Rect? = null
     private var width = 0
@@ -235,7 +240,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
             ov.onCarries = { word -> CarLink.extras(word) }
             ov.setAreas(visible, stable)
             ov.setOverview(overview)
-            ov.setTrip(CarLink.trip, dark, now = true)
+            ov.setTrip(CarLink.trip, now = true)
             frame.addView(ov, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             overlayView = ov
             p.setContentView(frame)
@@ -339,11 +344,12 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
     // ---- light and dark (quality rule MR-1) -------------------------------------------------------------------------
 
+    /** The car's day or night setting changed: while no theme is picked on the phone it decides the theme, so the style is asked
+     * for again (one load); once one is picked nothing changes. */
     fun setDark(on: Boolean) {
         if (on == dark) return
         dark = on
-        overlayView?.setTrip(CarLink.trip, dark, now = true)
-        loadStyle()
+        if (followsCar) loadStyle()
     }
 
     // ---- style and overlays ----------------------------------------------------------------------------------------
@@ -371,8 +377,11 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         loadStyle()
     }
 
+    /** Asks Dart for the style (the phone's theme) and sets it. Each call replaces the one before: an answer to an earlier
+     * request, or a style an earlier answer began to set, is dropped ([styleAttempt]), so only the latest is drawn. */
     private fun loadStyle() {
         if (map == null) return
+        main.removeCallbacks(reload)
         val attempt = ++styleAttempt
         CarLink.call("style", mapOf("dark" to dark)) { r ->
             val m = map ?: return@call
@@ -384,6 +393,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
                 main.postDelayed({ if (attempt == styleAttempt) loadStyle() }, 1500)
                 return@call
             }
+            followsCar = res["followsCar"] != false
             @Suppress("UNCHECKED_CAST")
             colors = DEFAULT_COLORS + ((res["colors"] as? Map<String, String>) ?: emptyMap())
             dropStyle()
@@ -544,7 +554,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     }
 
     override fun onTrip(trip: CarTrip) {
-        overlayView?.setTrip(trip, dark, now = false)
+        overlayView?.setTrip(trip, now = false)
         applyTrip(trip)
         val force = (if (overview) "overview" else trip.phase) != lastCameraPhase
         // While the driver has panned away the camera does not move, so its phase is not kept up: that must not make the
@@ -559,9 +569,11 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         follow(force = true)
     }
 
+    /** The phone's theme or its layers changed: one reload, a short while after the last of a quick run of changes (each
+     * change puts the pending reload off again), so five quick theme changes give one load, of the last. */
     override fun onStyleChanged() {
         main.removeCallbacks(reload)
-        main.postDelayed(reload, 400)
+        main.postDelayed(reload, STYLE_RELOAD_DELAY_MS)
     }
 
     private val reload = Runnable { loadStyle() }
@@ -592,7 +604,8 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         applyDriven(CarLink.trip)
     }
 
-    private fun overlayColors(t: CarTrip = CarLink.trip): CarOverlayColors? = t.palette?.forMode(dark)
+    /** The phone's chosen theme's colors, from the trip (null before the first palette). */
+    private fun overlayColors(t: CarTrip = CarLink.trip): CarOverlayColors? = t.palette
 
     private fun hex(c: Int): String = String.format("#%06x", c and 0xFFFFFF)
 
@@ -604,7 +617,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         st.getSourceAs<GeoJsonSource>(SRC_DRIVEN)?.setGeoJson(driven)
         val pal = overlayColors(t)
         if (pal != null) {
-            val key = "${pal.theme}|${dark}"
+            val key = "${pal.theme}|${pal.route}|${pal.routeDriven}"
             if (key != routeColorKey) {
                 routeColorKey = key
                 st.getLayer("car-route")?.setProperties(PropertyFactory.lineColor(hex(pal.route)))
@@ -615,7 +628,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         val g = ov?.steepGradePct
         val showBadge = t.guiding && pal != null && g != null && ov.steepLat != null && ov.steepLon != null
         if (showBadge) {
-            val key = "${pal!!.theme}|${dark}|${CarOverlayPainter.gradeText(g!!)}"
+            val key = "${pal!!.theme}|${pal.badge}|${pal.badgeGlyph}|${pal.badgeEdge}|${CarOverlayPainter.gradeText(g!!)}"
             if (key != badgeKey) {
                 badgeKey = key
                 val bmp: Bitmap = CarOverlayPainter.badgeBitmap(g, pal, density)
@@ -871,6 +884,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
         private const val SRC_BADGE = "car-badge-src"
         private const val BADGE_IMAGE = "car-grade-badge-img"
         private const val ARROW_IMAGE = "car-pos-arrow-img"
+
+        /** How long after a style change the style is asked for again ([onStyleChanged]). */
+        const val STYLE_RELOAD_DELAY_MS = 400L
 
         /** The whole-route view (the route overview and the route choice): north up, not tilted. */
         private const val ROUTE_VIEW_BEARING = 0.0

@@ -20,8 +20,9 @@ import kotlin.math.sqrt
  * Paints Cache's own pieces on the car's map: the route mini map and the climb ahead. Pure drawing: a Canvas, the trip's
  * blocks, a size, the host's areas and the density go in; nothing is read from the car, nothing moves, nothing is interactive.
  *
- * The pieces look like the host's own cards, not like the app's theme ([HOST_STYLE]): the same dark fill, outline, corner and
- * text colors by day and by night, as the host draws its cards.
+ * The pieces take the colors of the phone's chosen theme, from the trip's palette (the owner's decision of 2026-11-13: the car
+ * follows the phone's theme, day and night): the card, its text, its outline, the route and the dots. Their shape is the host's
+ * cards' (corner, outline width, text sizes). [HOST_STYLE] is only for a trip that has no palette yet.
  *
  * There are two layouts ([CarOverlayMode], chosen by [modeFor] from the stable area alone, so the choice holds for the whole
  * drive):
@@ -61,8 +62,8 @@ object CarOverlayPainter {
     const val ON_DARK_DRIVEN = 0xFF5A6672.toInt()
     const val ON_DARK_START = 0xFF8A96A3.toInt()
 
-    /** The colors every piece is painted with. The trip's theme palette does not color the pieces any more (it still colors
-     * what is part of the main map: the route, the driven part, the grade badge, and the host's turn card). */
+    /** The colors for a trip that carries no palette (none has come from the phone yet): dark cards like the host's. A trip
+     * with a palette is painted in it ([colorsFor]). */
     val HOST_STYLE = CarOverlayColors(
         theme = "host", route = ON_DARK_ROUTE, routeDriven = ON_DARK_DRIVEN, badge = 0xFFF4F6F8.toInt(), badgeGlyph = 0xFF161B20.toInt(),
         badgeEdge = HOST_CARD_FILL, startDot = ON_DARK_START, destDot = HOST_TEXT, posFill = HOST_TEXT, posRing = ON_DARK_ROUTE,
@@ -417,38 +418,44 @@ object CarOverlayPainter {
         val ov = trip.overview
         val l = layout(width, height, visible, density, showClimb = climb != null, showMini = ov != null, stable = stable)
         val d = density
+        val pal = colorsFor(trip)
         val box = l.box
         if (box != null) {
-            // One box: one card, the mini map in its upper part, a thin divider, the climb in its lower part.
-            drawCard(canvas, box, d)
+            // One box: one card, the mini map in its upper part (on the theme's page color, as the mini map tile), a thin
+            // divider, the climb in its lower part (on the card color).
+            drawCard(canvas, box, pal, d)
             canvas.save()
             canvas.clipPath(Path().apply { addRoundRect(box, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, Path.Direction.CW) })
             if (l.mini != null && ov != null) {
                 canvas.save()
                 canvas.clipRect(l.mini)
-                drawMiniContent(canvas, l.mini, ov, HOST_STYLE, d)
+                canvas.drawRect(l.mini, fill(pal.miniBg))
+                drawMiniContent(canvas, l.mini, ov, pal, d)
                 canvas.restore()
             }
             if (l.climb != null && climb != null) {
-                drawClimbPart(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d)
-                if (l.mini != null) canvas.drawRect(l.climb.left, l.climb.top, l.climb.right, l.climb.top + max(1f, d), fill(HOST_CARD_EDGE))
+                drawClimbPart(canvas, l.climb, climb, trip.imperial, pal, d)
+                if (l.mini != null) canvas.drawRect(l.climb.left, l.climb.top, l.climb.right, l.climb.top + max(1f, d), fill(pal.miniBorder))
             }
             canvas.restore()
-            drawCardEdge(canvas, box, d)
+            drawCardEdge(canvas, box, pal, d)
             return
         }
-        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d, lineShapeFilled, lineShapeInset)
-        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, HOST_STYLE, d, scale = l.mini.height() / (MINI_H * d))
+        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, pal, d, lineShapeFilled, lineShapeInset)
+        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, pal, d, scale = l.mini.height() / (MINI_H * d))
     }
 
-    /** A card like the host's: the fill, and over the content the outline. */
-    private fun drawCard(canvas: Canvas, r: RectF, d: Float) {
-        canvas.drawRoundRect(r, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, fill(HOST_CARD_FILL))
+    /** The colors the pieces are painted in: the trip's palette (the phone's chosen theme), or [HOST_STYLE] before one came. */
+    fun colorsFor(trip: CarTrip): CarOverlayColors = trip.palette ?: HOST_STYLE
+
+    /** A card in the host's shape: the fill, and over the content the outline. */
+    private fun drawCard(canvas: Canvas, r: RectF, pal: CarOverlayColors, d: Float) {
+        canvas.drawRoundRect(r, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, fill(pal.card))
     }
 
-    private fun drawCardEdge(canvas: Canvas, r: RectF, d: Float) {
+    private fun drawCardEdge(canvas: Canvas, r: RectF, pal: CarOverlayColors, d: Float) {
         val w = HOST_CARD_EDGE_W * d
-        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, HOST_CARD_RADIUS * d - w / 2, HOST_CARD_RADIUS * d - w / 2, stroke(HOST_CARD_EDGE, w))
+        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, HOST_CARD_RADIUS * d - w / 2, HOST_CARD_RADIUS * d - w / 2, stroke(pal.miniBorder, w))
     }
 
     // ---- the climb part -----------------------------------------------------------------------------------------------
@@ -543,7 +550,7 @@ object CarOverlayPainter {
         canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float,
         shapeFilled: Boolean = LINE_SHAPE_FILLED, shapeInset: Float = LINE_SHAPE_INSET,
     ) {
-        drawCard(canvas, r, d)
+        drawCard(canvas, r, pal, d)
         val figurePaint = text(pal.cardText, LINE_FIGURE_SIZE * d, 700)
         val textPaint = text(pal.cardSecondary, LINE_TEXT_SIZE * d, 400)
         val figure = climbText(c.climbAheadM, imperial)
@@ -571,7 +578,7 @@ object CarOverlayPainter {
         val baseline = r.centerY() + LINE_FIGURE_SIZE * 0.355f * d
         canvas.drawText(figure, x, baseline, figurePaint)
         if (second != null) canvas.drawText(second, x + figureW + gap, baseline, textPaint)
-        drawCardEdge(canvas, r, d)
+        drawCardEdge(canvas, r, pal, d)
     }
 
     /** Where a height is drawn in the shape, between [top] (high) and [bottom] (low), for a stretch whose heights run from
@@ -794,7 +801,7 @@ object CarOverlayPainter {
         return abs(steep[0] - dest[0]) >= (14f + MINI_DEST_R + gap) * d || abs(steep[1] - dest[1]) >= (10f + MINI_DEST_R + gap) * d
     }
 
-    /** The mini map as a tile of its own, in the host's card style: the card, the content, the outline. [scale] is the
+    /** The mini map as a tile of its own, in the host's card shape: the theme's page color, the content, the outline. [scale] is the
      * tile's size against the full one (the lines, the dots and the padding shrink with it; the card's outline and corner do
      * not). */
     fun drawMiniMap(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float, scale: Float = 1f) {

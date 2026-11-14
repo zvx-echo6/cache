@@ -105,6 +105,12 @@ class AppState extends ChangeNotifier {
 
   CacheThemeId theme = CacheThemeId.dark;
 
+  /// Whether the person has picked a theme in Settings > Appearance (any pick, also the one already shown). Never shown on
+  /// screen. While it is false the car screens follow the car's own day and night (Light by day, Dark by night), as Android
+  /// for Cars' quality rule MR-1 asks by default; once true they always show [theme] (car_overlay.dart, carTheme). A settings
+  /// file from before this flag counts as picked, whatever theme it holds; only a new install (no settings file) starts unset.
+  bool themeChosen = false;
+
   /// The Modules screen's icons: small, three across (false, the default), or large, two across.
   bool largeModuleIcons = false;
 
@@ -242,6 +248,9 @@ class AppState extends ChangeNotifier {
       _lastModelFile = j['lastModel'] as String?;
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
+      // A settings file from before the flag counts as picked, whatever theme it holds: only a new install (no file) starts
+      // with the car's day and night.
+      themeChosen = j.containsKey('themeChosen') ? j['themeChosen'] == true : true;
       largeModuleIcons = j['moduleIcons'] == 'large';
       darkPdfPages = j['pdfDarkPages'] == true;
       modelDeclined = j['modelDeclined'] == true;
@@ -267,6 +276,7 @@ class AppState extends ChangeNotifier {
       await fs.writeStringAtomic(AppRoot.support, _settingsName, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
+        'themeChosen': themeChosen,
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'pdfDarkPages': darkPdfPages,
         'modelDeclined': modelDeclined,
@@ -275,6 +285,12 @@ class AppState extends ChangeNotifier {
         'plainNames': _plainNames,
       }));
     } catch (_) {}
+  }
+
+  /// The person picked [id] in Settings > Appearance: it is the theme, and it is marked as picked ([themeChosen]).
+  Future<void> chooseTheme(CacheThemeId id) async {
+    themeChosen = true;
+    await setTheme(id);
   }
 
   Future<void> setTheme(CacheThemeId id) async {

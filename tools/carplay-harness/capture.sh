@@ -454,7 +454,7 @@ wait_more() {  # wait_more <text> <count before> <seconds>: 0 as soon as the app
   return 1
 }
 
-notify() {  # notify <next|day|night>: asks the harness's own plugin in the app (steps_plugin), by a Darwin notification
+notify() {  # notify <next|day|night|theme_dark|...>: asks the harness's own plugin in the app (steps_plugin), by a Darwin notification
   run xcrun simctl spawn "$UDID" notifyutil -p "org.example.carharness.$1"
 }
 
@@ -463,7 +463,7 @@ MAP_NOTES=""
 BUTTONS=""
 BUTTONS_MISSING=""
 
-map_step() {  # map_step <next|day|night> <log text to wait for> <picture name or ""> : one step of the map pictures
+map_step() {  # map_step <next|theme_light|...> <log text to wait for> <picture name or ""> : one step of the map pictures
   local before
   before=$(log_count "$2")
   notify "$1"
@@ -475,13 +475,13 @@ map_step() {  # map_step <next|day|night> <log text to wait for> <picture name o
   return 0
 }
 
-map_pictures() {  # map_pictures <label>: the map in the three phases, dark and light; then the panning state and the buttons
+map_pictures() {  # map_pictures <label>: the map in the three phases, in the phone's Dark and Light themes; then the panning state and the buttons
   local label="$1" before x y found="" free ft fl fb fr ax ay moved="" rx ry
   MAP_MISSING=""
   MAP_NOTES=""
   BUTTONS=""
   BUTTONS_MISSING=""
-  # The Simulator's car is in its dark setting. The app's style has to be the one drawn before the first picture.
+  # The stand-in phone starts in its Dark theme. The app's style has to be the one drawn before the first picture.
   wait_log 'car map: style loaded, dark' 40 || MAP_MISSING="$MAP_MISSING [no 'style loaded, dark' line]"
   # The phone's pins (five made-up ones, sent by the stand-in as the phone does on connect) are on the map, in the style's own
   # pin source, under the route and the markers.
@@ -492,13 +492,21 @@ map_pictures() {  # map_pictures <label>: the map in the three phases, dark and 
   fi
   sleep 3
   shot_ext "$label-map-dark-browsing"
-  # The light pictures: the harness tells the car scene that the car switched to day, through the call CarPlay makes. The map
-  # redraws light; Apple's own bar and buttons stay in the Simulator car's dark look, which is not how a real car in its day
-  # setting shows them. Hence the name of these pictures.
-  map_step day 'car map: style loaded, light' "$label-map-light-told-by-harness-browsing"
-  map_step next 'car link: trip previewing' "$label-map-light-told-by-harness-previewing"
-  map_step next 'car link: trip guiding' "$label-map-light-told-by-harness-guiding"
-  map_step night 'car map: style loaded, dark' "$label-map-dark-guiding"
+  # The car's own day setting (the harness tells the car scene the car switched to day, through the call CarPlay makes)
+  # changes nothing on the map: it follows the phone's theme, day and night. No other style is loaded for it.
+  before=$(log_count 'car map: style loaded')
+  notify day
+  sleep 5
+  [ "$(log_count 'car map: style loaded')" = "$before" ] || MAP_MISSING="$MAP_MISSING [day: the car's day setting loaded another style; the map is to follow the phone's theme]"
+  shot_ext "$label-map-dark-car-day-browsing"
+  notify night
+  sleep 2
+  # The phone's theme changes to Light: the car's map follows it (Apple's own bar and buttons stay in the Simulator car's
+  # dark look). Then back to Dark.
+  map_step theme_light 'car map: style loaded, light' "$label-map-light-browsing"
+  map_step next 'car link: trip previewing' "$label-map-light-previewing"
+  map_step next 'car link: trip guiding' "$label-map-light-guiding"
+  map_step theme_dark 'car map: style loaded, dark' "$label-map-dark-guiding"
   map_step next 'car link: trip browsing' ""
   map_step next 'car link: trip previewing' "$label-map-dark-previewing"
   # The panning state. The Pan button is the first of the map buttons, which stand in a column 22 points in from the trailing
@@ -1041,11 +1049,34 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     shot_ext "$label-guide-no-voice-switch"
     GUIDE_MISSING="$GUIDE_MISSING [the voice switch did not answer a tap at the bar's trailing edge]"
   fi
-  # The same in the light setting (told by the harness, as for the map), and dark again.
-  guide_step day 'car map: style loaded, light' "$label-guide-light-told-by-harness"
+  # The phone's four themes, with the climb ahead on the map: the map style, the route, the grade marker and the two extras
+  # follow each one, with the car in its dark setting all the while.
+  notify climb
+  sleep 2
+  for theme in light parchment tactical dark; do
+    guide_step "theme_$theme" "car map: style loaded, $theme" "$label-guide-theme-$theme"
+  done
+  # Five quick theme changes on the phone, a tenth of a second apart (timed by the stand-in Dart side: the job's notifications
+  # each take a second or more on a busy runner), ending in Tactical: one style load, of the last.
+  before=$(log_count 'car map: style loaded')
+  notify themeburst
+  if wait_more 'car map: style loaded' "$before" 15; then
+    sleep 5
+    got=$(( $(log_count 'car map: style loaded') - before ))
+    last=$(grep 'car map: style loaded' "$STREAM" | tail -n 1 | sed 's/.*style loaded, //; s/,.*//')
+    shot_ext "$label-guide-theme-burst"
+    if [ "$got" = 1 ] && [ "$last" = tactical ]; then
+      GUIDE="$GUIDE; five quick theme changes gave one style load, of the last (tactical)"
+    else
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes gave $got style load(s), the last of $last: one, of tactical, was wanted]"
+    fi
+  else
+    GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes loaded no style]"
+  fi
   before=$(log_count 'car map: style loaded, dark')
-  notify night
-  wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [night: the dark style did not come back]"
+  notify theme_dark
+  wait_more 'car map: style loaded, dark' "$before" 12 || GUIDE_MISSING="$GUIDE_MISSING [theme_dark: the Dark style did not come back]"
+  sleep 2
   # Off the route (the phone looks for a new one), then arrived.
   guide_step drive 'car guidance: rerouting' "$label-guide-rerouting"
   guide_step drive 'car guidance: arrived' "$label-guide-arrived"
@@ -1200,7 +1231,7 @@ for size in $SIZES; do
       elif [ -n "$MAP_MISSING" ]; then
         result "FAILED $label map:$MAP_MISSING; $MAP_NOTES"
       else
-        result "OK $label map: shots/$label-map-dark-{browsing,previewing,guiding}.png in the car's own dark setting; shots/$label-map-light-told-by-harness-{browsing,previewing,guiding}.png after the harness told the car scene the car switched to day (Apple's bar and buttons keep the Simulator car's dark look there); shots/$label-map-panning.png; $MAP_NOTES; $area"
+        result "OK $label map: shots/$label-map-dark-{browsing,previewing,guiding}.png in the phone's Dark theme; shots/$label-map-dark-car-day-browsing.png after the harness told the car scene the car switched to day (no other style was loaded: the map follows the phone's theme); shots/$label-map-light-{browsing,previewing,guiding}.png in the phone's Light theme (Apple's bar and buttons keep the Simulator car's dark look); shots/$label-map-panning.png; $MAP_NOTES; $area"
         if [ -n "$BUTTONS_MISSING" ]; then
           result "FAILED $label buttons:$BUTTONS_MISSING; $BUTTONS"
         else
@@ -1231,7 +1262,7 @@ for size in $SIZES; do
               elif [ -n "$GUIDE_MISSING" ]; then
                 result "FAILED $label guidance:$GUIDE_MISSING; $GUIDE"
               else
-                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, light, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-light-told-by-harness,-rerouting,-arrived,-ended}.png"
+                result "OK $label guidance: $ROWS_TEXT, nearer the turn, the turn after, the phone's four themes, looking for a new route and arrived, in CarPlay's guidance panel; $GUIDE; shots/$label-guide{,-roll-1,-extras,-overview,-near,-next,-voice-off,-theme-light,-theme-parchment,-theme-tactical,-theme-dark,-theme-burst,-rerouting,-arrived,-ended}.png"
               fi
             fi
           fi

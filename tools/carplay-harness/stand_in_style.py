@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Writes the stand-in map styles of the CarPlay harness, and the colours that go with them.
+"""Writes the stand-in map styles of the CarPlay harness, and the colours that go with them, for the phone's four themes.
 
-    stand_in_style.py <out folder>     -> style_light.json, style_dark.json, colors_light.json, colors_dark.json
+    stand_in_style.py <out folder>     -> style_<theme>.json, colors_<theme>.json, palette_<theme>.json for dark, light,
+                                          parchment and tactical
 
 The app's real style is built in Dart from layers the Rust core serves, and neither runs in the Simulator. The stand-in is a
 made-up town with no network and no text: land, a lake, two parks, a grid of streets with a few main roads, all in one GeoJSON
-source inside the style. Its colours are the app's light and dark map palettes as they stood when this was written
+source inside the style. Its colours are the app's four map palettes as they stood when this was written
 (app/lib/maps/palette/map_palette.dart), so the route and the position are judged against the real backgrounds; the answer to
-the car's `style` call carries the same roles the app sends (car_bridge.dart, style).
+the car's `style` call carries the same roles the app sends (car_bridge.dart, style). The trip's `palette` for each theme is the
+one the Kotlin tests read (app/android/app/src/test/resources/car/overlay_palette.json), which app/test/car_test.dart holds to
+what the phone sends (carOverlayColors).
 """
 import json
 import sys
@@ -28,7 +31,21 @@ PALETTES = {
         "route": "#6bb4de", "routeCasing": "#0f1115", "routeOffroad": "#e8955a", "routeAlternate": "#707987",
         "position": "#6bb4de", "positionRing": "#0f1115", "pin": "#ff6b5e",
     },
+    "parchment": {
+        "land": "#efe3c8", "water": "#9fb5a9", "park": "#d5d9b0", "roadMajor": "#edd08a", "roadMajorCasing": "#b98a50",
+        "roadMinor": "#f8efd8", "roadMinorCasing": "#cdbf9e",
+        "route": "#7a4e1d", "routeCasing": "#f3e9d2", "routeOffroad": "#a3261c", "routeAlternate": "#9a8a70",
+        "position": "#7a4e1d", "positionRing": "#f3e9d2", "pin": "#a3261c",
+    },
+    "tactical": {
+        "land": "#000000", "water": "#2e0909", "park": "#120303", "roadMajor": "#8a1a14", "roadMajorCasing": "#000000",
+        "roadMinor": "#5a100d", "roadMinorCasing": "#1a0505",
+        "route": "#ff5a4a", "routeCasing": "#000000", "routeOffroad": "#f08070", "routeAlternate": "#8e2b24",
+        "position": "#ff5a4a", "positionRing": "#000000", "pin": "#ff2d1f",
+    },
 }
+# The trip's palettes, one for each theme (the Kotlin tests' fixture, which the Dart tests hold to the phone's colours).
+TRIP_PALETTES = Path(__file__).resolve().parent.parent.parent / "app/android/app/src/test/resources/car/overlay_palette.json"
 SENT = ["route", "routeCasing", "routeOffroad", "routeAlternate", "position", "positionRing", "pin"]
 
 
@@ -112,9 +129,11 @@ def style(name, c):
 def main():
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
+    trip = json.loads(TRIP_PALETTES.read_text())
     for name, c in PALETTES.items():
         (out / ("style_%s.json" % name)).write_text(json.dumps(style(name, c), separators=(",", ":")))
         (out / ("colors_%s.json" % name)).write_text(json.dumps({role: c[role] for role in SENT}))
+        (out / ("palette_%s.json" % name)).write_text(json.dumps(trip[name]))
     sizes = ", ".join("%s %d bytes" % (p.name, p.stat().st_size) for p in sorted(out.glob("style_*.json")))
     print("stand-in styles: %s" % sizes)
 

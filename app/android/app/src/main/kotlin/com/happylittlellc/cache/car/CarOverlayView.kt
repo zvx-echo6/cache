@@ -36,7 +36,6 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
     private var height = 0
     private var visible: Rect? = null
     private var stable: Rect? = null
-    private var dark = false
     private var overview = false
     private var shown: CarTrip = CarTrip.EMPTY
     private var pending: CarTrip? = null
@@ -236,11 +235,11 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
         invalidate()
     }
 
-    /** [now]: show it at once (the first trip, a day/night change); otherwise in the next step. A trip that is not guiding is
-     * never held back for a step: the pieces of the route that ended go in this frame, and no waiting step can bring them back. */
-    fun setTrip(t: CarTrip, dark: Boolean, now: Boolean) {
-        val mode = this.dark != dark
-        this.dark = dark
+    /** [now]: show it at once (the first trip); otherwise in the next step. New colors (the phone's theme changed) are shown at
+     * once too. A trip that is not guiding is never held back for a step: the pieces of the route that ended go in this frame,
+     * and no waiting step can bring them back. */
+    fun setTrip(t: CarTrip, now: Boolean) {
+        val recolored = (pending ?: shown).palette != t.palette
         // The phone's drive screen, and the drive itself. A drive's first frame has the pieces or has not (on an in-between
         // screen: not, for the first moment, see onCar); after that a change waits its pause and fades.
         val started = t.guiding && !guidingNow
@@ -267,14 +266,14 @@ class CarOverlayView(context: Context, private val density: Float) : View(contex
             pending = null
             val was = shown.guiding
             shown = t
-            if (was || mode) invalidate()
+            if (was || recolored) invalidate()
             return
         }
         val elapsed = SystemClock.elapsedRealtime() - lastStepAt
         // A piece whose data has just arrived is shown at once, not at the next step: after Start the first guiding trip
         // carries no route shape yet, and holding the one that does for a step left the pieces out for about three seconds.
         val appears = pieces(t) and pieces(shown).inv() != 0
-        if (now || mode || appears || elapsed >= MIN_STEP_MS) {
+        if (now || recolored || appears || elapsed >= MIN_STEP_MS) {
             main.removeCallbacks(flush)
             pending = t
             flush.run()

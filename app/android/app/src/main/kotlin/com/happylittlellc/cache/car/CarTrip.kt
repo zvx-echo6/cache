@@ -46,7 +46,7 @@ data class CarTrip(
     val overlay: CarOverlaySwitches = CarOverlaySwitches.DEFAULT,
     val climb: CarClimb? = null,
     val overview: CarOverview? = null,
-    val palette: CarOverlayPalette? = null,
+    val palette: CarOverlayColors? = null,
     val stops: List<CarStop> = emptyList(),
 ) {
     val guiding: Boolean get() = phase == "guiding"
@@ -110,7 +110,7 @@ data class CarTrip(
                 overlay = CarOverlaySwitches.from(m["overlay"]),
                 climb = CarClimb.from(m["climb"]),
                 overview = CarOverview.from(m["overview"]),
-                palette = CarOverlayPalette.from(m["palette"]),
+                palette = CarOverlayColors.from(m["palette"]),
                 stops = (m["stops"] as? List<*>).orEmpty().mapIndexedNotNull { i, s ->
                     val x = s.asMap() ?: return@mapIndexedNotNull null
                     CarStop(
