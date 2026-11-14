@@ -20,3 +20,7 @@ Future<void> shareOrCopy(BuildContext context, String text, {required Future<voi
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(copied)));
 }
+
+/// A text (a conversation, a report) shared with its title, or copied with "Copied" where there is no share sheet.
+Future<void> shareTextOrCopy(BuildContext context, String title, String text, Future<void> Function(String title, String text) share) =>
+    shareOrCopy(context, text, share: (t) => share(title, t), copied: 'Copied');

@@ -4,6 +4,7 @@ import '../chat/answer_reports.dart';
 import '../history/share.dart';
 import '../theme.dart';
 import 'settings/widgets.dart';
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 /// What the person chose in the report sheet.
 class ReportChoice {
@@ -148,7 +149,7 @@ class ReportedAnswersPage extends StatelessWidget {
                             IconButton(
                               tooltip: 'Share',
                               icon: const Icon(Icons.ios_share),
-                              onPressed: () => share('Reported answer', r.toMarkdown()),
+                              onPressed: () => shareTextOrCopy(context, 'Reported answer', r.toMarkdown(), share),
                             ),
                             IconButton(
                               tooltip: 'Remove',
@@ -166,7 +167,7 @@ class ReportedAnswersPage extends StatelessWidget {
                     SettingsRow(
                       title: 'Share all reports',
                       chevron: false,
-                      onTap: () => share('Reported answers', [for (final r in items) r.toMarkdown()].join('\n---\n\n')),
+                      onTap: () => shareTextOrCopy(context, 'Reported answers', [for (final r in items) r.toMarkdown()].join('\n---\n\n'), share),
                     ),
                   ],
                 ),

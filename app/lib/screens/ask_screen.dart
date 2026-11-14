@@ -24,6 +24,7 @@ import 'confirm_card.dart';
 import 'history_drawer.dart';
 import 'model_search_screen.dart' show downloadModel;
 import 'models_screen.dart';
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 class AskScreen extends StatefulWidget {
   const AskScreen({
@@ -270,7 +271,7 @@ class _AskScreenState extends State<AskScreen> {
     final id = widget.chat.activeId;
     final md = id == null ? null : widget.chat.exportMarkdown(id);
     final title = id == null ? null : widget.chat.store?.get(id)?.title;
-    if (md != null) await widget.share(title ?? 'Chat', md);
+    if (md != null && mounted) await shareTextOrCopy(context, title ?? 'Chat', md, widget.share);
   }
 
   @override
