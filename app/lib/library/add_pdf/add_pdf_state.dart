@@ -365,6 +365,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
     this.mayRun,
     this.inUseTries = 15,
     this.startWait = kAddPdfStopWait,
+    this.embedBatch = kAddPdfEmbedBatch,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -375,6 +376,9 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
   /// How long a start waits for an earlier run of the same PDF to stop (it is mid-step and cannot be interrupted) before it gives
   /// up for now and the work is tried again by the scheduler's own timer. The same wait as the foreground service's take-over.
   final Duration startWait;
+
+  /// Pieces the core embeds in one step (a bench sets it to compare with the old 8).
+  final int embedBatch;
 
   /// Asked before the jobs are offered as work: false while a background run is adding PDFs (the app asks it to stop and offers
   /// them again at its next look). Null: always.
@@ -880,7 +884,7 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
         // One piece for each step of the core: a step cannot be interrupted, and a Pause or a Stop adding is only heard between steps.
         // Eight pieces were 90 s on a phone (13 min on the emulator): the notification's Pause and Stop adding did nothing for that long.
         // The core embeds each piece on its own anyway, so a batch of one costs no speed.
-        'embed_batch': kAddPdfEmbedBatch,
+        'embed_batch': embedBatch,
         // gentle on a phone: the throttle's thread cap, else two
         'embed_threads': threads == null || threads > 2 ? 2 : (threads < 1 ? 1 : threads),
       },
