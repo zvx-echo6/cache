@@ -373,10 +373,25 @@ class SharingState extends ChangeNotifier {
 
   /// The settings the engine runs with now, kept for the background round (which opens the same engine with the app closed): the
   /// open call's settings, with what was set since (`only`, `never_fetch`, the items switched off).
-  Future<void> _writeSnapshot() => _writing = _writing.then((_) => _writeSnapshotNow());
+  Future<void> _writeSnapshot() async {
+    // One write at a time (two would share the temp file); one asked while another is under way is done after it, from the
+    // state as it is then.
+    if (_writingNow) {
+      _writeAgain = true;
+      return;
+    }
+    _writingNow = true;
+    try {
+      do {
+        _writeAgain = false;
+        await _writeSnapshotNow();
+      } while (_writeAgain);
+    } finally {
+      _writingNow = false;
+    }
+  }
 
-  /// Writes are one after another, each from what the state holds when its turn comes (two at once would share the temp file).
-  Future<void> _writing = Future<void>.value();
+  bool _writingNow = false, _writeAgain = false;
 
   Future<void> _writeSnapshotNow() async {
     final c = _lastConfig;
