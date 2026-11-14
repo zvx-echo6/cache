@@ -355,3 +355,71 @@ pub fn remux_in_place(video: &Path, free: u64, margin: u64) -> Result<Option<Rem
     })?;
     Ok(Some(done))
 }
+
+/// What a pass over the saved videos did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Repaired {
+    pub remuxed: usize,
+    /// Not rewritten for want of room for a second copy (tried again at the next pass).
+    pub no_room: usize,
+    pub failed: usize,
+}
+
+/// Saved HLS videos from before saved videos were rewritten as plain MP4 (on the device, or synced from one): each is rewritten
+/// once, one at a time, and its manifest then says so, with the file's new size and sha256. Run on a job's thread after start,
+/// never in the way of other calls; [cancel] is looked at between videos. A video that cannot be rewritten stays as it is, with
+/// one line in the log.
+pub fn repair_saved(video: &crate::Video, progress: &dyn Fn(u64, u64), cancel: &dyn Fn() -> bool) -> Result<Repaired> {
+    let root = video.downloads_root();
+    let mut todo: Vec<(PathBuf, serde_json::Value)> = vec![];
+    for inst in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        for one in std::fs::read_dir(inst.path()).into_iter().flatten().flatten() {
+            let dir = one.path();
+            let Ok(text) = std::fs::read_to_string(dir.join("manifest.json")) else { continue };
+            let Ok(m) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            if m["source"].as_str().is_some_and(|s| s.starts_with("hls")) && m["remuxed"] != true {
+                todo.push((dir, m));
+            }
+        }
+    }
+    let mut done = Repaired::default();
+    let total = todo.len() as u64;
+    progress(0, total);
+    for (i, (dir, mut m)) in todo.into_iter().enumerate() {
+        if cancel() {
+            break;
+        }
+        let Some(file) = m["file"].as_str().map(|f| dir.join(f)) else { continue };
+        let free = crate::dl::available_bytes(&dir).unwrap_or(0);
+        match remux_in_place(&file, free, crate::dl::MARGIN) {
+            Ok(Some(_)) => {
+                let size = std::fs::metadata(&file).map(|x| x.len()).unwrap_or(0);
+                match crate::dl::sha256_file(&file) {
+                    Ok(sha) => {
+                        m["size"] = size.into();
+                        m["sha256"] = sha.into();
+                        m["remuxed"] = true.into();
+                        crate::store::write_atomic(&dir.join("manifest.json"), m.to_string().as_bytes())?;
+                        done.remuxed += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("cache_video: {} was rewritten as a plain MP4 but could not be read back: {}", dir.display(), e.message);
+                        done.failed += 1;
+                    }
+                }
+            }
+            Ok(None) => {
+                // plain already (a file that never was fragmented), or no room for a second copy: told apart for the count
+                if is_fragmented(&file).unwrap_or(false) {
+                    done.no_room += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("cache_video: {} kept as it is; it could not be rewritten as a plain MP4: {}", dir.display(), e.message);
+                done.failed += 1;
+            }
+        }
+        progress(i as u64 + 1, total);
+    }
+    Ok(done)
+}
