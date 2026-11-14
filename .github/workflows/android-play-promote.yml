@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version_code:
-        description: versionCode already on Play (for example 31)
+        description: versionCode already on Play (for example 5200; builds up to 51 used the build number, e.g. 51)
         type: string
         required: true
       from_track:
