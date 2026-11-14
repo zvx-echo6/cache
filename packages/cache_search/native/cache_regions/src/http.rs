@@ -64,6 +64,19 @@ pub fn get(agent: &ureq::Agent, url: &str, timeout: Duration) -> Result<Vec<u8>,
     }
 }
 
+/// Whether the server has `url`, without fetching it: a GET for its first byte only (a server that ignores the range sends
+/// the whole file, which is dropped unread). Ok when it answers 200 or 206.
+pub fn probe(agent: &ureq::Agent, url: &str, timeout: Duration) -> Result<(), Fail> {
+    if !url_ok(url) {
+        return Err(Fail::Status(0, format!("{url} is not an https address")));
+    }
+    match agent.get(url).set("Range", "bytes=0-0").timeout(timeout.max(Duration::from_millis(1))).call() {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, _)) => Err(Fail::Status(code, format!("HTTP {code} from {url}"))),
+        Err(ureq::Error::Transport(t)) => Err(Fail::Net(format!("{:?}: {} ({url})", t.kind(), t.message().unwrap_or(&t.to_string())))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

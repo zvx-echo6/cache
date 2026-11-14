@@ -122,6 +122,17 @@ impl Server {
         files.insert("/current.json".into(), current.to_string().into_bytes());
     }
 
+    /// Takes `build` off the server (its index and tiles); current.json is left as the last publish made it.
+    fn unpublish(&self, build: &str) {
+        let prefix = format!("/{build}/");
+        self.files.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// Takes one tile of `build` off the server (the build stays).
+    fn drop_tile(&self, build: &str, path: &str) {
+        self.files.lock().unwrap().remove(&format!("/{build}/{path}.gph.gz"));
+    }
+
     fn damage(&self, build: &str, path: &str, times: usize) {
         self.damaged.lock().unwrap().insert(format!("/{build}/{path}.gph.gz"), times);
     }
@@ -515,4 +526,169 @@ fn too_little_free_space_pauses_a_region_with_the_reason() {
     assert_eq!(srv.tile_hits(), 0);
     call(&e, "set_policy", json!({"reserve_bytes": 0}));
     wait_state(&e, "a", "ready");
+}
+
+// ---- a device whose build the server no longer has ----
+
+fn build_of(e: &Regions) -> Value {
+    call(e, "status", json!({}))["build"].clone()
+}
+
+/// A device on b1 with region a downloaded; then b2 is published and b1 taken off the server.
+fn on_b1_then_gone(srv: &Server, dir: &Path) -> Regions {
+    srv.publish("b1");
+    let e = engine(dir, srv, json!({}));
+    call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+    wait_state(&e, "a", "ready");
+    srv.publish("b2");
+    srv.unpublish("b1");
+    e
+}
+
+fn has_b2_tiles(dir: &Path, paths: &[&str]) {
+    for p in paths {
+        assert_eq!(std::fs::read(tile_file(dir, "b2", p)).unwrap(), tile("b2", p), "{p}");
+    }
+}
+
+#[test]
+fn adding_a_region_on_a_build_the_server_no_longer_has_moves_the_device_to_the_current_one() {
+    let srv = Server::start();
+    let t = Tmp::new("gone-add");
+    let e = on_b1_then_gone(&srv, &t.0);
+    // The index of b1 is on the device: the region is added on b1, its one new tile 404s, and the device moves to b2.
+    call(&e, "add", json!({"id": "b", "geometry": region_b()}));
+    wait("the move to b2", 20, || build_of(&e) == "b2");
+    wait_state(&e, "a", "ready");
+    wait_state(&e, "b", "ready");
+    has_b2_tiles(&t.0, &[A[0], A[1], A[2], B_ONLY]);
+    assert!(!t.0.join("tiles").join("b1").exists(), "the old build is deleted");
+    assert_eq!(call(&e, "status", json!({}))["update"], Value::Null);
+    drop(e);
+
+    // The index of b1 is not on the device either (its fetch 404s): the region goes straight into b2.
+    let srv = Server::start();
+    let t = Tmp::new("gone-add-no-index");
+    let e = on_b1_then_gone(&srv, &t.0);
+    drop(e);
+    std::fs::remove_file(t.0.join("index").join("b1.tsv")).unwrap();
+    let e = engine(&t.0, &srv, json!({}));
+    let added = call(&e, "add", json!({"id": "b", "geometry": region_b()}));
+    assert_eq!(added["tiles"], 4, "{added}");
+    wait("the move to b2", 20, || build_of(&e) == "b2");
+    wait_state(&e, "a", "ready");
+    wait_state(&e, "b", "ready");
+    has_b2_tiles(&t.0, &[A[0], A[1], A[2], B_ONLY]);
+}
+
+#[test]
+fn a_stream_tile_of_a_build_the_server_no_longer_has_moves_the_device() {
+    let srv = Server::start();
+    let t = Tmp::new("gone-stream");
+    let e = on_b1_then_gone(&srv, &t.0);
+    // Far from region a: b1's tiles there 404. The update to b2 starts; this route is answered as during an update (b1, which
+    // has nothing there).
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 15000}));
+    assert_eq!(s["ok"], false, "{s}");
+    wait("the move to b2", 20, || build_of(&e) == "b2");
+    wait_state(&e, "a", "ready");
+    has_b2_tiles(&t.0, &A);
+    // On b2 the route's tiles come.
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 15000}));
+    assert_eq!(s, json!({"fetched": 3, "missing": 0, "ok": true}));
+    drop(e);
+
+    // No regions (only streamed tiles): the device moves at once and the same stream is answered on b2.
+    let srv = Server::start();
+    srv.publish("b1");
+    let t = Tmp::new("gone-stream-no-regions");
+    let e = engine(&t.0, &srv, json!({}));
+    assert_eq!(call(&e, "stream", json!({"points": [[42.6, -113.9]], "timeout_ms": 10000}))["ok"], true);
+    assert_eq!(build_of(&e), "b1");
+    srv.publish("b2");
+    srv.unpublish("b1");
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 15000}));
+    assert_eq!(s, json!({"fetched": 3, "missing": 0, "ok": true}));
+    assert_eq!(build_of(&e), "b2");
+    has_b2_tiles(&t.0, &FAR);
+}
+
+#[test]
+fn offline_a_device_stays_on_its_build() {
+    let srv = Server::start();
+    let t = Tmp::new("gone-offline");
+    drop(on_b1_then_gone(&srv, &t.0));
+    // Nothing listens on this port: every request is refused, which says nothing about the build.
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://127.0.0.1:{}/", l.local_addr().unwrap().port())
+    };
+    let e = engine(&t.0, &srv, json!({"base_url": dead}));
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 5000}));
+    assert_eq!(s["ok"], false);
+    call(&e, "add", json!({"id": "b", "geometry": region_b()}));
+    wait_state(&e, "b", "paused");
+    std::thread::sleep(Duration::from_millis(500));
+    let st = call(&e, "status", json!({}));
+    assert_eq!(st["build"], "b1");
+    assert_eq!(st["update"], Value::Null);
+    for p in A {
+        assert_eq!(std::fs::read(tile_file(&t.0, "b1", p)).unwrap(), tile("b1", p), "{p} still there");
+    }
+    // The network off: the same, and no request at all.
+    call(&e, "set_policy", json!({"network": false}));
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 2000}));
+    assert_eq!(s["ok"], false);
+    assert_eq!(build_of(&e), "b1");
+}
+
+#[test]
+fn one_missing_tile_of_a_build_that_is_still_there_moves_nothing() {
+    let srv = Server::start();
+    srv.publish("b1");
+    let t = Tmp::new("gone-one-tile");
+    let e = engine(&t.0, &srv, json!({}));
+    call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+    wait_state(&e, "a", "ready");
+    // b2 is the current build, but b1 is still published, without two of its tiles.
+    srv.publish("b2");
+    srv.drop_tile("b1", FAR[2]);
+    srv.drop_tile("b1", B_ONLY);
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 15000}));
+    assert_eq!(s, json!({"fetched": 2, "missing": 1, "ok": false}));
+    // A region needing the other missing tile fails, as a tile the server will not give always did.
+    call(&e, "add", json!({"id": "b", "geometry": region_b()}));
+    wait_state(&e, "b", "failed");
+    std::thread::sleep(Duration::from_millis(500));
+    let st = call(&e, "status", json!({}));
+    assert_eq!(st["build"], "b1");
+    assert_eq!(st["update"], Value::Null, "no update was started");
+    assert!(!t.0.join("tiles").join("b2").exists());
+}
+
+#[test]
+fn an_update_already_under_way_is_not_started_again() {
+    let srv = Server::start();
+    srv.publish("b1");
+    let t = Tmp::new("gone-updating");
+    let e = engine(&t.0, &srv, json!({}));
+    call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+    wait_state(&e, "a", "ready");
+    // The person tapped Update to b2; one of its tiles is damaged, so the region fails in b2 and the update waits.
+    srv.publish("b2");
+    srv.damage("b2", A[2], 1000);
+    call(&e, "update", json!({}));
+    wait_state(&e, "a", "failed");
+    let before = srv.hits_of("b2", A[2]);
+    // Then b1 goes, and a route needs a tile of it: the update under way is the move, it is not started again (which would
+    // clear the region's failure and fetch the damaged tile again).
+    srv.unpublish("b1");
+    let s = call(&e, "stream", json!({"points": [[40.1, -100.15]], "timeout_ms": 15000}));
+    assert_eq!(s["ok"], false);
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(region(&e, "a")["state"], "failed");
+    assert_eq!(srv.hits_of("b2", A[2]), before, "the update was not started again");
+    let st = call(&e, "status", json!({}));
+    assert_eq!(st["build"], "b1");
+    assert_eq!(st["update"]["downloading"], true);
 }
