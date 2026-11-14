@@ -28,6 +28,7 @@ pub mod libupdate;
 pub mod nbplaces;
 pub mod nbrepeaters;
 pub mod openpool;
+pub mod ownlib;
 pub mod pdfbuild;
 pub mod pdfindex;
 pub mod qbuild;

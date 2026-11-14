@@ -1224,6 +1224,14 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "own_library_sync": {"library_dir"}
+ *   a person's own library (My books: "own": true in its cache-library.json and a folder name starting with "my-books")
+ *   made to match its packs on this device: sync conflict copies in it are removed, then, unless this device rebuilt it
+ *   before (.local/own-shard.json) and its copies.jsonl, documents.tsv and shard hold exactly the packs, a new shard is
+ *   made from the packs' own vectors and the lists from the packs, swapped in by the Add PDF commit journal (all or
+ *   nothing); the device keyword index is removed for index_library to build again. Any other library is left alone.
+ *   "detail": {"own","rebuilt","reason","books","points","conflicts_removed":[paths],"unreadable":[...]}. busy while an
+ *   Add PDF or an update writes the library. See src/ownlib.rs.
  * kind "zim_pdfs": {"zim_path"}
  *   the list cs_zim_pdfs gives, made on the job's thread (the ZIM is opened by path; "zim_name" is its metadata Name, else the
  *   file name). Progress is directory entries looked at, of all; when done the progress JSON adds "result" (the list).

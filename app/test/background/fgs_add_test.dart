@@ -469,6 +469,13 @@ void main() {
       expect(FgsProgress.of({'a'}, [job])!.library, 'Bookshelves');
     });
 
+    test('two libraries that both say own_default (an old device made My books again): the same one is Bookshelves everywhere', () {
+      final second = lib('my-books-2', {'library_id': 'my-books-b', 'own': true, 'own_default': true});
+      final first = lib('my-books', {'library_id': 'my-books-z', 'own': true, 'own_default': true});
+      expect(libraryIsDefaultOnDisk(first.path), isTrue, reason: 'the folder named exactly my-books');
+      expect(libraryIsDefaultOnDisk(second.path), isFalse);
+    });
+
     test('no settings file, or one that cannot be read: the title', () {
       expect(libraryIsDefaultOnDisk('${tmp.path}/none'), isFalse);
       final bad = Directory('${tmp.path}/bad')..createSync();

@@ -253,6 +253,7 @@ impl Job {
             "unpack_library" => Self::start_unpack_library(params_json),
             "check_library" => Self::start_check_library(params_json),
             "library_template" => Self::start_library_template(params_json),
+            "own_library_sync" => Self::start_own_library_sync(params_json),
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
@@ -669,6 +670,25 @@ impl Job {
         let settings = p.settings;
         Self::spawn("cs-check-library", (), 1, move |sh| {
             let d = libadd::check_library(&lib, settings.as_ref())?;
+            if let Ok(mut g) = sh.detail.lock() {
+                *g = Some(d);
+            }
+            sh.set_progress(1, 1);
+            Ok(Outcome::Done)
+        })
+    }
+
+    /// Start an `own_library_sync` job: `{"library_dir"}`, a person's own library (My books) made to match its packs on this device
+    /// (`ownlib.rs`). The detail is `{"own","rebuilt","reason","books","points","conflicts_removed","unreadable"}`.
+    fn start_own_library_sync(params_json: &str) -> Result<Job> {
+        let p: Value = serde_json::from_str(params_json)?;
+        let dir = p.get("library_dir").and_then(Value::as_str).unwrap_or_default().to_string();
+        if dir.is_empty() {
+            return Err(Error::bad_json("library_dir must not be empty"));
+        }
+        let lib = PathBuf::from(dir);
+        Self::spawn("cs-own-library", (), 1, move |sh| {
+            let d = crate::ownlib::sync(&lib, &|| sh.cancel.load(Ordering::SeqCst))?;
             if let Ok(mut g) = sh.detail.lock() {
                 *g = Some(d);
             }
