@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import '../net/fetch.dart' show isFetchAllowed;
 
+/// A source list in a newer format than this version reads (shown with Update Cache, which goes to the update).
+const String kNewerCatalogueFormat = 'This source list is in a newer format than this version of Cache can read. Update Cache to use it.';
+
 export '../net/fetch.dart' show isLoopbackHost;
 
 /// Why a catalogue or a connector could not be used, in words for people.
@@ -142,7 +145,7 @@ class Catalogue {
     final format = json['format'];
     if (format != kCatalogueFormat) {
       throw CatalogueException(format is int && format > kCatalogueFormat
-          ? 'This source list is in a newer format than this version of Cache can read. Update Cache to use it.'
+          ? kNewerCatalogueFormat
           : 'This source list is in a format Cache does not know.');
     }
     String field(String k) {
