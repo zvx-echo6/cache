@@ -348,8 +348,12 @@ Future<FgsAddEnd> fgsAddJob({
   try {
     await s.load();
     // the notification's Resume (and Resume anyway: the low battery does not hold it) started this run
+    // Only the PDFs the notification's own Pause paused: one the person paused in the app stays paused (Pixel round 1: Resume
+    // started the owner's own paused book).
     if (resume) {
+      final mine = await takeFgsPausedIds(backgroundDir(support));
       for (final j in s.active) {
+        if (!mine.contains(j.id)) continue;
         j.pausedByPerson = false;
         if (anyway) {
           j.anyway = true;
@@ -389,9 +393,14 @@ Future<FgsAddEnd> fgsAddJob({
     final why = control.stopWhy ?? r?.why ?? 'stopped';
     // Pause: what was running is paused the way the card's Pause pauses it, so it shows "Paused by you" and the charging run leaves it
     if (why == 'person') {
+      final paused = <String>{};
       for (final j in s.active) {
-        if (ids.contains(j.id)) j.pausedByPerson = true;
+        if (!ids.contains(j.id)) continue;
+        j.pausedByPerson = true;
+        paused.add(j.id);
       }
+      // remembered (on disk: Resume is a later run, maybe another process) so Resume lifts these and no other Pause
+      await addFgsPausedIds(backgroundDir(support), paused);
     }
     await s.save();
     final jobs = s.jobs;

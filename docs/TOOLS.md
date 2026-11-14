@@ -78,6 +78,9 @@ unknown); reference article `<ZIM title>: <article title>`; video concept `<vide
 
 Nothing found: `No results found.`
 
+What it searches: every installed source except a saved video's captions, which the app's own search (Home, Videos)
+finds and the assistant does not (decided for 1.1). Captions inside a ZIM are searched.
+
 ### read
 
 ```json
@@ -486,6 +489,8 @@ the map data gives no name is called by its kind label and has `"unnamed": true`
 Errors: `nearby_empty` (with `category` and `searched_within_km`), `no_location`, `not_set_up`, `geocode_empty` (no place
 matches `near`; `error` has `query`), and `bad_arguments` (no `category`, a category with no places of that kind
 installed, a `layer_...` category no longer on the phone, an empty `near`, or a `limit` outside 1 to 10).
+
+A `near` counts only when the places data finds a place the query actually names (the geocoder's own name-match bar); a weaker match, such as one shared word, is not used. When the phone's location is known, `nearby` then centres on it and `center` reads `current location (nothing found named "<near>")`; when it is not, the answer is `geocode_empty`. `locate` uses `near` only as a bias and falls back the same way.
 
 **The user's own points.** After the pack's categories the enum has `repeater` (described "repeater = amateur radio repeaters
 from the user's imported lists") while at least one imported repeater has a position, then one category per map layer with

@@ -31,6 +31,10 @@ import UIKit
 ///   changes the phone's chosen theme, as the phone does: the car is told to load its style again and the trip goes out with
 ///   the theme's palette. `.theme_none`: no theme is picked on the phone, so the car's day or night decides it (Light by
 ///   day, Dark by night), until one of the four is picked again. `.themeburst`: five theme changes a tenth of a second apart, ending in Tactical, timed there.
+/// - `org.example.carharness.voice_saved`, `.voice_list` and `.voice_none`: "Navigate to <place> with Cache" said to Siri, as
+///   far as a simulator allows (no Siri can be spoken to here): the product's Navigate intent is performed, through its
+///   perform() (CarVoiceNavigation in CarVoiceIntents.swift), with a place name as Siri would hand it over: a recorded saved
+///   place's name ("Cabin"), a name the stand-in finds places for, and one it finds none for.
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
@@ -50,7 +54,7 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
     }
     channel = steps
     let center = CFNotificationCenterGetDarwinNotifyCenter()
-    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys)).map { "org.example.carharness." + $0 }
+    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys) + Array(voiceNames.keys)).map { "org.example.carharness." + $0 }
     for name in names {
       CFNotificationCenterAddObserver(
         center, nil,
@@ -64,6 +68,9 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   }
 
   /// The audio session's codes for a short prompt and for none ('shrt', 'none'); nothing for the system's own.
+  /// The place names the voice steps hand to the intent.
+  private static let voiceNames: [String: String] = ["voice_saved": "Cabin", "voice_list": "Coffee", "voice_none": "Nowhere"]
+
   private static let promptCodes: [String: UInt?] = ["promptshort": 0x7368_7274, "promptnone": 0x6E6F_6E65, "promptnormal": nil]
 
   private static func told(_ name: String) {
@@ -75,6 +82,13 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
       shared?.setValue(code.map { NSNumber(value: $0) }, forKey: "codeForTests")
       NSLog("%@", "harness steps: the car side answers prompts with \(code == nil ? "the system's own style" : "the style the job named") (\(shared == nil ? "CarPrompts not found" : "set"))")
       channel?.invokeMethod("prompt", arguments: nil)
+      return
+    }
+    if let said = voiceNames[word] {
+      // The product's intent, reached by its Objective-C name: this plugin is not part of the app's module.
+      let voice: NSObjectProtocol? = NSClassFromString("CarVoiceNavigation").flatMap { ($0 as AnyObject) as? NSObjectProtocol }
+      _ = voice?.perform(NSSelectorFromString("runForHarness:"), with: said as NSString)
+      NSLog("%@", "harness steps: the Navigate intent was asked for a place (\(word)) (\(voice == nil ? "CarVoiceNavigation not found" : "asked"))")
       return
     }
     if toDart.contains(word) {

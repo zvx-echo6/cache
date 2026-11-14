@@ -698,7 +698,7 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
       }));
       return;
     }
-    final wash = Paint()..color = const Color(0x66FFD54F);
+    final wash = Paint()..color = kPassageMark;
     final current = Paint()..color = const Color(0x66FF9800);
     final ring = Paint()
       ..color = const Color(0xFFF57C00)

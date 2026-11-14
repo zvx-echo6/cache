@@ -13,6 +13,12 @@ protocol CarLinkListener: AnyObject {
   func carLinkDartReady()
   func carLinkSavedChanged()
   func carLinkPins()
+  /// A place said to Siri (CarVoice.swift) found these places, or none: the car shows them to pick from, as a typed search.
+  func carLinkVoicePlaces(query: String, places: [CarPlace])
+  /// A place said to Siri has its routes open on the phone, not started: the car shows them.
+  func carLinkVoiceRoutes(_ place: CarPlace)
+  /// A place said to Siri started guidance: the car goes back to its map, where guidance shows.
+  func carLinkVoiceStarted()
 }
 
 extension CarLinkListener {
@@ -23,6 +29,9 @@ extension CarLinkListener {
   func carLinkDartReady() {}
   func carLinkSavedChanged() {}
   func carLinkPins() {}
+  func carLinkVoicePlaces(query: String, places: [CarPlace]) {}
+  func carLinkVoiceRoutes(_ place: CarPlace) {}
+  func carLinkVoiceStarted() {}
 }
 
 /// One picture of the pins, as the phone drew it: PNG bytes, and its pixels per point.
@@ -200,6 +209,19 @@ final class CarLink {
       return false
     }
     return true
+  }
+
+  /// What a place said to Siri came to, for the car scene to show (CarVoice.navigate tells it, only while a car is connected).
+  func tellVoicePlaces(query: String, places: [CarPlace]) {
+    each { $0.carLinkVoicePlaces(query: query, places: places) }
+  }
+
+  func tellVoiceRoutes(_ place: CarPlace) {
+    each { $0.carLinkVoiceRoutes(place) }
+  }
+
+  func tellVoiceStarted() {
+    each { $0.carLinkVoiceStarted() }
   }
 
   private func each(_ tell: (CarLinkListener) -> Void) {

@@ -51,6 +51,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   private var shownImperial: Bool?
   private var retry: DispatchWorkItem?
 
+  private var voiceTemplate: CPListTemplate?
   private var searchTemplate: CPSearchTemplate?
   private var searchSeq = 0
   private var searchText = ""
@@ -101,6 +102,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     pendingSearch = nil
     waiting = nil
     savedTemplate = nil
+    voiceTemplate = nil
     searchTemplate = nil
     session = nil
     onSearchAllowedChanged = nil
@@ -151,6 +153,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
         return
       }
       self.saved = CarPlace.list(answer)
+      // Their names are what Siri knows for "Navigate to <place> with Cache" (CarVoiceIntents.swift).
+      if answer != nil { CarVoiceRun.savedPlacesListed(self.saved ?? []) }
       self.showSaved()
     }
   }
@@ -302,7 +306,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
 
   // ---- the routes to a place -----------------------------------------------------------------------------------------
 
-  private func openRoutes(to place: CarPlace) {
+  /// `ask`: ask the phone for the routes; false when the phone has them open already (a place said to Siri).
+  private func openRoutes(to place: CarPlace, ask: Bool = true) {
     if previewTrip != nil {
       mapTemplate?.hideTripPreviews()
       previewTrip = nil
@@ -314,6 +319,11 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     if !previewing {
       previewing = true
       onPreviewChanged?()
+    }
+    if !ask {
+      Self.log.info("car routes: the phone has the routes open already")
+      showRoutes(CarLink.shared.trip)
+      return
     }
     Self.log.info("car routes: directions asked")
     CarLink.shared.call("directions", ["id": place.id]) { [weak self] answer in
@@ -504,6 +514,10 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
       shownResults = []
       Self.log.info("car lists: search closed")
     }
+    if let template = voiceTemplate, aTemplate === template, !isShown(template) {
+      voiceTemplate = nil
+      Self.log.info("car voice: the places list closed")
+    }
     if let template = savedTemplate, aTemplate === template, !isShown(template) {
       savedTemplate = nil
       saved = nil
@@ -511,6 +525,56 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
       retry = nil
       Self.log.info("car lists: saved places closed")
     }
+  }
+
+  // ---- a place said to Siri (CarVoice.swift) -----------------------------------------------------------------------------
+
+  /// The places found for a name said to Siri, or none: as the Android car shows them (CacheCarAppService.handle: back to the
+  /// map, then the search screen with the name and what was found), here a list over the map with the name as its title, the
+  /// rows of Search, and Search's "No places found" when there are none. CarPlay's search screen cannot be given a name to show
+  /// in its box. Choosing a row opens its routes, as in Search.
+  func carLinkVoicePlaces(query: String, places: [CarPlace]) {
+    guard let interface = interface else { return }
+    if previewing { leaveRoutes() }
+    let template = CPListTemplate(title: query, sections: [])
+    let items = rows(places, imperial: CarLink.shared.trip.imperial)
+    if items.isEmpty {
+      template.emptyViewTitleVariants = [Self.noPlacesFound]
+    } else {
+      template.updateSections([CPListSection(items: items)])
+    }
+    voiceTemplate = template
+    let push: () -> Void = { [weak interface] in
+      interface?.pushTemplate(template, animated: true) { _, error in
+        if let error = error {
+          Self.log.error("car voice: the places could not be shown: \(error.localizedDescription, privacy: .public)")
+        }
+      }
+    }
+    // Over the map, whatever list was up: the one before goes first.
+    if interface.templates.count > 1 {
+      interface.popToRootTemplate(animated: false) { _, _ in push() }
+    } else {
+      push()
+    }
+    // No name in the log: the count is enough.
+    Self.log.info("car voice: places shown on the car, \(items.count) rows")
+  }
+
+  /// The routes to a place said to Siri are open on the phone, guidance not begun: CarPlay's route panel shows them.
+  func carLinkVoiceRoutes(_ place: CarPlace) {
+    guard let interface = interface else { return }
+    interface.popToRootTemplate(animated: true) { _, _ in }
+    Self.log.info("car voice: the routes are shown on the car")
+    openRoutes(to: place, ask: false)
+  }
+
+  /// Guidance began for a place said to Siri: back to the map, where CarPlay's guidance panel comes with the trip.
+  func carLinkVoiceStarted() {
+    guard let interface = interface else { return }
+    if previewing { endPreview(tellDart: false) }
+    interface.popToRootTemplate(animated: true) { _, _ in }
+    Self.log.info("car voice: guidance began, the car is back on its map")
   }
 
   // ---- what Dart pushes, and what the car allows -----------------------------------------------------------------------

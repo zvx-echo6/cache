@@ -139,6 +139,7 @@ import 'sources/sources_state.dart';
 import 'video/caption_search.dart' show CoreCaptionSearch;
 import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
+import 'browse/reader_resources.dart' show kFakeIndexedDbLicenseAsset;
 import 'browse/browse_screen.dart';
 import 'regions/ui/regions_screen.dart';
 import 'screens/models_screen.dart';
@@ -160,6 +161,10 @@ void main() {
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
+  });
+  // fake-indexeddb (inside every ZIM page the readers show) is Apache-2.0: its licence text, kept at third_party/fake-indexeddb/LICENSE.
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(['fake-indexeddb'], await rootBundle.loadString(kFakeIndexedDbLicenseAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
@@ -500,6 +505,8 @@ class _CacheAppState extends State<CacheApp> {
     bookshelves: _addPdfShelves,
     // the book is in: the Library, Catalog and Bookshelves read the libraries again
     onDone: (_) => libraries.rescan(),
+    // the person's own Pause or Resume wins over the notification's: it forgets the PDF
+    onPauseDecided: (job) => forgetFgsPausedId(backgroundDir(_supportPath ?? '.'), job.id),
     wordsPending: (path) => libraries.wordsPendingAt(path),
   );
 

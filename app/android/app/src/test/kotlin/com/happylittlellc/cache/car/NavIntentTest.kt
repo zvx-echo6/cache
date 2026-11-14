@@ -56,7 +56,7 @@ class NavIntentTest {
         })
         CarLink.setCarConnected(true)
         assertTrue(NavIntent.fromPhone(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=Made+Up+Clinic"))))
-        assertEquals(listOf(NavRequest(null, null, "Made Up Clinic", start = true)), heard)
+        assertEquals(listOf(NavRequest(null, null, "Made Up Clinic", NavKind.NAVIGATION)), heard)
     }
 
     @Test
@@ -77,11 +77,41 @@ class NavIntentTest {
         assertTrue(r.start)
     }
 
+    // Bug: "add a stop" was read as a plain navigation request, so the route was replaced. It is a stop: the route keeps its
+    // destination.
     @Test
     fun anAddressWithModeAndIntent() {
         val r = NavIntent.parse("geo:0,0?q=1600+Amphitheatre+parkway&mode=b&intent=add_a_stop")!!
         assertEquals("1600 Amphitheatre parkway", r.query)
+        assertEquals(NavKind.ADD_A_STOP, r.kind)
+        assertTrue(r.addStop)
         assertTrue(r.start)
+    }
+
+    @Test
+    fun addAStopWithCoordinatesAndAName() {
+        val r = NavIntent.parse("geo:42.6,-113.6?q=Place+1&intent=add_a_stop")!!
+        assertEquals(42.6, r.lat!!, 0.0)
+        assertEquals(-113.6, r.lon!!, 0.0)
+        assertEquals("Place 1", r.query)
+        assertEquals(NavKind.ADD_A_STOP, r.kind)
+    }
+
+    @Test
+    fun theIntentValuesGooglesPageLists() {
+        assertEquals(NavKind.NAVIGATION, NavIntent.parse("geo:0,0?q=Place+1&intent=navigation")!!.kind)
+        assertEquals(NavKind.DIRECTIONS, NavIntent.parse("geo:0,0?q=Place+1&intent=directions")!!.kind)
+        assertEquals(NavKind.ADD_A_STOP, NavIntent.parse("geo:0,0?q=Place+1&intent=add_a_stop")!!.kind)
+        // None: the page's default, navigation.
+        assertEquals(NavKind.NAVIGATION, NavIntent.parse("geo:0,0?q=Place+1")!!.kind)
+        // An unknown value: as before, a plain navigation request that starts.
+        val other = NavIntent.parse("geo:0,0?q=Place+1&intent=something_new")!!
+        assertEquals(NavKind.NAVIGATION, other.kind)
+        assertTrue(other.start)
+        assertFalse(other.addStop)
+        // Navigation and directions are not stops.
+        assertFalse(NavIntent.parse("geo:0,0?q=Place+1&intent=navigation")!!.addStop)
+        assertFalse(NavIntent.parse("geo:0,0?q=Place+1&intent=directions")!!.addStop)
     }
 
     @Test
@@ -90,6 +120,8 @@ class NavIntentTest {
         assertEquals(1.1, r.lat!!, 0.0)
         assertEquals(2.2, r.lon!!, 0.0)
         assertEquals("Starbucks on Main Street", r.query)
+        assertEquals(NavKind.NAVIGATION, r.kind)
+        assertTrue(r.start)
     }
 
     @Test

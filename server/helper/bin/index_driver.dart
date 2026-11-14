@@ -17,11 +17,13 @@ import 'pdf_zim_indexer.dart';
 /// - the polling and the "give the core the list again when a job ends" step are SourcesState._pollJobs.
 /// Beyond the keyword indexes, as on the phone (AppIndexCoreCalls and PdfIndexWork, run by its IndexScheduler):
 /// - `index_seal` for an index built before snapshots (cs_status `index.needs_seal`), and `index_source` for the EPUBs and caption
-///   files of a ZIM (`epubindex` and `captionsindex` with `needs_build`), with the same parameters; videos' captions need saved
-///   videos, which the server has none of;
+///   files of a ZIM (`epubindex` and `captionsindex` with `needs_build`), with the same parameters, and `index_source` (kind
+///   `captions`, with the videos folder) for each saved video whose `captions_index` says `needs_build` ([savedVideos], the
+///   server's own saved videos in `<docs>/videos`, read from cs_video_downloads);
 /// - the PDFs inside a ZIM that has none searchable yet (cs_status `pdfindex` is not ready): [ZimPdfIndexer] reads each PDF with
 ///   MuPDF (the pdfrx loop needs Flutter) and makes the same core calls, so the snapshot is the phone's format.
-/// Order: a ZIM or library's keyword index, then seals, then EPUBs and captions, then PDFs; one job at a time.
+/// Order: a ZIM or library's keyword index, then seals, then EPUBs and captions, then saved videos' captions, then PDFs; one job
+/// at a time.
 /// The phone's throttle has a hook here too, as far as a server has one ([HostLoad]): `index_seal`, `index_source` and the PDF loop
 /// follow the host's heat and memory (jobs through cs_job_set, the PDF loop between PDFs); with [load] null there is no yield.
 ///
@@ -30,7 +32,8 @@ import 'pdf_zim_indexer.dart';
 ///
 /// The helper is single-threaded and answers one line at a time, so a timer tick never overlaps a request.
 class IndexDriver {
-  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}, this.load, this.pdf}) : _pacer = IndexPacer(load);
+  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}, this.load, this.pdf, this.savedVideos, this.videoDir})
+      : _pacer = IndexPacer(load);
 
   final CoreDispatcher dispatcher;
 
@@ -44,6 +47,12 @@ class IndexDriver {
 
   /// The PDF reader and the indexes folder, for the PDFs inside ZIMs; null: they are not indexed.
   final PdfWork? pdf;
+
+  /// The saved videos as cs_video_downloads lists them (each with its `captions_index`); null: there are none to index.
+  final List<Map<String, dynamic>> Function()? savedVideos;
+
+  /// The saved videos' folder, which index_source reads a video's caption files from.
+  final String? videoDir;
   final IndexPacer _pacer;
 
   /// The running PDF run, and whether one is starting (it lists the ZIM's PDFs first).
@@ -297,6 +306,34 @@ class IndexDriver {
         if (id == null || _tried.contains(key) || failures.containsKey(key)) continue;
         return (source: src, kind: 'index_source', params: {...root, 'kind': sub['kind'], 'source_id': id}, key: key);
       }
+    }
+    return _nextVideoCaptions(root);
+  }
+
+  /// A saved video whose captions are not searchable yet (the phone's AppIndexCoreCalls.needs, its videos part).
+  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _nextVideoCaptions(Map<String, dynamic> root) {
+    final list = savedVideos;
+    if (list == null) return null;
+    List<Map<String, dynamic>> videos;
+    try {
+      videos = list();
+    } catch (e) {
+      log?.call('saved videos not read: $e');
+      return null;
+    }
+    for (final v in videos) {
+      final c = v['captions_index'];
+      if (c is! Map || c['needs_build'] != true) continue;
+      final id = c['source_id'];
+      if (id is! String || id.isEmpty) continue;
+      final key = 'captions/$id';
+      if (_tried.contains(key) || failures.containsKey(key)) continue;
+      return (
+        source: {'path': key},
+        kind: 'index_source',
+        params: {...root, 'kind': 'captions', 'source_id': id, 'video_dir': ?videoDir},
+        key: key,
+      );
     }
     return null;
   }

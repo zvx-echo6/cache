@@ -1161,16 +1161,16 @@ mod tests {
 
     #[test]
     fn missing_library_does_not_fail_the_handle() {
-        let mut h = Handle::open(r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","index_dir":"/x/i"}]}"#).unwrap();
+        let mut h = Handle::open(r#"{"sources":[{"kind":"library","path":"/nonexistent/field","index_dir":"/x/i"}]}"#).unwrap();
         let v: Value = serde_json::from_str(&h.status_json()).unwrap();
         let s = &v["sources"][0];
         assert_eq!(s["kind"], "library");
         assert_eq!(s["indexed"], false);
-        assert_eq!(s["title"], "recon");
+        assert_eq!(s["title"], "field");
         assert!(s["id"].is_null());
         assert_eq!(s["error"]["code"], "not_found");
         // bad settings are a whole-call failure
-        let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","settings":{"library_id":"r"}}]}"#;
+        let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/field","settings":{"library_id":"r"}}]}"#;
         assert_eq!(h.set_sources(bad).unwrap_err().code, ErrorCode::BadJson);
         assert_eq!(h.sources.len(), 1);
     }

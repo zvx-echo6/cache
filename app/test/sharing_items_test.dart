@@ -342,6 +342,45 @@ void main() {
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
 
+  testWidgets("a linked device's page: Don't replace my copies from this device, off until switched on, for that device only", (tester) async {
+    final r = await tester.runAsync(_rig);
+    final s = r!.make();
+    await tester.runAsync(s.setUp);
+    for (final (id, name) in [('p1', 'Desk'), ('p2', 'Pixel')]) {
+      r.sync.peers.add({'id': id, 'name': name, 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': 'direct', 'error': null});
+    }
+    await tester.runAsync(s.refresh);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingDevicePage(sharing: s, peer: 'p1')));
+    await tester.pump();
+    final row = find.byKey(const ValueKey('device-no-replace'));
+    expect(find.descendant(of: row, matching: find.text("Don't replace my copies from this device")), findsOneWidget);
+    expect(find.descendant(of: row, matching: find.text('Newer versions from Desk never replace yours. Notebooks, places and photos arrive beside yours.')), findsOneWidget);
+    Switch sw() => tester.widget<Switch>(find.descendant(of: row, matching: find.byType(Switch)));
+    expect(sw().value, isFalse, reason: 'off unless switched on');
+    // The engine is told which folders hold things the person made (newer versions arrive beside theirs) and which the switch
+    // never touches (no folder kept with every link is in this rig).
+    expect(r.configs.last['beside'], ['notebooks']);
+    expect(r.configs.last['not_copies'], isEmpty);
+
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': true});
+    expect(sw().value, isTrue);
+    expect(s.keepsCopies('p1'), isTrue);
+    expect(s.keepsCopies('p2'), isFalse, reason: 'one linked device at a time');
+
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': false});
+    expect(sw().value, isFalse);
+
+    await tester.pumpWidget(const SizedBox());
+    s.dispose();
+    await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
+
   test("a ZIM's saved icon goes with it: off and synced with the item, never an item of its own", () async {
     final r = await _rig();
     r.sync.items['library'] = [

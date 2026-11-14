@@ -278,7 +278,8 @@ class CarBridge {
     // trip that says guidance has started goes out before the drive itself is running, so the car's request for a test
     // drive ([CarDriveSource.simulate]) counts here as well as a drive that runs.
     final f = nav.lastFix ?? (nav.guiding && (drive.simulating || drive.simulate) ? null : nav.fix);
-    final onRoute = nav.guiding && p != null && p.onRoute;
+    // After arrival no progress comes: its matched point is where the vehicle arrived, not where it is, so the fix is drawn.
+    final onRoute = nav.guiding && !nav.arrived && p != null && p.onRoute;
     final pos = onRoute ? p.matched : (f == null ? null : GeoPoint(f.lat, f.lon));
     final heading = onRoute ? p.routeBearingDeg.toDouble() : f?.heading;
     // The Maps screen asks for the route's profile only while it is shown, so the car asks too (the same route again does nothing).
@@ -400,6 +401,7 @@ class CarBridge {
           lon: (a['lon'] as num?)?.toDouble(),
           query: a['query'] as String?,
           start: a['start'] != false,
+          stop: a['stop'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -521,8 +523,17 @@ class CarBridge {
   /// A navigation request from another app or the assistant (Android Auto's `androidx.car.app.action.NAVIGATE` with a `geo:`
   /// address): coordinates go straight to directions; a name that is a saved place does too; any other name comes back as the
   /// places found, for the driver to pick. [start] begins guidance once the route is ready (`intent=navigation`), otherwise the
-  /// route is only shown (`intent=directions`).
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true}) async {
+  /// route is only shown (`intent=directions`). The same request comes from Siri on an iPhone
+  /// (`Navigate to <place> with Cache`, app/ios/Runner/CarPlay/CarVoice.swift), which says the place's [MapPlace.name] and
+  /// shows its routes from the answer's `name`, `lat` and `lon`.
+  ///
+  /// [stop] (`intent=add_a_stop`) during a drive, or while a route is shown before Start, adds the place as a stop, as the
+  /// car's own Add stop does (the next stop during a drive, after the stops there are before Start): the route keeps its
+  /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
+  /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
+  /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
+    final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
@@ -532,15 +543,20 @@ class CarBridge {
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
-        return {'places': [for (final p in await search(q)) _placeOut(p)]};
+        return {'places': [for (final p in await search(q)) _placeOut(p)], if (asStop) 'forStop': true};
       }
     }
-    if (to == null) return {'places': const []};
+    if (to == null) return {'places': const [], if (asStop) 'forStop': true};
     _placeOut(to);
+    if (asStop) {
+      final added = nav.guiding ? await nav.addStopWhileGuiding(to) : await nav.addStop(to);
+      if (added) await push();
+      return {'started': nav.guiding, 'id': to.id, 'added': added};
+    }
     if (nav.guiding) await nav.end();
     await nav.openDirections(to);
     if (start && nav.route != null) await nav.start();
-    return {'started': nav.guiding, 'id': to.id};
+    return {'started': nav.guiding, 'id': to.id, 'name': to.name, 'lat': to.lat, 'lon': to.lon};
   }
 }
 

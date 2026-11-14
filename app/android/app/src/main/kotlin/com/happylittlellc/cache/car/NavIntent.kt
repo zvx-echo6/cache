@@ -8,9 +8,28 @@ import java.net.URLDecoder
  * A navigation request (quality rule NF-6): `androidx.car.app.action.NAVIGATE` with a `geo:` address, as Gemini, the Google
  * Assistant and other apps send it ("geo:0,0?q=Googleplex", "geo:1.1,2.2?q=Starbucks&mode=w&intent=navigation").
  *
- * [start] is false for `intent=directions` (show the route without starting).
+ * [kind] is the request's `intent` value ([NavKind]); [start] is false for `intent=directions` (show the route without starting).
  */
-data class NavRequest(val lat: Double?, val lon: Double?, val query: String?, val start: Boolean)
+data class NavRequest(val lat: Double?, val lon: Double?, val query: String?, val kind: NavKind = NavKind.NAVIGATION) {
+    val start: Boolean get() = kind != NavKind.DIRECTIONS
+    val addStop: Boolean get() = kind == NavKind.ADD_A_STOP
+}
+
+/**
+ * The `intent` value of a navigation request, as Google's "Implement navigation app intents" page lists them: `navigation` (the
+ * default: replace the destination and start), `add_a_stop` (add the place as the next stop, keeping the destinations there are)
+ * and `directions` (show the route without starting). A machine format: the values are matched as they are. A missing or unknown
+ * value is [NAVIGATION], the page's default.
+ */
+enum class NavKind(val value: String) {
+    NAVIGATION("navigation"),
+    ADD_A_STOP("add_a_stop"),
+    DIRECTIONS("directions");
+
+    companion object {
+        fun of(value: String?): NavKind = entries.firstOrNull { it.value == value } ?: NAVIGATION
+    }
+}
 
 object NavIntent {
     private val coords = Regex("""^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*(?:\((.*)\))?\s*$""")
@@ -66,7 +85,7 @@ object NavIntent {
             }
         }
         if (lat == null && name == null) return null
-        return NavRequest(lat, lon, name, start = params["intent"] != "directions")
+        return NavRequest(lat, lon, name, NavKind.of(params["intent"]))
     }
 
     private fun query(s: String): Map<String, String> = s.split('&').mapNotNull { part ->

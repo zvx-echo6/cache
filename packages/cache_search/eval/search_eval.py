@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Search-quality evaluation for cache_search (standard library only). Not part of the normal test run: it needs a real
-source set (the recon library plus ZIMs) and a running `cs serve`, so it is a script, not a cargo test.
+source set (the field library plus ZIMs) and a running `cs serve`, so it is a script, not a cargo test.
 
   cs serve --config sources.json --listen 127.0.0.1:18490
   search_eval.py --url http://127.0.0.1:18490 --queries queries.json [--label hybrid] [--out result.json]
@@ -13,7 +13,7 @@ Three runs make the comparison (the sources are the same, only the ZIMs' engine 
   and any build of the core can be tried by pointing `cs serve` at it.
 
 queries.json: {"queries": [{"id","query","expect":[{"source":"<substring of the source title>","title":"<regex on the article
-title>"}], "note"}]}. Expectations were written by reading what the recon library and the ZIMs contain, each source
+title>"}], "note"}]}. Expectations were written by reading what the field library and the ZIMs contain, each source
 searched alone, never from a ranking. A result matches an expectation when its source title contains `source`
 (case-insensitive; empty matches any) and its article title (the text after "<source title>: ") matches the regex `title`
 (case-insensitive search; absent matches any). A query scores hit@k when any of the top k results matches any of its

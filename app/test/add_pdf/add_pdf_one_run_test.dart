@@ -64,14 +64,14 @@ void main() {
     final job = await addOne(s);
     final task = (await s.pending()).single;
     final first = await task.start();
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await pumpUntil(() => n == 1, what: 'the first step');
     final starts = [task.start(), task.start(), task.start()];
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await turns(50);
     gate.complete();
     final runs = await Future.wait(starts);
     expect(await first.finished, isFalse, reason: 'the earlier run stopped');
     expect(identical(runs[0], runs[1]) && identical(runs[1], runs[2]), isTrue, reason: 'one run for all three');
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await pumpUntil(() => n >= 3, what: 'the new run stepping');
     expect(mostInStep, 1, reason: 'one run steps the job, never two at once');
     expect(calls.argsOf('start'), hasLength(1));
     await s.pause(job);
@@ -112,13 +112,13 @@ void main() {
     await addOne(s);
     final task = (await s.pending()).single;
     final first = await task.start();
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await pumpUntil(() => n == 1, what: 'the first step');
     unawaited(first.pause(IndexWait.closed)); // to the back: it stops after its step
     // to the front: the scheduler asks again, tick after tick, while the step is still going
     final again = <Future<IndexRun>>[];
     for (var i = 0; i < 5; i++) {
       again.add(task.start());
-      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await turns(5);
     }
     gate.complete();
     final runs = await Future.wait(again);

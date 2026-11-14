@@ -236,6 +236,21 @@ class _HarnessAppState extends State<HarnessApp> {
           unawaited(_push());
         }
         return true;
+      case 'navigateTo':
+        // As car_bridge.dart's navigateTo, which "Navigate to <place> with Cache" (Siri) reaches: a saved place's name starts
+        // guidance and says which place; another name gives the places found: the recorded ones, or none for "Nowhere".
+        final Object? asked = call.arguments;
+        final String said = asked is Map && asked['query'] is String ? (asked['query'] as String).trim().toLowerCase() : '';
+        await _steps.invokeMethod<void>('say', 'navigateTo asked, ${said.length} characters');
+        for (final Object? p in jsonDecode(recorded['saved']!) as List) {
+          if (p is Map && (p['name'] as String).toLowerCase() == said) {
+            _phase = 2;
+            _frame = 0;
+            await _push();
+            return <String, Object?>{'started': true, 'id': p['id'], 'name': p['name'], 'lat': p['lat'], 'lon': p['lon']};
+          }
+        }
+        return <String, Object?>{'places': said == 'nowhere' ? <Object?>[] : jsonDecode(recorded['search']!)};
       case 'selectRoute':
         // The other route is the chosen one now: the trip says so and the line is drawn the other way round.
         final Object? which = call.arguments;

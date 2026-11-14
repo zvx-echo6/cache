@@ -628,5 +628,101 @@ link.setCarConnected(false)
 check(link.pins == CarPinSet.empty, "the car went: no pins and no pictures")
 link.reset()
 
+// ---- "Navigate to <place> with Cache" (CarVoice.swift): the place Siri hands over, the call to Dart, what came of it --------
+
+final class HeardVoice: CarLinkListener {
+  var places: [(String, [CarPlace])] = []
+  var routes: [CarPlace] = []
+  var started = 0
+  func carLinkVoicePlaces(query: String, places: [CarPlace]) { self.places.append((query, places)) }
+  func carLinkVoiceRoutes(_ place: CarPlace) { routes.append(place) }
+  func carLinkVoiceStarted() { started += 1 }
+}
+
+func voiceOutcome(_ place: CarVoicePlace, _ link: CarLink, wait: TimeInterval = 2) -> CarVoiceOutcome? {
+  var got: CarVoiceOutcome?
+  CarVoice.navigate(place, link: link, wait: wait) { got = $0 }
+  let end = Date().addingTimeInterval(wait + 2)
+  while got == nil && Date() < end { turn() }
+  return got
+}
+
+let said = CarVoicePlace.spoken("  Place 1 ")
+check(said.name == "Place 1" && !said.hasCoordinates, "a name Siri heard: trimmed, no coordinates")
+check(CarVoicePlace(id: said.id) == said, "a said name comes back from its identifier")
+let foundPlace = CarPlace(id: "poi:7", name: "Place 2", address: "1 Sample St", lat: 10.5, lon: 20.25, distanceM: 900)
+let foundVoice = CarVoicePlace.found(foundPlace)
+check(foundVoice.hasCoordinates && foundVoice.detail == "1 Sample St", "a place found: its coordinates and address")
+check(CarVoicePlace(id: foundVoice.id) == foundVoice, "a place found comes back from its identifier, coordinates and all")
+check(CarVoicePlace(id: "not a place") == nil && CarVoicePlace(id: "{\"name\":\"\"}") == nil, "an identifier that is no place is none")
+check(CarVoicePlace(id: "{\"name\":\"Place 3\",\"lat\":1}")?.hasCoordinates == false, "half a coordinate is none")
+
+let saidArgs = CarVoice.arguments(for: said)
+check(saidArgs["query"] as? String == "Place 1" && saidArgs["start"] as? Bool == true && saidArgs["lat"] == nil, "a name goes to Dart's navigateTo as a query, to start")
+let foundArgs = CarVoice.arguments(for: foundVoice)
+check(foundArgs["lat"] as? Double == 10.5 && foundArgs["lon"] as? Double == 20.25 && foundArgs["query"] as? String == "Place 2", "a place found goes with its coordinates and name")
+
+let searchPlaces = recorded("search.json")
+check(CarVoice.outcome(["places": searchPlaces], for: said) == .places(query: "Place 1", places: CarPlace.list(searchPlaces)), "places found: the list, with the name said")
+check(CarVoice.outcome(["places": [Any]()], for: said) == .none(query: "Place 1"), "nothing found")
+check(CarVoice.outcome(["started": true, "id": "place:1", "name": "Place 4"], for: said) == .started(name: "Place 4"), "started: the place's own name")
+check(CarVoice.outcome(["started": true, "id": "place:1"], for: said) == .started(name: "Place 1"), "started, no name in the answer: the name said")
+check(CarVoice.outcome(["started": false, "id": "place:1", "name": "Place 4", "lat": 1.5, "lon": 2.5], for: said)
+  == .routes(CarPlace(id: "place:1", name: "Place 4", address: nil, lat: 1.5, lon: 2.5, distanceM: nil)), "not started: the routes to the place")
+check(CarVoice.outcome(nil, for: said) == .noAnswer && CarVoice.outcome(["started": false], for: said) == .noAnswer, "no answer")
+
+check(CarVoice.words(.started(name: "Place 4"), carConnected: true) == "Starting the route to Place 4.", "Siri's words: started")
+check(CarVoice.words(.places(query: "Place 1", places: []), carConnected: true) == "Showing places for Place 1.", "Siri's words: places shown on the car")
+check(CarVoice.words(.places(query: "Place 1", places: []), carConnected: false) == nil, "no car: Siri asks which place in its own words")
+check(CarVoice.words(.none(query: "Place 1"), carConnected: false) == "Cache found no places for Place 1.", "Siri's words: nothing found")
+check(CarVoice.words(.noAnswer, carConnected: true) == nil && CarVoice.words(.routes(foundPlace), carConnected: true) == nil, "no words of Cache's for a failure")
+check(CarVoice.whereTo == "Where to?", "Siri's question")
+
+// Through the link, with a car connected: what Dart was asked, and what the car is told to show.
+link.reset()
+let voiceHeard = HeardVoice()
+link.addListener(voiceHeard)
+link.setCarConnected(true)
+var asked: [(String, [String: Any])] = []
+var voiceAnswer: Any? = ["places": searchPlaces]
+link.dartForTests = { method, arguments, done in
+  asked.append((method, arguments as? [String: Any] ?? [:]))
+  done(voiceAnswer)
+}
+check(voiceOutcome(said, link) == .places(query: "Place 1", places: CarPlace.list(searchPlaces)), "a name not saved: the places found")
+check(asked.count == 1 && asked[0].0 == "navigateTo" && asked[0].1["query"] as? String == "Place 1", "one navigateTo, with the name")
+check(voiceHeard.places.count == 1 && voiceHeard.places[0].0 == "Place 1" && voiceHeard.places[0].1.count == 3, "the car is told to list the three places")
+voiceAnswer = ["places": [Any]()]
+check(voiceOutcome(said, link) == .none(query: "Place 1"), "nothing found")
+check(voiceHeard.places.count == 2 && voiceHeard.places[1].1.isEmpty, "the car is told to show that no places were found")
+voiceAnswer = ["started": true, "id": "place:1", "name": "Place 1", "lat": 1.0, "lon": 2.0]
+check(voiceOutcome(said, link) == .started(name: "Place 1"), "a saved place's name: started")
+check(voiceHeard.started == 1, "the car is told guidance began")
+voiceAnswer = ["started": false, "id": "place:1", "name": "Place 1", "lat": 1.0, "lon": 2.0]
+check(voiceOutcome(said, link) == .routes(CarPlace(id: "place:1", name: "Place 1", address: nil, lat: 1, lon: 2, distanceM: nil)), "not started: the routes")
+check(voiceHeard.routes.map { $0.id } == ["place:1"], "the car is told to show the routes")
+// No car: nothing is told to a car; the outcome is the same.
+link.setCarConnected(false)
+voiceAnswer = ["places": searchPlaces]
+check(voiceOutcome(said, link) != nil && voiceHeard.places.count == 2, "no car: no list is shown on a car")
+// Dart not up: the request waits for it, then gives up.
+link.dartForTests = nil
+let began = Date()
+check(voiceOutcome(said, link, wait: 0.6) == .noAnswer, "Dart never said hello: no answer")
+check(Date().timeIntervalSince(began) >= 0.5, "it waited for Dart first")
+link.reset()
+
+// The saved places' names kept for Siri.
+let voiceDefaults = UserDefaults(suiteName: "car-voice-tests")!
+voiceDefaults.removePersistentDomain(forName: "car-voice-tests")
+let savedList = CarPlace.list(recorded("saved.json"))
+check(CarVoiceSaved.remember(savedList, voiceDefaults), "new names are kept")
+check(CarVoiceSaved.names(voiceDefaults) == savedList.map { $0.name }, "the names, in the list's order")
+check(!CarVoiceSaved.remember(savedList, voiceDefaults), "the same names again: nothing changed")
+let twice = [savedList[0], CarPlace(id: "x", name: " \(savedList[0].name.uppercased()) ", address: nil, lat: 0, lon: 0, distanceM: nil)]
+check(CarVoiceSaved.remember(twice, voiceDefaults) && CarVoiceSaved.names(voiceDefaults) == [savedList[0].name], "a name twice is kept once")
+check(CarVoiceSaved.remember([], voiceDefaults) && CarVoiceSaved.names(voiceDefaults).isEmpty, "no saved places: no names")
+voiceDefaults.removePersistentDomain(forName: "car-voice-tests")
+
 print("car link tests: \(checks - failures) of \(checks) passed")
 exit(failures == 0 ? 0 : 1)

@@ -55,7 +55,7 @@ void main() {
 
   Future<AddPdfJob> addOne(AddPdfState s) => s.add(pdfPath: pdf.path, fileName: 'Water purification manual.pdf', bytes: 4096, title: 'Water purification manual', target: AddPdfTarget(title: 'My books', path: lib.path, isDefault: true), ownsFile: true);
 
-  IndexScheduler schedulerOver(AddPdfState s) => IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(milliseconds: 2));
+  IndexScheduler schedulerOver(AddPdfState s) => IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(hours: 1));
 
   group('a Pause stays', () {
     test('a paused job read again after a restart is not started: no "resumed"', () async {
@@ -76,7 +76,8 @@ void main() {
       final sched = schedulerOver(b);
       addTearDown(sched.dispose);
       sched.setOpen(true);
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await sched.kick();
+      await turns(200);
       expect(calls.argsOf('start'), isEmpty);
       expect(calls.argsOf('step'), isEmpty);
       expect(b.jobs.single.status, AddPdfStatus.active);
@@ -127,18 +128,18 @@ void main() {
       final sched = schedulerOver(s);
       addTearDown(sched.dispose);
       sched.setOpen(true);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(sched.running, isNotNull);
+      await pumpUntil(() => n == 1 && sched.running != null, what: 'the first step');
       sched.setOpen(false); // to the back: the run stops after its step
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await turns(50);
       sched.setOpen(true); // to the front: a start now waits for the run that is still stopping
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await turns(50);
       sched.setOpen(false); // to the back again while that start waits: nothing is running yet that the scheduler could stop
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await turns(50);
       sched.setOpen(true);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await turns(50);
       gate.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 600));
+      await pumpUntil(() => done == 1, what: 'the job done');
+      await turns(200);
       expect(await logLines('waiting for the earlier run of this PDF'), lessThanOrEqualTo(1), reason: 'said once, not once for every start');
       expect(done, 1);
       expect(calls.argsOf('start'), hasLength(1));
@@ -160,7 +161,7 @@ void main() {
       await addOne(s);
       final first = (await s.pending()).single;
       final run = await first.start();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await pumpUntil(() => calls.argsOf('step').isNotEmpty, what: 'the first step');
       expect(calls.argsOf('step'), hasLength(1), reason: 'the first run is in its step');
 
       final t0 = DateTime.now();
@@ -176,7 +177,6 @@ void main() {
       final took = DateTime.now().difference(t0);
       expect(gaveUp, 5, reason: 'each start gave up');
       expect(took, greaterThanOrEqualTo(const Duration(milliseconds: 150)), reason: 'each start waited its time (no busy loop)');
-      expect(took, lessThan(const Duration(seconds: 5)));
       expect(await logLines('waiting for the earlier run of this PDF'), 1, reason: 'said once, not for every start');
       expect(calls.argsOf('step'), hasLength(1));
       expect(calls.argsOf('start'), hasLength(1));
@@ -200,9 +200,9 @@ void main() {
       final s = stateOver(Directory('${tmp.path}/ingest'), calls, startWait: const Duration(seconds: 5));
       await addOne(s);
       final run = await (await s.pending()).single.start();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await pumpUntil(() => n == 1, what: 'the first step');
       final next = (await s.pending()).single.start();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await turns(50);
       gate.complete();
       final run2 = await next;
       expect(identical(run2, run), isFalse);

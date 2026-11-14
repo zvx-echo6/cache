@@ -246,6 +246,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(zimStorageScript());
     _resolveStart();
     _learnMain();
   }
@@ -742,8 +743,8 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       initialSettings: readerSettings(customScheme: _customScheme),
       findInteractionController: _findController,
       onWebViewCreated: (c) => _web = c,
-      onLoadResourceWithCustomScheme: (controller, request) =>
-          serveCustomZimResource(_server, request.url.uriValue),
+      onLoadResourceWithCustomScheme: (controller, request) async =>
+          serveCustomZimResource(_server, request.url.uriValue, storageScript: await zimStorageScript()),
       shouldInterceptRequest: (controller, request) async {
         var r = await _server.serve(request.url.uriValue);
         // A PDF entry the page opened (a link whose path does not end in .pdf): the PDF reader shows it; the page stays.
@@ -759,7 +760,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           return WebResourceResponse(contentType: 'text/plain', statusCode: 204, reasonPhrase: 'No Content', data: Uint8List(0));
         }
         if (r.status == 200 && r.mime.split(';').first.trim() == 'text/html') {
-          r = ServedEntry(200, r.mime, utf8.encode(withoutPicturePlaceholders(utf8.decode(r.bytes, allowMalformed: true))));
+          r = ServedEntry(200, r.mime, utf8.encode(androidReaderHtml(utf8.decode(r.bytes, allowMalformed: true), await zimStorageScript())));
         }
         final text =
             r.mime.startsWith('text/') ||

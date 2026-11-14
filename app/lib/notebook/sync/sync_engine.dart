@@ -797,6 +797,11 @@ class NotebookSync {
           }
         }
       } else if (s != null) {
+        // Not read is not deleted: an entry that is still in the store (and still part of this sync) was left out of the read, so
+        // nothing is removed or written for it this round.
+        final stored = await notebook.entry(id);
+        final home = stored == null ? null : notebook.notebook(stored.notebookId);
+        if (stored != null && home != null && _included(home, stored)) continue;
         if (f == null || kind == SyncKind.logseqExport) {
           // Gone from Cache: gone from the folder too (unless only the folder had it, already gone).
           if (f == null && kind != SyncKind.logseqExport) {
