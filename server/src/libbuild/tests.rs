@@ -2851,3 +2851,13 @@ fn the_frees_figures_are_what_deleting_removes() {
     assert!(left[0]["bytes"].as_u64().unwrap() < sum, "the figures follow the removal");
     assert!(svc.libraries()[0]["bytes"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn a_library_built_here_never_takes_the_name_of_a_persons_own_library() {
+    // the share keeps a my-books... folder's shard to each device (kLibraryNotShared): a built library named so would lose its own
+    for t in ["My books", "my-books", "My Books 2"] {
+        let id = make_library_id(t);
+        assert!(id.starts_with("library-my-books"), "{t} -> {id}");
+    }
+    assert!(make_library_id("Medicine").starts_with("medicine-"));
+}

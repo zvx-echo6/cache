@@ -73,7 +73,7 @@ enum IndexAction {
     Remove,
 }
 
-struct CoreStaged {
+pub(crate) struct CoreStaged {
     lib: PathBuf,
     entry: Arc<LibEntry>,
     shard: PathBuf,
@@ -86,7 +86,7 @@ struct CoreStaged {
     _guard: UpdateGuard,
 }
 
-fn upsert(shard_dir: &Path, points: &[Point]) -> Result<()> {
+pub(crate) fn upsert(shard_dir: &Path, points: &[Point]) -> Result<()> {
     let shard = EdgeShard::load(shard_dir, None).map_err(|e| io("opening the staged shard", e))?;
     let upd = |op: PointOperations| shard.update(UpdateOperation::PointOperation(op)).map_err(|e| io("adding points", e));
     let mut batch = Vec::new();
@@ -127,6 +127,14 @@ fn remove_dir(p: &Path) {
 }
 
 fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
+    begin_write_with(library_dir, points, false)
+}
+
+/// [`begin_write`], or with `fresh` a NEW shard holding only `points` (a person's own library rebuilt from its packs, see
+/// `ownlib.rs`): the stage starts as the blank shard instead of a copy of the library's, so a shard that is missing or that a
+/// sync put together from two devices' files is never read; the device keyword index, built for the old shard, is removed
+/// (`index_library` builds it again).
+pub(crate) fn begin_write_with(library_dir: &Path, points: &[Point], fresh: bool) -> Result<CoreStaged> {
     ensure_init();
     let shard = library_dir.join("shard");
     let entry = libreg::entry_for(&shard);
@@ -138,15 +146,17 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
         }
         libupdate::recover_leftovers(&shard)?;
     }
-    if !shard.is_dir() {
-        return Err(Error::not_found(format!("library shard {} not found", shard.display())));
+    if !fresh {
+        if !shard.is_dir() {
+            return Err(Error::not_found(format!("library shard {} not found", shard.display())));
+        }
+        library::check_not_damaged(&shard, true)?;
     }
-    library::check_not_damaged(&shard, true)?;
     let index = library_dir.join(INDEX_DIR);
     let index_stage = library_dir.join(INDEX_STAGE);
     let index_old = library_dir.join(INDEX_OLD);
     // space: the copies of the shard and the index, the new points (vector and text) and the margin
-    let shard_bytes = tree_size(&shard)?;
+    let shard_bytes = if shard.is_dir() { tree_size(&shard)? } else { 0 };
     let index_bytes = if index.is_dir() { tree_size(&index)? } else { 0 };
     let new_bytes: u64 = points.iter().map(|p| (p.vector.len() * 4 + p.payload.to_string().len()) as u64 * 2).sum();
     let needed = shard_bytes.saturating_add(index_bytes).saturating_add(new_bytes).saturating_add(margin_for(shard_bytes));
@@ -181,11 +191,19 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
     };
     // from here `Drop` removes the copies on any failure
     remove_dir(&st.stage);
-    copy_tree(&st.shard, &st.stage)?;
+    if fresh {
+        crate::libadd::make_blank_shard(&st.stage)?;
+    } else {
+        copy_tree(&st.shard, &st.stage)?;
+    }
     upsert(&st.stage, points)?;
     write_segments_manifest(&st.stage)?;
     sync_tree(&st.stage)?;
-    if st.index.is_dir() {
+    if fresh {
+        if st.index.is_dir() {
+            st.index_action = IndexAction::Remove;
+        }
+    } else if st.index.is_dir() {
         let given: Option<Value> = std::fs::read_to_string(library_dir.join(SETTINGS_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok());
         let ro = library::open_shard_for_scroll(&st.stage)?;
         let settings = library::resolve_settings(&ro, &st.stage, given.as_ref())?;

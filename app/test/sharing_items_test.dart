@@ -435,6 +435,14 @@ void main() {
     // declared once: a second declaration in the app would win over the export and the two would drift apart
     expect(identical(libraries_state.kLibraryNotShared, share_rules.kLibraryNotShared), isTrue);
     expect(identical(sources_state.kZimNotShared, share_rules.kZimNotShared), isTrue);
-    expect(share_rules.kLibraryNotShared, ['*/index', '*/index-snapshots']);
+    expect(share_rules.kLibraryNotShared, [
+      '*/index',
+      '*/index-snapshots',
+      // a person's own library (My books) keeps its shard and lists to each device; only its packs, PDFs and settings sync
+      'my-books*/shard*',
+      'my-books*/copies.jsonl',
+      'my-books*/documents.tsv',
+      'my-books*/SHA256SUMS',
+    ]);
   });
 }
