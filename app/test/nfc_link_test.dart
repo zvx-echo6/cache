@@ -125,9 +125,17 @@ void main() {
   });
 
   group('iPhone', () {
-    testWidgets('the button is hidden while the flag is off, and the Android lines never show', (tester) async {
-      expect(kIosNfcEnabled, isFalse, reason: 'until the entitlement is added');
-      final r = await open(tester, NfcLink(channel: ch, platform: TargetPlatform.iOS));
+    testWidgets('the button shows when reading is available; with the flag off it is hidden; the Android lines never show', (tester) async {
+      expect(kIosNfcEnabled, isTrue, reason: 'the entitlement is in Runner.entitlements');
+      var r = await open(tester, NfcLink(channel: ch, iosEnabled: false, platform: TargetPlatform.iOS));
+      await tester.tap(find.text('Enter a link code'));
+      await tester.pumpAndSettle();
+      expect(find.text('Read by NFC'), findsNothing, reason: 'the flag is off');
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await r.dispose(tester);
+
+      r = await open(tester, NfcLink(channel: ch, platform: TargetPlatform.iOS));
       await tester.tap(find.byKey(const ValueKey('show-code')));
       await tester.pumpAndSettle();
       expect(find.text(giveLine), findsNothing);
@@ -136,7 +144,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Enter a link code'));
       await tester.pumpAndSettle();
-      expect(find.text('Read by NFC'), findsNothing);
+      expect(find.text('Read by NFC'), findsOneWidget, reason: 'the build default is on');
       expect(find.text(receiveLine), findsNothing);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();

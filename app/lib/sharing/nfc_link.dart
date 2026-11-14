@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Whether the iPhone's "Read by NFC" button is offered. False until the NFC Tag Reading capability is on the App ID and
-/// `com.apple.developer.nfc.readersession.formats` = [NDEF] is in ios/Runner/Runner.entitlements; it turns true with that entitlement.
-const kIosNfcEnabled = false;
+/// Whether the iPhone's "Read by NFC" button is offered. True together with the NFC Tag Reading capability on the App ID and
+/// `com.apple.developer.nfc.readersession.formats` = [NDEF] in ios/Runner/Runner.entitlements; the two go on and off together.
+const kIosNfcEnabled = true;
 
 /// What the phone's NFC can do right now.
 class NfcStatus {
