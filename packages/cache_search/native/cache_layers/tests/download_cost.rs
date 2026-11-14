@@ -20,8 +20,9 @@ const ARCHIVE_BOX: [f64; 4] = [-120.0, 40.0, -108.0, 50.0];
 const REGION: &str = r#""bbox":[-117,42,-111,49]"#;
 const ZMAX: u8 = 12;
 const LEAF_ENTRIES: usize = 64;
-/// Every answer of the stub takes this long, as a real host's round trip does.
-const DELAY: Duration = Duration::from_millis(3);
+/// Every answer of the stub takes this long, as a real host's round trip does (longer than storing a batch takes, as on a
+/// phone's connection).
+const DELAY: Duration = Duration::from_millis(15);
 
 fn body(z: u8, x: u32, y: u32) -> Vec<u8> {
     format!("t{z}-{x}-{y}").into_bytes()
@@ -297,5 +298,135 @@ fn an_outline_downloads_fewer_tiles_than_its_box() {
     assert_eq!(b_stored as usize, bcover.len(), "{report}");
     for &(_, z, x, y) in &pcover {
         assert_eq!(st.find(z, x, y).unwrap(), Some(Stored::Tile(body(z, x, y))));
+    }
+}
+
+#[test]
+fn a_plan_asks_the_store_one_range_query_per_zoom() {
+    let sc = Scratch::new("cost-store");
+    let a = archive();
+    let h = host(&a);
+    let first = common::engine(&sc);
+    first.save_user_def(&def("coststore", h.port)).unwrap();
+    let small = format!(r#"{{"layer":"coststore","area":"s1","bbox":[-116,43,-113,46],"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    assert!(matches!(download(&first, &small), Done::Finished));
+    let scover = AreaReq::parse(&small).unwrap().tiles(0, ZMAX).unwrap();
+    take(&h);
+
+    // A larger region over it, planned on an engine of its own (its store is opened afresh, so its count starts at 0).
+    let big = format!(r#"{{"layer":"coststore","area":"b1",{REGION},"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    let bcover = AreaReq::parse(&big).unwrap().tiles(0, ZMAX).unwrap();
+    let planner = common::engine(&sc);
+    let plan = planner.plan(&AreaReq::parse(&big).unwrap()).unwrap();
+    let st = planner.store_read("coststore").unwrap();
+    let plan_queries = st.queries();
+    // what was on the device is told right: the tiles of both regions
+    let both: std::collections::HashSet<_> = scover.iter().collect();
+    let overlap = bcover.iter().filter(|t| both.contains(t)).count();
+    assert_eq!(plan["tiles_already"], json!(overlap));
+    assert_eq!(plan["already_bytes"], json!(bcover.iter().filter(|t| both.contains(t)).map(|t| body(t.1, t.2, t.3).len()).sum::<usize>()));
+    assert_eq!(plan["tiles_to_download"], json!(bcover.len() - overlap));
+
+    // The job: its plan, then what the area holds once done.
+    let job = common::engine(&sc);
+    assert!(matches!(download(&job, &big), Done::Finished));
+    let job_queries = job.store_read("coststore").unwrap().queries();
+    let zooms = ZMAX as u64 + 1;
+    eprintln!(
+        "store queries for {} tiles: plan {plan_queries} (one a tile before: {}), job {job_queries} (before: {})",
+        bcover.len(),
+        bcover.len() + overlap,
+        2 * bcover.len() + overlap
+    );
+    assert_eq!(plan_queries, zooms, "one range query per zoom");
+    assert_eq!(job_queries, 2 * zooms, "the plan's, and the count of what the area holds at the end");
+    let held = job.store_read("coststore").unwrap();
+    assert_eq!(held.tile_count() as usize, bcover.len());
+    let area = job.areas("coststore").iter().find(|x| x.id == "b1").unwrap().meta.clone();
+    assert_eq!(area["tiles_present"], json!(bcover.len()));
+}
+
+#[test]
+fn an_outline_in_parts_downloads_their_union() {
+    let sc = Scratch::new("cost-parts");
+    let a = archive();
+    let h = host(&a);
+    let inner = common::engine(&sc);
+    inner.save_user_def(&def("costparts", h.port)).unwrap();
+    let west = "[[-117,42],[-115,43],[-116,45]]";
+    let east = "[[-113,44],[-111,45],[-112,48],[-114,47]]";
+    let req = format!(r#"{{"layer":"costparts","area":"u1","polygon":[{west},{east}],"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    let one = |ring: &str| AreaReq::parse(&format!(r#"{{"layer":"costparts","polygon":{ring}}}"#)).unwrap().tiles(0, ZMAX).unwrap();
+    let mut union: Vec<_> = one(west).into_iter().chain(one(east)).collect();
+    union.sort();
+    union.dedup();
+    let cover = AreaReq::parse(&req).unwrap().tiles(0, ZMAX).unwrap();
+    assert_eq!(cover, union, "the cover of the parts is the union of their covers");
+    assert!(matches!(download(&inner, &req), Done::Finished));
+    take(&h);
+    let st = inner.store_read("costparts").unwrap();
+    assert_eq!(st.tile_count() as usize, union.len());
+    for &(_, z, x, y) in &union {
+        assert_eq!(st.find(z, x, y).unwrap(), Some(Stored::Tile(body(z, x, y))));
+    }
+    // the stored area keeps its outline: asked again by the area alone, it is the same shape and nothing is fetched
+    assert!(matches!(download(&inner, r#"{"layer":"costparts","area":"u1"}"#), Done::Finished));
+    assert_eq!(take(&h).data, 0);
+
+    // Deleting an area keeps what another outline covers, and only that.
+    let other = format!(r#"{{"layer":"costparts","area":"o1","polygon":{east},"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    assert!(matches!(download(&inner, &other), Done::Finished));
+    let d = inner.delete_areas("costparts", Some("u1")).unwrap();
+    let east_cover = one(east);
+    assert_eq!(d["tiles_kept"], json!(east_cover.len()), "{d}");
+    assert_eq!(st.tile_count() as usize, east_cover.len());
+    for &(_, z, x, y) in &east_cover {
+        assert!(st.find(z, x, y).unwrap().is_some());
+    }
+}
+
+#[test]
+fn a_stopped_download_keeps_whole_batches_nearest_first_and_carries_on_and_an_update_swaps_in_at_the_end() {
+    let sc = Scratch::new("cost-resume");
+    let a = archive();
+    let h = host(&a);
+    let inner = common::engine(&sc);
+    inner.save_user_def(&def("costresume", h.port)).unwrap();
+    let req = format!(r#"{{"layer":"costresume","area":"c1",{REGION},"minzoom":0,"maxzoom":{ZMAX},"near":[45.5,-114.0]}}"#);
+    let areq = AreaReq::parse(&req).unwrap();
+    let cover = areq.tiles(0, ZMAX).unwrap();
+    // stopped after the second batch is stored
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let r = inner.run_download(
+        &areq,
+        &|_, _, _| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        },
+        &|| calls.load(std::sync::atomic::Ordering::SeqCst) > 2,
+    );
+    assert!(matches!(r.unwrap(), Done::Cancelled));
+    let st = inner.store_read("costresume").unwrap();
+    let mut order = cover.clone();
+    cache_layers::download::order_blocks_from(&mut order, areq.near);
+    let first: std::collections::HashSet<_> = order.iter().take(2048).map(|t| (t.1, t.2, t.3)).collect();
+    assert_eq!(st.tile_count(), 2048, "two whole batches");
+    for &(z, x, y) in &first {
+        assert!(st.find(z, x, y).unwrap().is_some(), "the nearest tiles first: z{z}/{x}/{y}");
+    }
+    take(&h);
+    // carried on: only the rest is read
+    assert!(matches!(download(&inner, &req), Done::Finished));
+    assert_eq!(st.tile_count() as usize, cover.len());
+    let rest = take(&h);
+    assert!(rest.data > 0);
+
+    // a new version: fetched into staging, swapped in when all of it is there
+    let mut d: serde_json::Value = serde_json::from_str(&def("costresume", h.port)).unwrap();
+    d["update"]["version"] = json!("2");
+    inner.save_user_def(&d.to_string()).unwrap();
+    assert!(matches!(download(&inner, r#"{"layer":"costresume","area":"c1","update":true}"#), Done::Finished));
+    assert_eq!(st.staging_count(), 0);
+    for &(_, z, x, y) in &cover {
+        assert_eq!(st.info(z, x, y).unwrap().map(|i| i.1), Some("2".to_string()), "z{z}/{x}/{y}");
     }
 }

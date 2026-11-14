@@ -97,6 +97,9 @@ class _LayersNative implements CsNative {
       case 'server':
         if (arg != null) online = (jsonDecode(arg) as Map)['online'] as bool;
         return jsonEncode({'port': port, 'base_url': 'http://127.0.0.1:$port', 'online': online});
+      case 'test_calls':
+        // What the app asked of the core so far (the jobs with their requests).
+        return jsonEncode({'calls': calls});
       case 'test_new_port':
         // The core's tile server lost its socket and the next 'server' call starts a new one on a new port.
         port = int.parse(arg!);
@@ -420,6 +423,50 @@ void main() {
     }
     await until(() => again.areasOf('hillshade').single.phase == AreaPhase.done);
     expect(again.areasOf('hillshade').single.error, isNull);
+  });
+
+  test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
+    final outline = [
+      [
+        [-113.8, 42.5],
+        [-113.66, 42.5],
+        [-113.73, 42.6],
+        [-113.8, 42.5],
+      ],
+    ];
+    Future<List<Map<String, dynamic>>> jobs() async => [
+          for (final c in ((await core.layers('test_calls'))['calls'] as List).cast<String>())
+            if (c.startsWith('job:layer_download:')) (jsonDecode(c.substring('job:layer_download:'.length)) as Map).cast<String, dynamic>(),
+        ];
+    final a = await engine.download('hillshade', home, label: 'Outline', outline: outline);
+    // The estimate was of the box (1200 tiles here); the job counts the outline's, and the bar follows the job.
+    expect(a.totalTiles, 1200);
+    final first = (await jobs()).single;
+    expect(first['polygon'], outline);
+    expect(first['bbox'], [home.west, home.south, home.east, home.north], reason: 'the box stays: the zoom was chosen for it');
+    await until(() => a.doneTiles > 0);
+    expect(a.totalTiles, 20);
+    await until(() => a.phase == AreaPhase.done);
+
+    // Closed mid-download and opened again: Update carries it on with the same outline.
+    await engine.download('hillshade', home, label: 'Cut off', outline: outline);
+    engine.dispose();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+    );
+    await again.start();
+    final stopped = again.areasOf('hillshade').firstWhere((x) => x.label == 'Cut off');
+    expect(stopped.phase, AreaPhase.failed);
+    await again.update(stopped.id);
+    expect((await jobs()).last['polygon'], outline);
+    await until(() => again.areasOf('hillshade').firstWhere((x) => x.label == 'Cut off').phase == AreaPhase.done);
+
+    // A box alone sends no outline.
+    await again.download('hillshade', home, label: 'Box');
+    expect((await jobs()).last.containsKey('polygon'), isFalse);
   });
 
   test('a download stopped in an older build, with no shape kept by the app, carries on from the shape the core stored', () async {

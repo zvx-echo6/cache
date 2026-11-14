@@ -1097,7 +1097,7 @@ char *cs_layers_remove(cs_handle *h, const char *id);
  * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
 char *cs_layers_server(cs_handle *h, const char *options_json);
 
-/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..] or [[[lon,lat],..],..] (rings, even-odd),
  * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
  * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
  * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",

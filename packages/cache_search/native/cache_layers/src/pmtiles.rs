@@ -7,7 +7,8 @@ use flate2::Compression;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const HEADER_LEN: usize = 127;
 
@@ -316,6 +317,11 @@ pub trait RangeSource: Send + Sync {
     fn read_many(&self, ranges: &[(u64, u64)]) -> Result<Vec<Vec<u8>>> {
         ranges.iter().map(|&(o, l)| self.read(o, l)).collect()
     }
+    /// Where the bytes come from (an address, a path), when two readers of it may share the directory pages they read; `None`
+    /// keeps a reader's pages its own.
+    fn id(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct FileSource(pub PathBuf);
@@ -327,6 +333,13 @@ impl RangeSource for FileSource {
         let mut buf = Vec::new();
         f.take(len).read_to_end(&mut buf).map_err(|e| io_at("reading", &self.0, e))?;
         Ok(buf)
+    }
+
+    /// The path and when the file was last written: a file written again in place is another archive.
+    fn id(&self) -> Option<String> {
+        let m = std::fs::metadata(&self.0).ok()?;
+        let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(format!("file:{}:{}:{}", self.0.display(), m.len(), t.as_nanos()))
     }
 }
 
@@ -356,13 +369,123 @@ impl RangeSource for HttpSource {
         });
         results.into_iter().collect()
     }
+
+    fn id(&self) -> Option<String> {
+        Some(self.url.clone())
+    }
+}
+
+/// The directory entries the leaf pages in memory may hold in all, for every archive and every engine of the process
+/// (24 bytes an entry: about 48 MB). Past it the pages used longest ago go, a quarter at a time. The pages were kept per
+/// reader and thrown away all at once past 1,024 pages, so a state's download read the same pages again and again.
+pub const LEAF_CACHE_ENTRIES: usize = 1 << 21;
+
+/// Threads a prefetch reads directory pages with (the source's gate keeps the requests in flight to its own limit).
+const PREFETCH_WORKERS: usize = 16;
+
+/// Leaf directory pages in memory, shared by every reader of the same archive in the process: the size estimate (on the planner
+/// engine) and the download job (on an engine of its own) read an archive's pages once between them.
+#[derive(Default)]
+struct LeafCache {
+    /// (archive, page offset) -> (entries, last used)
+    pages: HashMap<(u64, u64), (Arc<Vec<Entry>>, u64)>,
+    entries: usize,
+    tick: u64,
+}
+
+impl LeafCache {
+    fn get(&mut self, key: (u64, u64)) -> Option<Arc<Vec<Entry>>> {
+        self.tick += 1;
+        let t = self.tick;
+        self.pages.get_mut(&key).map(|p| {
+            p.1 = t;
+            p.0.clone()
+        })
+    }
+
+    fn has(&self, key: (u64, u64)) -> bool {
+        self.pages.contains_key(&key)
+    }
+
+    fn put(&mut self, key: (u64, u64), page: Arc<Vec<Entry>>) {
+        self.tick += 1;
+        self.entries += page.len();
+        if let Some(old) = self.pages.insert(key, (page, self.tick)) {
+            self.entries -= old.0.len();
+        }
+        if self.entries > LEAF_CACHE_ENTRIES {
+            let mut by_age: Vec<((u64, u64), u64)> = self.pages.iter().map(|(k, v)| (*k, v.1)).collect();
+            by_age.sort_by_key(|p| p.1);
+            for (k, _) in by_age {
+                if self.entries <= LEAF_CACHE_ENTRIES / 4 * 3 || k == key {
+                    break;
+                }
+                if let Some(p) = self.pages.remove(&k) {
+                    self.entries -= p.0.len();
+                }
+            }
+        }
+    }
+}
+
+fn leaf_cache() -> std::sync::MutexGuard<'static, LeafCache> {
+    static C: OnceLock<Mutex<LeafCache>> = OnceLock::new();
+    C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The directory pages of all archives in memory now (entries), for tests and the log.
+pub fn leaf_cache_entries() -> usize {
+    leaf_cache().entries
+}
+
+/// One merged range read of the tile data: `len` bytes from `offset` (within the tile data), holding the tiles `members` (indexes
+/// into the list of wanted tiles it was made from).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    pub offset: u64,
+    pub len: u64,
+    pub members: Vec<usize>,
+}
+
+/// The merged reads for tile ranges `want` ((offset, length) in the tile data): neighbours closer than [MAX_GAP_BYTES] share a
+/// read of at most [MAX_GROUP_BYTES]; in the order of the file.
+pub fn groups(want: &[(u64, u32)]) -> Vec<Group> {
+    let mut order: Vec<usize> = (0..want.len()).collect();
+    order.sort_by_key(|&i| want[i].0);
+    let mut groups: Vec<Group> = Vec::new();
+    for i in order {
+        let (o, l) = (want[i].0, want[i].1 as u64);
+        match groups.last_mut() {
+            Some(g) if o <= g.offset + g.len + MAX_GAP_BYTES && (o + l).max(g.offset + g.len) - g.offset <= MAX_GROUP_BYTES => {
+                g.len = (o + l).max(g.offset + g.len) - g.offset;
+                g.members.push(i);
+            }
+            _ => groups.push(Group { offset: o, len: l, members: vec![i] }),
+        }
+    }
+    groups
+}
+
+/// Each member's bytes out of a group's read, into `out` (indexed as `want`).
+pub fn split_group(g: &Group, buf: &[u8], want: &[(u64, u32)], out: &mut [Vec<u8>]) -> Result<()> {
+    for &i in &g.members {
+        let s = (want[i].0 - g.offset) as usize;
+        let e = s + want[i].1 as usize;
+        if e > buf.len() {
+            return Err(Error::bad_response("short read from the PMTiles archive"));
+        }
+        out[i] = buf[s..e].to_vec();
+    }
+    Ok(())
 }
 
 pub struct Reader {
     src: Box<dyn RangeSource>,
     pub header: Header,
     root: Vec<Entry>,
-    leaves: Mutex<HashMap<u64, Arc<Vec<Entry>>>>,
+    /// This archive's key in the shared page cache: its source and the layout its header gives (a new build at the same
+    /// address has another), or a key of its own when the source has no id.
+    archive: u64,
 }
 
 impl Reader {
@@ -375,7 +498,20 @@ impl Reader {
             src.read(header.root_offset, header.root_len)?
         };
         let root = parse_dir(&decompress(&root_raw, header.internal_compression)?)?;
-        Ok(Reader { src, header, root, leaves: Mutex::new(HashMap::new()) })
+        let archive = match src.id() {
+            Some(id) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                id.hash(&mut h);
+                first[..HEADER_LEN].hash(&mut h);
+                h.finish() & !(1 << 63)
+            }
+            None => {
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                (1 << 63) | NEXT.fetch_add(1, Ordering::Relaxed)
+            }
+        };
+        Ok(Reader { src, header, root, archive })
     }
 
     pub fn open_file(path: &Path) -> Result<Reader> {
@@ -392,16 +528,12 @@ impl Reader {
     }
 
     fn leaf(&self, e: &Entry) -> Result<Arc<Vec<Entry>>> {
-        if let Some(l) = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?.get(&e.offset) {
-            return Ok(l.clone());
+        if let Some(l) = leaf_cache().get((self.archive, e.offset)) {
+            return Ok(l);
         }
         let raw = self.src.read(self.header.leaf_offset + e.offset, e.length as u64)?;
         let l = Arc::new(parse_dir(&decompress(&raw, self.header.internal_compression)?)?);
-        let mut g = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
-        if g.len() > 1024 {
-            g.clear();
-        }
-        g.insert(e.offset, l.clone());
+        leaf_cache().put((self.archive, e.offset), l.clone());
         Ok(l)
     }
 
@@ -427,6 +559,11 @@ impl Reader {
         self.src.read(self.header.data_offset + offset, len)
     }
 
+    /// One merged read of the tile data (see [`groups`]).
+    pub fn read_group(&self, g: &Group) -> Result<Vec<u8>> {
+        self.read_range(g.offset, g.len)
+    }
+
     /// The stored bytes of a tile (compressed as `header.tile_compression` says).
     pub fn get_raw(&self, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
         if z < self.header.min_zoom || z > self.header.max_zoom {
@@ -438,62 +575,90 @@ impl Reader {
         }
     }
 
-    /// Fetches, all at once, the first-level leaf directories the lookups of `ids` need that are not in memory yet, so a
-    /// download's lookups do not wait for one leaf request after another.
-    pub fn prefetch_leaves(&self, ids: &[u64]) -> Result<()> {
-        let mut need: Vec<Entry> = Vec::new();
-        {
-            let have = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
-            for &id in ids {
-                if let Some(e) = find(&self.root, id) {
-                    if e.run_length == 0 && !have.contains_key(&e.offset) && !need.iter().any(|n| n.offset == e.offset) {
-                        need.push(e);
+    /// Fetches the leaf directory pages the lookups of `ids` need that are not in memory yet, in parallel and level by level
+    /// (a page under a page is found once the one above it is here), so lookups do not wait for one page after another.
+    /// Returns how many pages it fetched.
+    pub fn prefetch_leaves(&self, ids: &[u64]) -> Result<usize> {
+        let mut fetched = 0;
+        for _ in 0..4 {
+            // the pages not in memory that the walk from the root reaches for these ids
+            let mut need: Vec<Entry> = Vec::new();
+            let mut seen: std::collections::HashSet<u64> = Default::default();
+            {
+                let mut c = leaf_cache();
+                for &id in ids {
+                    let mut cur: Option<Arc<Vec<Entry>>> = None;
+                    loop {
+                        let e = match &cur {
+                            None => find(&self.root, id),
+                            Some(d) => find(d, id),
+                        };
+                        match e {
+                            Some(e) if e.run_length == 0 => match c.get((self.archive, e.offset)) {
+                                Some(d) => cur = Some(d),
+                                None => {
+                                    if seen.insert(e.offset) {
+                                        need.push(e);
+                                    }
+                                    break;
+                                }
+                            },
+                            _ => break,
+                        }
                     }
                 }
             }
+            if need.is_empty() {
+                break;
+            }
+            // a few readers taking the pages one after another, so pages stay in flight up to the source's limit (its gate)
+            let next = AtomicUsize::new(0);
+            let failed: Mutex<Option<Error>> = Mutex::new(None);
+            let pol = crate::http::policy();
+            std::thread::scope(|sc| {
+                for _ in 0..PREFETCH_WORKERS.min(need.len()) {
+                    sc.spawn(|| {
+                        crate::http::with_policy(pol, || loop {
+                            if failed.lock().map(|f| f.is_some()).unwrap_or(true) {
+                                break;
+                            }
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(e) = need.get(i) else { break };
+                            let page = self.src.read(self.header.leaf_offset + e.offset, e.length as u64).and_then(|raw| decompress(&raw, self.header.internal_compression)).and_then(|d| parse_dir(&d)).map(Arc::new);
+                            match page {
+                                Ok(p) => {
+                                    let mut c = leaf_cache();
+                                    if !c.has((self.archive, e.offset)) {
+                                        c.put((self.archive, e.offset), p);
+                                    }
+                                }
+                                Err(err) => {
+                                    if let Ok(mut f) = failed.lock() {
+                                        f.get_or_insert(err);
+                                    }
+                                    break;
+                                }
+                            }
+                        })
+                    });
+                }
+            });
+            if let Some(e) = failed.into_inner().ok().flatten() {
+                return Err(e);
+            }
+            fetched += need.len();
         }
-        if need.is_empty() {
-            return Ok(());
-        }
-        let ranges: Vec<(u64, u64)> = need.iter().map(|e| (self.header.leaf_offset + e.offset, e.length as u64)).collect();
-        let raws = self.src.read_many(&ranges)?;
-        let mut g = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
-        if g.len() + need.len() > 1024 {
-            g.clear();
-        }
-        for (e, raw) in need.iter().zip(raws) {
-            g.insert(e.offset, Arc::new(parse_dir(&decompress(&raw, self.header.internal_compression)?)?));
-        }
-        Ok(())
+        Ok(fetched)
     }
 
     /// Fetch many (offset,len) tile ranges, merging neighbours into fewer reads. Result order matches input.
     pub fn read_ranges(&self, want: &[(u64, u32)]) -> Result<Vec<Vec<u8>>> {
-        let mut order: Vec<usize> = (0..want.len()).collect();
-        order.sort_by_key(|&i| want[i].0);
-        let mut groups: Vec<(u64, u64, Vec<usize>)> = Vec::new();
-        for i in order {
-            let (o, l) = (want[i].0, want[i].1 as u64);
-            match groups.last_mut() {
-                Some(g) if o <= g.0 + g.1 + MAX_GAP_BYTES && (o + l).max(g.0 + g.1) - g.0 <= MAX_GROUP_BYTES => {
-                    g.1 = (o + l).max(g.0 + g.1) - g.0;
-                    g.2.push(i);
-                }
-                _ => groups.push((o, l, vec![i])),
-            }
-        }
-        let ranges: Vec<(u64, u64)> = groups.iter().map(|g| (self.header.data_offset + g.0, g.1)).collect();
+        let gs = groups(want);
+        let ranges: Vec<(u64, u64)> = gs.iter().map(|g| (self.header.data_offset + g.offset, g.len)).collect();
         let bufs = self.src.read_many(&ranges)?;
         let mut out = vec![Vec::new(); want.len()];
-        for (g, buf) in groups.iter().zip(bufs) {
-            for &i in &g.2 {
-                let s = (want[i].0 - g.0) as usize;
-                let e = s + want[i].1 as usize;
-                if e > buf.len() {
-                    return Err(Error::bad_response("short read from the PMTiles archive"));
-                }
-                out[i] = buf[s..e].to_vec();
-            }
+        for (g, buf) in gs.iter().zip(bufs) {
+            split_group(g, &buf, want, &mut out)?;
         }
         Ok(out)
     }
