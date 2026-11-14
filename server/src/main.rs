@@ -196,6 +196,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
         helper_cfg.shim = PathBuf::from(shim);
     }
     helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
+    helper_cfg.starter_layers = Some(web.join("assets").join("packages").join("cache_search").join("layers"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
     helper_cfg.data_dir = Some(data.clone());
 

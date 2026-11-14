@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -19,6 +20,7 @@ import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
+import 'platform/byte_units.dart';
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -73,22 +75,11 @@ class AppState extends ChangeNotifier {
     Future<MemoryReading?> Function()? memory,
     Future<BenchOptions> Function()? bench,
     LlamaSession? session,
-    bool Function()? startedWithNoPhoneScreen,
     ServerModels? server,
   })  : memory = memory ?? readMemory,
         session = session ?? LlamaSession(),
         _bench = bench ?? readBenchOptions,
-        _startedWithNoPhoneScreen = startedWithNoPhoneScreen ?? _never,
         _server = server ?? (plat.isWeb ? ServerModels() : null);
-
-  static bool _never() => false;
-
-  /// Whether Cache is starting with no phone screen: Android Auto started it with the phone app closed. Asked once, when the start
-  /// would load the chosen model. Never true unless the app says so (tests and every platform but Android: never).
-  final bool Function() _startedWithNoPhoneScreen;
-
-  /// The chosen model was left out of a start with no phone screen and waits for one ([phoneScreenAppeared]).
-  bool _waitsForPhoneScreen = false;
 
   /// The bench's launch options (test APK only; off everywhere else), read at each model load.
   final Future<BenchOptions> Function() _bench;
@@ -237,30 +228,12 @@ class AppState extends ChangeNotifier {
     if (last != null) {
       for (final e in models) {
         if (e.fileName == last && !isUnsupported(e)) {
-          // The car started Cache and the phone's screen is not open: the car never asks the chat model anything, so it is
-          // not loaded for it. It rests, still the chosen model, and loads when the phone's screen first appears
-          // ([phoneScreenAppeared]) or when Ask needs it ([wake]), under the same memory gate as below.
-          if (_startedWithNoPhoneScreen()) {
-            logInfo('Model not loaded at start: the car started Cache and the phone screen is not open');
-            resting = e;
-            _waitsForPhoneScreen = true;
-            notifyListeners();
-            break;
-          }
-          // Loaded at start only when it fits the memory free now; else when Ask opens. A model loaded into a phone without
-          // room for it makes Android kill Cache (or everything else) while it answers.
-          final r = await memory();
-          final need = r == null ? null : await needOf(e);
-          if (r != null && need != null && need.total > r.room) {
-            logInfo('Model not loaded at start: it needs about ${need.total >> 20} MB, $r');
-            resting = e;
-            heldForMemory = true;
-            heldNeedMb = need.total >> 20;
-            heldFreeMb = r.room >> 20;
-            notifyListeners();
-          } else {
-            await activate(e);
-          }
+          // The chat model is never loaded at start (owner, 2026-11-13): it is the most memory Cache holds by far, and most starts
+          // (the car's, a map, the library) never ask it anything. It rests, still the chosen model, and loads when Ask opens
+          // ([wake], under the memory gate), or by Ask's own Load button.
+          logInfo('Model not loaded at start: it loads when Ask opens');
+          resting = e;
+          notifyListeners();
           break;
         }
       }
@@ -445,9 +418,9 @@ class AppState extends ChangeNotifier {
       await _unloading;
       final own = settingsFor?.call(entry) ?? ModelSettings.none;
       final sw = Stopwatch()..start();
-      logInfo('Model loads (${entry.size >> 20} MB); ${memoryNow()}', detail: entry.fileName);
+      logInfo('Model loads (${mbOf(entry.size)} MB); ${memoryNow()}', detail: entry.fileName);
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
-      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${memoryNow()}', detail: entry.fileName);
+      logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}; ${mappedFileSummary(entry.path) ?? ''}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
       final parts = prettyModelParts(info.description, fileName: entry.fileName);
       if (parts != null) {
@@ -556,7 +529,7 @@ class AppState extends ChangeNotifier {
     } finally {
       if (identical(_unloading, u)) _unloading = null;
     }
-    logInfo('Model unloaded; ${memoryNow()}');
+    logInfo('Model unloaded; ${await memorySnapshot()}');
     await _writeSettings();
   }
 
@@ -577,6 +550,15 @@ class AppState extends ChangeNotifier {
       await u;
     } finally {
       if (identical(_unloading, u)) _unloading = null;
+    }
+    // Whether the model's file is still mapped, and the memory once the allocator has had time to give pages back (measurement:
+    // the reading right after the unload can lag).
+    final mapped = mappedFileSummary(a.path);
+    if (mapped != null) logInfo('Model released: $mapped');
+    if (mapped != null && !Platform.environment.containsKey('FLUTTER_TEST')) {
+      unawaited(Future<void>.delayed(const Duration(seconds: 15), () async {
+        logInfo('Model released 15 s ago: ${mappedFileSummary(a.path) ?? ''}; ${await memorySnapshot()}');
+      }));
     }
   }
 
@@ -623,10 +605,10 @@ class AppState extends ChangeNotifier {
       final room = await memory();
       final need = room == null ? null : await needOf(r);
       if (room != null && need != null && need.total > room.room) {
-        logInfo('Model not loaded on wake: it needs about ${need.total >> 20} MB, $room');
+        logInfo('Model not loaded on wake: it needs about ${mbOf(need.total)} MB, $room');
         heldForMemory = true;
-        heldNeedMb = need.total >> 20;
-        heldFreeMb = room.room >> 20;
+        heldNeedMb = mbOf(need.total);
+        heldFreeMb = mbOf(room.room);
         notifyListeners();
         return;
       }
@@ -634,26 +616,6 @@ class AppState extends ChangeNotifier {
       if (resting != r || active != null || loading != null) return;
     }
     await activate(r);
-  }
-
-  /// The phone's screen has appeared. The chosen model that a start with no phone screen left out loads now, as it would have
-  /// at start: when it fits the memory free now ([wake]). Anything else (a model already loaded, loading or let go for memory;
-  /// a later screen) changes nothing here.
-  ///
-  /// It loads only through the memory gate. On Android the memory reading is the phone screen's own (its activity answers
-  /// it), so with no reading there is no phone screen, whatever said there was: nothing is loaded and the model goes on
-  /// waiting for a screen. (Flutter reports "resumed" before any other state that follows "detached", the state an Android
-  /// engine starts in: the car side once told an app with no phone screen that it was in the back, and that read as a screen
-  /// in front and loaded the model into whatever memory there was.)
-  Future<void> phoneScreenAppeared() async {
-    if (!_waitsForPhoneScreen) return;
-    if (await memory() == null) {
-      logInfo('Model not loaded: no phone screen answers for the free memory; it waits for one');
-      return;
-    }
-    if (!_waitsForPhoneScreen) return;
-    _waitsForPhoneScreen = false;
-    await wake();
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.

@@ -36,6 +36,10 @@ pub struct HelperConfig {
     /// The setup guide library the app bundles (`<web>/assets/assets/guide/cache-guide.cache-library` in the web build), handed to the
     /// helper as `CACHE_GUIDE_LIBRARY` when the file is there; the helper installs it so guide search has something to search.
     pub guide_package: Option<PathBuf>,
+    /// The starter map layer definitions the app bundles (`<web>/assets/packages/cache_search/layers` in the web build: hillshade,
+    /// contours, the elevation layer, imagery), handed to the helper as `CACHE_STARTER_LAYERS` when the folder is there; the helper
+    /// puts them in the core's definition folder before the core opens, as the phone does at every start.
+    pub starter_layers: Option<PathBuf>,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -56,6 +60,7 @@ impl HelperConfig {
             app_dirs: None,
             data_dir: None,
             guide_package: None,
+            starter_layers: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -250,6 +255,9 @@ impl Helper {
         }
         if let Some(guide) = self.cfg.guide_package.as_ref().filter(|g| g.is_file()) {
             cmd.env("CACHE_GUIDE_LIBRARY", guide);
+        }
+        if let Some(layers) = self.cfg.starter_layers.as_ref().filter(|d| d.is_dir()) {
+            cmd.env("CACHE_STARTER_LAYERS", layers);
         }
         // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
         // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.

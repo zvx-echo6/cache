@@ -55,7 +55,7 @@ const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
-/// The name of the heading marker image the screen adds to the style.
+/// The name of the vehicle arrow's image (the car's arrow, VehicleArrow) the screen adds to the style.
 const String kHeadingImage = 'position-heading';
 
 /// The chosen place's pin (a route's destination while it is shown): its circle's radius and the edge around it, in points.
@@ -574,7 +574,8 @@ List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
         'id': kPositionDot,
         'type': 'circle',
         'source': kPositionSource,
-        'filter': ['==', ['geometry-type'], 'Point'],
+        // The dot only while no heading was ever known: once there is one, the arrow (kPositionHeading) is the marker, as the car's.
+        'filter': ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'heading']]],
         'paint': {
           'circle-radius': kPositionDotRadius,
           'circle-color': p.css('position'),

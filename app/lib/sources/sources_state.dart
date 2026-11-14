@@ -130,6 +130,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return _retrying ?? _coreOpened.future;
   }
 
+  final Completer<Map<String, dynamic>?> _configBuilt = Completer<Map<String, dynamic>?>();
+
+  /// The sections of the cs_open config besides the sources ([openedExtra]) once they are built, before the core opens its
+  /// sources (the car's own places handle, car/car_places.dart, opens with some of them); null when they could not be built.
+  Future<Map<String, dynamic>?> whenConfigReady() => _configBuilt.future;
+
   /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
   /// starts once the core is up waits on this, so a core opened by Try again starts it too.
   Future<SearchCore> whenCoreOpen() => _everOpened.future;
@@ -186,9 +192,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// One start of the core: null (with [unavailable] saying why) when it could not open.
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
+    final clock = Stopwatch()..start();
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
       final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
+      if (!_configBuilt.isCompleted) _configBuilt.complete(extra);
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -196,6 +204,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       );
     } catch (e, stack) {
       logError('Search core startup failed', error: e, stack: stack);
+      if (!_configBuilt.isCompleted) _configBuilt.complete(null);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -206,7 +215,18 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     unavailable = null;
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
+    logInfo('Search core opened in ${clock.elapsedMilliseconds} ms (${_configs().length} sources)');
+    unawaited(_logOpenTimings(core));
     return core;
+  }
+
+  /// The core's own lines about how long its open took (the ZIM opens and the steps after them), into the log.
+  Future<void> _logOpenTimings(SearchCore core) async {
+    try {
+      for (final line in await core.openTimings()) {
+        logInfo(line);
+      }
+    } catch (_) {}
   }
 
   /// In a browser the server holds the folders, so the config sections come from it (`server.features`): the whole `extras` the

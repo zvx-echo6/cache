@@ -11,10 +11,14 @@ use serde::Deserialize;
 /// Embeds a search query: the model id and the vector, or None when it cannot.
 type QueryEmbedder = dyn Fn(&str) -> Option<(String, Vec<f32>)>;
 
-/// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite"}`.
+/// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite", "read_only"?: bool}`. `read_only` (default
+/// false) is for a second handle that only lists the saved places (the app's car handle): user.sqlite is opened read-only,
+/// saving and deleting places answer `unsupported`, and the user's map layers and lists are left out.
 #[derive(Debug, Deserialize)]
 pub struct UserCfg {
     pub db_path: String,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Default)]
@@ -130,12 +134,18 @@ impl crate::handle::Handle {
         places: Option<cache_places::PlacesCfg>,
     ) {
         if let Some(u) = user {
-            self.ext.user = Some(UserStore::new(&u.db_path));
-            self.ext.user_db = Some(u.db_path.clone());
-            self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
-            let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
-            *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
-            self.ext.map_data = Some(store);
+            if u.read_only {
+                // no live data and no map layers on such a handle, so nothing else opens the file
+                self.ext.user = Some(UserStore::read_only(&u.db_path));
+                self.set_saved_places(Box::new(UserStore::read_only(&u.db_path)));
+            } else {
+                self.ext.user = Some(UserStore::new(&u.db_path));
+                self.ext.user_db = Some(u.db_path.clone());
+                self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
+                let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
+                *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
+                self.ext.map_data = Some(store);
+            }
         }
         if let Some(l) = live {
             // the handle's own engine reads the keys the host pushed (cs_live_set_key) for a fetch whose request has none

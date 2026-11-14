@@ -913,20 +913,6 @@ void guideScreens() {
     await show(tester, NotebookEditor(notebook: n.nb, template: n.templates.byId('log')!));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('notebook-name')), 'Pump house check');
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Run time');
-    await tester.tap(find.text('Number'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-unit')), 'min');
-    await tester.tap(find.byKey(const ValueKey('field-done')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Under load');
-    await tester.tap(find.text('Yes/No'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('field-done')));
     await tester.pumpAndSettle();
     await shot(tester, 'log-editor');
 

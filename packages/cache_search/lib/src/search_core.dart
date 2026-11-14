@@ -53,6 +53,9 @@ class SearchCore {
       ];
 
   /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  /// The lines the core wrote about how long its last open took, for the app's log (empty from an older core).
+  Future<List<String>> openTimings() async => [for (final t in await _call('openTimings') as List) t as String];
+
   Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
         for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];

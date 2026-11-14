@@ -148,16 +148,34 @@ class NotebookState extends ChangeNotifier {
 
   // ---- notebooks ----
 
-  /// Makes a notebook (no [id]) or replaces its definition and switches. A name another notebook has is refused by the core.
+  /// Makes a notebook (no [id], or an id not used here yet) or replaces its definition and switches. A name another notebook has
+  /// is refused by the core.
+  ///
+  /// A notebook's fields are fixed once it exists (1.1: there is no field editor, 2026-11-13): saving one that exists keeps the
+  /// fields it has, hidden ones included, whatever [def] lists. Its name, icon, color, Due again and switches still change. A new
+  /// notebook gets [def]'s fields.
   Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef}) =>
-      _change(() async => Notebook.fromJson(await backend.call('notebook_save', {
-            'id': ?id,
-            'template': ?template,
-            'def': def.toJson(),
-            'private': ?private,
-            'map': ?map,
-            'template_ref': ?templateRef,
-          })));
+      _change(() async {
+        final have = id == null ? null : await _stored(id);
+        return Notebook.fromJson(await backend.call('notebook_save', {
+          'id': ?id,
+          'template': ?template,
+          'def': (have == null ? def : def.copyWith(fields: have.def.fields)).toJson(),
+          'private': ?private,
+          'map': ?map,
+          'template_ref': ?templateRef,
+        }));
+      });
+
+  /// Notebook [id] as the store has it now; null when there is none.
+  Future<Notebook?> _stored(String id) async {
+    try {
+      return Notebook.fromJson(await backend.call('notebook', {'id': id}));
+    } on CacheSearchException catch (e) {
+      if (e.code == 'not_found') return null;
+      rethrow;
+    }
+  }
 
   Future<void> deleteNotebook(String id) => _change(() => backend.call('notebook_delete', {'id': id}));
 

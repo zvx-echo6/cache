@@ -16,6 +16,7 @@ import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
 import 'car_overlay.dart';
+import 'car_places.dart';
 import 'car_pins.dart';
 import 'car_trip.dart';
 import 'phone_drive.dart';
@@ -24,8 +25,9 @@ import 'phone_drive.dart';
 /// iPhone build made with it, the native side is app/ios/Runner/CarPlay).
 ///
 /// One guidance runs, the phone's [NavState]. The car shows it ([carTrip], pushed as it changes) and asks it for things: places
-/// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: searches and routes go to the same core
-/// through the same [NavState] the phone screen uses, so a route started in the car shows on the phone and the other way round.
+/// to go to, directions, start, stop, mute, a test drive. Nothing is worked out twice: routes go to the same core through the
+/// same [NavState] the phone screen uses, so a route started in the car shows on the phone and the other way round. Saved places
+/// and the place search are read on a core handle of their own ([places]), so they never wait behind library work.
 ///
 /// [connected] is true while a car screen is attached. It is the hook for the phone's own view while connected (later: the
 /// phone shows the opposite view to the car's); today the phone just keeps working as it does.
@@ -46,6 +48,7 @@ class CarBridge {
     this.ready,
     this.onConnected,
     this.pins,
+    this.places,
     this.throttle = const Duration(milliseconds: 250),
   })  : _channel = channel ?? const MethodChannel('co.cache/car'),
         _glyphs = glyphs ?? MapAssets.glyphsUrl;
@@ -86,9 +89,13 @@ class CarBridge {
   final Future<String> Function() _glyphs;
   final Duration throttle;
 
-  /// Resolves once the search core is open. The car can start Cache with the phone app closed, and asks for saved places at once:
-  /// places, search and directions wait for the core (at most [readyWait]) instead of answering empty.
+  /// Resolves once the search core is open. The car can start Cache with the phone app closed: directions, start and stops wait
+  /// for the core (at most [readyWait]) instead of answering empty; so do saved places and search when there is no [places].
   final Future<void> Function()? ready;
+
+  /// The car's saved places and place search on a handle of their own (car_places.dart): they wait neither for the main core
+  /// to open its libraries nor behind its library work. Null, or when it fails: through [nav]'s backend, after [ready].
+  final CarPlaces? places;
   static const Duration readyWait = Duration(seconds: 30);
 
   /// Called when a car screen attaches: the app reads a current position (the car may have started Cache with the phone app
@@ -116,6 +123,7 @@ class CarBridge {
   String? _lastTrip;
   String? _lastRouteSig;
   String? _lastStyleKey;
+  bool _answeringStyle = false;
   bool _started = false;
 
   /// Places the car was last shown, by id, so a tap in the car picks the very place the phone found.
@@ -155,6 +163,7 @@ class CarBridge {
     maps.removeListener(_onMaps);
     _events?.cancel();
     pins?.dispose();
+    unawaited(places?.close());
     if (_started) _channel.setMethodCallHandler(null);
     connected.dispose();
   }
@@ -167,12 +176,16 @@ class CarBridge {
       _lastRouteSig = null;
       _pushedPhase = null;
       _schedule();
+      // The tile server may have lost its socket while the app was in the back: a new port reloads the car's map ([_onMaps]).
+      unawaited(maps.engine.recheckServer());
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
       unawaited(_ready().then((_) => _send('savedChanged', null)));
     } else {
       carries?.value = CarExtras.never;
+      // The car's own handle goes with the car; its next call opens it again.
+      unawaited(places?.close());
       // The car went away. A real drive goes on: the phone keeps guiding, and the car shows it again when it connects again
       // (the trip is pushed on connecting). A simulated test drive is the deliberate exception: it exists only for the car
       // (Google's review asks for it through the car), so it ends with the car session and the phone is back on its real
@@ -214,6 +227,8 @@ class CarBridge {
   String get _carStyleKey => [
         for (final u in maps.uses) u.def.id,
         'pins-${maps.pinStyle.name}',
+        // A tile server started again on a new port: the car's map must load its sources from the new one.
+        'port${maps.engine.port}',
         for (final l in maps.engine.layers) l.styleSignature,
       ].join(',');
 
@@ -237,7 +252,7 @@ class CarBridge {
   }
 
   void _onMaps() {
-    if (!connected.value) return;
+    if (!connected.value || _answeringStyle) return;
     final key = _carStyleKey;
     if (key == _lastStyleKey) return;
     _lastStyleKey = key;
@@ -325,7 +340,8 @@ class CarBridge {
   Future<Object?> _onCall(MethodCall call) async {
     final a = call.arguments is Map ? (call.arguments as Map).cast<String, Object?>() : const <String, Object?>{};
     logInfo('Car asks: ${call.method}');
-    if (const {'saved', 'search', 'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
+    // Saved places and search wait for the core only when they go through it ([_saved], [_search]).
+    if (const {'directions', 'navigateTo', 'start', 'addStop'}.contains(call.method)) await _ready();
     switch (call.method) {
       case 'connected':
         _setConnected(a['on'] == true);
@@ -411,6 +427,14 @@ class CarBridge {
       }
     }
     if (!maps.engine.ready) return null;
+    // The style must point at a tile server that answers (iOS can take its socket away while the app is in the back). A new port
+    // found here is in the style being answered, so it does not also send styleChanged.
+    _answeringStyle = true;
+    try {
+      await maps.engine.recheckServer();
+    } finally {
+      _answeringStyle = false;
+    }
     final palette = mapPaletteFor(carShows);
     // The pins' pictures follow the map's look (Tactical has its own).
     pins?.setTactical(palette.id == CacheThemeId.tactical);
@@ -432,13 +456,41 @@ class CarBridge {
   /// The saved places, as places to go to.
   Future<List<MapPlace>> savedPlaces() async {
     try {
-      final saved = await nav.backend.savedPlaces();
+      final saved = await _saved();
       logInfo('Car: ${saved.length} saved places');
       return [for (final s in saved) _savedPlace(s)];
     } catch (e, st) {
       logError('Car: saved places could not be read', error: e, stack: st);
       return const [];
     }
+  }
+
+  /// The saved places from the car's own handle, else from the main core once it is open.
+  Future<List<SavedPlaceRecord>> _saved() async {
+    final own = places;
+    if (own != null) {
+      try {
+        return await own.savedPlaces();
+      } catch (e, st) {
+        logError('Car: own places handle', error: e, stack: st);
+      }
+    }
+    await _ready();
+    return nav.backend.savedPlaces();
+  }
+
+  /// The map search by name, address and category word: on the car's own handle, else on the main core once it is open.
+  Future<MapSearchResponse> _search(String q) async {
+    final own = places;
+    if (own != null) {
+      try {
+        return await own.search(q, near: nav.here, limit: 10);
+      } catch (e, st) {
+        logError('Car: own places handle', error: e, stack: st);
+      }
+    }
+    await _ready();
+    return nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
   }
 
   static MapPlace _savedPlace(SavedPlaceRecord s) => MapPlace(
@@ -460,7 +512,7 @@ class CarBridge {
     final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
     List<MapPlace> found = const [];
     try {
-      final r = await nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
+      final r = await _search(q);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
     return [...saved, ...found].take(12).toList();

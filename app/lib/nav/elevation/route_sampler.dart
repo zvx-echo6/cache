@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 
 import 'elevation_profile.dart';
@@ -12,6 +13,29 @@ typedef RouteSample = ({double lat, double lon, double distM});
 /// Where the elevation tiles come from: the bytes of tile z/x/y (PNG or WebP, Terrarium-encoded), or null when there is none.
 abstract class DemTiles {
   Future<Uint8List?> tile(int z, int x, int y);
+}
+
+/// A browser's elevation tiles: read from Cache Server's own tile route through the page's connection (the session goes with
+/// it), as the map's tiles are. A tile that cannot be read is none.
+class HttpDemTiles implements DemTiles {
+  HttpDemTiles(this.urlTemplate, {http.Client? client}) : _client = client ?? http.Client();
+
+  /// The elevation layer's tile address with `{z}`, `{x}` and `{y}` in it.
+  final String urlTemplate;
+  final http.Client _client;
+
+  @override
+  Future<Uint8List?> tile(int z, int x, int y) async {
+    final url = urlTemplate.replaceAll('{z}', '$z').replaceAll('{x}', '$x').replaceAll('{y}', '$y');
+    try {
+      final r = await _client.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+      return r.statusCode == 200 ? r.bodyBytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void close() => _client.close();
 }
 
 /// The map's own tile server on this device (127.0.0.1): the elevation layer's downloaded tiles, and the ones viewed before.

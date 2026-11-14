@@ -273,6 +273,14 @@ The server gives the helper the package from its web build (`<web>/assets/assets
 (the steps of the phone's `LibrariesState.ensureGuide`) and replaces it when the app carries another `version`. Not done when
 `sources.json` gives the sources (that list is the operator's own).
 
+## The starter map layers
+
+The map layers the app bundles (hillshade, contour lines, the elevation layer from Mapterhorn that route elevation charts and
+off-road routing read, imagery, WorldCover and OpenFreeMap) are put in place as on a phone. The server gives the helper the folder
+from its web build (`<web>/assets/packages/cache_search/layers`, as `CACHE_STARTER_LAYERS`); before the core opens,
+`server/helper/bin/starter_layers.dart` writes each definition to `app/support/layer-defs` when it is missing or differs (the
+phone's `installStarterLayers`).
+
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`

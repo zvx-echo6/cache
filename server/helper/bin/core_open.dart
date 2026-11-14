@@ -51,7 +51,7 @@ class OpenOp implements OpHandler {
       log?.call('sources: ${sources.length} found in ${dirs.docs.path}/zims and /libraries');
     }
     final extra = serverCoreExtras(dirs);
-    log?.call('skipped on the server for now: ICU data install, starter map layers');
+    log?.call('skipped on the server for now: ICU data install');
     log?.call('core extras: ${(extra.keys.toList()..sort()).join(', ')}');
     final f = serverFeatures(extra);
     log?.call('road routing: shim ${(f['routing'] as Map)['shim']} ${(f['routing'] as Map)['available'] == true ? 'present' : 'missing (no road routing)'}; '

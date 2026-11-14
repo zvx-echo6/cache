@@ -24,7 +24,12 @@ pub struct TileServer {
     pub port: u16,
     server: Arc<Tiny>,
     stop: Arc<AtomicBool>,
+    /// False once accepting a connection has failed: the listening socket is gone and the server takes nothing more.
+    listening: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
+    /// A second handle on the listening socket, so a test can take the socket away as iOS does.
+    #[cfg(test)]
+    pub(crate) listener: std::net::TcpListener,
 }
 
 const WORKERS: usize = 8;
@@ -36,13 +41,20 @@ const RETRY_OFFLINE: &str = "5";
 
 impl TileServer {
     pub fn start(inner: Arc<Inner>) -> Result<TileServer> {
-        let server = Arc::new(Tiny::http("127.0.0.1:0").map_err(|e| Error::io(format!("cannot start the tile server: {e}")))?);
+        fn cannot(e: impl std::fmt::Display) -> Error {
+            Error::io(format!("cannot start the tile server: {e}"))
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(cannot)?;
+        #[cfg(test)]
+        let kept = listener.try_clone().map_err(cannot)?;
+        let server = Arc::new(Tiny::from_listener(listener, None).map_err(cannot)?);
         let port = server.server_addr().to_ip().map(|a| a.port()).ok_or_else(|| Error::internal("no port"))?;
         let stop = Arc::new(AtomicBool::new(false));
+        let listening = Arc::new(AtomicBool::new(true));
         let sched = Sched::new(inner.clone(), format!("http://127.0.0.1:{port}"));
         let mut threads = Vec::new();
         for i in 0..WORKERS {
-            let (s, inner, stop, sched) = (server.clone(), inner.clone(), stop.clone(), sched.clone());
+            let (s, inner, stop, sched, listening) = (server.clone(), inner.clone(), stop.clone(), sched.clone(), listening.clone());
             threads.push(
                 std::thread::Builder::new()
                     .name(format!("cs-tiles-{i}"))
@@ -54,14 +66,37 @@ impl TileServer {
                                     let _ = r;
                                 }
                                 Ok(None) => {}
-                                Err(_) => break,
+                                // tiny_http's accept loop hands over its error and ends: the listening socket is gone.
+                                Err(_) => {
+                                    listening.store(false, Ordering::Relaxed);
+                                    break;
+                                }
                             }
                         }
                     })
                     .map_err(|e| Error::internal(format!("thread: {e}")))?,
             );
         }
-        Ok(TileServer { port, server, stop, threads })
+        Ok(TileServer {
+            port,
+            server,
+            stop,
+            listening,
+            threads,
+            #[cfg(test)]
+            listener: kept,
+        })
+    }
+
+    /// True while the server still takes connections. iOS can take a suspended app's listening socket away (Apple TN2277,
+    /// "Networking and Multitasking"); the app may or may not hear of it. Heard of: accepting failed. Not heard of: the port
+    /// no longer takes a connection.
+    pub fn is_listening(&self) -> bool {
+        if !self.listening.load(Ordering::Relaxed) {
+            return false;
+        }
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)).is_ok()
     }
 
     pub fn base_url(&self) -> String {

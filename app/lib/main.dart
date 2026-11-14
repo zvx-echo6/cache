@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +18,7 @@ import 'browse/browse_state.dart';
 import 'car/car_bridge.dart';
 import 'car/car_drive.dart';
 import 'car/car_pins.dart';
+import 'car/car_places.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
@@ -123,6 +124,7 @@ import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
+import 'platform/launch_clock.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
@@ -145,7 +147,11 @@ import 'theme.dart';
 import 'keyboard.dart';
 import 'platform.dart' as plat;
 
+/// How long the launch screen waits, and on what (one log line when it lifts).
+final LaunchClock launchClock = LaunchClock(logInfo);
+
 void main() {
+  launchClock.begin();
   WidgetsFlutterBinding.ensureInitialized();
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
@@ -169,12 +175,8 @@ class CacheApp extends StatefulWidget {
 }
 
 class _CacheAppState extends State<CacheApp> {
-  late final AppState app = AppState(
-    // No phone screen by the time the start would load the chat model: on Android that is a start by the car with the phone
-    // app closed (the engine starts with no screen and only an activity says otherwise). The model then waits for the
-    // phone's screen ([_onPhoneScreen]).
-    startedWithNoPhoneScreen: () => plat.isAndroid && noPhoneScreen(WidgetsBinding.instance.lifecycleState),
-  );
+  // The chat model is never loaded at start, by the car or with the phone's screen: it loads when Ask opens (AppState.init).
+  late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
   // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
@@ -630,8 +632,12 @@ class _CacheAppState extends State<CacheApp> {
   /// The memory is logged as the model starts, to see what each takes.
   void _onChatForIndexing() {
     final on = chat.busy || app.loading != null;
-    if (on && !_modelRunning) logInfo('Model starts (${app.loading != null ? 'loading' : 'answering'}); ${memoryNow()}');
-    if (!on && _modelRunning) logInfo('Model done; ${memoryNow()}');
+    // a fresh reading (on iOS the cached one can be minutes old); the line may follow the next ones by the reading's few ms
+    if (on && !_modelRunning) {
+      final what = app.loading != null ? 'loading' : 'answering';
+      unawaited(memorySnapshot().then((m) => logInfo('Model starts ($what); $m')));
+    }
+    if (!on && _modelRunning) unawaited(memorySnapshot().then((m) => logInfo('Model done; $m')));
     _modelRunning = on;
     indexThrottle.setGenerating(on);
   }
@@ -868,6 +874,8 @@ class _CacheAppState extends State<CacheApp> {
     simulatedDrive: () => carDrive.simulating,
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
+    // One guidance line a minute in the app log while a route is followed (fixes, the core's answer, failures).
+    guidanceLogEvery: const Duration(minutes: 1),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
@@ -910,6 +918,8 @@ class _CacheAppState extends State<CacheApp> {
     };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
+    // A core call that took over two seconds is logged with its name, its wait in the core's queue and its run (no arguments).
+    CoreCallTimes.onSlow = (op, queued, ran) => logInfo(CoreCallTimes.line(op, queued, ran));
     sources.embedding = searchModel;
     // In a browser the search model is the server's: ask whether it is there (meaning search follows the answer).
     if (plat.isWeb) unawaited(searchModel.refreshServer());
@@ -925,6 +935,8 @@ class _CacheAppState extends State<CacheApp> {
         _foregroundUpdates.front();
         if (!plat.isWeb) unawaited(connections.syncAll());
         if (!plat.isWeb) unawaited(_backToFront());
+        // iOS can take the map tile server's socket away while the app is in the back: the core starts a new one if so.
+        if (!plat.isWeb) unawaited(maps.engine.recheckServer());
       },
       // The search model is let go when Cache goes to the back. Coming back to the front does not load it: opening Ask or a
       // search box does (SearchModel.aboutToSearch).
@@ -984,24 +996,32 @@ class _CacheAppState extends State<CacheApp> {
       if (call.method == 'changed') await indexThrottle.read(fresh: true);
       return null;
     });
-    // Android says memory is short: the model (the most memory by far) is let go while no answer is being written, and loads
-    // again when Ask opens. Holding it is how Cache came to be the app Android killed.
-    // The search model is let go at the same levels (and on an iOS memory warning); the next search loads it again.
+    // Memory is short (Android's onTrimMemory at the levels below, or iOS's memory warning): the chat model, by far the most memory
+    // Cache holds, is let go first while no answer is being written, and loads again when Ask opens. The search model goes only when
+    // there is no chat model to let go (or it is answering): it is much smaller, and the car's and the map's searches wait on its
+    // reload. Holding the chat model is how Cache came to be the app Android killed.
     listenMemoryTrim((level, reading) {
-      // Android 14 and later no longer send levels 10 to 19; older Androids do, and the chat model goes at once.
-      // Going to the back (UI_HIDDEN and beyond) starts the grace period of the release below.
+      // Android 14 and later no longer send levels 10 to 19; older Androids do. Going to the back (UI_HIDDEN and beyond) also starts
+      // the grace period of the background release.
       if (trimMeansBackground(level)) _modelRelease.toBackground();
-      if (releaseModelOn(level, reading)) searchModel.onTrim(level);
-      if (!releaseChatModelNowOn(level)) return;
-      if (chat.busy || app.active == null) return;
-      logInfo('Model let go (Android trim level $level, ${reading ?? 'memory unknown'}); ${memoryNow()}');
-      unawaited(app.release().then((_) => logInfo('Model let go; ${memoryNow()}')));
-    }, onWarning: searchModel.onMemoryWarning);
+      if (releaseModelOn(level, reading) || releaseChatModelNowOn(level)) {
+        unawaited(_memoryShort('Android trim level $level', () => searchModel.onTrim(level)));
+      }
+    }, onWarning: () => unawaited(_memoryShort('iOS memory warning', searchModel.onMemoryWarning)));
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
+      launchClock.coreReady();
       if (mounted) setState(() => _coreDone = true);
     });
+    // the launch screen also waits for the app's own start (settings and models read): time that too
+    void noteAppStarted() {
+      if (!app.started) return;
+      app.removeListener(noteAppStarted);
+      launchClock.appReady();
+    }
+    app.addListener(noteAppStarted);
+    noteAppStarted();
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();
@@ -1189,6 +1209,8 @@ class _CacheAppState extends State<CacheApp> {
         carries: _phoneDrive.extras,
         settings: app,
         ready: () => sources.whenCoreReady(),
+        // Saved places and the place search on a handle of their own: not behind the main core's library work.
+        places: CoreCarPlaces(config: sources.whenConfigReady),
         // The phone map's pins (notebook places, saved places, shown repeater lists) on the car's map.
         pins: CarPins.of(notebooks: notebooks, userLayers: userLayers, maps: maps),
         // A current position for the car (no prompt: the explanation answers no, so only a permission already given is used).
@@ -1253,8 +1275,15 @@ class _CacheAppState extends State<CacheApp> {
     // load ends with Cache still in the back, a new grace period starts.
     busy: () => chat.busy || app.loading != null,
     loaded: () => app.active != null,
-    release: () => app.release().then((_) => logInfo('Model let go; ${memoryNow()}')),
+    release: () => app.release().then((_) async => logInfo('Model let go; ${await memorySnapshot()}')),
     changes: Listenable.merge([chat, app]),
+  );
+
+  /// The chat model goes a while after Ask is left ([kAskIdleRelease]); an answer, a load or the prompt read ahead holds it.
+  late final AskIdleRelease _askIdleRelease = AskIdleRelease(
+    busy: () => chat.busy || app.loading != null || promptReadAhead.reading,
+    loaded: () => app.active != null,
+    release: () => app.release().then((_) async => logInfo('Model let go; ${await memorySnapshot()}')),
   );
   int? _backendGeneration;
   bool? _scheduledFor;
@@ -1327,6 +1356,7 @@ class _CacheAppState extends State<CacheApp> {
     _lifecycle.dispose();
     _foregroundUpdates.dispose();
     _modelRelease.dispose();
+    _askIdleRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
     app.removeListener(_onApp);
@@ -1377,14 +1407,27 @@ class _CacheAppState extends State<CacheApp> {
     super.dispose();
   }
 
+  /// Memory is short ([why]): the chat model is let go when one is loaded and not in use ([releaseOnMemoryShort]); otherwise
+  /// [releaseSearch] lets the search model go. The log line carries a fresh memory reading (on iOS the last one can be minutes old).
+  Future<void> _memoryShort(String why, void Function() releaseSearch) async {
+    final what = releaseOnMemoryShort(chatLoaded: app.active != null, chatBusy: chat.busy || app.loading != null);
+    if (what == MemoryShortRelease.searchModel) {
+      releaseSearch();
+      logInfo('Memory short ($why): the search model goes; ${await memorySnapshot()}');
+      return;
+    }
+    final released = app.release();
+    logInfo('Memory short ($why): the chat model goes; ${await memorySnapshot()}');
+    await released;
+    logInfo('Model let go; ${await memorySnapshot()}');
+  }
+
   /// A phone screen has come to the front for the first time: the first one of this run, or a new one after Android closed the
   /// last (on Android the app outlives its screen: platform/phone_screen.dart). What the start did for the screen it expected
   /// is done for this one.
   void _onPhoneScreen() {
     // The system bars are the screen's own (MainActivity): a new screen has not been told how to show them.
     applySystemUi(_applied);
-    // The chat model a start by the car left out loads now, as it would have at a start with the phone's screen.
-    unawaited(app.phoneScreenAppeared());
   }
 
   @override
@@ -1459,6 +1502,7 @@ class _CacheAppState extends State<CacheApp> {
           notebooks: notebookDeps,
           firstRunWizard: true,
           discoverFetch: () => fetchText(Uri.parse(kDiscoverUrl)),
+          onAskShown: _askIdleRelease.askShown,
         ),
       ),
     );

@@ -20,6 +20,8 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/vehicle_arrow.dart';
+import '../platform.dart' as plat;
 import '../maps/ui/map_widgets.dart';
 import '../platform/phone_window.dart';
 import '../maps/measure.dart';
@@ -29,6 +31,7 @@ import '../nav/elevation/route_elevation.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
+import '../nav/overview/route_snapshotter.dart';
 import '../car/phone_drive.dart';
 import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
@@ -164,7 +167,7 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
 }
 
 /// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
-/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, with its heading marker).
+/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, or the arrow once a heading is known).
 class RouteEndMark {
   const RouteEndMark({required this.lat, required this.lon, required this.reach});
 
@@ -329,7 +332,7 @@ class _MapsScreenState extends State<MapsScreen> {
   // ---- guidance: the elevation panel and the route mini map ----
 
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
-  RouteSnapshotter get _snapshotter => widget.snapshotter ?? const ChannelRouteSnapshotter();
+  RouteSnapshotter get _snapshotter => widget.snapshotter ?? platformRouteSnapshotter();
 
   /// The style the live map has (the whole-route picture is rendered from it).
   String? _styleJson;
@@ -584,7 +587,8 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
     try {
       final p = _palette;
-      await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));
+      // The car's arrow, at the map's own scale: a phone reads an added image at the screen's pixels per point, a browser at one.
+      await c.addImage(kHeadingImage, await VehicleArrow.png(p['position'], p['positionRing'], plat.isWeb ? 1.0 : screenRatio));
     } catch (_) {}
     await _pushPosition();
     _navSig = null;
@@ -839,9 +843,7 @@ class _MapsScreenState extends State<MapsScreen> {
         RouteEndMark(
           lat: fix.lat,
           lon: fix.lon,
-          reach: (fix.heading ?? _lastHeading) == null
-              ? kPositionDotReach
-              : math.max(kPositionDotReach, MapAssets.headingMarkerReach(widget.imagePixelRatio ?? MediaQuery.devicePixelRatioOf(context))),
+          reach: (fix.heading ?? _lastHeading) == null ? kPositionDotReach : math.max(kPositionDotReach, VehicleArrow.reach),
         ),
     ];
   }

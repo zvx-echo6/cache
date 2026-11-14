@@ -424,6 +424,169 @@ void main() {
     });
   });
 
+  group('a notebook\'s fields are fixed (1.1: the field editor is gone)', () {
+    // Two devices of one share, each with its own folder. What cache_sync carries from one to the other: every file but hidden
+    // ones (a name starting with "."), so `.cache/notebooks.json` stays on the device that wrote it.
+    void carry(_Rig from, _Rig to) {
+      bool hidden(String p) => p.split('/').any((c) => c.startsWith('.'));
+      for (final e in from.folder.text.entries) {
+        if (!hidden(e.key)) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!hidden(e.key)) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    Future<void> syncTo(_Rig from, _Rig to) async {
+      await from.engine.run();
+      carry(from, to);
+      await to.engine.run();
+    }
+
+    const hikes = NotebookDef(
+        name: 'Hikes', fields: [LogField(label: 'Trail', type: FieldType.text), LogField(label: 'Distance', type: FieldType.number, unit: 'mi')], quickAdd: true, sort: NotebookSort.recent);
+
+    // "Hikes" (Trail, Distance) made on both devices (as from one starter log), two entries made on A and synced to B. Then B gets a
+    // field A does not have, "Weather" (added before 1.1, as an earlier build could), with a value on Ridge, synced to A.
+    Future<(_Rig, _Rig, String, String)> twoDevices() async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final la = await a.nb.saveNotebook(template: 'log', def: hikes);
+      final lb = await b.nb.saveNotebook(template: 'log', def: hikes);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-20T09:00:00-06:00', title: 'Ridge', body: 'Steep.', values: {'f1': 'Ridge loop', 'f2': 5});
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-21T09:00:00-06:00', title: 'Lake', body: 'Calm.', values: {'f1': 'Lake trail', 'f2': 3});
+      await syncTo(a, b);
+      expect([for (final e in await b.nb.entries(lb.id)) e.values['f1']]..sort(), ['Lake trail', 'Ridge loop']);
+      final def = b.store.notebooks.firstWhere((n) => n['id'] == lb.id)['def'] as Map;
+      (def['fields'] as List).add({'fid': 'f3', 'label': 'Weather', 'type': 'text'});
+      await b.nb.reload();
+      final ridge = (await b.nb.entries(lb.id)).firstWhere((e) => e.title == 'Ridge');
+      await b.nb.saveEntry(id: ridge.id, notebookId: lb.id, occurredAt: ridge.occurredAt, title: 'Ridge', body: ridge.body, values: {...ridge.values, 'f3': 'Sunny'});
+      await syncTo(b, a);
+      return (a, b, la.id, lb.id);
+    }
+
+    String fileOf(_Rig r, String title) =>
+        r.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && !e.key.startsWith('Conflicts/') && e.value.contains('title: $title')).value;
+
+    Future<NbEntry> entryOf(_Rig r, String nb, String title) async => (await r.nb.entries(nb)).firstWhere((e) => e.title == title);
+
+    test('R1: a notebook renamed on one device is renamed on the other, which keeps its fields and every value in its field', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      // A renames the notebook and edits Lake, so a file naming the new name reaches B.
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      final lake = await entryOf(a, ida, 'Lake');
+      await a.nb.saveEntry(id: lake.id, notebookId: ida, occurredAt: lake.occurredAt, title: 'Lake', body: 'Windy.', values: lake.values);
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      final book = b.nb.notebook(idb)!;
+      expect(book.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect([for (final f in book.def.fields) (f.fid, f.label, f.hidden)], [('f1', 'Trail', false), ('f2', 'Distance', false), ('f3', 'Weather', false)],
+          reason: 'no field is made again or hidden');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3});
+      expect((await entryOf(b, idb, 'Lake')).body, 'Windy.');
+      expect((await entryOf(b, idb, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5, 'f3': 'Sunny'});
+      // B edits Ridge: its file keeps the keys both devices read.
+      final ridge = await entryOf(b, idb, 'Ridge');
+      await b.nb.saveEntry(id: ridge.id, notebookId: idb, occurredAt: ridge.occurredAt, title: 'Ridge', body: 'Steep and dry.', values: ridge.values);
+      await syncTo(b, a);
+      final text = fileOf(a, 'Ridge');
+      expect(text, contains('notebook: Hikes 2024'));
+      expect(text, contains('trail: Ridge loop'));
+      expect(text, contains('distance: 5'));
+      expect(text, contains('weather: Sunny'));
+      expect((await entryOf(a, ida, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A keeps its values in its fields');
+      expect((await entryOf(a, ida, 'Ridge')).body, 'Steep and dry.');
+      expect(a.nb.notebook(ida)!.def.fields.length, 2);
+    });
+
+    test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
+      final (a, b, id, idb) = await twoDevices();
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      expect((await entryOf(a, id, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A has no Weather field');
+      Future<void> editA(String body) async {
+        final e = await entryOf(a, id, 'Ridge');
+        await a.nb.saveEntry(id: e.id, notebookId: id, occurredAt: e.occurredAt, title: e.title, body: body, values: e.values);
+      }
+
+      Future<void> editB({String? body, Map<String, dynamic>? values}) async {
+        final e = await entryOf(b, idb, 'Ridge');
+        await b.nb.saveEntry(id: e.id, notebookId: idb, occurredAt: e.occurredAt, title: e.title, body: body ?? e.body, values: values ?? e.values);
+      }
+
+      // an edit on A (A writes the file)
+      await editA('Steep. Loose rock.');
+      await syncTo(a, b);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      // a clean merge on A: A changes the text, B a value
+      await editA('Steep. Loose rock near the top.');
+      await editB(values: {'f1': 'Ridge loop', 'f2': 6, 'f3': 'Sunny'});
+      await syncTo(b, a);
+      expect((await entryOf(a, id, 'Ridge')).values['f2'], 6);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      await syncTo(a, b);
+      // a conflict, answered with this device's version
+      await editA('Gentle.');
+      await editB(body: 'Brutal.');
+      await b.engine.run();
+      carry(b, a);
+      var ea = a.engine;
+      await ea.run();
+      expect(ea.conflicts, hasLength(1));
+      await ea.resolve(ea.conflicts.single, keepCache: true);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      await syncTo(a, b);
+      // a conflict, answered with the folder's version, then an edit here
+      await editA('Rocky.');
+      await editB(body: 'Muddy.');
+      await b.engine.run();
+      carry(b, a);
+      ea = a.engine;
+      await ea.run();
+      expect(ea.conflicts, hasLength(1));
+      await ea.resolve(ea.conflicts.single, keepCache: false);
+      await editA('Muddy, then dry.');
+      await syncTo(a, b);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      expect(fileOf(b, 'Ridge'), contains('weather: Sunny'));
+      expect((await entryOf(b, idb, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 6, 'f3': 'Sunny'});
+      expect((await entryOf(b, idb, 'Ridge')).body, 'Muddy, then dry.');
+      // one more round changes nothing
+      final ra = await a.engine.run();
+      carry(a, b);
+      final rb = await b.engine.run();
+      expect([ra.written, ra.read, rb.written, rb.read], [0, 0, 0, 0]);
+    });
+
+    test('G1: saving a notebook that exists keeps its fields, hidden ones too; a new notebook gets the fields it is given', () async {
+      final r = _Rig(SyncKind.share);
+      await r.journal();
+      final log = await r.nb.saveNotebook(
+          template: 'log',
+          def: const NotebookDef(
+              name: 'Generator test',
+              fields: [LogField(label: 'Run time', type: FieldType.number, unit: 'min'), LogField(label: 'Under load', type: FieldType.yesNo)],
+              quickAdd: true,
+              sort: NotebookSort.recent));
+      expect([for (final f in log.def.fields) f.fid], ['f1', 'f2'], reason: 'a new notebook gets its fields');
+      // a field taken out by an earlier build, hidden with its values
+      final def = r.store.notebooks.firstWhere((n) => n['id'] == log.id)['def'] as Map;
+      (def['fields'] as List).add({'fid': 'f3', 'label': 'Fuel', 'type': 'text', 'hidden': true});
+      await r.nb.reload();
+      final before = jsonEncode(r.nb.notebook(log.id)!.def.toJson()['fields']);
+      final renamed = await r.nb.saveNotebook(
+          id: log.id, def: r.nb.notebook(log.id)!.def.copyWith(name: 'Generator check', fields: const [LogField(label: 'Something new', type: FieldType.text)]));
+      expect(renamed.name, 'Generator check');
+      expect(jsonEncode(renamed.def.toJson()['fields']), before);
+      final emptied = await r.nb.saveNotebook(id: log.id, def: renamed.def.copyWith(fields: const []), map: true);
+      expect(jsonEncode(emptied.def.toJson()['fields']), before);
+      expect(emptied.map, isTrue);
+    });
+  });
+
   group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);

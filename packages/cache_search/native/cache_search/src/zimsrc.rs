@@ -162,12 +162,17 @@ impl Drop for ZimSource {
     }
 }
 
-/// Sizes in bytes of the ZIM's full-text and title index entries (0 when it has none or they cannot be read).
-fn index_sizes(zim: &Zim) -> (u64, u64) {
-    fn len_of(c: Option<Option<zim::Content<'_>>>) -> u64 {
-        c.flatten().and_then(|c| c.len().ok()).unwrap_or(0) as u64
+/// Whether the ZIM has the full-text and title index entries, and their sizes in bytes (0 when it has none or they cannot be
+/// read): `(has_ft, has_ti, ft_bytes, ti_bytes)`. Each index is looked up in the directory once (a binary search).
+fn index_facts(zim: &Zim) -> (bool, bool, u64, u64) {
+    fn facts(c: Option<Option<zim::Content<'_>>>) -> (bool, u64) {
+        let c = c.flatten();
+        let present = c.is_some();
+        (present, c.and_then(|c| c.len().ok()).unwrap_or(0) as u64)
     }
-    (len_of(zim.fulltext_index().ok()), len_of(zim.title_index().ok()))
+    let (has_ft, ft_bytes) = facts(zim.fulltext_index().ok());
+    let (has_ti, ti_bytes) = facts(zim.title_index().ok());
+    (has_ft, has_ti, ft_bytes, ti_bytes)
 }
 
 /// Opening libzim on one ZIM and building its searchers, to run on a background thread (see `ZimSource::warm_job`).
@@ -335,9 +340,7 @@ impl ZimSource {
         });
         let language = meta("Language");
         let name = meta("Name");
-        let (ft_bytes, ti_bytes) = index_sizes(&zim);
-        let has_ft = zim.fulltext_index().ok().flatten().is_some();
-        let has_ti = zim.title_index().ok().flatten().is_some();
+        let (has_ft, has_ti, ft_bytes, ti_bytes) = index_facts(&zim);
         let entries = zim.header.article_count as u64;
         let x = Arc::new(Shared {
             path: path.to_path_buf(),

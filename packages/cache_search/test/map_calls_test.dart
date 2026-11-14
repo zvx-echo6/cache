@@ -89,6 +89,19 @@ void main() {
       expect(decodePolyline6('_'), isEmpty, reason: 'a cut-off string gives what was complete');
     });
 
+    test('polyline6 of a real route west and north of the start (Kīlauea to Hilo, from Cache Server on 2026-11-13)', () {
+      // The first steps of the route's own geometry: a step west or south is negative, which the browser build once read as
+      // +2^32 millionths of a degree (no line, the camera on the whole world).
+      final pts = decodePolyline6('yoz`d@bpccgHbCqIb@cB');
+      expect(pts, hasLength(3));
+      expect(pts[0].lat, closeTo(19.429133, 1e-9));
+      expect(pts[0].lon, closeTo(-155.257106, 1e-9));
+      for (final p in pts) {
+        expect(p.lon, inInclusiveRange(-156, -155), reason: '$p');
+        expect(p.lat, inInclusiveRange(19, 20), reason: '$p');
+      }
+    });
+
     test('a search answer: the anchor town, the categories, the rows with their card details', () {
       final r = MapSearchResponse.fromJson(jsonDecode(fixture('search-pharmacy.json')) as Map<String, dynamic>);
       expect(r.query, 'pharmacy near Burley');
