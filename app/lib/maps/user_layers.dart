@@ -149,6 +149,9 @@ class UserLayersState extends ChangeNotifier {
 
   List<UserLayer> get repeaterLists => [for (final l in _all) if (l.isRepeaters) l];
 
+  /// The layer or list with [id], or null.
+  UserLayer? layerById(String id) => _all.where((l) => l.id == id).firstOrNull;
+
   /// The repeaters the map drew last, by list id and item number (a tap on the map finds its repeater here).
   final Map<(String, int), Repeater> _drawn = {};
 
