@@ -97,7 +97,7 @@ fn same_book(r: &Resolved, a: &str, b: &str) -> bool {
 #[test]
 fn lines_round_trip_and_have_the_documented_shape() {
     let all = [
-        ev(1793600000000, "phone-7", place("A", "210")).with_loc("recon/wm"),
+        ev(1793600000000, "phone-7", place("A", "210")).with_loc("field/wm"),
         ev(1793600000001, "phone-7", assign("A", "210", 1)),
         ev(1793600000002, "phone-7", same("B", "A", By::Auto, Some(0.921875))),
         ev(1793600000003, "phone-7", notsame("B", "A", By::User)),
@@ -115,7 +115,7 @@ fn lines_round_trip_and_have_the_documented_shape() {
     for e in &all {
         assert_eq!(Event::from_line(&e.to_line()).as_ref(), Some(e), "{}", e.to_line());
     }
-    assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"A","div":"210","by":"auto","loc":"recon/wm"}"#);
+    assert_eq!(all[0].to_line(), r#"{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"A","div":"210","by":"auto","loc":"field/wm"}"#);
     assert_eq!(all[1].to_line(), r#"{"v":1,"at":1793600000001,"dev":"phone-7","ev":"assign","copy":"A","div":"210","seq":1}"#);
     assert_eq!(all[2].to_line(), r#"{"v":1,"at":1793600000002,"dev":"phone-7","ev":"same","copy":"B","with":"A","by":"auto","how":"text","score":0.921875}"#);
     assert_eq!(all[3].to_line(), r#"{"v":1,"at":1793600000003,"dev":"phone-7","ev":"notsame","copy":"B","with":"A","by":"user"}"#);

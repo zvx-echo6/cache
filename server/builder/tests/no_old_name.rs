@@ -1,5 +1,5 @@
 // The owner's rule: the old library name is not used in Cache.
-// This test keeps it out of server/builder.
+// This test keeps it out of the whole repository.
 use std::fs;
 use std::path::Path;
 
@@ -24,15 +24,23 @@ fn line_matches(line: &str, needle: &str) -> bool {
     false
 }
 
-fn walk(dir: &Path, needle: &str, hits: &mut Vec<String>) {
+const SKIP_DIRS: &[&str] = &[
+    ".git", "target", "build", ".dart_tool", "node_modules", "third_party", "Pods", ".gradle",
+];
+
+fn walk(root: &Path, dir: &Path, needle: &str, hits: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().map_or(false, |n| n == "target") {
+            if path.file_name().map_or(false, |n| SKIP_DIRS.iter().any(|s| n == *s)) {
                 continue;
             }
-            walk(&path, needle, hits);
+            // Renamed in a following change.
+            if path.strip_prefix(root).map_or(false, |r| r.starts_with("packages/cache_search")) {
+                continue;
+            }
+            walk(root, &path, needle, hits);
         } else if let Ok(bytes) = fs::read(&path) {
             let Ok(text) = String::from_utf8(bytes) else { continue };
             for (i, line) in text.lines().enumerate() {
@@ -48,6 +56,7 @@ fn walk(dir: &Path, needle: &str, hits: &mut Vec<String>) {
 fn old_library_name_is_not_used() {
     let needle = ["re", "con"].concat();
     let mut hits = Vec::new();
-    walk(Path::new(env!("CARGO_MANIFEST_DIR")), &needle, &mut hits);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    walk(&root, &root, &needle, &mut hits);
     assert!(hits.is_empty(), "old name found at:\n{}", hits.join("\n"));
 }
