@@ -78,7 +78,7 @@ void main() {
     });
   });
 
-  group('the hand-off waits for the app's own run (Pixel round 3)', () {
+  group('the hand-off waits for the own run of the app (Pixel round 3)', () {
     test("Android's 'left' reaches Dart before 'hidden': the hand-off closes the index work itself and waits for the step", () async {
       final gate = Completer<void>();
       var n = 0;
