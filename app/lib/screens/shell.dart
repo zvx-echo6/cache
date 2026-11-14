@@ -518,7 +518,13 @@ class _ShellState extends State<Shell> {
           : MapPlace(id: p.address, type: 'place', name: p.title.isEmpty ? 'Place' : p.title, kind: 'Place', lat: lat, lon: lon);
     } else {
       if (!widget.nav.backend.available) {
-        _say('The map data for places is not on this device');
+        // The way out is the regions download (the Setup card's "Get your area"): its sheet for where the phone is.
+        final m = ScaffoldMessenger.of(context);
+        m.hideCurrentSnackBar();
+        m.showSnackBar(SnackBar(
+          content: const Text('The map data for places is not on this device'),
+          action: SnackBarAction(label: 'Download places', onPressed: () => mounted ? _getArea(context) : null),
+        ));
         return;
       }
       try {
