@@ -518,7 +518,7 @@ pub struct BuildService {
     ocr: Mutex<Option<OcrSettings>>,
     pub(crate) removed: Mutex<Vec<RemovedEntry>>,
     /// Libraries in which a linked-folder PDF has been built since the scheduler last looked: their linked folders are checked
-    /// again (through the scheduler, so quiet-time coalescing applies). Never held together with `st`.
+    /// again (through the scheduler, so quiet-time coalescing applies). Taken while `st` is held, never the other way round.
     linked_recheck: Mutex<BTreeSet<String>>,
     class_cache: Mutex<ClassCache>,
     /// The classifier model files in `<data>/models/`.
