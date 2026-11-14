@@ -587,6 +587,68 @@ void main() {
     });
   });
 
+  group('a notebook of more than 1000 entries loses none to sync', () {
+    void carry(_Rig from, _Rig to) {
+      for (final e in from.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    int files(_Rig r) => r.folder.text.keys.where((k) => k.endsWith('.md')).length;
+
+    Future<(_Rig, _Rig, String, String)> big(int n) async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      const def = NotebookDef(name: 'Repeaters', fields: [], sort: NotebookSort.distance);
+      final la = await a.nb.saveNotebook(template: 'notes', def: def);
+      final lb = await b.nb.saveNotebook(template: 'notes', def: def);
+      for (var i = 0; i < n; i++) {
+        await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-20T09:00:00-06:00', title: 'R$i', body: 'row $i');
+      }
+      return (a, b, la.id, lb.id);
+    }
+
+    test('1500 entries reach the other device and none is lost on later rounds, both ways', () async {
+      final (a, b, ida, idb) = await big(1500);
+      await a.engine.run();
+      expect(files(a), 1500, reason: 'every entry is written, not the first 1000');
+      carry(a, b);
+      await b.engine.run();
+      expect((await b.nb.entries(idb)).length, 1500);
+      // a second round each way changes nothing
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect(files(a), 1500);
+      expect((await a.nb.entries(ida)).length, 1500);
+      expect((await b.nb.entries(idb)).length, 1500);
+      // an edit to the last entry made on B comes back to A
+      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R1499');
+      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R1499', body: 'edited on B');
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R1499').body, 'edited on B');
+      expect((await a.nb.entries(ida)).length, 1500);
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
+    test('an entry the read did not return is never treated as deleted', () async {
+      final (a, _, ida, _) = await big(300);
+      await a.engine.run();
+      expect(files(a), 300);
+      // the read now stops short (whatever the reason): 100 of 300 come back
+      a.store.entryCap = 100;
+      final r = await a.engine.run();
+      expect(r.deleted, 0);
+      expect(files(a), 300, reason: 'no file is removed for an entry that was only not read');
+      expect(a.store.entries.where((e) => e['notebook_id'] == ida).length, 300);
+    }, timeout: const Timeout(Duration(minutes: 3)));
+  });
+
   group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);

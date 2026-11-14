@@ -75,7 +75,7 @@ fn error_json_bytes() {
 
 #[test]
 fn status_of_a_missing_zim_and_library() {
-    let cfg = cstr(r#"{"sources":[{"kind":"zim","path":"/nonexistent/a.zim"},{"kind":"library","path":"/nonexistent/recon"}]}"#);
+    let cfg = cstr(r#"{"sources":[{"kind":"zim","path":"/nonexistent/a.zim"},{"kind":"library","path":"/nonexistent/field"}]}"#);
     let h = unsafe { cs_open(cfg.as_ptr()) };
     let v: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
     // "open_timings": the lines about how long the last open took (the app writes them to its log)
@@ -155,7 +155,7 @@ fn search_read_and_library_status_order() {
 
     let r = take(unsafe { cs_search(h, cstr("sesquipedalian").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) }).unwrap();
     let v: Value = serde_json::from_str(&r).unwrap();
-    assert_eq!(keys(&v), ["results", "total_estimate", "vector_sources", "keyword_only_sources"]);
+    assert_eq!(keys(&v), ["results", "total_estimate", "vector_sources", "keyword_only_sources", "meaning_timed_out"]);
     assert_eq!(keys(&v["results"][0]), ["address", "title", "snippet", "source_id", "source_kind", "source_title", "page"]);
     assert_eq!(v["results"][0]["address"], "lib:own/3");
 

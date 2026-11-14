@@ -71,5 +71,12 @@ const List<String> kSettingsShareModes = ['match', 'send'];
 
 const List<String> kBookshelvesShareModes = ['match'];
 
+/// The shares of things the person made (cache_sync's `beside`): with "Don't replace my copies from this device" on for a linked
+/// device, that device's newer version of a file here arrives beside it ("Entry (from Pixel).md") and never replaces it; in every
+/// other share nothing of that device's is taken. The notebooks: their entries, the saved places notebook and their photos. Not
+/// the libraries, not even My books: a library is one database (a Qdrant shard) whose files only make sense together, and its
+/// PDFs are named by their content (`bookshelf/<BLAKE3>.pdf`), so a newer version of one never exists.
+const List<String> kBesideShares = ['notebooks'];
+
 /// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").
 const String kNotebookShareDir = 'notebook-share';

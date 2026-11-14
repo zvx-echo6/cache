@@ -50,6 +50,7 @@ CsNative _kinds() => FakeNative()
     'total_estimate': 3,
     'vector_sources': ['field-library'],
     'keyword_only_sources': ['u'],
+    'meaning_timed_out': ['big-library'],
   });
 
 // Runs inside the worker isolate, so it builds its own fake.
@@ -72,6 +73,26 @@ class _PagesNative extends FakeNative {
 }
 
 CsNative _pagesNative() => _PagesNative();
+
+/// Answers cs_read_document with two pages, the address and size limit it got in the title.
+class _DocumentNative extends FakeNative {
+  @override
+  bool get hasReadDocument => true;
+  @override
+  String? readDocument(int handle, String address, int maxChars) => jsonEncode({
+        'address': address,
+        'title': '$address:$maxChars',
+        'at_page': 1,
+        'more_before': true,
+        'more_after': false,
+        'pages': [
+          {'page': 1, 'text': 'A', 'addresses': ['lib:field/1']},
+          {'page': 'iv', 'text': 'B', 'addresses': ['lib:field/2']},
+        ],
+      });
+}
+
+CsNative _documentNative() => _DocumentNative();
 
 CsNative _failing() => FakeNative()
   ..openResult = 0
@@ -114,6 +135,7 @@ void main() {
     expect(r.totalEstimate, 3);
     expect(r.vectorSources, ['field-library']);
     expect(r.keywordOnlySources, ['u']);
+    expect(r.meaningTimedOut, ['big-library'], reason: 'through the worker');
     await core.close();
   });
 
@@ -137,6 +159,17 @@ void main() {
     // a whole number sent as 47.0 is page 47; a blank label is no page
     expect((ReadResult.fromJson(read(47.0)).page, ReadResult.fromJson(read(47.0)).pageLabel), (47, '47'));
     expect((ReadResult.fromJson(read(' ')).page, ReadResult.fromJson(read(' ')).pageLabel), (null, null));
+  });
+
+  test('a whole document is read through the worker, with the size limit', () async {
+    final core = await SearchCore.open(const [], native: _documentNative);
+    final d = await core.readDocument('lib:field/2', maxChars: 1234);
+    // the fake puts the address and the limit it was called with in the title
+    expect((d.title, d.atPage, d.moreBefore, d.moreAfter, d.pages.length), ('lib:field/2:1234', 1, true, false, 2));
+    expect([for (final p in d.pages) (p.page, p.pageLabel, p.text)], [(1, '1', 'A'), (null, 'iv', 'B')]);
+    expect([for (final p in d.pages) p.addresses], [['lib:field/1'], ['lib:field/2']]);
+    expect((await core.readDocument('lib:field/2')).title, 'lib:field/2:200000');
+    await core.close();
   });
 
   test('a failing open raises the core error', () async {

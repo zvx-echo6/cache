@@ -62,12 +62,15 @@ class SearchEngine {
           if (t is String) t,
       ];
 
-  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
+  /// [meaningLimit]: a time limit on each library's meaning search (cs_search's `meaning_ms`); a library over it is searched by
+  /// keywords for this query and named in [SearchResponse.meaningTimedOut]. No limit when null.
+  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) {
     final options = {
       'k': k,
       'offset': offset,
       'sources': sources,
       'query_vector': queryVector?.toJson(),
+      'meaning_ms': ?meaningLimit?.inMilliseconds,
     };
     return SearchResponse.fromJson(_object(_ok(native.search(_h, query, jsonEncode(options)))));
   }
@@ -75,6 +78,13 @@ class SearchEngine {
   /// The text for an address, cut at a paragraph end to [maxChars] (about 6,000 is 1,500 tokens).
   ReadResult read(String address, {int maxChars = 6000}) =>
       ReadResult.fromJson(_object(_ok(native.read(_h, address, maxChars))));
+
+  /// A library document read whole, page by page, cut to [maxChars] of text in all (cs_read_document). Only `lib:` addresses.
+  LibraryDocument readDocument(String address, {int maxChars = 200000}) {
+    final n = native is CsDocumentNative ? native as CsDocumentNative : null;
+    if (n == null || !n.hasReadDocument) throw const CacheSearchException('unsupported', 'This build of the core cannot read a whole document yet');
+    return LibraryDocument.fromJson(_object(_ok(n.readDocument(_h, address, maxChars))));
+  }
 
   /// Raw bytes of a ZIM entry (HTML, CSS, images), following redirects.
   ZimBytes zimGet(String address) =>

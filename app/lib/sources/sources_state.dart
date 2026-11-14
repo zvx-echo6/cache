@@ -953,9 +953,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     List<String>? zimIds,
     int k = 20,
     int offset = 0,
+    Duration? meaningLimit,
   }) async {
     final core = _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
-    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds));
+    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds), meaningLimit: meaningLimit);
   }
 
   /// The embedding models the searchable sources in [ids] (every source when null) name, the search model first.
@@ -1076,6 +1077,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
     return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
+  }
+
+  @override
+  Future<ReadDocument> readDocument(String address) async {
+    final core =
+        _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
+    final d = await core.readDocument(address);
+    return ReadDocument(
+      title: d.title,
+      atPage: d.atPage,
+      moreBefore: d.moreBefore,
+      moreAfter: d.moreAfter,
+      pages: [for (final p in d.pages) DocumentPageText(text: p.text, pageLabel: p.pageLabel, addresses: p.addresses)],
+    );
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).

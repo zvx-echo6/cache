@@ -60,18 +60,22 @@ class SearchCore {
         for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];
 
-  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
+  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) async =>
       SearchResponse.fromJson(((await _call('search', {
         'query': query,
         'k': k,
         'offset': offset,
         'sources': sources,
         'queryVector': queryVector?.toJson(),
+        'meaningMs': ?meaningLimit?.inMilliseconds,
       })) as Map)
           .cast<String, dynamic>());
 
   Future<ReadResult> read(String address, {int maxChars = 6000}) async =>
       ReadResult.fromJson(((await _call('read', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
+
+  Future<LibraryDocument> readDocument(String address, {int maxChars = 200000}) async =>
+      LibraryDocument.fromJson(((await _call('readDocument', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
 
   Future<ZimBytes> zimGet(String address) async {
     final r = await _call('zimGet', {'address': address}) as List;

@@ -111,13 +111,20 @@ class SearchHit {
 }
 
 class SearchResponse {
-  const SearchResponse({required this.results, required this.totalEstimate, this.vectorSources = const [], this.keywordOnlySources = const []});
+  const SearchResponse({
+    required this.results,
+    required this.totalEstimate,
+    this.vectorSources = const [],
+    this.keywordOnlySources = const [],
+    this.meaningTimedOut = const [],
+  });
 
   factory SearchResponse.fromJson(Map<String, dynamic> j) => SearchResponse(
         results: [for (final r in (j['results'] as List? ?? const [])) SearchHit.fromJson((r as Map).cast<String, dynamic>())],
         totalEstimate: (j['total_estimate'] ?? 0) as int,
         vectorSources: ((j['vector_sources'] as List?) ?? const []).cast<String>(),
         keywordOnlySources: ((j['keyword_only_sources'] as List?) ?? const []).cast<String>(),
+        meaningTimedOut: ((j['meaning_timed_out'] as List?) ?? const []).cast<String>(),
       );
 
   final List<SearchHit> results;
@@ -125,12 +132,16 @@ class SearchResponse {
   final List<String> vectorSources;
   final List<String> keywordOnlySources;
 
+  /// Libraries whose meaning search passed its time limit (the search's meaningLimit): searched by their keywords only this time.
+  final List<String> meaningTimedOut;
+
   /// The response as [SearchResponse.fromJson] reads it (what the worker sends to the app).
   Map<String, dynamic> toJson() => {
         'results': [for (final h in results) h.toJson()],
         'total_estimate': totalEstimate,
         'vector_sources': vectorSources,
         'keyword_only_sources': keywordOnlySources,
+        'meaning_timed_out': meaningTimedOut,
       };
 }
 
@@ -187,6 +198,68 @@ class ReadResult {
         'author': author,
         'page': page ?? pageLabel,
         'source_type': sourceType,
+      };
+}
+
+/// A page as the core prints it: a number, or its printed label when that is not a number ("iv", "A-3").
+({int? number, String? label}) _pageOf(Object? p) {
+  final number = p is int ? p : (p is double && p.isFinite && p == p.truncateToDouble() ? p.toInt() : null);
+  return (number: number, label: number != null ? '$number' : (p is String && p.trim().isNotEmpty ? p : (p is num ? '$p' : null)));
+}
+
+/// One page of a [LibraryDocument]: the text of its passages and their addresses. [page] is the page when it is a number,
+/// [pageLabel] the page as printed; both are null when the library has no page for it.
+class DocumentPage {
+  const DocumentPage({this.page, this.pageLabel, required this.text, required this.addresses});
+
+  factory DocumentPage.fromJson(Map<String, dynamic> j) {
+    final p = _pageOf(j['page']);
+    return DocumentPage(
+      page: p.number,
+      pageLabel: p.label,
+      text: (j['text'] ?? '') as String,
+      addresses: [for (final a in (j['addresses'] as List? ?? const [])) a as String],
+    );
+  }
+
+  final int? page;
+  final String? pageLabel;
+  final String text;
+  final List<String> addresses;
+
+  Map<String, dynamic> toJson() => {'page': page ?? pageLabel, 'text': text, 'addresses': addresses};
+}
+
+/// What cs_read_document returns: a library document's pages in order, [atPage] (the index of the page holding the opened
+/// passage) and whether the document goes on before and after them.
+class LibraryDocument {
+  const LibraryDocument({required this.address, required this.title, required this.pages, required this.atPage, required this.moreBefore, required this.moreAfter});
+
+  factory LibraryDocument.fromJson(Map<String, dynamic> j) => LibraryDocument(
+        address: (j['address'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        pages: [for (final p in (j['pages'] as List? ?? const [])) DocumentPage.fromJson((p as Map).cast<String, dynamic>())],
+        atPage: ((j['at_page'] ?? 0) as num).toInt(),
+        moreBefore: (j['more_before'] ?? false) as bool,
+        moreAfter: (j['more_after'] ?? false) as bool,
+      );
+
+  final String address;
+  final String title;
+  final List<DocumentPage> pages;
+  final int atPage;
+
+  /// The document has passages before / after the pages shown (it is too long to show whole).
+  final bool moreBefore;
+  final bool moreAfter;
+
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'pages': [for (final p in pages) p.toJson()],
+        'at_page': atPage,
+        'more_before': moreBefore,
+        'more_after': moreAfter,
       };
 }
 

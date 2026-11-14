@@ -96,11 +96,14 @@ class CoreDispatcher {
           queryVector: a['queryVector'] == null
               ? null
               : QueryVector((a['queryVector'] as Map)['model'] as String, [for (final x in (a['queryVector'] as Map)['vector'] as List) (x as num).toDouble()]),
+          meaningLimit: a['meaningMs'] == null ? null : Duration(milliseconds: a['meaningMs'] as int),
         );
         // One serialisation for both directions (SearchHit.toJson and fromJson), so no field of a hit is lost on the way.
         result = r.toJson();
       case 'read':
         result = eng().read(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
+      case 'readDocument':
+        result = eng().readDocument(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
       case 'zimGet':
         final z = eng().zimGet(a['address'] as String);
         result = [z.bytes, z.mime];

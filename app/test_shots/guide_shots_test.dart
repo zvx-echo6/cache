@@ -28,7 +28,6 @@ import 'package:cache/maps/palette/map_palette.dart' show mapPaletteFor;
 import 'package:cache/maps/ui/place_map.dart' show kPlaceZoom;
 import 'package:cache/maps/style/style_generator.dart' show kMeasureSource, kNotebookSource, kPinSource;
 import 'package:cache/nav/elevation/route_elevation.dart' show RouteElevation;
-import 'package:cache/nav/guidance_camera.dart' show guidanceAnchor;
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/catalogue_screen.dart';
 import 'package:cache/notebook/notebook_map.dart' show PinLook;
@@ -130,6 +129,7 @@ import '../test/support/regions_fake.dart';
 import '../test/support/sync_fake.dart' show FakeSync;
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
+import '../test/support/guide_anchor.dart' show GuideLayout;
 import '../test/support/weather_screen_kit.dart' show dayItem, nowItem, nwsAlert, storedAnswer;
 import 'guide_map_kit.dart';
 import 'guide_sample.dart';
@@ -1482,7 +1482,7 @@ void main() {
     // screen then agree.
     final mapSize = tester.getSize(find.byType(MapLibreMap));
     final at = m.kit.cameraOf(mapOf(tester), mapSize).project(fix.lat, fix.lon, mapSize);
-    expect((at - guidanceAnchor(mapSize, side: false)).distance, lessThan(3), reason: 'the guidance camera does not put the position at its anchor');
+    expect((at - GuideLayout.read(tester).anchor).distance, lessThan(3), reason: 'the guidance camera does not put the position at its anchor');
     m.kit.inset.write();
     await mapShot(tester, m, 'guidance', 'guidance');
     await tester.runAsync(() async => m.nav.end());
@@ -1855,7 +1855,7 @@ class _HitSources extends FakeSources {
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) async =>
       SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
 }
 
