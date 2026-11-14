@@ -422,6 +422,24 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a region\'s map downloads for its outline in every layer; an area drawn on the map for its box', (tester) async {
+    final r = await _Rig.boot(tester);
+    final g = (await tester.runAsync(() => r.catalogue.geometry(r.county)))!;
+    final outline = mapOutline(r.county, g);
+    expect(outline, isNotNull);
+    await tester.runAsync(() => r.regions.download(r.county, routing: false, map: true));
+    final asked = r.s.engine.outlineOf['Twin Falls County']!;
+    expect(asked, isNotEmpty);
+    expect(asked.values, everyElement(outline), reason: 'the same outline for each layer, the rings as the catalogue has them');
+    // each layer is still sized for the box: the box is what the download is given as its area
+    expect(r.s.engine.allAreas.map((a) => a.bounds), everyElement(r.county.bounds));
+
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
+    await tester.runAsync(() => r.regions.download(drawn, routing: false, map: true, anyway: true));
+    expect(r.s.engine.outlineOf[drawn.name]!.values, everyElement(isNull));
+    await r.dispose(tester);
+  });
+
   testWidgets('directions with no road data for the area: its page says not available yet, as it does for places, not Ready', (tester) async {
     final r = await _Rig.boot(tester);
     await tester.runAsync(() async {

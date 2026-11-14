@@ -142,11 +142,15 @@ class TestLayerEngine extends LayerEngine {
   /// Where each download (by label) was asked to start from.
   final Map<String, ({double lat, double lon})?> nearOf = {};
 
+  /// The outline each download (by label, then layer) was asked for; null for a box.
+  final Map<String, Map<String, List<List<List<double>>>?>> outlineOf = {};
+
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, MapFile? file}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline, MapFile? file}) async {
     await policy?.checkDownload(anyway: anyway);
     (fileOf[label] ??= {})[layerId] = file;
     nearOf[label] = near;
+    (outlineOf[label] ??= {})[layerId] = outline;
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/maps/geo.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -172,5 +173,61 @@ void main() {
     expect(regionKindLabel('sub_state'), 'Part of a state');
     expect(regionKindLabel('locality'), 'City or town');
     expect(regionKindHeading('county'), 'Counties');
+  });
+
+  test('a region\'s map is downloaded for its outline: every ring of every part, the parts inside the box it was cut to', () async {
+    final c = RegionCatalogue(dir: () async => dir, fetch: regionWeb().fetch);
+    final idaho = (await c.shard('us'))['us-id']!;
+    final g = await c.geometry(idaho);
+    final rings = mapOutline(idaho, g)!;
+    final want = [
+      for (final ring in g['coordinates'] as List) [for (final p in ring as List) [((p as List)[0] as num).toDouble(), (p[1] as num).toDouble()]],
+    ];
+    expect(rings, want, reason: 'a Polygon: its outer ring (and holes) as they are');
+
+    // A region in parts: the rings of all of them, so the core downloads their union.
+    final square = [[-117.0, 42.0], [-115.0, 42.0], [-115.0, 44.0], [-117.0, 44.0], [-117.0, 42.0]];
+    final hole = [[-116.5, 42.5], [-116.0, 42.5], [-116.0, 43.0], [-116.5, 42.5]];
+    final island = [[-113.0, 42.0], [-112.0, 42.0], [-112.0, 43.0], [-113.0, 42.0]];
+    final multi = {
+      'type': 'MultiPolygon',
+      'coordinates': [
+        [square, hole],
+        [island],
+      ],
+    };
+    expect(mapOutline(idaho, multi), [square, hole, island]);
+
+    // Across the antimeridian the box is cut to its larger side: only the parts on that side go.
+    const far = RegionRecord(id: 'x', name: 'X', kind: 'region', bbox: [172.0, 51.0, -130.0, 72.0]);
+    expect(far.bounds!.west, -180);
+    final westOfLine = [[175.0, 52.0], [179.9, 52.0], [179.9, 53.0], [175.0, 52.0]];
+    final mainland = [[-170.0, 55.0], [-131.0, 55.0], [-131.0, 70.0], [-170.0, 55.0]];
+    expect(
+        mapOutline(far, {
+          'type': 'MultiPolygon',
+          'coordinates': [
+            [westOfLine],
+            [mainland],
+          ],
+        }),
+        [mainland]);
+
+    // No outline to use: an area drawn on the map, another kind of geometry, coordinates that are not numbers.
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4));
+    expect(mapOutline(drawn, await c.geometry(drawn)), isNull);
+    expect(mapOutline(idaho, {'type': 'Point', 'coordinates': [-114.0, 43.0]}), isNull);
+    expect(
+        mapOutline(idaho, {
+          'type': 'Polygon',
+          'coordinates': [
+            [
+              ['a', 1],
+              [2, 3],
+              [4, 5],
+            ],
+          ],
+        }),
+        isNull);
   });
 }
