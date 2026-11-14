@@ -439,7 +439,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
     linkedFolders: b.device?.build?.linkedFolders == null || libs!.isGuide(l) ? null : () async {
       final controller = b.device!.build!.linkedFolders!;
-      openDetail(_pane ?? context, key: 'linked-folders:${l.folderName}', builder: (_) => LinkedFolderManagementPage(controller: controller, libraryId: l.folderName));
+      openDetail(_pane ?? context, key: 'linked-folders:${l.folderName}', builder: (_) => LinkedFolderManagementPage(controller: controller, libraryId: l.folderName, build: b.device!.build));
     },
   );
 
