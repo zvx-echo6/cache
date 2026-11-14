@@ -419,7 +419,9 @@ fn media_entries(epubs: &[(&str, Vec<u8>)]) -> Vec<(&'static str, &'static str, 
 /// reads stays as it was until the owner decides otherwise (1.1).
 #[test]
 fn asks_search_tool_leaves_out_saved_video_captions_the_apps_search_finds_them() {
-    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000002";
+    // Its own video id: caption jobs are keyed by source (host/uuid) across the test process, so a test sharing another's id
+    // (cancelling_keeps_the_build_… uses …0002) can be handed the other's job when both run at once.
+    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000003";
     let t = TempDir::new("vidask");
     let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
     save_video(&vdir, VIDEO, "Flood Safety Basics", &[("en", vtt_of("sandbag barriers", 30))]);
