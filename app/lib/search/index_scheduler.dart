@@ -567,6 +567,8 @@ class IndexScheduler extends ChangeNotifier {
 
   Future<void> _start(IndexTask t) async {
     _current = t;
+    // the run that went before is not this one: its end (it may come while this start waits for it) must not clear this work
+    _run = null;
     _set(IndexWait.none);
     _lastPulse = _pulseOf(t);
     _quiet = Duration.zero;
@@ -575,6 +577,13 @@ class IndexScheduler extends ChangeNotifier {
     _watch = Timer.periodic(watchEvery, (_) => _watchdog());
     try {
       final run = await t.start();
+      // Paused or closed while the start waited (an earlier run still stopping): `_pause` found no run to stop. This one is stopped
+      // here and the work stays queued; taking it as the running work would leave a live run the scheduler does not know of, which
+      // the next look starts over (and stops), over and over.
+      if (!identical(_current, t)) {
+        unawaited(run.pause(IndexWait.none).catchError((Object _) {}));
+        return;
+      }
       _run = run;
       // The throttle reads the device every few seconds while work runs, and the run follows its duty from the start.
       throttle?.watch(true);
