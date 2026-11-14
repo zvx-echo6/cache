@@ -1093,6 +1093,12 @@ char *cs_layers_list(cs_handle *h);
  * {"catalogues":[{"url","layers":N,"invalid":[...]}|{"url","error":{"code","message"}}],"updates":{"<id>":"<version>"|{"error"}}}. */
 char *cs_layers_refresh(cs_handle *h);
 
+/* cs_layers_refresh as a job, on a thread of its own: the catalogue's network wait never holds the caller (the app's one core
+ * worker). Poll cs_job_progress: when "done", "result" is what cs_layers_refresh returns; a failed refresh is "failed" with
+ * cs_layers_refresh's error. The handle's catalogue is updated when it is done. Free it with cs_job_free. NULL on error
+ * (cs_last_error(h)): "not_configured" without "layers". */
+cs_job *cs_layers_refresh_start(cs_handle *h);
+
 /* Add or edit a user definition (the Advanced section): the JSON of one definition, validated ("bad_json" lists every
  * problem). A user definition overrides one with the same id. Returns {"id","saved":true}. */
 char *cs_layers_save(cs_handle *h, const char *definition_json);

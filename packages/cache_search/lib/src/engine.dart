@@ -153,6 +153,17 @@ class SearchEngine {
     return CoreJob(native, j);
   }
 
+  /// cs_layers_refresh_start: `layers('refresh')` as a job on a thread of its own (its "result" is the refresh's answer); null when
+  /// the core has no such call (then `layers('refresh')` is the way).
+  CoreJob? layersRefreshJob() {
+    final n = native;
+    if (n is! CsLayersJobNative) return null;
+    final j = (n as CsLayersJobNative).layersRefreshStart(_h);
+    if (j == -1) return null;
+    if (j == 0) throw CacheSearchException.fromJson(native.lastError(_h));
+    return CoreJob(native, j);
+  }
+
   CsLiveNative get _liveNative {
     final n = native is CsLiveNative ? native as CsLiveNative : null;
     if (n != null && n.hasLivePolicy) return n;

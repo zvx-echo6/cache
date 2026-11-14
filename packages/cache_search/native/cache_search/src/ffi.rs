@@ -1024,6 +1024,15 @@ pub unsafe extern "C" fn cs_layers_refresh(h: *mut Handle) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_refresh()?))
 }
 
+/// `cs_layers_refresh` as a job on a thread of its own (see `Ext::layers_refresh_job`). NULL on error (`cs_last_error(h)`).
+///
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_refresh_start(h: *mut Handle) -> *mut Job {
+    with_handle(h, ptr::null_mut(), |h| Ok(Box::into_raw(Box::new(h.ext.layers_refresh_job()?))))
+}
+
 /// # Safety
 /// `h` NULL or live; `def_json` NULL or NUL-terminated.
 #[no_mangle]
