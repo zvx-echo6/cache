@@ -152,6 +152,65 @@ void main() {
     expect(jobs(), hasLength(3));
   });
 
+  test('a saved video whose captions are not indexed is indexed with index_source (kind captions), after the ZIMs\' work', () {
+    // The phone's AppIndexCoreCalls: each saved video whose cs_video_downloads `captions_index` says needs_build, with the videos
+    // folder. The server keeps saved videos too (<docs>/videos), so the driver lists them as well.
+    status['a.zim'] = _st('a.zim', epub: {'state': 'none', 'kind': 'zim-epub', 'source_id': 'sid-a.zim', 'needs_build': true});
+    var saved = <Map<String, dynamic>>[
+      {'instance': 'tube.example', 'uuid': 'u1', 'captions_index': {'source_id': 'tube.example/u1', 'kind': 'captions', 'files': 2, 'built': false, 'needs_build': true}},
+      {'instance': 'tube.example', 'uuid': 'u2', 'captions_index': {'source_id': 'tube.example/u2', 'kind': 'captions', 'files': 1, 'built': true, 'needs_build': false}},
+      {'instance': 'tube.example', 'uuid': 'u3'},
+    ];
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, savedVideos: () => saved, videoDir: '/docs/videos')
+      ..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    driver.tick();
+    expect(params(jobs().single, 'index_source')['kind'], 'zim-epub', reason: 'the ZIM first');
+    driver.tick(); // the EPUBs are done: the video's captions start
+    expect(jobs(), hasLength(2));
+    expect(params(jobs().last, 'index_source'), {'indexes_dir': '/indexes', 'kind': 'captions', 'source_id': 'tube.example/u1', 'video_dir': '/docs/videos'});
+    expect(driver.progress.keys, ['captions/tube.example/u1']);
+    saved = [
+      {...saved[0], 'captions_index': {'source_id': 'tube.example/u1', 'kind': 'captions', 'files': 2, 'built': true, 'needs_build': false}},
+    ];
+    driver.tick(); // done: the core is given the sources again, so it attaches the new index
+    expect(fake.calls.where((c) => c.startsWith('setSources')), isNotEmpty);
+    driver.tick();
+    expect(jobs(), hasLength(2), reason: 'built, and the built one is not started');
+  });
+
+  test('a video saved later is indexed when the driver is kicked; one already tried is not started again until a rescan', () {
+    var saved = <Map<String, dynamic>>[];
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, savedVideos: () => saved, videoDir: '/docs/videos')
+      ..useSources(const []);
+    addTearDown(driver.stop);
+    driver.tick();
+    expect(jobs(), isEmpty);
+    expect(driver.hasWork, isFalse);
+    saved = [
+      {'instance': 'tube.example', 'uuid': 'u9', 'captions_index': {'source_id': 'tube.example/u9', 'kind': 'captions', 'files': 1, 'built': false, 'needs_build': true}},
+    ];
+    expect(driver.hasWork, isTrue);
+    driver.kick();
+    driver.tick();
+    expect(params(jobs().single, 'index_source')['source_id'], 'tube.example/u9');
+    driver.tick(); // done, but the list still says needs_build (a failed publish): not again until the next rescan
+    driver.tick();
+    expect(jobs(), hasLength(1));
+  });
+
+  test('a saved-videos list that cannot be read leaves the other work as it is', () {
+    status['a.zim'] = _st('a.zim', epub: {'state': 'none', 'kind': 'zim-epub', 'source_id': 's', 'needs_build': true});
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, savedVideos: () => throw StateError('no video folder'))
+      ..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    driver.tick();
+    expect(params(jobs().single, 'index_source')['kind'], 'zim-epub');
+    driver.tick();
+    driver.tick();
+    expect(jobs(), hasLength(1));
+  });
+
   test('without an indexes folder there are no seals or index_source jobs', () {
     status['a.zim'] = _st('a.zim', epub: {'state': 'none', 'kind': 'zim-epub', 'needs_build': true});
     final driver = IndexDriver(d, every: const Duration(hours: 1))..useSources([_src('a.zim')]);
