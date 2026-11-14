@@ -43,6 +43,8 @@ pub struct Knobs {
     pub private_hls: bool,
     /// `/api/v1/config`'s `plugin` and `client` sections (the sign-in methods), merged into the recorded config.
     pub auth_config: Option<Value>,
+    /// What the instance's joined file (video + audio) is, instead of its usual bytes: a real fragmented MP4 in the remux tests.
+    pub generated: Option<Vec<u8>>,
 }
 
 pub struct Mock {
@@ -309,8 +311,12 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
         }
         ("GET", p) if p == format!("/download/videos/generate/{HLS_UUID}") => {
             if q.contains("videoFileIds=101") && q.contains("videoFileIds=103") {
-                let mut b = blob(300_000, 201);
-                b.extend(blob(40_000, 203));
+                let given = knobs.lock().unwrap().generated.clone();
+                let b = given.unwrap_or_else(|| {
+                    let mut b = blob(300_000, 201);
+                    b.extend(blob(40_000, 203));
+                    b
+                });
                 serve_file(&mut s, &hit, &b, &knobs, false)
             } else {
                 send_json(&mut s, 400, &json!({"detail": "bad ids"}))
@@ -329,4 +335,85 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
         _ => send_json(&mut s, 404, &json!({"detail": "no route"})),
     }
     Some(())
+}
+
+pub const FMP4_PER_FRAGMENT: u32 = 4;
+pub const FMP4_FRAGMENTS: u32 = 3;
+pub const FMP4_DELTA: u32 = 100;
+
+/// The bytes of sample [n] (each sample has its own length and content, so a misplaced one is caught).
+pub fn fmp4_sample(n: u32) -> Vec<u8> {
+    (0..(50 + n * 7)).map(|i| (n as u8).wrapping_mul(31).wrapping_add(i as u8)).collect()
+}
+
+/// A fragmented MP4 as PeerTube serves HLS: an ftyp, a moov with no samples and an mvex, then for each fragment a sidx, a moof
+/// and its mdat. Returns the file's bytes and every sample's bytes in order.
+pub fn fragmented_mp4() -> (Vec<u8>, Vec<Vec<u8>>) {
+    use mp4_atom::{Encode, Ftyp, Hdlr, Mdhd, Mdia, Mfhd, Minf, Moof, Moov, Mvex, Mvhd, Smhd, Stbl, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, TrunSamples};
+    let mut out: Vec<u8> = vec![];
+    Ftyp { major_brand: b"iso6".into(), minor_version: 512, compatible_brands: vec![b"iso6".into(), b"mp41".into()] }.encode(&mut out).unwrap();
+    let moov = Moov {
+        mvhd: Mvhd { timescale: 1000, next_track_id: 2, ..Default::default() },
+        mvex: Some(Mvex { mehd: None, trex: vec![Trex { track_id: 1, default_sample_description_index: 1, ..Default::default() }] }),
+        trak: vec![Trak {
+            tkhd: Tkhd { track_id: 1, enabled: true, in_movie: true, ..Default::default() },
+            mdia: Mdia {
+                mdhd: Mdhd { timescale: 1000, language: "und".into(), ..Default::default() },
+                hdlr: Hdlr { handler: b"soun".into(), name: "sound".into() },
+                minf: Minf { smhd: Some(Smhd::default()), stbl: Stbl::default(), ..Default::default() },
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    moov.encode(&mut out).unwrap();
+    let mut all = vec![];
+    for f in 0..FMP4_FRAGMENTS {
+        // a per-fragment index, as PeerTube writes (20 bytes, its contents do not matter here)
+        out.extend_from_slice(&20u32.to_be_bytes());
+        out.extend_from_slice(b"sidx");
+        out.extend_from_slice(&[0u8; 12]);
+        let samples: Vec<Vec<u8>> = (0..FMP4_PER_FRAGMENT).map(|i| fmp4_sample(f * FMP4_PER_FRAGMENT + i)).collect();
+        let entries: Vec<TrunEntry> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, x)| TrunEntry {
+                duration: Some(FMP4_DELTA),
+                size: Some(x.len() as u32),
+                // the first sample of each fragment is a sync sample, the others are not
+                flags: Some(if i == 0 { 0 } else { 0x0001_0000 }),
+                cts: None,
+            })
+            .collect();
+        let moof_of = |data_offset: i32| Moof {
+            mfhd: Mfhd { sequence_number: f + 1 },
+            traf: vec![Traf {
+                tfhd: Tfhd { track_id: 1, default_base_is_moof: true, ..Default::default() },
+                tfdt: Some(Tfdt { base_media_decode_time: (f * FMP4_PER_FRAGMENT * FMP4_DELTA) as u64 }),
+                trun: vec![Trun { data_offset: Some(data_offset), samples: TrunSamples::Explicit(entries.clone()) }],
+                ..Default::default()
+            }],
+        };
+        let mut probe = vec![];
+        moof_of(0).encode(&mut probe).unwrap();
+        moof_of(probe.len() as i32 + 8).encode(&mut out).unwrap();
+        let data: Vec<u8> = samples.concat();
+        out.extend_from_slice(&((data.len() + 8) as u32).to_be_bytes());
+        out.extend_from_slice(b"mdat");
+        out.extend_from_slice(&data);
+        all.extend(samples);
+    }
+    (out, all)
+}
+
+/// The top-level boxes' kinds, where each starts and its length.
+pub fn top_kinds(b: &[u8]) -> Vec<(String, usize, usize)> {
+    let mut v = vec![];
+    let mut at = 0;
+    while at + 8 <= b.len() {
+        let size = u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+        v.push((String::from_utf8_lossy(&b[at + 4..at + 8]).into_owned(), at, size));
+        at += size.max(8);
+    }
+    v
 }
