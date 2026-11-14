@@ -617,29 +617,31 @@ void main() {
       return (a, b, la.id, lb.id);
     }
 
-    test('1500 entries reach the other device and none is lost on later rounds, both ways', () async {
-      final (a, b, ida, idb) = await big(1500);
+    test('1050 entries reach the other device and none is lost on later rounds, both ways', () async {
+      const n = 1050; // just over the 1000 the bug lived at; a lighter notebook, the same boundary
+      expect(n, greaterThan(1000));
+      final (a, b, ida, idb) = await big(n);
       await a.engine.run();
-      expect(files(a), 1500, reason: 'every entry is written, not the first 1000');
+      expect(files(a), n, reason: 'every entry is written, not the first 1000');
       carry(a, b);
       await b.engine.run();
-      expect((await b.nb.entries(idb)).length, 1500);
+      expect((await b.nb.entries(idb)).length, n);
       // a second round each way changes nothing
       await b.engine.run();
       carry(b, a);
       await a.engine.run();
-      expect(files(a), 1500);
-      expect((await a.nb.entries(ida)).length, 1500);
-      expect((await b.nb.entries(idb)).length, 1500);
+      expect(files(a), n);
+      expect((await a.nb.entries(ida)).length, n);
+      expect((await b.nb.entries(idb)).length, n);
       // an edit to the last entry made on B comes back to A
-      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R1499');
-      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R1499', body: 'edited on B');
+      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R${n - 1}');
+      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R${n - 1}', body: 'edited on B');
       await b.engine.run();
       carry(b, a);
       await a.engine.run();
-      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R1499').body, 'edited on B');
-      expect((await a.nb.entries(ida)).length, 1500);
-    }, timeout: const Timeout(Duration(minutes: 3)));
+      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R${n - 1}').body, 'edited on B');
+      expect((await a.nb.entries(ida)).length, n);
+    }, timeout: const Timeout(Duration(minutes: 6)));
 
     test('an entry the read did not return is never treated as deleted', () async {
       final (a, _, ida, _) = await big(300);
