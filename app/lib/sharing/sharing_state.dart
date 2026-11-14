@@ -177,19 +177,15 @@ class SharingState extends ChangeNotifier {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
-<<<<<<< HEAD
+        // "Don't replace my copies from this device": newer versions of things the person made arrive beside theirs; the
+        // folders kept with every link whatever is ticked (the search indexes, the settings and Bookshelves logs) are never touched.
+        'beside': kBesideShares,
+        'not_copies': [for (final a in always) a.id, for (final l in linkShares) l.id],
       };
       _lastConfig = config;
       _core = await _opener(config);
       lock.engineStarted(kSyncWork);
       await _writeSnapshot();
-=======
-        // "Don't replace my copies from this device": newer versions of things the person made arrive beside theirs; the
-        // folders kept with every link whatever is ticked (the search indexes, the settings and Bookshelves logs) are never touched.
-        'beside': kBesideShares,
-        'not_copies': [for (final a in always) a.id, for (final l in linkShares) l.id],
-      });
->>>>>>> origin/rel-1.1
       await _applyPolicy();
       await refresh();
       await _retire();
