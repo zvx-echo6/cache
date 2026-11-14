@@ -264,6 +264,7 @@ void main() {
         size: 557 << 20,
         articleCount: 1,
         downloadUrl: Uri.parse('https://download.kiwix.org/zim/ted/ted_mul_ted-prize_2026-09.zim'),
+        iconUrl: null,
       );
       api.jobList = [job('p2', 'paused', url: e.downloadUrl.toString(), bytes: 17, total: 557)];
       await d.refresh();
