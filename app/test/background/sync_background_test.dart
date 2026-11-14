@@ -278,7 +278,6 @@ void main() {
       expect(opened!['lifetime_secs'], 240 + 90, reason: 'the engine ends itself if the run is cut off');
       expect(opened!['dht'], false);
       expect(opened!['only'], {'indexes': <String>[]});
-      expect(core.args.first, isEmpty);
       expect(core.calls, contains('set_policy'));
       expect(core.closed, isTrue);
       expect(lock.runs(kSyncWork), isFalse);

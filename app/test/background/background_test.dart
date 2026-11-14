@@ -82,8 +82,8 @@ void main() {
       expect(t.lastLine, contains('outcome no such task'));
     });
 
-    test('the app dispatcher has the weather, detect and add jobs, and no sync job yet', () {
-      expect(backgroundJobs().keys.toSet(), {kWeatherTask, kWatchDetectTask, kWatchAddTask});
+    test('the app dispatcher has the weather, detect, add and the three sync jobs', () {
+      expect(backgroundJobs().keys.toSet(), {kWeatherTask, kWatchDetectTask, kWatchAddTask, kSyncTask, kSyncRefreshTask, kSyncProcessingTask});
       expect(kWeatherTask, 'com.happylittle.cache.live-update', reason: 'the name existing phones have it scheduled under, and the iPhone identifier');
       expect(kBackgroundTask, kWeatherTask);
     });
