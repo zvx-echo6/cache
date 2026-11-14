@@ -689,8 +689,9 @@ fn an_f16_library_opens_and_answers_like_the_f32_one_in_less_space() {
     assert_eq!(out.status.code(), Some(2));
 }
 
-/// Edge keeps vectors in 32 MiB chunks it creates whole, so a small library is the same size either way; f16 holds twice the
-/// vectors per chunk (16384 against 8192 of 1024 dimensions). 9000 pieces need two chunks as f32 and one as f16.
+/// Past Qdrant's indexing threshold the builder indexes the vectors (HNSW), which writes them out compactly, so f16 saves its
+/// real half: 9000 pieces of 1024 dimensions are 36.9 MB as f32 and 18.4 MB as f16. (Before, Edge kept them in 32 MiB chunks
+/// it creates whole, and the saving showed only once a chunk filled.)
 #[test]
 fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_same_top_1() {
     use cache_builder::embed::fake_vector;
@@ -733,7 +734,8 @@ fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_sam
     };
     let (a, b) = (mk("f32", VectorDatatype::F32), mk("f16", VectorDatatype::F16));
     let (sa, sb) = (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")));
-    assert!(sb + 30 * 1024 * 1024 < sa, "f16 {sb} bytes, f32 {sa} bytes");
+    // at least 90% of the 18.4 MB the vectors save
+    assert!(sb + 9000 * 1024 * 2 * 9 / 10 < sa, "f16 {sb} bytes, f32 {sa} bytes");
     let open = |d: &Path| {
         let s: Value = serde_json::from_slice(&std::fs::read(d.join(SETTINGS_FILE)).unwrap()).unwrap();
         cache_search::library::open_library(&d.join("shard"), None, Some(&s)).unwrap()
