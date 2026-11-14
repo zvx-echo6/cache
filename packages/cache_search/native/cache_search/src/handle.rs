@@ -439,6 +439,9 @@ pub struct Handle {
     pub last_cites: Vec<(String, crate::conv::Cite)>,
     /// `indexes_dir` of the sources config (see `Config`).
     pub indexes_dir: Option<PathBuf>,
+    /// Timing lines of the last `set_sources` (how long the ZIM opens and each later step took), for the app's log; they
+    /// travel in `cs_status` as `open_timings`.
+    pub open_timings: Vec<String>,
 }
 
 impl Drop for Handle {
@@ -471,6 +474,7 @@ impl Handle {
             act: Arc::new(cache_act::ActState::new()),
             last_cites: Vec::new(),
             indexes_dir: None,
+            open_timings: Vec::new(),
         };
         h.register_tool(Box::new(cache_calc::CalculateTool));
         h.register_tool(Box::new(cache_act::ActTool(h.act.clone())));
@@ -504,8 +508,28 @@ impl Handle {
             OpenLib { path: PathBuf, index_dir: Option<PathBuf>, given: Option<Value>, id: String, title: String, settings: Option<LibrarySettings> },
             New(Source),
         }
+        let t_all = std::time::Instant::now();
         self.poll_opening();
         let cfg: Config = serde_json::from_str(config_json)?;
+        // The ZIMs not open yet are opened side by side on a few threads (each open is an independent file read); the
+        // results come back in config order and are used below exactly as the serial opens were. Nothing shared is
+        // touched until they have all finished.
+        let t_zims = std::time::Instant::now();
+        let to_open: Vec<PathBuf> = cfg
+            .sources
+            .iter()
+            .filter(|sc| sc.kind == "zim")
+            .map(|sc| PathBuf::from(&sc.path))
+            .filter(|p| !self.sources.iter().any(|s| matches!(s, Source::Zim(z) if z.src.path == *p)))
+            .collect();
+        let threads = crate::openpool::default_threads();
+        let mut opened = crate::openpool::run_pool(&to_open, threads, |p| {
+            let t = std::time::Instant::now();
+            let r = ZimSource::open(p);
+            (r, t.elapsed().as_millis() as u64)
+        })
+        .into_iter();
+        let mut zim_ms: Vec<(String, u64)> = Vec::new();
         let mut plan: Vec<Plan> = Vec::new();
         let mut ids: Vec<String> = Vec::new();
         for sc in &cfg.sources {
@@ -523,16 +547,21 @@ impl Handle {
                             Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir, builtin)),
                             _ => unreachable!(),
                         },
-                        None => match ZimSource::open(&path) {
-                            Ok(z) => {
-                                let id = z.id.clone();
-                                (Some(id), Plan::New(Source::Zim(ZimSlot::new(z, index_dir, builtin))))
+                        None => {
+                            let (result, ms) = opened.next().expect("one open per new ZIM");
+                            match result {
+                                Ok(z) => {
+                                    zim_ms.push((z.title.clone(), ms));
+                                    let id = z.id.clone();
+                                    (Some(id), Plan::New(Source::Zim(ZimSlot::new(z, index_dir, builtin))))
+                                }
+                                Err(error) => {
+                                    let title = stem_title(&path);
+                                    zim_ms.push((title.clone(), ms));
+                                    (None, Plan::New(Source::Failed { kind: "zim", path, title, error }))
+                                }
                             }
-                            Err(error) => {
-                                let title = stem_title(&path);
-                                (None, Plan::New(Source::Failed { kind: "zim", path, title, error }))
-                            }
-                        },
+                        }
                     };
                     if let Some(id) = id {
                         if ids.contains(&id) {
@@ -592,6 +621,7 @@ impl Handle {
                 other => return Err(Error::bad_json(format!("unknown source kind {other:?}"))),
             }
         }
+        let zims_ms = t_zims.elapsed().as_millis() as u64;
         // Success: commit. Move reused sources out of the old list.
         let mut old: Vec<Option<Source>> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
         self.sources = plan
@@ -640,8 +670,10 @@ impl Handle {
                 _ => {}
             }
         }
+        let t_snap = std::time::Instant::now();
         self.attach_pdf_indexes(old_pdfs);
         self.sync_indexes();
+        let snap_ms = t_snap.elapsed().as_millis() as u64;
         // where jobs find the saved videos and the ZIM files (kwbuild.rs)
         let zim_places: Vec<(String, PathBuf)> = self
             .sources
@@ -670,13 +702,38 @@ impl Handle {
         if cfg.prewarm {
             self.start_prewarm();
         }
+        let t = std::time::Instant::now();
         self.ext.configure_regions(cfg.regions)?;
+        let regions_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.attach_kw_indexes(old_kw);
         self.ext.plug_regions();
+        let ext_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.ext.configure_layers(cfg.layers)?;
+        let layers_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.ext.configure_notebook(cfg.notebook);
+        let notebook_ms = t.elapsed().as_millis() as u64;
         self.ext.plug_elevation();
+        let total_ms = t_all.elapsed().as_millis() as u64;
+        let other_ms = total_ms.saturating_sub(zims_ms + snap_ms + regions_ms + ext_ms + layers_ms + notebook_ms);
+        // slowest three ZIM opens (one line, not one per ZIM: a phone holds dozens)
+        zim_ms.sort_by_key(|z| std::cmp::Reverse(z.1));
+        let slowest: Vec<String> = zim_ms.iter().take(3).map(|(t, ms)| format!("{t} {ms} ms")).collect();
+        self.open_timings = vec![
+            format!(
+                "core open: {} ZIMs opened on {} threads in {} ms (slowest: {})",
+                zim_ms.len(),
+                threads.min(zim_ms.len()).max(1),
+                zims_ms,
+                if slowest.is_empty() { "none".to_string() } else { slowest.join(", ") }
+            ),
+            format!(
+                "core open steps (ms): zims {zims_ms}, snapshots {snap_ms}, regions {regions_ms}, places-live-keywords {ext_ms}, layers {layers_ms}, notebook {notebook_ms}, other {other_ms}, total {total_ms}"
+            ),
+        ];
         Ok(())
     }
 
@@ -1038,6 +1095,8 @@ impl Handle {
         if let Some(root) = &self.indexes_dir {
             out["rejected_snapshots"] = Value::Array(crate::snapshot::read_rejected(root));
         }
+        // how long the last set_sources took, step by step (the app writes these lines to its log)
+        out["open_timings"] = json!(self.open_timings);
         out.to_string()
     }
 

@@ -26,6 +26,7 @@ pub mod library;
 pub mod libreg;
 pub mod libupdate;
 pub mod nbplaces;
+pub mod openpool;
 pub mod pdfbuild;
 pub mod pdfindex;
 pub mod qbuild;

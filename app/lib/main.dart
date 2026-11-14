@@ -124,6 +124,7 @@ import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
+import 'platform/launch_clock.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
 import 'platform/model_release.dart';
@@ -146,7 +147,11 @@ import 'theme.dart';
 import 'keyboard.dart';
 import 'platform.dart' as plat;
 
+/// How long the launch screen waits, and on what (one log line when it lifts).
+final LaunchClock launchClock = LaunchClock(logInfo);
+
 void main() {
+  launchClock.begin();
   WidgetsFlutterBinding.ensureInitialized();
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
@@ -1006,8 +1011,17 @@ class _CacheAppState extends State<CacheApp> {
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
+      launchClock.coreReady();
       if (mounted) setState(() => _coreDone = true);
     });
+    // the launch screen also waits for the app's own start (settings and models read): time that too
+    void noteAppStarted() {
+      if (!app.started) return;
+      app.removeListener(noteAppStarted);
+      launchClock.appReady();
+    }
+    app.addListener(noteAppStarted);
+    noteAppStarted();
     // Bookshelves writes where a person places a book in this device's own library log.
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();

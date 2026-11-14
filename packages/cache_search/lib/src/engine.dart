@@ -56,6 +56,12 @@ class SearchEngine {
           if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
       ];
 
+  /// cs_status's "open_timings": the lines the core wrote about how long its last open took (none from an older core).
+  List<String> openTimings() => [
+        for (final t in (_object(_ok(native.status(_h)))['open_timings'] as List? ?? const []))
+          if (t is String) t,
+      ];
+
   SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
     final options = {
       'k': k,
