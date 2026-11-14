@@ -322,6 +322,9 @@ class AddPdfTarget {
   bool get isNew => path == null;
 }
 
+/// Pieces the core embeds in one step (see `_startArgs`): the longest a Pause or a Stop adding waits is one piece.
+const int kAddPdfEmbedBatch = 1;
+
 /// How long a start waits for an earlier run of the same PDF to stop (the foreground service waits the same, 45 s, for a charging run).
 const Duration kAddPdfStopWait = Duration(seconds: 45);
 
@@ -874,7 +877,10 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
         'title': job.title,
         'ocr': job.ocr,
         'ocr_batch': 4,
-        'embed_batch': 8,
+        // One piece for each step of the core: a step cannot be interrupted, and a Pause or a Stop adding is only heard between steps.
+        // Eight pieces were 90 s on a phone (13 min on the emulator): the notification's Pause and Stop adding did nothing for that long.
+        // The core embeds each piece on its own anyway, so a batch of one costs no speed.
+        'embed_batch': kAddPdfEmbedBatch,
         // gentle on a phone: the throttle's thread cap, else two
         'embed_threads': threads == null || threads > 2 ? 2 : (threads < 1 ? 1 : threads),
       },
@@ -933,7 +939,8 @@ class AddPdfState extends ChangeNotifier implements IndexWorkSource {
       }
     }
     final clock = job.stepClock ??= StepClock();
-    if (before == job.state && job.state == 'embedding' && job.piecesDone != piecesBefore) {
+    // said every eight pieces (steps are one piece each): the log keeps its size
+    if (before == job.state && job.state == 'embedding' && job.piecesDone != piecesBefore && job.piecesDone ~/ 8 != piecesBefore ~/ 8) {
       logInfo('Add PDF timing: pieces ${job.piecesDone} of ${job.pieces} embedded, last batch ${(job.pieceClock ?? clock).took()}', job: job.key);
       job.pieceClock = StepClock();
     }

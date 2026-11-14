@@ -256,6 +256,22 @@ class FgsAddTest {
     }
 
     @Test
+    fun pause_inTheNotification_saysPausedAtOnce_andProgressDoesNotPutAddingBack() {
+        val s = start()
+        runner.events!!.onProgress(progress)
+        s.onStartCommand(android.content.Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_PAUSE), 0, 2)
+        val n = posted(FgsAddNotifications.ID_ADDING)!!
+        assertEquals("Paused · 2 of 5 PDFs", title(n))
+        assertEquals("Paused by you", text(n))
+        assertTrue(n.actions == null || n.actions.isEmpty())
+        SystemClock.sleep(1100)
+        runner.events!!.onProgress(progress.copy(done = 3, current = "Garden notes"))
+        assertEquals("Paused · 2 of 5 PDFs", title(posted(FgsAddNotifications.ID_ADDING)!!))
+        runner.events!!.onFinished(FgsFinish("paused", "person", 2, 5, 0, 0, null, false, "Bookshelves", null, null, null))
+        assertEquals("Paused · 2 of 5 PDFs", title(posted(FgsAddNotifications.ID_RESULT)!!))
+    }
+
+    @Test
     fun finished_endsTheForegroundNotification_postsTheResult_releasesTheWakeLock_andStops() {
         val s = start()
         runner.events!!.onProgress(progress)

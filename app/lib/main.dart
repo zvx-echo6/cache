@@ -46,6 +46,7 @@ import 'library/add_pdf/watch_folders.dart';
 import 'background/background_dispatcher.dart';
 import 'background/background_lock.dart';
 import 'background/fgs_add.dart';
+import 'background/fgs_refused_note.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
@@ -538,10 +539,7 @@ class _CacheAppState extends State<CacheApp> {
     onLeft: () {
       if (_atFront) _toBack();
     },
-    onRefused: () {
-      final c = _navKey.currentContext;
-      if (c != null && c.mounted) ScaffoldMessenger.maybeOf(c)?.showSnackBar(const SnackBar(content: Text(FgsWords.refused)));
-    },
+    onRefused: () => unawaited(showFgsRefusedNote(() => _navKey.currentContext)),
   );
   Timer? _bgOpenTimer;
   int _bgSeen = 0;

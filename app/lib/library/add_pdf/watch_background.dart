@@ -213,7 +213,7 @@ Future<String> watchAddJob({
       // only what the watched folders found: a PDF added by hand is added while Cache is open, as always
       only: (j) => j.watchId != null,
       throttle: th,
-      lookEvery: const Duration(seconds: 5),
+      lookEvery: kFgsLookEvery,
       held: () async => addPdfHeld(th),
     ).run();
     // more to do: the next slice, unless Cache took over (it carries on itself)
@@ -238,6 +238,9 @@ const Duration kFgsAddBudget = Duration(hours: 7);
 /// How long the service waits for Cache to finish going to the back (it is started while Cache is still in front, and the app's
 /// hand-off then lets go of the lock) before it gives up.
 const Duration kFgsWaitForBack = Duration(seconds: 90);
+
+/// How often the service's run looks for a Pause (or a stop): the Pause waits at most this and then one piece of the core's work.
+const Duration kFgsLookEvery = Duration(seconds: 1);
 
 /// How long the service waits for a charging run that holds the lock to stop when asked (it looks at the stop every few seconds).
 const Duration kFgsTakeOverWait = Duration(seconds: 45);
@@ -297,7 +300,7 @@ Future<FgsAddEnd> fgsAddJob({
   Duration look = const Duration(milliseconds: 500),
   Duration progressEvery = const Duration(seconds: 1),
   // how often it looks at the stop, the battery and the heat: Pause answers within this
-  Duration lookEvery = const Duration(seconds: 5),
+  Duration lookEvery = kFgsLookEvery,
   bool resume = false,
   bool anyway = false,
   Future<void> Function({bool next, Duration delay})? queue,
