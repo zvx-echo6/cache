@@ -554,7 +554,8 @@ class AppState extends ChangeNotifier {
     // Whether the model's file is still mapped, and the memory once the allocator has had time to give pages back (measurement:
     // the reading right after the unload can lag).
     final mapped = mappedFileSummary(a.path);
-    if (mapped != null) logInfo('Model released: $mapped');
+    final freed = freedMemoryNote(session.lastFreeReport);
+    if (mapped != null || freed != null) logInfo('Model released: ${[?mapped, ?freed].join('; ')}');
     if (mapped != null && !Platform.environment.containsKey('FLUTTER_TEST')) {
       unawaited(Future<void>.delayed(const Duration(seconds: 15), () async {
         logInfo('Model released 15 s ago: ${mappedFileSummary(a.path) ?? ''}; ${await memorySnapshot()}');

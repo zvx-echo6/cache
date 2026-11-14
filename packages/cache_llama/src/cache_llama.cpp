@@ -27,6 +27,13 @@
 #include <vector>
 
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <malloc/malloc.h>
+#endif
+#if defined(__linux__)
+#include <malloc.h>
+#endif
 #if defined(__linux__)
 #include <sched.h>
 #endif
@@ -193,6 +200,35 @@ void set_err(char * err, int len, const std::string & msg) {
 }
 
 // Copies s into out; returns the length or -1 if it does not fit.
+// The process's memory that a freed model leaves behind if the allocator keeps it: anonymous resident memory (RssAnon of
+// /proc/self/status) on Linux and Android, the footprint the system counts against the app (phys_footprint) on Apple; -1
+// where unknown.
+long long process_memory_kb() {
+#if defined(__APPLE__)
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) == KERN_SUCCESS) {
+        return (long long) (info.phys_footprint / 1024);
+    }
+    return -1;
+#elif defined(__linux__)
+    FILE * f = fopen("/proc/self/status", "r");
+    if (!f) return -1;
+    char line[256];
+    long long kb = -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "RssAnon:", 8) == 0) {
+            kb = atoll(line + 8);
+            break;
+        }
+    }
+    fclose(f);
+    return kb;
+#else
+    return -1;
+#endif
+}
+
 int put(const std::string & s, char * out, int len) {
     if (!out || (int) s.size() + 1 > len) {
         return -1;
@@ -1520,6 +1556,38 @@ int cl_free_all(void) {
     }
     for (Handle * h : all) free_handle(h);
     return (int) all.size();
+}
+
+int cl_release_free_memory(char * out_json, int out_len) {
+    try {
+        const long long before = process_memory_kb();
+        long long result = -1;
+#if defined(__APPLE__)
+        result = (long long) malloc_zone_pressure_relief(nullptr, 0);  // all zones, as much as possible; bytes released
+#elif defined(__ANDROID__)
+        int done = 0;
+#if defined(M_PURGE_ALL)
+        done = mallopt(M_PURGE_ALL, 0);  // 0 where the option is not known (before API 34)
+#endif
+        if (!done) done = mallopt(M_PURGE, 0);
+        result = done;
+#elif defined(__GLIBC__)
+        result = malloc_trim(0);
+#endif
+        const long long after = process_memory_kb();
+        auto j = common_json::object();
+#if defined(__APPLE__)
+        j["what"] = "footprint";
+#else
+        j["what"] = "anon";
+#endif
+        j["before_kb"] = before;
+        j["after_kb"]  = after;
+        j["result"]    = result;
+        return put(j.dump(), out_json, out_len);
+    } catch (const std::exception &) {
+        return -1;
+    }
 }
 
 // ---------------- embeddings ----------------
