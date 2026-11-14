@@ -140,6 +140,8 @@ class _HarnessAppState extends State<HarnessApp> {
               trip['remainingM'] = 22860.45 - 22.0 * i;
               await _pushRaw(jsonEncode(trip), recorded['route_guiding']!);
             }
+            // The job waits for the glides after the last position, from here.
+            await _steps.invokeMethod<void>('say', 'roll done, five positions pushed');
           }
         case 'phoneon':
         case 'phoneoff':

@@ -949,14 +949,22 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
   # A moving vehicle: five positions a second apart. The marker glides between them and the camera goes with it; a picture
   # is taken as fast as they come while it does.
   before=$(log_count 'car map: the marker glides')
+  local rolled waited
+  rolled=$(log_count 'harness steps: roll done')
   notify roll
   for at in 1 2 3 4 5; do shot_ext "$label-guide-roll-$at"; done
-  sleep 2
+  # The glides are counted from the app's own lines, once they have come: the stand-in says when it has pushed the last
+  # position, and the job then waits up to 8 s more for the four glides between the five (a busy runner can be slow to log
+  # them), and says how long it waited.
+  wait_more 'harness steps: roll done' "$rolled" 20 || GUIDE_MISSING="$GUIDE_MISSING [the stand-in did not say it pushed the five positions]"
+  waited=$SECONDS
+  while [ $(( $(log_count 'car map: the marker glides') - before )) -lt 4 ] && [ $((SECONDS - waited)) -lt 8 ]; do sleep 0.5; done
+  waited=$((SECONDS - waited))
   at=$(( $(log_count 'car map: the marker glides') - before ))
   if [ "$at" -ge 3 ]; then
-    GUIDE="prompts: a short one and none were answered as told, $PROMPTS (the tone on this runner: ${TONE:-no line}); the marker glided between $at of five positions a second apart"
+    GUIDE="prompts: a short one and none were answered as told, $PROMPTS (the tone on this runner: ${TONE:-no line}); the marker glided between $at of five positions a second apart (counted ${waited} s after the last position)"
   else
-    GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart]"
+    GUIDE_MISSING="$GUIDE_MISSING [the marker glided between only $at of five positions a second apart, counted ${waited} s after the last position]"
   fi
   # The two extras on the map: the route mini map and the climb ahead. The app measures the room CarPlay reports and says
   # the screen's class (small: never on the car; big: always; in-between: on the car except while the phone's drive screen
