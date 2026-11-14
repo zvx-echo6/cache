@@ -1078,10 +1078,14 @@ guide_pictures() {  # guide_pictures <label>: turn by turn after Start, along th
     gaps=$(grep 'harness steps: phone theme ' "$STREAM" | tail -n +$((changes + 1)) | head -n 5 | cut -c12-23 \
       | awk -F'[:.]' '{ t = (($1 * 60 + $2) * 60 + $3) * 1000 + $4; if (NR > 1) printf "%d ", t - p; p = t }')
     long=0
-    for gap in $gaps; do [ "$gap" -gt 400 ] && long=$((long + 1)); done
+    count=0
+    for gap in $gaps; do
+      count=$((count + 1))
+      [ "$gap" -gt 400 ] && long=$((long + 1))
+    done
     want=$((long + 1))
-    if [ "$(echo $gaps | wc -w)" != 4 ]; then
-      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes: the stand-in said $(( $(echo $gaps | wc -w) + 1 )) of them, not five]"
+    if [ "$count" -ne 4 ]; then
+      GUIDE_MISSING="$GUIDE_MISSING [five quick theme changes: the stand-in said $((count + 1)) of them, not five]"
     elif [ "$got" = "$want" ] && [ "$last" = tactical ]; then
       if [ "$long" = 0 ]; then
         GUIDE="$GUIDE; five quick theme changes (gaps ${gaps% } ms) gave one style load, of the last (tactical)"
