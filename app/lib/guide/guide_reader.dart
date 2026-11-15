@@ -533,11 +533,7 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
     }
     if (!isAppLink(href)) return; // the guide works offline: web links do not open
     final place = appPlaceOf(href);
-    if (place != null && appPlaceKnown(place)) {
-      await goToAppPlace(context, place);
-    } else {
-      _say(kUnknownAppLink);
-    }
+    if (place == null || !goToAppPlace(context, place)) _say(kUnknownAppLink);
   }
 
   @override
@@ -622,22 +618,19 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
 
 /// A part of Cache opened from the guide: it slides up over the reader, full height, with "Back to the guide" at the top. Closing
 /// it in any way returns to the guide exactly where it was (the reader stays underneath).
-/// Whether [goToAppPlace] can open [place] here: the map for drawing an area, else a screen the shell has for it.
-bool appPlaceKnown(AppPlace place) =>
-    place == AppPlace.drawArea ? openAppPlace != null : appPlaceScreen?.call(place) != null;
-
-/// Opens [place] from [context]: drawing an area on the map itself, anything else as its screen over what is open. Nothing
-/// happens when [appPlaceKnown] is false.
-Future<void> goToAppPlace(BuildContext context, AppPlace place) async {
+/// Opens [place] from [context]: drawing an area on the map itself, anything else as its screen (built once) over what is open.
+/// False when this build has no screen for it, or no shell set the place screens.
+bool goToAppPlace(BuildContext context, AppPlace place) {
   if (place == AppPlace.drawArea) {
-    if (openAppPlace == null) return;
+    if (openAppPlace == null) return false;
     Navigator.of(context).popUntil((r) => r.isFirst);
     openAppPlace!(place);
-    return;
+    return true;
   }
   final screen = appPlaceScreen?.call(place);
-  if (screen == null) return;
-  await Navigator.of(context).push(AppPlaceRoute(child: screen));
+  if (screen == null) return false;
+  Navigator.of(context).push(AppPlaceRoute(child: screen));
+  return true;
 }
 
 class AppPlaceRoute extends PageRouteBuilder<void> {
