@@ -171,7 +171,7 @@ fn a_tiled_build_across_a_block_edge() {
     let csv = dir.join("addresses.csv");
     let t = tile_id_l1(40.5, -111.99);
     let nvt = tile_id_l1(40.73, -116.5);
-    let mut lines = vec!["id,number,street,unit,postcode,postal_city,state,country,lat,lon,tile".to_string()];
+    let mut lines = vec!["id,number,street,unit,postcode,postal_city,state,country,lat,lon,tile,source".to_string()];
     for (id, num, street, unit, pc, city, lat, lon) in [
         ("a1", "10", "MAIN ST", "", "84000", "EDGEVILLE", 40.501, -111.99),
         ("a2", "12", "MAIN ST", "", "84000", "EDGEVILLE", 40.501, -111.9898),
@@ -181,9 +181,11 @@ fn a_tiled_build_across_a_block_edge() {
         ("a5", "14A", "S STATE ST", "", "84000", "", 40.5002, -111.99),
         ("a6", "10", "S STATE ST", "", "84000", "", 40.4999, -111.99),
     ] {
-        lines.push(format!("{id},{num},{street},{unit},{pc},{city},UT,US,{lat},{lon},{t}"));
+        // One number of Main St (a8) comes from OpenAddresses, as `oa-merge` writes it.
+        let source = if id == "a8" { "oa:us/id/test" } else { "" };
+        lines.push(format!("{id},{num},{street},{unit},{pc},{city},UT,US,{lat},{lon},{t},{source}"));
     }
-    lines.push(format!("a7,1,Front St,,89820,Battle Mountain,NV,US,40.73,-116.5,{nvt}"));
+    lines.push(format!("a7,1,Front St,,89820,Battle Mountain,NV,US,40.73,-116.5,{nvt},"));
     std::fs::write(&csv, lines.join("\n") + "\n").unwrap();
     let addr_db = dir.join("addresses.sqlite");
     let ar = addresses(&AddressesCfg { csv, blocks: blocks_dir.clone(), admins, out: addr_db.clone(), bbox: Some([-113.0, 40.0, -111.0, 41.0]) }).unwrap();
@@ -247,6 +249,8 @@ fn a_tiled_build_across_a_block_edge() {
     assert!((twelve.lat - 40.5).abs() < 1e-6, "the first unit's point");
     let (exp, loc, _, k, _, _, _) = row("Main St");
     assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("Main Street"), Some("Edgeville"), 3));
+    let src = |street: &str| c.query_row("SELECT source FROM addr_streets WHERE street = ?1", [street], |r| r.get::<_, Option<String>>(0)).unwrap();
+    assert_eq!((src("Main St").as_deref(), src("S State St")), (Some("oa:us/id/test"), None));
     let city: String = c.query_row("SELECT postal_city FROM addr_streets WHERE street = 'Main St'", [], |r| r.get(0)).unwrap();
     assert_eq!(city, "Edgeville", "EDGEVILLE in the source");
 
@@ -265,6 +269,7 @@ fn a_tiled_build_across_a_block_edge() {
             described: Some(described),
             overture_release: "2026-10-21.0".into(),
             osm_source: "test".into(),
+            oa_attribution: None,
         },
         &rules,
         RULES,

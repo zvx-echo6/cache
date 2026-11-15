@@ -15,6 +15,8 @@ No data, library content or language model ships inside Cache. The maps, library
 - Material Symbols (Google): the icons notebooks and places have on the map, Apache-2.0. https://fonts.google.com/icons
 - Noto Sans: the map label fonts (glyph ranges as served by OpenFreeMap), SIL Open Font License 1.1. https://openfontlicense.org
 - Overture Maps Foundation: places (shops, services and other points of interest) for the map search. Overture publishes its places theme under the CDLA Permissive 2.0 license. https://docs.overturemaps.org/attribution/
+- OpenAddresses: street addresses (house numbers and where they are) for the address search, added where the places pack has none. OpenAddresses collects address data from public sources and does not relicense it; each source keeps its own license, and most ask only for attribution. https://openaddresses.io
+- OpenAddresses sources: Ada County, Idaho (us/id/ada): (c) City of Boise, CC BY 4.0. https://opendata.cityofboise.org
 - Mapterhorn: terrain heights, and the hillshade and contour lines made from them. (c) Mapterhorn. Open data from many national sources, see https://mapterhorn.com/attribution
 - ESA WorldCover 2021: land cover. (c) ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0.
 - Open-Meteo: weather forecasts. Weather data by Open-Meteo.com, CC BY 4.0. https://open-meteo.com

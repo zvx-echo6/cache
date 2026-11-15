@@ -29,6 +29,8 @@ pub struct CommonCfg {
     pub described: Option<PathBuf>,
     pub overture_release: String,
     pub osm_source: String,
+    /// `oa-attribution.json` from `oa-merge`: the OpenAddresses sources used and their credits.
+    pub oa_attribution: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +99,16 @@ pub fn common(cfg: &CommonCfg, rules: &Rules, rules_json: &str) -> Result<Common
         }
     }
 
+    let (mut sources_text, mut attribution_text) = (sources.join("; "), ATTRIBUTION.to_string());
+    if let Some(p) = &cfg.oa_attribution {
+        let json = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let (s, a) = crate::openaddresses::attribution_text(&json)?;
+        if !s.is_empty() {
+            sources_text = format!("{sources_text}; {s}");
+            attribution_text = format!("{attribution_text} {a}");
+        }
+    }
+
     let _ = std::fs::remove_file(&cfg.out);
     if let Some(d) = cfg.out.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
@@ -151,9 +163,9 @@ pub fn common(cfg: &CommonCfg, rules: &Rules, rules_json: &str) -> Result<Common
         ("built_at", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
         ("overture_release", cfg.overture_release.clone()),
         ("osm_source", cfg.osm_source.clone()),
-        ("sources", sources.join("; ")),
+        ("sources", sources_text),
         ("builder_rules", rules_json.to_string()),
-        ("attribution", ATTRIBUTION.to_string()),
+        ("attribution", attribution_text),
         ("levels", "[1]".to_string()),
     ] {
         tx.execute("INSERT INTO meta(key, value) VALUES (?1, ?2)", params![k, v]).map_err(|e| e.to_string())?;
