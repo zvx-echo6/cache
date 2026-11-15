@@ -56,6 +56,7 @@ class _Rig {
     bool places = false,
     bool placesBuildOnlyWithRegion = false,
     Future<void> Function()? onPlacesChanged,
+    bool Function()? synced,
   }) async {
     final r = _Rig();
     r.s = await SettingsRig.create(tester, connection: connection);
@@ -75,6 +76,7 @@ class _Rig {
         return r.core;
       },
       onPlacesChanged: onPlacesChanged,
+      syncedWithOtherDevice: synced,
     );
     await tester.runAsync(() async {
       await r.regions.init();
@@ -138,6 +140,146 @@ Future<void> _openCountySheet(WidgetTester tester) async {
 }
 
 void main() {
+
+  // Maps sync with one writer per file (regions_share.dart): each device lists its own regions and the ones linked devices share, and a
+  // delete is shared and ends the region on every device that has it; a region added after the delete stays.
+  group('regions shared with linked devices', () {
+    void peerFile(_Rig r, String device, Map<String, Object?> regions) {
+      final d = Directory('${r.s.dir.path}/regions/regions-share')..createSync(recursive: true);
+      File('${d.path}/$device.json').writeAsStringSync(jsonEncode({'v': 1, 'regions': regions}));
+    }
+
+    void peerDeletes(_Rig r, String device, List<(String, int)> deletes) {
+      final d = Directory('${r.s.dir.path}/regions/regions-share')..createSync(recursive: true);
+      File('${d.path}/$device.deletes.json').writeAsStringSync(jsonEncode({'deletes': [for (final x in deletes) {'id': x.$1, 'at': x.$2}]}));
+    }
+
+    Map<String, dynamic> readJson(String path) => jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+
+    Future<_Rig> bootShared(WidgetTester tester) async {
+      // the region engine names this device when it opens (cache_places::share::share_id); the fake core does not
+      final r = await _Rig.boot(tester);
+      File('${r.s.dir.path}/regions/.share-id')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('phone1');
+      return r;
+    }
+
+    testWidgets('a region only a linked device shares is listed, this device shares its own, and the union is read-only', (tester) async {
+      final r = await bootShared(tester);
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      r.core.finish(_county);
+      await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+      peerFile(r, 'peerdev', {
+        'us-ut': {'name': 'Utah', 'added': 1000, 'routing': true, 'places': false, 'routingPart': {'state': 'ready', 'bytes': 1234}, 'kind': null},
+        // the same region both hold: this device's own is the one listed
+        _county: {'name': 'Twin Falls (other device)', 'added': 5, 'routing': true, 'routingPart': {'state': 'ready', 'bytes': 9}},
+      });
+      await tester.runAsync(r.regions.refresh);
+      expect({for (final l in r.regions.local) l.id}, {_county, 'us-ut'});
+      expect(r.regions.regionOf('us-ut')!.name, 'Utah');
+      expect(r.regions.regionOf('us-ut')!.routingState, 'ready');
+      expect(r.regions.regionOf('us-ut')!.routingBytes, 1234);
+      expect(r.regions.regionOf(_county)!.name, 'Twin Falls County', reason: 'own first');
+      // nothing of the other device's was added to this device's own engine
+      expect(r.core.regions.keys, [_county]);
+      // this device shares its own, under its own name, and not the other device's
+      final mine = readJson('${r.s.dir.path}/regions/regions-share/phone1.json');
+      expect((mine['regions'] as Map).keys, [_county]);
+      expect((((mine['regions'] as Map)[_county] as Map)['routingPart'] as Map)['state'], 'ready');
+      expect(((mine['regions'] as Map)[_county] as Map)['name'], 'Twin Falls County');
+      await r.dispose(tester);
+    });
+
+    testWidgets('deleting a region shared by another device deletes it everywhere: a record in this device\'s folder, and a later download stays', (tester) async {
+      final r = await bootShared(tester);
+      peerFile(r, 'peerdev', {'us-ut': {'name': 'Utah', 'added': 1000, 'routing': true, 'routingPart': {'state': 'ready'}}});
+      await tester.runAsync(r.regions.refresh);
+      expect(r.regions.regionOf('us-ut'), isNotNull);
+      await tester.runAsync(() => r.regions.remove('us-ut'));
+      final deletes = (readJson('${r.s.dir.path}/regions/regions-share/phone1.deletes.json')['deletes'] as List).cast<Map>();
+      expect(deletes.single['id'], 'us-ut');
+      expect(r.regions.regionOf('us-ut'), isNull, reason: 'gone at once, though the other device still lists it');
+      await tester.runAsync(r.regions.refresh);
+      expect(r.regions.regionOf('us-ut'), isNull, reason: 'and stays gone while its file still lists it');
+      // the other device downloads it again: newer than the delete, it shows
+      final at = (deletes.single['at'] as num).toInt();
+      peerFile(r, 'peerdev', {'us-ut': {'name': 'Utah', 'added': at + 60000, 'routing': true, 'routingPart': {'state': 'ready'}}});
+      await tester.runAsync(r.regions.refresh);
+      expect(r.regions.regionOf('us-ut'), isNotNull);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a delete another device shared ends this device\'s own copy of the region, and writes no delete of its own', (tester) async {
+      final r = await bootShared(tester);
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+      r.core.finish(_county);
+      r.s.engine.finishAll();
+      await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+      expect(r.s.engine.storageTotal, greaterThan(0));
+      final when = DateTime.now().millisecondsSinceEpoch + 1000;
+      peerDeletes(r, 'peerdev', [(_county, when)]);
+      await r.refreshUntil(tester, () => r.regions.regionOf(_county) == null);
+      expect(r.regions.regionOf(_county), isNull);
+      expect(r.core.regions, isEmpty);
+      expect(r.core.calls, contains('remove'));
+      expect(r.s.engine.storageTotal, 0, reason: 'its map area went too');
+      expect(File('${r.s.dir.path}/regions/regions-share/phone1.deletes.json').existsSync(), isFalse, reason: 'the delete is the other device\'s, with its own time');
+      // downloaded again after that delete: it stays, and the old record does not end it
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 1200)));
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      r.core.finish(_county);
+      await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+      await tester.runAsync(r.regions.refresh);
+      expect(r.regions.regionOf(_county), isNotNull);
+      await r.dispose(tester);
+    });
+
+    testWidgets('files that are not a device\'s share are never read', (tester) async {
+      final r = await bootShared(tester);
+      final d = Directory('${r.s.dir.path}/regions/regions-share')..createSync(recursive: true);
+      File('${d.path}/phone1.json').writeAsStringSync(jsonEncode({'regions': {'own-echo': {'name': 'Echo'}}}));
+      File('${d.path}/peerdev (conflict, X, 2026-11-15 2040 UTC).json').writeAsStringSync(jsonEncode({'regions': {'conflict-region': {'name': 'C'}}}));
+      File('${d.path}/.peerdev.json.tmp1').writeAsStringSync('{"regions": {"half": {"name": "H"}}}');
+      File('${d.path}/broken.json').writeAsStringSync('{not json');
+      await tester.runAsync(r.regions.refresh);
+      expect(r.regions.local, isEmpty);
+      await r.dispose(tester);
+    });
+  });
+
+  group('delete confirmation', () {
+    Future<void> askDelete(WidgetTester tester, _Rig r) async {
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      r.core.finish(_county);
+      await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+      await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
+      await tester.pump();
+      await tester.longPress(find.byKey(const ValueKey('local-$_county')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('region-action-delete')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('asks "Delete this region?" and, when Maps is synced with a linked device, says it deletes on every synced device', (tester) async {
+      final r = await _Rig.boot(tester, synced: () => true);
+      await askDelete(tester, r);
+      expect(find.text('Delete this region?'), findsOneWidget);
+      expect(find.text('Deleting this will delete this from all synced devices.'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('delete-region-cancel')));
+      await tester.pumpAndSettle();
+      expect(r.regions.regionOf(_county), isNotNull, reason: 'Cancel deletes nothing');
+      await r.dispose(tester);
+    });
+
+    testWidgets('without a synced device it asks only the question', (tester) async {
+      final r = await _Rig.boot(tester, synced: () => false);
+      await askDelete(tester, r);
+      expect(find.text('Delete this region?'), findsOneWidget);
+      expect(find.text('Deleting this will delete this from all synced devices.'), findsNothing);
+      await r.dispose(tester);
+    });
+  });
   testWidgets('the tree browses regions at every scale, and a region shows under each region it is in', (tester) async {
     final r = await _Rig.boot(tester);
     await r.s.show(tester, RegionsScreen(regions: r.regions));
@@ -228,8 +370,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('region-action-delete')));
     await tester.pumpAndSettle();
-    expect(find.text('Delete Twin Falls County?'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('confirm-delete')));
+    expect(find.text('Delete this region?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('delete-region-confirm-button')));
     // Until the removal has saved, refreshed and told the screen (see settleUntil).
     await r.settleUntil(tester, () => r.regions.local.isEmpty && find.text('Nothing downloaded yet').evaluate().isNotEmpty);
     expect(r.core.regions, isEmpty);
@@ -826,7 +968,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('region-action-delete')));
       await tester.pumpAndSettle();
-      expect(find.text('Its map, directions, places and off-road data are removed from this device. Parts another region uses stay.'), findsOneWidget);
+      expect(find.text('Delete this region?'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await r.dispose(tester);

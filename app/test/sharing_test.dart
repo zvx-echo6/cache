@@ -86,11 +86,12 @@ void main() {
     await tester.runAsync(sharing.setUp);
     // The engine is told at its start, before its first round, so nothing of an index goes out or comes in even once.
     // The same patterns cache_sync's tests check (packages/cache_search/native/cache_sync/tests/derived_folders.rs): fetched
-    // indexes, the viewed-tile cache and TileJSON, and SQLite's -shm and -journal; every downloaded part still syncs.
+    // indexes, the viewed-tile cache and TileJSON, SQLite's -shm and -journal, and the live databases (one writer each; every device
+    // shares a snapshot of its own instead: maps_two_writers.rs); the immutable downloaded parts still sync.
     expect(config?['exclude'], {
       'libraries': ['*/index', '*/index-snapshots', 'my-books*/shard*', 'my-books*/copies.jsonl', 'my-books*/documents.tsv', 'my-books*/SHA256SUMS'],
-      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'],
-      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal'],
+      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*'],
+      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT'],
     });
     // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
     final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);

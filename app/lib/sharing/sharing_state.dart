@@ -230,6 +230,13 @@ class SharingState extends ChangeNotifier {
     return peers.isNotEmpty;
   }
 
+  /// Whether a region deleted here is deleted on another device too: the Maps share (the Regions kind) is on and at least one device is
+  /// linked. Sync is fully shared both ways, so every linked device takes the delete.
+  bool get mapsTakenByAnotherDevice {
+    final k = kinds.where((k) => k.id == 'regions').firstOrNull;
+    return k != null && kindOn(k) && peers.isNotEmpty;
+  }
+
   /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
   Future<void> setItem(DataKind k, ShareItem it, bool on) => _driver.setItem(k, it, on);
 

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../maps/ui/format.dart';
 import '../../screens/download_confirm.dart';
 import '../../settings/data_policy.dart';
+import '../../theme.dart';
 import '../problem_words.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
@@ -291,7 +292,8 @@ Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegi
   if (choice == DownloadChoice.cancel) return;
   tell(m, 'Starting ${l.name} again');
   await _run(m, 'start ${l.name} again', () async {
-    await regions.remove(l.id);
+    // a repair on this device: it does not take the other devices' copies away
+    await regions.remove(l.id, everywhere: false);
     if (choice == DownloadChoice.now) {
       await regions.download(rec, routing: routing, map: map, places: places, offroad: offroad, anyway: true);
     } else {
@@ -300,14 +302,37 @@ Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegi
   });
 }
 
-/// Deletes a region after asking, with what it frees.
-Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRegion l) async {
-  final yes = await confirmDelete(
-    context,
-    name: l.name,
-    bytes: l.bytes,
-    again: l.isArea ? 'Its map is removed from this device.' : 'Its map, directions, places and off-road data are removed from this device. Parts another region uses stay.',
+// WORDING (for cache-pm): the region delete's confirmation, the same shape as deleting a book (owner's design, 2026-11-15): the question,
+// and under it, only when the delete reaches other devices (the Maps share is on and a device is linked), the line.
+const String kDeleteRegionQuestion = 'Delete this region?';
+const String kDeleteRegionSyncedLine = 'Deleting this will delete this from all synced devices.';
+
+/// Asks "Delete this region?" with Cancel and Delete, and, when [synced] (Maps shared with at least one linked device), the line
+/// "Deleting this will delete this from all synced devices.". True to delete.
+Future<bool> confirmDeleteRegion(BuildContext context, {required bool synced}) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('delete-region-confirm'),
+      title: const Text(kDeleteRegionQuestion),
+      content: synced ? const Text(kDeleteRegionSyncedLine, key: ValueKey('delete-region-synced-line')) : null,
+      actions: [
+        TextButton(key: const ValueKey('delete-region-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('delete-region-confirm-button'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
   );
+  return yes == true;
+}
+
+/// Deletes a region after asking. There is no delete for one device: with Maps synced the region goes from every linked device.
+Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRegion l) async {
+  final yes = await confirmDeleteRegion(context, synced: regions.deleteReachesOtherDevices);
   if (!yes || !context.mounted) return false;
   final m = ScaffoldMessenger.of(context);
   try {
