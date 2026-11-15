@@ -1536,6 +1536,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   String? _labelStyle;
   List<String> _labelIds = const [];
 
+  List<String> _basemapLines() {
+    final style = _styleJson;
+    final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
+    if (style == null || base == null) return const [];
+    return basemapLineLayers(style, basemapSource: sourceIdOf(base.def));
+  }
+
   List<String> _basemapLabels() {
     final style = _styleJson;
     final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
@@ -1639,6 +1646,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           final f = read(raw, TapSource.overlay, use.def.title);
           if (f != null) hits.add(f);
         }
+      }
+    }
+    // Nothing else is there: a named line of the base map (a path, a track, a road, a river) is a tap on that name, as its label is.
+    if (hits.isEmpty) {
+      final lines = _basemapLines();
+      note.write(' | basemap-lines(${lines.length}):');
+      for (final raw in await _query(c, point, lines, note)) {
+        final f = read(raw, TapSource.basemap, '');
+        if (f != null) hits.add(f);
       }
     }
     final f = pickTapFeature(hits);

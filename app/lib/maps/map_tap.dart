@@ -104,6 +104,22 @@ List<String> basemapLabelLayers(String styleJson, {required String basemapSource
   }
 }
 
+/// The base map's line layers in a style ([styleJson], as the screen applied it): its paths, tracks, roads, rivers, from the base
+/// map's source. A feature of one with a name is a tap on that road or path; one without opens nothing.
+List<String> basemapLineLayers(String styleJson, {required String basemapSource}) {
+  try {
+    final s = jsonDecode(styleJson);
+    final layers = s is Map ? s['layers'] : null;
+    if (layers is! List) return const [];
+    return [
+      for (final l in layers)
+        if (l is Map && l['type'] == 'line' && l['source'] == basemapSource && l['id'] is String) l['id'] as String,
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// The line and area layers an overlay drew into a style ([styleJson], as the screen applied it): its layers of type line (the
 /// route's line and its casing) and fill, from its source. What a tap asks for is what the style has, not the ids worked out again.
 List<String> overlayHitLayers(String styleJson, {required String source}) {
