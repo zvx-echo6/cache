@@ -417,6 +417,7 @@ class CarBridge {
           query: a['query'] as String?,
           start: a['start'] != false,
           stop: a['stop'] == true,
+          search: a['search'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -537,10 +538,14 @@ class CarBridge {
   /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
   /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
   /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false, bool search = false}) async {
     final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
+    if (search && q.isNotEmpty) {
+      // A voice search (Android `geo:?q=`): always the list of places found, even for a saved place's exact name.
+      return {'places': [for (final p in await this.search(q)) _placeOut(p)]};
+    }
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
       to = MapPlace.pin(lat, lon, name: q.isEmpty ? 'Dropped pin' : q);
     } else if (q.isNotEmpty) {

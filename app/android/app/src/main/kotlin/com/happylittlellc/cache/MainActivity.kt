@@ -14,6 +14,7 @@ import android.os.Build
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.GeoView
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import com.happylittlellc.cache.fgs.FgsAddArm
@@ -67,7 +68,7 @@ class MainActivity : FlutterActivity() {
     // A tap on a guidance notification (OpenMaps.kt): the Maps tab. Held until Dart takes it (a cold start) and also pushed to a
     // running Dart on the co.cache/open channel (lib/nav/open_maps.dart).
     private var openChannel: MethodChannel? = null
-    private var pendingOpen: String? = null
+    private var pendingOpen: Any? = null  // "maps", or a map (what, lat, lon, query) for a geo: link opened here
 
     private fun readOpen(i: Intent?) {
         if (!OpenMaps.wants(i)) return
@@ -81,11 +82,27 @@ class MainActivity : FlutterActivity() {
         })
     }
 
+    // A geo: link with no car connected (Cache picked from "Open with"): the Maps tab, with the search or the point. Held until
+    // Dart takes it, and pushed to a running Dart on the co.cache/open channel.
+    private fun openGeo(v: GeoView) {
+        val (lat, lon, query) = when (v) {
+            is GeoView.Search -> Triple(v.lat, v.lon, v.query)
+            is GeoView.Point -> Triple(v.req.lat, v.req.lon, v.req.query)
+        }
+        val what = hashMapOf<String, Any?>("what" to OpenMaps.MAPS, "lat" to lat, "lon" to lon, "query" to query)
+        pendingOpen = what
+        openChannel?.invokeMethod("open", what, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
     override fun onNewIntent(intent: Intent) {
         // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
         // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
         // is dropped. Flutter never sees it: it would read the address as a page to open, and the app has no such pages.
-        if (NavIntent.fromPhone(intent)) return
+        if (NavIntent.fromPhone(intent, ::openGeo)) return
         super.onNewIntent(intent)
         readBenchExtras(intent)
         readLink(intent)
@@ -95,7 +112,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         // The same when the request is what started this activity: the app opens as from its icon.
-        if (NavIntent.fromPhone(intent)) intent = NavIntent.plainLaunch(intent)
+        if (NavIntent.fromPhone(intent, ::openGeo)) intent = NavIntent.plainLaunch(intent)
         super.onCreate(savedInstanceState)
         readBenchExtras(intent)
         readLink(intent)

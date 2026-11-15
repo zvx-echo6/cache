@@ -635,6 +635,23 @@ void main() {
       expect(inbox.pending, isFalse, reason: 'only the Maps tab is asked for here');
       expect(heard, 2);
     });
+
+    test('a geo: link opened on the phone brings its search or its point with the request, once', () {
+      final inbox = OpenMapsInbox(channel: const MethodChannel('co.cache/open/test'));
+      inbox.offer({'what': 'maps', 'query': ' gas station ', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      final g = inbox.takeGeo()!;
+      expect((g.query, g.lat, g.lon), ('gas station', 43.6, -116.2));
+      expect(inbox.takeGeo(), isNull, reason: 'once');
+      inbox.offer({'what': 'maps', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()!.query, isNull);
+      inbox.offer('maps');
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo(), isNull, reason: 'a notification tap carries nothing');
+      inbox.offer({'what': 'weather'});
+      expect(inbox.pending, isFalse);
+    });
   });
 
   batch2();

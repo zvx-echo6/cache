@@ -1483,6 +1483,21 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'place 1', 'start': true, 'search': true})) as Map;
+      expect(r['places'], isNotEmpty);
+      expect(r.containsKey('started'), isFalse);
+      expect(nav.guiding, isFalse);
+      expect(asked, everyElement(isFalse), reason: 'the car never loads the search model');
+    });
+
     test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
       backend.saved.add(('Place 1', 42.6, -113.7));
       location.publish(fixAt(42.5, -113.8));
