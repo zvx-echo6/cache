@@ -19,7 +19,7 @@ use std::time::Duration;
 pub const MAX_PER_INSTANCE: usize = 2;
 pub const MAX_TOTAL: usize = 4;
 /// Room kept free beyond the file itself (thumbnail, captions, manifest, the file system's own needs).
-const MARGIN: u64 = 16 * 1024 * 1024;
+pub(crate) const MARGIN: u64 = 16 * 1024 * 1024;
 const ATTEMPTS: u32 = 4;
 
 static SLOTS: Mutex<Option<(HashMap<String, usize>, usize)>> = Mutex::new(None);
@@ -177,7 +177,7 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
     Err(Error::io(format!("reading the free space of {}: not supported on this platform", path.display())))
 }
 
-fn sha256_file(p: &Path) -> Result<String> {
+pub(crate) fn sha256_file(p: &Path) -> Result<String> {
     let mut f = std::fs::File::open(p).map_err(|e| Error::io(format!("reading {}: {e}", p.display())))?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 256 * 1024];
@@ -431,6 +431,26 @@ impl Prepared {
                 }
             }
         }
+        // A file a site serves as HLS is a fragmented MP4, which Android's player reads as its first fragment (a 1:59 video as
+        // "0:04 / 0:04", nothing to seek to): it is rewritten as a plain MP4 when there is room for a second copy. The checksum
+        // above is the instance's file's; the manifest then describes the saved one. Anything that goes wrong leaves the file as
+        // it was downloaded, with one line in the log.
+        let (mut size, mut sha, mut remuxed) = (size, sha, false);
+        if o.source.starts_with("hls") {
+            let free = match p.fake_available_bytes {
+                Some(n) => n,
+                None => available_bytes(&dest).unwrap_or(0),
+            };
+            match crate::remux::remux_in_place(&part, free, MARGIN) {
+                Ok(Some(_)) => {
+                    size = std::fs::metadata(&part).map_err(|e| Error::io(format!("reading {}: {e}", part.display())))?.len();
+                    sha = sha256_file(&part)?;
+                    remuxed = true;
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("cache_video: {} kept as downloaded; it could not be rewritten as a plain MP4: {}", uuid, e.message),
+            }
+        }
         // the file is complete: it replaces any earlier download of this video
         if let Ok(rd) = std::fs::read_dir(&dest) {
             for e in rd.flatten() {
@@ -501,6 +521,8 @@ impl Prepared {
             "size": size,
             "sha256": sha,
             "checksum_verified": verified,
+            // rewritten from the site's fragmented MP4 (HLS) into a plain MP4: size and sha256 are the saved file's
+            "remuxed": remuxed,
             "file": final_name,
             "thumbnail": thumb,
             "captions": caps,

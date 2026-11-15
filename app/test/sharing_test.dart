@@ -88,7 +88,7 @@ void main() {
     // The same patterns cache_sync's tests check (packages/cache_search/native/cache_sync/tests/derived_folders.rs): fetched
     // indexes, the viewed-tile cache and TileJSON, and SQLite's -shm and -journal; every downloaded part still syncs.
     expect(config?['exclude'], {
-      'libraries': ['*/index', '*/index-snapshots'],
+      'libraries': ['*/index', '*/index-snapshots', 'my-books*/shard*', 'my-books*/copies.jsonl', 'my-books*/documents.tsv', 'my-books*/SHA256SUMS'],
       'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'],
       'regions': ['index', 'places/index', '**/*-shm', '**/*-journal'],
     });

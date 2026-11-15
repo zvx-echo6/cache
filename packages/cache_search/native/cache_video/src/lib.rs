@@ -13,6 +13,7 @@ pub mod dl;
 pub mod http;
 pub mod model;
 pub mod resolve;
+pub mod remux;
 pub mod store;
 
 use serde::Deserialize;

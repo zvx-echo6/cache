@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import '../../../app/lib/sharing/share_rules.dart' show kLibraryNotShared;
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/errors.dart';
 import '../bin/line_protocol.dart';
@@ -138,7 +139,8 @@ void main() {
     final ex = {for (final k in t.kinds) ...k.notShared};
     // the same lists the phone's Library kind gives its engine (app/lib/main.dart dataKinds): a server that synced what phones never
     // do would send those files, and their deletes, to every linked device
-    expect(ex['libraries'], ['*/index', '*/index-snapshots']);
+    expect(ex['libraries'], kLibraryNotShared);
+    expect(ex['libraries'], containsAll(['*/index', '*/index-snapshots', 'my-books*/shard*', 'my-books*/copies.jsonl', 'my-books*/documents.tsv', 'my-books*/SHA256SUMS']));
     expect(ex['library'], ['*.illustration.png']);
     expect(ex['maps'], contains('tiles.sqlite*'));
     expect(ex['regions'], contains('places/index'));
@@ -168,7 +170,7 @@ void main() {
     for (final k in ['relay', 'relay_urls', 'dht', 'mdns', 'lookup', 'lookup_url', 'port', 'interval_secs', 'reserve_bytes']) {
       expect(cfg.containsKey(k), isFalse, reason: k);
     }
-    expect((cfg['exclude'] as Map)['libraries'], ['*/index', '*/index-snapshots']);
+    expect((cfg['exclude'] as Map)['libraries'], kLibraryNotShared);
     expect((cfg['exclude'] as Map)['library'], ['*.illustration.png']);
     expect((cfg['exclude'] as Map)['indexes'], contains('.local'));
     expect(cfg['only'], {'indexes': <String>[]});

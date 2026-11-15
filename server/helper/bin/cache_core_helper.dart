@@ -5,6 +5,7 @@ import 'dart:io';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
+import 'own_libraries.dart';
 import 'fs_ops.dart';
 import 'guide_install.dart';
 import 'history_ops.dart';
@@ -67,11 +68,15 @@ Future<void> main() async {
   final indexer = IndexDriver(dispatcher,
       log: log, extra: extras, load: HostLoad(), pdf: pdf, savedVideos: () => videoOps.savedVideos(), videoDir: '${dirs.docs.path}/videos');
   videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: indexer.kick);
+  // saved HLS videos from before are rewritten as plain MP4 in the background, a while after start (not in its way)
+  Timer(const Duration(seconds: 30), () => unawaited(videoOps.repairSaved()));
   // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
   final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
   final guide = guidePath != null && guidePath.isNotEmpty
       ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
       : null;
+  // The person's own libraries (My books) that sync here: made to match their packs on this server (their shard is each device's).
+  final own = OwnLibrarySync(dispatcher, dirs, log: log, onChanged: indexer.useSources, onDone: indexer.kick);
   // Weather, alerts and fires stay fresh with no tab open (what a phone's background run does).
   final liveTimer = LiveTimer(dispatcher, support: dirs.support, log: log)..start();
   // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
@@ -87,7 +92,13 @@ Future<void> main() async {
       ? null
       : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
-  if (sharing != null) unawaited(sharing.init());
+  if (sharing != null) {
+    // a pack of My books that another device added arrives in the libraries share: made searchable here
+    sharing.onShareChanged = (ids) {
+      if (ids.contains('libraries')) unawaited(own.run());
+    };
+    unawaited(sharing.init());
+  }
   await serveLines(
     stdin,
     (line) async {
@@ -97,11 +108,11 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, onOpened: () {
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, onOpened: () {
         regionsOps.afterOpen();
         keys.replay(dispatcher);
       }),
-      RescanOp(dirs, dispatcher, log: log, indexer: indexer),
+      RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own),
       IndexStateOp(indexer),
       IndexPauseOp(indexer),
       FeaturesOp(dirs),

@@ -165,6 +165,27 @@ class _LibNative implements CsNative {
           File('${p['index_dir']}/done').createSync(recursive: true);
         }
         result = done(null);
+      case 'own_library_sync':
+        // the core makes a person's own library match its packs (ownlib.rs, tested in Rust: tests/ownlib_ffi.rs): here a library
+        // with no shard gets one holding a point per pack
+        final lib = p['library_dir'] as String;
+        // the fake core runs in the search worker's isolate: the calls are written beside the libraries folder for the test
+        File('${Directory(lib).parent.parent.path}/own-sync-calls.txt').writeAsStringSync('${_base(lib)}\n', mode: FileMode.append);
+        final packs = Directory('$lib/packs').existsSync() ? Directory('$lib/packs').listSync().length : 0;
+        // "busy-once" in the library: the first look is refused busy (an index job of the library is running)
+        final once = File('$lib/busy-once');
+        if (once.existsSync()) {
+          once.deleteSync();
+          File('${Directory(lib).parent.parent.path}/own-sync-calls.txt').writeAsStringSync('busy:${_base(lib)}\n', mode: FileMode.append);
+          err = jsonEncode({'code': 'busy', 'message': 'the library is already being updated'});
+          return 0;
+        }
+        final rebuilt = !Directory('$lib/shard').existsSync();
+        if (rebuilt) {
+          Directory('$lib/shard').createSync(recursive: true);
+          File('$lib/shard/fake.json').writeAsStringSync(jsonEncode({'docs': packs}));
+        }
+        result = done({'own': true, 'rebuilt': rebuilt, 'reason': rebuilt ? 'first rebuild on this device' : null, 'books': packs, 'points': packs, 'conflicts_removed': <String>[], 'unreadable': <String>[]});
       case 'library_template':
         File(p['out_path'] as String).writeAsStringSync(jsonEncode({
           'fake_library': true,
@@ -191,6 +212,7 @@ class _LibNative implements CsNative {
 }
 
 CsNative _makeNative() => _LibNative();
+
 
 /// A downloader that "downloads" by writing the bytes the test gives for each link.
 class _FakeDownloader extends ZimDownloader {
@@ -238,7 +260,7 @@ void main() {
   String? picked;
   final saved = <String, Uint8List>{};
 
-  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir}) async {
+  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir, Duration ownBusyRetry = const Duration(seconds: 30)}) async {
     sources = SourcesState(
       zimsDirOverride: Directory('${tmp.path}/zims'),
       indexesDirOverride: Directory('${tmp.path}/indexes'),
@@ -258,6 +280,7 @@ void main() {
         return true;
       },
       pollInterval: const Duration(milliseconds: 5),
+      ownBusyRetry: ownBusyRetry,
       bundledGuide: guide,
     );
     await sources.init();
@@ -283,7 +306,107 @@ void main() {
   Future<bool> never(String n, String? a, String? b) async => fail('no update was expected');
   Future<String?> noSettings(String reason) async => fail('no settings file was expected');
 
+  group('pickDefaultOwn', () {
+    test('more than one own_default: every device picks the same one, whatever order the folders are read in', () async {
+      await setUpLibs(); // the file's tearDown disposes the libraries state
+      ({String folder, String? id}) c(String folder, String? id) => (folder: folder, id: id);
+      expect(pickDefaultOwn(const []), isNull);
+      expect(pickDefaultOwn([c('my-books-2', 'my-books-a'), c('my-books', 'my-books-z')]), 'my-books', reason: 'the folder named exactly my-books first');
+      expect(pickDefaultOwn([c('my-books-3', 'my-books-c'), c('my-books-2', 'my-books-b')]), 'my-books-2', reason: 'else the lowest library id');
+      expect(pickDefaultOwn([c('my-books-2', 'my-books-b'), c('my-books-3', 'my-books-c')]), 'my-books-2');
+      expect(pickDefaultOwn([c('my-books-4', null), c('my-books-3', 'my-books-x')]), 'my-books-3', reason: 'an id before none');
+      expect(pickDefaultOwn([c('my-books-5', null), c('my-books-4', null)]), 'my-books-4', reason: 'else the lowest folder name');
+    });
+  });
+
   group('LibrariesState', () {
+    test("a person's own library that arrived by sync without its shard is made from its packs at start, and only own ones are", () async {
+      // the libraries the fake core's own_library_sync was asked about, by folder name, in order
+      List<String> ownSyncCalls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      void lib(String name, Map<String, dynamic> settings, {bool shard = false, int packs = 0}) {
+        final d = Directory('${tmp.path}/libraries/$name')..createSync(recursive: true);
+        File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'fields': {'text': 'text'}, ...settings}));
+        for (var i = 0; i < packs; i++) {
+          File('${d.path}/packs/b$i@1.cdoc').createSync(recursive: true);
+        }
+        if (shard) {
+          File('${d.path}/shard/fake.json')
+            ..createSync(recursive: true)
+            ..writeAsStringSync(jsonEncode({'docs': 3}));
+        }
+      }
+
+      // My books as a new device of the person receives it now: settings, packs and PDFs, never the shard or the lists
+      lib('my-books', {'library_id': 'my-books-abc', 'title': 'My books', 'own': true, 'own_default': true}, packs: 2);
+      // a downloaded library (not own), and an own-looking one in a folder the app never names so: never asked about
+      lib('library-my-books', {'library_id': 'my-books', 'title': 'Shared'}, shard: true);
+      lib('first-aid', {'library_id': 'first-aid', 'title': 'First aid', 'own': true}, shard: true);
+      await setUpLibs();
+      expect(ownSyncCalls(), ['my-books']);
+      final mine = libs.libraries.firstWhere((l) => l.folderName == 'my-books');
+      expect(libs.defaultOwnLibrary, mine, reason: 'listed once it has its shard, so Add PDF adds to it rather than making another');
+      expect(libs.docsOf(mine), 2);
+      expect(libs.ownSyncResults[mine.path]?['rebuilt'], isTrue);
+      // its keyword index is started in the same pass (the rebuild removes the device index; _resumeIndexes runs after it)
+      await libs.whenIdle();
+      expect(File('${mine.indexPath}/done').existsSync(), isTrue);
+      // a sync that changed the libraries folder (main.dart: libraries.rescan) looks again; nothing to rebuild now
+      await libs.rescan();
+      expect(ownSyncCalls(), ['my-books', 'my-books']);
+      expect(libs.ownSyncResults[mine.path]?['rebuilt'], isFalse);
+    });
+
+    test('two own libraries that both say own_default: defaultOwnLibrary is the folder named exactly my-books', () async {
+      for (final (name, id) in [('my-books-2', 'my-books-a'), ('my-books', 'my-books-z')]) {
+        final d = Directory('${tmp.path}/libraries/$name')..createSync(recursive: true);
+        File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': id, 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+        File('${d.path}/shard/fake.json')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(jsonEncode({'docs': 1}));
+      }
+      await setUpLibs();
+      expect(libs.ownLibraries, hasLength(2));
+      expect(libs.defaultOwnLibrary?.folderName, 'my-books');
+      await libs.whenIdle();
+    });
+
+    test('an own library that answers busy (its index job runs) is looked at once more after a while, then is listed', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      List<String> calls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      await setUpLibs(ownBusyRetry: const Duration(milliseconds: 50));
+      for (var i = 0; i < 400 && libs.defaultOwnLibrary == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      // each look is written as it is asked ("my-books"), a refused one also as "busy:my-books"
+      expect(calls(), ['my-books', 'busy:my-books', 'my-books'], reason: 'refused busy, then one delayed look made it');
+      expect(libs.defaultOwnLibrary?.folderName, 'my-books');
+      // the delayed rescan finishes (the core's list, the index job) before the state is disposed
+      for (var i = 0; i < 200 && libs.docsOf(libs.defaultOwnLibrary!) == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      await libs.whenIdle();
+    });
+
+    test("only a person's own library is given a my-books folder name, and every own one is", () async {
+      await setUpLibs();
+      await libs.addFile(libFile('shared.cache-library', _lib(id: 'my-books', title: 'Shared books')), confirmUpdate: never, askSettings: noSettings);
+      final body = (jsonDecode(_lib(id: 'mine', title: 'Mine')) as Map).cast<String, dynamic>();
+      (body['settings'] as Map)['own'] = true;
+      await libs.addFile(libFile('mine.cache-library', jsonEncode(body)), confirmUpdate: never, askSettings: noSettings);
+      expect(folders(), ['library-my-books', 'my-books-mine']);
+    });
+
     test('a .cache-library file is added with its settings, indexed and ready; nothing is asked', () async {
       await setUpLibs();
       await libs.addFile(libFile('manuals.cache-library', _lib()), confirmUpdate: never, askSettings: noSettings);

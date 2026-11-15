@@ -25,8 +25,11 @@ use std::sync::{Arc, Mutex, Once};
 
 pub type Shard = ReadOnlyEdgeShard<MmapFile>;
 
-/// `hnsw_ef` for every dense search. Set here, not exposed to the app.
-pub const HNSW_EF: usize = 64;
+/// `hnsw_ef` for every dense search. Set here, not exposed to the app. It matters only for a library whose vectors are in an
+/// HNSW graph (past Edge's indexing threshold; a small library is searched exactly). Measured on the 1.7 million-point Field
+/// library (2026-11-14, 238 real queries, top 10 against exact search): 64 found 0.72 of the exact results in 2 ms, 512 found
+/// 0.92 in 9 ms (exact search takes 1.7 s). A graph built with larger m / ef_construct would reach more; logged for after 1.1.
+pub const HNSW_EF: usize = 512;
 /// How many payloads are sampled to guess settings.
 const GUESS_SAMPLE: usize = 20;
 /// The size past which Qdrant Edge gives a segment's vectors an HNSW graph when the shard is optimized, in KB (Edge's default

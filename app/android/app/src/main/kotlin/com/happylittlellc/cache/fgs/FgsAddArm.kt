@@ -66,6 +66,8 @@ object FgsAddArm {
      * The person is leaving [activity]: start the service when armed, and tell the app. Returns whether a start was asked for.
      */
     fun onLeave(activity: Activity, source: Leave = Leave.HINT, now: Long = SystemClock.elapsedRealtime()): Boolean {
+        // said every time, so a device round can see which callbacks arrive (Recents on the Pixel) and why one did not start it
+        Log.i("FgsAddArm", "leave: $source armed=$armed running=${FgsAddService.running} changingConfig=${activity.isChangingConfigurations} internal=$internalLaunch")
         if (!armed || activity.isChangingConfigurations || FgsAddService.running) return false
         if (internalLaunch) {
             // the hint the launch itself makes, and the pause and stop while the picker is up: not leaves. A hint long after the launch is the person's.

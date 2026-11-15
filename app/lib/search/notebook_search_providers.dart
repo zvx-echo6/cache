@@ -4,6 +4,7 @@ import '../notebook/notebook_model.dart';
 import '../notebook/notebook_state.dart';
 import '../notebook/notebook_text.dart';
 import '../notebook/places.dart';
+import '../nav/saved_first.dart';
 import 'app_search.dart';
 
 /// The rank a search hit keeps by its place in the store's list (best match first), or the name's match when that is higher.
@@ -56,9 +57,13 @@ class NotebooksSearchProvider implements AppSearchProvider {
 
 /// Places: the places of the Places notebooks that match, nearest first among equals.
 class NotebookPlacesSearchProvider implements AppSearchProvider {
-  NotebookPlacesSearchProvider({required this.notebook, required this.open, this.here, this.distance});
+  NotebookPlacesSearchProvider({required this.notebook, required this.open, this.here, this.distance, this.savedByName = false});
 
   final NotebookState notebook;
+
+  /// The saved places are listed by name by the Places search ([PlacesSearchProvider], saved_first.dart): an entry of the
+  /// saved-places notebook whose name matches is left to it, so it is not listed twice. One found by its notes stays here.
+  final bool savedByName;
   final void Function(Notebook n, NbEntry e) open;
   final ({double lat, double lon})? Function()? here;
 
@@ -75,7 +80,11 @@ class NotebookPlacesSearchProvider implements AppSearchProvider {
   Future<List<AppSearchResult>> search(String query, {int limit = 8}) async {
     await notebook.start();
     final h = here?.call();
-    final hits = [for (final x in await notebook.search(query)) if (notebook.notebook(x.entry.notebookId) case final n? when n.isPlaces) (x, n)];
+    final hits = [
+      for (final x in await notebook.search(query))
+        if (notebook.notebook(x.entry.notebookId) case final n? when n.isPlaces)
+          if (!(savedByName && n.savedPlaces && savedMatch(entryTitle(x.entry), query) != null)) (x, n),
+    ];
     return [
       for (var i = 0; i < hits.length && i < limit; i++)
         () {

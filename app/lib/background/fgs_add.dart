@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import '../library/add_pdf/add_pdf_state.dart';
 import '../platform/app_log.dart';
 import '../platform/battery.dart';
-import '../sources/libraries_state.dart' show kLibrarySettingsFile;
+import '../sources/libraries_state.dart' show defaultOwnFolderOnDisk, kLibrarySettingsFile;
 
 // The foreground service for adding PDFs in the background (Android only), build 52. Design: renders/fgs/design.md (branch
 // design/fgs-background-add); the owner's decisions are in the build's notes:
@@ -27,11 +27,14 @@ const MethodChannel kFgsRunChannel = MethodChannel('co.cache/fgs_add_run');
 /// Whether the library folder [libraryPath] is the default own library (the one the Bookshelves live in): found by its stable
 /// identity, `own_default` in its `cache-library.json` as the main path finds it (`LibrariesState.defaultOwnLibrary`), never by its
 /// title (the person may rename it). The background engine has no libraries state, so it reads the same file.
+/// When more than one library says `own_default`, the one [pickDefaultOwn] picks (the same as the main path's).
 bool libraryIsDefaultOnDisk(String libraryPath) {
   try {
     final f = File('$libraryPath${Platform.pathSeparator}$kLibrarySettingsFile');
     if (!f.existsSync()) return false;
-    return (jsonDecode(f.readAsStringSync()) as Map)['own_default'] == true;
+    if ((jsonDecode(f.readAsStringSync()) as Map)['own_default'] != true) return false;
+    final dir = Directory(libraryPath);
+    return defaultOwnFolderOnDisk(dir.parent) == dir.path.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).last;
   } catch (_) {
     return false;
   }

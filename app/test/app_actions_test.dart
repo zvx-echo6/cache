@@ -1,6 +1,7 @@
 import 'package:cache/actions/action_registry.dart';
 import 'package:cache/actions/app_actions.dart';
 import 'package:cache/actions/setup_status.dart';
+import 'package:cache/chat/ask_target.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache_search/cache_search.dart';
@@ -40,7 +41,7 @@ class Fakes {
         ),
         watch: WatchDeps(
           choices: () async => [
-            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Where I am', subtitle: ''),
+            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Pine Hollow, ID', subtitle: ''),
             for (final s in saved) WatchPlace(id: 'place:${s.key}', kind: PlaceKind.saved, name: s.name, subtitle: '', lat: s.lat, lon: s.lon, key: s.key),
           ],
           watched: () => watched,
@@ -113,6 +114,12 @@ void main() {
     });
   });
 
+  // The screens name "Where I am" after its town; the assistant's list keeps the old label (model input, undecided).
+  test('the assistant still sees "Where I am" whatever the screens call it', () async {
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home']);
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], isNot(contains('Pine Hollow, ID')));
+  });
+
   test('watch add and remove change the Places list', () async {
     expect((await reg.run('weather.watch_add', {'place': 'Home'}))['result'], {'place': 'Home', 'watched': true});
     expect(f.watched, {'here', 'place:k1'});
@@ -149,5 +156,15 @@ void main() {
     f.previewOk = false;
     expect((await reg.run('navigation.start', {'route_id': 'r1'}))['error']['type'], 'not_found');
     expect(f.calls, ['preview r1']);
+  });
+
+  test('places.save gives its card the place to open, and its Done the place that was saved', () async {
+    const fields = {'name': 'Elk camp', 'place': {'lat': 44.21, 'lon': -114.93}};
+    final before = reg.cardTargets('places.save', fields, null);
+    expect(before?.lines.keys, ['Place']);
+    expect(before?.done, isNull);
+    final done = reg.cardTargets('places.save', fields, {'name': 'Elk camp', 'lat': 44.21, 'lon': -114.93});
+    expect(done?.done, isA<AskPlace>());
+    expect((done!.done! as AskPlace).title, 'Elk camp');
   });
 }

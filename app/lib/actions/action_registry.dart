@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../chat/ask_target.dart';
 import 'action_def.dart';
 import '../platform/app_log.dart';
 
@@ -9,6 +10,20 @@ typedef ActionHandler = Future<Map<String, dynamic>> Function(Map<String, dynami
 /// The lines a confirm card shows for a call, in the module's own words: (label, value) pairs made from the call's [fields] as the
 /// model wrote them and the core's [summary] of them (places as the user will recognise them). Null: the card shows the summary.
 typedef CardLines = List<MapEntry<String, String>>? Function(Map<String, dynamic> fields, List<MapEntry<String, String>> summary);
+
+/// Where a confirm card points, app side only (never part of what the model reads or what an action returns): the notebook its
+/// title names ([title]), the place or notebook each line names (by the line's label as the card shows it), and what the "Done"
+/// outcome made or changed ([done]).
+class CardTargets {
+  const CardTargets({this.title, this.lines = const {}, this.done});
+
+  final AskTarget? title;
+  final Map<String, AskTarget> lines;
+  final AskTarget? done;
+}
+
+/// The targets of a card for an action: from the call's [fields] and, once it is done, the action's [result].
+typedef CardTargetsOf = CardTargets Function(Map<String, dynamic> fields, Map<String, dynamic>? result);
 
 /// Why an action could not do what it was asked; becomes the `error` of the tool result.
 class ActionFailure implements Exception {
@@ -44,6 +59,7 @@ class ActionRegistry extends ChangeNotifier {
   final Map<String, List<ActionDef>> _modules = {};
   final Map<String, ActionHandler> _handlers = {};
   final Map<String, CardLines> _cardLines = {};
+  final Map<String, CardTargetsOf> _cardTargets = {};
   List<ActionRejection> _rejected = const [];
 
   /// The last rejections of each module, for the log.
@@ -73,9 +89,21 @@ class ActionRegistry extends ChangeNotifier {
     }
   }
 
+  /// Where the card's lines, title and "Done" point, when its module says (see [CardTargets]); null for a card that points at nothing.
+  CardTargets? cardTargets(String action, Map<String, dynamic> fields, Map<String, dynamic>? result) {
+    final f = _cardTargets[action];
+    if (f == null) return null;
+    try {
+      return f(fields, result);
+    } catch (e) {
+      logError('Actions: card targets failed', error: e, detail: action);
+      return null;
+    }
+  }
+
   /// Installs (or replaces) [module]'s actions. [handlers] are by action id; a definition without a handler is rejected. [cardLines]
   /// (by action id) word the confirm cards of the module's change actions.
-  List<ActionRejection> publish(String module, List<Map<String, dynamic>> defs, Map<String, ActionHandler> handlers, {Map<String, CardLines> cardLines = const {}}) {
+  List<ActionRejection> publish(String module, List<Map<String, dynamic>> defs, Map<String, ActionHandler> handlers, {Map<String, CardLines> cardLines = const {}, Map<String, CardTargetsOf> cardTargets = const {}}) {
     final taken = {for (final e in _modules.entries) if (e.key != module) for (final d in e.value) d.id};
     final kept = <ActionDef>[];
     final rejected = <ActionRejection>[];
@@ -94,11 +122,13 @@ class ActionRegistry extends ChangeNotifier {
     for (final d in _modules[module] ?? const <ActionDef>[]) {
       _handlers.remove(d.id);
       _cardLines.remove(d.id);
+      _cardTargets.remove(d.id);
     }
     _modules[module] = kept;
     for (final d in kept) {
       _handlers[d.id] = handlers[d.id]!;
       if (cardLines[d.id] case final c?) _cardLines[d.id] = c;
+      if (cardTargets[d.id] case final c?) _cardTargets[d.id] = c;
     }
     _rejected = [..._rejected.where((r) => r.module != module), ...rejected];
     for (final r in rejected) {

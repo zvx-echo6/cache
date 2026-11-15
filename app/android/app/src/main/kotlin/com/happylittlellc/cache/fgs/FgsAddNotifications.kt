@@ -15,6 +15,9 @@ import com.happylittlellc.cache.R
  * branch design/fgs-background-add). Both channels are SILENT (low importance, no sound, no vibration). The lock screen shows a
  * private public version: no file names and no library names, only that PDFs are being added in the background.
  *
+ * The lock screen's file name when the person has turned "Show sensitive content" ON (Android's own setting) is INTENDED: the
+ * system shows the full notification then, as the person chose; nothing here overrides it (emulator check, 2026-11-14).
+ *
  * Every string here is a DRAFT from wording.md, not yet approved by the owner; the ones that reuse the app's existing Add PDF
  * words (the error words, "Paused by you", "Resume", "Resume anyway", "Pause") are the same words.
  */
@@ -123,6 +126,18 @@ object FgsAddNotifications {
         if (p?.more != null) b.setStyle(NotificationCompat.BigTextStyle().bigText("$text\n${p.more}"))
         return b.build()
     }
+
+    /**
+     * Shown at once when Pause is tapped, while the run finishes the piece it is on (a piece cannot be interrupted): the person sees
+     * it was heard. Still ongoing (the service runs until the run ends), with no action; the ending notification replaces it.
+     */
+    fun pausing(context: Context, p: FgsProgress?): Notification =
+        base(context, CHANNEL_ADDING, "Paused · ${p?.done ?: 0} of ${p?.total ?: 0} PDFs", "Paused by you")
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setPublicVersion(publicVersion(context, CHANNEL_ADDING, PUBLIC_STOPPED_TITLE, PUBLIC_ADDING_TEXT))
+            .build()
 
     /** The notification that ends a run (not ongoing: the person can swipe it away); null when nothing was started. */
     fun ended(context: Context, f: FgsFinish): Notification? {

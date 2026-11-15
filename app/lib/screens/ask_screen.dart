@@ -6,6 +6,9 @@ import '../chat/answer_progress.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../actions/setup_status.dart' show setupGuideTitle;
+import '../chat/ask_target.dart';
+import '../chat/progress_steps.dart' show ToolStep, nearbyQuery, stepQuery;
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
 import '../desktop/ask_column.dart';
@@ -34,6 +37,7 @@ class AskScreen extends StatefulWidget {
     this.onOpenPassage,
     this.onOpenVideo,
     this.onOpenNavigation,
+    this.onOpenTarget,
     this.share = shareMarkdown,
     this.layout,
     this.location,
@@ -74,6 +78,10 @@ class AskScreen extends StatefulWidget {
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
+  /// Opens what a citation, a step of the steps list, or a card points at when it is not a page, passage or video: a place, a
+  /// layer's point, a notebook entry, live data, a search. The shell routes it to Maps, Notebooks, Weather or Home's search.
+  final void Function(AskTarget target)? onOpenTarget;
+
   @override
   State<AskScreen> createState() => _AskScreenState();
 }
@@ -110,6 +118,7 @@ class _AskScreenState extends State<AskScreen> {
       reason: r.reason,
       note: r.note,
       sources: [for (final s in m.sources) s.result.title],
+      chatId: widget.chat.activeId,
     ));
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -421,6 +430,7 @@ class _AskScreenState extends State<AskScreen> {
                             onOpenPassage: widget.onOpenPassage,
                             onOpenVideo: widget.onOpenVideo,
                             onOpenNavigation: widget.onOpenNavigation,
+                            onOpenTarget: widget.onOpenTarget,
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
@@ -686,7 +696,7 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onOpenTarget, this.onReport, this.chat});
 
   final ChatMessage msg;
 
@@ -697,6 +707,7 @@ class _AssistantBlock extends StatefulWidget {
   final void Function(String address, String quote)? onOpenPassage;
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
+  final void Function(AskTarget target)? onOpenTarget;
 
   @override
   State<_AssistantBlock> createState() => _AssistantBlockState();
@@ -705,7 +716,9 @@ class _AssistantBlock extends StatefulWidget {
 class _AssistantBlockState extends State<_AssistantBlock> {
   /// What tapping a citation does: a video moment opens the player there (a saved video's or a ZIM's caption); a citation the
   /// reader can show opens it ([SourceResult.readerAddress]: a ZIM page, a PDF page, an EPUB chapter), with its passage
-  /// marked when it has one; anything else does nothing.
+  /// marked when it has one; the phone's setup opens its guide section; a route opens in Maps; a place, a layer's point, a repeater
+  /// or notebook entry and live data go to the shell ([AskScreen.onOpenTarget]). A web page does nothing (an owner decision is
+  /// pending).
   VoidCallback? _tapOf(SourceResult r) {
     final video = widget.onOpenVideo;
     if (r.isVideoMoment && video != null) return () => video(r.link!, r.time!, r.lang);
@@ -714,11 +727,53 @@ class _AssistantBlockState extends State<_AssistantBlock> {
     // library reads.
     final lib = widget.onOpenSource;
     if (r.address.startsWith('lib:') && lib != null) return () => lib(r.address);
+    // The phone's setup (app.setup_status) opens the guide section that part names.
+    if (lib != null && setupGuideTitle(r.address) != null) return () => lib(r.address);
+    // A route opens in Maps as the "Open navigation" button does (a route whose snapshot is gone says so).
+    final navigate = widget.onOpenNavigation;
+    if (navigate != null && r.address.startsWith('nav:') && r.address.length > 4) {
+      final action = widget.msg.navigationActions.where((x) => x.address == r.address).firstOrNull ?? NavigationAction(address: r.address);
+      return () => navigate(action);
+    }
     final a = r.readerAddress;
-    if (a == null) return null;
-    final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
-    if (passage != null && quote != null) return () => passage(a, quote);
-    if (source != null) return () => source(a);
+    if (a != null) {
+      final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
+      if (passage != null && quote != null) return () => passage(a, quote);
+      if (source != null) return () => source(a);
+    }
+    // A place, a layer's point, a repeater or notebook entry, live data: the shell opens it.
+    return _targetTap(r.target);
+  }
+
+  VoidCallback? _targetTap(AskTarget? t) {
+    final open = widget.onOpenTarget;
+    return t == null || open == null ? null : () => open(t);
+  }
+
+  /// What tapping the mark of source [n] in the answer does: what tapping that source's row does.
+  VoidCallback? _citeTap(int n) {
+    final r = widget.msg.sources.where((s) => s.id == n).firstOrNull;
+    return r == null ? null : _tapOf(r.result);
+  }
+
+  /// What tapping a finished step's line does: open what it read or made, run its search again, or show its route; null when it
+  /// points at nothing.
+  VoidCallback? _stepTap(ToolStep s) {
+    switch (s.tool) {
+      case 'read' || 'act':
+        final r = s.source;
+        return r == null ? null : _tapOf(r);
+      case 'search':
+        final q = stepQuery(s);
+        return q == null ? null : _targetTap(AskHomeSearch(query: q));
+      case 'nearby':
+        final q = nearbyQuery(s);
+        return q == null ? null : _targetTap(AskMapSearch(query: q));
+      case 'navigate':
+        final navigate = widget.onOpenNavigation;
+        final action = s.routes.firstOrNull;
+        return navigate == null || action == null ? null : () => navigate(action);
+    }
     return null;
   }
 
@@ -757,11 +812,16 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
             dropCitations: m.isDone && m.sources.isEmpty,
+            onCite: (n) => _citeTap(n)?.call(),
+            canCite: (n) => _citeTap(n) != null,
+            stepTap: _stepTap,
           ),
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
               lines: widget.chat?.actions?.cardLines(card.action, card.fields, card.summary),
+              targets: widget.chat?.actions?.cardTargets(card.action, card.fields, card.result),
+              onOpen: widget.onOpenTarget,
               enabled: widget.chat?.canSend ?? false,
               onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
             ),

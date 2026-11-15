@@ -1,4 +1,5 @@
 import CarPlay
+import AVFoundation
 import Flutter
 import UIKit
 
@@ -20,7 +21,8 @@ import UIKit
 /// - `org.example.carharness.promptshort`, `.promptnone` and `.promptnormal`: the stand-in Dart side asks the car side how a
 ///   spoken prompt may be given, as the phone's voice does before each prompt, and says the answer. For the first two the
 ///   car side is first told to answer as iOS would during a call, or while Siri listens (no call can be made in the
-///   Simulator); for the last it reads the system's own style again.
+///   Simulator); for the last it reads the system's own style again. `.promptinterrupted`: the audio session's interruption
+///   by another app is posted as iOS posts it (began, then ended), and then the same as `.promptnormal`.
 /// - `org.example.carharness.nosaved` and `.saved`: the stand-in Dart side has no saved places, or has its recorded ones
 ///   again, and says that they changed.
 /// - `org.example.carharness.day` and `.night`: the car scene is told that the car switched its day or night setting, through
@@ -54,7 +56,7 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
     }
     channel = steps
     let center = CFNotificationCenterGetDarwinNotifyCenter()
-    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys) + Array(voiceNames.keys)).map { "org.example.carharness." + $0 }
+    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys) + ["promptinterrupted"] + Array(voiceNames.keys)).map { "org.example.carharness." + $0 }
     for name in names {
       CFNotificationCenterAddObserver(
         center, nil,
@@ -75,6 +77,20 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
 
   private static func told(_ name: String) {
     let word: String = name.components(separatedBy: ".").last ?? ""
+    if word == "promptinterrupted" {
+      // Another app taking the audio, as far as a simulator allows: the system's two interruption notifications, posted as
+      // iOS posts them, to the product's observer (CarPrompts); then a prompt with the system's own style.
+      let center = NotificationCenter.default
+      let session = AVAudioSession.sharedInstance()
+      center.post(name: AVAudioSession.interruptionNotification, object: session,
+                  userInfo: [AVAudioSessionInterruptionTypeKey: NSNumber(value: AVAudioSession.InterruptionType.began.rawValue)])
+      center.post(name: AVAudioSession.interruptionNotification, object: session,
+                  userInfo: [AVAudioSessionInterruptionTypeKey: NSNumber(value: AVAudioSession.InterruptionType.ended.rawValue),
+                             AVAudioSessionInterruptionOptionKey: NSNumber(value: AVAudioSession.InterruptionOptions.shouldResume.rawValue)])
+      NSLog("%@", "harness steps: an interruption of the audio session was posted, began and ended")
+      told("org.example.carharness.promptnormal")
+      return
+    }
     if let code = promptCodes[word] {
       // The product's CarPrompts, reached by its Objective-C name: this plugin is not part of the app's module.
       let prompts: NSObjectProtocol? = NSClassFromString("CarPrompts").flatMap { ($0 as AnyObject) as? NSObjectProtocol }
