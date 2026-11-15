@@ -405,6 +405,7 @@ class CarBridge {
         // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
         // straight away, even when guidance prompts are off, since the driver asked.
         final text = carAnswer(nav, a['kind'] as String?);
+        logInfo('Car answers (${a['kind']}): $text');
         await nav.speaker.speak(text);
         return text;
       case 'autoDrive':
