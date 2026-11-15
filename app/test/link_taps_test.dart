@@ -124,6 +124,16 @@ class _Maps {
   /// The last camera move of [kind] ('newLatLngZoom', 'newLatLngBounds'), as the map package encodes it.
   List<dynamic>? lastMove(String kind) => camera.cameras.cast<List<dynamic>>().where((u) => u.first == kind).lastOrNull;
 
+  /// The last camera the screen gave the map to show a spot (a point at a street's zoom, north up), in the shape [_near] reads. The
+  /// camera is centred so the spot lands in the room the header and the panel leave free, so its target is near the spot, not on it.
+  List<dynamic>? lastSpot() {
+    final u = camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newCameraPosition').lastOrNull;
+    if (u == null) return null;
+    final c = (u[1] as Map).cast<String, dynamic>();
+    expect((c['zoom'] as num).toDouble(), greaterThanOrEqualTo(14));
+    return ['newLatLngZoom', c['target']];
+  }
+
   /// The small pin the screen marks a shown spot with.
   Map? marked() => ((camera.sources[kPinSource]?['features'] as List?) ?? const []).cast<Map>().where((f) => (f['properties'] as Map)['id'] == 'route-step').firstOrNull;
 
@@ -144,11 +154,11 @@ class _Maps {
 const _bakery = MapPlace(id: 'place:test:bakery', type: 'place', name: 'Larkspur Bakery', kind: 'Bakery', address: '', lat: 42.51, lon: -113.7, matched: 'name');
 const _mill = MapPlace(id: 'place:test:mill', type: 'place', name: 'Old Mill Bakery', kind: 'Bakery', address: '', lat: 42.52, lon: -113.6, matched: 'name');
 
-void _near(List<dynamic>? move, double lat, double lon, {String? reason}) {
+void _near(List<dynamic>? move, double lat, double lon, {String? reason, double within = 1e-6}) {
   expect(move, isNotNull, reason: reason);
   final at = (move![1] as List).cast<num>();
-  expect(at[0].toDouble(), closeTo(lat, 1e-6), reason: reason);
-  expect(at[1].toDouble(), closeTo(lon, 1e-6), reason: reason);
+  expect(at[0].toDouble(), closeTo(lat, within), reason: reason);
+  expect(at[1].toDouble(), closeTo(lon, within), reason: reason);
 }
 
 void main() {
@@ -269,7 +279,7 @@ void main() {
       await m.pump(tester);
       m.nav.showOnMap(const GeoPoint(42.53, -113.66));
       await m.settle(tester);
-      _near(m.lastMove('newLatLngZoom'), 42.53, -113.66);
+      _near(m.lastSpot(), 42.53, -113.66, within: 0.02);
       final mark = m.marked();
       expect(mark, isNotNull, reason: 'the spot is marked');
       expect(((mark!['geometry'] as Map)['coordinates'] as List).cast<num>(), [-113.66, 42.53]);
@@ -471,7 +481,7 @@ void main() {
       expect(find.byKey(const ValueKey('drive-screen')), findsNothing, reason: 'the map is on the tab');
       expect(find.byType(MapLibreMap), findsOneWidget);
       expect(m.drive.signal.value, isFalse, reason: 'the car is told the drive screen is not showing');
-      _near(m.lastMove('newLatLngZoom'), stop.lat, stop.lon);
+      _near(m.lastSpot(), stop.lat, stop.lon, within: 0.02);
       expect(m.marked(), isNotNull);
       expect(m.maps.follow, FollowMode.free, reason: 'the map stays on the spot');
       // Back: the drive screen again.
@@ -483,7 +493,7 @@ void main() {
       final turn = m.nav.route!.maneuvers[2];
       await tester.tap(find.byKey(const ValueKey('drive-row-2')));
       await m.settle(tester);
-      _near(m.lastMove('newLatLngZoom'), turn.lat, turn.lon);
+      _near(m.lastSpot(), turn.lat, turn.lon, within: 0.02);
       await tester.binding.handlePopRoute();
       await m.settle(tester);
       expect(find.byKey(const ValueKey('drive-screen')), findsOneWidget);
@@ -624,6 +634,39 @@ void main() {
       inbox.offer('weather');
       expect(inbox.pending, isFalse, reason: 'only the Maps tab is asked for here');
       expect(heard, 2);
+    });
+
+    test('a geo: link opened on the phone brings its search or its point with the request, once', () {
+      final inbox = OpenMapsInbox(channel: const MethodChannel('co.cache/open/test'));
+      inbox.offer({'what': 'maps', 'query': ' gas station ', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      final g = inbox.takeGeo()!;
+      expect((g.query, g.lat, g.lon), ('gas station', 43.6, -116.2));
+      expect(inbox.takeGeo(), isNull, reason: 'once');
+      inbox.offer({'what': 'maps', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()!.query, isNull);
+      inbox.offer('maps');
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo(), isNull, reason: 'a notification tap carries nothing');
+      inbox.offer({'what': 'weather'});
+      expect(inbox.pending, isFalse);
+    });
+
+    test('a geo: link that started the app is taken at start with its search', () async {
+      const channel = MethodChannel('co.cache/open/test-geo');
+      Object? pending = {'what': 'maps', 'query': 'coffee', 'lat': null, 'lon': null};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method != 'take') return null;
+        final p = pending;
+        pending = null;
+        return p;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+      final inbox = OpenMapsInbox(channel: channel);
+      await inbox.start();
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()?.query, 'coffee');
     });
   });
 

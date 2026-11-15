@@ -43,8 +43,9 @@ class Harness {
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true}) async {
     final h = Harness();
+    h.withBuiltIns = withBuiltIns;
     h.browser = browser;
     h.notifier = notifier;
     if (clock != null) h.clock = clock;
@@ -68,6 +69,9 @@ class Harness {
   }
 
   AlertNotifier? notifier;
+
+  /// False: no built-in sources either, so nothing is listed until a catalogue is read.
+  bool withBuiltIns = true;
 
   /// The folders kept the browser's way (on Cache Server through AppFs, here over [dir]) instead of the phone's.
   bool browser = false;
@@ -97,7 +101,7 @@ class Harness {
     catalogueFiles: browser ? () => _open('live-catalogues') : null,
     liveFiles: browser ? () => _open('live-sources') : null,
     onPlan: browser ? (p) async => plans.add(p) : null,
-    builtIns: () async => builtInDefinitions(),
+    builtIns: () async => withBuiltIns ? builtInDefinitions() : [],
     position: () => here,
     regions: () => regions,
     fetch: web.fetch,
@@ -119,7 +123,18 @@ class Harness {
   /// The settled end of a restart: the same folder, settings and keys, a new object.
   Future<Harness> restart() async {
     weather.dispose();
-    return create(again: this, serve: false, browser: browser);
+    return create(again: this, serve: false, browser: browser, withBuiltIns: withBuiltIns);
+  }
+
+  /// A clean slate for a test that is about something else than the defaults: exactly the sources [ids] on. Weather always works, so
+  /// "nothing on" is no state a test can start from; the sources wanted are switched on first, and only then the rest off.
+  Future<void> only(Iterable<String> ids) async {
+    for (final id in ids) {
+      await weather.setSourceOn(weather.sourceById(id)!, true);
+    }
+    for (final c in weather.enabledSources.toList()) {
+      if (!ids.contains(c.id)) await weather.setSourceOn(c, false);
+    }
   }
 
   Set<String> get inFolder => liveDir.existsSync() ? ({for (final f in liveDir.listSync().whereType<File>()) f.uri.pathSegments.last}..remove('.managed')) : {};
@@ -156,6 +171,156 @@ void main() {
   late Harness h;
   tearDown(() => h.dispose());
 
+  // Weather always works (owner, 2026-11-15): whenever no source would be on, the default sources (Weather forecast, Weather alerts,
+  // Wildfires, and the alert defaults) come back by themselves. The one state where weather does not work is an unwatched location.
+  group('weather always works: the default sources come back whenever none would be on', () {
+    const defaults = {'openmeteo-forecast', 'nws-alerts-point', 'wfigs-incidents-near', 'wfigs-perimeters-near'};
+    Set<String> on() => {for (final c in h.weather.enabledSources) c.id};
+
+    /// A start with the catalogue already kept on the phone and no source on in the settings.
+    Future<Harness> startWithCatalogueAndNothingOn() async {
+      final first = await Harness.create();
+      first.settings.replaceLiveSourcesOn(const <String>{});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final again = await first.restart();
+      expect(again.web.requested, isEmpty, reason: 'the catalogue came from the phone');
+      return again;
+    }
+
+    test('at start, with the catalogue loaded and no source on, the default rows come on and nothing else does', () async {
+      h = await startWithCatalogueAndNothingOn();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse, reason: 'Earthquakes is not a default');
+      expect(h.weather.isOn('firms-viirs-near'), isFalse);
+      expect(h.inFolder, {'openmeteo-forecast.json', 'nws-alerts-point.json', 'wfigs-incidents-near.json', 'wfigs-perimeters-near.json'}, reason: 'and the core holds exactly those');
+      expect(h.lastPolicy['enabled_sources'], unorderedEquals(defaults));
+      expect(WeatherState.defaultRows.map((r) => r.title), ['Weather forecast', 'Weather alerts', 'Wildfires']);
+    });
+
+    test('the alert defaults come with them: Emergency alerts is on with Weather alerts', () async {
+      final first = await Harness.create(serve: false);
+      first.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-alerts-point', 'alerts', 'Weather alerts (NWS, by point)', provider: 'NWS'),
+        entry('ipaws-alerts-near', 'alerts', 'Emergency alerts', provider: 'FEMA IPAWS'),
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+      ]));
+      await first.weather.refreshCatalogues();
+      first.settings.replaceLiveSourcesOn(const <String>{});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      h = await first.restart();
+      expect(h.weather.isOn('nws-alerts-point'), isTrue);
+      expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
+      expect(h.weather.isOn('openmeteo-forecast'), isTrue);
+    });
+
+    test('a settings sync from a linked device that would empty the list leaves the defaults on', () async {
+      h = await startWithCatalogueAndNothingOn();
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.settings.replaceLiveSourcesOn(const <String>{});
+      expect(h.weather.enabledSources, isEmpty, reason: 'the settings alone say nothing is on, until the weather part is told');
+      await h.weather.sourcesChanged();
+      expect(on(), defaults);
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse, reason: 'what the other device switched off stays off');
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+      expect(h.inFolder, isNot(contains('usgs-quakes-near.json')));
+    });
+
+    test('a synced list with sources in it is taken as it is, with no defaults added', () async {
+      h = await startWithCatalogueAndNothingOn();
+      h.settings.replaceLiveSourcesOn(const {'usgs-quakes-near'});
+      await h.weather.sourcesChanged();
+      expect(on(), {'usgs-quakes-near'});
+    });
+
+    test('switching the last source off brings the defaults back, with the last one off; no message', () async {
+      h = await Harness.create();
+      await h.only(['usgs-quakes-near']);
+      expect(on(), {'usgs-quakes-near'});
+      await h.weather.setRowOn(row('Earthquakes'), false);
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse);
+      expect(on(), containsAll(['openmeteo-forecast', 'nws-alerts-point']));
+      expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
+      expect(h.weather.rowIsOn(row('Weather alerts')), isTrue);
+      expect(h.weather.rowIsOn(row('Wildfires')), isTrue);
+      expect(h.inFolder, isNot(contains('usgs-quakes-near.json')));
+    });
+
+    test('switching one of two off leaves the other alone, and adds no defaults', () async {
+      h = await Harness.create();
+      await h.only(['usgs-quakes-near', 'nwps-gauges-near']);
+      await h.weather.setRowOn(row('River levels'), false);
+      expect(on(), {'usgs-quakes-near'});
+      expect(h.weather.isOn('openmeteo-forecast'), isFalse);
+      expect(h.weather.isOn('nws-alerts-point'), isFalse);
+      expect(h.weather.isOn('wfigs-incidents-near'), isFalse);
+      expect(h.inFolder, {'usgs-quakes-near.json'});
+    });
+
+    test('with the catalogue not loaded yet (no sources) nothing is switched; once it loads the defaults come on', () async {
+      h = await Harness.create(connection: ConnectionKind.none, serve: false, withBuiltIns: false);
+      expect(h.weather.sources, isEmpty);
+      expect(h.weather.enabledSources, isEmpty);
+      expect(h.settings.liveSourcesOn, isEmpty, reason: 'nothing was switched on in the settings either');
+      expect(h.inFolder, isEmpty);
+      h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+      h.probe.change(ConnectionKind.wifi);
+      await h.weather.refreshCatalogues();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+    });
+
+    // A first start: the built-in sources (weather, alerts) are listed before the catalogue is read, but they stand in for only two of the
+    // three default rows, so nothing is switched on until the catalogue is there; then all three rows come on together.
+    test('a first start online, the catalogue read after the built-in sources: all three default rows are on', () async {
+      h = await Harness.create();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+    });
+
+    test('a first start with no connection: the built-in sources are listed, and nothing is switched until a catalogue is read', () async {
+      h = await Harness.create(connection: ConnectionKind.none, serve: false);
+      expect(h.weather.sources.map((c) => c.id).toSet(), {'weather', 'alerts'});
+      expect(h.weather.enabledSources, isEmpty);
+      expect(h.settings.liveSourcesOn, isEmpty);
+      h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+      h.probe.change(ConnectionKind.wifi);
+      await h.weather.refreshCatalogues();
+      expect(on(), defaults);
+    });
+
+    test('a source the person switched on and that is not a default is no reason to switch the defaults on', () async {
+      h = await startWithCatalogueAndNothingOn();
+      await h.only(['usgs-quakes-near']);
+      await h.weather.refreshCatalogues();
+      expect(on(), {'usgs-quakes-near'});
+    });
+
+    test('nothingWatched: only when Your location is not watched and no other place is', () async {
+      h = await Harness.create();
+      expect(h.weather.nothingWatched, isFalse);
+      h.settings.setWatched('here', false);
+      expect(h.weather.nothingWatched, isTrue);
+      expect(h.weather.status().headline, kWeatherHereOff);
+      h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
+      h.settings.setWatched('place:cabin', true);
+      await h.weather.placeChoices();
+      expect(h.weather.nothingWatched, isFalse, reason: 'another place is watched');
+      h.settings.setWatched('place:cabin', false);
+      expect(h.weather.nothingWatched, isTrue);
+    });
+
+    test('watchHereAgain watches Your location again and updates', () async {
+      h = await Harness.create();
+      h.settings.setWatched('here', false);
+      expect(h.weather.nothingWatched, isTrue);
+      await h.weather.watchHereAgain();
+      expect(h.settings.watchedPlaces, contains('here'));
+      expect(h.weather.nothingWatched, isFalse);
+      expect(h.core.fetches, isNotEmpty, reason: 'it updated for the place');
+    });
+  });
+
   group('sources', () {
     test('the catalogue is downloaded at the first start and its sources listed, the built-in ones they replace left out', () async {
       h = await Harness.create();
@@ -176,12 +341,9 @@ void main() {
       expect(h.web.requested, isEmpty, reason: 'nothing is asked while offline');
     });
 
-    test('the sources are not on until the person switches them on, and the core holds only the ones that are on', () async {
+    test('only the sources that are on are given to the core; a switch the person makes adds to them', () async {
       h = await Harness.create();
-      expect(h.weather.enabledSources, isEmpty);
-      expect(h.inFolder, isEmpty);
-      expect((await h.core.sources())['sources'], isEmpty);
-      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.only(['openmeteo-forecast']);
       expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
       expect(h.inFolder, {'openmeteo-forecast.json'});
       expect(h.weather.registeredIds, {'openmeteo-forecast'});
@@ -193,6 +355,8 @@ void main() {
 
     test('a built-in source switched on before the catalogue came is still on when the catalogue replaces it', () async {
       h = await Harness.create(connection: ConnectionKind.none, serve: false);
+      // Offline at the first start: only the built-in sources, and nothing is switched on before a catalogue is read.
+      expect(h.weather.enabledSources, isEmpty);
       await h.weather.setRowOn(row('Weather forecast'), true);
       expect(h.inFolder, contains('weather.json'));
       h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
@@ -201,7 +365,7 @@ void main() {
       expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
       expect(h.inFolder, contains('openmeteo-forecast.json'));
       expect(h.inFolder, isNot(contains('weather.json')));
-      expect(h.weather.enabledSources.map((c) => c.id), ['openmeteo-forecast']);
+      expect(h.weather.enabledSources.map((c) => c.id), ['openmeteo-forecast'], reason: 'only the one the person switched on; the defaults come only when none is on');
     });
 
     test('what is on survives a restart, and so do the downloaded sources', () async {
@@ -236,7 +400,7 @@ void main() {
 
     test('go with "Weather alerts" the first time the catalogue offers them; after that the switch is the person\'s', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      expect(h.weather.isOn('nws-alerts-point'), isTrue, reason: 'on by default');
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
       h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
@@ -250,10 +414,13 @@ void main() {
     });
 
     test('stay off without "Weather alerts", and Turn on weather switches them on with it', () async {
-      h = await Harness.create(serve: false);
+      h = await Harness.create();
+      // Forecast stays on, so the defaults do not come back by themselves when alerts are switched off.
+      await h.weather.setRowOn(row('Weather alerts'), false);
       h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
+      expect(h.weather.isOn('nws-alerts-point'), isFalse);
       await h.weather.setRowOn(row('Weather alerts'), true);
       await h.weather.applyAlertDefaults(force: true);
       expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
@@ -366,7 +533,7 @@ void main() {
       expect(await h.secrets.read(WeatherState.secretName('own-creek')), ownSecret);
       expect(h.weather.isOn('own-creek'), isTrue);
       expect(h.inFolder, contains('own-creek.json'));
-      expect(h.lastPolicy['enabled_sources'], ['own-creek']);
+      expect(h.lastPolicy['enabled_sources'], contains('own-creek'), reason: 'with the defaults that were already on');
       expect(h.core.everythingSeen(), isNot(contains(ownSecret)));
       // a second one by the same name gets its own id
       expect(await h.weather.saveOwnSource(const OwnDraft(name: 'Creek', address: 'https://other.example.org/x'), const [OwnPick('v', 'V')]), isNull);
@@ -444,14 +611,14 @@ void main() {
   });
 
   group('the fetch policy', () {
-    test('it is pushed at start: online, not metered, mobile data allowed, nothing enabled', () async {
+    test('it is pushed at start: online, not metered, mobile data allowed, the default sources enabled', () async {
       h = await Harness.create();
-      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': <String>[]});
+      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': ['nws-alerts-point', 'openmeteo-forecast', 'wfigs-incidents-near', 'wfigs-perimeters-near']});
     });
 
     test('it follows the connection: mobile data, none, Wi-Fi again', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       await Future<void>.delayed(Duration.zero);
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -466,6 +633,7 @@ void main() {
 
     test('it follows the settings: the sources that are on; mobile data is always allowed for updates', () async {
       h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['allow_metered'], true);
@@ -473,7 +641,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['allow_metered'], true);
       await h.weather.setRowOn(row('Wildfires'), true);
-      expect(h.lastPolicy['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
+      expect(h.lastPolicy['enabled_sources'], ['openmeteo-forecast', 'wfigs-incidents-near', 'wfigs-perimeters-near']);
     });
 
     test('the core can never answer "mobile data updates are off": on mobile data the policy always allows it, with no per-source state', () async {
@@ -506,6 +674,7 @@ void main() {
 
     test('a key that the provider accepts is saved in secure storage, given to the core, and switches the source on', () async {
       h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
       final firms = h.weather.sourceById('firms-viirs-near')!;
       expect(h.weather.keyReady(firms), isFalse);
       final r = await h.weather.saveKey(firms, '  $secret  ');
@@ -514,7 +683,7 @@ void main() {
       expect(h.core.keys['firms-viirs-near'], secret, reason: 'memory only in the core');
       expect(h.weather.hasKey('firms'), isTrue);
       expect(h.weather.isOn('firms-viirs-near'), isTrue);
-      expect(h.lastPolicy['enabled_sources'], ['firms-viirs-near']);
+      expect(h.lastPolicy['enabled_sources'], ['firms-viirs-near', 'openmeteo-forecast']);
       // the check was one real download with the key, for a place, storing nothing
       expect(h.core.previews.single['api_key'], secret);
       expect(h.core.previews.single['place'], containsPair('lat', 42.54));
@@ -560,6 +729,7 @@ void main() {
     test('a source with a saved key updates from Update now, after a restart and for "Where I am", with no key in the request', () async {
       h = await Harness.create();
       await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, secret);
+      await h.only(['firms-viirs-near']);
       final r = await h.weather.updateNow();
       expect(r.failures, isEmpty);
       expect(r.fetched, 1);
@@ -691,8 +861,8 @@ void main() {
 
   group('Update now', () {
     Future<void> setUp3(Harness h) async {
-      await h.weather.setRowOn(row('Weather forecast'), true);
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      // Forecast and alerts only (the defaults also bring Wildfires), for two places.
+      await h.only(['openmeteo-forecast', 'nws-alerts-point']);
       h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
       h.settings.setWatched('place:cabin', true);
     }
@@ -750,7 +920,11 @@ void main() {
 
     test('back on the screen: an update runs only when one is due, without forcing', () async {
       h = await Harness.create();
-      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'nothing is switched on');
+      h.settings.setWatched('here', false);
+      final none = await h.weather.updateIfDue(const Duration(minutes: 30));
+      expect(none?.words, contains('No place is being watched'), reason: 'no place is watched: nothing is fetched');
+      expect(h.core.fetches, isEmpty);
+      h.settings.setWatched('here', true);
       await setUp3(h);
       final first = await h.weather.updateIfDue(const Duration(minutes: 30));
       expect(first?.fetched, 4, reason: 'never updated: due');
@@ -800,10 +974,9 @@ void main() {
       expect(h.core.fetches, isEmpty);
     });
 
-    test('nothing on, or no place, or a source that needs a key it does not have, is said in words', () async {
+    test('no place, or a source that needs a key it does not have, is said in words', () async {
       h = await Harness.create();
-      expect((await h.weather.updateNow()).words, 'Switch on a source to update it.');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       h.settings.setWatched('here', false);
       expect((await h.weather.updateNow()).words, contains('No place is being watched'));
       h.settings.setWatched('here', true);
@@ -829,10 +1002,14 @@ void main() {
   });
 
   group('the status line', () {
-    test('nothing on, never updated, fresh, and old by the rule a reading goes by', () async {
+    test('never updated, fresh, and old by the rule a reading goes by; no place watched says so', () async {
       h = await Harness.create();
-      expect(h.weather.status().headline, 'Nothing switched on yet');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      expect(h.weather.status().headline, 'Not updated yet', reason: 'the defaults are on from the start');
+      h.settings.setWatched('here', false);
+      expect(h.weather.status().headline, kWeatherHereOff);
+      expect(h.weather.status().tone, StatusTone.warn);
+      h.settings.setWatched('here', true);
+      await h.only(['nws-alerts-point']);
       expect(h.weather.status().headline, 'Not updated yet');
       expect(h.weather.status().tone, StatusTone.warn);
       await h.weather.updateNow();
@@ -909,7 +1086,7 @@ void main() {
 
     test('the age is kept across a restart', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       await h.weather.updateNow();
       h.clock = h.clock.add(const Duration(minutes: 5));
       final c = h.clock;
@@ -921,8 +1098,8 @@ void main() {
 
     test('the Settings line: how many are on and how old', () async {
       h = await Harness.create();
-      expect(h.weather.settingsLine(), 'Nothing on');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
+      expect(h.weather.settingsLine(), '1 on');
       await h.weather.setRowOn(row('Wildfires'), true);
       expect(h.weather.settingsLine(), '3 on');
     });
@@ -955,10 +1132,13 @@ void main() {
       ],
     };
 
-    test('Home: nothing switched on says so', () async {
+    test('Home: with no place watched it says weather is off, and with the defaults on it is not "Not set up yet"', () async {
       h = await Harness.create();
-      expect(await homeWeather(h.weather), 'Not set up yet');
-      expect(await homeAlerts(h.weather), 'Not set up yet');
+      expect(await homeWeather(h.weather), isNot('Not set up yet'), reason: 'the defaults are on from the start');
+      expect((await h.weather.homeCard()).hereOff, isFalse);
+      h.settings.setWatched('here', false);
+      expect(await homeWeather(h.weather), kWeatherHereOff);
+      expect((await h.weather.homeCard()).hereOff, isTrue);
     });
 
     test('after an update, Home never says "Not set up yet" for weather that is on while the weather part is still starting', () async {
@@ -1333,7 +1513,7 @@ void main() {
     // Weather screen's row for it still said "Not downloaded yet. Update now to get it.".
     test('a source whose first download failed says why, not that an update will get it', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Earthquakes'), true);
+      await h.only(['usgs-quakes-near']);
       h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
       final r = await h.weather.updateNow();
       expect(r.failures, hasLength(1));
@@ -1419,7 +1599,7 @@ void main() {
 
     test('"Where I am" moving to a new key fetches for it once it settles, at most every 15 minutes', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.only(['openmeteo-forecast']);
       h.core.fetches.clear();
       Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 150));
       List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
@@ -1483,7 +1663,7 @@ void main() {
     test('the Weather screen\'s view of "Where I am" borrows the nearest kept key too, and the nearest of several', () async {
       h = await Harness.create(clock: noon);
       await hereNeverSettles();
-      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.only(['openmeteo-forecast']);
       final near = forecast(), far = forecast();
       (near['items'] as List)[0]['fields']['Temperature'] = '41 °F';
       (far['items'] as List)[0]['fields']['Temperature'] = '60 °F';
@@ -1541,7 +1721,7 @@ void main() {
 
     test('"Where I am" moving without settling is fetched for within 5 minutes; still, after 45 seconds; hereGap is kept', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.only(['openmeteo-forecast']);
       h.weather.dispose();
       h.timers = FakeTimers();
       h.hereSettle = const Duration(seconds: 45);
@@ -1642,8 +1822,8 @@ void main() {
       h.here = null;
       h.settings.setWatched('here', false);
       expect(h.weather.waitingForPosition, isFalse);
-      expect(await homeWeather(h.weather), 'Choose a place to watch in Settings');
-      expect(await homeAlerts(h.weather), 'Choose a place to watch in Settings');
+      expect(await homeWeather(h.weather), kWeatherHereOff, reason: 'the one state where weather does not work');
+      expect(await homeAlerts(h.weather), kWeatherHereOff);
     });
 
     // build 46: at start Home's card and the Weather screen waited 10-15 s for the core (busy listing PDFs) for data the app

@@ -117,15 +117,58 @@ class CarSession(
         val home = HomeScreen(carContext, renderer)
         // A navigation request that opened Cache: handled once the first screen is up.
         NavIntent.parse(intent)?.let { req -> main.post { handle(req) } }
+        NavIntent.parseAction(intent)?.let { a -> main.post { handle(a) } }
+        NavIntent.parseView(intent)?.let { v -> main.post { handle(v) } }
         return home
     }
 
     override fun onNewIntent(intent: Intent) {
         NavIntent.parse(intent)?.let { handle(it) }
+        NavIntent.parseAction(intent)?.let { handle(it) }
+        NavIntent.parseView(intent)?.let { handle(it) }
     }
 
     // A navigation request that reached the phone's activity while this car is connected: handled as the car's own are.
     override fun onNavRequest(req: NavRequest) = handle(req)
+
+    override fun onSearchRequest(search: GeoView.Search) = handle(search)
+
+    override fun onCarAction(action: CarAction) = handle(action)
+
+    /**
+     * A `VIEW` of a `geo:` address (a voice search): the search's places listed near the position, the list a name that is not a
+     * saved place's gets from NAVIGATE (always a list, whatever the name). Coordinates with no search show the route, not
+     * started (`intent=directions`).
+     */
+    private fun handle(view: GeoView) = when (view) {
+        is GeoView.Search -> handle(NavRequest(null, null, view.query, NavKind.NAVIGATION), search = true)
+        is GeoView.Point -> handle(view.req)
+    }
+
+    /**
+     * A custom action from the assistant (`geo.action:?act=...`, [CarAction]). End route and the voice switch are what their
+     * buttons on the guidance screen do; the answers are composed and said by the phone's voice (lib/car/car_answer.dart, said
+     * even when the voice is off: the driver asked); the overview is the screen the Overview button opens. Any other action
+     * gets one message, as Google requires.
+     */
+    internal fun handle(action: CarAction) {
+        when (action) {
+            CarAction.ExitNavigation -> CarLink.stopGuidance()
+            CarAction.Mute -> CarLink.call("voice", mapOf("on" to false))
+            CarAction.Unmute -> CarLink.call("voice", mapOf("on" to true))
+            is CarAction.Answer -> CarLink.call("answer", mapOf("kind" to action.kind))
+            CarAction.RouteOverview -> {
+                if (!CarLink.trip.guiding) {
+                    // No route to show: the phone says so.
+                    CarLink.call("answer", mapOf("kind" to "route"))
+                } else if (screenManager.top !is RouteOverviewScreen) {
+                    if (screenManager.top !is NavigationScreen) screenManager.popTo(STOP_RETURN)
+                    screenManager.push(RouteOverviewScreen(carContext, renderer))
+                }
+            }
+            is CarAction.Unsupported -> CarToast.makeText(carContext, "Cache can't do that yet.", CarToast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCarConfigurationChanged(newConfiguration: Configuration) {
         if (ready) renderer.setDark(carContext.isDarkMode)
@@ -137,8 +180,8 @@ class CarSession(
      * route keeps its destination; the trip update shows it); a name that is not saved lists the places found for Add stop,
      * as the car's own Add stop search does. With no route it is a plain navigation request (the phone answers so).
      */
-    private fun handle(req: NavRequest) {
-        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start, "stop" to req.addStop)) { r ->
+    private fun handle(req: NavRequest, search: Boolean = false) {
+        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start, "stop" to req.addStop, "search" to search)) { r ->
             val res = r.asMap() ?: return@call
             val places = res["places"]
             if (places != null) {

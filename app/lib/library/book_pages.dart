@@ -104,7 +104,7 @@ Future<void> openPlace(BuildContext context, LibraryDeps d, ShelfBook b, {List<S
 
 /// "Where does this book go?": the three best guesses as chips (the first marked "Best guess"), then every division (the ten
 /// classes, then their divisions), and Leave unsorted. A tap saves it, says its new number with Undo, and goes on to the next book
-/// of [queue]. No scores are shown. Move titles itself "Move to another division".
+/// of [queue]. No scores are shown. Move titles itself "Move to another category".
 class PlacePanel extends StatefulWidget {
   const PlacePanel({super.key, required this.deps, required this.bookId, required this.onDone, this.queue = const []});
 
@@ -158,6 +158,38 @@ class _PlacePanelState extends State<PlacePanel> {
     });
   }
 
+  /// Move > Unsorted: the book goes back to Unsorted (the log's `unsort` event, its number retired, as Add PDF's Undo does), so a
+  /// filing can be undone. Says so with Undo, which files it in its old division again.
+  Future<void> _unsort(ShelfBook b) async {
+    final placer = d.shelves.placer;
+    if (_busy || placer is! ShelfUnsorter || b.shelf == null) return;
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await (placer as ShelfUnsorter).unsort(b);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      return;
+    }
+    if (!mounted) return;
+    _busy = false;
+    final was = Placement([PlacedBook(before: b, shelf: '', callNumber: null)]);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: const ValueKey('unsorted-snack'),
+          content: const Text('Moved to Unsorted.'),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => placer?.undo(was)),
+        ),
+      );
+    widget.onDone(true);
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: d.changes,
@@ -177,15 +209,15 @@ class _PlacePanelState extends State<PlacePanel> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(move ? 'Move to another division' : 'Where does this book go?', key: const ValueKey('place-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+              Text(move ? 'Move to another category' : 'Where does this book go?', key: const ValueKey('place-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
               const SizedBox(height: 6),
               Text(b.title, key: const ValueKey('place-book'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
               if (move) Text('Now ${b.callNumber ?? _shelfWords(d, b.shelf!)}', style: TextStyle(fontSize: 13, color: k.secondary)),
               const SizedBox(height: 8),
               Text(
                 example == null
-                    ? 'The book gets its call number in the division you pick.'
-                    : 'The book gets its call number in the division you pick, for example $example.',
+                    ? 'The book gets its call number in the category you pick.'
+                    : 'The book gets its call number in the category you pick, for example $example.',
                 style: TextStyle(fontSize: 13, height: 1.4, color: k.secondary),
               ),
               if (placer == null) ...[
@@ -208,12 +240,23 @@ class _PlacePanelState extends State<PlacePanel> {
                   ],
                 ),
               ],
+              if (move && placer is ShelfUnsorter)
+                ListTile(
+                  key: const ValueKey('place-unsorted'),
+                  dense: true,
+                  minTileHeight: 44,
+                  contentPadding: EdgeInsets.zero,
+                  enabled: !_busy,
+                  title: Text('Unsorted', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
+                  subtitle: Text('Take it off its shelf', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  onTap: () => _unsort(b),
+                ),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 4,
                 children: [
                   if (!side)
-                    TextButton(key: const ValueKey('place-all-divisions'), onPressed: () => setState(() => _all = !_all), child: Text(_all ? 'Hide divisions' : 'See all divisions')),
+                    TextButton(key: const ValueKey('place-all-divisions'), onPressed: () => setState(() => _all = !_all), child: Text(_all ? 'Hide categories' : 'See all categories')),
                   if (!move) TextButton(key: const ValueKey('place-leave'), onPressed: _busy ? null : () => _choose(b, null), child: const Text('Leave unsorted')),
                 ],
               ),
@@ -373,7 +416,7 @@ class UnsortedPage extends StatelessWidget {
                                 TextButton(
                                   key: ValueKey('all-divisions-${b.id}'),
                                   onPressed: () => openPlace(context, d, b, queue: queue),
-                                  child: const Text('All divisions'),
+                                  child: const Text('All categories'),
                                 ),
                               ],
                             ),

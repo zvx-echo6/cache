@@ -369,9 +369,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         child: Column(children: [
           Icon(Icons.library_books, size: 40, color: k.secondary),
           const SizedBox(height: 12),
-          Text(_division == null ? 'No books in this library yet.' : 'No books in this division.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'No books in this library yet.' : 'No books in this category.', style: TextStyle(fontSize: 13, color: k.secondary)),
           const SizedBox(height: 2),
-          Text(_division == null ? 'Add PDFs and Cache builds them one at a time.' : 'Choose another division or add books to this one.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'Add PDFs and Cache builds them one at a time.' : 'Choose another category or add books to this one.', style: TextStyle(fontSize: 13, color: k.secondary)),
           Text('It keeps going if you close this tab.', style: TextStyle(fontSize: 13, color: k.secondary)),
         ]),
       );
@@ -536,7 +536,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       }
       setState(() { _division = division; _bookNumber = target; });
     } else {
-      say(context, 'There is no division with that number.');
+      say(context, 'There is no category with that number.');
     }
   }
 

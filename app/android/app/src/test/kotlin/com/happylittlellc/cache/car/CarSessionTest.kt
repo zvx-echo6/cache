@@ -20,6 +20,7 @@ import androidx.car.app.navigation.model.MessageInfo
 import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.car.app.navigation.model.RoutingInfo
 import androidx.car.app.testing.SessionController
+import androidx.car.app.testing.TestAppManager
 import androidx.car.app.testing.TestCarContext
 import androidx.car.app.testing.TestScreenManager
 import androidx.car.app.testing.navigation.TestNavigationManager
@@ -527,6 +528,63 @@ class CarSessionTest {
         assertNull(a["lat"])
     }
 
+    // Voice search ("find gas near me": VIEW of geo:0,0?q=...): the car lists the places found, whatever the name, near the
+    // position. The phone asks Dart for a search (no coordinates, so it is never taken for a place to go to).
+    @Test
+    fun aVoiceSearchThatReachedThePhoneListsThePlacesFoundOnTheCar() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(if (method == "navigateTo") mapOf("places" to listOf(place(1), place(2))) else null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2?q=gas+station"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("gas station", a["query"])
+        assertEquals(true, a["search"])
+        assertNull(a["lat"])
+        assertEquals(false, a["stop"])
+        assertEquals(listOf("Place 1", "Place 2"), searchRows(screens.top as SearchScreen))
+    }
+
+    // Coordinates with no search: the route is shown, not started (as intent=directions).
+    @Test
+    fun aGeoLinkWithOnlyCoordinatesShowsTheRouteOnTheCar() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals(43.6, a["lat"])
+        assertEquals(false, a["start"])
+        assertEquals(false, a["search"])
+    }
+
+    // The car's own delivery (Android Auto hands the session the VIEW intent, at start or later).
+    @Test
+    fun aVoiceSearchFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        val session = CarSession(startEngine = {})
+        start(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=coffee")), session)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("coffee", (asked.single { it.first == "navigateTo" }.second as Map<*, *>)["query"])
+        asked.clear()
+        session.onNewIntent(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=pharmacy")))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("pharmacy", a["query"])
+        assertEquals(true, a["search"])
+    }
+
     // Android Auto's own path: the request comes with the session's first screen, or to a session that is already up.
     @Test
     fun aNavigationRequestFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {
@@ -996,5 +1054,102 @@ class CarSessionTest {
         push("trip", trip("guiding", guiding + mapOf("stops" to listOf(mapOf("number" to 1, "name" to "Place 3", "address" to "")))))
         val bare = ((templateOf(overview) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
         assertNull(bare[0].onClickDelegate)
+    }
+
+    // Custom actions from the assistant (geo.action:?act=...), both ways in: the session's first intent and a later one.
+    private fun action(code: String) = Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=$code"))
+
+    private fun askedOfDart(): MutableList<Pair<String, Any?>> {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        return asked
+    }
+
+    @Test
+    fun exitNavigationEndsTheRouteAsTheEndRouteButtonDoes() {
+        val asked = askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        push("trip", trip("guiding", guiding))
+        session.onNewIntent(action("exit_navigation"))
+        assertFalse(CarLink.trip.guiding)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("stop" in asked.map { it.first })
+    }
+
+    @Test
+    fun muteAndUnmuteAskThePhoneForTheVoiceSwitch() {
+        val asked = askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        session.onNewIntent(action("mute"))
+        session.onNewIntent(action("unmute"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf<Any?>(mapOf("on" to false), mapOf("on" to true)), asked.filter { it.first == "voice" }.map { it.second })
+    }
+
+    @Test
+    fun theQuestionsAboutTheTripAreAskedOfThePhoneToSay() {
+        val asked = askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        for (code in listOf("eta", "time_to_destination", "distance_to_destination", "query_next_turn", "distance_to_next_turn", "time_to_next_turn", "query_destination")) {
+            session.onNewIntent(action(code))
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(
+            listOf("eta", "eta", "distance", "turn", "turn", "turn", "destination"),
+            asked.filter { it.first == "answer" }.map { (it.second as Map<*, *>)["kind"] },
+        )
+    }
+
+    @Test
+    fun routeOverviewOpensTheOverviewScreenWhileGuiding() {
+        askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        push("trip", trip("guiding", guiding))
+        assertTrue(screens.top is NavigationScreen)
+        session.onNewIntent(action("route_overview"))
+        assertTrue(screens.top is RouteOverviewScreen)
+        // Asked again with it up: no second overview.
+        val depth = screens.screenStack.size
+        session.onNewIntent(action("route_overview"))
+        assertEquals(depth, screens.screenStack.size)
+    }
+
+    @Test
+    fun routeOverviewWithNoRouteLeavesItToThePhoneToSayNoRouteIsRunning() {
+        val asked = askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        session.onNewIntent(action("route_overview"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(screens.top is HomeScreen)
+        assertEquals("route", (asked.single { it.first == "answer" }.second as Map<*, *>)["kind"])
+    }
+
+    @Test
+    fun anUnsupportedActionGetsOneToastAndNothingElse() {
+        val asked = askedOfDart()
+        val session = CarSession(startEngine = {})
+        start(session = session)
+        asked.clear()
+        session.onNewIntent(action("follow_mode"))
+        session.onNewIntent(Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?other=1")))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf<CharSequence>("Cache can't do that yet.", "Cache can't do that yet."), car.getCarService(TestAppManager::class.java).toastsShown)
+        assertTrue(asked.isEmpty())
+    }
+
+    @Test
+    fun anActionThatOpensTheCarIsHandledOnceTheFirstScreenIsUp() {
+        val asked = askedOfDart()
+        start(action("mute"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(mapOf("on" to false), asked.single { it.first == "voice" }.second)
     }
 }

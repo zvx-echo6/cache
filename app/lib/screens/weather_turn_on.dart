@@ -2,6 +2,7 @@ import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/material.dart';
 
 import '../location/location_service.dart';
+import '../location/position_source.dart' show LocationPermissionState;
 import '../settings/app_settings.dart' show kWatchHere;
 import '../theme.dart';
 import '../weather/curated.dart';
@@ -24,10 +25,12 @@ class WeatherTurnOn {
   /// Saves a found place to the saved places, so it can be watched.
   final Future<void> Function(MapPlace place)? savePlace;
 
+  /// Cache has no location permission (never asked, denied, or blocked): the one reason Home's card waits for a position and offers
+  /// "Use my location". With the permission given and the fix not in yet there is nothing to ask for.
+  bool get lacksLocationPermission => location != null && location!.permission != LocationPermissionState.granted;
+
   /// The switches it turns on: Weather forecast, Weather alerts and Wildfires.
-  static List<CuratedRow> get rows => [
-    for (final title in const ['Weather forecast', 'Weather alerts', 'Wildfires']) kCurated.firstWhere((r) => r.title == title),
-  ];
+  static List<CuratedRow> get rows => WeatherState.defaultRows;
 
   Future<void> switchOn() async {
     for (final r in rows) {
@@ -66,6 +69,28 @@ Future<void> turnOnWeather(BuildContext buttonContext, WeatherTurnOn t) async {
     return;
   }
   await _update(context, t.weather);
+}
+
+/// Home's "Use my location": the same request "Turn on weather" makes (the reason first when the permission was never asked, then the
+/// system's question; when it is blocked, the app's settings page opens), for a card that waits for a position because Cache has no location permission. When it is given, the weather
+/// part is told the position is there and goes on to the forecast; when it is refused nothing changes and nothing is said.
+Future<void> useMyLocation(BuildContext buttonContext, WeatherTurnOn t) async {
+  final context = _lasting(buttonContext);
+  final loc = t.location;
+  if (loc == null) return;
+  if (!loc.enabled) {
+    if (!await _explainLocation(context)) return;
+    await loc.setEnabled(true);
+  }
+  if (!context.mounted) return;
+  final located = await loc.request(explain: () => _explainLocation(context));
+  if (!located) {
+    // Blocked ("denied forever"): the system will not ask again, so the app's own settings page is where it is given.
+    if (loc.problem == LocationProblem.permissionBlocked) await loc.openAppSettings();
+    return;
+  }
+  t.weather.positionChanged();
+  await t.weather.updateNow(force: true);
 }
 
 /// Lets the person pick a saved place (or a downloaded region), or find one, to watch; then switches weather on and updates.
