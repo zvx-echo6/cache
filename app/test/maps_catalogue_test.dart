@@ -4,6 +4,7 @@ import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/network_access.dart';
+import 'package:cache/maps/ui/area_page.dart';
 import 'package:cache/maps/ui/catalogue_screen.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/location/location_service.dart';
@@ -125,6 +126,45 @@ void main() {
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
     expect(maps.engine.areasOf('hillshade'), isEmpty);
+  });
+
+  // Link audit, batch 2: a layer's card opens the layer sheet at its switch on the Maps tab. A downloaded area's row opens the
+  // area's page (whose Show on map fits the map to the area), and keeps Update and Delete.
+  testWidgets('a layer\'s card asks for the Maps tab at that layer; a downloaded area\'s row opens its page, whose Show on map fits the map to the area', (tester) async {
+    areaMapForTests = (context, extent) => const SizedBox.expand();
+    addTearDown(() => areaMapForTests = null);
+    await boot(tester, () => CatalogueScreen(maps: maps));
+    final card = maps.catalogueLayers.first;
+    expect(maps.asks, 0);
+    await tester.tap(find.byKey(ValueKey('layer-card-${card.id}')));
+    await tester.pump();
+    expect(maps.asks, 1);
+    expect(maps.takeLayerAsk(), card.id);
+    expect(maps.areaAsk, isNull);
+    final area = (await tester.runAsync(() => maps.engine.download('hillshade', maps.viewBounds!, label: 'Home')))!;
+    await settle(tester, () => area.phase == AreaPhase.done);
+    await tester.pump();
+    final row = find.byKey(ValueKey('area-row-${area.id}'));
+    expect(row, findsOneWidget);
+    await tester.tap(find.descendant(of: row, matching: find.text('Home')));
+    await tester.pumpAndSettle();
+    expect(find.byType(AreaPage), findsOneWidget, reason: 'the row opens the area\'s page');
+    expect(maps.asks, 1, reason: 'not its card\'s ask too');
+    await tester.tap(find.byKey(const ValueKey('area-show-on-map')));
+    await tester.pump();
+    expect(maps.asks, 2);
+    expect(maps.layerAsk, isNull);
+    expect(maps.takeAreaAsk(), maps.engine.areasOf('hillshade').single.bounds);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    // Update and Delete are still the row's own.
+    expect(find.descendant(of: row, matching: find.byTooltip('Update')), findsOneWidget);
+    await tester.tap(find.descendant(of: row, matching: find.byTooltip('Delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete Home?'), findsOneWidget);
+    expect(maps.asks, 2, reason: 'Delete does not show the area');
+    await tester.tap(find.text('Keep'));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('Advanced: a layer definition can be added and edited, and bad ones are refused', (tester) async {

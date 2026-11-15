@@ -11,6 +11,7 @@ import 'package:cache/nav/ui/search_panel.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/regions/problem_words.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/regions/ui/region_actions.dart';
 import 'package:cache/regions/ui/region_download.dart';
 import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_list_sheet.dart';
@@ -344,6 +345,124 @@ void main() {
     expect(r.core.build, '2026-11');
     expect(find.text('Up to date'), findsOneWidget);
     expect(r.s.engine.areasOf('basemap').single.phase.name, 'done', reason: 'the map was fetched again');
+    await r.dispose(tester);
+  });
+
+  // Link audit: a region's row under Updates > Map opens the region's page.
+  testWidgets('a region under Updates > Map opens its page', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+    r.core.finish(_county);
+    await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+    await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 2));
+    await tester.pump();
+    expect(find.byType(RegionPage), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('map-$_county')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(RegionPage), findsOneWidget);
+    expect(find.text(r.county.name), findsWidgets);
+    await r.dispose(tester);
+  });
+
+  // Link audit, batch 2: a downloaded region shows on the map, from its page and from its hold menu.
+  testWidgets('a region on the phone: Show on map on its page and in its hold menu asks for the map fitted to the region', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+    r.core.finish(_county);
+    await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+    final box = r.regions.boundsOf(_county);
+    expect(box, isNotNull);
+    expect(box, r.county.bounds, reason: 'the box it was downloaded for');
+    await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
+    await tester.pump();
+    final asks = r.s.maps.asks;
+    // The hold menu.
+    await tester.longPress(find.byKey(const ValueKey('local-$_county')));
+    await tester.pumpAndSettle();
+    expect(find.text('Show on map'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('region-action-showOnMap')));
+    await tester.pumpAndSettle();
+    expect(r.s.maps.asks, asks + 1);
+    expect(r.s.maps.takeAreaAsk(), box);
+    // Its page.
+    await tester.tap(find.byKey(const ValueKey('local-$_county')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(RegionPage), findsOneWidget);
+    final show = find.byKey(const ValueKey('region-show-on-map'));
+    await tester.ensureVisible(show);
+    await tester.pump();
+    await tester.tap(show);
+    await tester.pump();
+    expect(r.s.maps.asks, asks + 2);
+    expect(r.s.maps.takeAreaAsk(), box);
+    await r.dispose(tester);
+  });
+
+  // Link audit, batch 2: a route error that names missing data gets the download for the route's area.
+  testWidgets('Download this area: with nothing on the phone, the catalogue\'s region where to', (tester) async {
+    final r = await _Rig.boot(tester);
+    final b = r.county.bounds!;
+    final inCounty = GeoPoint((b.south + b.north) / 2, (b.west + b.east) / 2);
+    final ends = [inCounty];
+    await r.s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => getRouteArea(c, r.regions, ends), child: const Text('go')))));
+    // Nothing on the phone: the region where to.
+    final here = r.catalogue.regionAt(inCounty.lat, inCounty.lon);
+    expect(here, isNotNull);
+    await tester.tap(find.text('go'));
+    await r.settleUntil(tester, () => _shown(find.text('Download ${here!.name}?')));
+    expect(find.text('Download ${here!.name}?'), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Download this area: where to is held by a region on the phone, the start is not: the start\'s region', (tester) async {
+    final r2 = await _Rig.boot(tester);
+    final b = r2.county.bounds!;
+    final inCounty = GeoPoint((b.south + b.north) / 2, (b.west + b.east) / 2);
+    final other = r2.us['us-ut']!.bounds!;
+    final elsewhere = GeoPoint((other.south + other.north) / 2, (other.west + other.east) / 2);
+    await tester.runAsync(() => r2.regions.download(r2.county, routing: true, map: true));
+    r2.core.finish(_county);
+    await r2.refreshUntil(tester, () => r2.regions.regionOf(_county)?.phase == RegionPhase.ready);
+    expect(r2.regions.regionHolding(inCounty.lat, inCounty.lon, routing: true)?.id, _county);
+    expect(r2.regions.regionHolding(elsewhere.lat, elsewhere.lon, routing: true), isNull);
+    final ends = [inCounty, elsewhere];
+    final there = r2.catalogue.regionAt(elsewhere.lat, elsewhere.lon);
+    expect(there, isNotNull);
+    await r2.s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => getRouteArea(c, r2.regions, ends), child: const Text('go')))));
+    await tester.tap(find.text('go'));
+    await r2.settleUntil(tester, () => _shown(find.text('Download ${there!.name}?')));
+    expect(find.text('Download ${there!.name}?'), findsOneWidget);
+    await r2.dispose(tester);
+  });
+
+  testWidgets('Download this area: where the catalogue names no region (the open sea), the Regions sheet at that place', (tester) async {
+    final r3 = await _Rig.boot(tester);
+    const ends = [GeoPoint(0.5, -150.0)];
+    await r3.s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => getRouteArea(c, r3.regions, ends), child: const Text('go')))));
+    await tester.tap(find.text('go'));
+    await r3.settleUntil(tester, () => _shown(find.byType(RegionsListSheet)));
+    expect(find.byType(RegionsListSheet), findsOneWidget);
+    final sheet = tester.widget<RegionsListSheet>(find.byType(RegionsListSheet));
+    expect((sheet.lat, sheet.lon), (0.5, -150.0));
+    await r3.dispose(tester);
+  });
+
+  testWidgets('Add off-road data: the region on the phone that holds the route and has no off-road gets Add off-road', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+    r.core.finish(_county);
+    await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+    final b = r.county.bounds!;
+    final inCounty = GeoPoint((b.south + b.north) / 2, (b.west + b.east) / 2);
+    expect(r.regions.regionHolding(inCounty.lat, inCounty.lon, withoutOffroad: true)?.id, _county);
+    await r.s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => addRouteOffroad(c, r.regions, [inCounty]), child: const Text('go')))));
+    await tester.tap(find.text('go'));
+    await r.settleUntil(tester, () => _shown(find.text('Add off-road to ${r.county.name}?')));
+    expect(find.text('Add off-road to ${r.county.name}?'), findsOneWidget);
     await r.dispose(tester);
   });
 

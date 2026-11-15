@@ -621,6 +621,45 @@ void main() {
       });
     });
   }
+
+  // Link audit, batch 2: a route error that names missing data has the button that gets it.
+  testWidgets('outside the downloaded maps: Download this area; no off-road data: Add off-road data, with Walk and Drive', (tester) async {
+    const theme = CacheThemeId.dark;
+    var area = 0, offroad = 0;
+    Widget panel({bool buttons = true}) => host(
+        theme,
+        live(nav, () => RoutePanel(nav: nav, fmt: fmt, onDownloadArea: buttons ? () => area++ : null, onAddOffroad: buttons ? () => offroad++ : null)));
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'out_of_coverage', 'message': 'outside'}]});
+    await nav.openDirections(hospital);
+    expect(nav.outsideMaps, isTrue);
+    expect(nav.offroadDataMissing, isFalse);
+    expect(nav.routeEnds.first, hospital.point, reason: 'where to is looked at first');
+    await tester.pumpWidget(panel());
+    expect(find.text('One of these places is outside the downloaded maps'), findsOneWidget);
+    expect(find.text('Download this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-add-offroad')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('route-download-area')));
+    await tester.tap(find.byKey(const ValueKey('route-download-area')));
+    expect(area, 1);
+    // With nowhere to download from (no regions), no button.
+    await tester.pumpWidget(panel(buttons: false));
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    // Off-road with no off-road data for the area.
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'not_set_up', 'message': 'no data'}]});
+    await nav.setMode('offroad_foot');
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    expect(nav.outsideMaps, isFalse);
+    expect(find.text('Off-road needs off-road data for this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    expect(find.text('Add off-road data'), findsOneWidget);
+    expect(find.byKey(const ValueKey('offroad-instead-walk')), findsOneWidget, reason: 'the road modes are still offered');
+    await tester.ensureVisible(find.byKey(const ValueKey('route-add-offroad')));
+    await tester.tap(find.byKey(const ValueKey('route-add-offroad')));
+    expect(offroad, 1);
+    expect(area, 1);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _startGuiding(TestNav nav, FakeBackend backend, Map<String, dynamic> route) async {

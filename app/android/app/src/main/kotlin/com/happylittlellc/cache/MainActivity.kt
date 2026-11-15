@@ -64,6 +64,23 @@ class MainActivity : FlutterActivity() {
         })
     }
 
+    // A tap on a guidance notification (OpenMaps.kt): the Maps tab. Held until Dart takes it (a cold start) and also pushed to a
+    // running Dart on the co.cache/open channel (lib/nav/open_maps.dart).
+    private var openChannel: MethodChannel? = null
+    private var pendingOpen: String? = null
+
+    private fun readOpen(i: Intent?) {
+        if (!OpenMaps.wants(i)) return
+        // Cleared so a re-created activity does not open the Maps tab again.
+        i!!.removeExtra(OpenMaps.EXTRA)
+        pendingOpen = OpenMaps.MAPS
+        openChannel?.invokeMethod("open", OpenMaps.MAPS, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
     override fun onNewIntent(intent: Intent) {
         // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
         // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
@@ -72,6 +89,7 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         readBenchExtras(intent)
         readLink(intent)
+        readOpen(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,6 +99,7 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         readBenchExtras(intent)
         readLink(intent)
+        readOpen(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -165,6 +184,18 @@ class MainActivity : FlutterActivity() {
                         val link = pendingLink
                         pendingLink = null
                         result.success(link)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        openChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/open").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        val open = pendingOpen
+                        pendingOpen = null
+                        result.success(open)
                     }
                     else -> result.notImplemented()
                 }
@@ -270,6 +301,8 @@ class MainActivity : FlutterActivity() {
         // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
         linkChannel?.setMethodCallHandler(null)
         linkChannel = null
+        openChannel?.setMethodCallHandler(null)
+        openChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
