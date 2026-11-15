@@ -57,8 +57,10 @@ void main() {
       ..onRoute = ((to, mode, from) async => MapRoute.fromJson(route))
       ..onProgress = ((r, lat, lon) async {
         final j = fakeProgressJson(route, (along / total).clamp(0.0, 0.97));
-        final left = ((j['remaining'] as Map)['duration_s'] as int);
-        (j['remaining'] as Map)['eta'] = now.add(Duration(seconds: left)).toUtc().toIso8601String();
+        // The fake's 'remaining' map is typed for numbers only, so it is rebuilt as a map of anything to add the arrival time.
+        final rem = Map<String, dynamic>.from(j['remaining'] as Map);
+        rem['eta'] = now.add(Duration(seconds: rem['duration_s'] as int)).toUtc().toIso8601String();
+        j['remaining'] = rem;
         return MapProgress.fromJson(j);
       });
     final gps = FakeNavPosition();
