@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../maps/ui/place_map.dart' show PlaceFixScope;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
-import '../../notebook/place_style.dart';
 import '../../notebook/places.dart';
 import '../../theme.dart';
 import 'places_screen.dart' show parseLatLon;
