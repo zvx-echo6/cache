@@ -961,7 +961,11 @@ class NavState extends ChangeNotifier {
       // never used.
       final r = await backend
           .route(
-              from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
+              // The way the vehicle is going rides with the start (heading_deg, only when it is moving): the router then starts the
+              // new route forward. Without it a start on a road mid-block was snapped either way, and a driver who turned early
+              // got a route that began with a U-turn, which he was off again after a few more seconds (a re-route every cooldown).
+              from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location', if (f.heading != null) 'heading_deg': f.heading},
+              to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
           .timeout(rerouteTimeout);
       if (gen != _rerouteGen || !guiding || !identical(selected, to)) {
         logInfo('Guidance: a new route came after guidance had moved on, it is not used');
