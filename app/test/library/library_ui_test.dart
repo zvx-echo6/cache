@@ -304,7 +304,7 @@ void main() {
       expect(shelves.unsorted, hasLength(3), reason: 'Undo reverses the whole batch');
     });
 
-    testWidgets('All divisions: the Place it sheet says the number before the tap, lists every division, and Leave unsorted', (tester) async {
+    testWidgets('All categories: the Place it sheet says the number before the tap, lists every category, and Leave unsorted', (tester) async {
       size(tester, const Size(390, 844));
       await tester.runAsync(setUpAll0);
       await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
@@ -313,7 +313,7 @@ void main() {
       await tapKey(tester, 'shelves-unsorted');
       await tapKey(tester, 'all-divisions-bees');
       expect(find.text('Where does this book go?'), findsOneWidget);
-      expect(find.text('The book gets its call number in the division you pick, for example CDS 350-001.'), findsOneWidget);
+      expect(find.text('The book gets its call number in the category you pick, for example CDS 350-001.'), findsOneWidget);
       await tapKey(tester, 'place-all-divisions');
       await tester.scrollUntilVisible(find.byKey(const ValueKey('place-div-530')), 200, scrollable: find.byType(Scrollable).last);
       await tapKey(tester, 'place-div-530');
@@ -336,7 +336,7 @@ void main() {
       await tapKey(tester, 'book-aid');
       expect(shelves.book('aid')!.shelf, '210');
       await tapKey(tester, 'book-move');
-      expect(find.text('Move to another division'), findsOneWidget);
+      expect(find.text('Move to another category'), findsOneWidget);
       expect(find.byKey(const ValueKey('place-unsorted')), findsOneWidget, reason: 'a filed book can go back to Unsorted');
       expect(find.text('Unsorted'), findsOneWidget);
       calls.appended.clear();
