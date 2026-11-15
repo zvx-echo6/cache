@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// The token could not be had (the device did not answer, or the session is over).
 class ZimTokenException implements Exception {
@@ -52,7 +53,10 @@ class ZimTokens {
   Future<String> _ask() async {
     try {
       final r = await (_client ??= http.Client()).post(Uri.parse(endpoint)).timeout(const Duration(seconds: 30));
-      if (r.statusCode == 401) throw const ZimTokenException('Sign in again to read this.');
+      if (r.statusCode == 401) {
+        reportSignedOut();
+        throw const ZimTokenException('Sign in again to read this.');
+      }
       if (r.statusCode != 200) throw const ZimTokenException('This device could not be reached.');
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       final res = j is Map ? j['result'] : null;
