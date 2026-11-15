@@ -7,9 +7,9 @@ use cache_sync::{Config, SyncEngine};
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
-fn engine(dir: &Path, name: &str) -> SyncEngine {
+fn engine(dir: &Path, name: &str, port: Option<u16>) -> SyncEngine {
     let cfg: Config = serde_json::from_value(json!({
-        "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false, "interval_secs": 5, "reserve_bytes": 0,
+        "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false, "interval_secs": 5, "reserve_bytes": 0, "port": port,
     }))
     .unwrap();
     SyncEngine::open(cfg).unwrap()
@@ -61,7 +61,7 @@ fn a_stored_keep_copies_flag_is_ignored_edits_and_deletes_arrive_and_old_side_co
     put(&fa.join("Journal/entry (from Tablet).md"), b"an old side copy");
     std::fs::create_dir_all(&fc).unwrap();
 
-    let (a, c) = (engine(&da, "Desk"), engine(&dc, "Tablet"));
+    let (a, c) = (engine(&da, "Desk", None), engine(&dc, "Tablet", None));
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     call(&c, "link", json!({"code": code}));
     let ic = call(&c, "status", json!({}))["id"].as_str().unwrap().to_string();
@@ -72,8 +72,9 @@ fn a_stored_keep_copies_flag_is_ignored_edits_and_deletes_arrive_and_old_side_co
         is(&fc.join("Journal/entry.md"), b"desk v1") && is(&fc.join("Journal/del.md"), b"desk keeps this") && is(&fc.join("Journal/entry (from Tablet).md"), b"an old side copy")
     });
 
-    // 51.3 left the flag in the Desk's saved file for the Tablet (only the Desk restarts: with no discovery the Tablet could not
-    // find a restarted Desk, but the restarted Desk dials the Tablet, which is all this needs)
+    // 51.3 left the flag in the Desk's saved file for the Tablet (the Desk restarts on the same port: with no discovery the Tablet
+    // finds it only there)
+    let a_port = a.port().expect("the Desk listens on a port");
     a.close();
     let saved = da.join("sync.json");
     let mut v: Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
@@ -83,7 +84,7 @@ fn a_stored_keep_copies_flag_is_ignored_edits_and_deletes_arrive_and_old_side_co
         }
     }
     std::fs::write(&saved, serde_json::to_vec(&v).unwrap()).unwrap();
-    let a = engine(&da, "Desk");
+    let a = engine(&da, "Desk", Some(a_port));
     let all = [&a, &c];
     let peer = call(&a, "status", json!({}))["peers"].as_array().unwrap().iter().find(|p| p["id"] == ic).cloned().unwrap();
     assert!(peer.get("keep_copies").is_none(), "the flag is no longer a thing: {peer}");
