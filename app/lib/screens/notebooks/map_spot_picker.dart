@@ -15,7 +15,7 @@ import 'places_screen.dart' show parseLatLon;
 typedef SpotMapBuilder = Widget Function(BuildContext context, NbPlace? target, ValueChanged<NbPlace> onMoving, ValueChanged<NbPlace> onCentre, ValueChanged<NbPlace> onTap);
 
 /// "Choose on map": a full-screen map to put a place's pin on. Pan and zoom the map under a fixed crosshair and press "Use this
-/// spot"; a tap on the map moves it there; search and "Where I am" move the map. Cancel keeps the previous pin. Answers the chosen
+/// spot"; a tap on the map moves it there; search moves the map. Cancel keeps the previous pin. Answers the chosen
 /// [NbPlace] (its name when the spot is the one a search found), or null.
 class MapSpotPicker extends StatefulWidget {
   const MapSpotPicker({super.key, required this.map, required this.places, required this.start, required this.icon, required this.tint, required this.pinStyle});
@@ -42,10 +42,8 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
   NbPlace? _named;
   List<NbPlace> _found = const [];
   bool _searching = false;
-  String? _note;
 
-  /// The person has touched the map: the position fix that was asked for on opening leaves it where they put it ("Where I am"
-  /// is their own press and always moves it).
+  /// The person has touched the map: the position fix that was asked for on opening leaves it where they put it.
   bool _touched = false;
 
   /// The opening position fix is still being read (false once it answered that there is none).
@@ -54,7 +52,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
   @override
   void initState() {
     super.initState();
-    if (_target == null) _here(quiet: true);
+    if (_target == null) _openFix();
   }
 
   @override
@@ -63,7 +61,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
     super.dispose();
   }
 
-  /// Bumped when the map is sent to the spot it is already aimed at (the person panned away and pressed "Where I am" again):
+  /// Bumped when the map is sent to the spot it is already aimed at (the person panned away and searched for it again):
   /// the map is then opened afresh on it, as a changed target is what moves it.
   int _again = 0;
 
@@ -73,24 +71,21 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
         _centre = _target;
         _named = named ? p : null;
         _found = const [];
-        _note = null;
       });
 
-  Future<void> _here({bool quiet = false}) async {
+  /// The position fix asked for on opening: the map moves to it unless the person has already touched the map.
+  Future<void> _openFix() async {
     try {
       final p = await widget.places.herePlace();
       if (!mounted) return;
       if (p != null) {
-        if (quiet && _touched) return;
+        if (_touched) return;
         _go(p);
-      } else if (quiet) {
-        setState(() => _fixComing = false);
       } else {
-        setState(() => _note = 'Where you are is not known yet. Check that location is on.');
+        setState(() => _fixComing = false);
       }
     } catch (_) {
-      if (mounted && quiet) setState(() => _fixComing = false);
-      if (mounted && !quiet) setState(() => _note = 'Where you are is not known yet. Check that location is on.');
+      if (mounted) setState(() => _fixComing = false);
     }
   }
 
@@ -212,26 +207,11 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(c == null ? 'Move the map to the spot' : c.coords, key: const ValueKey('picker-coords'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-                    Text(_note ?? 'Move the map under the crosshair, or tap it', style: TextStyle(fontSize: 13, color: k.secondary)),
+                    Text('Move the map under the crosshair, or tap it', style: TextStyle(fontSize: 13, color: k.secondary)),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        // "Current location" is wider than the label it replaced: the button gives way before the row overflows.
-                        Flexible(
-                          flex: 3,
-                          child: OutlinedButton.icon(
-                            key: const ValueKey('picker-here'),
-                            onPressed: _here,
-                            icon: const Icon(Icons.my_location),
-                            label: const Text('Current location', maxLines: 1, softWrap: false, overflow: TextOverflow.ellipsis),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: FilledButton(key: const ValueKey('picker-use'), onPressed: c == null ? null : () => Navigator.pop(context, _answer()), child: const Text('Use this spot')),
-                        ),
-                      ],
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(key: const ValueKey('picker-use'), onPressed: c == null ? null : () => Navigator.pop(context, _answer()), child: const Text('Use this spot', maxLines: 1, softWrap: false)),
                     ),
                   ],
                 ),
