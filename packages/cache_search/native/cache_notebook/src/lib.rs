@@ -142,6 +142,7 @@ impl Notebook {
             "source_add_back" => store::source_add_back(c, &args)?,
             "source_rows" => store::source_rows(c, &args)?,
             "source_migrated" => store::source_migrated(c, &args)?,
+            "source_rekey_by_title" => store::source_rekey_by_title(c, &args)?,
             _ => return Err(Error { code: "unsupported", message: format!("unknown notebook op {op:?}") }),
         }))?;
         Ok(out.to_string())

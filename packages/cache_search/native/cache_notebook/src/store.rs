@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use std::path::Path;
 
 mod source;
-pub(crate) use source::{source_add_back, source_merge, source_migrated, source_rows};
+pub(crate) use source::{source_add_back, source_merge, source_migrated, source_rekey_by_title, source_rows};
 
 const SCHEMA_VERSION: &str = "2";
 const DEFAULT_LIMIT: i64 = 1000;
