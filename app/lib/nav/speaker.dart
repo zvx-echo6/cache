@@ -15,7 +15,7 @@ abstract class Speaker {
 
 /// A [Speaker] that says when it has said every prompt it was given ([onIdle]): the car side then lets the audio session or
 /// the navigation focus go at once, so the other apps' sound comes back as the prompt ends.
-abstract class IdleSpeaker {
+abstract class IdleSpeaker implements Speaker {
   set onIdle(void Function()? f);
 }
 
