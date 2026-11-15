@@ -131,23 +131,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 const SizedBox(height: 10),
               ],
               for (final g in s.notShelved) ...[
-                Container(
-                  key: ValueKey('shelves-gap-${g.library}'),
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                      const SizedBox(height: 4),
-                      Text(
-                        'This library was made before Cache could shelve books. They are still searchable. '
-                        'Update the library to put them on your shelves.',
-                        style: TextStyle(fontSize: 13, color: k.secondary),
-                      ),
-                    ],
-                  ),
-                ),
+                ShelfGapCard(key: ValueKey('shelves-gap-${g.library}'), gap: g),
                 const SizedBox(height: 10),
               ],
               if (s.bookCount == 0 && s.notShelved.isEmpty && !s.loading) ...[
@@ -593,6 +577,7 @@ class HiddenBooksPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = deps;
+    final pageContext = context;
     return Scaffold(
       appBar: libraryAppBar(context, title: 'Hidden books'),
       body: ListenableBuilder(
@@ -626,6 +611,7 @@ class HiddenBooksPage extends StatelessWidget {
                           titleLines: 2,
                           statusLines: null,
                           chevron: false,
+                          onTap: () => LibraryNav.of(pageContext).open(pageContext, bookSpec(d, b.id)),
                           statusWidget: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
@@ -635,7 +621,7 @@ class HiddenBooksPage extends StatelessWidget {
                                 TextButton(
                                   key: ValueKey('hidden-show-${b.id}'),
                                   style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4), minimumSize: const Size(0, 40), alignment: Alignment.centerLeft),
-                                  onPressed: () => showOnBookshelves(context, d, b),
+                                  onPressed: () => showOnBookshelves(pageContext, d, b),
                                   child: const Text('Show on Bookshelves'),
                                 ),
                             ],
@@ -658,6 +644,7 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   final copies = d.shelves.copies;
   if (copies == null) return;
   final messenger = ScaffoldMessenger.of(context);
+  final nav = LibraryNav.of(context);
   try {
     await copies.hide(b, hidden: false);
   } catch (_) {
@@ -672,7 +659,18 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   if (where == null) return;
   messenger
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(key: const ValueKey('shown-snack'), content: Text(where)));
+    ..showSnackBar(
+      SnackBar(
+        key: const ValueKey('shown-snack'),
+        content: Text(where),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () {
+            if (context.mounted) nav.open(context, bookSpec(d, b.id));
+          },
+        ),
+      ),
+    );
 }
 
 /// The book rows of a division: call number (without "CDS"), title, size, and one small state mark when needed.
@@ -742,4 +740,31 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
   if (addPdfShared?.awaitsWords(b.id) == true) return 'Adding to search index';
   if (b.pdfPath == null && !b.onServer) return 'Not on this device';
   return null;
+}
+
+/// A library made before Cache could shelve books: its books are not on the shelves, and they are still searchable. (It once said
+/// "Update the library", which no library can: only ZIMs have Check for update, and Discover has no newer edition of a library
+/// made like this. Words that point somewhere link there, so it says nothing it cannot link.)
+class ShelfGapCard extends StatelessWidget {
+  const ShelfGapCard({super.key, required this.gap});
+
+  final ShelfGap gap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final g = gap;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+          const SizedBox(height: 4),
+          Text('This library was made before Cache could shelve books. They are still searchable.', style: TextStyle(fontSize: 13, color: k.secondary)),
+        ],
+      ),
+    );
+  }
 }

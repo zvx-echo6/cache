@@ -97,7 +97,7 @@ let after = guiding.then
 check(after?.turn == "right", "guiding: the one after")
 check(after?.road == "Road 2", "guiding: the road of the one after")
 check(guiding.currentRoad == "Road 0", "guiding: the road now")
-check(isNumber(guiding.remainingM, 22860.45) && isWhole(guiding.remainingS, 1134), "guiding: what is left")
+check(isNumber(guiding.remainingM, 22860.45) && isWhole(guiding.remainingS, 1140), "guiding: what is left")
 check(isWhole(guiding.etaMs, 1_794_168_000_000), "guiding: the arrival time")
 check(!guiding.arrived && !guiding.rerouting && guiding.voiceOn, "guiding: not arrived, not rerouting, the voice on")
 
@@ -179,9 +179,20 @@ let nearLength = CarText.length(320.4, imperial: true)
 check(nearLength.value == 0.2 && nearLength.unit == UnitLength.miles, "a length for CarPlay: the phone's number, in miles")
 let farLength = CarText.length(25400.5, imperial: false)
 check(farLength.value == 25 && farLength.unit == UnitLength.kilometers, "a length for CarPlay: in kilometres")
-check(guiding.leftSeconds == 1134, "the time left is the phone's")
+check(guiding.leftSeconds == 1140, "the time left is the phone's")
+// CarPlay is told again when the minutes change or the phone's arrival clock moves to another minute, and only then.
+check(guiding.leftKey == "19|29902800", "the time left is told by its minutes and the arrival minute")
+let sameMinutes: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_000_000]
+let laterFix: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_059_000]
+let clockMoved: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_060_000]
+let fewerMinutes: [String: Any] = ["phase": "guiding", "remainingS": 180, "remainingM": 2900.0, "etaMs": 1_794_168_000_000]
+check(CarTrip.from(sameMinutes).leftKey == CarTrip.from(laterFix).leftKey, "the same minutes and arrival minute: not told again")
+check(CarTrip.from(sameMinutes).leftKey != CarTrip.from(clockMoved).leftKey, "the arrival clock moved on: told again")
+check(CarTrip.from(sameMinutes).leftKey != CarTrip.from(fewerMinutes).leftKey, "fewer minutes left: told again")
+check(CarTrip.from(["phase": "guiding", "remainingS": 240, "remainingM": 3000.0]).leftKey == "4|", "no arrival time: the minutes alone")
+check(CarTrip.from([:]).leftKey == nil, "no time left known: nothing to tell")
 if let nextTurn = guiding.step {
-  // 320.4 m of 22860.45 m left, of 1134 s: 16 s.
+  // 320.4 m of 22860.45 m left, of 1140 s: 16 s.
   check(guiding.turnSeconds(nextTurn) == 16, "the time to the turn is its share of the time left")
 }
 let lastStretch: [String: Any] = ["phase": "guiding", "remainingS": 20, "remainingM": 150.0]

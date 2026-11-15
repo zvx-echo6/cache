@@ -190,7 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'Sharing and sync',
                       status: _sharing(sharing),
                       selected: isPaneSelected(context, 'settings-sharing'),
-                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing, settingsSync: d.hub.settingsSync)),
+                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing, settingsSync: d.hub.settingsSync, onOpenItem: d.hub.openShareItem)),
                     ),
                   ),
                 SettingsRow(
