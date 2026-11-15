@@ -278,7 +278,7 @@ class LibrariesState extends ChangeNotifier {
   /// status is read again until no library is opening (for at most ten minutes, like an add).
   Future<void> _whileOpening() async {
     for (var i = 0; i < 2400 && !_disposed; i++) {
-      if (!libraries.any((l) => statusOf(l)?.opening ?? false)) return;
+      if (!libraries.any((l) => (statusOf(l)?.opening ?? false) || (statusOf(l)?.index?.opening ?? false))) return;
       await Future<void>.delayed(pollInterval);
       if (_disposed) return;
       await sources.reloadStatus();

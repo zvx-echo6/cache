@@ -258,6 +258,48 @@ void main() {
     expect([for (final t in await CoreIndexWork(calls).pending()) t.key], ['library-words/my-books@1']);
   });
 
+  SourceStatus legacyLib({int docs = 12}) => SourceStatus.fromJson({
+        'id': 'my-books', 'kind': 'library', 'path': '/l/my-books/shard', 'title': 'My books', 'indexed': true, 'docs': docs,
+        'source_id': 'my-books@1',
+        'index': {'kind': 'library', 'location': 'legacy', 'dir': '/l/my-books/index', 'needs_seal': true},
+      });
+
+  test('a library whose index was sealed once this session is listed again when a later add (or own rebuild) leaves one in the old place again', () async {
+    statuses = [legacyLib()];
+    var run = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.done, done: 1, total: 1);
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
+    // the seal made a snapshot: nothing is left to do for it
+    statuses = [
+      SourceStatus.fromJson({
+        'id': 'my-books', 'kind': 'library', 'path': '/l/my-books/shard', 'title': 'My books', 'indexed': true, 'docs': 12, 'source_id': 'my-books@1',
+        'keyword_pending': false, 'index': {'kind': 'library', 'location': 'snapshot', 'snapshot': 'b1'},
+      }),
+    ];
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+    // a later add (Add PDF appends to the index in the old place when one exists) or a rebuild from the packs: the same library needs
+    // the work again, in the same session
+    job = _Job();
+    started.clear();
+    statuses = [legacyLib(docs: 17)];
+    final again = await CoreIndexWork(calls).pending();
+    expect([for (final t in again) t.key], ['library/my-books@1'], reason: 'listed again');
+    run = await again.single.start();
+    expect(started.single.$1, 'index_seal');
+  });
+
+  test('a seal that was declined as stale is tried again when the library changes (a new add), not before', () async {
+    statuses = [legacyLib()];
+    final run = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'index_stale');
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'unchanged: not again');
+    now = now.add(const Duration(hours: 1));
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'not on a timer either');
+    statuses = [legacyLib(docs: 17)];
+    expect([for (final t in await CoreIndexWork(calls).pending()) t.key], ['library/my-books@1'], reason: 'the library changed: the seal is offered again');
+  });
+
   test('a seal the core declines (links cannot be made here) is not asked for again this session', () async {
     statuses = [
       SourceStatus.fromJson({
