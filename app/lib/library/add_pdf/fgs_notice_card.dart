@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../background/fgs_add.dart';
 import '../../theme.dart';
+import 'add_pdf_pages.dart' show openAddPdfProgress;
 
 /// The in-app notice, on the Library, when Cache is next opened after a background add failed or ended before it was done. Silent
 /// notifications cannot be relied on (the person may have refused them), so the app says it itself. The words are
@@ -19,7 +20,7 @@ class FgsAddNoticeCard extends StatelessWidget {
       if (n == null) return const SizedBox.shrink();
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
-        child: FgsAddNoticeBody(notice: n, onDismiss: state.dismiss),
+        child: FgsAddNoticeBody(notice: n, onDismiss: state.dismiss, onOpen: () => openAddPdfProgress(context)),
       );
     },
   );
@@ -27,10 +28,13 @@ class FgsAddNoticeCard extends StatelessWidget {
 
 /// The card itself (the pictures draw it without a state).
 class FgsAddNoticeBody extends StatelessWidget {
-  const FgsAddNoticeBody({super.key, required this.notice, this.onDismiss});
+  const FgsAddNoticeBody({super.key, required this.notice, this.onDismiss, this.onOpen});
 
   final FgsAddNotice notice;
   final VoidCallback? onDismiss;
+
+  /// The card's body opens the Add PDF progress page.
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +47,9 @@ class FgsAddNoticeBody extends StatelessWidget {
         if (text.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2), child: Text(text, style: TextStyle(fontSize: 13, height: 1.4, color: k.secondary))),
       ],
     );
+    Widget body(Widget child) => onOpen == null
+        ? child
+        : Semantics(button: true, child: InkWell(key: const ValueKey('fgs-add-notice-open'), borderRadius: BorderRadius.circular(8), onTap: onOpen, child: child));
     return Container(
       key: const ValueKey('fgs-add-notice'),
       decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16), border: Border(left: BorderSide(color: tone, width: 4))),
@@ -50,6 +57,10 @@ class FgsAddNoticeBody extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          body(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -67,6 +78,9 @@ class FgsAddNoticeBody extends StatelessWidget {
             const SizedBox(height: 8),
             Padding(padding: const EdgeInsets.only(left: 48), child: lines(notice.alsoTitle!, notice.alsoText ?? '', strong: false)),
           ],
+              ],
+            ),
+          ),
           if (onDismiss != null) ...[
             const SizedBox(height: 6),
             Align(

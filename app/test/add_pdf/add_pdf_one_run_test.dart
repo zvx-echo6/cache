@@ -60,7 +60,7 @@ void main() {
         return progress('embedding', pagesDone: 3, pieces: 10, piecesDone: 4);
       },
     });
-    final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls);
+    final s = testAddPdfState(Directory('${tmp.path}/ingest'), frozenClock: true, calls: calls);
     final job = await addOne(s);
     final task = (await s.pending()).single;
     final first = await task.start();
@@ -81,7 +81,7 @@ void main() {
     final calls = FakeIngestCalls({
       'step': steps([progress('done', pagesDone: 3, pieces: 10, piecesDone: 10, result: {'copy': 'ab' * 32, 'pieces': 10})]),
     });
-    final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls);
+    final s = testAddPdfState(Directory('${tmp.path}/ingest'), frozenClock: true, calls: calls);
     final job = await addOne(s);
     final task = (await s.pending()).single;
     expect(await (await task.start()).finished, isTrue);
@@ -108,7 +108,7 @@ void main() {
         return progress('done', pagesDone: 3, pieces: 10, piecesDone: 10, result: {'copy': 'ab' * 32, 'pieces': 10});
       },
     });
-    final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls, onDone: (_) async => done++);
+    final s = testAddPdfState(Directory('${tmp.path}/ingest'), frozenClock: true, calls: calls, onDone: (_) async => done++);
     await addOne(s);
     final task = (await s.pending()).single;
     final first = await task.start();

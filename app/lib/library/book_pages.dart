@@ -7,6 +7,7 @@ import '../pdf/open_pdf.dart' show openPdfReader;
 import '../browse/web/device_api.dart' show DeviceException;
 import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom, PdfGone, PdfServerSource;
 
+import '../screens/settings/sharing_page.dart' show SharingDevicePage;
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
@@ -17,7 +18,7 @@ import 'book_edit_pages.dart';
 import 'library_panes.dart';
 import 'same_book_pages.dart';
 import 'shelf_source.dart';
-import 'shelves_pages.dart' show shelfColor;
+import 'shelves_pages.dart' show shelfColor, showOnBookshelves;
 
 /// "CDS 350 · Beekeeping".
 String _shelfWords(LibraryDeps d, String id) {
@@ -392,7 +393,10 @@ class UnsortedPage extends StatelessWidget {
 
 /// One fact of the book page: its name small above, its value, and a line under it.
 class _Fact {
-  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey});
+  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey, this.onTap});
+
+  /// The value opens what it names (the shelf, the device): drawn as a link.
+  final VoidCallback? onTap;
 
   final String label;
   final String value;
@@ -400,6 +404,23 @@ class _Fact {
   final Tone tone;
   final Widget? action;
   final String? valueKey;
+}
+
+/// A fact's value: plain, or a link (accent, underlined, a button for a screen reader) when it opens something.
+Widget _factValue(BuildContext context, _Fact f) {
+  final k = context.t;
+  final linked = f.onTap != null;
+  final text = Text(
+    f.value,
+    key: f.valueKey == null ? null : ValueKey<String>(f.valueKey!),
+    style: TextStyle(
+      fontSize: 15,
+      color: linked ? k.accent : (f.tone == Tone.normal ? k.text : toneColor(k, f.tone)),
+      decoration: linked ? TextDecoration.underline : null,
+      decorationColor: k.accent,
+    ),
+  );
+  return linked ? Semantics(button: true, child: InkWell(onTap: f.onTap, child: text)) : text;
 }
 
 Widget _facts(BuildContext context, List<_Fact> facts) {
@@ -423,11 +444,7 @@ Widget _facts(BuildContext context, List<_Fact> facts) {
                     children: [
                       Text(facts[i].label, style: TextStyle(fontSize: 13, color: k.secondary)),
                       const SizedBox(height: 2),
-                      Text(
-                        facts[i].value,
-                        key: facts[i].valueKey == null ? null : ValueKey(facts[i].valueKey),
-                        style: TextStyle(fontSize: 15, color: facts[i].tone == Tone.normal ? k.text : toneColor(k, facts[i].tone)),
-                      ),
+                      _factValue(context, facts[i]),
                       if (facts[i].line != null) Text(facts[i].line!, style: TextStyle(fontSize: 13, color: k.secondary)),
                     ],
                   ),
@@ -457,7 +474,7 @@ class BookPage extends StatelessWidget {
       listenable: d.changes,
       builder: (context, _) {
         final k = context.t;
-        final b = d.shelves.book(bookId);
+        final b = d.shelves.bookOrHidden(bookId);
         if (b == null) {
           return Scaffold(
             appBar: libraryAppBar(context, title: 'Book'),
@@ -481,13 +498,16 @@ class BookPage extends StatelessWidget {
           rows: [
             if (d.shelves.copies != null) ...[
               SettingsRow(key: const ValueKey('book-rename'), title: 'Rename', onTap: () => openRename(context, d, b)),
-              SettingsRow(
-                key: const ValueKey('book-hide'),
-                title: 'Hide from Bookshelves',
-                status: const [Part('On all your devices. No file is deleted.')],
-                chevron: false,
-                onTap: () => hideBook(context, d, b),
-              ),
+              if (d.shelves.isHidden(b.id))
+                SettingsRow(key: const ValueKey('book-show'), title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+              else
+                SettingsRow(
+                  key: const ValueKey('book-hide'),
+                  title: 'Hide from Bookshelves',
+                  status: const [Part('On all your devices. No file is deleted.')],
+                  chevron: false,
+                  onTap: () => hideBook(context, d, b),
+                ),
             ],
             SettingsRow(key: const ValueKey('book-delete'), title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
@@ -624,11 +644,7 @@ class BookPage extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    fact.value,
-                                    key: fact.valueKey == null ? null : ValueKey(fact.valueKey),
-                                    style: TextStyle(fontSize: 15, color: fact.tone == Tone.normal ? k.text : toneColor(k, fact.tone)),
-                                  ),
+                                  _factValue(context, fact),
                                   if (fact.line != null) Text(fact.line!, style: TextStyle(fontSize: 13, color: k.secondary)),
                                 ],
                               ),
@@ -650,14 +666,17 @@ class BookPage extends StatelessWidget {
                     if (d.shelves.copies != null) ...[
                       SettingsRow(key: const ValueKey('book-rename'), compact: true, title: 'Rename', onTap: () => openRename(context, d, b)),
                       Divider(height: 1, color: line),
-                      SettingsRow(
-                        key: const ValueKey('book-hide'),
-                        compact: true,
-                        title: 'Hide from Bookshelves',
-                        status: const [Part('On all your devices. No file is deleted.')],
-                        chevron: false,
-                        onTap: () => hideBook(context, d, b),
-                      ),
+                      if (d.shelves.isHidden(b.id))
+                        SettingsRow(key: const ValueKey('book-show'), compact: true, title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+                      else
+                        SettingsRow(
+                          key: const ValueKey('book-hide'),
+                          compact: true,
+                          title: 'Hide from Bookshelves',
+                          status: const [Part('On all your devices. No file is deleted.')],
+                          chevron: false,
+                          onTap: () => hideBook(context, d, b),
+                        ),
                       Divider(height: 1, color: line),
                     ],
                     SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
@@ -683,17 +702,25 @@ class BookPage extends StatelessWidget {
         : here != null
             ? 'On this device · ${formatBytes(here)}'
             : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
+    // the linked device that name is (one, and only one, or the words stay plain)
+    final sharing = d.sharing;
+    final peers = from == null || sharing == null ? const <Map<String, dynamic>>[] : [for (final p in sharing.peers) if (p['name'] == from) p];
+    final VoidCallback? openPeer = b.onServer || here != null || peers.length != 1 || sharing == null
+        ? null
+        : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: sharing, peer: peers.single['id'] as String)));
+    final shelfNow = b.shelf == null ? null : d.shelves.shelf(b.shelf!);
     return [
       _Fact(
         'Subject',
         b.shelf == null ? 'Unsorted' : _shelfWords(d, b.shelf!),
         valueKey: 'book-subject',
+        onTap: shelfNow == null ? null : () => LibraryNav.of(context).open(context, shelfSpec(d, shelfNow)),
         line: b.shelf == null ? null : (b.shelvedBy == ShelvedBy.person ? 'Placed by you' : 'Filed by Cache'),
         action: placer == null
             ? null
             : RowButton(key: const ValueKey('book-move'), label: b.shelf == null ? 'Place it' : 'Move', onPressed: () => openPlace(context, d, b, replace: true)),
       ),
-      _Fact('PDF', pdf, valueKey: 'book-pdf'),
+      _Fact('PDF', pdf, valueKey: 'book-pdf', onTap: openPeer),
       _Fact(
         'Search',
         switch (search.state) {

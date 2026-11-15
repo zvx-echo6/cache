@@ -8,6 +8,7 @@ import 'package:web/web.dart' as web;
 
 import 'device_api.dart' show DeviceException;
 import 'local_files_base.dart';
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// A file the person chose or dropped. It stays a browser `File` (a Blob): it is read only by the upload, which streams it.
 class WebLocalFile implements LocalFile {
@@ -140,6 +141,7 @@ class _XhrTask implements UploadTask {
           return;
         }
         final err = body is Map ? body['error'] : null;
+        if (status == 401) reportSignedOut();
         _done.completeError(
           status == 401
               ? const DeviceException('unauthorized', 'Sign in again.', status: 401)

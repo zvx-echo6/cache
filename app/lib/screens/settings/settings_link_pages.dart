@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../sharing/settings_sync.dart';
 import '../../theme.dart';
 import 'widgets.dart';
+import '../../guide/place_link.dart' show LinkText;
 
 /// A linked device's page, its Settings section: how settings go between the two (Match both ways, Send mine, Take theirs, Off), then What's included
 /// and API keys while they go. The device it is chosen on is where settings come from. On the device that follows the other's
@@ -100,7 +101,9 @@ String settingsLinkNotice(SettingsLink link, String name) => switch (link) {
 /// ([SettingsSync.answer]). The first answer from either device sets both sides; when the other device answers first this turns
 /// into a plain notice of what it chose, with OK, and cannot override it. Until answered nothing goes; closing it is Off, unless
 /// the other device has answered meanwhile.
-Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String peer, String name) async {
+///
+/// [openDevice] opens [name]'s page in Sharing and sync: the notice's words point there and link to it.
+Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String peer, String name, {VoidCallback? openDevice}) async {
   final to = await showDialog<SettingsLink>(
     context: context,
     builder: (ctx) {
@@ -120,7 +123,12 @@ Future<void> askSettingsLink(BuildContext context, SettingsSync sync, String pee
             return AlertDialog(
               key: const ValueKey('settings-link-notice'),
               title: Text(settingsLinkNotice(sync.linkWith(peer), name)),
-              content: Text("Change this any time on $name's page in Sharing and sync."),
+              content: openDevice == null
+                  ? Text("Change this any time on $name's page in Sharing and sync.")
+                  : LinkText("Change this any time on $name's page in Sharing and sync.", onTap: () {
+                      Navigator.pop(ctx);
+                      openDevice();
+                    }),
               actions: [TextButton(key: const ValueKey('notice-ok'), onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
             );
           }

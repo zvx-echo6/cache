@@ -88,7 +88,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Notes imported by their tag in the last sync: the app's name ("Obsidian") and their titles. Read and cleared by
   /// [takeImported] (the snack bar "2 notes added from Obsidian").
-  final List<({String app, String target, List<String> titles, Set<String> books})> _news = [];
+  final List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> _news = [];
 
   List<SyncTargetConfig> get targets => [for (final t in _targets) if (t.kind != SyncKind.share) t];
   SyncTargetConfig? target(SyncKind kind) => _targets.where((t) => t.kind == kind || (kind == SyncKind.logseq && t.kind == SyncKind.logseqExport)).firstOrNull;
@@ -122,7 +122,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   String? stoppedWith(String entryId) => switch (_linkTarget(entryId, true)) { final t? => appName(t.kind), null => null };
 
   /// The notes imported since the last call, by connection.
-  List<({String app, String target, List<String> titles, Set<String> books})> takeImported() {
+  List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> takeImported() {
     final out = [..._news];
     _news.clear();
     return out;
@@ -328,7 +328,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             if (t.kind != SyncKind.share) {
               _notAdded[t.id] = r.notAdded;
               _links[t.id] = await NotebookSync.links(e.stateFile);
-              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
+              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}, ids: [...r.importedIds]));
             }
             final n = e.conflicts.length;
             _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(_now())}';

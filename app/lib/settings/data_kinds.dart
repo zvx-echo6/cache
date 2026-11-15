@@ -2,6 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
+/// What a row of Sharing and sync opens: the action for [item] of [kind] (its notebook, its page), or null when the app has no
+/// page for it (the row then toggles sharing, as before).
+typedef ShareItemOpener = VoidCallback? Function(BuildContext context, DataKind kind, ShareItem item);
+
 /// One kind of thing Cache keeps on the phone (Library, Models, Regions, ...) and the folders that hold it: the one list Storage
 /// measures and Sharing shares, so the two always agree. A new kind is one more entry in the app's list.
 class DataKind {

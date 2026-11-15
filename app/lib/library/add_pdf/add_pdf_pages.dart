@@ -309,7 +309,11 @@ class _Big extends StatelessWidget {
 
 /// A note inside a card: a stripe down its left side in its tone, a heading, a line, and its buttons.
 class _Note extends StatelessWidget {
-  const _Note({required this.tone, required this.title, this.body, this.actions = const [], this.leading, this.trailing, this.plain = false, this.fill, super.key});
+  const _Note({required this.tone, required this.title, this.body, this.actions = const [], this.leading, this.trailing, this.plain = false, this.fill, this.onTapTitle, this.onTapBody, super.key});
+
+  /// The title ("Filed in Science") or the body ("Looks like another copy of …") opens what it names.
+  final VoidCallback? onTapTitle;
+  final VoidCallback? onTapBody;
 
   /// Its own fill (a watched folder's summary: the page's color), in place of [plain]'s.
   final Color? fill;
@@ -333,8 +337,12 @@ class _Note extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-        if (body != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(body!, style: TextStyle(fontSize: 13, height: 1.4, color: k.secondary))),
+        _linked(Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: onTapTitle == null ? k.text : k.accent, decoration: onTapTitle == null ? null : TextDecoration.underline, decorationColor: k.accent)), onTapTitle),
+        if (body != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: _linked(Text(body!, style: TextStyle(fontSize: 13, height: 1.4, color: onTapBody == null ? k.secondary : k.accent, decoration: onTapBody == null ? null : TextDecoration.underline, decorationColor: k.accent)), onTapBody),
+          ),
       ],
     );
     return Container(
@@ -364,6 +372,9 @@ class _Note extends StatelessWidget {
     );
   }
 }
+
+/// [child] as a link (a button for a screen reader) when there is somewhere to go.
+Widget _linked(Widget child, VoidCallback? onTap) => onTap == null ? child : Semantics(button: true, child: InkWell(onTap: onTap, child: child));
 
 /// The error's icon on a tinted square.
 class _ErrIcon extends StatelessWidget {
@@ -1158,6 +1169,7 @@ Widget? addPdfResultNote(
       tone: k.accent,
       title: 'A spare copy of an existing book',
       body: exact ? 'Same file as $name. It shares that number.' : 'Looks like another copy of $name.',
+      onTapBody: other == null || d == null ? null : () => LibraryNav.of(context).open(context, bookSpec(d, other.id)),
       actions: [
         _Ghost(
           label: 'Not the same book',
@@ -1180,11 +1192,14 @@ Widget? addPdfResultNote(
           }
         : null;
     final move = d == null || book == null ? null : () => openPlace(context, d, book);
+    final shelfObj = d?.shelves.shelf(div);
+    final VoidCallback? onShelf = d == null || shelfObj == null ? null : () => LibraryNav.of(context).open(context, shelfSpec(d, shelfObj));
     if (oneLine) {
       return _Note(
         key: ValueKey('add-pdf-note-${job.id}'),
         tone: k.ok,
         title: 'Filed in ${cdsChipLabel(div)}',
+        onTapTitle: onShelf,
         trailing: [_Txt(label: 'Move', onPressed: move), _Txt(label: 'Undo', onPressed: undo)],
       );
     }
@@ -1192,6 +1207,7 @@ Widget? addPdfResultNote(
       key: ValueKey('add-pdf-note-${job.id}'),
       tone: k.ok,
       title: 'Filed in ${cdsChipLabel(div)}',
+      onTapTitle: onShelf,
       body: book?.callNumber,
       actions: [
         _Ghost(key: ValueKey('add-pdf-move-${job.id}'), label: 'Move', onPressed: move),

@@ -409,3 +409,19 @@ abstract class OriginalFileProvider implements Listenable {
 
   Future<void> open(ShelfBook book);
 }
+
+/// A book page's lookup: the book [id] when it is on Bookshelves, else the one hidden from them (a hidden book still has its page,
+/// with Show on Bookshelves). Lists and search use [ShelfSource.book], which never finds a hidden book.
+extension ShelfBookPageLookup on ShelfSource {
+  ShelfBook? bookOrHidden(String id) {
+    final shown = book(id);
+    if (shown != null) return shown;
+    for (final b in hidden) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  /// True for a book that is hidden from Bookshelves (and so not found by [ShelfSource.book]).
+  bool isHidden(String id) => book(id) == null && bookOrHidden(id) != null;
+}

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../guide/app_links.dart' show AppPlace;
+import '../guide/place_link.dart';
 import '../pdf/index/pdf_index_app.dart' show pdfIndexShared, pdfZimRef;
 import '../pdf/index/pdf_index_state.dart' show PdfPartPhase, PdfZimRef;
 import '../pdf/index/pdf_index_ui.dart' show PdfIndexPartRow;
@@ -218,6 +220,12 @@ class CatalogPage extends StatelessWidget {
     return null;
   }
 
+  /// The sync line names Sharing and sync when sharing is off: it links there.
+  AppPlace? _syncPlace() {
+    final s = deps.sharing;
+    return s != null && !s.enabled ? AppPlace.sharing : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = deps;
@@ -279,7 +287,7 @@ class CatalogPage extends StatelessWidget {
                       children: [
                         for (var i = 0; i < rows.length; i++) ...[
                           if (i > 0) const SizedBox(height: 2),
-                          CatalogRow(entry: rows[i], sync: sync, focused: rows[i].key == focus),
+                          CatalogRow(entry: rows[i], sync: sync, syncPlace: _syncPlace(), focused: rows[i].key == focus),
                         ],
                       ],
                     ),
@@ -296,10 +304,13 @@ class CatalogPage extends StatelessWidget {
 
 /// One search index: name and kind tag, its state (with the bar while it is made) and its one action, then how it syncs.
 class CatalogRow extends StatelessWidget {
-  const CatalogRow({super.key, required this.entry, this.sync, this.focused = false});
+  const CatalogRow({super.key, required this.entry, this.sync, this.syncPlace, this.focused = false});
 
   final CatalogEntry entry;
   final String? sync;
+
+  /// Where the sync line's words point (Sharing and sync, when sharing is off): the line links there.
+  final AppPlace? syncPlace;
   final bool focused;
 
   /// The one thing to do about the work, from the scheduler: Pause while it runs, Resume after the person paused it, Try again
@@ -370,7 +381,13 @@ class CatalogRow extends StatelessWidget {
                 ),
               ),
           ],
-          if (sync != null) ...[const SizedBox(height: 4), Text(sync!, style: TextStyle(fontSize: 12, color: k.secondary))],
+          if (sync != null) ...[
+            const SizedBox(height: 4),
+            if (syncPlace case final place?)
+              placeLink(sync!, place, style: const TextStyle(fontSize: 12))
+            else
+              Text(sync!, style: TextStyle(fontSize: 12, color: k.secondary)),
+          ],
         ],
       ),
     );
