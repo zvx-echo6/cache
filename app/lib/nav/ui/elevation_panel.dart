@@ -66,25 +66,24 @@ const double kChartLabelGap = 18.0;
 /// drawn in a plot [plotHeight] points tall ([full]: the guidance panel's chart, else the preview's, which draws every other line of
 /// the big one's). [floor] is the window's least span ([chartWindow]).
 ///
-/// A profile that spans [floor] or more has lines [niceStep] of its span apart, as ever. One that spans less (a flat route) sits in
-/// a window several times as tall as it is, so that step reached 2 lines (3,600 and 3,800 around a route at 3,760 ft) and the
-/// preview drew one of them. Its lines are instead the least nice step that keeps [kChartLabelGap] points between labels, all within
-/// the window, and the one at the profile's own middle (to a tenth of the step, 3,760 for a route from 3,755 to 3,766) in place of
-/// any that would be too close to it.
+/// The lines are [niceStep] of the profile's span apart, as ever (every other one in the preview). A flat route sits in a window
+/// several times as tall as it is, so that step can leave the preview one line (3,600 around a route at 3,760 ft). Only then, with
+/// fewer than two lines, the lines are the least nice step that keeps [kChartLabelGap] points between labels, all within the window,
+/// and the one at the profile's own middle (to a tenth of the step, 3,760 for a route from 3,755 to 3,766) in place of any that
+/// would be too close to it.
 @visibleForTesting
 List<double> chartGridLines(double lo, double hi, {required double floor, required double plotHeight, required bool full}) {
   final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
   final span = math.max(hi - lo, floor);
-  if (hi - lo >= floor) {
-    final gStep = niceStep(span / 2.2);
-    final out = <double>[];
-    var line = 0;
-    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
-      if (!full && line.isOdd) continue;
-      out.add(g);
-    }
-    return out;
+  // The lines of a profile as ever: a nice step of its span apart, every other one in the preview.
+  final gStep = niceStep(span / 2.2);
+  final usual = <double>[];
+  var line = 0;
+  for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
+    if (!full && line.isOdd) continue;
+    usual.add(g);
   }
+  if (hi - lo >= floor || usual.length >= 2) return usual;
   if (plotHeight <= 0) return const [];
   final window = yMax - yMin;
   final pointsPer = window / plotHeight;
