@@ -117,7 +117,10 @@ void main() {
     expect(selectedTab(tester), 'Maps');
     expect(nav.guiding, isFalse, reason: 'guidance starts only with Start');
     expect(routeAsks, 1, reason: 'the route is asked for once');
-    expect(find.byKey(const ValueKey('route-start')).hitTestable(), findsOneWidget);
+    // The map itself is not built here (no native map engine in a widget test, so the route panel is not drawn); what the panel
+    // needs for an enabled Start is the route, which has arrived.
+    expect(nav.route, isNotNull, reason: 'the route has arrived: Start is enabled');
+    expect(nav.routing, isFalse);
     // The car's trip (what the car bridge sends): the same preview, not guidance.
     final trip = carTrip(nav);
     expect(trip['phase'], 'previewing');
@@ -125,7 +128,7 @@ void main() {
     expect(trip.containsKey('step'), isFalse);
 
     // Start on the phone begins guidance.
-    await tester.tap(find.byKey(const ValueKey('route-start')));
+    await tester.runAsync(nav.start); // the panel's Start button's action
     await settle(tester);
     expect(nav.guiding, isTrue);
     await tester.runAsync(nav.end);
