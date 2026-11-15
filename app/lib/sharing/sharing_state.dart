@@ -93,6 +93,9 @@ class SharingState extends ChangeNotifier {
   String? error;
   Map<String, dynamic> status = const {};
 
+  /// Whether this is Cache Server seen from a browser (the server's sharing host drives it), not a phone or a desktop.
+  bool get onServer => _driver is _WebDriver;
+
   bool get enabled => _driver.enabled;
   bool get running => _driver.running;
   bool get starting => _driver.starting;
