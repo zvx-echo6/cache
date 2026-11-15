@@ -1259,6 +1259,10 @@ listen_pictures() {  # listen_pictures <label>: the car's voice search with no m
     LISTEN_MISSING="$LISTEN_MISSING [listen_none: Didn't catch that never showed]"
   fi
   notify listen_off
+  # A run that died here is not a missing picture: the app's process id changed, and every later step has no app to talk to.
+  if [ "$(grep -o 'Runner\[[0-9]*' "$STREAM" | sort -u | wc -l)" -gt 1 ]; then
+    LISTEN_MISSING="$LISTEN_MISSING [the app's process died or restarted during the voice search steps: the log has more than one process id]"
+  fi
 }
 
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed

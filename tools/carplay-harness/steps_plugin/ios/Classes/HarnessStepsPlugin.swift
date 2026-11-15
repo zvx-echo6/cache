@@ -106,6 +106,7 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
       return
     }
     if let heard = listenWords[word] {
+      NSLog("%@", "harness steps: the voice search step \(heard) arrived (\(UIApplication.shared.connectedScenes.count) scene(s))")
       var scenes = 0
       for scene in UIApplication.shared.connectedScenes {
         guard let car = scene as? CPTemplateApplicationScene, let delegate = car.delegate as? NSObject else { continue }

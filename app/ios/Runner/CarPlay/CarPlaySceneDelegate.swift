@@ -237,6 +237,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   /// For the CarPlay harness only (its steps plugin reaches it by this Objective-C name): the microphone button's path with no
   /// microphone. `word` is `text` (words are "heard"), `none` (nothing heard) or `off` (back to the real thing).
   @objc func harnessListen(_ word: NSString) {
+    NSLog("%@", "harness steps: the car scene's harnessListen was reached with \(word)")
     switch word as String {
     case "text":
       CarListen.testSetup = CarListenTestSetup(text: "Coffee", listeningFor: 6, searchingFor: 4, didntCatchFor: 6)
@@ -246,6 +247,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
       CarListen.testSetup = nil
     }
     showButtons()
+    NSLog("%@", "harness steps: harnessListen: the buttons were set again, the voice search is \(CarListen.testSetup != nil ? "asked for" : "left")")
     if CarListen.testSetup != nil { templates?.listen() }
   }
 

@@ -510,6 +510,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   /// The microphone button was pressed: CarPlay's voice control template, and the phone listens while it is up. The words
   /// heard are searched as if typed (the same call to Dart as the search box's), and shown as a list of the places found.
   func listen() {
+    Self.log.info("car listen: asked to listen (a car: \(self.interface != nil), already up: \(self.listenTemplate != nil), button allowed: \(CarListenAccess.current().showsButton))")
     guard let interface = interface, listenTemplate == nil, CarListenAccess.current().showsButton else { return }
     let states = [
       CPVoiceControlState(
@@ -528,10 +529,13 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     listenSession = session
     session.onState = { [weak self] state in self?.listenStateChanged(state) }
     session.onText = { [weak self] text in self?.searchHeard(text) }
-    interface.pushTemplate(template, animated: true) { [weak self] ok, error in
+    // CarPlay presents a voice control template (as it does an alert); it is not pushed onto the stack, and pushing it raises.
+    Self.log.info("car listen: presenting the voice control template")
+    interface.presentTemplate(template, animated: true) { [weak self] ok, error in
       if let error = error {
         Self.log.error("car listen: the voice control template could not be shown: \(error.localizedDescription, privacy: .public)")
       }
+      Self.log.info("car listen: the voice control template presented, ok \(ok)")
       // Listening begins only with the template up (Apple: recording only together with it).
       if ok, self?.listenTemplate === template {
         self?.listenSession?.begin()
@@ -557,7 +561,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     case .idle:
       // Over without a search (no words heard, or cancelled): the template goes.
       listenTemplate = nil
-      if isShownTop(template) { interface?.popTemplate(animated: true) { _, _ in } }
+      if isPresented(template) { interface?.dismissTemplate(animated: true) { _, _ in } }
     }
   }
 
@@ -587,9 +591,9 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     if items.isEmpty {
       list.emptyViewTitleVariants = [Self.noPlacesFound]
     }
-    if isShownTop(template) {
-      interface.popTemplate(animated: false) { _, _ in
-        interface.pushTemplate(list, animated: false) { _, _ in }
+    if isPresented(template) {
+      interface.dismissTemplate(animated: false) { _, _ in
+        interface.pushTemplate(list, animated: true) { _, _ in }
       }
     } else {
       interface.pushTemplate(list, animated: true) { _, _ in }
@@ -598,8 +602,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     Self.log.info("car listen: heard words searched, \(items.count) places shown")
   }
 
-  private func isShownTop(_ template: CPTemplate) -> Bool {
-    interface?.topTemplate === template
+  private func isPresented(_ template: CPTemplate) -> Bool {
+    interface?.presentedTemplate === template
   }
 
   // ---- what is on the screen -------------------------------------------------------------------------------------------
@@ -620,7 +624,7 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
       shownResults = []
       Self.log.info("car lists: search closed")
     }
-    if let template = listenTemplate, aTemplate === template, !isShown(template) {
+    if let template = listenTemplate, aTemplate === template, !isPresented(template) {
       // CarPlay's own Cancel (or the car leaving it): listening stops and the audio is let go.
       listenTemplate = nil
       listenSession?.cancel()
