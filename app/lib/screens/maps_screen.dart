@@ -14,6 +14,8 @@ import '../location/location_web_ui.dart';
 import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
+import '../maps/map_tap.dart';
+import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
@@ -1483,6 +1485,99 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     );
   }
 
+  /// The base map's label layers in the style applied last (read again only when the style changes).
+  String? _labelStyle;
+  List<String> _labelIds = const [];
+
+  List<String> _basemapLabels() {
+    final style = _styleJson;
+    final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
+    if (style == null || base == null) return const [];
+    if (!identical(style, _labelStyle)) {
+      _labelStyle = style;
+      _labelIds = basemapLabelLayers(style, basemapSource: sourceIdOf(base.def));
+    }
+    return _labelIds;
+  }
+
+  /// The card a tap on an imported file's line or area opened, and that file's notebook (its card's Open).
+  ({String placeId, String notebookId})? _tappedBook;
+
+  /// Counts taps, so a slow lookup of an earlier tap never opens over a later one.
+  int _tapSeq = 0;
+
+  /// How far around the tapped point the map's query reaches, in the point's own units (Android reports a tap in the screen's
+  /// pixels, iOS in points): lines are a few points wide.
+  static const double _tapReach = 10;
+
+  Future<List<dynamic>> _query(MapLibreMapController c, math.Point<double> point, List<String> layers) async {
+    if (layers.isEmpty) return const [];
+    final r = _tapReach * (plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
+    try {
+      return await c.queryRenderedFeaturesInRect(Rect.fromLTRB(point.x - r, point.y - r, point.x + r, point.y + r), layers, null);
+    } catch (_) {
+      // A platform without the box query: the point alone.
+      try {
+        return await c.queryRenderedFeatures(point, layers, null);
+      } catch (_) {
+        return const [];
+      }
+    }
+  }
+
+  /// A tap on a base-map label (a place, a town, a point of interest, a road's name), else on a line or an area of an overlay or
+  /// of a file imported into a Places notebook, opens its card (map_tap.dart chooses). Only on a tap: nothing runs while panning.
+  /// True when there was one.
+  Future<bool> _tapMapFeature(math.Point<double> point, LatLng at) async {
+    final c = _controller;
+    if (c == null) return false;
+    final seq = ++_tapSeq;
+    final hits = <TapFeature>[];
+    TapFeature? read(Object? raw, TapSource source, String kind, {String? notebookId}) =>
+        tapFeatureFrom(raw, source: source, kind: kind, tapLat: at.latitude, tapLon: at.longitude, notebookId: notebookId);
+    for (final raw in await _query(c, point, _basemapLabels())) {
+      final f = read(raw, TapSource.basemap, '');
+      if (f != null) hits.add(f);
+    }
+    // A label is first whatever lies under it: the overlays and files are asked only when there is none.
+    if (hits.isEmpty) {
+      final u = widget.userLayers;
+      if (u != null) {
+        for (final raw in await _query(c, point, const [kUserLines, kUserAreas])) {
+          final props = raw is Map ? raw['properties'] : null;
+          final layer = props is Map && props['layer'] is String ? u.layerById(props['layer'] as String) : null;
+          final f = read(raw, TapSource.imported, layer?.name ?? '', notebookId: layer?.notebookId);
+          if (f != null) hits.add(f);
+        }
+      }
+      for (final use in maps.uses) {
+        if (use.def.kind != LayerKind.vector) continue;
+        for (final raw in await _query(c, point, overlayLayerIds(use.def))) {
+          final f = read(raw, TapSource.overlay, use.def.title);
+          if (f != null) hits.add(f);
+        }
+      }
+    }
+    final f = pickTapFeature(hits);
+    if (f == null || seq != _tapSeq || !mounted) return false;
+    HapticFeedback.selectionClick();
+    var candidates = const <MapPlace>[];
+    if (f.tier == TapTier.label) {
+      // The places data the search box reads, for the label's name near it: the card then has what a search result has.
+      try {
+        candidates = (await nav.backend.search(f.name!, near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
+      } catch (_) {}
+    }
+    if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
+    final reachM = math.max(kLabelMatchFloorM, kLabelMatchReach * metresPerPoint(f.lat, _zoom));
+    final choice = tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+    final book = choice.notebookId;
+    _tappedBook = book == null ? null : (placeId: choice.place.id, notebookId: book);
+    widget.userLayers?.clearRepeater();
+    nav.select(choice.place);
+    return true;
+  }
+
   void _notebookCard(NbEntry e) {
     final book = widget.notebooks?.notebook(e.notebookId);
     showFittedSheet<void>(
@@ -1515,7 +1610,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
-    } else if (nav.phase == NavPhase.browsing && nav.selected != null) {
+      return;
+    }
+    // A place, a label, a line or an area of the map opens its card.
+    if (nav.phase == NavPhase.browsing && await _tapMapFeature(point, at)) return;
+    if (nav.phase == NavPhase.browsing && nav.selected != null) {
       nav.clearSelection();
     }
   }
@@ -2295,7 +2394,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (sel != null && !searching) {
       final open = widget.onOpenEntry;
       final entry = open == null || widget.notebooks == null ? null : notebookEntryFor(sel, _pins, savedKey: nav.savedFor(sel)?.key);
-      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: entry == null ? null : () => open!(entry));
+      // A line or an area of an imported file: Open is its notebook.
+      final book = _tappedBook?.placeId == sel.id ? _tappedBook!.notebookId : null;
+      final openBook = widget.onOpenNotebook;
+      final VoidCallback? onOpen = entry != null
+          ? () => open!(entry)
+          : (book != null && openBook != null ? () => openBook(book) : null);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen);
     }
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;

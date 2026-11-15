@@ -70,7 +70,7 @@ class PlaceCard extends StatelessWidget {
                           Text(place.name, key: const ValueKey('place-card-name'), style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: k.text)),
                           const SizedBox(height: 2),
                           Text(
-                            [place.kind, ?dist].join(' · '),
+                            [if (place.kind.isNotEmpty) place.kind, ?dist].join(' · '),
                             style: TextStyle(fontSize: 16, color: k.secondary),
                           ),
                         ],
