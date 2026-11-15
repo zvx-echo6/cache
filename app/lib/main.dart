@@ -427,6 +427,8 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: () async => Directory(await appSupportPath()),
     deviceName: plat.isAndroid ? 'Android device' : (plat.isIOS ? 'iPhone' : plat.hostName),
     kinds: dataKinds,
+    // The notebooks are told in the notebook sync's own words (connections.dart say), never file by file.
+    quiet: const ['notebooks'],
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
     // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
     always: [
