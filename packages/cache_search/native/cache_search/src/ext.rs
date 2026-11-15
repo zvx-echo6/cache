@@ -639,7 +639,8 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Array(a)) if a.len() <= 8 => a.iter().enumerate().map(|(i, e)| self.map_end(Some(e), &format!("via[{i}]"))).collect::<Result<Vec<_>>>()?,
             Some(_) => return Err(Error::bad_json("via: must be an array of at most 8 places")),
         };
-        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives };
+        let from_heading_deg = o.get("from").and_then(|f| f.get("heading_deg")).and_then(serde_json::Value::as_f64).filter(|h| h.is_finite() && (0.0..=360.0).contains(h));
+        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives, from_heading_deg };
         let (out, active) = cache_navigate::map::route(nav, &req).map_err(tool_err)?;
         self.ext.routes.add(&active);
         Ok(out.to_string())

@@ -81,7 +81,7 @@ fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
 }
 
 fn req(via: Vec<MapEnd>, alternatives: usize) -> MapRouteReq {
-    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives }
+    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives, from_heading_deg: None }
 }
 
 #[test]
@@ -238,6 +238,21 @@ fn off_route_needs_a_few_fixes_in_a_row() {
     let p = r.progress(&ProgressReq { lat: fix(&out, total * 0.6, 90.0).0, lon: fix(&out, total * 0.6, 90.0).1, accuracy_m: Some(120.0), now: None, reset: true, off_route_m: 50.0, off_route_fixes: 1, arrive_m: 25.0 });
     assert_eq!(p["on_route"], true);
     assert!(p["remaining"].get("eta").is_none());
+}
+
+#[test]
+fn a_drive_along_a_road_100_m_beside_the_route_is_off_route_on_the_third_fix() {
+    // An early turn onto a parallel road: 12 m/s, one fix a second, 100 m from the route line.
+    let (out, active) = route(&core(10, 0), &req(vec![], 0)).unwrap();
+    let r = &active[0];
+    let total = out["distance_m"].as_f64().unwrap();
+    for i in 0..5 {
+        assert_eq!(prog(r, fix(&out, total * 0.3 + 12.0 * i as f64, 3.0))["off_route"], false);
+    }
+    for n in 1..=3 {
+        let p = prog(r, fix(&out, total * 0.3 + 60.0 + 12.0 * n as f64, 100.0));
+        assert_eq!(p["off_route"], n == 3, "fix {n}: {p}");
+    }
 }
 
 #[test]

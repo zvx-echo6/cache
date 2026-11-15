@@ -320,6 +320,70 @@ void main() {
     });
   });
 
+  group('an early turn onto a parallel road', () {
+    // The driver turns one road before the planned turn and goes on along a road beside the route. The stand-in core answers as
+    // the real one does: on the route while within 50 m of it, off after 3 fixes in a row beyond that.
+    var offFixes = 0;
+    MapProgress core(double lat) {
+      final offset = (lat - 42.5) * 110574;
+      if (offset <= 50) {
+        offFixes = 0;
+        return p(0.4, offset: offset);
+      }
+      offFixes++;
+      return p(0.4, offset: offset, off: offFixes >= 3, count: offFixes);
+    }
+
+    int routeCalls() => backend.calls.where((c) => c.startsWith('route:')).length;
+
+    Future<void> driveFix(double lat, {double? heading, int seconds = 1}) async {
+      now = now.add(Duration(seconds: seconds));
+      gps.controller.add(Fix(lat: lat, lon: -113.76, accuracyM: 6, time: now, heading: heading));
+      await settle(20);
+    }
+
+    setUp(() => offFixes = 0);
+
+    test('a re-route is asked for within 10 s of leaving the route, from where the car is and the way it is going', () async {
+      backend.onProgress = (r, lat, lon) async => core(lat);
+      await startGuidance();
+      final before = routeCalls();
+      // 12 m/s north-east-ish onto the parallel road: 100 m off the route within 4 fixes.
+      final start = now;
+      DateTime? asked;
+      for (var i = 0; i < 12 && asked == null; i++) {
+        await driveFix(42.5 + (20 + 12.0 * i) / 110574, heading: 90);
+        if (routeCalls() > before) asked = now;
+      }
+      expect(asked, isNotNull, reason: 'no re-route was asked for');
+      expect(asked!.difference(start).inSeconds, lessThanOrEqualTo(10));
+      // Before: from carried only lat, lon and name, so the router could start the new route against the way he was going
+      // (a U-turn), and every re-route after it did the same.
+      expect(backend.froms.last!['heading_deg'], 90);
+    });
+
+    test('a car that is not moving sends no heading', () async {
+      backend.onProgress = (r, lat, lon) async => core(lat);
+      await startGuidance();
+      for (var i = 0; i < 6; i++) {
+        await driveFix(42.5 + 200 / 110574, heading: null);
+      }
+      expect(backend.froms.last!.containsKey('heading_deg'), isFalse);
+    });
+
+    test('GPS noise along the route does not ask for a re-route', () async {
+      backend.onProgress = (r, lat, lon) async => core(lat);
+      await startGuidance();
+      final before = routeCalls();
+      for (var i = 0; i < 30; i++) {
+        // wobbles of up to 30 m either side of the route line
+        final wobble = (i.isEven ? 1 : -1) * (5.0 + (i * 7) % 25);
+        await driveFix(42.5 + wobble / 110574, heading: 90);
+      }
+      expect(routeCalls(), before);
+    });
+  });
+
   test('guidance that ends by itself after arrival says so in one line, then ends as End does', () async {
     nav.arrivalEndAfter = const Duration(milliseconds: 100);
     backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(routeJson, 1.0, arrived: true));
