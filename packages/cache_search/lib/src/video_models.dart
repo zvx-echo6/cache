@@ -344,6 +344,8 @@ class DownloadedVideo {
     this.warnings = const [],
     this.missingCaptions = const [],
     this.captionsIndex,
+    this.source = 'web',
+    this.remuxed = false,
   });
 
   factory DownloadedVideo.fromJson(Map<String, dynamic> j) => DownloadedVideo(
@@ -367,7 +369,15 @@ class DownloadedVideo {
             VideoCaptionInfo(language: (c['language'] ?? '') as String, label: (c['label'] ?? c['language'] ?? '') as String, url: '', automatic: c['automatic'] == true),
         ],
         captionsIndex: j['captions_index'] is Map ? VideoCaptionsIndex.fromJson((j['captions_index'] as Map).cast<String, dynamic>()) : null,
+        source: (j['source'] ?? 'web') as String,
+        remuxed: j['remuxed'] == true,
       );
+
+  /// Where the instance had the file: "web" (a plain MP4), "hls" or "hls+audio" (a fragmented MP4).
+  final String source;
+
+  /// An HLS file rewritten as a plain MP4 (every player can seek it); false for one saved before that, until it is.
+  final bool remuxed;
 
   /// The index of its caption files (with an indexes_dir in the core's config, when it has captions).
   final VideoCaptionsIndex? captionsIndex;
