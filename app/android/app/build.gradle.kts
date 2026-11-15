@@ -112,6 +112,14 @@ if (androidAuto) {
     }
 }
 
+// The foreground service's test hook (src/testhook/AndroidManifest.xml: a receiver a device round can send Pause and Resume to with
+// `adb shell am broadcast`) is merged only into the test APK (-PcacheTestApk=true); never into a release or Play build.
+if ((project.findProperty("cacheTestApk") as String?) == "true") {
+    androidComponents {
+        onVariants { variant -> variant.sources.manifests.addStaticManifestFile("src/testhook/AndroidManifest.xml") }
+    }
+}
+
 // The car screen's Robolectric tests read the merged assets, which the Flutter plugin's copy task writes: let it run first.
 tasks.configureEach {
     if (name == "packageDebugUnitTestForUnitTest") dependsOn("copyFlutterAssetsDebug")

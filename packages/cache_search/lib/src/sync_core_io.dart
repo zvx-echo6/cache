@@ -14,6 +14,9 @@ typedef _CloseC = Void Function(Pointer<Void>);
 typedef _Close = void Function(Pointer<Void>);
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _Free = void Function(Pointer<Utf8>);
+typedef _LogC = Void Function(Pointer<Utf8>);
+typedef _SetLogC = Void Function(Pointer<NativeFunction<_LogC>>);
+typedef _SetLog = void Function(Pointer<NativeFunction<_LogC>>);
 typedef _ErrC = Pointer<Utf8> Function(Pointer<Void>);
 
 /// The core library: [path] when given (the Cache Server helper, which is told the library's full path), else the platform's name.
@@ -40,6 +43,28 @@ class SyncCore {
   final int _address;
   final String? _path;
   bool _closed = false;
+
+  static NativeCallable<_LogC>? _logCallable;
+
+  /// Has the engine say each step of its start (with the time since it began) to [sink], one short line at a time. Once per
+  /// process, from the isolate that stays (the app's main one); the listener lives as long as the app. Where the core is not
+  /// there, or is older and lacks the function, nothing is set and nothing is said.
+  static void setLog(void Function(String line) sink, {String? libraryPath}) {
+    if (_logCallable != null) return;
+    try {
+      final lib = _openLib(libraryPath);
+      final set = lib.lookupFunction<_SetLogC, _SetLog>('cs_sync_set_log');
+      final free = lib.lookupFunction<_FreeC, _Free>('cs_free_string');
+      // The engine hands over the line and the listener runs later: it reads the line, frees it, then passes it on.
+      final cb = NativeCallable<_LogC>.listener((Pointer<Utf8> p) {
+        final s = p.toDartString();
+        free(p);
+        sink(s);
+      });
+      set(cb.nativeFunction);
+      _logCallable = cb;
+    } catch (_) {}
+  }
 
   /// Starts the engine with [config] (`dir`, `name`, and the optional discovery and relay settings). [libraryPath] is the full path of
   /// the core library, for a host that was given it (the Cache Server helper); the apps leave it out and the platform's name is used.

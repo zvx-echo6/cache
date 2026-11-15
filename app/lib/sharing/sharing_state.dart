@@ -33,7 +33,11 @@ class SharingState extends ChangeNotifier {
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
     bool? phone,
-  }) : _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
+    void Function(String line)? log,
+    Timer Function(Duration after, void Function() run)? timer,
+  }) : _log = log ?? ((l) => logInfo(l)),
+       _timer = timer ?? Timer.new,
+       _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore;
 
@@ -60,6 +64,14 @@ class SharingState extends ChangeNotifier {
   final int Function(String dir) _reserveBytes;
 
   static int _storageReserve(String dir) => reserveFor(totalBytesOnDisk(dir));
+
+  /// Where the start's timing lines go (the app's log), and how the one-shot "still starting" timer is made (tests make their own).
+  final void Function(String line) _log;
+  final Timer Function(Duration after, void Function() run) _timer;
+  Timer? _slowStart;
+
+  /// How long a start may take before the log says it is still going.
+  static const Duration kSlowStart = Duration(seconds: 60);
 
   SyncCoreLike? _core;
   bool _enabled = false;
@@ -149,6 +161,10 @@ class SharingState extends ChangeNotifier {
     _starting = true;
     error = null;
     notifyListeners();
+    final took = Stopwatch()..start();
+    _log('Sharing: starting');
+    // Only says so: a start that hangs leaves this line as the trace of where it stopped. Cancelled when the start ends.
+    _slowStart = _timer(kSlowStart, () => _log('Sharing: still starting after ${kSlowStart.inSeconds} s'));
     try {
       final dir = Directory('${(await supportDir()).path}/sync');
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
@@ -203,9 +219,14 @@ class SharingState extends ChangeNotifier {
       policy.settings.addListener(_onSettings);
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
       await refresh();
+      _log('Sharing: started in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
     } catch (e) {
       error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
+      // The kind of failure only: the text can carry paths, and this log is shared.
+      _log('Sharing: start failed after ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (${e is CacheSearchException ? e.code : e.runtimeType})');
     } finally {
+      _slowStart?.cancel();
+      _slowStart = null;
       _starting = false;
       notifyListeners();
     }
@@ -669,6 +690,7 @@ class SharingState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _slowStart?.cancel();
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);

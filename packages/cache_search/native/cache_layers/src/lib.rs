@@ -10,6 +10,7 @@
 pub mod cog;
 pub mod contour;
 pub mod core;
+pub mod cover;
 pub mod def;
 pub mod download;
 pub mod error;

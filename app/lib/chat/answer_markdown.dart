@@ -4,13 +4,35 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../desktop/desktop.dart';
 import '../theme.dart';
 
+/// A citation mark: one number ([1]), or a list or range of them ([1, 2], [1,2,3], [1-3], [1–3]).
+final RegExp _citeMark = RegExp(r'(?<!\\)\[\s*(\d+(?:\s*[,\-\u2013]\s*\d+)*)\s*\]');
+
+/// The scheme of the link an answer's citation mark becomes while the markdown is built; it never leaves the app.
+const String kCiteScheme = 'cite:';
+
+/// The source number a citation link ([kCiteScheme] and the number) names, or null for any other link.
+int? citeNumberOfLink(String? href) {
+  if (href == null || !href.startsWith(kCiteScheme)) return null;
+  return int.tryParse(href.substring(kCiteScheme.length));
+}
+
 /// Escapes citation markers like [1] so markdown shows them as plain text and never as a link.
 /// Text inside code (fenced or inline) is left alone.
-String protectCitations(String text) {
+///
+/// With [linked], a mark whose first number it accepts becomes a link to that source (`cite:` and the number), shown as the same text:
+/// the mark of a list or range ([1-3]) points at its first number, as the sources list's first row of it. The tap is the answer
+/// widget's; web links stay off.
+String protectCitations(String text, {bool Function(int n)? linked}) {
   final code = RegExp(r'```[\s\S]*?(?:```|$)|`[^`\n]*`');
   final out = StringBuffer();
   var at = 0;
-  String esc(String s) => s.replaceAllMapped(RegExp(r'(?<!\\)\[(\d+)\]'), (m) => '\\[${m.group(1)}\\]');
+  String esc(String s) => s.replaceAllMapped(_citeMark, (m) {
+        final body = m.group(1)!;
+        final single = RegExp(r'^\d+$').hasMatch(body);
+        final first = int.parse(RegExp(r'\d+').firstMatch(body)!.group(0)!);
+        if (linked != null && first > 0 && linked(first)) return '[\\[$body\\]]($kCiteScheme$first)';
+        return single ? '\\[$body\\]' : m.group(0)!;
+      });
   for (final m in code.allMatches(text)) {
     out.write(esc(text.substring(at, m.start)));
     out.write(m.group(0));
@@ -80,9 +102,15 @@ MarkdownStyleSheet answerStyle(CacheTokens k, {double text = 18, double line = 1
 
 /// An assistant answer rendered as markdown. User messages stay plain text elsewhere.
 class AnswerMarkdown extends StatelessWidget {
-  const AnswerMarkdown(this.text, {super.key, this.dropCitations = false});
+  const AnswerMarkdown(this.text, {super.key, this.dropCitations = false, this.onCite, this.canCite});
 
   final String text;
+
+  /// A tap on a citation mark ([1], [1-3]) with the number of the source it opens (a range's first). Null leaves the marks plain.
+  final void Function(int n)? onCite;
+
+  /// Whether the mark of source [n] opens something; only those marks are links.
+  final bool Function(int n)? canCite;
 
   /// The answer cites nothing: its citation marks are not shown ([dropCitationMarks]).
   final bool dropCitations;
@@ -90,11 +118,15 @@ class AnswerMarkdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MarkdownBody(
-      data: protectCitations(dropCitations ? dropCitationMarks(text) : text),
+      data: protectCitations(dropCitations ? dropCitationMarks(text) : text, linked: onCite == null ? null : (n) => canCite?.call(n) ?? true),
       selectable: true,
       // The Linux desktop reads at 16 with 1.6 between lines.
       styleSheet: isLinuxDesktop(context) ? answerStyle(context.t, text: 16, line: 1.6) : answerStyle(context.t),
-      onTapLink: (text, href, title) {}, // links never open: the app works offline
+      // Web links never open (the app works offline); a citation mark opens its source.
+      onTapLink: (text, href, title) {
+        final n = citeNumberOfLink(href);
+        if (n != null) onCite?.call(n);
+      },
     );
   }
 }

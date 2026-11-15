@@ -54,7 +54,7 @@ Future<String?> addPdfHeldNow(IndexThrottle t, {bool unplugged = false}) async {
 /// Pause pauses it: the core keeps what is done, nothing is visible in the library until its journaled commit, and the next run
 /// resumes it from the same job folder.
 class AddPdfSlice {
-  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.throttle, this.lookEvery = const Duration(seconds: 15), DateTime Function()? clock})
+  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.throttle, this.lookEvery = const Duration(seconds: 15), this.wake, DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
 
   final AddPdfState state;
@@ -69,6 +69,9 @@ class AddPdfSlice {
   /// follow its duty through [indexThrottleShared].
   final IndexThrottle? throttle;
   final Duration lookEvery;
+
+  /// Completes when something asks the slice to stop (the service's Pause): it looks at once, not at the next [lookEvery].
+  final Future<void>? wake;
   final DateTime Function() _clock;
 
   bool _wanted(String key) {
@@ -111,7 +114,7 @@ class AddPdfSlice {
       final run = await task.start();
       String? stopWhy;
       var looking = false;
-      final timer = Timer.periodic(lookEvery, (_) async {
+      Future<void> look() async {
         if (looking || stopWhy != null) return;
         looking = true;
         try {
@@ -123,8 +126,15 @@ class AddPdfSlice {
         } finally {
           looking = false;
         }
-      });
+      }
+
+      final timer = Timer.periodic(lookEvery, (_) => look());
+      var ended = false;
+      unawaited(wake?.then((_) {
+        if (!ended) return look();
+      }));
       final ok = await run.finished;
+      ended = true;
       timer.cancel();
       if (ok) {
         added++;

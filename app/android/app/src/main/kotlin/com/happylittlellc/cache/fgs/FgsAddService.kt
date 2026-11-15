@@ -27,13 +27,19 @@ class FgsAddService : Service(), FgsAddEvents {
     private var last: FgsProgress? = null
     private var lastNotifyAt = 0L
     private var over = false
+    private var pausing = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             FgsAddNotifications.ACTION_PAUSE -> {
-                // Pause in the notification: the add stops after its step and keeps what is done
+                // Pause in the notification: the add stops after the piece it is on and keeps what is done; the notification says
+                // Paused at once, and later progress does not put "Adding" back
+                if (runner != null && !over) {
+                    pausing = true
+                    notify(FgsAddNotifications.ID_ADDING, FgsAddNotifications.pausing(this, last))
+                }
                 runner?.stop("person")
                 return START_NOT_STICKY
             }
@@ -52,6 +58,7 @@ class FgsAddService : Service(), FgsAddEvents {
         }
         running = true
         over = false
+        pausing = false
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG).apply {
             setReferenceCounted(false)
@@ -64,6 +71,7 @@ class FgsAddService : Service(), FgsAddEvents {
     override fun onProgress(p: FgsProgress) {
         if (over) return
         last = p
+        if (pausing) return
         // at most one update a second (Android also limits them, and each one wakes the system UI)
         val now = SystemClock.elapsedRealtime()
         if (lastNotifyAt != 0L && now - lastNotifyAt < MIN_UPDATE_MS) return

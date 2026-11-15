@@ -7,7 +7,32 @@
 /// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
 /// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
 /// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
+///
+/// A person's own libraries (My books: the folders named [kOwnLibraryPrefix]...) also keep what is made from their packs to each
+/// device: the shard (and its staged copies during a write), `copies.jsonl`, `documents.tsv` and `SHA256SUMS`. Every device of
+/// the person adds books to the same own library, so when those synced, two devices that each added a book while apart both
+/// rewrote them and the sync kept one side per file: a book lost its search and its list row, or the shard was put together from
+/// both devices' files (tools/books-proof). Now only the packs (written once by the device that built the book), the PDFs (named
+/// by their content) and the settings sync, and each device builds its shard and lists from the packs itself (the core's
+/// `own_library_sync` job, LibrariesState.syncOwnLibraries). Cache 1.1 builds 47 to 51 still sync them; a device on this version
+/// leaves theirs out and they no longer get the search of books added on it (accepted: testers update).
+const List<String> kLibraryNotShared = [
+  '*/index',
+  '*/index-snapshots',
+  '$kOwnLibraryPrefix*/shard*',
+  '$kOwnLibraryPrefix*/copies.jsonl',
+  '$kOwnLibraryPrefix*/documents.tsv',
+  '$kOwnLibraryPrefix*/SHA256SUMS',
+];
+
+/// The folder-name prefix of a person's own libraries: My books is `my-books` (`my-books-2`, ... when the name is taken), an own
+/// library restored from an export is named by its id (`my-books-<time>`). No other library is given a folder name starting so
+/// (LibrariesState and the Linux server's library ids avoid it), so the share can tell them apart by name before the settings
+/// arrive. The core also checks `"own": true` in the settings before it changes anything (ownlib.rs).
+const String kOwnLibraryPrefix = 'my-books';
+
+/// Whether a folder name in the libraries folder is one an own library has ([kOwnLibraryPrefix]).
+bool isOwnLibraryFolderName(String name) => name.startsWith(kOwnLibraryPrefix);
 
 /// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
 /// for itself (the saved `.icon.png` does sync, with its ZIM).
@@ -74,8 +99,9 @@ const List<String> kBookshelvesShareModes = ['match'];
 /// The shares of things the person made (cache_sync's `beside`): with "Don't replace my copies from this device" on for a linked
 /// device, that device's newer version of a file here arrives beside it ("Entry (from Pixel).md") and never replaces it; in every
 /// other share nothing of that device's is taken. The notebooks: their entries, the saved places notebook and their photos. Not
-/// the libraries, not even My books: a library is one database (a Qdrant shard) whose files only make sense together, and its
-/// PDFs are named by their content (`bookshelf/<BLAKE3>.pdf`), so a newer version of one never exists.
+/// the libraries, not even My books: a library is one database (a Qdrant shard) whose files only make sense together (My books
+/// keeps its shard to each device, [kLibraryNotShared]), and its PDFs and packs are named by their content
+/// (`bookshelf/<BLAKE3>.pdf`, `packs/<doc_id>@<version>.cdoc`), so a newer version of one never exists.
 const List<String> kBesideShares = ['notebooks'];
 
 /// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").

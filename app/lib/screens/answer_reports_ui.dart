@@ -102,9 +102,12 @@ class _ReportSheetState extends State<_ReportSheet> {
 
 /// Settings > Assistant > Reported answers: the saved reports, each shareable and removable.
 class ReportedAnswersPage extends StatelessWidget {
-  const ReportedAnswersPage({super.key, required this.reports, this.share = shareMarkdown});
+  const ReportedAnswersPage({super.key, required this.reports, this.share = shareMarkdown, this.onOpenChat});
 
   final AnswerReports reports;
+
+  /// Opens the chat a report came from (a row with a chat id is tappable; one without stays plain). Null: no row opens.
+  final void Function(int chatId)? onOpenChat;
   final ShareMarkdown share;
 
   String _when(DateTime at) {
@@ -158,6 +161,7 @@ class ReportedAnswersPage extends StatelessWidget {
                           ],
                         ),
                         chevron: false,
+                        onTap: r.chatId == null || onOpenChat == null ? null : () => onOpenChat!(r.chatId!),
                       ),
                   ],
                 ),

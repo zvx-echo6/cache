@@ -2,6 +2,9 @@
 class SyncCore {
   SyncCore._();
 
+  /// No engine on the web: nothing to say.
+  static void setLog(void Function(String line) sink, {String? libraryPath}) {}
+
   /// Starts the engine with [config]. Throws on the web.
   static Future<SyncCore> open(Map<String, Object?> config, {String? libraryPath}) async => throw UnsupportedError('web: SyncCore.open');
 
