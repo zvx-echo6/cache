@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 
 import '../../downloads/download_row.dart';
@@ -16,7 +15,6 @@ import 'place_map.dart';
 typedef AreaMapBuilder = Widget Function(BuildContext context, GeoBounds extent);
 
 /// What tests draw in place of the platform map on an area's page; null draws the real one ([PlaceMap] with the area's extent).
-@visibleForTesting
 AreaMapBuilder? areaMapForTests;
 
 /// Opens the page of downloaded map area [id]: beside the list on a tablet, else as a page of its own (as a region's page opens).
