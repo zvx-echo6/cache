@@ -14,6 +14,7 @@ import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
 import '../nav/saved_first.dart';
 import '../nav/speaker.dart';
+import 'car_answer.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
@@ -400,6 +401,12 @@ class CarBridge {
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
         return nav.voiceOn;
+      case 'answer':
+        // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
+        // straight away, even when guidance prompts are off, since the driver asked.
+        final text = carAnswer(nav, a['kind'] as String?);
+        await nav.speaker.speak(text);
+        return text;
       case 'autoDrive':
         drive.simulate = a['on'] == true;
         return null;
@@ -410,6 +417,7 @@ class CarBridge {
           query: a['query'] as String?,
           start: a['start'] != false,
           stop: a['stop'] == true,
+          search: a['search'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -530,10 +538,14 @@ class CarBridge {
   /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
   /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
   /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false, bool search = false}) async {
     final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
+    if (search && q.isNotEmpty) {
+      // A voice search (Android `geo:?q=`): always the list of places found, even for a saved place's exact name.
+      return {'places': [for (final p in await this.search(q)) _placeOut(p)]};
+    }
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
       to = MapPlace.pin(lat, lon, name: q.isEmpty ? 'Dropped pin' : q);
     } else if (q.isNotEmpty) {
@@ -541,7 +553,7 @@ class CarBridge {
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
-        return {'places': [for (final p in await search(q)) _placeOut(p)], if (asStop) 'forStop': true};
+        return {'places': [for (final p in await this.search(q)) _placeOut(p)], if (asStop) 'forStop': true};
       }
     }
     if (to == null) return {'places': const [], if (asStop) 'forStop': true};

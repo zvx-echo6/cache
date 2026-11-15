@@ -8,11 +8,22 @@ import 'package:flutter/services.dart';
 /// The activity hands it over on the channel `co.cache/open`: Dart pulls with `take` once at start (a tap that started the app
 /// arrives before Dart listens) and receives `open` while the app runs. The shell listens ([addListener]) and takes it ([take]).
 /// The iPhone posts no guidance notification, so nothing arrives there.
+///
+/// A `geo:` link opened from the phone's "Open with" list (no car connected) arrives the same way, as a map with `what: maps` and
+/// the `lat`, `lon` and `query` the link carried ([MapsOpen]).
+class MapsOpen {
+  const MapsOpen({this.lat, this.lon, this.query});
+  final double? lat;
+  final double? lon;
+  final String? query;
+}
+
 class OpenMapsInbox extends ChangeNotifier {
   OpenMapsInbox({MethodChannel? channel}) : _channel = channel ?? const MethodChannel('co.cache/open');
 
   final MethodChannel _channel;
   bool _pending = false;
+  MapsOpen? _geo;
 
   /// The Maps tab was asked for and not taken yet.
   bool get pending => _pending;
@@ -34,7 +45,14 @@ class OpenMapsInbox extends ChangeNotifier {
 
   /// What the activity sent: `maps` asks for the Maps tab; anything else is not this inbox's.
   void offer(Object? what) {
-    if (what != 'maps') return;
+    if (what is Map && what['what'] == 'maps') {
+      final q = (what['query'] as String?)?.trim();
+      _geo = MapsOpen(lat: (what['lat'] as num?)?.toDouble(), lon: (what['lon'] as num?)?.toDouble(), query: q == null || q.isEmpty ? null : q);
+    } else if (what != 'maps') {
+      return;
+    } else {
+      _geo = null;
+    }
     _pending = true;
     notifyListeners();
   }
@@ -44,6 +62,15 @@ class OpenMapsInbox extends ChangeNotifier {
     final p = _pending;
     _pending = false;
     return p;
+  }
+}
+
+/// The place or search a `geo:` link carried with the request just taken, once (null for a notification's tap).
+extension MapsOpenTake on OpenMapsInbox {
+  MapsOpen? takeGeo() {
+    final g = _geo;
+    _geo = null;
+    return g;
   }
 }
 
