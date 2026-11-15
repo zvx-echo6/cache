@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:cache/car/car_answer.dart';
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
 import 'package:cache/app_state.dart';
@@ -1482,6 +1483,21 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'place 1', 'start': true, 'search': true})) as Map;
+      expect(r['places'], isNotEmpty);
+      expect(r.containsKey('started'), isFalse);
+      expect(nav.guiding, isFalse);
+      expect(asked, everyElement(isFalse), reason: 'the car never loads the search model');
+    });
+
     test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
       backend.saved.add(('Place 1', 42.6, -113.7));
       location.publish(fixAt(42.5, -113.8));
@@ -1666,6 +1682,60 @@ void main() {
       expect(drive.simulate, isTrue);
       expect(await fromCar('voice', {'on': false}), isFalse);
       expect(nav.voiceOn, isFalse);
+    });
+
+    group('the assistant asks about the trip (geo.action)', () {
+      const fmt = Fmt(UnitSystem.imperial);
+
+      test('with no route running every question gets the one no-route answer, said aloud', () async {
+        for (final kind in ['eta', 'distance', 'turn', 'destination', 'route']) {
+          expect(carAnswer(nav, kind), 'No route is running.');
+        }
+        speaker.said.clear();
+        expect(await fromCar('answer', {'kind': 'eta'}), 'No route is running.');
+        expect(speaker.said, ['No route is running.']);
+      });
+
+      test('arrival time is the clock the phone shows', () async {
+        await guide();
+        final p = nav.progress!;
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'eta', now: () => now), 'Arriving at ${clockTime(at)}.');
+        expect(carAnswer(nav, 'eta', now: () => now), matches(RegExp(r'^Arriving at \d{1,2}:\d\d (AM|PM)\.$')));
+      });
+
+      test('the distance left is said as the phone says distances', () async {
+        await guide();
+        final said = fmt.spoken(nav.progress!.remainingM);
+        expect(carAnswer(nav, 'distance'), '${said[0].toUpperCase()}${said.substring(1)} to go.');
+        expect(carAnswer(nav, 'distance'), endsWith(' to go.'));
+      });
+
+      test('the next turn is the step and how far', () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn'), 'Next: $step in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test('the destination is named', () async {
+        await guide();
+        final named = nav.route!.destinationName;
+        final name = named.isNotEmpty ? named : nav.selected!.name;
+        expect(carAnswer(nav, 'destination'), 'Going to $name.');
+      });
+
+      test('the answer is spoken even when the voice prompts are off', () async {
+        await guide();
+        expect(await fromCar('voice', {'on': false}), isFalse);
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'distance'});
+        expect(text, endsWith(' to go.'));
+        expect(speaker.said, [text]);
+        expect(nav.voiceOn, isFalse);
+      });
     });
 
     test('the voice takes the car audio focus only while a car is connected', () async {

@@ -309,7 +309,19 @@ class _ShellState extends State<Shell> {
   /// A guidance notification was tapped: the pages over the tabs close and the Maps tab shows.
   void _openMapsFromNotification() {
     if (!mounted || !openMapsInbox.take()) return;
+    final geo = openMapsInbox.takeGeo();
     Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+    // A `geo:` link picked from "Open with" (no car connected): its search, or its point, on the Maps tab. While a route is shown or
+    // followed the tab opens as it is.
+    final nav = widget.nav;
+    if (geo != null && nav.phase == NavPhase.browsing) {
+      if (geo.query != null) {
+        nav.openSearch();
+        nav.onQueryChanged(geo.query!);
+      } else if (geo.lat != null && geo.lon != null) {
+        nav.showOnMap(GeoPoint(geo.lat!, geo.lon!));
+      }
+    }
     _goModule(ModuleId.maps);
   }
 
