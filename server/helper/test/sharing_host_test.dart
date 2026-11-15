@@ -299,7 +299,7 @@ void main() {
     final h = host();
     await h.setUp();
     final c = opened.single;
-    for (final m in ['set_secrets', 'take_secrets', 'link', 'share_add', 'share_join', 'share_remove', 'set_off', 'set_only', 'set_never_fetch', 'set_share_with', 'set_policy', 'network_changed', 'nope']) {
+    for (final m in ['set_secrets', 'take_secrets', 'link', 'share_add', 'share_join', 'share_remove', 'set_off', 'set_only', 'set_never_fetch', 'set_share_with', 'set_policy', 'network_changed', 'set_keep_copies', 'nope']) {
       await expectLater(
         h.invoke('sharing.call', {'method': m, 'args': {'peer': 'p', 'secrets': {'k': 'v'}, 'path': '/etc'}}),
         throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'forbidden')),

@@ -609,6 +609,8 @@ class SettingsSync extends ChangeNotifier {
           continue;
         }
         if (!applies(link, ev, current: current, localAt: _localAt[e.key] ?? 0)) continue;
+        // which setting a linked device changed here, and which device (its id's start; never the value: some hold place names)
+        logInfo('Settings sync: applying ${e.key} from device ${id.length > 8 ? id.substring(0, 8) : id}');
         await _apply(s, ev);
       }
     }

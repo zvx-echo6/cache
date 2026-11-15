@@ -86,7 +86,7 @@ class PlaceMapHooks {
 /// Without [onPick] it is a view: the page's scroll keeps the gestures. [onCentre] is told where the middle of the map is when the
 /// camera comes to rest (the full-screen picker's crosshair); [showPin] false leaves the pin out (the picker draws its own).
 class PlaceMap extends StatefulWidget {
-  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick, this.onCentre, this.onMoving, this.showPin = true, this.look, this.fallback, this.hooks});
+  const PlaceMap({super.key, required this.maps, required this.themeId, required this.pin, this.onPick, this.onCentre, this.onMoving, this.showPin = true, this.look, this.fallback, this.extent, this.hooks});
 
   final MapsState maps;
   final CacheThemeId themeId;
@@ -104,6 +104,10 @@ class PlaceMap extends StatefulWidget {
 
   /// Where to open when there is no pin after [kPlaceFixWait] (the Maps tab's last camera, the notebook's places), or null.
   final Future<({double lat, double lon, double zoom})?> Function()? fallback;
+
+  /// An area instead of a pin (a downloaded area's page): the map opens on it at once, fitted to it with room around it, and its
+  /// outline is drawn.
+  final GeoBounds? extent;
 
   @visibleForTesting
   final PlaceMapHooks? hooks;
@@ -176,6 +180,14 @@ class _PlaceMapState extends State<PlaceMap> {
   /// [kPlaceZoom], else on the fallback camera. Never on the whole continent, never waiting for ever.
   Future<void> _tryOpen() async {
     if (!mounted || _initial != null || _opening || _style == null) return;
+    final x = widget.extent;
+    if (x != null) {
+      // One zoom out from the fit, so the whole area is in the short map with a margin.
+      final cam = CameraPosition(target: LatLng(x.centerLat, x.centerLon), zoom: (_fitZoom(_span(x)) - 1).clamp(1.0, kPlaceZoom).toDouble());
+      _zoom = cam.zoom;
+      setState(() => _initial = cam);
+      return;
+    }
     final p = widget.pin;
     if (p == null && !_waited && PlaceFixScope.comingOf(context)) return;
     _opening = true;
@@ -252,7 +264,37 @@ class _PlaceMapState extends State<PlaceMap> {
     _ready = true;
     _images = null;
     _showPin();
+    _showExtent();
     _aim();
+  }
+
+  /// The area's outline ([PlaceMap.extent]), drawn as the user's own areas are.
+  Future<void> _showExtent() async {
+    final c = _c, x = widget.extent;
+    if (c == null || !_ready || x == null) return;
+    try {
+      await c.setGeoJsonSource(kUserSource, {
+        'type': 'FeatureCollection',
+        'features': [
+          {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Polygon',
+              'coordinates': [
+                [
+                  [x.west, x.south],
+                  [x.east, x.south],
+                  [x.east, x.north],
+                  [x.west, x.north],
+                  [x.west, x.south],
+                ],
+              ],
+            },
+            'properties': <String, dynamic>{},
+          },
+        ],
+      });
+    } catch (_) {}
   }
 
   Future<void> _showPin() async {

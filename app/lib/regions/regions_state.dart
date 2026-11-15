@@ -925,15 +925,15 @@ class RegionsState extends ChangeNotifier {
   /// A region on the phone has [path] among its packs (on the phone, or downloading for it).
   bool _packKept(String path) => _kept.values.any((k) => k.offroad.any((x) => x.path == path));
 
-  /// The off-road packs on the phone or on their way, each with its size and the regions that use it (Storage > Regions lists
-  /// them: a pack stays while one of them is on the phone).
-  List<({String name, int bytes, bool done, List<String> usedBy})> get offroadPacks {
-    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy})>{};
+  /// The off-road packs on the phone or on their way, each with its size and the regions that use it, by name ([usedBy]) and by id
+  /// ([usedByIds], in the same order) (Storage > Regions lists them: a pack stays while one of them is on the phone).
+  List<({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})> get offroadPacks {
+    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})>{};
     for (final k in _kept.values) {
       for (final p in k.offroad) {
         final st = _packState(p);
         final had = byPath[p.path];
-        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name]);
+        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name], usedByIds: [...?had?.usedByIds, k.id]);
       }
     }
     return byPath.values.toList()..sort((a, b) => a.name.compareTo(b.name));
@@ -1510,6 +1510,33 @@ class RegionsState extends ChangeNotifier {
       offroad: offroad,
       offroadShared: shared,
     );
+  }
+
+  /// The box region [id] covers, for showing it on the map: the box it was downloaded for, else the box around its map areas, else
+  /// the catalogue's (when its country's file is read already). Null when none is known.
+  GeoBounds? boundsOf(String id) {
+    final k = _kept[id];
+    final b = k?.bbox ?? _boxOfAreas(k) ?? loadedRecord(id)?.bbox;
+    return b == null ? null : RegionRecord(id: id, name: id, kind: 'region', bbox: b).bounds;
+  }
+
+  /// A region on this phone whose box ([boundsOf]) holds the point: one with directions ([routing]), or one with no off-road yet
+  /// that can have it ([withoutOffroad]: not an area kept from before regions). The smallest when several do; null when none.
+  LocalRegion? regionHolding(double lat, double lon, {bool routing = false, bool withoutOffroad = false}) {
+    LocalRegion? best;
+    var bestSize = double.infinity;
+    for (final l in local) {
+      if (routing && !l.hasRouting) continue;
+      if (withoutOffroad && (l.hasOffroad || l.isArea)) continue;
+      final b = boundsOf(l.id);
+      if (b == null || !b.contains(lat, lon)) continue;
+      final size = (b.east - b.west) * (b.north - b.south);
+      if (size < bestSize) {
+        best = l;
+        bestSize = size;
+      }
+    }
+    return best;
   }
 
   /// The catalogue's record of [id] when its country's file is read already (no waiting), or null.

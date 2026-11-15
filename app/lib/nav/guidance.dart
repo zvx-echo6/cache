@@ -1,5 +1,6 @@
 import 'package:cache_search/cache_search.dart';
 
+import 'street_names.dart';
 import 'units.dart';
 
 /// The picture for a maneuver: Valhalla's maneuver type names (and "via" for a stop) choose it.
@@ -60,13 +61,13 @@ class GuidanceEngine {
   /// How to say what a maneuver asks, as a clause ("turn left onto Main Street"). [arriveAt] says it for an arrival.
   String clauseFor(ProgressManeuver m) {
     if (m.isArrival) return 'you reach your destination';
-    if (m.type == 'via') return _asClause(m.instruction);
+    if (m.type == 'via') return _asClause(m.spokenInstruction);
     if (m.kind == 'offroad_follow') {
       final what = m.followName ?? 'the ${m.trailKind == 'road' ? 'road' : m.trailKind == 'track' ? 'track' : 'trail'}';
       return 'follow $what ${cardinalWord(m.cardinal)} for ${fmt.spoken(m.lengthM)}'.replaceAll('  ', ' ');
     }
     if (m.kind == 'offroad') return 'leave the road and head ${cardinalWord(m.cardinal)} for ${fmt.spoken(m.lengthM)}${_climb(m)}'.replaceAll('  ', ' ');
-    return _asClause(m.instruction);
+    return _asClause(m.spokenInstruction);
   }
 
   String _climb(ProgressManeuver m) {
@@ -80,7 +81,7 @@ class GuidanceEngine {
   String opening(MapRoute route, ProgressManeuver first) {
     final lead = 'Starting navigation to ${destination.isEmpty ? 'your destination' : destination}.';
     final where = '${fmt.spokenDuration(route.durationS)}, ${fmt.spoken(route.distanceM)}.';
-    final firstStep = first.isOffroad ? _sentence(clauseFor(first)) : _sentence(_asClause(first.instruction));
+    final firstStep = first.isOffroad ? _sentence(clauseFor(first)) : _sentence(_asClause(first.spokenInstruction));
     return '$lead $where $firstStep';
   }
 
@@ -118,7 +119,7 @@ class GuidanceEngine {
     if (due == st.length - 1 && !next.isArrival) {
       out.add(_sentence(clause));
     } else if (next.isArrival && due == st.length - 1) {
-      out.add(_sentence(_asClause(next.instruction)));
+      out.add(_sentence(_asClause(next.spokenInstruction)));
     } else {
       out.add(_sentence('in ${fmt.spoken(d)}, $clause'));
     }

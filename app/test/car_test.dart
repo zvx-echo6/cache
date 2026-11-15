@@ -150,9 +150,9 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  Future<void> preview() async {
+  Future<void> preview([Map<String, dynamic>? route]) async {
     location.publish(fixAt(42.5, -113.8));
-    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(route ?? routeJson);
     await nav.openDirections(_place('place:4', 'Cassia Regional Hospital'));
   }
 
@@ -187,6 +187,26 @@ void main() {
       expect(t['remainingM'], closeTo((routeJson['distance_m'] as num) * 0.9, 1));
       expect(t['remainingS'], isNotNull);
       expect(t['currentRoad'], 'Road 0');
+    });
+
+    test('a street with a name and a route number: the car shows the name first and the number after it, as the phone does', () async {
+      final named = namedRoadsRouteJson();
+      await preview(named);
+      expect(((carTrip(nav)['routes'] as List).first as Map)['via'], 'Via Lakeside Boulevard (US 99 Bus)');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(named, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(named, 0.1));
+      final t = carTrip(nav);
+      final step = t['step'] as Map;
+      expect(step['cue'], 'Turn left onto Lakeside Boulevard (US 99 Bus).');
+      expect(step['road'], 'Lakeside Boulevard (US 99 Bus)');
+      // A highway with only a number keeps the number.
+      expect((t['then'] as Map)['cue'], 'Turn right onto SH 99.');
+      expect((t['then'] as Map)['road'], 'SH 99');
+      // A street with two names keeps its first.
+      expect(t['currentRoad'], 'Lakeside Boulevard');
     });
 
     // The iPhone car side (app/ios/Runner/CarPlay) is tested on recorded messages (tools/carplay-harness/recorded). They are

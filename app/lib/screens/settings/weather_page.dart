@@ -67,14 +67,16 @@ class _WeatherPageState extends State<WeatherPage> {
   void initState() {
     super.initState();
     // Nothing downloaded yet (a first start with no connection until now): try once on opening.
+    logInfo('Weather: Settings page opened; ${w.sourcesLine()}, ${w.catalogues.length} catalogues');
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
   }
 
   /// The refresh button: the source list first (the connector catalogues, as "Check for updates" does, so a newly published
   /// source shows here), then the data.
   Future<void> _refresh() async {
-    logInfo('Weather: Update now tapped');
+    logInfo('Weather: Update now tapped (Settings); ${w.sourcesLine()}');
     await w.refreshCatalogues();
+    logInfo('Weather: catalogues refreshed; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
     if (mounted) say(context, r.words);
   }
