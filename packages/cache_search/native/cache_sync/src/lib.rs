@@ -81,27 +81,30 @@ fn t() -> bool {
     true
 }
 
-/// Where the open's timing lines go: a function the app gave (`cs_sync_set_log`), or nowhere.
-static LOG_SINK: Mutex<Option<extern "C" fn(*const std::ffi::c_char)>> = Mutex::new(None);
+/// The lines the open has said and nobody has taken yet, oldest first. Nothing calls out to the app: a callback into Dart from an
+/// engine thread aborted the process in a background (WorkManager) isolate ("Cannot invoke native callback from a leaf call"), so the
+/// app asks for the lines instead ([`take_log`]).
+static LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Sets (or, with `None`, clears) the function that gets one short line per step of opening the engine. The line is a heap string
-/// given to the function, which frees it (`cs_free_string`): the function may hand it to another thread and return at once, as the
-/// app's does (a Dart listener reads it later).  The function must not block.
-pub fn set_log(sink: Option<extern "C" fn(*const std::ffi::c_char)>) {
-    *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner()) = sink;
+/// The most lines kept: an app that never asks must not grow it without end (the oldest go first).
+const LOG_KEEP: usize = 200;
+
+/// Returns the lines said since the last call, oldest first, and clears them.
+pub fn take_log() -> Vec<String> {
+    std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
-/// The steps of one open, each said with the milliseconds since the open began. Does nothing while no sink is set.
+/// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
 impl OpenSteps {
     fn step(&self, name: &str) {
-        let sink = *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner());
-        if let Some(f) = sink {
-            if let Ok(line) = std::ffi::CString::new(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis())) {
-                f(line.into_raw());
-            }
+        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
+        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+        if b.len() >= LOG_KEEP {
+            b.remove(0);
         }
+        b.push(line);
     }
 }
 
