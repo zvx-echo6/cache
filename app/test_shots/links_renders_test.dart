@@ -61,7 +61,7 @@ void main() {
       ..stops = [driveStop, MapPlace.pin(42.47, -113.7, name: 'Fuel stop')];
     await tester.pumpWidget(shotApp(Align(
       alignment: Alignment.topCenter,
-      child: Padding(padding: const EdgeInsets.all(12), child: DirectionsHeader(nav: nav)),
+      child: Padding(padding: const EdgeInsets.all(12), child: Material(type: MaterialType.transparency, child: DirectionsHeader(nav: nav))),
     )));
     await tester.pump();
     await snap(tester, _out, '02-route-header');
