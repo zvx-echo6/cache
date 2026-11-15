@@ -88,6 +88,23 @@ class AppIndexCoreCalls implements IndexCoreCalls {
   /// Seals that will not work (index_missing, index_stale), by key: not listed again this session.
   final Set<String> _skip = {};
 
+  /// What a source's status looked like when its seal or extension was started, by key: a source that finished or was declined is
+  /// listed again when it has changed since (an add, an own rebuild, a new snapshot), in the same session; not when it has not.
+  final Map<String, String> _sigAt = {};
+
+  static String _sig(SourceStatus s) => '${s.docs}|${s.index?.location}|${s.index?.snapshot}|${s.keywordPending}|${s.index?.needsSeal}';
+
+  /// Whether the seal or extension [key] of [s] was done or declined already and the source has not changed since. One that has
+  /// changed is forgotten (listed again).
+  bool _doneAlready(String key, SourceStatus s) {
+    if (!_built.contains(key) && !_skip.contains(key)) return false;
+    if (_sigAt[key] == _sig(s)) return true;
+    _built.remove(key);
+    _skip.remove(key);
+    _sigAt.remove(key);
+    return false;
+  }
+
   final Iterable<SourceStatus> Function() statuses;
   final List<DownloadedVideo> Function() videos;
   final IndexJobStarter startJob;
@@ -113,13 +130,13 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     _built.removeWhere((k) => k.startsWith('library-words/') && !statuses().any((s) => s.keywordPending == true && 'library-words/${s.sourceId}' == k));
     return [
       for (final s in statuses())
-        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}') && !_built.contains('${i.kind}/${s.sourceId}'))
+        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_doneAlready('${i.kind}/${s.sourceId}', s) && !_waits('${i.kind}/${s.sourceId}'))
           CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir, title: s.title, pulse: () => pulse['${i.kind}/${s.sourceId}'], step: () => steps['${i.kind}/${s.sourceId}']),
       // a library that grows, whose newest points are not in its keyword snapshot yet (also: one a past add left behind): one job
       // brings it up to date, the same queue, throttle, heat and battery rules as every other index job. It clears itself: once the
       // snapshot covers the library's points the status says so and nothing is listed.
       for (final s in statuses())
-        if (s.kind == 'library' && s.keywordPending == true && s.sourceId != null && !_skip.contains('library-words/${s.sourceId}') && !_waits('library-words/${s.sourceId}') && !_built.contains('library-words/${s.sourceId}') && !(s.index?.needsSeal ?? false))
+        if (s.kind == 'library' && s.keywordPending == true && s.sourceId != null && !_doneAlready('library-words/${s.sourceId}', s) && !_waits('library-words/${s.sourceId}') && !(s.index?.needsSeal ?? false))
           CoreIndexNeed(kind: 'library-words', sourceId: s.sourceId!, seal: false, title: s.title, extendOf: (path: s.path, settings: s.settings), pulse: () => pulse['library-words/${s.sourceId}'], step: () => steps['library-words/${s.sourceId}']),
       for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
@@ -148,6 +165,9 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     final d = duty?.call();
     final pace = d == null || d.paused ? null : {'work_ms': d.workMs, 'idle_ms': d.idleMs, 'threads': ?d.threads};
     final key = '${need.kind}/${need.sourceId}';
+    for (final st in statuses()) {
+      if (st.sourceId == need.sourceId && (st.kind == need.kind || (need.kind == 'library-words' && st.kind == 'library'))) _sigAt[key] = _sig(st);
+    }
     final IndexJob? job;
     try {
       job = await startJob(need.extendOf != null ? 'index_extend' : (need.seal ? 'index_seal' : 'index_source'), need.extendOf != null ? {
