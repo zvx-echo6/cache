@@ -57,7 +57,7 @@ class _Phone extends CustomPainter {
     final tac = id == CacheThemeId.tactical;
     final red = cacheTokens[CacheThemeId.tactical]!.accent;
     final p = mapPaletteFor(id);
-    final cap = p['labelPlace'] as Color;
+    final cap = p['labelPlace'];
     canvas.drawRect(Offset.zero & size, Paint()..color = p['land']);
     Color tint(String n) => tac ? red : markerColor(n).color;
     _cap(canvas, cap, '${id.name}  -  real size (30 pt)', 10, 8);
@@ -91,7 +91,7 @@ class _Car extends CustomPainter {
     for (var b = 0; b < bands.length; b++) {
       final (id, imgs) = bands[b];
       final p = mapPaletteFor(id);
-      final cap = p['labelPlace'] as Color;
+      final cap = p['labelPlace'];
       canvas.save();
       canvas.translate(0, b * bandH);
       canvas.drawRect(Rect.fromLTWH(0, 0, size.width, bandH), Paint()..color = p['land']);
@@ -138,7 +138,7 @@ void main() {
             id,
             [
               for (final (ic, col) in _pins)
-                await (await (await ui.instantiateImageCodec(await renderPinPng(_icon(ic), id == CacheThemeId.tactical ? red : markerColor(col).color, PinStyle.teardrop, ratio: kCarPinImageRatio, tactical: id == CacheThemeId.tactical))).getNextFrame()).image,
+                (await (await ui.instantiateImageCodec(await renderPinPng(_icon(ic), id == CacheThemeId.tactical ? red : markerColor(col).color, PinStyle.teardrop, ratio: kCarPinImageRatio, tactical: id == CacheThemeId.tactical))).getNextFrame()).image,
             ]
           ),
       ];
