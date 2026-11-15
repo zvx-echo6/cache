@@ -54,9 +54,7 @@ void main() {
       expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);
       for (final t in ['Weather alerts (NWS, by point)', 'Weather forecast (Open-Meteo)', 'Wildfires near the place (WFIGS)', 'Earthquakes near the place (USGS)']) {
         expect(find.text(t), findsOneWidget, reason: t);
-        // Weather always works: the forecast and alerts are on from the start; the rest start off. (Wildfires is a default too, but a
-        // first start before the catalogue is read does not switch it on: see the skipped test in weather_state_test.dart.)
-        if (t == 'Wildfires near the place (WFIGS)') continue;
+        // Weather always works: the forecast, alerts and wildfires are on from the start; the rest start off.
         expect(switchIn(tester, t).value, t != 'Earthquakes near the place (USGS)', reason: '$t at the start');
       }
       // Each row says what the source gives and who provides it.
@@ -131,18 +129,18 @@ void main() {
     testWidgets('the refresh button updates and says what happened; on mobile data it still updates', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.descendant(of: rowWith('Weather alerts (NWS, by point)'), matching: find.byType(Switch)));
-      await tester.pump();
+      final n = r.weather.enabledSources.length;
+      expect(n, greaterThan(0), reason: 'the defaults are on from the start');
       await _tapRefresh(tester);
       expect(find.text('Updated'), findsOneWidget, reason: 'the snack bar');
       expect(find.text('Updated just now'), findsOneWidget, reason: 'the status line');
-      expect(r.liveCore.fetches.length, 1);
+      expect(r.liveCore.fetches.length, n, reason: 'each source that is on, once');
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
       r.probe.change(ConnectionKind.mobile);
       await tester.pumpAndSettle();
       await _tapRefresh(tester);
-      expect(r.liveCore.fetches.length, 2, reason: 'updates use mobile data');
+      expect(r.liveCore.fetches.length, 2 * n, reason: 'updates use mobile data');
       await r.dispose(tester);
     });
 

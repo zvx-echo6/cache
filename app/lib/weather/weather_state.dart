@@ -76,7 +76,7 @@ class HomeWeather {
   /// ([WeatherState.homeCardAsOfNow]); null for words in place of a card.
   final HomeAnswer? answer;
 
-  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
+  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Weather is off: your location isn't watched".
   final String? message;
 
   /// Weather was on and every source is off now: the card says "Weather is off" with Turn on (Settings > Weather and alerts).
@@ -399,7 +399,9 @@ class WeatherState extends ChangeNotifier {
   /// device, after a switch), the default sources come back on by themselves, with no message. Only once the catalogues are there
   /// (before, no source can be recognised as on). Writes the setting directly, not through [setSourcesOn], so it never loops.
   Future<bool> _keepDefaultsOn() async {
-    if (!_started || sources.isEmpty || enabledSources.isNotEmpty) return false;
+    // The catalogues must be there, not only the built-in sources: the built-ins stand in for forecast and alerts but not for Wildfires,
+    // so switching on before the catalogue came left Wildfires off for good. A first start waits for the catalogue.
+    if (!_started || _catalogues.isEmpty || sources.isEmpty || enabledSources.isNotEmpty) return false;
     final ids = <String>{for (final r in defaultRows) for (final c in rowSources(r)) ..._same(c.id)};
     if (ids.isEmpty) return false;
     settings.setLiveSourcesOn(ids, true);

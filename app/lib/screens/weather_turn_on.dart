@@ -72,7 +72,7 @@ Future<void> turnOnWeather(BuildContext buttonContext, WeatherTurnOn t) async {
 }
 
 /// Home's "Use my location": the same request "Turn on weather" makes (the reason first when the permission was never asked, then the
-/// system's question), for a card that waits for a position because Cache has no location permission. When it is given, the weather
+/// system's question; when it is blocked, the app's settings page opens), for a card that waits for a position because Cache has no location permission. When it is given, the weather
 /// part is told the position is there and goes on to the forecast; when it is refused nothing changes and nothing is said.
 Future<void> useMyLocation(BuildContext buttonContext, WeatherTurnOn t) async {
   final context = _lasting(buttonContext);
@@ -84,7 +84,11 @@ Future<void> useMyLocation(BuildContext buttonContext, WeatherTurnOn t) async {
   }
   if (!context.mounted) return;
   final located = await loc.request(explain: () => _explainLocation(context));
-  if (!located) return;
+  if (!located) {
+    // Blocked ("denied forever"): the system will not ask again, so the app's own settings page is where it is given.
+    if (loc.problem == LocationProblem.permissionBlocked) await loc.openAppSettings();
+    return;
+  }
   t.weather.positionChanged();
   await t.weather.updateNow(force: true);
 }

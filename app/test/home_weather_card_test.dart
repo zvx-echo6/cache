@@ -252,4 +252,22 @@ void main() {
     layout.dispose();
     await r.dispose(tester);
   });
+
+  testWidgets('Use my location when the permission is blocked: the button stays, and a tap opens the app\'s settings page', (tester) async {
+    final r = await SettingsRig.create(tester, permission: LocationPermissionState.deniedForever);
+    final layout = LayoutState(settingsDirOverride: r.dir);
+    await tester.runAsync(layout.init);
+    r.here = null;
+    r.location.permission = LocationPermissionState.deniedForever;
+    await r.show(tester, _home(r, layout, turnOn: true));
+    await _settle(tester);
+    expect(_inCard(find.byKey(const ValueKey('weather-use-location'))), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('weather-use-location')));
+    await _settle(tester);
+    expect(r.position.asked, 0, reason: 'the system does not ask again');
+    expect(r.position.settingsOpened, 1);
+    expect(_inCard(find.text('Waiting for your position')), findsOneWidget, reason: 'the card stays as it was');
+    layout.dispose();
+    await r.dispose(tester);
+  });
 }
