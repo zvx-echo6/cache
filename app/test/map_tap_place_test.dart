@@ -170,6 +170,13 @@ void _pureTests() {
       expect(basemapLabelLayers(style, basemapSource: 'src-basemap'), ['places_town', 'roads_labels']);
       expect(basemapLabelLayers('not json', basemapSource: 'src-basemap'), isEmpty);
     });
+
+    test('an overlay\'s hit layers are its line and fill layers of the style, from its source', () {
+      const style = '{"layers":[{"id":"t-fill","type":"fill","source":"src-t"},{"id":"t-casing","type":"line","source":"src-t"},'
+          '{"id":"t-line","type":"line","source":"src-t"},{"id":"o-line","type":"line","source":"src-o"},{"id":"t-sym","type":"symbol","source":"src-t"}]}';
+      expect(overlayHitLayers(style, source: 'src-t'), ['t-fill', 't-casing', 't-line']);
+      expect(overlayHitLayers('not json', source: 'src-t'), isEmpty);
+    });
   });
 }
 
@@ -338,6 +345,18 @@ void _screenTests() {
       expect(m.nav.selected?.lat, 42.5001);
       expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
       expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty, reason: 'only a label is looked up');
+      await m.finish(tester);
+    });
+
+    testWidgets('a trail\'s thin line with no label near it opens its card; the query asks for the line layers the style has', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.trails.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'TRAIL_NAME': 'Hollow Fern Trail'}));
+      await m.tap(tester, 42.5, -113.5);
+      final asked = m.camera.asked.firstWhere((l) => l.any((x) => x.startsWith('test-trails-')));
+      expect(asked, containsAll(['test-trails-line', 'test-trails-casing']));
+      expect(m.nav.selected?.name, 'Hollow Fern Trail');
+      expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
       await m.finish(tester);
     });
 

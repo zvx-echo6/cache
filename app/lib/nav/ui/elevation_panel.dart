@@ -59,6 +59,51 @@ double niceStep(double raw, {bool quarter = true}) {
   return (yMin, yMax);
 }
 
+/// The least room between two height labels, in points: the label's text is 11 points tall.
+const double kChartLabelGap = 18.0;
+
+/// The heights of the chart's grid lines, each labelled with its own height, in the chart's unit, for a profile from [lo] to [hi]
+/// drawn in a plot [plotHeight] points tall ([full]: the guidance panel's chart, else the preview's, which draws every other line of
+/// the big one's). [floor] is the window's least span ([chartWindow]).
+///
+/// A profile that spans [floor] or more has lines [niceStep] of its span apart, as ever. One that spans less (a flat route) sits in
+/// a window several times as tall as it is, so that step reached 2 lines (3,600 and 3,800 around a route at 3,760 ft) and the
+/// preview drew one of them. Its lines are instead the least nice step that keeps [kChartLabelGap] points between labels, all within
+/// the window, and the one at the profile's own middle (to a tenth of the step, 3,760 for a route from 3,755 to 3,766) in place of
+/// any that would be too close to it.
+@visibleForTesting
+List<double> chartGridLines(double lo, double hi, {required double floor, required double plotHeight, required bool full}) {
+  final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
+  final span = math.max(hi - lo, floor);
+  if (hi - lo >= floor) {
+    final gStep = niceStep(span / 2.2);
+    final out = <double>[];
+    var line = 0;
+    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
+      if (!full && line.isOdd) continue;
+      out.add(g);
+    }
+    return out;
+  }
+  if (plotHeight <= 0) return const [];
+  final window = yMax - yMin;
+  final pointsPer = window / plotHeight;
+  // The least nice step that keeps the labels apart.
+  final want = kChartLabelGap * pointsPer;
+  final decade = math.pow(10, (math.log(want) / math.ln10).floor()).toDouble();
+  final step = [for (final m in const [1.0, 2.0, 5.0, 10.0]) m * decade].firstWhere((v) => v >= want - 1e-9);
+  final unit = step / 10;
+  final mid = ((hi + lo) / 2 / unit).round() * unit;
+  final out = <double>[];
+  for (var g = (yMin / step).ceil() * step; g <= yMax + 1e-9; g += step) {
+    if ((g - mid).abs() < kChartLabelGap * pointsPer) continue;
+    out.add(g);
+  }
+  if (mid >= yMin && mid <= yMax) out.add(mid);
+  out.sort();
+  return out;
+}
+
 /// The distance labels along the chart's foot (in the chart's own unit), as (distance, text). Enough decimals that no two read the
 /// same: the step is 1, 2 or 5 times a power of ten, and it needs as many decimals as that power is small.
 @visibleForTesting
@@ -153,7 +198,6 @@ class ElevationChartPainter extends CustomPainter {
       lo = math.min(lo, _h(e));
       hi = math.max(hi, _h(e));
     }
-    final span = math.max(hi - lo, _h(kChartMinSpanM));
     final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM));
     final total = _d(profile.totalM);
     double x(double m) => l + (total <= 0 ? 0 : _d(m) / total * pw);
@@ -163,11 +207,8 @@ class ElevationChartPainter extends CustomPainter {
     final grid = Paint()
       ..color = colors.secondary.withValues(alpha: 0.28)
       ..strokeWidth = 1;
-    // The small chart labels every other line of the big one's.
-    final gStep = niceStep(span / 2.2);
-    var line = 0;
-    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
-      if (!full && line.isOdd) continue;
+    // The small chart labels every other line of the big one's (chartGridLines).
+    for (final g in chartGridLines(lo, hi, floor: _h(kChartMinSpanM), plotHeight: ph, full: full)) {
       final gy = t + (yMax - g) / (yMax - yMin) * ph;
       for (var gx = l; gx < size.width - r; gx += 7) {
         canvas.drawLine(Offset(gx, gy), Offset(math.min(gx + 3, size.width - r), gy), grid);
