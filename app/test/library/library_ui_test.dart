@@ -55,6 +55,8 @@ void main() {
   late LibrariesState libs;
   late CdsShelfSource shelves;
   late BrowseState browse;
+  late FakeShelvesCalls calls;
+  late Directory shelvesDir0;
   var made = false;
 
   Future<void> setUpAll0({bool books = true, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}}) async {
@@ -73,7 +75,9 @@ void main() {
     libs = await librariesAt(Directory('${tmp.path}/libraries'), sources);
     final shelvesDir = writeShelves(Directory('${tmp.path}/bookshelves'),
         placed: books ? const [('aid', '210', 1), ('surgery', '210', 2)] : const [], checked: const ['aid', 'surgery', 'bees', 'engines', 'stone']);
-    shelves = CdsShelfSource(libs, calls: FakeShelvesCalls(), bookshelvesDir: () async => shelvesDir, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+    calls = FakeShelvesCalls();
+    shelvesDir0 = shelvesDir;
+    shelves = CdsShelfSource(libs, calls: calls, bookshelvesDir: () async => shelvesDir, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
     await shelves.whenRead();
     browse = BrowseState(sources: sources, libraries: libs, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
     made = true;
@@ -319,6 +323,54 @@ void main() {
       await tapKey(tester, 'place-leave');
       await tapKey(tester, 'place-leave');
       expect(find.text('Where does this book go?'), findsNothing, reason: 'nothing more to place: the sheet closes');
+    });
+
+    testWidgets('Move has an "Unsorted" row for a filed book: one tap takes it off its shelf, into Unsorted, as a log event that syncs; it stays after a reload', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelf-200');
+      await tapKey(tester, 'shelf-210');
+      await tapKey(tester, 'book-aid');
+      expect(shelves.book('aid')!.shelf, '210');
+      await tapKey(tester, 'book-move');
+      expect(find.text('Move to another division'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-unsorted')), findsOneWidget, reason: 'a filed book can go back to Unsorted');
+      expect(find.text('Unsorted'), findsOneWidget);
+      calls.appended.clear();
+      await tapKey(tester, 'place-unsorted');
+      expect(find.text('Moved to Unsorted.'), findsOneWidget);
+      final aid = shelves.book('aid')!;
+      expect(aid.unsorted, isTrue, reason: 'off its shelf');
+      expect(shelves.unsorted.map((b) => b.id), contains('aid'), reason: 'in the Unsorted list');
+      expect(shelves.booksOn('210').map((b) => b.id), isNot(contains('aid')));
+      expect(aid.callNumber, isNull, reason: 'Unsorted books have no call number');
+      // the same events Add PDF\'s Undo writes: the log carries them to the other devices
+      expect([for (final e in calls.appended) e['ev']], ['unsort', 'retire']);
+      // it survives a reload: a new source reads the same log
+      final again = CdsShelfSource(libs, calls: calls, bookshelvesDir: () async => shelvesDir0, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+      addTearDown(again.dispose);
+      await tester.runAsync(again.whenRead);
+      expect(again.book('aid')!.unsorted, isTrue);
+      expect(again.unsorted.map((b) => b.id), contains('aid'));
+      // Undo files it in its old division again
+      await tester.tap(find.byKey(const ValueKey('unsorted-undo')));
+      await tester.pumpAndSettle();
+      expect(shelves.book('aid')!.shelf, '210');
+    });
+
+    testWidgets('a book that is already in Unsorted has no Unsorted row', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelves-unsorted');
+      await tapKey(tester, 'all-divisions-bees');
+      expect(find.text('Where does this book go?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-unsorted')), findsNothing);
     });
 
     testWidgets('on a tablet Place it is the detail pane, never a dialog', (tester) async {

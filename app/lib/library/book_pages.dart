@@ -158,6 +158,38 @@ class _PlacePanelState extends State<PlacePanel> {
     });
   }
 
+  /// Move > Unsorted: the book goes back to Unsorted (the log's `unsort` event, its number retired, as Add PDF's Undo does), so a
+  /// filing can be undone. Says so with Undo, which files it in its old division again.
+  Future<void> _unsort(ShelfBook b) async {
+    final placer = d.shelves.placer;
+    if (_busy || placer is! ShelfUnsorter || b.shelf == null) return;
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await (placer as ShelfUnsorter).unsort(b);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      return;
+    }
+    if (!mounted) return;
+    _busy = false;
+    final was = Placement([PlacedBook(before: b, shelf: '', callNumber: null)]);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: const ValueKey('unsorted-snack'),
+          content: const Text('Moved to Unsorted.'),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => placer?.undo(was)),
+        ),
+      );
+    widget.onDone(true);
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: d.changes,
@@ -208,6 +240,17 @@ class _PlacePanelState extends State<PlacePanel> {
                   ],
                 ),
               ],
+              if (move && placer is ShelfUnsorter)
+                ListTile(
+                  key: const ValueKey('place-unsorted'),
+                  dense: true,
+                  minTileHeight: 44,
+                  contentPadding: EdgeInsets.zero,
+                  enabled: !_busy,
+                  title: Text('Unsorted', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
+                  subtitle: Text('Take it off its shelf', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  onTap: () => _unsort(b),
+                ),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 4,
