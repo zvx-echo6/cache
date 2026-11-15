@@ -58,6 +58,7 @@ void main() {
     expect(opened, isEmpty);
     expect(find.text("You're offline"), findsOneWidget);
     expect(find.text('Copy link'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 800)); // the snack bar slides in
     await tester.tap(find.text('Copy link'));
     await tester.pump();
     expect(copied, ['https://example.org/a?b=1']);
