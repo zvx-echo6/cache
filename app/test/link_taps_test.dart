@@ -635,6 +635,39 @@ void main() {
       expect(inbox.pending, isFalse, reason: 'only the Maps tab is asked for here');
       expect(heard, 2);
     });
+
+    test('a geo: link opened on the phone brings its search or its point with the request, once', () {
+      final inbox = OpenMapsInbox(channel: const MethodChannel('co.cache/open/test'));
+      inbox.offer({'what': 'maps', 'query': ' gas station ', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      final g = inbox.takeGeo()!;
+      expect((g.query, g.lat, g.lon), ('gas station', 43.6, -116.2));
+      expect(inbox.takeGeo(), isNull, reason: 'once');
+      inbox.offer({'what': 'maps', 'lat': 43.6, 'lon': -116.2});
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()!.query, isNull);
+      inbox.offer('maps');
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo(), isNull, reason: 'a notification tap carries nothing');
+      inbox.offer({'what': 'weather'});
+      expect(inbox.pending, isFalse);
+    });
+
+    test('a geo: link that started the app is taken at start with its search', () async {
+      const channel = MethodChannel('co.cache/open/test-geo');
+      Object? pending = {'what': 'maps', 'query': 'coffee', 'lat': null, 'lon': null};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method != 'take') return null;
+        final p = pending;
+        pending = null;
+        return p;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+      final inbox = OpenMapsInbox(channel: channel);
+      await inbox.start();
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()?.query, 'coffee');
+    });
   });
 
   batch2();
