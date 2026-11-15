@@ -879,7 +879,35 @@ impl Inner {
     }
 
     /// Delete one area (only the tiles no other area covers go), or every area of the layer and all its tiles.
+    ///
+    /// The delete is also written to this device's shared folder (share.rs), so every linked device that shares Maps deletes it too;
+    /// an area only a linked device's copy holds is deleted that way alone (no error: there is nothing of it here).
     pub fn delete_areas(&self, layer: &str, area: Option<&str>) -> Result<Value> {
+        let base = self.base_of(layer)?;
+        let mut ids: Vec<String> = Vec::new();
+        match area {
+            Some(a) => ids.push(a.to_string()),
+            None => ids.extend(self.areas(&base.id).iter().map(|a| a.id.clone())),
+        }
+        let held_here = match area {
+            Some(a) => self.store_read(&base.id).and_then(|s| s.area(a).ok().flatten()).is_some(),
+            None => true,
+        };
+        let r = if held_here {
+            self.delete_areas_inner(layer, area)?
+        } else if self.areas(&base.id).iter().any(|x| Some(x.id.as_str()) == area) {
+            json!({"layer": base.id, "removed": [area], "tiles_removed": 0, "tiles_kept": 0, "freed_bytes": 0, "shared_only": true})
+        } else {
+            return Err(Error::not_found(format!("no area {:?} of layer {layer:?}", area.unwrap_or(""))));
+        };
+        for id in &ids {
+            self.record_delete(&base.id, id)?;
+        }
+        Ok(r)
+    }
+
+    /// [`Inner::delete_areas`] for this device's own store only, with no record in the shared folder.
+    pub fn delete_areas_inner(&self, layer: &str, area: Option<&str>) -> Result<Value> {
         let base = self.base_of(layer)?;
         let store = self.store_read(&base.id);
         let Some(store) = store else {

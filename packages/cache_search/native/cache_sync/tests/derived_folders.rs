@@ -11,8 +11,8 @@ use std::{path::Path, time::Duration};
 fn app_patterns() -> Value {
     json!({
         "libraries": ["*/index", "*/index-snapshots"],
-        "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
-        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
+        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT"],
+        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*"],
     })
 }
 
@@ -109,10 +109,15 @@ fn region_caches_never_travel() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let (ra, rb, ma, mb) = (tmp.path().join("regions-a"), tmp.path().join("regions-b"), tmp.path().join("maps-a"), tmp.path().join("maps-b"));
-    let parts = ["regions.sqlite", "regions.sqlite-wal", "tiles/2026-10/1/047/701.gph", "places/2026-10.sqlite", "places/2026-10/common.sqlite", "places/CURRENT", "offroad/offroad-2026-10/idaho/offroad.sqlite"];
-    let caches = ["index/2026-10.tsv", "places/index/2026-10.tsv", "regions.sqlite-shm", "places/2026-10.sqlite-shm"];
-    let layer_parts = ["store/osm.sqlite", "store/osm.sqlite-wal", "catalogue.json", "latest.json", "user-defs/mine.json"];
-    let layer_caches = ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "tilejson/osm.json", "store/osm.sqlite-shm"];
+    // Each device's live databases (regions.sqlite, places/<build>.sqlite, store/<layer>.sqlite, with their logs) never travel either:
+    // they have one writer, and each device shares a snapshot of its own under its own name instead (maps_two_writers.rs).
+    let parts = ["tiles/2026-10/1/047/701.gph", "regions-share/A.json", "places-share/2026-10/A.sqlite", "offroad/offroad-2026-10/idaho/offroad.sqlite"];
+    let caches = [
+        "index/2026-10.tsv", "places/index/2026-10.tsv", "regions.sqlite-shm", "places/2026-10.sqlite-shm", "regions.sqlite", "regions.sqlite-wal",
+        "places/2026-10.sqlite", "places/2026-10.sqlite-wal", "places/2026-10/common.sqlite", "places/CURRENT",
+    ];
+    let layer_parts = ["store-share/osm/A.sqlite", "store-share/A.deletes.json", "catalogue.json", "latest.json", "user-defs/mine.json"];
+    let layer_caches = ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "tilejson/osm.json", "store/osm.sqlite-shm", "store/osm.sqlite", "store/osm.sqlite-wal"];
     for f in parts.iter().chain(&caches) {
         write(&ra.join(f), &format!("A {f}"));
     }

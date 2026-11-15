@@ -62,6 +62,18 @@ impl Store {
         Ok(Store { conn: Mutex::new(c), queries: AtomicU64::new(0) })
     }
 
+    /// A peer device's shared copy of its store (`store-share/<layer>/<device>.sqlite`), opened read-only: nothing here ever
+    /// writes it, and it is never merged into this device's own store. `Err` when it is not a store (a file still arriving,
+    /// something else with the name).
+    pub fn open_peer(path: &Path) -> Result<Store> {
+        let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        c.busy_timeout(std::time::Duration::from_secs(5))?;
+        // the two tables a reader needs, else it is not one of ours
+        c.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))?;
+        c.query_row("SELECT COUNT(*) FROM areas", [], |r| r.get::<_, i64>(0))?;
+        Ok(Store { conn: Mutex::new(c), queries: AtomicU64::new(0) })
+    }
+
     /// The tile's bytes; `None` if not stored or stored as "the source has no tile here" ([`Store::find`] tells the two apart).
     pub fn get(&self, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
         Ok(match self.find(z, x, y)? {
@@ -175,6 +187,13 @@ impl Store {
         }
     }
 
+    /// Folds the write-ahead log into the database file (without waiting for readers), so the file alone holds what is committed.
+    pub fn checkpoint(&self) {
+        if let Ok(c) = self.conn.lock() {
+            let _ = c.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+        }
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.conn.lock().ok().and_then(|c| c.query_row("SELECT COALESCE(SUM(length(data)),0) FROM tiles", [], |r| r.get::<_, i64>(0)).ok()).unwrap_or(0) as u64
     }
@@ -213,6 +232,44 @@ impl Store {
     pub fn remove_area(&self, id: &str) -> Result<()> {
         lock(&self.conn)?.execute("DELETE FROM areas WHERE id=?1", [id])?;
         Ok(())
+    }
+
+    /// Writes a consistent copy of this store (tiles and areas, never the staging table) to a new SQLite file at `to`, which must
+    /// not exist: the device's shared export. `source` is this store's file, read through a connection of its own so tile reads
+    /// are not held up; `stamp` is written into the copy (`share.src`) so a later run can tell whether the store changed since.
+    pub fn export_to(source: &Path, to: &Path, stamp: &str) -> Result<()> {
+        let c = Connection::open(to)?;
+        c.execute_batch(
+            "PRAGMA journal_mode = DELETE;
+             CREATE TABLE tiles(z INTEGER NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, data BLOB NOT NULL, ver TEXT NOT NULL, PRIMARY KEY(z,x,y)) WITHOUT ROWID;
+             CREATE TABLE areas(id TEXT PRIMARY KEY, state TEXT NOT NULL, meta TEXT NOT NULL);
+             CREATE TABLE share(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
+        c.execute("ATTACH DATABASE ?1 AS s", [source.to_string_lossy().as_ref()])?;
+        c.execute_batch("BEGIN; INSERT INTO main.tiles SELECT z,x,y,data,ver FROM s.tiles; INSERT INTO main.areas SELECT id,state,meta FROM s.areas;")?;
+        c.execute("INSERT INTO main.share(key,value) VALUES('src', ?1)", [stamp])?;
+        c.execute_batch("COMMIT; DETACH DATABASE s;")?;
+        Ok(())
+    }
+
+    /// Merges another store file into this one, as the device's own data: tiles it lacks (insert or ignore), areas by id (a
+    /// complete one beats a partial one). The other file is only read. One transaction: a kill leaves this store as it was.
+    pub fn merge_from(&self, other: &Path) -> Result<(u64, u64)> {
+        let c = lock(&self.conn)?;
+        c.execute("ATTACH DATABASE ?1 AS o", [other.to_string_lossy().as_ref()])?;
+        let r = (|| -> Result<(u64, u64)> {
+            c.execute_batch("BEGIN")?;
+            let t = c.execute("INSERT OR IGNORE INTO main.tiles(z,x,y,data,ver) SELECT z,x,y,data,ver FROM o.tiles", [])? as u64;
+            let a = c.execute("INSERT OR IGNORE INTO main.areas(id,state,meta) SELECT id,state,meta FROM o.areas", [])? as u64;
+            c.execute("UPDATE main.areas SET state='complete', meta=(SELECT meta FROM o.areas WHERE o.areas.id=main.areas.id) WHERE state<>'complete' AND id IN (SELECT id FROM o.areas WHERE state='complete')", [])?;
+            c.execute_batch("COMMIT")?;
+            Ok((t, a))
+        })();
+        if r.is_err() {
+            let _ = c.execute_batch("ROLLBACK");
+        }
+        let _ = c.execute_batch("DETACH DATABASE o");
+        r
     }
 
     pub fn clear_all(&self) -> Result<u64> {
