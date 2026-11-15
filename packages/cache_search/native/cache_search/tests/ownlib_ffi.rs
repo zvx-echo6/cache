@@ -74,9 +74,14 @@ fn service() -> Service {
 
 /// Adds a book as Add PDF does, and puts its PDF beside it (`bookshelf/<copy>.pdf`, as the app does after `done`).
 fn add_book(svc: &Service, root: &Path, lib: &Path, name: &str, topic: &str, pages: usize) -> (String, u64) {
+    add_pages(svc, root, lib, name, &book(topic, pages))
+}
+
+/// [`add_book`] with the pages given.
+fn add_pages(svc: &Service, root: &Path, lib: &Path, name: &str, pages: &[cache_ingest::testing::FakePage]) -> (String, u64) {
     let pdf = root.join("Inbox").join(format!("{name}.pdf"));
     std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
-    std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, &book(topic, pages))).unwrap();
+    std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, pages)).unwrap();
     let job_dir = root.join("ingest").join(format!("{}-{name}", lib.parent().unwrap().parent().unwrap().file_name().unwrap().to_string_lossy()));
     let s: Value = serde_json::from_str(&svc.start(&json!({"library_dir": lib, "pdf_path": pdf, "job_dir": job_dir}).to_string()).unwrap()).unwrap();
     let job = s["job"].as_u64().unwrap();
@@ -487,5 +492,51 @@ fn a_book_added_through_add_pdf_makes_the_open_core_say_its_words_are_behind() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
     assert_ne!(st["keyword_pending"], true, "the extension clears it: {st}");
+    unsafe { cs_close(h) };
+}
+
+/// The core opened with no indexes folder, as a device whose My books has its keyword index in the library's own `index/` folder.
+fn open_core_legacy(lib: &Path) -> *mut Handle {
+    let src = json!({"kind": "library", "path": lib.join("shard").to_str().unwrap(), "index_dir": lib.join("index").to_str().unwrap(), "settings": settings(true)});
+    let h = unsafe { cs_open(cstr(&json!({"sources": [src]}).to_string()).as_ptr()) };
+    assert!(!h.is_null());
+    wait_open(h);
+    h
+}
+
+/// The titles of a keyword-only search (no query vector) for `text`.
+fn keyword_titles(h: *mut Handle, text: &str) -> Vec<String> {
+    let r = take(unsafe { cs_search(h, cstr(text).as_ptr(), cstr(&json!({"k": 8}).to_string()).as_ptr()) }).expect("search result");
+    let v: Value = serde_json::from_str(&r).unwrap();
+    v["results"].as_array().unwrap().iter().filter_map(|x| x["title"].as_str().map(String::from)).collect()
+}
+
+#[test]
+fn a_book_added_by_add_pdf_is_found_by_its_words_and_its_title_through_the_real_sequence() {
+    // the sequence the app runs: Add PDF finishes -> the Library reads again: own_library_sync -> the sources' status -> the keyword
+    // index. A short book (three pages, three subjects, so one piece) on a library whose keyword index is in its own index/ folder.
+    let tmp = TempDir::new("real-seq");
+    let svc = service();
+    let a = make_library(&tmp.0.join("a"), "my-books", true);
+    add_book(&svc, &tmp.0, &a, "Quasar Guide", "quasar", 6);
+    assert_eq!(sync(&a)["rebuilt"], true);
+    let p = run_job("index_library", json!({"library_path": a.join("shard").to_str().unwrap(), "index_dir": a.join("index").to_str().unwrap(), "heap_mb": 50, "settings": settings(true)}));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_core_legacy(&a);
+    let st = wait_words(h);
+    assert_eq!(st["keyword_source"], "device", "{st}");
+    use cache_ingest::testing::FakePage;
+    let pages = [FakePage::text("Harbor lantern keeper winds the brass clock."), FakePage::text("Glacier compass needle points to the iron ridge."), FakePage::text("Meadow telescope watches the violet comet tonight.")];
+    let (_, pieces) = add_pages(&svc, &tmp.0, &a, "R12 one", &pages);
+    // the Library reads again after the add
+    let r = sync(&a);
+    let st = wait_open(h);
+    eprintln!("PIECES {pieces}; sync {r}; status {st}");
+    assert_eq!(st["docs"].as_u64().unwrap(), r["points"].as_u64().unwrap(), "{st}");
+    // by its words, an exact line of page 3 and the title, in the keyword search alone
+    let line3 = keyword_titles(h, "Meadow telescope watches the violet comet tonight.");
+    assert!(line3.iter().any(|t| t.starts_with("R12 one")), "an exact line of page 3 is found by its words, got {line3:?}; status {st}");
+    let by_title = keyword_titles(h, "R12 one");
+    assert!(by_title.iter().any(|t| t.starts_with("R12 one")), "the title is found, got {by_title:?}; status {st}");
     unsafe { cs_close(h) };
 }
