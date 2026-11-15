@@ -117,15 +117,44 @@ class CarSession(
         val home = HomeScreen(carContext, renderer)
         // A navigation request that opened Cache: handled once the first screen is up.
         NavIntent.parse(intent)?.let { req -> main.post { handle(req) } }
+        NavIntent.parseAction(intent)?.let { a -> main.post { handle(a) } }
         return home
     }
 
     override fun onNewIntent(intent: Intent) {
         NavIntent.parse(intent)?.let { handle(it) }
+        NavIntent.parseAction(intent)?.let { handle(it) }
     }
 
     // A navigation request that reached the phone's activity while this car is connected: handled as the car's own are.
     override fun onNavRequest(req: NavRequest) = handle(req)
+
+    override fun onCarAction(action: CarAction) = handle(action)
+
+    /**
+     * A custom action from the assistant (`geo.action:?act=...`, [CarAction]). End route and the voice switch are what their
+     * buttons on the guidance screen do; the answers are composed and said by the phone's voice (lib/car/car_answer.dart, said
+     * even when the voice is off: the driver asked); the overview is the screen the Overview button opens. Any other action
+     * gets one message, as Google requires.
+     */
+    internal fun handle(action: CarAction) {
+        when (action) {
+            CarAction.ExitNavigation -> CarLink.stopGuidance()
+            CarAction.Mute -> CarLink.call("voice", mapOf("on" to false))
+            CarAction.Unmute -> CarLink.call("voice", mapOf("on" to true))
+            is CarAction.Answer -> CarLink.call("answer", mapOf("kind" to action.kind))
+            CarAction.RouteOverview -> {
+                if (!CarLink.trip.guiding) {
+                    // No route to show: the phone says so.
+                    CarLink.call("answer", mapOf("kind" to "route"))
+                } else if (screenManager.top !is RouteOverviewScreen) {
+                    if (screenManager.top !is NavigationScreen) screenManager.popTo(STOP_RETURN)
+                    screenManager.push(RouteOverviewScreen(carContext, renderer))
+                }
+            }
+            is CarAction.Unsupported -> CarToast.makeText(carContext, "Cache can't do that yet.", CarToast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCarConfigurationChanged(newConfiguration: Configuration) {
         if (ready) renderer.setDark(carContext.isDarkMode)

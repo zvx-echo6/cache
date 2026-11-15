@@ -14,6 +14,7 @@ import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
 import '../nav/saved_first.dart';
 import '../nav/speaker.dart';
+import 'car_answer.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
@@ -400,6 +401,12 @@ class CarBridge {
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
         return nav.voiceOn;
+      case 'answer':
+        // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
+        // straight away, even when guidance prompts are off, since the driver asked.
+        final text = carAnswer(nav, a['kind'] as String?);
+        await nav.speaker.speak(text);
+        return text;
       case 'autoDrive':
         drive.simulate = a['on'] == true;
         return null;

@@ -159,4 +159,77 @@ class NavIntentTest {
         assertNull(NavIntent.parse(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=Burley"))))
         assertNull(NavIntent.parse(null as Intent?))
     }
+
+    private fun act(code: String) = NavIntent.parseAction("geo.action:?act=$code")
+
+    @Test
+    fun exitNavigationIsRead() = assertEquals(CarAction.ExitNavigation, act("exit_navigation"))
+
+    @Test
+    fun muteIsRead() = assertEquals(CarAction.Mute, act("mute"))
+
+    @Test
+    fun unmuteIsRead() = assertEquals(CarAction.Unmute, act("unmute"))
+
+    @Test
+    fun routeOverviewIsRead() = assertEquals(CarAction.RouteOverview, act("route_overview"))
+
+    @Test
+    fun etaIsRead() = assertEquals(CarAction.Answer("eta"), act("eta"))
+
+    @Test
+    fun timeToDestinationIsRead() = assertEquals(CarAction.Answer("eta"), act("time_to_destination"))
+
+    @Test
+    fun distanceToDestinationIsRead() = assertEquals(CarAction.Answer("distance"), act("distance_to_destination"))
+
+    @Test
+    fun queryNextTurnIsRead() = assertEquals(CarAction.Answer("turn"), act("query_next_turn"))
+
+    @Test
+    fun distanceToNextTurnIsRead() = assertEquals(CarAction.Answer("turn"), act("distance_to_next_turn"))
+
+    @Test
+    fun timeToNextTurnIsRead() = assertEquals(CarAction.Answer("turn"), act("time_to_next_turn"))
+
+    @Test
+    fun queryDestinationIsRead() = assertEquals(CarAction.Answer("destination"), act("query_destination"))
+
+    @Test
+    fun anUnknownActionIsUnsupported() {
+        assertEquals(CarAction.Unsupported("follow_mode"), act("follow_mode"))
+        assertEquals(CarAction.Unsupported("avoid_tolls"), act("avoid_tolls"))
+    }
+
+    @Test
+    fun aMissingActionIsUnsupported() {
+        assertEquals(CarAction.Unsupported(null), NavIntent.parseAction("geo.action:"))
+        assertEquals(CarAction.Unsupported(null), NavIntent.parseAction("geo.action:?other=1"))
+        assertEquals(CarAction.Unsupported(null), NavIntent.parseAction("geo.action:?act="))
+    }
+
+    @Test
+    fun onlyAViewIntentWithTheActionSchemeIsAnAction() {
+        assertEquals(CarAction.Mute, NavIntent.parseAction(Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=mute"))))
+        assertNull(NavIntent.parseAction(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo.action:?act=mute"))))
+        assertNull(NavIntent.parseAction(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=Burley"))))
+        assertNull(NavIntent.parseAction("geo:0,0?q=Burley"))
+        assertNull(NavIntent.parseAction(null as Intent?))
+    }
+
+    // An action that reaches the phone's activity is kept from Flutter; a connected car's session takes it, otherwise it is dropped.
+    @Test
+    fun anActionThatReachesThePhoneIsTakenAndGoesToTheCarWhenOneIsConnected() {
+        val heard = mutableListOf<CarAction>()
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onCarAction(action: CarAction) {
+                heard += action
+            }
+        })
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=mute"))))
+        assertEquals(0, heard.size)
+        CarLink.setCarConnected(true)
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=mute"))))
+        assertEquals(listOf<CarAction>(CarAction.Mute), heard)
+    }
 }

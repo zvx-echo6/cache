@@ -16,6 +16,13 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:scheme="geo"/>
             </intent-filter>
+            <!-- Custom actions ("geo.action:?act=mute", end navigation, ETA, ...): the car session handles them the same way
+                 (car/NavIntent.kt, CarAction). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="geo.action"/>
+            </intent-filter>
         </activity>
         <!-- A navigation app built with the Android for Cars App Library. -->
         <service

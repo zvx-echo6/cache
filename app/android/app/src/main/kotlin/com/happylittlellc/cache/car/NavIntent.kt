@@ -31,12 +31,58 @@ enum class NavKind(val value: String) {
     }
 }
 
+/**
+ * A custom action from Gemini or the Google Assistant: `android.intent.action.VIEW` with `geo.action:?act=<code>` (Google's
+ * "Implement navigation app intents" page). The assistant does the understanding; the code is a fixed machine value, matched as
+ * it is.
+ *
+ * [Answer] is a question about the trip, said aloud by the phone's voice ([Answer.kind] is what Dart composes the words from:
+ * `eta`, `distance`, `turn`, `destination`). [Unsupported] is any other code, or none: the car tells the driver so.
+ */
+sealed interface CarAction {
+    object ExitNavigation : CarAction
+    object Mute : CarAction
+    object Unmute : CarAction
+    object RouteOverview : CarAction
+    data class Answer(val kind: String) : CarAction
+    data class Unsupported(val act: String?) : CarAction
+
+    companion object {
+        /** The action a code stands for. */
+        fun of(act: String?): CarAction = when (act) {
+            "exit_navigation" -> ExitNavigation
+            "mute" -> Mute
+            "unmute" -> Unmute
+            "route_overview" -> RouteOverview
+            "eta", "time_to_destination" -> Answer("eta")
+            "distance_to_destination" -> Answer("distance")
+            "query_next_turn", "distance_to_next_turn", "time_to_next_turn" -> Answer("turn")
+            "query_destination" -> Answer("destination")
+            else -> Unsupported(act)
+        }
+    }
+}
+
 object NavIntent {
     private val coords = Regex("""^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*(?:\((.*)\))?\s*$""")
 
     fun parse(intent: Intent?): NavRequest? {
         if (intent == null || intent.action != CarContext.ACTION_NAVIGATE) return null
         return parse(intent.dataString ?: return null)
+    }
+
+    /** The custom action [intent] carries (`VIEW` with a `geo.action:` address), or null when it is not one. */
+    fun parseAction(intent: Intent?): CarAction? {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) return null
+        return parseAction(intent.dataString ?: return null)
+    }
+
+    fun parseAction(uri: String): CarAction? {
+        val colon = uri.indexOf(':')
+        if (colon < 0 || uri.substring(0, colon).lowercase() != "geo.action") return null
+        val q = uri.indexOf('?')
+        val act = if (q < 0) null else query(uri.substring(q + 1))["act"]?.trim()?.takeIf { it.isNotEmpty() }
+        return CarAction.of(act)
     }
 
     /**
@@ -46,6 +92,11 @@ object NavIntent {
      * dropped (the phone does not open places from "geo:" addresses).
      */
     fun fromPhone(intent: Intent?): Boolean {
+        // A custom action ("geo.action:") goes the same way: to the car session when a car is connected, otherwise dropped.
+        parseAction(intent)?.let {
+            CarLink.carAction(it)
+            return true
+        }
         if (intent == null || intent.action != CarContext.ACTION_NAVIGATE) return false
         parse(intent)?.let { CarLink.navRequest(it) }
         return true
