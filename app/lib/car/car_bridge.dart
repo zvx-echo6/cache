@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../maps/maps_state.dart';
 import '../nav/elevation/route_elevation.dart';
@@ -337,6 +338,12 @@ class CarBridge {
     if (connected.value) await _send('promptStop', null);
   }
 
+  /// The phone's voice has said every prompt it was given: the car side lets the audio session (iPhone) or the navigation
+  /// focus (Android) go at once.
+  Future<void> promptDone() async {
+    if (connected.value) await _send('promptDone', null);
+  }
+
   // ---- the car asking --------------------------------------------------------------------------------------
 
   Future<Object?> _onCall(MethodCall call) async {
@@ -564,18 +571,37 @@ const String kPromptNone = 'none';
 /// On an iPhone with its car screen attached the car side says how iOS wants the prompt given. For a short one it has played
 /// a tone itself; for that and for none the phone's voice says nothing. Any other answer, or none, and the prompt is spoken.
 class CarAwareSpeaker implements Speaker {
-  CarAwareSpeaker(this.inner, {required this.car});
+  CarAwareSpeaker(this.inner, {required this.car}) {
+    final idle = inner;
+    if (idle is IdleSpeaker) {
+      idle.onIdle = () {
+        try {
+          unawaited(car()?.promptDone());
+        } catch (_) {}
+      };
+    }
+  }
 
   final Speaker inner;
   final CarBridge? Function() car;
 
   @override
   Future<void> speak(String text) async {
+    // Nothing to say: the car side is not asked, so it neither makes the audio session active nor plays a tone for it.
+    if (text.trim().isEmpty) return;
+    final bridge = car();
     String? how;
     try {
-      how = await car()?.prompt(text);
+      how = await bridge?.prompt(text);
     } catch (_) {}
-    if (how == kPromptShort || how == kPromptNone) return;
+    final silent = how == kPromptShort || how == kPromptNone;
+    // What the car side answered, and where the phone app was (no words of the prompt: roads, places). Only with a car
+    // attached.
+    if (bridge != null && bridge.connected.value) {
+      logInfo("Car prompts: the car side answered ${how ?? 'nothing'} with the app ${WidgetsBinding.instance.lifecycleState?.name ?? 'not started'}; "
+          "the phone's voice ${silent ? 'stays silent' : 'speaks'}");
+    }
+    if (silent) return;
     await inner.speak(text);
   }
 
