@@ -102,7 +102,14 @@ class _LibNative implements CsNative {
     // "opening_reads": N: the core is still opening the library (on its background thread) for the next N status reads.
     final reads = (fake['opening_reads'] as int?) ?? 0;
     if (reads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'opening_reads': reads - 1}));
+    // "snapshot_opening_reads": N: the library is open, but the core is still picking its keyword snapshot for the next N status reads:
+    // the index is the old one in the library's own folder (no words pending), then the older snapshot, which lacks the new book.
+    final snapReads = (fake['snapshot_opening_reads'] as int?) ?? 0;
+    if (snapReads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'snapshot_opening_reads': snapReads - 1}));
     return {
+      if (fake.containsKey('snapshot_opening_reads')) 'keyword_pending': snapReads == 0,
+      if (fake.containsKey('snapshot_opening_reads'))
+        'index': snapReads > 0 ? {'kind': 'library', 'location': 'legacy', 'opening': true} : {'kind': 'library', 'location': 'snapshot', 'snapshot': 'b1'},
       'id': r['library_id'],
       'kind': 'library',
       'path': path,
@@ -685,6 +692,22 @@ void main() {
       expect(libs.statusOf(l)!.opening, isFalse, reason: 'the status is read again until the core has opened it');
       expect(libs.phaseOf(l), LibraryPhase.ready);
       expect(notified.last, LibraryPhase.ready, reason: 'the list is told, so the row leaves Getting ready at once');
+    });
+
+    test('a library whose keyword snapshot the core is still picking is read again until it is, so the words still to add are seen', () async {
+      // Pixel testing: right after an add the status showed the old index in the library's own folder (nothing pending), then the core
+      // picked the older snapshot, which lacks the new book; nobody read the status again, so no index job was ever listed.
+      await setUpLibs();
+      await libs.addFile(
+        libFile('m.cache-library', jsonEncode({...jsonDecode(_lib()) as Map, 'snapshot_opening_reads': 3})),
+        confirmUpdate: never,
+        askSettings: noSettings,
+      );
+      await libs.whenIdle();
+      final s = libs.statusOf(libs.libraries.single)!;
+      expect(s.index?.opening, isFalse, reason: 'read again until the snapshot was picked');
+      expect(s.keywordPending, isTrue, reason: 'the final status says the new words are still to be added, so the index work is listed');
+      expect(libs.wordsPendingAt(libs.libraries.single.path), isTrue);
     });
 
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {

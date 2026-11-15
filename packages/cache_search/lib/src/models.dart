@@ -450,7 +450,7 @@ class ZimSubIndex {
 
 /// cs_status's `index` of a source: where its search index is and what it is.
 class SourceIndex {
-  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false});
+  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false, this.opening = false});
 
   factory SourceIndex.fromJson(Map<String, dynamic> j) => SourceIndex(
     location: (j['location'] ?? 'none') as String,
@@ -459,15 +459,20 @@ class SourceIndex {
     kind: j['kind'] as String?,
     dir: j['dir'] as String?,
     needsSeal: j['needs_seal'] == true,
+    opening: j['opening'] == true,
   );
 
-  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true};
+  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true, if (opening) 'opening': true};
 
   /// The folder of the index in use (a snapshot's, or the old index_dir), when there is one.
   final String? dir;
 
   /// Only an index in the old place exists and the indexes folder is set: an index_seal job moves it into a snapshot.
   final bool needsSeal;
+
+  /// The core is still picking this source's snapshot (on a background thread): what the status says about the index is not final, and
+  /// the status is read again until it is.
+  final bool opening;
 
   /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
   final String location;
