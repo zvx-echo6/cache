@@ -18,7 +18,8 @@ import 'catalogue_screen.dart';
 import '../../layout/adaptive.dart' show isShort, showFittedSheet;
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
-Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers}) {
+Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location,
+    {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers, void Function(String notebookId)? onOpenNotebook, void Function(String listId)? onOpenList}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -26,12 +27,12 @@ Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationServic
     useSafeArea: true,
     // 560 wide at most, as every sheet; most of the window's height (all of a short window's, a phone held sideways).
     constraints: BoxConstraints(maxWidth: 560, maxHeight: isShort(context) ? double.infinity : MediaQuery.sizeOf(context).height * 0.8),
-    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers),
+    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers, onOpenNotebook: onOpenNotebook, onOpenList: onOpenList),
   );
 }
 
 class LayerSheet extends StatelessWidget {
-  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers});
+  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers, this.onOpenNotebook, this.onOpenList, this.pickRepeaters});
 
   final MapsState maps;
   final LocationService location;
@@ -44,6 +45,26 @@ class LayerSheet extends StatelessWidget {
 
   /// The repeater lists, also under "My layers", and "Add from a file".
   final UserLayersState? userLayers;
+
+  /// A notebook under "My layers" (a tap on its name; the switch still shows or hides it), and Show on "Added N repeaters" after
+  /// Add from a file: that notebook. Null: the rows only switch.
+  final void Function(String notebookId)? onOpenNotebook;
+
+  /// A repeater list under "My layers" (a tap on its name): the list. Null: the rows only switch.
+  final void Function(String listId)? onOpenList;
+
+  /// The file picker of Add from a file's repeater list (tests give their own); null: the phone's.
+  @visibleForTesting
+  final Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pickRepeaters;
+
+  /// Closes this sheet when it is still open, then opens what was asked for (a notebook or a list over the map).
+  static void _go(BuildContext context, void Function(String id) open, String id) {
+    if (context.mounted) {
+      final route = ModalRoute.of(context);
+      if (route is ModalBottomSheetRoute && route.isActive) Navigator.of(context).removeRoute(route);
+    }
+    open(id);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,34 +89,71 @@ class LayerSheet extends StatelessWidget {
                 Text('MY LAYERS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: k.secondary)),
                 if (notebooks case final nb?)
                   for (final n in myLayers(nb.notebooks))
-                    SwitchListTile(
-                      key: ValueKey('my-layer-${n.id}'),
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
-                      value: n.map,
-                      onChanged: (v) => nb.setOnMap(n, v),
-                    ),
+                    if (onOpenNotebook case final open?)
+                      ListTile(
+                        key: ValueKey('my-layer-${n.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        trailing: Switch(key: ValueKey('my-layer-switch-${n.id}'), value: n.map, onChanged: (v) => nb.setOnMap(n, v)),
+                        onTap: () => _go(context, open, n.id),
+                      )
+                    else
+                      SwitchListTile(
+                        key: ValueKey('my-layer-${n.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        value: n.map,
+                        onChanged: (v) => nb.setOnMap(n, v),
+                      ),
                 if (userLayers case final u?)
                   for (final l in u.repeaterLists)
-                    SwitchListTile(
-                      key: ValueKey('my-layer-${l.id}'),
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
-                      subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
-                      secondary: IconButton(
-                        key: ValueKey('remove-${l.id}'),
-                        tooltip: 'Delete ${l.name}',
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _deleteList(context, u, l),
+                    if (onOpenList case final open?)
+                      ListTile(
+                        key: ValueKey('my-layer-${l.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        leading: IconButton(
+                          key: ValueKey('remove-${l.id}'),
+                          tooltip: 'Delete ${l.name}',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _deleteList(context, u, l),
+                        ),
+                        title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        trailing: Switch(key: ValueKey('my-layer-switch-${l.id}'), value: l.visible, onChanged: (v) => u.setVisible(l, v)),
+                        onTap: () => _go(context, open, l.id),
+                      )
+                    else
+                      SwitchListTile(
+                        key: ValueKey('my-layer-${l.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        secondary: IconButton(
+                          key: ValueKey('remove-${l.id}'),
+                          tooltip: 'Delete ${l.name}',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _deleteList(context, u, l),
+                        ),
+                        value: l.visible,
+                        onChanged: (v) => u.setVisible(l, v),
                       ),
-                      value: l.visible,
-                      onChanged: (v) => u.setVisible(l, v),
-                    ),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     key: const ValueKey('my-layers-add'),
-                    onPressed: () => addMapFile(context, notebooks: notebooks, userLayers: userLayers),
+                    // Show on "Added N repeaters" opens what the file went into: the new Repeaters notebook (or, with no notebooks,
+                    // the new list).
+                    onPressed: () => addMapFile(
+                      context,
+                      notebooks: notebooks,
+                      userLayers: userLayers,
+                      onShowList: switch ((notebooks, onOpenNotebook, onOpenList)) {
+                        (_?, final open?, _) => (id) => _go(context, open, id),
+                        (null, _, final open?) => (id) => _go(context, open, id),
+                        _ => null,
+                      },
+                      pickRepeaters: pickRepeaters,
+                    ),
                     icon: const Icon(Icons.add),
                     label: const Text('Add from a file'),
                   ),
@@ -209,7 +267,13 @@ class LayerSheet extends StatelessWidget {
 /// file, into your Places notebook) or a repeater list (a RepeaterBook KML and/or a CHIRP CSV of the same export), then the phone's
 /// file picker. Reading a file shows "Reading file…" with a bar until it is done; the end says how many came in, with Show when
 /// [onShowList] is given (the list notebook).
-Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLayersState? userLayers, void Function(String listId)? onShowList}) async {
+Future<void> addMapFile(
+  BuildContext context, {
+  NotebookState? notebooks,
+  UserLayersState? userLayers,
+  void Function(String listId)? onShowList,
+  @visibleForTesting Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pickRepeaters,
+}) async {
   final kind = await showFittedSheet<String>(
     context: context,
     showDragHandle: true,
@@ -253,7 +317,7 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
     return;
   }
   if (notebooks != null) {
-    await importRepeatersIntoNotebook(ScaffoldMessenger.of(context), notebooks, onShow: onShowList);
+    await importRepeatersIntoNotebook(ScaffoldMessenger.of(context), notebooks, onShow: onShowList, pick: pickRepeaters);
     return;
   }
   await importRepeaterFile(ScaffoldMessenger.of(context), userLayers!, onShowList: onShowList);

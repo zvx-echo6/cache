@@ -347,6 +347,24 @@ void main() {
     await r.dispose(tester);
   });
 
+  // Link audit: a region's row under Updates > Map opens the region's page.
+  testWidgets('a region under Updates > Map opens its page', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.regions.download(r.county, routing: true, map: true));
+    r.core.finish(_county);
+    await r.refreshUntil(tester, () => r.regions.regionOf(_county)?.phase == RegionPhase.ready);
+    await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 2));
+    await tester.pump();
+    expect(find.byType(RegionPage), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('map-$_county')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(RegionPage), findsOneWidget);
+    expect(find.text(r.county.name), findsWidgets);
+    await r.dispose(tester);
+  });
+
   testWidgets('Settings > Maps and the layer sheet open the regions screen', (tester) async {
     final r = await _Rig.boot(tester);
     final hub = SettingsHub(

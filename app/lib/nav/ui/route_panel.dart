@@ -27,13 +27,27 @@ class DirectionsHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Directions to', style: TextStyle(fontSize: 13, color: k.secondary)),
-                Text(to?.name ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                // Where to: the destination on the map.
+                InkWell(
+                  key: const ValueKey('directions-to'),
+                  onTap: to == null ? null : () => nav.showOnMap(to.point),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Directions to', style: TextStyle(fontSize: 13, color: k.secondary)),
+                      Text(to?.name ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                    ],
+                  ),
+                ),
                 if (nav.fromPlace case final f?)
                   Row(
                     children: [
                       Expanded(
-                        child: Text('From ${f.name}', key: const ValueKey('directions-from'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                        child: InkWell(
+                          onTap: () => nav.showOnMap(f.point),
+                          child: Text('From ${f.name}', key: const ValueKey('directions-from'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                        ),
                       ),
                       IconButton(
                         key: const ValueKey('directions-from-clear'),
@@ -49,7 +63,13 @@ class DirectionsHeader extends StatelessWidget {
                   Row(
                     key: ValueKey('stop-$i'),
                     children: [
-                      Expanded(child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text))),
+                      Expanded(
+                        child: InkWell(
+                          key: ValueKey('stop-show-$i'),
+                          onTap: () => nav.showOnMap(stop.point),
+                          child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
+                        ),
+                      ),
                       IconButton(
                         key: ValueKey('stop-remove-$i'),
                         tooltip: 'Remove stop ${i + 1}',
