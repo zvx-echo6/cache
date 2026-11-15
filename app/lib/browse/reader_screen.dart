@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../net/web_link.dart';
 import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton, ContentWidth;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
@@ -803,7 +804,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           }
           return NavigationActionPolicy.ALLOW;
         }
-        if (mounted) {
+        // A web link: the phone's browser online; offline "You're offline" with Copy link (net/web_link.dart).
+        if (u != null && isWebLink(u)) {
+          if (mounted) unawaited(openWebLink(context, u.toString()));
+        } else if (mounted) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
             ..showSnackBar(

@@ -13,6 +13,7 @@ import '../browse/web/device_api.dart' show DeviceException;
 import '../layout/adaptive.dart' show isShort, kDesktopMinWidth;
 import '../platform/app_log.dart' show logError;
 import '../screens/download_confirm.dart' show openStorageForSpace;
+import '../net/web_link.dart';
 import '../settings/hub.dart' show openInSystemBrowser;
 import '../theme.dart';
 import '../video/format.dart';
@@ -657,11 +658,22 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Future<void> _askToOpen(Uri url) async {
+    // Offline: no question first, only "You're offline" with Copy link (web links only).
+    if (isWebLink(url) && await isOffline()) {
+      if (mounted) await openWebLink(context, url.toString());
+      return;
+    }
+    if (!mounted) return;
     final ok = await askToOpenPdfLink(context);
     if (ok == true) {
-      try {
-        await openInSystemBrowser(url.toString());
-      } catch (_) {}
+      if (!mounted) return;
+      if (isWebLink(url)) {
+        await openWebLink(context, url.toString());
+      } else {
+        try {
+          await openInSystemBrowser(url.toString());
+        } catch (_) {}
+      }
     }
   }
 
