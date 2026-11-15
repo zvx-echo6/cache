@@ -53,6 +53,7 @@ void main() {
     final layout = LayoutState(settingsDirOverride: dir);
     await tester.runAsync(layout.init);
     final backend = FakeBackend();
+    r.location.publish(fixAt(42.5, -113.8)); // the route starts from where the phone is
     final nav = DriveNav(backend, r.location);
     final drive = PhoneDrive();
     final route = driveRouteJson();
@@ -152,6 +153,7 @@ void main() {
       routeAsks++;
       return MapRoute.fromJson(driveRouteJson());
     };
+    r.location.publish(fixAt(42.5, -113.8));
     final nav = DriveNav(backend, r.location);
     final maps = <Object>[];
     final sub = nav.events.listen((e) {
