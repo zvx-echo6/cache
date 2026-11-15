@@ -66,7 +66,9 @@ android {
         minSdk = 28
 
         ndk {
-            abiFilters "arm64-v8a" // arm64 only; the app ships no x86_64 slice
+            // arm64 only for every real build; -PcacheAbis=x86_64 (the emulator test build only) builds the x86_64 slice instead
+            // (CMakeLists turns on AVX2/FMA/F16C for it).
+            abiFilters.addAll((project.findProperty("cacheAbis") ?: "arm64-v8a").toString().split(",").collect { it.trim() })
         }
 
         if (buildLlama) externalNativeBuild {
