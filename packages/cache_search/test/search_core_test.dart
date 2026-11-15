@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,6 +75,35 @@ class _PagesNative extends FakeNative {
 }
 
 CsNative _pagesNative() => _PagesNative();
+
+/// A core whose catalogue refresh holds the caller's thread for 2 s (the network at an app start), and is a job that is done
+/// after 600 ms when asked as one (cs_layers_refresh_start).
+class _SlowRefreshNative extends FakeNative implements CsLayersJobNative {
+  DateTime? _started;
+
+  @override
+  String? layers(int handle, String op, String? arg) {
+    calls.add('layers:$op:$arg');
+    if (op == 'refresh') {
+      sleep(const Duration(seconds: 2));
+      return '{"catalogues":[],"updates":{}}';
+    }
+    return '{"layers":[]}';
+  }
+
+  @override
+  int layersRefreshStart(int handle) {
+    _started = DateTime.now();
+    return 9;
+  }
+
+  @override
+  String? jobProgress(int job) => DateTime.now().difference(_started!) < const Duration(milliseconds: 600)
+      ? '{"state":"running","done":0,"total":1,"error":null}'
+      : '{"state":"done","done":1,"total":1,"error":null,"result":{"catalogues":[{"url":"u","layers":1,"invalid":[]}],"updates":{}}}';
+}
+
+CsNative _slowRefresh() => _SlowRefreshNative();
 
 /// Answers cs_read_document with two pages, the address and size limit it got in the title.
 class _DocumentNative extends FakeNative {
@@ -172,7 +203,21 @@ void main() {
     await core.close();
   });
 
-  test('a failing open raises the core error', () async {
+  test('a layer catalogue refresh runs as a job: a call asked after it is answered at once, and the refresh answers when done', () async {
+    final core = await SearchCore.open(const [], native: _slowRefresh);
+    final refresh = core.layers('refresh');
+    var refreshed = false;
+    unawaited(refresh.then((_) => refreshed = true));
+    final clock = Stopwatch()..start();
+    await core.layers('list');
+    expect(clock.elapsed, lessThan(const Duration(seconds: 1)), reason: 'the worker is not held by the refresh');
+    expect(refreshed, isFalse);
+    final r = await refresh;
+    expect(((r['catalogues'] as List).single as Map)['layers'], 1);
+    await core.close();
+  });
+
+    test('a failing open raises the core error', () async {
     await expectLater(
       SearchCore.open(const [], native: _failing),
       throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'io')),

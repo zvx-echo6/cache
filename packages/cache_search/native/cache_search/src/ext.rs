@@ -424,6 +424,14 @@ impl Ext {
         self.layers()?.inner.refresh().map(|v| v.to_string()).map_err(layers_err)
     }
 
+    /// `cs_layers_refresh_start`: `cs_layers_refresh` on a thread of its own, as a job whose "result" is what `cs_layers_refresh`
+    /// answers (a failed refresh makes it `failed` with the same error). The catalogue's network wait (retries, long timeouts) never
+    /// holds the caller: saved places, live data and searches are answered meanwhile. The handle's catalogue is updated in place.
+    pub fn layers_refresh_job(&self) -> Result<crate::job::Job> {
+        let inner = self.layers()?.inner.clone();
+        crate::job::Job::spawn_result("cs-layers-refresh", move |_cancelled| inner.refresh().map_err(layers_err))
+    }
+
     pub fn layers_save(&self, def_json: &str) -> Result<String> {
         self.layers()?.inner.save_user_def(def_json).map(|v| v.to_string()).map_err(layers_err)
     }
