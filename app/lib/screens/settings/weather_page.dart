@@ -15,6 +15,7 @@ import 'source_page.dart';
 import '../../sharing/settings_sync.dart' show kWatchPlacesKey;
 import 'widgets.dart';
 import '../../guide/place_link.dart' show LinkText;
+import '../../platform/app_log.dart';
 import '../../update/update_ui.dart' show updateCacheAction;
 import '../../weather/catalogue.dart' show kNewerCatalogueFormat;
 
@@ -72,6 +73,7 @@ class _WeatherPageState extends State<WeatherPage> {
   /// The refresh button: the source list first (the connector catalogues, as "Check for updates" does, so a newly published
   /// source shows here), then the data.
   Future<void> _refresh() async {
+    logInfo('Weather: Update now tapped');
     await w.refreshCatalogues();
     final r = await w.updateNow(force: true);
     if (mounted) say(context, r.words);

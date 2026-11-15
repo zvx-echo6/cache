@@ -132,6 +132,14 @@ void main() {
     expect(fake.videoCalls.last, 'downloads:');
   });
 
+  test('the saved HLS videos from before are rewritten in the background: one video_repair job on the videos folder', () async {
+    fake.progressScript.add(jsonEncode({'state': 'done', 'done': 1, 'total': 1}));
+    await ops.repairSaved(poll: Duration.zero);
+    final start = fake.calls.singleWhere((c) => c.startsWith('jobStart:video_repair:'));
+    expect(jsonDecode(start.substring('jobStart:video_repair:'.length)), {'dir': '${docs.path}/videos'});
+    expect(fake.calls.where((c) => c.startsWith('jobFree')), isNotEmpty, reason: 'the job is let go when it ends');
+  });
+
   test('an unknown video op is an error', () {
     expect(() => ops.handle('video.nope', {}), throwsA(isA<CacheSearchException>()));
   });

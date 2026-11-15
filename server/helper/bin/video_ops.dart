@@ -120,6 +120,30 @@ class VideoOps implements OpHandler {
     return jsonEncode(r(j));
   }
 
+  /// Saved HLS videos from before saved videos were rewritten as plain MP4 (Android's player read them as their first few
+  /// seconds) are rewritten: one video_repair job on the core's own thread, which never holds other calls; the helper starts it a
+  /// while after start. Logs what it did.
+  Future<void> repairSaved({Duration poll = const Duration(seconds: 2)}) async {
+    try {
+      final n = _open();
+      final job = CoreJob.start(n, 'video_repair', {'dir': dir});
+      try {
+        while (true) {
+          final p = job.progress();
+          if (p.state != JobState.running) {
+            if (p.state == JobState.failed) log?.call('saved videos not rewritten as plain MP4: ${p.errorMessage}');
+            break;
+          }
+          await Future<void>.delayed(poll);
+        }
+      } finally {
+        job.free();
+      }
+    } catch (e) {
+      log?.call('saved videos not rewritten as plain MP4: $e');
+    }
+  }
+
   /// The saved videos, as cs_video_downloads lists them (each with its `captions_index`).
   List<Map<String, dynamic>> savedVideos() {
     final n = _open();

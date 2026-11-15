@@ -42,7 +42,8 @@ Offset seenAt(Map<String, dynamic> c, double lat, double lon, Size map) {
 
 /// The Maps screen on a screen of [size] points at [ratio] pixels a point, guiding along the fake route after showing it (so a
 /// route was fitted into view before Start, as on the phone). [body] is given the rig once the first guidance fix is in.
-Future<void> guiding(WidgetTester tester, {required Size size, required double ratio, required Future<void> Function(GuideRig rig) body}) async {
+/// With [fixesAfterStart] false the map is given no fix after Start: the phone stands still (its last fix is from before).
+Future<void> guiding(WidgetTester tester, {required Size size, required double ratio, required Future<void> Function(GuideRig rig) body, bool fixesAfterStart = true}) async {
   tester.view.physicalSize = size * ratio;
   tester.view.devicePixelRatio = ratio;
   addTearDown(tester.view.reset);
@@ -90,11 +91,18 @@ Future<void> guiding(WidgetTester tester, {required Size size, required double r
     }
     await tester.runAsync(() async {
       await nav.start();
-      gps.controller.add(fixAt(42.5, -113.79, heading: 90));
+      // Standing still, the position stream gives nothing after Start (a fix here is published to the location too, and the
+      // map would follow it as any fix, not from Start): the last fix stays the one from before, at 42.5, -113.8.
+      if (fixesAfterStart) gps.controller.add(fixAt(42.5, -113.79, heading: 90));
       await Future<void>.delayed(const Duration(milliseconds: 30));
     });
-    await tester.pump();
     final rig = GuideRig(tester, camera, location, nav, maps, gps, backend, route);
+    rig.camerasBeforeStart = camera.cameras.length;
+    if (!fixesAfterStart) {
+      await body(rig);
+      return;
+    }
+    await tester.pump();
     // The first fix moves the map there; the same fix again glides in place, with the screen as it is laid out by then.
     await rig.fix(42.5, -113.79, 90);
     await rig.fix(42.5, -113.79, 90);
@@ -123,6 +131,9 @@ class GuideRig {
   final Map<String, dynamic> route;
 
   Size get mapSize => tester.getSize(find.byType(MapLibreMap));
+
+  /// How many camera moves the screen had asked for when Start was tapped.
+  int camerasBeforeStart = 0;
 
   /// A fix reaches the map, and the glide to it runs to its end.
   Future<void> fix(double lat, double lon, double heading) async {
@@ -288,6 +299,54 @@ void main() {
       }
       (mLat, mLon) = markerOf(camera);
       expect(mLon, closeTo(-113.7896, 1e-9));
+      p = rig.seen(42.5, -113.7896);
+      expect(p.dx, closeTo(at.dx, 0.5));
+      expect(p.dy, closeTo(at.dy, 0.5));
+    });
+  });
+
+  testWidgets('Start with the phone standing still: the guidance view at once from the last fix, not the route preview kept', (tester) async {
+    await guiding(tester, size: const Size(384, 832), ratio: 2.8125, fixesAfterStart: false, body: (rig) async {
+      // No fix after Start; two frames (32 ms) later the map has been asked for the guidance view.
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      final after = rig.camera.cameras.skip(rig.camerasBeforeStart).where((c) => (c as List).first == 'newCameraPosition');
+      expect(after, isNotEmpty, reason: 'the map kept the route preview after Start');
+      expect(rig.maps.follow, FollowMode.headingUp);
+      final layout = GuideLayout.read(tester);
+      final at = rig.seen(42.5, -113.8);
+      expect(at.dx, closeTo(layout.free.center.dx, 0.5));
+      expect(at.dy, closeTo(layout.anchor.dy, 2));
+      expect((lastCamera(rig.camera)['bearing'] as num).toDouble(), 90);
+    });
+  });
+
+  testWidgets('Find me after moving the map while guiding: back to the guidance view and its spot, heading up; north up keeps the spot', (tester) async {
+    await guiding(tester, size: const Size(384, 832), ratio: 2.8125, body: (rig) async {
+      final at = rig.seen(42.5, -113.79);
+      // A finger moving the map stops the following (what the map's listener does on a drag).
+      rig.maps.setFollow(FollowMode.free);
+      await tester.pump();
+      await tester.tap(find.byTooltip('Find me'));
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 160));
+      }
+      expect(rig.maps.follow, FollowMode.headingUp);
+      var p = rig.seen(42.5, -113.79);
+      expect(p.dx, closeTo(at.dx, 0.5));
+      expect(p.dy, closeTo(at.dy, 0.5));
+      // Fixes after it keep it there.
+      await rig.fix(42.5, -113.7896, 95);
+      p = rig.seen(42.5, -113.7896);
+      expect(p.dx, closeTo(at.dx, 0.5));
+      expect(p.dy, closeTo(at.dy, 0.5));
+      // North up while guiding: the map turns north, the position keeps its spot.
+      await tester.tap(find.byTooltip('Following you, heading up. Tap for north up'));
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 160));
+      }
+      expect(rig.maps.follow, FollowMode.follow);
+      expect((lastCamera(rig.camera)['bearing'] as num).toDouble(), 0);
       p = rig.seen(42.5, -113.7896);
       expect(p.dx, closeTo(at.dx, 0.5));
       expect(p.dy, closeTo(at.dy, 0.5));

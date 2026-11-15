@@ -18,7 +18,7 @@ class CarAudio(context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         .setAudioAttributes(ATTRIBUTES)
-        .setOnAudioFocusChangeListener { change -> if (change == AudioManager.AUDIOFOCUS_LOSS) held = false }
+        .setOnAudioFocusChangeListener { change -> held = heldAfter(change) }
         .build()
     private val abandon = Runnable { release() }
 
@@ -43,6 +43,13 @@ class CarAudio(context: Context) {
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
+
+        /**
+         * Whether the focus is still held after [change]. Only a gain keeps it: after any loss (another app taking the audio
+         * for good, for a while, or letting us duck) the next prompt asks for it again. Before, a loss for a while left it
+         * counted as held, and the prompts after it did not ask until the hold ran out.
+         */
+        fun heldAfter(change: Int): Boolean = change == AudioManager.AUDIOFOCUS_GAIN
 
         /** About how long the phone takes to say [text] at the guidance rate, with a margin; at most 20 seconds. */
         fun holdMs(text: String): Long = (1500L + 80L * text.length).coerceAtMost(20_000L)

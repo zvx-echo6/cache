@@ -81,6 +81,30 @@ fn t() -> bool {
     true
 }
 
+/// Where the open's timing lines go: a function the app gave (`cs_sync_set_log`), or nowhere.
+static LOG_SINK: Mutex<Option<extern "C" fn(*const std::ffi::c_char)>> = Mutex::new(None);
+
+/// Sets (or, with `None`, clears) the function that gets one short line per step of opening the engine. The line is a heap string
+/// given to the function, which frees it (`cs_free_string`): the function may hand it to another thread and return at once, as the
+/// app's does (a Dart listener reads it later).  The function must not block.
+pub fn set_log(sink: Option<extern "C" fn(*const std::ffi::c_char)>) {
+    *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner()) = sink;
+}
+
+/// The steps of one open, each said with the milliseconds since the open began. Does nothing while no sink is set.
+struct OpenSteps(Instant);
+
+impl OpenSteps {
+    fn step(&self, name: &str) {
+        let sink = *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner());
+        if let Some(f) = sink {
+            if let Ok(line) = std::ffi::CString::new(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis())) {
+                f(line.into_raw());
+            }
+        }
+    }
+}
+
 /// The `cs_sync_open` config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -2439,8 +2463,16 @@ impl ProtocolHandler for SyncProto {
 impl SyncEngine {
     /// Opens (or creates) the identity, store and settings in `cfg.dir`, binds the endpoint and starts the sync rounds.
     pub fn open(cfg: Config) -> Result<SyncEngine> {
+        let steps = OpenSteps(Instant::now());
+        steps.step("started");
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
-        let (inner, router) = rt.block_on(Self::start(cfg.clone()))?;
+        let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
+            Ok(v) => v,
+            Err(e) => {
+                steps.step("failed");
+                return Err(e);
+            }
+        };
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
         rt.spawn(async move {
@@ -2490,10 +2522,11 @@ impl SyncEngine {
                 let _ = inner4.store.shutdown().await;
             });
         }
+        steps.step("done");
         Ok(SyncEngine { rt, inner, router: Some(router) })
     }
 
-    async fn start(cfg: Config) -> Result<(Arc<Inner>, Router)> {
+    async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {
         std::fs::create_dir_all(&cfg.dir)?;
         // Read before anything is written: if the links cannot be read now, nothing here may be changed.
         let fresh = !cfg.dir.join("sync.json").exists();
@@ -2501,7 +2534,9 @@ impl SyncEngine {
         // Whether the links can be trusted to be complete, for what the Gate may say to a key that is not linked.
         let gate = Arc::new(GateState::default());
         gate.grace_until.store(links_grace_until(&cfg.dir, fresh || saved_note.is_some())?, Ordering::SeqCst);
+        steps.step("links loaded");
         let (secret, _) = identity::load_or_create(&cfg.dir)?;
+        steps.step("identity loaded");
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
         }
@@ -2545,6 +2580,7 @@ impl SyncEngine {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
         let endpoint = b.bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
+        steps.step("endpoint bound");
 
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         let w2 = wanted.clone();
@@ -2559,6 +2595,7 @@ impl SyncEngine {
         let mut opts = StoreOptions::new(&store_dir);
         opts.gc = Some(gc);
         let store = FsStore::load_with_opts(store_dir.join("blobs.db"), opts).await.map_err(|e| anyhow!("could not open the store: {e}"))?;
+        steps.step("blob store opened");
 
         let inner = Arc::new(Inner {
             dir: cfg.dir.clone(),
@@ -2595,6 +2632,7 @@ impl SyncEngine {
             received: Mutex::new(HashMap::new()),
         });
         inner.save()?;
+        steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
         let blobs = BlobsProtocol::new(&store, None);

@@ -68,6 +68,8 @@ Future<void> main() async {
   final indexer = IndexDriver(dispatcher,
       log: log, extra: extras, load: HostLoad(), pdf: pdf, savedVideos: () => videoOps.savedVideos(), videoDir: '${dirs.docs.path}/videos');
   videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: indexer.kick);
+  // saved HLS videos from before are rewritten as plain MP4 in the background, a while after start (not in its way)
+  Timer(const Duration(seconds: 30), () => unawaited(videoOps.repairSaved()));
   // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
   final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
   final guide = guidePath != null && guidePath.isNotEmpty

@@ -344,6 +344,9 @@ pub fn coordinates_json(core: &PlacesCore, lat: f64, lon: f64, near: Option<(f64
             .map(|t| format!("{} mi {} of {}", round_to(t.km / crate::geo::KM_PER_MI, 1), compass8((t.bearing + 180.0) % 360.0), t.label))
             .unwrap_or_default()),
     );
+    // The nearest town as data ("Burley, ID": the reverse result's locality and state), for a screen that names the point after it.
+    // Only the map's search box reads this result; no tool the model reads builds it.
+    m.insert("town".into(), json!(town.as_ref().map(|t| t.label.as_str())));
     m.insert("lat".into(), json!(round_to(lat, 6)));
     m.insert("lon".into(), json!(round_to(lon, 6)));
     from_near(near, lat, lon, &mut m);
