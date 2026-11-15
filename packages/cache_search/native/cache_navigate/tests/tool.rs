@@ -55,6 +55,7 @@ impl Valhalla for Fake {
                 bearing_after: Some(90.0),
                 bearing_before: None,
                 lanes: if self.lanes && i > 0 { vec![Lane { directions: 8, active: Some(8), valid: None }, Lane { directions: 2, active: None, valid: None }] } else { vec![] },
+                ..Default::default()
             })
             .collect();
         Ok(Trip { shape_encoded: cache_offroad::valhalla::encode_polyline6(&shape), shape, maneuvers, length_km: 1.5 * n as f64, time_s: 90.0 * n as f64 + (b.0 - a.0).abs() * self.per_deg_s })

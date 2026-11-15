@@ -173,6 +173,12 @@ pub struct Config {
     /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
+    /// Shares whose files the Activity does not list one by one (share ids): the app says what arrived in its own words (the
+    /// notebooks: "3 entries arrived from your other devices"), and a file line would name the person's notebook files. Only the
+    /// lines that announce a normal change to a file (got, deleted by a device, kept, conflict copy) are left out; a failure or a
+    /// stop of the share is still said.
+    #[serde(default)]
+    pub quiet: Vec<String>,
     /// What this device has switched off in a shared folder, by share id (patterns as for `exclude`): the person's choice of
     /// items in one share (a library, a map layer, a model). Such a path is neither fetched here nor offered to the others, and
     /// its deletes stay here, but this device keeps listing it with its history, so switching it on again carries on where it
@@ -616,6 +622,8 @@ struct Inner {
     last: BTreeMap<String, Vec<String>>,
     /// [`Config::hidden`].
     hidden: BTreeMap<String, Vec<String>>,
+    /// [`Config::quiet`].
+    quiet: HashSet<String>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::off`], as `set_off` last left it.
@@ -1162,6 +1170,13 @@ impl Inner {
 
     fn note(&self, msg: impl Into<String>) {
         self.run.lock().unwrap().note(msg);
+    }
+
+    /// A line that announces a normal change to one file of share `share_id`: left out when the share is [`Config::quiet`].
+    fn note_file(&self, share_id: &str, msg: impl Into<String>) {
+        if !self.quiet.contains(share_id) {
+            self.note(msg);
+        }
     }
 
     fn peer_name(&self, id: &str) -> String {
@@ -1843,7 +1858,7 @@ impl Inner {
                         keep.hist.push(r.ver.clone());
                         idx.files.insert(path.clone(), keep);
                         self.store_index(&sh.id, &idx, &seen)?;
-                        self.note(format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
+                        self.note_file(&sh.id, format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
                     }
                 }
                 Action::Delete { path, entry } => {
@@ -1865,7 +1880,7 @@ impl Inner {
                         idx.files.insert(path.clone(), entry);
                         self.store_index(&sh.id, &idx, &seen)?;
                         self.unmark_writing(&sh.id, &path)?;
-                        self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        self.note_file(&sh.id, format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
                         // The content that was here may live on at another path (a rename): the store reads it from there now.
                         if let Some(h) = gone {
                             self.repoint(&h, None).await;
@@ -2031,7 +2046,7 @@ impl Inner {
             let copy = index::conflict_name(path, &self.saved.lock().unwrap().name, &stamp);
             if let Some(cfull) = safe_join(&sh.path, &copy) {
                 std::fs::rename(&full, &cfull)?;
-                self.note(format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
+                self.note_file(&sh.id, format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
                 // Picked up as a new file by the next scan; the store is pointed at it below.
                 conflict_copy = Some(cfull);
             }
@@ -2063,7 +2078,7 @@ impl Inner {
         let entry_hash = entry.hash.clone();
         let size = entry.size;
         self.written(sh, path, &full, entry).await?;
-        self.note(format!("{}: got {path} ({})", sh.name, human(size)));
+        self.note_file(&sh.id, format!("{}: got {path} ({})", sh.name, human(size)));
         // The content that was here: kept as a conflict copy, or still in use at another path.
         if let Some(c) = conflict_copy {
             if let Some(h) = &old_hash {
@@ -2497,6 +2512,7 @@ impl SyncEngine {
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
             hidden: cfg.hidden.clone(),
+            quiet: cfg.quiet.iter().cloned().collect(),
             off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
