@@ -81,27 +81,30 @@ fn t() -> bool {
     true
 }
 
-/// Where the open's timing lines go: a function the app gave (`cs_sync_set_log`), or nowhere.
-static LOG_SINK: Mutex<Option<extern "C" fn(*const std::ffi::c_char)>> = Mutex::new(None);
+/// The lines the open has said and nobody has taken yet, oldest first. Nothing calls out to the app: a callback into Dart from an
+/// engine thread aborted the process in a background (WorkManager) isolate ("Cannot invoke native callback from a leaf call"), so the
+/// app asks for the lines instead ([`take_log`]).
+static LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Sets (or, with `None`, clears) the function that gets one short line per step of opening the engine. The line is a heap string
-/// given to the function, which frees it (`cs_free_string`): the function may hand it to another thread and return at once, as the
-/// app's does (a Dart listener reads it later).  The function must not block.
-pub fn set_log(sink: Option<extern "C" fn(*const std::ffi::c_char)>) {
-    *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner()) = sink;
+/// The most lines kept: an app that never asks must not grow it without end (the oldest go first).
+const LOG_KEEP: usize = 200;
+
+/// Returns the lines said since the last call, oldest first, and clears them.
+pub fn take_log() -> Vec<String> {
+    std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
-/// The steps of one open, each said with the milliseconds since the open began. Does nothing while no sink is set.
+/// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
 impl OpenSteps {
     fn step(&self, name: &str) {
-        let sink = *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner());
-        if let Some(f) = sink {
-            if let Ok(line) = std::ffi::CString::new(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis())) {
-                f(line.into_raw());
-            }
+        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
+        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+        if b.len() >= LOG_KEEP {
+            b.remove(0);
         }
+        b.push(line);
     }
 }
 
@@ -645,6 +648,33 @@ pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
     inner: Arc<Inner>,
     router: Option<Router>,
+    /// Held while this engine lives: the folder is not opened a second time in this process.
+    _folder: FolderGuard,
+}
+
+/// The folders engines of this process run on. A second `open` on one of them (the app's own engine is running and a background
+/// round opens another on the same folder, in the same process) answers at once with an error instead of waiting on the first
+/// one's store, which a background round did without ever coming back (found on a Pixel).
+static OPEN_FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+struct FolderGuard(PathBuf);
+
+impl FolderGuard {
+    fn take(dir: &Path) -> Result<FolderGuard> {
+        let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let mut open = OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner());
+        if open.contains(&key) {
+            bail!("another engine of this app already runs on this folder");
+        }
+        open.push(key.clone());
+        Ok(FolderGuard(key))
+    }
+}
+
+impl Drop for FolderGuard {
+    fn drop(&mut self) {
+        OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner()).retain(|p| p != &self.0);
+    }
 }
 
 /// The code a device shows for linking: its address, a one-time token, and its name.
@@ -2351,6 +2381,14 @@ impl SyncEngine {
     pub fn open(cfg: Config) -> Result<SyncEngine> {
         let steps = OpenSteps(Instant::now());
         steps.step("started");
+        std::fs::create_dir_all(&cfg.dir)?;
+        let folder = match FolderGuard::take(&cfg.dir) {
+            Ok(g) => g,
+            Err(e) => {
+                steps.step("folder already open in this process");
+                return Err(e);
+            }
+        };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
         let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
             Ok(v) => v,
@@ -2409,7 +2447,7 @@ impl SyncEngine {
             });
         }
         steps.step("done");
-        Ok(SyncEngine { rt, inner, router: Some(router) })
+        Ok(SyncEngine { rt, inner, router: Some(router), _folder: folder })
     }
 
     async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {

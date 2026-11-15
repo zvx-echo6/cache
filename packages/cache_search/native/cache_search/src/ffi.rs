@@ -1130,11 +1130,13 @@ pub unsafe extern "C" fn cs_sync_open(config_json: *const c_char) -> *mut cache_
     }
 }
 
-/// Sets the function that gets one short line per step of `cs_sync_open`, or clears it with NULL. The line is a string the function
-/// owns and frees with `cs_free_string` (it may read it later, on another thread). May be called from any thread; must not block.
+/// The lines `cs_sync_open` has said (one short line per step, with the time since the open began) since the last call, as a JSON
+/// array of strings, oldest first; the lines are cleared. `[]` when there are none. Free the string with `cs_free_string`. Safe from any
+/// thread, also while an open is running on another. The engine never calls into the app: the app asks.
 #[no_mangle]
-pub extern "C" fn cs_sync_set_log(cb: Option<extern "C" fn(*const c_char)>) {
-    cache_sync::set_log(cb);
+pub extern "C" fn cs_sync_take_log() -> *mut c_char {
+    let lines = cache_sync::take_log();
+    out_string(serde_json::to_string(&lines).unwrap_or_else(|_| "[]".to_string())).unwrap_or(ptr::null_mut())
 }
 
 /// One sync method (status, link_code, link, share_add, share_join, ...) with JSON args. Always a JSON string: the answer, or

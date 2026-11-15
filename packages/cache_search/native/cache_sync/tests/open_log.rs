@@ -1,32 +1,20 @@
-//! Opening the engine says each step to the function the app gave (`set_log`), in order, with the time since the open began.
-//! One test only: the sink is process-wide.
+//! Opening the engine puts each step in a buffer the app asks for (`take_log`), in order, with the time since the open began. Nothing
+//! is called out to the app: a callback into Dart aborted the process in a background isolate. One test only: the buffer is process-wide.
 
-use cache_sync::{set_log, Config, SyncEngine};
+use cache_sync::{take_log, Config, SyncEngine};
 use serde_json::json;
-use std::ffi::{c_char, CString};
-use std::sync::Mutex;
-
-static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-extern "C" fn collect(line: *const c_char) {
-    // The line is the callee's to free, as the app's does with cs_free_string.
-    let s = unsafe { CString::from_raw(line as *mut c_char) }.to_string_lossy().into_owned();
-    LINES.lock().unwrap().push(s);
-}
 
 #[test]
-fn an_open_says_its_steps_in_order() {
+fn an_open_says_its_steps_in_order_and_taking_them_clears_them() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg: Config = serde_json::from_value(json!({
         "dir": tmp.path().join("a"), "name": "Phone", "relay": false, "dht": false, "mdns": false, "lookup": false,
         "interval_secs": 5, "reserve_bytes": 0,
     }))
     .unwrap();
-    set_log(Some(collect));
+    take_log();
     let e = SyncEngine::open(cfg).unwrap();
-    set_log(None);
-    e.close();
-    let lines = LINES.lock().unwrap().clone();
+    let lines = take_log();
     for l in &lines {
         println!("{l}");
     }
@@ -37,4 +25,6 @@ fn an_open_says_its_steps_in_order() {
     }
     let ms: Vec<u64> = lines.iter().map(|l| l.rsplit_once('+').unwrap().1.trim_end_matches(" ms").parse().unwrap()).collect();
     assert!(ms.windows(2).all(|w| w[0] <= w[1]), "times only grow: {ms:?}");
+    assert!(take_log().is_empty(), "taking the lines clears them");
+    e.close();
 }
