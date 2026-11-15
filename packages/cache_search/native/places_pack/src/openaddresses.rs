@@ -394,8 +394,15 @@ pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
     for (si, src) in sources.iter().enumerate() {
         let st = rep.per_source.entry(format!("oa:{}", src.id)).or_default();
         let country = src.id.split('/').next().unwrap_or("").to_uppercase();
-        for line in open_lines(&src.path)?.lines() {
-            let line = line.map_err(|e| format!("{}: {e}", src.path.display()))?;
+        for (n, line) in open_lines(&src.path)?.lines().enumerate() {
+            // A source file that is damaged part-way (seen in OpenAddresses' own output) gives the rows before the damage.
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{}: stopped after {n} lines: {e}", src.path.display());
+                    break;
+                }
+            };
             if line.trim().is_empty() {
                 continue;
             }
