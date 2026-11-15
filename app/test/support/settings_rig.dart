@@ -64,8 +64,14 @@ class RigPositionSource implements PositionSource {
 
   @override
   Future<bool> serviceEnabled() async => true;
+  /// Called when the phone is asked for a position (a test moves the weather part's position here).
+  void Function()? onCurrent;
+
   @override
-  Future<Fix> current() async => fixAt(42.5, -113.8);
+  Future<Fix> current() async {
+    onCurrent?.call();
+    return fixAt(42.5, -113.8);
+  }
   @override
   Stream<Fix> stream() => const Stream.empty();
   @override

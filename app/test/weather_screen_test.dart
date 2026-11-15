@@ -1,8 +1,10 @@
 import 'package:cache/chat/ask_about.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
+import 'package:cache/settings/app_settings.dart' show kWatchHere;
 import 'package:cache/theme.dart';
 import 'package:cache/weather/alert_watch.dart' show AlertFocus;
+import 'package:cache/weather/weather_state.dart' show kWeatherHereOff;
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -293,8 +295,9 @@ void main() {
     expect(find.text('Forecast'), findsOneWidget);
 
     await tester.runAsync(() async {
-      await r.weather.setSourceOn(r.weather.sourceById('openmeteo-forecast')!, false);
+      // Alerts first: forecast is the only source on, and switching the last one off would bring the defaults back.
       await r.weather.setSourceOn(r.weather.sourceById('nws-alerts-point')!, true);
+      await r.weather.setSourceOn(r.weather.sourceById('openmeteo-forecast')!, false);
     });
     store(r, 'nws-alerts-point', storedAnswer(wednesday(14, 26), wednesday(14, 14), const []));
     await _open(tester, r, opened: opened);
@@ -324,15 +327,54 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('nothing switched on: the whole-page state, with the way to Settings', (tester) async {
+  // Weather always works (owner, 2026-11-15): "nothing switched on" is no state any more (the defaults come back), so the
+  // whole-page state is the one for a location that is not watched, with the way to Settings kept.
+  testWidgets('location not watched: the whole-page state, with the way to Settings', (tester) async {
     final r = await _rig(tester);
+    r.settings.setWatched('here', false);
     final opened = <String>[];
     await _open(tester, r, opened: opened);
-    expect(find.text('Nothing is switched on yet.'), findsOneWidget);
-    expect(find.text('Nothing switched on yet'), findsOneWidget, reason: 'the status line');
+    expect(find.text('No place is being watched.'), findsOneWidget);
+    expect(find.text(kWeatherHereOff), findsOneWidget, reason: 'the status line');
     await tester.tap(find.text('Open Weather and alerts settings'));
     await tester.pump();
     expect(opened, ['settings']);
+    await r.dispose(tester);
+  });
+
+  testWidgets('location not watched: the status line says so, with Watch my location; a tap watches the location and the weather shows again', (tester) async {
+    final r = await _rig(tester);
+    r.clock = wednesday(14, 14);
+    await useScreenSources(tester, r, ['openmeteo-forecast']);
+    store(r, 'openmeteo-forecast', storedAnswer(wednesday(14, 26), wednesday(14, 14), sixteenDays(wednesday(14, 14))));
+    r.settings.setWatched('here', false);
+    await _open(tester, r);
+    expect(find.text(kWeatherHereOff), findsOneWidget, reason: 'the status line');
+    expect(find.byKey(const ValueKey('weather-screen-watch-here')), findsOneWidget);
+    expect(find.text('Watch my location'), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('weather-screen-watch-here')));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+    expect(r.settings.watchedPlaces, contains(kWatchHere));
+    expect(find.byKey(const ValueKey('weather-screen-watch-here')), findsNothing);
+    expect(find.text(kWeatherHereOff), findsNothing);
+    await r.dispose(tester);
+  });
+
+  testWidgets('a place other than your location is watched: weather works, no Watch my location', (tester) async {
+    final r = await _rig(tester);
+    r.clock = wednesday(14, 14);
+    await useScreenSources(tester, r, ['openmeteo-forecast']);
+    store(r, 'openmeteo-forecast', storedAnswer(wednesday(14, 26), wednesday(14, 14), sixteenDays(wednesday(14, 14))));
+    r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
+    r.settings.setWatched('place:cabin', true);
+    r.settings.setWatched('here', false);
+    await _open(tester, r);
+    expect(r.weather.nothingWatched, isFalse);
+    expect(find.byKey(const ValueKey('weather-screen-watch-here')), findsNothing);
+    expect(find.text(kWeatherHereOff), findsNothing);
     await r.dispose(tester);
   });
 

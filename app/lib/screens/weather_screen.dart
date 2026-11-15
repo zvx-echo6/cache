@@ -230,6 +230,13 @@ class _WeatherScreenState extends State<WeatherScreen> {
               _statusBox(context, w.status()),
               const SizedBox(height: 12),
             ],
+            if (w.nothingWatched) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton(key: const ValueKey('weather-screen-watch-here'), onPressed: () => unawaited(w.watchHereAgain()), child: const Text('Watch my location')),
+              ),
+              const SizedBox(height: 12),
+            ],
             words,
           ];
           return RefreshIndicator(

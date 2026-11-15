@@ -51,6 +51,9 @@ void main() {
 
   Future<void> rig(WidgetTester tester) async {
     r = await SettingsRig.create(tester);
+    // A fresh phone knows no position yet (the location permission was never asked). Weather always works once it does, so "Turn on
+    // weather" is to do exactly while there is no position (see weatherOn).
+    r.here = null;
     layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
     regions = _Regions(r);
@@ -84,7 +87,11 @@ void main() {
     r.sources.titles[path] = 'Wikipedia';
   }
 
-  Future<void> weatherOn(WidgetTester tester) => tester.runAsync(() => r.weather.setRowOn(WeatherTurnOn.rows.first, true));
+  /// Weather done: the defaults are on from the start, so what is left is the phone knowing where it is.
+  Future<void> weatherOn(WidgetTester tester) async {
+    r.here = (lat: 42.54, lon: -113.79);
+    await tester.runAsync(() => r.weather.setRowOn(WeatherTurnOn.rows.first, true));
+  }
 
   Finder row(String key) => find.byKey(ValueKey(key));
 
@@ -258,7 +265,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('Hide switches the block off, with Undo; Edit Home brings it back; then the weather card offers "Turn on weather"', (tester) async {
+  testWidgets('Hide switches the block off, with Undo; Edit Home brings it back; then the weather card offers "Use my location"', (tester) async {
     await rig(tester);
     model();
     await home(tester);
@@ -274,7 +281,7 @@ void main() {
     layout.setBlockOn(HomeBlock.setup, false);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('setup-card')), findsNothing);
-    expect(find.byKey(const ValueKey('weather-turn-on')), findsOneWidget, reason: 'now the one place it appears');
+    expect(find.byKey(const ValueKey('weather-use-location')), findsOneWidget, reason: 'now the one place it appears: the card waits for a position, with no permission');
     final again = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(again.init);
     expect(again.isOn(HomeBlock.setup), isFalse, reason: 'kept in layout.json');
