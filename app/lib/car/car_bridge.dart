@@ -553,7 +553,7 @@ class CarBridge {
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
-        return {'places': [for (final p in await search(q)) _placeOut(p)], if (asStop) 'forStop': true};
+        return {'places': [for (final p in await this.search(q)) _placeOut(p)], if (asStop) 'forStop': true};
       }
     }
     if (to == null) return {'places': const [], if (asStop) 'forStop': true};
