@@ -607,6 +607,21 @@ class SharingState extends ChangeNotifier {
 
   String get name => (status['name'] as String?) ?? deviceName;
 
+  final List<Map<String, dynamic>> _extraLog = [];
+
+  /// A line this app adds to the Activity (the notebook sync's: the engine's own log has the file transfers).
+  void addActivity(String text) {
+    _extraLog.insert(0, {'text': text, 'at': DateTime.now().millisecondsSinceEpoch});
+    if (_extraLog.length > 100) _extraLog.removeRange(100, _extraLog.length);
+    notifyListeners();
+  }
+
+  /// The Activity: the engine's log and this app's own lines, newest first.
+  List<Map<String, dynamic>> get activity => [
+        for (final e in (status['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>(),
+        ..._extraLog,
+      ]..sort((a, b) => ((b['at'] as int?) ?? 0).compareTo((a['at'] as int?) ?? 0));
+
   List<Map<String, dynamic>> get peers => [for (final p in (status['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
   List<Map<String, dynamic>> get shares => [for (final p in (status['shares'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
   List<Map<String, dynamic>> get offers => [for (final p in (status['offers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];

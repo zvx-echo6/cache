@@ -362,6 +362,16 @@ void main() {
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
 
+  test("the Activity holds this app's own lines (notebook sync) with the engine's, newest first", () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    s.addActivity('Notebooks: 3 entries arrived from your other devices');
+    expect(s.activity.first['text'], 'Notebooks: 3 entries arrived from your other devices');
+    s.dispose();
+    await r.dir.delete(recursive: true);
+  });
+
   test("a ZIM's saved icon goes with it: off and synced with the item, never an item of its own", () async {
     final r = await _rig();
     r.sync.items['library'] = [
