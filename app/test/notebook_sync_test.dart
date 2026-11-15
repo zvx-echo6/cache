@@ -800,6 +800,39 @@ void main() {
     });
   });
 
+  group('a repeater list that arrives all at once on a phone that has no such notebook', () {
+    test('every repeater keeps its fields, not only the first (three rows with no position, as a CSV import makes them)', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync()).byId('repeaters')!;
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true, templateRef: t.ref);
+      const rows = [
+        ('R11 Boise', {'f1': '146.760 MHz', 'f2': '-600 kHz', 'f3': '100.0 Hz to transmit and receive', 'f4': 'FM'}),
+        ('R11 Nampa', {'f1': '147.020 MHz', 'f2': '+600 kHz', 'f3': '107.2 Hz to transmit and receive', 'f4': 'FM'}),
+        ('R11 Meridian', {'f1': '444.100 MHz', 'f2': '+5 MHz', 'f3': '123.0 Hz to transmit and receive', 'f4': 'FM'}),
+      ];
+      var minute = 0;
+      for (final r in rows) {
+        await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-11-15T09:0${minute++}:00-07:00', title: r.$1, body: '', values: r.$2);
+      }
+      await a.engine.run();
+      for (final e in a.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) b.folder.text[e.key] = e.value;
+      }
+      // one round on the other phone brings all three: the first makes the notebook, the others must be read with its fields
+      await b.engine.run();
+      final nbB = b.nb.notebooks.firstWhere((n) => n.name == 'Repeaters');
+      final got = {for (final e in await b.nb.entries(nbB.id)) e.title: e.values};
+      expect(got, {for (final r in rows) r.$1: r.$2}, reason: 'every row has its frequency, offset, tone and mode on phone 2');
+      // and it stays so after more rounds
+      await b.engine.run();
+      await b.engine.run();
+      final again = {for (final e in await b.nb.entries(nbB.id)) e.title: e.values};
+      expect(again, {for (final r in rows) r.$1: r.$2});
+    });
+  });
+
   group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);
