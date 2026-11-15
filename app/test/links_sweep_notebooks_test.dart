@@ -119,7 +119,7 @@ void main() {
     expect(r.shown, [(42.5607, 'Trailhead')]);
   });
 
-  testWidgets('18. An ordinary entry with a place offers Show on map, from its place line and its menu', (tester) async {
+  testWidgets('18. An ordinary entry with a place: the Place line opens Maps there (so does Show on map in its menu); the button is Edit', (tester) async {
     final r = _Rig();
     await r.nb.start();
     final journal = r.nb.journal!;
@@ -128,7 +128,10 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.byType(EntryEditor), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('place-show-on-map')));
+    expect(find.byIcon(Icons.map_outlined), findsNothing, reason: 'no map icon: the whole place line is the link');
+    expect(find.text('Edit'), findsOneWidget, reason: 'the place row\'s button is Edit');
+    expect(find.text('Change'), findsNothing);
+    await tester.tap(find.textContaining('Place: '));
     await tester.pumpAndSettle();
     expect(r.shown, [(42.5607, 'Fuel stop')]);
     await tester.tap(find.byKey(const ValueKey('editor-menu')));
