@@ -6,15 +6,18 @@
 //! assistant's `nearby` gave for a list row. "Update from a file" is cache_notebook's `source_merge` (a three-way merge that keeps
 //! what the person changed); this module reads the files, makes the rows and keys, and matches entries made by hand.
 //!
-//! A row's key is the callsign, the frequency in Hz and the town, case-folded and with spaces collapsed, and `#2`, `#3` for exact
-//! repeats inside one file (one callsign can run the same frequency at two sites, so the town is part of it).
+//! One rule matches every import (the owner's decision): a row whose NAME is the name of an entry of the notebook updates that entry,
+//! any other row is added. A row's key is therefore its name (the callsign), trimmed, case-folded and with spaces collapsed. A name
+//! twice in one file is one row, the later one's. Of several entries with the same name the one the notebook's ledger last linked
+//! to it is updated, else the oldest: never a second. (The conversion of the older store's lists, one entry per old row, still keys
+//! its rows by callsign, frequency and town, [`keys_of`]; the next import makes them names, `source_rekey_by_title`.)
 //!
 //! The assistant's `nearby` reads these notebooks through [`NotebookRepeaters`], with the same keys and the same words.
 
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::Ext;
 use cache_tool::user::{UserCategory, UserPoint, UserPoints};
-use cache_user::mapdata::repeater::{frequency_text, mhz_to_hz, Repeater};
+use cache_user::mapdata::repeater::{frequency_text, Repeater};
 use cache_user::mapdata::{self, LegacyRepeaterList, MapStore};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -58,6 +61,13 @@ pub fn def(name: &str) -> Value {
 
 fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// The key of a repeater row in an import: its name (callsign), trimmed, case-folded, spaces collapsed; a repeater with no name
+/// is keyed by its frequency and town.
+fn name_key_of(r: &Repeater) -> String {
+    let n = norm(&r.name);
+    if n.is_empty() { base_key("", r.freq_hz, r.town.as_deref()) } else { n }
 }
 
 fn base_key(name: &str, freq_hz: i64, town: Option<&str>) -> String {
@@ -142,7 +152,7 @@ impl Ext {
         serde_json::from_str(&out).map_err(|e| Error::internal(format!("notebook answer: {e}")))
     }
 
-    fn entries_of(&self, notebook_id: &str) -> Result<Vec<Value>> {
+    pub(crate) fn entries_of(&self, notebook_id: &str) -> Result<Vec<Value>> {
         let r = self.nbr_call("entries", &json!({"notebook_id": notebook_id, "limit": 100_000_000}))?;
         Ok(r["entries"].as_array().cloned().unwrap_or_default())
     }
@@ -198,7 +208,7 @@ impl Ext {
         };
         let parsed = mapdata::parse_repeater_files(&paths).map_err(user_err)?;
         let reps = &parsed.repeaters;
-        let keys = keys_of(reps.iter().map(|r| (r.name.clone(), r.freq_hz, r.town.as_deref())));
+        let keys: Vec<String> = reps.iter().map(name_key_of).collect();
         let (nb_arg, fid, claims) = match args.get("notebook_id").and_then(Value::as_str) {
             Some(id) => {
                 let n = self.nbr_call("notebook", &json!({"id": id}))?;
@@ -206,7 +216,9 @@ impl Ext {
                     return Err(Error::bad_json("repeaters are updated in a Repeaters notebook"));
                 }
                 let fid = fids(Some(&n["def"]));
-                let claims = self.claims(id, &fid, &keys)?;
+                // ledgers made before imports matched by name are keyed by something else: the names take their place
+                self.nbr_call("source_rekey_by_title", &json!({"notebook_id": id}))?;
+                let claims = self.claims(id, &keys)?;
                 (json!({"notebook_id": id}), fid, claims)
             }
             None => {
@@ -218,7 +230,19 @@ impl Ext {
                 (json!({"notebook": {"template": TEMPLATE, "def": def(&name), "map": true, "template_ref": TEMPLATE_REF}}), fids(None), Value::Null)
             }
         };
-        let rows: Vec<Value> = reps.iter().zip(&keys).map(|(r, k)| row(r, k, &fid, serde_json::to_string(r).unwrap_or_default())).collect();
+        // a name twice in the file is one row: the later one's (last wins), at the place of the first
+        let mut rows: Vec<Value> = Vec::with_capacity(reps.len());
+        let mut at: HashMap<&str, usize> = HashMap::new();
+        for (r, k) in reps.iter().zip(&keys) {
+            let v = row(r, k, &fid, serde_json::to_string(r).unwrap_or_default());
+            match at.get(k.as_str()) {
+                Some(&i) => rows[i] = v,
+                None => {
+                    at.insert(k.as_str(), rows.len());
+                    rows.push(v);
+                }
+            }
+        }
         let mut a = nb_arg;
         a["now"] = json!(now);
         a["rows"] = Value::Array(rows);
@@ -233,12 +257,12 @@ impl Ext {
         Ok(out)
     }
 
-    /// For each row key of the new file, the entry of this notebook that has no ledger row and whose callsign, frequency and town
-    /// give that key (the nth such entry for a repeated key): what `source_merge` may fill the blanks of.
-    fn claims(&self, notebook_id: &str, fid: &HashMap<String, String>, keys: &[String]) -> Result<Value> {
+    /// For each row key (a name) of the new file, the entry of this notebook that has no ledger row and has that name (trimmed,
+    /// case-folded, spaces collapsed): the oldest of them when several do. What `source_merge` may fill the blanks of.
+    fn claims(&self, notebook_id: &str, keys: &[String]) -> Result<Value> {
         let ledger = self.nbr_call("source_rows", &json!({"notebook_id": notebook_id, "brief": true}))?;
         let tied: Vec<&str> = ledger["rows"].as_array().into_iter().flatten().filter_map(|r| r["entry_id"].as_str()).collect();
-        let mut derived: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_name: HashMap<String, String> = HashMap::new();
         let entries = self.entries_of(notebook_id)?;
         let mut ordered: Vec<&Value> = entries.iter().filter(|e| e["draft"] != true).collect();
         ordered.sort_by_key(|e| e["created"].as_i64().unwrap_or(0));
@@ -247,18 +271,12 @@ impl Ext {
             if tied.contains(&id) {
                 continue;
             }
-            let (Some(title), Some(freq)) = (e["title"].as_str(), value(e, fid, "Frequency").and_then(Value::as_str)) else { continue };
-            let Some(hz) = mhz_to_hz(freq.trim().trim_end_matches("MHz").trim()) else { continue };
-            let town = value(e, fid, "Town").and_then(Value::as_str);
-            derived.entry(base_key(title, hz, town)).or_default().push(id.to_string());
+            let Some(title) = e["title"].as_str().map(norm).filter(|t| !t.is_empty()) else { continue };
+            by_name.entry(title).or_insert_with(|| id.to_string());
         }
         let mut claims = Map::new();
         for k in keys {
-            let (base, n) = match k.rsplit_once('#') {
-                Some((b, n)) if n.parse::<usize>().is_ok() => (b, n.parse::<usize>().unwrap_or(1)),
-                _ => (k.as_str(), 1),
-            };
-            if let Some(id) = derived.get(base).and_then(|l| l.get(n - 1)) {
+            if let Some(id) = by_name.get(k) {
                 claims.insert(k.clone(), json!(id));
             }
         }
