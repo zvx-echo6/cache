@@ -80,6 +80,30 @@ Map<String, dynamic> fakeRouteJson({String id = 'r1', String mode = 'drive', boo
   };
 }
 
+/// [fakeRouteJson] with roads named as a town's are, the names in the order the map gives them and with its word on which is a
+/// route number (the core's `streets`): it starts on a street with two names, turns left onto a street that is also a business
+/// route (the map lists the number first, as Valhalla writes it into the instruction), then right onto a highway with only a
+/// number. The main road is the business route.
+Map<String, dynamic> namedRoadsRouteJson() {
+  final j = fakeRouteJson();
+  final mans = (j['maneuvers'] as List).cast<Map<String, dynamic>>();
+  Map<String, dynamic> st(String text, {bool number = false}) => {'text': text, 'is_route_number': number};
+  void name(int i, String instruction, List<Map<String, dynamic>> streets) {
+    mans[i]['instruction'] = instruction;
+    mans[i]['street_names'] = [for (final s in streets) s['text']];
+    mans[i]['streets'] = streets;
+    mans[i]['begin_streets'] = const <Object>[];
+  }
+
+  name(0, 'Drive east on Lakeside Boulevard/Lakeview Drive.', [st('Lakeside Boulevard'), st('Lakeview Drive')]);
+  name(1, 'Turn left onto US 99 Bus/Lakeside Boulevard.', [st('US 99 Bus', number: true), st('Lakeside Boulevard')]);
+  name(2, 'Turn right onto SH 99.', [st('SH 99', number: true)]);
+  j['major_roads'] = [
+    {'name': 'US 99 Bus', 'distance_km': (j['distance_m'] as num) / 1000, 'streets': mans[1]['streets']},
+  ];
+  return j;
+}
+
 Map<String, dynamic> fakeProgressJson(Map<String, dynamic> route, double fraction, {double offset = 0, bool offRoute = false, int offCount = 0, bool arrived = false, double? now}) {
   final total = (route['distance_m'] as num).toDouble();
   final along = total * fraction;
@@ -92,7 +116,8 @@ Map<String, dynamic> fakeProgressJson(Map<String, dynamic> route, double fractio
   }
   Map<String, dynamic> view(int i, double d) {
     final m = mans[i];
-    return {'index': i, 'kind': m['kind'], 'type': m['type'], 'instruction': m['instruction'], 'street_names': m['street_names'], 'travel': m['travel'], 'lat': m['lat'], 'lon': m['lon'], 'distance_m': d, 'length_m': m['distance_m'], 'cardinal': 'E', 'bearing_deg': 90,
+    return {'index': i, 'kind': m['kind'], 'type': m['type'], 'instruction': m['instruction'], 'street_names': m['street_names'],
+      if (m['streets'] != null) 'streets': m['streets'], if (m['begin_streets'] != null) 'begin_streets': m['begin_streets'], 'travel': m['travel'], 'lat': m['lat'], 'lon': m['lon'], 'distance_m': d, 'length_m': m['distance_m'], 'cardinal': 'E', 'bearing_deg': 90,
       if (m['kind'] == 'offroad') ...{'elev_gain_m': 30, 'elev_loss_m': 0, 'grade_class': 'steep', 'follow': null}};
   }
 

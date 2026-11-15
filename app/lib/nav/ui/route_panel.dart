@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../maps/ui/map_widgets.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
+import '../street_names.dart';
 import '../units.dart';
 import 'route_steps.dart';
 
@@ -437,8 +438,9 @@ class _RouteCard extends StatelessWidget {
   /// The main road of the route, for telling alternatives apart.
   String _via() {
     for (final m in route.maneuvers) {
-      if (m.streetNames.isNotEmpty && m.distanceM > 0) {
-        return 'via ${m.streetNames.first}';
+      final road = m.shownRoadName;
+      if (road != null && m.distanceM > 0) {
+        return 'via $road';
       }
     }
     return '';
@@ -447,9 +449,9 @@ class _RouteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final via = (route.raw['major_roads'] is List && (route.raw['major_roads'] as List).isNotEmpty)
-        ? 'via ${((route.raw['major_roads'] as List).first as Map)['name']}'
-        : _via();
+    final roads = route.raw['major_roads'];
+    final major = roads is List && roads.isNotEmpty ? majorRoadShown(roads.first) : null;
+    final via = major != null ? 'via $major' : _via();
     return Semantics(
       button: true,
       selected: selected,
