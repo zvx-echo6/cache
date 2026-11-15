@@ -7,13 +7,16 @@ import 'guide_reader.dart' show goToAppPlace;
 /// Words that point to another part of Cache, as a link to it (the owner's rule: everything that points to something links to
 /// it). The same look as a link in the guide and in notes: the accent colour, underlined.
 class LinkText extends StatelessWidget {
-  const LinkText(this.text, {super.key, required this.onTap, this.style});
+  const LinkText(this.text, {super.key, required this.onTap, this.style, this.color});
 
   final String text;
   final VoidCallback onTap;
 
   /// The text's own style (its size and weight); the link's colour and underline go on top.
   final TextStyle? style;
+
+  /// The link's colour where the accent cannot be read (on a coloured band); the accent otherwise.
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +33,7 @@ class LinkText extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         child: Text(
           text,
-          style: (style ?? const TextStyle()).copyWith(color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent),
+          style: (style ?? const TextStyle()).copyWith(color: color ?? k.accent, decoration: TextDecoration.underline, decorationColor: color ?? k.accent),
         ),
       ),
       ),

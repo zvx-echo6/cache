@@ -533,7 +533,7 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
     }
     if (!isAppLink(href)) return; // the guide works offline: web links do not open
     final place = appPlaceOf(href);
-    if (place == null || !goToAppPlace(context, place)) _say(kUnknownAppLink);
+    if (place == null || !goToAppPlace(context, place, fromGuide: true)) _say(kUnknownAppLink);
   }
 
   @override
@@ -618,9 +618,10 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
 
 /// A part of Cache opened from the guide: it slides up over the reader, full height, with "Back to the guide" at the top. Closing
 /// it in any way returns to the guide exactly where it was (the reader stays underneath).
-/// Opens [place] from [context]: drawing an area on the map itself, anything else as its screen (built once) over what is open.
-/// False when this build has no screen for it, or no shell set the place screens.
-bool goToAppPlace(BuildContext context, AppPlace place) {
+/// Opens [place] from [context]: drawing an area on the map itself, anything else as its screen (built once) over what is open,
+/// with the "Back to the guide" bar only when [fromGuide]. False when this build has no screen for it, or no shell set the place
+/// screens.
+bool goToAppPlace(BuildContext context, AppPlace place, {bool fromGuide = false}) {
   if (place == AppPlace.drawArea) {
     if (openAppPlace == null) return false;
     Navigator.of(context).popUntil((r) => r.isFirst);
@@ -629,7 +630,7 @@ bool goToAppPlace(BuildContext context, AppPlace place) {
   }
   final screen = appPlaceScreen?.call(place);
   if (screen == null) return false;
-  Navigator.of(context).push(AppPlaceRoute(child: screen));
+  Navigator.of(context).push(fromGuide ? AppPlaceRoute(child: screen) : MaterialPageRoute<void>(builder: (_) => screen));
   return true;
 }
 

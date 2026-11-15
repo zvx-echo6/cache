@@ -33,7 +33,7 @@ class SignedOutBanner extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: LinkText('Sign in again.', key: const ValueKey('signed-out-banner'), onTap: () => signInAgain(), style: const TextStyle(fontSize: 14)),
+                  child: LinkText('Sign in again.', key: const ValueKey('signed-out-banner'), onTap: () => signInAgain(), style: const TextStyle(fontSize: 14), color: scheme.onErrorContainer),
                 ),
               ),
             ),
