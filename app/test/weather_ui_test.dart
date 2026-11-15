@@ -43,12 +43,34 @@ Future<void> _tapRefresh(WidgetTester tester) async {
 
 void main() {
   group('Weather and alerts', () {
+    testWidgets('no source on: the headline says so and Turn on switches the default sources on right here', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      expect(find.text('No weather sources are on'), findsOneWidget);
+      final button = find.byKey(const ValueKey('weather-sources-turn-on'));
+      expect(button, findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(button);
+        for (var i = 0; i < 20; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pumpAndSettle();
+      for (final t in ['Weather alerts (NWS, by point)', 'Weather forecast (Open-Meteo)', 'Wildfires near the place (WFIGS)']) {
+        expect(switchIn(tester, t).value, isTrue, reason: '$t is on after Turn on');
+      }
+      expect(switchIn(tester, 'Earthquakes near the place (USGS)').value, isFalse, reason: 'only the default set');
+      expect(button, findsNothing, reason: 'the button goes once a source is on');
+      expect(find.text('No weather sources are on'), findsNothing);
+    });
+
     testWidgets('one line for the age with a small refresh button; the catalogue\'s featured sources, the rest under More sources; places', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
       expect(find.text('Weather and alerts'), findsOneWidget);
-      expect(find.text('Nothing switched on yet'), findsOneWidget);
+      expect(find.text('No weather sources are on'), findsOneWidget);
       expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget);
       expect(find.text('Update now'), findsNothing);
       expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);

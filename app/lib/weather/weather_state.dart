@@ -1499,7 +1499,7 @@ class WeatherState extends ChangeNotifier {
   /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour,
   /// and the screen shows old data in its own ways (no reading after [kReadingLasts], "Last checked").
   WeatherStatus freshness() {
-    if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
+    if (enabledSources.isEmpty) return const WeatherStatus(headline: 'No weather sources are on', tone: StatusTone.quiet);
     final now = _now();
     final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
     final ok = _lastOkAt;

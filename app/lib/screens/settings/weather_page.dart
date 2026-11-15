@@ -17,6 +17,7 @@ import 'widgets.dart';
 import '../../guide/place_link.dart' show LinkText;
 import '../../platform/app_log.dart';
 import '../../update/update_ui.dart' show updateCacheAction;
+import '../weather_turn_on.dart' show WeatherTurnOn;
 import '../../weather/catalogue.dart' show kNewerCatalogueFormat;
 
 /// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
@@ -93,6 +94,22 @@ class _WeatherPageState extends State<WeatherPage> {
           title: 'Weather and alerts',
           children: [
             StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh),
+            // No source on while the catalogues are there: one tap switches on the defaults ("Turn on weather"'s set) right here.
+            if (w.enabledSources.isEmpty && all.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton(
+                    key: const ValueKey('weather-sources-turn-on'),
+                    onPressed: () async {
+                      logInfo('Weather: Turn on tapped (Settings, no source on)');
+                      await WeatherTurnOn(weather: w).switchOn();
+                    },
+                    child: const Text('Turn on'),
+                  ),
+                ),
+              ),
             WatchGroups(deps: d),
             if (all.isEmpty)
               w.refreshingCatalogues
