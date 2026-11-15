@@ -1015,6 +1015,7 @@ Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) as
     ..showSnackBar(synced
         ? const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere))
         : const SnackBar(key: ValueKey('deleted'), content: Text(kDeleted)));
+  if (!context.mounted) return;
   nav.goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
 }
 
