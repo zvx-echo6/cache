@@ -9,6 +9,7 @@ import '../location/coords.dart';
 import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
+import '../maps/geo.dart';
 import '../maps/maps_state.dart';
 import '../platform/app_log.dart';
 import 'eta_blend.dart';
@@ -73,12 +74,14 @@ class MapRequested extends NavEvent {
   const MapRequested();
 }
 
-/// What the Maps tab is asked to show ([NavState.mapShow]): a spot, or the whole route.
+/// What the Maps tab is asked to show ([NavState.mapShow]): a spot, the whole route, or an area fitted in view ([area]: a region,
+/// a layer's downloaded area, asked through [MapsState.showAreaOnMap]).
 class MapShow {
-  const MapShow({this.at, this.route = false});
+  const MapShow({this.at, this.route = false, this.area});
 
   final GeoPoint? at;
   final bool route;
+  final GeoBounds? area;
 }
 
 class NavNotice extends NavEvent {
@@ -186,6 +189,9 @@ class NavState extends ChangeNotifier {
 
   /// True when the off-road route failed because the area has no off-road data (the panel offers Walk and Drive).
   bool offroadDataMissing = false;
+
+  /// True when the route failed because a place of it is outside the downloaded maps (the panel offers Download this area).
+  bool outsideMaps = false;
 
   /// The best route and its alternatives; [routeIndex] is the one chosen.
   List<MapRoute> routes = const [];
@@ -727,6 +733,7 @@ class NavState extends ChangeNotifier {
     routeIndex = 0;
     routeError = null;
     offroadDataMissing = false;
+    outsideMaps = false;
     if (from == null) {
       routeError = 'Your position is not known yet. Turn on location to get directions from where you are.';
       notifyListeners();
@@ -747,6 +754,7 @@ class NavState extends ChangeNotifier {
       if (!r.ok) {
         routeError = routeErrorText(r);
         offroadDataMissing = offroad && r.errors.isNotEmpty && r.errors.first.code == 'not_set_up';
+        outsideMaps = r.errors.isNotEmpty && r.errors.first.code == 'out_of_coverage';
       } else {
         routes = [r, ...r.alternatives];
         if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
@@ -1185,6 +1193,10 @@ class NavState extends ChangeNotifier {
   }
 
   GeoPoint? get routeStart => _routeFrom;
+
+  /// The places of the route asked for, in the order a missing download is looked for ([outsideMaps], [offroadDataMissing]):
+  /// where to, the stops, then the start.
+  List<GeoPoint> get routeEnds => [if (selected case final to?) to.point, for (final s in stops) s.point, ?_routeFrom];
 
   bool _disposed = false;
 

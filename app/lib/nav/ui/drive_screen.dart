@@ -34,12 +34,16 @@ class DriveScreen extends StatefulWidget {
     required this.elevation,
     required this.palette,
     required this.themeId,
+    this.onMap,
   });
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
+
+  /// Map, beside the guidance bar: the phone's map on the tab instead of this screen (until Back). Null leaves it out.
+  final VoidCallback? onMap;
 
   @override
   State<DriveScreen> createState() => _DriveScreenState();
@@ -125,9 +129,25 @@ class _DriveScreenState extends State<DriveScreen> {
               minimum: const EdgeInsets.only(bottom: 8),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-                child: ListenableBuilder(
-                  listenable: nav,
-                  builder: (context, _) => GuidanceBar(nav: nav, fmt: nav.fmt),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ListenableBuilder(
+                        listenable: nav,
+                        builder: (context, _) => GuidanceBar(nav: nav, fmt: nav.fmt),
+                      ),
+                    ),
+                    if (widget.onMap case final onMap?) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        key: const ValueKey('drive-map'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), padding: const EdgeInsets.symmetric(horizontal: 14)),
+                        onPressed: onMap,
+                        icon: const Icon(Icons.map_outlined),
+                        label: const Text('Map'),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),

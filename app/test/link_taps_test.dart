@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:cache/car/car_trip.dart';
 import 'package:cache/car/phone_drive.dart';
 import 'package:cache/location/location_service.dart';
+import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/style_generator.dart';
@@ -623,6 +624,115 @@ void main() {
       inbox.offer('weather');
       expect(inbox.pending, isFalse, reason: 'only the Maps tab is asked for here');
       expect(heard, 2);
+    });
+  });
+
+  batch2();
+}
+
+
+/// The box of a recorded fit ('newLatLngBounds'): (south, west, north, east).
+(double, double, double, double) _boxOf(List<dynamic> fit) {
+  List<double> pair(Object? v) => [for (final n in v as List) (n as num).toDouble()];
+  final a = pair((fit[1] as List)[0]), b = pair((fit[1] as List)[1]);
+  return (math.min(a[0], b[0]), math.min(a[1], b[1]), math.max(a[0], b[0]), math.max(a[1], b[1]));
+}
+
+/// The link audit's second batch, on the Maps screen: an area asked for from off the map (a region's Show on map, a layer's
+/// downloaded area), a layer of "Get more layers", and the drive screen's Map.
+void batch2() {
+  const area = GeoBounds(south: 42.40, west: -113.95, north: 42.65, east: -113.45);
+
+  group('batch 2: an area from off the map', () {
+    testWidgets('the map is fitted to an area asked for, and nothing is marked', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final before = m.camera.cameras.length;
+      m.maps.showAreaOnMap(area);
+      await m.settle(tester);
+      final fit = m.lastMove('newLatLngBounds');
+      expect(fit, isNotNull);
+      expect(m.camera.cameras.indexOf(fit) >= before, isTrue, reason: 'a fit made after the ask');
+      final (s, w, n, e) = _boxOf(fit!);
+      expect(s, closeTo(area.south, 1e-9));
+      expect(w, closeTo(area.west, 1e-9));
+      expect(n, closeTo(area.north, 1e-9));
+      expect(e, closeTo(area.east, 1e-9));
+      expect(m.maps.areaAsk, isNull, reason: 'taken');
+      expect(m.marked(), isNull, reason: 'an area is not a spot');
+      expect(m.maps.follow, FollowMode.free, reason: 'the map stays on the area');
+      await m.finish(tester);
+    });
+
+    testWidgets('a layer of "Get more layers" opens the layer sheet at that layer\'s switch', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final id = m.maps.catalogueLayers.last.id;
+      expect(find.byType(LayerSheet), findsNothing);
+      m.maps.showLayerOnMap(id);
+      await m.settle(tester);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(LayerSheet), findsOneWidget);
+      expect(find.byKey(ValueKey('layer-row-$id')), findsOneWidget);
+      expect(find.byKey(ValueKey('layer-switch-$id')), findsOneWidget);
+      expect(m.maps.layerAsk, isNull, reason: 'taken');
+      await m.finish(tester);
+    });
+  });
+
+  group('batch 2: the drive screen\'s Map', () {
+    Future<_Maps> driving(WidgetTester tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      await tester.runAsync(() => m.rig.guide());
+      m.rig.at(1, 400);
+      m.drive.carConnected.value = true;
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsOneWidget);
+      expect(m.drive.signal.value, isTrue);
+      return m;
+    }
+
+    testWidgets('Map shows the map, following as it did; the map\'s Back brings the drive screen again', (tester) async {
+      final m = await driving(tester);
+      final follow = m.maps.follow;
+      expect(find.byKey(const ValueKey('peek-back')), findsNothing, reason: 'no Back while the drive screen shows');
+      await tester.tap(find.byKey(const ValueKey('drive-map')));
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsNothing, reason: 'the map is on the tab');
+      expect(find.byType(MapLibreMap), findsOneWidget);
+      expect(m.drive.signal.value, isFalse, reason: 'the car is told the drive screen is not showing');
+      expect(m.maps.follow, follow, reason: 'the map follows the position as it did');
+      final back = find.byKey(const ValueKey('peek-back'));
+      expect(back, findsOneWidget);
+      expect(find.byTooltip('Back'), findsWidgets, reason: 'the screen reader says Back, as the directions header does');
+      await tester.tap(back);
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsOneWidget);
+      expect(m.drive.signal.value, isTrue);
+      expect(find.byKey(const ValueKey('peek-back')), findsNothing);
+      // The phone's Back still works the same way.
+      await tester.tap(find.byKey(const ValueKey('drive-map')));
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsNothing);
+      await tester.binding.handlePopRoute();
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('an area asked for while the drive screen shows: the map comes on, fitted to it, with Back', (tester) async {
+      final m = await driving(tester);
+      m.maps.showAreaOnMap(area);
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsNothing);
+      final fit = m.lastMove('newLatLngBounds');
+      expect(fit, isNotNull);
+      expect(_boxOf(fit!).$1, closeTo(area.south, 1e-9), reason: 'the area, not the route');
+      await tester.tap(find.byKey(const ValueKey('peek-back')));
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('drive-screen')), findsOneWidget);
+      await m.finish(tester);
     });
   });
 }

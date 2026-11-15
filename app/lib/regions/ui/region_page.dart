@@ -177,6 +177,19 @@ class RegionPage extends StatelessWidget {
                       ),
                   ],
                 ),
+                // The region on the Maps tab, the map fitted to it.
+                if (regions.boundsOf(l.id) != null) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('region-show-on-map'),
+                      icon: const Icon(Icons.map_outlined),
+                      label: const Text('Show on map'),
+                      onPressed: () => showRegionOnMap(regions, l.id),
+                    ),
+                  ),
+                ],
                 // Try again has not worked twice: the last fix, one pop-up.
                 if (l.phase == RegionPhase.failed && regions.triesOf(l.id) >= 2) ...[
                   const SizedBox(height: 10),

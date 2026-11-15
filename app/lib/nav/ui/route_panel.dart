@@ -92,10 +92,18 @@ class DirectionsHeader extends StatelessWidget {
 
 /// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onNextTurn});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onNextTurn, this.onDownloadArea, this.onAddOffroad});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// "Download this area" under a route outside the downloaded maps ([NavState.outsideMaps]): the download for the route's area.
+  /// Null leaves it out.
+  final VoidCallback? onDownloadArea;
+
+  /// "Add off-road data" under an off-road route with no off-road data ([NavState.offroadDataMissing]): the off-road data for the
+  /// route's area. Null leaves it out.
+  final VoidCallback? onAddOffroad;
 
   /// The next arrow beside Start: shows the route's first turn (the step card). Null leaves the arrows out. On the whole route
   /// the back arrow is off.
@@ -204,6 +212,26 @@ class RoutePanel extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                            // A place outside the downloaded maps: the download for it.
+                            if (nav.outsideMaps && onDownloadArea != null) ...[
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                key: const ValueKey('route-download-area'),
+                                onPressed: onDownloadArea,
+                                icon: const Icon(Icons.download),
+                                label: const Text('Download this area'),
+                              ),
+                            ],
+                            // No off-road data here: the off-road data for it, or the road modes, which still work.
+                            if (nav.offroadDataMissing && onAddOffroad != null) ...[
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                key: const ValueKey('route-add-offroad'),
+                                onPressed: onAddOffroad,
+                                icon: const Icon(Icons.terrain_outlined),
+                                label: const Text('Add off-road data'),
+                              ),
+                            ],
                             // No off-road data here: the road modes still work.
                             if (nav.offroadDataMissing) ...[
                               const SizedBox(height: 8),
