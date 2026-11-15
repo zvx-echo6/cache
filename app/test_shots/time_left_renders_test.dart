@@ -82,9 +82,14 @@ void main() {
     try {
       await tester.runAsync(() async {
         await location.init();
+        // A known position, as the branch's own tests have it, so the route can be worked out from it and guidance starts on it.
+        location.publish(fixAt(42.5, -113.8));
         await nav.openDirections(const MapPlace(id: 'place:osm:w7', type: 'place', name: 'Shoshone Falls Park', kind: 'Park', address: 'Twin Falls, ID', lat: 42.5944, lon: -114.4003, matched: 'name'));
         await nav.start();
+        await Future<void>.delayed(const Duration(milliseconds: 30));
       });
+      expect(nav.progress, isNotNull, reason: 'guidance is on the route');
+      expect(nav.route!.distanceM, greaterThan(5000));
       await step(0);
       for (var i = 0; i < 48; i++) {
         await step(140);
