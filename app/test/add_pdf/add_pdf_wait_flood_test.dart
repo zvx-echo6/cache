@@ -55,7 +55,7 @@ void main() {
         return progress('done', pagesDone: 3, pieces: 10, piecesDone: 10, result: {'copy': 'ab' * 32, 'pieces': 10});
       },
     });
-    final s = testAddPdfState(Directory('${tmp.path}/ingest'), calls: calls, onDone: (_) async => done++);
+    final s = testAddPdfState(Directory('${tmp.path}/ingest'), frozenClock: true, calls: calls, onDone: (_) async => done++);
     await s.add(pdfPath: pdf.path, fileName: 'Water purification manual.pdf', bytes: 4096, title: 'Water purification manual', target: AddPdfTarget(title: 'My books', path: lib.path, isDefault: true), ownsFile: true);
     final sched = IndexScheduler(sources: [s], space: () => const Space(free: 100 << 30, reserve: 1 << 30), battery: () async => null, every: const Duration(hours: 1));
     addTearDown(sched.dispose);

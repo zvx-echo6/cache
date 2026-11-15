@@ -299,7 +299,7 @@ void main() {
     final h = host();
     await h.setUp();
     final c = opened.single;
-    for (final m in ['set_secrets', 'take_secrets', 'link', 'share_add', 'share_join', 'share_remove', 'set_off', 'set_only', 'set_never_fetch', 'set_share_with', 'set_policy', 'network_changed', 'nope']) {
+    for (final m in ['set_secrets', 'take_secrets', 'link', 'share_add', 'share_join', 'share_remove', 'set_off', 'set_only', 'set_never_fetch', 'set_share_with', 'set_policy', 'network_changed', 'set_keep_copies', 'nope']) {
       await expectLater(
         h.invoke('sharing.call', {'method': m, 'args': {'peer': 'p', 'secrets': {'k': 'v'}, 'path': '/etc'}}),
         throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'forbidden')),
@@ -311,8 +311,7 @@ void main() {
     // only the host's own start-up share_add calls happened, none with the browser's path
     expect(c.argsOf('share_add').every((a) => a['path'] != '/etc'), isTrue);
     expect(await h.invoke('sharing.call', {'method': 'link_code', 'args': {}}), containsPair('code', 'CACHE1-abc'));
-    // set_keep_copies: "Don't replace my copies from this device" on a linked device's page, the device's own say like set_link
-    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'set_keep_copies', 'sync_now', 'share_items']) {
+    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items']) {
       await h.invoke('sharing.call', {'method': m, 'args': {'x': 1}});
       expect(c.argsOf(m).last, {'x': 1}, reason: m);
     }

@@ -82,7 +82,7 @@ import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
 import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'screens/notebooks/notebooks_screen.dart' show NotebooksScreen;
-import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
+import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps, placeDirections;
 import 'regions/offroad_catalogue.dart';
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
@@ -908,6 +908,7 @@ class _CacheAppState extends State<CacheApp> {
     dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    onActivity: (line) => sharing.addActivity(line),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -950,13 +951,13 @@ class _CacheAppState extends State<CacheApp> {
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
     map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
-    directions: (p, name) {
-      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
-      if (nav.guiding) return false;
-      nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+    directions: (p, name) => placeDirections(nav, p, name),
+    // Show on map: Maps focused on the place (its card), the way Directions gets there, without a route
+    showOnMap: (p, name) {
+      nav.select(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
       nav.requestMap();
-      return true;
     },
+    openUrl: hub.openUrl,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.

@@ -29,7 +29,7 @@ class FakeSharingHost implements CoreTransport {
   Object? stateError;
 
   /// The methods a browser may call (SharingHost.browserMethods).
-  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'set_keep_copies', 'sync_now', 'share_items'};
+  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items'};
 
   int count(String op) => ops.where((o) => o == op).length;
 

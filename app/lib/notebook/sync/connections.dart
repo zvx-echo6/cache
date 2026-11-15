@@ -54,13 +54,17 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, DateTime Function()? clock})
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.onActivity, DateTime Function()? clock})
     : _now = clock ?? DateTime.now;
 
   /// The time now: for the "Synced" line and for what each sync stamps (a fixed clock in tests and the guide's pictures).
   final DateTime Function() _now;
 
   final NotebookState notebook;
+
+  /// Told one short line when notebook entries arrive, change or are removed by a sync with the other devices (the Sharing page's
+  /// Activity); the app log gets the same line.
+  final void Function(String line)? onActivity;
 
   /// Where the connections and each one's record live (`<support>/notebook-sync`).
   final Future<Directory> Function() dir;
@@ -88,7 +92,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Notes imported by their tag in the last sync: the app's name ("Obsidian") and their titles. Read and cleared by
   /// [takeImported] (the snack bar "2 notes added from Obsidian").
-  final List<({String app, String target, List<String> titles, Set<String> books})> _news = [];
+  final List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> _news = [];
 
   List<SyncTargetConfig> get targets => [for (final t in _targets) if (t.kind != SyncKind.share) t];
   SyncTargetConfig? target(SyncKind kind) => _targets.where((t) => t.kind == kind || (kind == SyncKind.logseq && t.kind == SyncKind.logseqExport)).firstOrNull;
@@ -122,7 +126,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   String? stoppedWith(String entryId) => switch (_linkTarget(entryId, true)) { final t? => appName(t.kind), null => null };
 
   /// The notes imported since the last call, by connection.
-  List<({String app, String target, List<String> titles, Set<String> books})> takeImported() {
+  List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> takeImported() {
     final out = [..._news];
     _news.clear();
     return out;
@@ -328,8 +332,9 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             if (t.kind != SyncKind.share) {
               _notAdded[t.id] = r.notAdded;
               _links[t.id] = await NotebookSync.links(e.stateFile);
-              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
+              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}, ids: [...r.importedIds]));
             }
+            if (t.kind == SyncKind.share) say(r);
             final n = e.conflicts.length;
             _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(_now())}';
           } on FileSystemException catch (x) {
@@ -344,6 +349,21 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     } finally {
       _running = false;
       notifyListeners();
+    }
+  }
+
+  /// The lines for what a notebook sync with the other devices did here (no ids, names or paths).
+  @visibleForTesting
+  void say(SyncReport r) {
+    String entries(int n) => n == 1 ? '1 entry' : '$n entries';
+    final changed = r.read - r.arrived;
+    for (final line in [
+      if (r.arrived > 0) 'Notebooks: ${entries(r.arrived)} arrived from your other devices',
+      if (changed > 0) 'Notebooks: ${entries(changed)} updated from your other devices',
+      if (r.removedHere > 0) 'Notebooks: ${entries(r.removedHere)} removed by your other devices',
+    ]) {
+      logInfo(line);
+      onActivity?.call(line);
     }
   }
 
