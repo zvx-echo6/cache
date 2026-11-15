@@ -222,7 +222,9 @@ void main() {
       });
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Scaffold(body: IndexOverviewLine(scheduler: s, doneFor: const Duration(milliseconds: 50))),
+        // The done moment runs on a real timer (the scheduler's listener starts it inside runAsync): long enough that a busy
+        // machine cannot end it before the line is checked, and the test then waits for it to go rather than sleeping a fixed time.
+        home: Scaffold(body: IndexOverviewLine(scheduler: s, doneFor: const Duration(seconds: 2))),
       ));
       expect(find.text('Getting search ready · 0 of 2 done'), findsOneWidget);
       await tester.runAsync(() async {
@@ -242,8 +244,10 @@ void main() {
       await tester.pump();
       expect(find.text('Search ready · 2 of 2'), findsOneWidget);
       expect(tester.widget<LinearProgressIndicator>(find.byKey(const ValueKey('index-overview-bar'))).value, 1);
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
-      await tester.pump();
+      for (var i = 0; i < 200 && find.byKey(const ValueKey('index-overview')).evaluate().isNotEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await tester.pump();
+      }
       expect(find.byKey(const ValueKey('index-overview')), findsNothing);
     });
 

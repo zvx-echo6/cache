@@ -41,7 +41,7 @@ class Fakes {
         ),
         watch: WatchDeps(
           choices: () async => [
-            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Where I am', subtitle: ''),
+            const WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Pine Hollow, ID', subtitle: ''),
             for (final s in saved) WatchPlace(id: 'place:${s.key}', kind: PlaceKind.saved, name: s.name, subtitle: '', lat: s.lat, lon: s.lon, key: s.key),
           ],
           watched: () => watched,
@@ -112,6 +112,12 @@ void main() {
         {'name': 'Home', 'lat': 43.6, 'lon': -116.2, 'label': 'Boise'},
       ],
     });
+  });
+
+  // The screens name "Where I am" after its town; the assistant's list keeps the old label (model input, undecided).
+  test('the assistant still sees "Where I am" whatever the screens call it', () async {
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home']);
+    expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], isNot(contains('Pine Hollow, ID')));
   });
 
   test('watch add and remove change the Places list', () async {

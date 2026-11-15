@@ -93,7 +93,7 @@ void main() {
       await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
       expect(find.text('Places'), findsOneWidget);
       // Where I am and the downloaded regions are Weather and alerts' watched areas now, not rows here
-      expect(find.text('Where I am'), findsNothing);
+      expect(find.text('Current location'), findsNothing);
       expect(find.byKey(const ValueKey('marker-here')), findsNothing);
       expect(find.text('Idaho'), findsNothing);
       expect(find.text('Home'), findsOneWidget);
@@ -371,7 +371,7 @@ void main() {
       final caches = await r.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Caches', fields: [], sort: NotebookSort.distance));
       await r.place(caches, 'Cache 1', 42.55, -114.45);
       await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: caches.id));
-      expect(find.text('Where I am'), findsNothing);
+      expect(find.text('Current location'), findsNothing);
       await tester.longPress(find.text('Cache 1'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('weather-row')), findsNothing);

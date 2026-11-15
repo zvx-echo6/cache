@@ -315,6 +315,16 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
+    // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point (the `town` field of its coordinates result).
+    townOf: (lat, lon) async {
+      final core = sources.core;
+      if (core == null) return null;
+      final r = await core.mapSearch('${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}', limit: 1, meaning: false);
+      for (final m in r.results) {
+        if (m.isCoordinates) return m.town;
+      }
+      return null;
+    },
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
@@ -1044,12 +1054,16 @@ class _CacheAppState extends State<CacheApp> {
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        logInfo('App: to the back');
         _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
         if (!plat.isWeb) _toBack();
       },
       // On the screen again (a desktop window shown without being clicked into does not "resume").
-      onShow: () => _foregroundUpdates.front(),
+      onShow: () {
+        logInfo('App: to the front');
+        _foregroundUpdates.front();
+      },
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
@@ -1364,12 +1378,13 @@ class _CacheAppState extends State<CacheApp> {
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
 
-  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
-  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  /// The weather update while Cache is left open in front: every five minutes it checks whether an update is due (the background
+  /// schedule's interval since the last good one, as when Cache opens) and makes it then, not forced, so each source's refresh time
+  /// and quota hold. A check that is not due does nothing. Where no scheduled job runs for an app in front.
   late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
-    every: kBackgroundEvery,
+    every: kForegroundTick,
     on: () => weather.enabledSources.isNotEmpty,
-    update: () => weather.updateNow(),
+    update: () => weather.updateIfDue(kBackgroundEvery),
     wanted: foregroundUpdatesWanted(),
   );
   late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
