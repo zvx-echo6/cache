@@ -77,6 +77,10 @@ class CoreDispatcher {
               'updating': s.updating,
               'docs': s.docs,
               'keyword_source': s.keywordSource,
+              // whether the library has points its keyword index lacks: left out here, the app never saw it (the index job for a book
+              // just added was never listed, and the card never knew its words were still to come)
+              'keyword_pending': s.keywordPending,
+              'settings': s.settings,
               'embedding_model': s.embeddingModel,
               'whole_library_only': s.wholeLibraryOnly,
               'source_id': s.sourceId,

@@ -1208,6 +1208,13 @@ impl LibSlot {
                 Ok(Some((out, n)))
             }
             "device" => {
+                // A person's own library whose snapshot is behind its shard (a book was just added or arrived, the extension has not
+                // run yet) has no complete keyword list: the one it has knows only the older books, and fused with the meaning list
+                // it ranks them above a new book's own lines (found on a phone: a book added there was not found by its own text).
+                // Until the extension has run, the library is searched by meaning alone, which already holds every point.
+                if self.keyword_pending() == Some(true) {
+                    return Ok(None);
+                }
                 let Some(oi) = self.device_index()? else { return Ok(None) };
                 let (hits, count) = libindex::keyword_hits(oi, query, candidates)?;
                 let out = hits

@@ -235,15 +235,24 @@ pub fn index_info_json(
     if let Some((name, dir)) = snapshot {
         return json!({"kind": kind, "location": "snapshot", "snapshot": name, "format": format, "dir": path(dir)});
     }
-    if matches!(legacy, IndexState::Done(_)) {
+    // `opening` (only present, true): the snapshot of this source is still being picked on a background thread, so this is not yet
+    // what the source's index is: the app reads the status again until it is gone (a status read right after the sources were set
+    // showed the old index in the library's own folder, kept up to date by Add PDF, and nothing read it again once the older
+    // snapshot became the index in use).
+    let mut v = if matches!(legacy, IndexState::Done(_)) {
         let mut v = json!({"kind": kind, "location": "legacy", "snapshot": Value::Null, "format": format,
             "dir": legacy_dir.map(path).unwrap_or(Value::Null)});
         if has_indexes_dir && !opening && !legacy_dir.is_some_and(idxsnap::seal_blocked) {
             v["needs_seal"] = json!(true);
         }
-        return v;
+        v
+    } else {
+        json!({"kind": kind, "location": "none", "snapshot": Value::Null, "format": format, "dir": Value::Null})
+    };
+    if opening {
+        v["opening"] = json!(true);
     }
-    json!({"kind": kind, "location": "none", "snapshot": Value::Null, "format": format, "dir": Value::Null})
+    v
 }
 
 /// The PDF index of one loaded ZIM (`<zim name>.pdfindex/`, see pdfindex.rs): its newest usable snapshot, verified and opened
@@ -1173,6 +1182,15 @@ mod tests {
         let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/field","settings":{"library_id":"r"}}]}"#;
         assert_eq!(h.set_sources(bad).unwrap_err().code, ErrorCode::BadJson);
         assert_eq!(h.sources.len(), 1);
+    }
+
+    #[test]
+    fn the_index_info_says_when_the_snapshot_is_still_being_picked() {
+        let none = IndexState::Missing;
+        let v = index_info_json("library", 2, None, true, &none, None, true);
+        assert_eq!(v["opening"], true, "{v}");
+        let v = index_info_json("library", 2, None, false, &none, None, true);
+        assert!(v.get("opening").is_none(), "{v}");
     }
 
     #[test]
