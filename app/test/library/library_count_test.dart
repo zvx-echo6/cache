@@ -164,6 +164,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(asked, [AppPlace.sharing]);
     expect(find.text('the Sharing and sync page'), findsOneWidget, reason: 'the link opens the page');
+    expect(find.text('Back to the guide'), findsNothing, reason: 'it was opened from the Catalog, not the guide');
   });
 
   test('every way into the Library is built by BrowseScreen.inHub, so Storage cannot lose Regions or Sharing', () {

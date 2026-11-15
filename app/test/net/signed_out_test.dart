@@ -31,4 +31,12 @@ void main() {
     await tester.tap(find.text('Sign in again.'));
     expect(went, 1);
   });
+
+  testWidgets('the banner\'s words are in the banner\'s own text colour, readable on it (the accent was not)', (tester) async {
+    signedOut.value = true;
+    final theme = buildTheme(CacheThemeId.dark);
+    await tester.pumpWidget(MaterialApp(theme: theme, home: const Scaffold(body: SignedOutBanner())));
+    final words = tester.widget<Text>(find.text('Sign in again.'));
+    expect(words.style?.color, theme.colorScheme.onErrorContainer);
+  });
 }
