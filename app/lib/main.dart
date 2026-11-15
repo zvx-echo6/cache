@@ -102,6 +102,7 @@ import 'settings/storage_usage.dart';
 import 'settings/token_store_open.dart';
 import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
+import 'nav/open_maps.dart';
 import 'sharing/share_items.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
@@ -177,6 +178,8 @@ void main() {
   if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
   // A cachelink: link the app was opened with, or that arrives while it runs (the native side holds it; see LinkInbox).
   unawaited(linkInbox.start());
+  // A tap on one of Android's guidance notifications: the Maps tab (the native side holds it; see OpenMapsInbox).
+  unawaited(openMapsInbox.start());
   runApp(const CacheApp());
 }
 
@@ -953,10 +956,7 @@ class _CacheAppState extends State<CacheApp> {
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) => placeDirections(nav, p, name),
     // Show on map: Maps focused on the place (its card), the way Directions gets there, without a route
-    showOnMap: (p, name) {
-      nav.select(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
-      nav.requestMap();
-    },
+    showOnMap: (p, name) => nav.showPlace(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {})),
     openUrl: hub.openUrl,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots

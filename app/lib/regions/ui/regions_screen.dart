@@ -425,6 +425,8 @@ class _LocalTabState extends State<LocalTab> {
                     key: ValueKey('offroad-pack-${p.name}'),
                     title: p.name,
                     status: [Part('${p.done ? formatBytes(p.bytes) : (p.bytes == 0 ? 'Waiting' : 'Downloading')} · used by ${p.usedBy.join(', ')}')],
+                    chevron: true,
+                    onTap: () => openPackRegions(context, regions, p.usedByIds),
                   ),
               ],
             ),
@@ -433,6 +435,24 @@ class _LocalTabState extends State<LocalTab> {
       },
     );
   }
+}
+
+/// The regions that use an off-road pack ([ids]): one opens its page; several are listed as the Local tab lists regions (each row
+/// opens its page).
+Future<void> openPackRegions(BuildContext context, RegionsState regions, List<String> ids) async {
+  final here = [for (final id in ids) ?regions.regionOf(id)];
+  if (here.isEmpty) return;
+  if (here.length == 1) return openRegionPage(context, regions, here.single.id);
+  await showFittedSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: SettingsGroup(rows: [for (final l in here) RegionRow(regions: regions, region: l)]),
+      ),
+    ),
+  );
 }
 
 // ---- Updates ---------------------------------------------------------------------------------------------
@@ -518,6 +538,7 @@ class _UpdatesTabState extends State<UpdatesTab> {
                 SettingsRow(
                   key: ValueKey('map-${l.id}'),
                   title: l.name,
+                  onTap: () => openRegionPage(context, r, l.id),
                   status: [
                     Part(l.fetchedAt == null ? 'Downloading' : 'Downloaded ${formatDate(l.fetchedAt!)} · ${formatBytes(l.mapBytes)}'),
                   ],

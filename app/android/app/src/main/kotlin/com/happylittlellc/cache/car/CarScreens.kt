@@ -30,6 +30,9 @@ import androidx.lifecycle.LifecycleOwner
 
 /** A screen that redraws when the trip changes, while it is on. */
 abstract class TripScreen(carContext: CarContext, protected val map: CarMapRenderer) : Screen(carContext), CarLink.Listener {
+    /** The map this screen draws on (the tests read what it was asked to show). */
+    internal val mapRenderer: CarMapRenderer get() = map
+
     init {
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
@@ -346,6 +349,8 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
                 for (s in t.stops.take(SavedPlacesScreen.MAX_ROWS - 1)) {
                     val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
                     s.address?.let { row.addText(it) }
+                    // A tap shows the stop on the map.
+                    if (s.lat != null && s.lon != null) row.setOnClickListener { showStop(s) }
                     items.addItem(row.build())
                 }
                 ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build()
@@ -385,6 +390,11 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     }
 
     internal fun addStop() = screenManager.push(SavedPlacesScreen(carContext, map, forStop = true))
+
+    /** A stop's row: that stop on the map. */
+    internal fun showStop(s: CarStop) {
+        if (s.lat != null && s.lon != null) map.showPoint(s.lat, s.lon)
+    }
 }
 
 /** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
@@ -472,6 +482,8 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
         for (s in t.stops.take((SavedPlacesScreen.MAX_ROWS - 1 - routeRows).coerceAtLeast(0))) {
             val row = Row.Builder().setTitle("Stop ${s.number}: ${s.name}")
             s.address?.let { row.addText(it) }
+            // A tap shows the stop on the map (Back, or the map's Recenter, returns to the whole route).
+            if (s.lat != null && s.lon != null) row.setOnClickListener { showStop(s) }
             items.addItem(row.build())
         }
         val left = Row.Builder().setTitle(t.destinationName ?: "Destination")
@@ -490,5 +502,10 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
             .setContentTemplate(ListTemplate.Builder().setHeader(header).setSingleList(items.build()).build())
             .setMapController(map.mapController())
             .build()
+    }
+
+    /** A stop's row: that stop on the map. */
+    internal fun showStop(s: CarStop) {
+        if (s.lat != null && s.lon != null) map.showPoint(s.lat, s.lon)
     }
 }

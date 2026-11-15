@@ -127,6 +127,37 @@ void main() {
     expect(maps.engine.areasOf('hillshade'), isEmpty);
   });
 
+  // Link audit, batch 2: a layer's card opens the layer sheet at its switch on the Maps tab; a downloaded area's row shows the area
+  // on the map, and keeps Update and Delete.
+  testWidgets('a layer\'s card asks for the Maps tab at that layer; a downloaded area\'s row for the map fitted to the area', (tester) async {
+    await boot(tester, () => CatalogueScreen(maps: maps));
+    final card = maps.catalogueLayers.first;
+    expect(maps.asks, 0);
+    await tester.tap(find.byKey(ValueKey('layer-card-${card.id}')));
+    await tester.pump();
+    expect(maps.asks, 1);
+    expect(maps.takeLayerAsk(), card.id);
+    expect(maps.areaAsk, isNull);
+    final area = (await tester.runAsync(() => maps.engine.download('hillshade', maps.viewBounds!, label: 'Home')))!;
+    await settle(tester, () => area.phase == AreaPhase.done);
+    await tester.pump();
+    final row = find.byKey(ValueKey('area-row-${area.id}'));
+    expect(row, findsOneWidget);
+    await tester.tap(find.descendant(of: row, matching: find.text('Home')));
+    await tester.pump();
+    expect(maps.asks, 2, reason: 'one ask: the area\'s, not its card\'s too');
+    expect(maps.layerAsk, isNull);
+    expect(maps.takeAreaAsk(), maps.engine.areasOf('hillshade').single.bounds);
+    // Update and Delete are still the row's own.
+    expect(find.descendant(of: row, matching: find.byTooltip('Update')), findsOneWidget);
+    await tester.tap(find.descendant(of: row, matching: find.byTooltip('Delete')));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete Home?'), findsOneWidget);
+    expect(maps.asks, 2, reason: 'Delete does not show the area');
+    await tester.tap(find.text('Keep'));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('Advanced: a layer definition can be added and edited, and bad ones are refused', (tester) async {
     await boot(tester, () => CatalogueScreen(maps: maps));
     await tester.tap(find.text('Advanced'));

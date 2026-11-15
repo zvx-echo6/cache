@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import 'package:cache/screens/settings/sharing_page.dart';
+import 'package:cache/screens/settings/widgets.dart' show SettingsRow;
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/sharing/share_items.dart';
 import 'package:cache/sharing/sharing_state.dart';
@@ -271,8 +272,15 @@ void main() {
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingPage(sharing: s)));
     await tester.pump();
     expect(find.text('Set up sharing'), findsOneWidget);
+    // On a server the setup line says what setting up does there (the phone's says "this device's identity").
+    expect(find.textContaining('Setting up gives this server its own identity for linking with your devices.'), findsOneWidget);
+    expect(find.textContaining("creates this device's identity"), findsNothing);
     await _tap(tester, find.text('Set up sharing'));
     expect(find.text('Cache Server'), findsOneWidget, reason: "the server's own name");
+    // "This device" is a server, not a phone
+    final me = find.ancestor(of: find.text('Cache Server'), matching: find.byType(SettingsRow));
+    expect(find.descendant(of: me, matching: find.byIcon(Icons.dns)), findsOneWidget);
+    expect(find.descendant(of: me, matching: find.byIcon(Icons.smartphone)), findsNothing);
     expect(find.text('Show my link code'), findsOneWidget);
     expect(find.text('Enter a link code'), findsOneWidget);
 

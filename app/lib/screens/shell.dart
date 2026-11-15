@@ -81,6 +81,7 @@ import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/own_source_pages.dart' show OwnSourceFormPage;
 import '../sharing/link_inbox.dart';
+import '../nav/open_maps.dart';
 import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
@@ -268,6 +269,7 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
+    _mapsAsks = widget.maps.asks;
     widget.maps.addListener(_onMaps);
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
@@ -299,6 +301,16 @@ class _ShellState extends State<Shell> {
     linkInbox.addListener(_openIncomingLink);
     widget.hub.openShareItem = _shareItemOpener;
     WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
+    // A tap on a guidance notification (Android): the Maps tab, with guidance on it.
+    openMapsInbox.addListener(_openMapsFromNotification);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openMapsFromNotification());
+  }
+
+  /// A guidance notification was tapped: the pages over the tabs close and the Maps tab shows.
+  void _openMapsFromNotification() {
+    if (!mounted || !openMapsInbox.take()) return;
+    Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+    _goModule(ModuleId.maps);
   }
 
   bool _linkPageUp = false;
@@ -417,12 +429,23 @@ class _ShellState extends State<Shell> {
   /// the map is not on screen, so the request went nowhere: the Maps tab is opened for it.
   void _onMaps() {
     if (widget.maps.drawRequest && _module != ModuleId.maps && mounted) _goModule(ModuleId.maps);
+    // An area or a layer asked for from off the map (a region's Show on map, a layer of "Get more layers"): the pages over the tabs
+    // close and the Maps tab shows it.
+    if (widget.maps.asks != _mapsAsks && mounted) {
+      _mapsAsks = widget.maps.asks;
+      Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+      _goModule(ModuleId.maps);
+    }
   }
+
+  /// The last of [MapsState.asks] answered (those from before this shell are not).
+  int _mapsAsks = 0;
 
   @override
   void dispose() {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
+    openMapsInbox.removeListener(_openMapsFromNotification);
     if (widget.hub.openShareItem == _shareItemOpener) widget.hub.openShareItem = null;
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
@@ -1052,6 +1075,20 @@ class _ShellState extends State<Shell> {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RepeaterListScreen(deps: deps, listId: r.listId, focusItem: r.item)));
   }
 
+  /// A notebook from the map's layer sheet ("My layers", Show after Add from a file): the notebook over the map (Back returns).
+  void _openNotebookOverMap(String id) {
+    final deps = _notebookDeps;
+    if (deps == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: id)));
+  }
+
+  /// A repeater list from the map's layer sheet: the list over the map (Back returns).
+  void _openListOverMap(String id) {
+    final deps = _notebookDeps;
+    if (deps == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RepeaterListScreen(deps: deps, listId: id)));
+  }
+
   /// "Read about it" on a place card: the place's article in the phone's Wikipedia, in the Library's reader.
   late final PlaceAbout _about = LibraryPlaceAbout(
     sources: widget.sources,
@@ -1071,7 +1108,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),

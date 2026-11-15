@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cache_search/cache_search.dart' show GeoPoint;
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/format.dart';
@@ -9,6 +10,7 @@ import '../problem_words.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
 import 'region_page.dart';
+import 'regions_list_sheet.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// "Map, directions, places and off-road.": the parts a download brings, as one sentence.
@@ -209,6 +211,50 @@ Future<void> askAddOffroad(BuildContext context, RegionsState regions, String id
   await _askAddParts(context, regions, rec, RegionOffer(RegionOfferKind.addParts, offroad: true, bytes: o.kind == RegionOfferKind.addParts ? o.bytes : regions.costOf(rec).offroad, offroadShared: o.offroadShared));
 }
 
+/// "Download this area" under a route that is outside the downloaded maps: of the route's places ([ends], where to first), the
+/// first that no region with directions on this phone holds; the catalogue's region there ([RegionCatalogue.regionAt], as Download
+/// this area from the map's search) gets the one download pop-up ([openRegionOffer]). Where the catalogue names none, the Regions
+/// sheet at that place, to choose from.
+Future<void> getRouteArea(BuildContext context, RegionsState regions, List<GeoPoint> ends) async {
+  if (ends.isEmpty) return;
+  final at = ends.where((p) => regions.regionHolding(p.lat, p.lon, routing: true) == null).firstOrNull ?? ends.first;
+  await _offerAt(context, regions, at);
+}
+
+/// "Add off-road data" under an off-road route with no off-road data: the region on this phone that holds the first of the route's
+/// places ([ends], where to first) and has no off-road yet gets Add off-road ([askAddOffroad]). With none on the phone there, as
+/// [getRouteArea] at where to: the catalogue's region there (its pop-up adds off-road, or downloads it with the rest), else the
+/// Regions sheet at that place.
+Future<void> addRouteOffroad(BuildContext context, RegionsState regions, List<GeoPoint> ends) async {
+  if (ends.isEmpty) return;
+  for (final p in ends) {
+    final l = regions.regionHolding(p.lat, p.lon, withoutOffroad: true);
+    if (l != null) return askAddOffroad(context, regions, l.id);
+  }
+  await _offerAt(context, regions, ends.first);
+}
+
+/// The catalogue's region at [at] in its download pop-up, or the Regions sheet at [at] when the catalogue cannot name one.
+Future<void> _offerAt(BuildContext context, RegionsState regions, GeoPoint at) async {
+  RegionRecord? rec;
+  try {
+    await regions.catalogue.readShardAt(at.lat, at.lon);
+    rec = regions.catalogue.regionAt(at.lat, at.lon);
+  } catch (_) {}
+  if (!context.mounted) return;
+  if (rec != null) return openRegionOffer(context, regions, rec);
+  await showRegionsSheet(context, regions, lat: at.lat, lon: at.lon);
+}
+
+/// Show on map for a region on this phone: the Maps tab with the map fitted to the region ([MapsState.showAreaOnMap]); false when
+/// its box is not known.
+bool showRegionOnMap(RegionsState regions, String id) {
+  final b = regions.boundsOf(id);
+  if (b == null) return false;
+  regions.maps.showAreaOnMap(b);
+  return true;
+}
+
 /// Runs a region action, and when it fails says what happened and the next step in plain words, with "Try again".
 Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function() f, {Future<void> Function()? retry}) async {
   try {
@@ -293,11 +339,13 @@ Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, Local
 }
 
 /// What can be done with a region on the phone, in the order the menu lists it.
-enum RegionAction { open, carryOn, tryAgain, addOffroad, update, delete }
+enum RegionAction { open, showOnMap, carryOn, tryAgain, addOffroad, update, delete }
 
-/// The actions for [l]: a stopped or failed region's fix first, then off-road when it has none, update when it is complete, delete.
+/// The actions for [l]: Show on map when its box is known, a stopped or failed region's fix, then off-road when it has none, update
+/// when it is complete, delete.
 List<RegionAction> regionActions(RegionsState regions, LocalRegion l, {bool open = true}) => [
   if (open) RegionAction.open,
+  if (regions.boundsOf(l.id) != null) RegionAction.showOnMap,
   if (l.phase == RegionPhase.stopped) RegionAction.carryOn,
   if (l.phase == RegionPhase.failed) RegionAction.tryAgain,
   if (!l.hasOffroad && !l.isArea && regions.offroadCatalogue != null) RegionAction.addOffroad,
@@ -307,6 +355,7 @@ List<RegionAction> regionActions(RegionsState regions, LocalRegion l, {bool open
 
 String regionActionLabel(RegionAction a) => switch (a) {
   RegionAction.open => 'Open',
+  RegionAction.showOnMap => 'Show on map',
   RegionAction.carryOn => 'Carry on',
   RegionAction.tryAgain => 'Try again',
   RegionAction.addOffroad => 'Add off-road',
@@ -316,6 +365,7 @@ String regionActionLabel(RegionAction a) => switch (a) {
 
 IconData regionActionIcon(RegionAction a) => switch (a) {
   RegionAction.open => Icons.open_in_new,
+  RegionAction.showOnMap => Icons.map_outlined,
   RegionAction.carryOn => Icons.play_arrow,
   RegionAction.tryAgain => Icons.refresh,
   RegionAction.addOffroad => Icons.terrain_outlined,
@@ -328,6 +378,8 @@ Future<void> runRegionAction(BuildContext context, RegionsState regions, LocalRe
   switch (a) {
     case RegionAction.open:
       await openRegionPage(context, regions, l.id);
+    case RegionAction.showOnMap:
+      showRegionOnMap(regions, l.id);
     case RegionAction.carryOn || RegionAction.tryAgain:
       await carryOnNow(ScaffoldMessenger.of(context), regions, l.id, name: l.name, again: a == RegionAction.tryAgain);
     case RegionAction.addOffroad:

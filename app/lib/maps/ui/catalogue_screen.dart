@@ -54,28 +54,36 @@ class _LayerCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final engine = maps.engine;
     final areas = maps.areasOfCard(def);
     final stored = maps.storageOfCard(def);
+    // A tap on the card: the Maps tab, with the layer sheet open at this layer's switch.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(def.title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-            const SizedBox(height: 4),
-            Text(def.description, style: TextStyle(fontSize: 15, color: k.text, height: 1.35)),
-            const SizedBox(height: 8),
-            _fact(context, Icons.public, def.coverage),
-            _fact(context, Icons.gavel, def.licence),
-            if (def.onlineOnly) _fact(context, Icons.cloud_outlined, 'Online only'),
-            if (stored > 0) _fact(context, Icons.sd_storage_outlined, '${formatBytes(stored)} on this device'),
-            // A layer is kept offline by downloading a region (every region has its map); areas from before are still listed here.
-            for (final a in areas) _AreaRow(engine: engine, area: a),
-          ],
+      child: Material(
+        color: k.surface,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: ValueKey('layer-card-${def.id}'),
+          onTap: () => maps.showLayerOnMap(def.id),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(def.title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                const SizedBox(height: 4),
+                Text(def.description, style: TextStyle(fontSize: 15, color: k.text, height: 1.35)),
+                const SizedBox(height: 8),
+                _fact(context, Icons.public, def.coverage),
+                _fact(context, Icons.gavel, def.licence),
+                if (def.onlineOnly) _fact(context, Icons.cloud_outlined, 'Online only'),
+                if (stored > 0) _fact(context, Icons.sd_storage_outlined, '${formatBytes(stored)} on this device'),
+                // A layer is kept offline by downloading a region (every region has its map); areas from before are still listed here.
+                for (final a in areas) _AreaRow(maps: maps, area: a),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -98,10 +106,12 @@ class _LayerCard extends StatelessWidget {
 }
 
 class _AreaRow extends StatelessWidget {
-  const _AreaRow({required this.engine, required this.area});
+  const _AreaRow({required this.maps, required this.area});
 
-  final LayerEngine engine;
+  final MapsState maps;
   final DownloadedArea area;
+
+  LayerEngine get engine => maps.engine;
 
   Future<void> _confirmDelete(BuildContext context) async {
     final yes = await showDialog<bool>(
@@ -178,43 +188,49 @@ class _AreaRow extends StatelessWidget {
         ),
       );
     }
+    // A tap on a downloaded area: the Maps tab, the map fitted to the area (Update and Delete stay its buttons).
     return Padding(
       padding: const EdgeInsets.only(top: 10),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-        decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(area.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
-                  Text(status, style: TextStyle(fontSize: 14, color: color)),
-                  if (area.error != null && area.phase == AreaPhase.done)
-                    Text(area.error!, style: TextStyle(fontSize: 14, color: k.warning)),
-                  if (running) ...[
-                    const SizedBox(height: 6),
-                    LinearProgressIndicator(value: area.fraction),
+      child: InkWell(
+        key: ValueKey('area-row-${area.id}'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => maps.showAreaOnMap(area.bounds),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(area.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
+                    Text(status, style: TextStyle(fontSize: 14, color: color)),
+                    if (area.error != null && area.phase == AreaPhase.done)
+                      Text(area.error!, style: TextStyle(fontSize: 14, color: k.warning)),
+                    if (running) ...[
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(value: area.fraction),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            if (running)
-              TextButton(onPressed: () => engine.cancel(area.id), child: const Text('Cancel'))
-            else ...[
-              IconButton(
-                tooltip: 'Update',
-                icon: Icon(Icons.refresh, color: k.secondary),
-                onPressed: () => _update(context),
-              ),
-              IconButton(
-                tooltip: 'Delete',
-                icon: Icon(Icons.delete_outline, color: k.secondary),
-                onPressed: () => _confirmDelete(context),
-              ),
+              if (running)
+                TextButton(onPressed: () => engine.cancel(area.id), child: const Text('Cancel'))
+              else ...[
+                IconButton(
+                  tooltip: 'Update',
+                  icon: Icon(Icons.refresh, color: k.secondary),
+                  onPressed: () => _update(context),
+                ),
+                IconButton(
+                  tooltip: 'Delete',
+                  icon: Icon(Icons.delete_outline, color: k.secondary),
+                  onPressed: () => _confirmDelete(context),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
