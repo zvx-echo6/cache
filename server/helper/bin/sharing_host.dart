@@ -474,7 +474,7 @@ class SharingHost {
   /// The engine methods a browser may call through `sharing.call`: the ones that need no more than the device's own say. Everything
   /// else is the host's (shares, off lists and what links they are kept with come from the share table and the person's choices
   /// above; a browser does not name folders) or has its own op (`link`: `sharing.link_start`). `status` is served from the cache.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items'};
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'set_keep_copies', 'sync_now', 'share_items'};
 
   /// The engine's key methods, which a browser may never reach (the host does them itself).
   static const Set<String> secretMethods = {'set_secrets', 'take_secrets'};
