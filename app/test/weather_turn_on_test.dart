@@ -215,7 +215,7 @@ void main() {
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
     await tester.pumpAndSettle();
     // The place is named in the top card (it was a chip): the page says which place it is about, for a single place too.
-    expect(find.descendant(of: find.byKey(const ValueKey('weather-place')), matching: find.text('Where I am')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('weather-place')), matching: find.text('Current location')), findsOneWidget);
     // (opening the screen already ran the update that was due, not forced: only the person's tap is looked at here)
     r.liveCore.fetches.clear();
     await tester.tap(find.text('Update now'));

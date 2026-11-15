@@ -53,6 +53,9 @@ class ConfirmCard {
   /// The error detail of a failed run.
   String? error;
 
+  /// What a done action returned (the outcome's `result`), for the card's "Done" line to open what it made. App side only.
+  Map<String, dynamic>? result;
+
   bool get resolved => state == ConfirmState.done || state == ConfirmState.declined || state == ConfirmState.failed;
 
   /// The card for an `act` tool result, or null when it is not a `needs_confirmation`.
@@ -79,6 +82,8 @@ class ConfirmCard {
     switch (outcome['status']) {
       case 'done':
         state = ConfirmState.done;
+        final r = outcome['result'];
+        result = r is Map ? r.cast<String, dynamic>() : null;
       case 'declined':
         state = ConfirmState.declined;
       case 'failed':

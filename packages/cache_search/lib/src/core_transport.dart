@@ -18,6 +18,13 @@ class CoreCallTimes {
   /// Null: nothing is reported.
   static void Function(String op, Duration queued, Duration ran)? onSlow;
 
+  /// The name a call is reported by: its op, and for a call that takes an op of its own (layers, notebook, shelves, pdfIndex)
+  /// that one too, as `layers(refresh)`. Only the call names; no other argument.
+  static String name(String op, Map<String, dynamic> args) {
+    final sub = args['op'];
+    return sub is String ? '$op($sub)' : op;
+  }
+
   /// The log line for one slow call.
   static String line(String op, Duration queued, Duration ran) =>
       'Core call $op: ${(queued + ran).inMilliseconds} ms (${queued.inMilliseconds} ms in the queue, ${ran.inMilliseconds} ms running)';

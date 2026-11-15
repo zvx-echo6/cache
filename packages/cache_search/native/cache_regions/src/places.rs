@@ -668,7 +668,7 @@ impl Inner {
                     let res = self.p_fetch_tile(p, &b.build, &t, None);
                     match res {
                         Ok(()) => self.p_landed(&b.build, &t, false),
-                        Err(TileFail::Bad(m)) => self.p_tile_failed(&b.build, &t.path, &m),
+                        Err(TileFail::Bad(m) | TileFail::Missing(m)) => self.p_tile_failed(&b.build, &t.path, &m),
                         Err(TileFail::Later(m)) => *lock(&later) = Some(m),
                     }
                     p.release(&b.build, &t.path);

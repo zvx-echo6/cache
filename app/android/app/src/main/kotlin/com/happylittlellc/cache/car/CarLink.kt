@@ -199,7 +199,8 @@ object CarLink {
                 audio?.prompt(call.argument<String>("text") ?: "")
                 result.success(null)
             }
-            "promptStop" -> {
+            "promptStop", "promptDone" -> {
+                // Stopped, or the phone's voice has said its prompts: the navigation focus is let go at once.
                 audio?.release()
                 result.success(null)
             }

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, MapPlace, SearchCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore, SyncCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -68,6 +68,7 @@ import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'net/fetch.dart' show fetchText;
+import 'net/signed_out.dart';
 import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
@@ -81,7 +82,7 @@ import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
 import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'screens/notebooks/notebooks_screen.dart' show NotebooksScreen;
-import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
+import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps, placeDirections;
 import 'regions/offroad_catalogue.dart';
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
@@ -158,9 +159,13 @@ final LaunchClock launchClock = LaunchClock(logInfo);
 void main() {
   launchClock.begin();
   WidgetsFlutterBinding.ensureInitialized();
+  // A core call the server answers 401 (the browser's session ended) shows the way back to the sign-in page.
+  HttpTransport.onUnauthorized = reportSignedOut;
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
   unawaited(openAppLog());
+  // The sync engine's start, step by step, in the same log.
+  SyncCore.setLog((line) => logInfo(line));
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
@@ -316,6 +321,16 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
+    // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point (the `town` field of its coordinates result).
+    townOf: (lat, lon) async {
+      final core = sources.core;
+      if (core == null) return null;
+      final r = await core.mapSearch('${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}', limit: 1, meaning: false);
+      for (final m in r.results) {
+        if (m.isCoordinates) return m.town;
+      }
+      return null;
+    },
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: plat.isWeb ? ToldStore.appFs(_appFs) : ToldStore.lazy(() async => File('${await appSupportPath()}/alerts_told.json')),
@@ -892,6 +907,7 @@ class _CacheAppState extends State<CacheApp> {
     dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    onActivity: (line) => sharing.addActivity(line),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -934,17 +950,10 @@ class _CacheAppState extends State<CacheApp> {
     setHereOnMap: (on) => unawaited(location.setEnabled(on)),
     map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
-    directions: (p, name) {
-      // A route being followed is not replaced from a place's screen: it says to finish or end the route first.
-      if (nav.guiding) return false;
-      nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
-      nav.requestMap();
-      return true;
-    },
-    // A place's small map and coordinates line: the place on the Maps tab (its card; the spot while a route is shown).
-    show: (p, name) => nav.showPlace(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {})),
-    // A link in a place's notes opens as the app's other web links do.
-    openLink: openInSystemBrowser,
+    directions: (p, name) => placeDirections(nav, p, name),
+    // Show on map: Maps focused on the place (its card), the way Directions gets there, without a route
+    showOnMap: (p, name) => nav.showPlace(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {})),
+    openUrl: hub.openUrl,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
@@ -1043,12 +1052,16 @@ class _CacheAppState extends State<CacheApp> {
       },
       // Automatic index work runs only while the app is open (the server builds the indexes for a browser).
       onHide: () {
+        logInfo('App: to the back');
         _foregroundUpdates.back();
         if (!plat.isWeb) indexing.setOpen(false);
         if (!plat.isWeb) _toBack();
       },
       // On the screen again (a desktop window shown without being clicked into does not "resume").
-      onShow: () => _foregroundUpdates.front(),
+      onShow: () {
+        logInfo('App: to the front');
+        _foregroundUpdates.front();
+      },
     );
     if (!plat.isWeb) indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
@@ -1363,12 +1376,13 @@ class _CacheAppState extends State<CacheApp> {
   ConversationStore? _store;
   late final AppLifecycleListener _lifecycle;
 
-  /// The weather update while Cache is left open in front, at the background schedule's interval: the same update a background
-  /// run makes (not forced, so each source's refresh time and quota hold), where no scheduled job runs for an app in front.
+  /// The weather update while Cache is left open in front: every five minutes it checks whether an update is due (the background
+  /// schedule's interval since the last good one, as when Cache opens) and makes it then, not forced, so each source's refresh time
+  /// and quota hold. A check that is not due does nothing. Where no scheduled job runs for an app in front.
   late final ForegroundUpdates _foregroundUpdates = ForegroundUpdates(
-    every: kBackgroundEvery,
+    every: kForegroundTick,
     on: () => weather.enabledSources.isNotEmpty,
-    update: () => weather.updateNow(),
+    update: () => weather.updateIfDue(kBackgroundEvery),
     wanted: foregroundUpdatesWanted(),
   );
   late final BackgroundModelRelease _modelRelease = BackgroundModelRelease(
@@ -1572,6 +1586,8 @@ class _CacheAppState extends State<CacheApp> {
                 // one shape whether the banner shows or not, so the app below keeps its state when it comes and goes
                 builder: (context, _) => Column(
                   children: [
+                    // a browser whose session ended: one way back to the sign-in page, whatever the page said
+                    const SignedOutBanner(),
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
                     Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),

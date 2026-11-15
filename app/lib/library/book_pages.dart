@@ -7,6 +7,7 @@ import '../pdf/open_pdf.dart' show openPdfReader;
 import '../browse/web/device_api.dart' show DeviceException;
 import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom, PdfGone, PdfServerSource;
 
+import '../screens/settings/sharing_page.dart' show SharingDevicePage;
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
@@ -17,7 +18,7 @@ import 'book_edit_pages.dart';
 import 'library_panes.dart';
 import 'same_book_pages.dart';
 import 'shelf_source.dart';
-import 'shelves_pages.dart' show shelfColor;
+import 'shelves_pages.dart' show shelfColor, showOnBookshelves;
 
 /// "CDS 350 · Beekeeping".
 String _shelfWords(LibraryDeps d, String id) {
@@ -392,7 +393,10 @@ class UnsortedPage extends StatelessWidget {
 
 /// One fact of the book page: its name small above, its value, and a line under it.
 class _Fact {
-  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey});
+  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey, this.onTap});
+
+  /// The value opens what it names (the shelf, the device): drawn as a link.
+  final VoidCallback? onTap;
 
   final String label;
   final String value;
@@ -400,6 +404,23 @@ class _Fact {
   final Tone tone;
   final Widget? action;
   final String? valueKey;
+}
+
+/// A fact's value: plain, or a link (accent, underlined, a button for a screen reader) when it opens something.
+Widget _factValue(BuildContext context, _Fact f) {
+  final k = context.t;
+  final linked = f.onTap != null;
+  final text = Text(
+    f.value,
+    key: f.valueKey == null ? null : ValueKey<String>(f.valueKey!),
+    style: TextStyle(
+      fontSize: 15,
+      color: linked ? k.accent : (f.tone == Tone.normal ? k.text : toneColor(k, f.tone)),
+      decoration: linked ? TextDecoration.underline : null,
+      decorationColor: k.accent,
+    ),
+  );
+  return linked ? Semantics(button: true, child: InkWell(onTap: f.onTap, child: text)) : text;
 }
 
 Widget _facts(BuildContext context, List<_Fact> facts) {
@@ -423,11 +444,7 @@ Widget _facts(BuildContext context, List<_Fact> facts) {
                     children: [
                       Text(facts[i].label, style: TextStyle(fontSize: 13, color: k.secondary)),
                       const SizedBox(height: 2),
-                      Text(
-                        facts[i].value,
-                        key: facts[i].valueKey == null ? null : ValueKey(facts[i].valueKey),
-                        style: TextStyle(fontSize: 15, color: facts[i].tone == Tone.normal ? k.text : toneColor(k, facts[i].tone)),
-                      ),
+                      _factValue(context, facts[i]),
                       if (facts[i].line != null) Text(facts[i].line!, style: TextStyle(fontSize: 13, color: k.secondary)),
                     ],
                   ),
@@ -457,7 +474,7 @@ class BookPage extends StatelessWidget {
       listenable: d.changes,
       builder: (context, _) {
         final k = context.t;
-        final b = d.shelves.book(bookId);
+        final b = d.shelves.bookOrHidden(bookId);
         if (b == null) {
           return Scaffold(
             appBar: libraryAppBar(context, title: 'Book'),
@@ -481,15 +498,18 @@ class BookPage extends StatelessWidget {
           rows: [
             if (d.shelves.copies != null) ...[
               SettingsRow(key: const ValueKey('book-rename'), title: 'Rename', onTap: () => openRename(context, d, b)),
-              SettingsRow(
-                key: const ValueKey('book-hide'),
-                title: 'Hide from Bookshelves',
-                status: const [Part('On all your devices. No file is deleted.')],
-                chevron: false,
-                onTap: () => hideBook(context, d, b),
-              ),
+              if (d.shelves.isHidden(b.id))
+                SettingsRow(key: const ValueKey('book-show'), title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+              else
+                SettingsRow(
+                  key: const ValueKey('book-hide'),
+                  title: 'Hide from Bookshelves',
+                  status: const [Part('On all your devices. No file is deleted.')],
+                  chevron: false,
+                  onTap: () => hideBook(context, d, b),
+                ),
             ],
-            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );
         final desktop = DesktopMetrics.of(context);
@@ -624,11 +644,7 @@ class BookPage extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    fact.value,
-                                    key: fact.valueKey == null ? null : ValueKey(fact.valueKey),
-                                    style: TextStyle(fontSize: 15, color: fact.tone == Tone.normal ? k.text : toneColor(k, fact.tone)),
-                                  ),
+                                  _factValue(context, fact),
                                   if (fact.line != null) Text(fact.line!, style: TextStyle(fontSize: 13, color: k.secondary)),
                                 ],
                               ),
@@ -650,17 +666,20 @@ class BookPage extends StatelessWidget {
                     if (d.shelves.copies != null) ...[
                       SettingsRow(key: const ValueKey('book-rename'), compact: true, title: 'Rename', onTap: () => openRename(context, d, b)),
                       Divider(height: 1, color: line),
-                      SettingsRow(
-                        key: const ValueKey('book-hide'),
-                        compact: true,
-                        title: 'Hide from Bookshelves',
-                        status: const [Part('On all your devices. No file is deleted.')],
-                        chevron: false,
-                        onTap: () => hideBook(context, d, b),
-                      ),
+                      if (d.shelves.isHidden(b.id))
+                        SettingsRow(key: const ValueKey('book-show'), compact: true, title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+                      else
+                        SettingsRow(
+                          key: const ValueKey('book-hide'),
+                          compact: true,
+                          title: 'Hide from Bookshelves',
+                          status: const [Part('On all your devices. No file is deleted.')],
+                          chevron: false,
+                          onTap: () => hideBook(context, d, b),
+                        ),
                       Divider(height: 1, color: line),
                     ],
-                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
                   ],
                 ),
               ),
@@ -683,17 +702,25 @@ class BookPage extends StatelessWidget {
         : here != null
             ? 'On this device · ${formatBytes(here)}'
             : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
+    // the linked device that name is (one, and only one, or the words stay plain)
+    final sharing = d.sharing;
+    final peers = from == null || sharing == null ? const <Map<String, dynamic>>[] : [for (final p in sharing.peers) if (p['name'] == from) p];
+    final VoidCallback? openPeer = b.onServer || here != null || peers.length != 1 || sharing == null
+        ? null
+        : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: sharing, peer: peers.single['id'] as String)));
+    final shelfNow = b.shelf == null ? null : d.shelves.shelf(b.shelf!);
     return [
       _Fact(
         'Subject',
         b.shelf == null ? 'Unsorted' : _shelfWords(d, b.shelf!),
         valueKey: 'book-subject',
+        onTap: shelfNow == null ? null : () => LibraryNav.of(context).open(context, shelfSpec(d, shelfNow)),
         line: b.shelf == null ? null : (b.shelvedBy == ShelvedBy.person ? 'Placed by you' : 'Filed by Cache'),
         action: placer == null
             ? null
             : RowButton(key: const ValueKey('book-move'), label: b.shelf == null ? 'Place it' : 'Move', onPressed: () => openPlace(context, d, b, replace: true)),
       ),
-      _Fact('PDF', pdf, valueKey: 'book-pdf'),
+      _Fact('PDF', pdf, valueKey: 'book-pdf', onTap: openPeer),
       _Fact(
         'Search',
         switch (search.state) {
@@ -949,22 +976,84 @@ Future<void> _removeHere(BuildContext context, LibraryDeps d, List<ShelfBook> bo
     ..showSnackBar(SnackBar(content: Text(text)));
 }
 
-/// Delete book: two clearly separate choices. "Remove from this device" takes the book, its PDF and its search entry off this
-/// device only, after checking right now that another device has it; "Delete from all your devices" deletes it everywhere and
-/// cannot be undone. A choice this device cannot do yet says so.
-Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) => showModalBottomSheet<void>(
-  context: context,
-  showDragHandle: true,
-  isScrollControlled: true,
-  builder: (ctx) => DeleteBookSheet(deps: d, book: b, onDeleted: () => LibraryNav.of(context).goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!))),
-);
+/// The words of the Delete book sheet (drafts until the owner has seen the renders; owner decisions 2026-11-14: one red button with
+/// the title, the size and "can't be undone"; the shelf place and the call number are kept, so the text does not promise to delete
+/// them).
+String deleteEverywhereText(ShelfBook b) =>
+    'Deletes this book, its PDF and its search entries on this device and on your linked devices that get ${b.libraryName ?? 'My books'} '
+    "from it. This can't be undone.";
+const String kDeletedEverywhere = 'Deleted. Your other devices remove it when they next connect.';
+// WORDING QUESTION: a book of a library the person did not make (a downloaded or shared one) cannot be deleted from here.
+const String kNotYoursToDelete = "This book isn't in a library you made, so you can't delete it here.";
+// WORDING QUESTION: the delete failed (a file could not be removed).
+const String kDeleteFailed = "Couldn't delete the book. Try again.";
+
+// WORDING (for cache-pm): the confirmation, owner's design 2026-11-15: the question, and under it, only when the book is synced
+// with another device, the line.
+const String kDeleteQuestion = 'Delete this book?';
+const String kDeleteSyncedLine = 'Deleting this will delete this from all synced devices.';
+// WORDING (for cache-pm): the snackbar after a delete that was not synced (the synced one is [kDeletedEverywhere]).
+const String kDeleted = 'Deleted.';
+
+/// Delete (owner's design, 2026-11-15): always asks "Delete this book?" with Cancel and Delete; a book synced with another device
+/// ([BookFiles.syncedWithOtherDevice]) also says "Deleting this will delete this from all synced devices.". A book of a library the
+/// person did not make (or where deleting is not available) keeps the sheet that says why. It is permanent in 1.1 (Recently
+/// deleted is 1.2).
+Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final nav = LibraryNav.of(context);
+  if (!(d.files.canDeleteEverywhere && d.files.canDeleteBook(b))) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => DeleteBookSheet(files: d.files, book: b),
+    );
+  }
+  final synced = d.files.syncedWithOtherDevice(b);
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('delete-confirm'),
+      title: const Text(kDeleteQuestion),
+      content: synced ? const Text(kDeleteSyncedLine, key: ValueKey('delete-synced-line')) : null,
+      actions: [
+        TextButton(key: const ValueKey('delete-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('delete-confirm-button'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (yes != true) return;
+  try {
+    await d.files.deleteEverywhere(b);
+  } catch (_) {
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(key: ValueKey('delete-failed'), content: Text(kDeleteFailed)));
+    return;
+  }
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(synced
+        ? const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere))
+        : const SnackBar(key: ValueKey('deleted'), content: Text(kDeleted)));
+  if (!context.mounted) return;
+  nav.goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
+}
 
 class DeleteBookSheet extends StatefulWidget {
-  const DeleteBookSheet({super.key, required this.deps, required this.book, this.onDeleted});
+  const DeleteBookSheet({super.key, required this.files, required this.book, this.onDeleted});
 
-  final LibraryDeps deps;
+  final BookFiles files;
   final ShelfBook book;
-  final VoidCallback? onDeleted;
+
+  /// After the sheet closed on a delete: true for "Delete from all your devices", false for "Remove from this device".
+  final void Function(bool everywhere)? onDeleted;
 
   @override
   State<DeleteBookSheet> createState() => _DeleteBookSheetState();
@@ -972,18 +1061,20 @@ class DeleteBookSheet extends StatefulWidget {
 
 class _DeleteBookSheetState extends State<DeleteBookSheet> {
   bool _asking = false;
+  bool _deleting = false;
   String? _refused;
+  String? _failed;
 
   Future<void> _remove() async {
     setState(() {
       _asking = true;
       _refused = null;
     });
-    final (outcome, _, _) = await widget.deps.files.removeFromDevice([widget.book]);
+    final (outcome, _, _) = await widget.files.removeFromDevice([widget.book]);
     if (!mounted) return;
     if (outcome == RemoveOutcome.removed) {
       Navigator.of(context).pop();
-      widget.onDeleted?.call();
+      widget.onDeleted?.call(false);
       return;
     }
     setState(() {
@@ -993,17 +1084,34 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
   }
 
   Future<void> _deleteEverywhere() async {
-    await widget.deps.files.deleteEverywhere(widget.book);
+    setState(() {
+      _deleting = true;
+      _failed = null;
+    });
+    try {
+      await widget.files.deleteEverywhere(widget.book);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _deleting = false;
+          _failed = kDeleteFailed;
+        });
+      }
+      return;
+    }
     if (!mounted) return;
     Navigator.of(context).pop();
-    widget.onDeleted?.call();
+    widget.onDeleted?.call(true);
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final f = widget.deps.files;
+    final f = widget.files;
     final b = widget.book;
+    final busy = _asking || _deleting;
+    final canDelete = f.canDeleteEverywhere && f.canDeleteBook(b);
+    final deleteNote = !f.canDeleteEverywhere ? 'Not available on this device yet.' : _failed;
     Widget choice({required String title, required String text, required Widget button, bool danger = false, String? note, Key? key}) => Container(
       key: key,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -1016,11 +1124,10 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           Text(text, style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
           const SizedBox(height: 10),
           button,
-          if (note != null) ...[const SizedBox(height: 6), Text(note, style: TextStyle(fontSize: 13, color: k.secondary))],
+          if (note != null) ...[const SizedBox(height: 6), Text(note, key: ValueKey('$key-note'), style: TextStyle(fontSize: 13, color: k.secondary))],
         ],
       ),
     );
-    const unavailable = 'Not available on this device yet.';
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1029,32 +1136,45 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           children: [
             Text('Delete book', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
             const SizedBox(height: 2),
-            Text(b.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
+            Text(b.title, key: const ValueKey('delete-title'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+            if (b.bytes case final n? when n > 0)
+              Text(formatBytes(n), key: const ValueKey('delete-size'), style: TextStyle(fontSize: 13, color: k.secondary)),
             const SizedBox(height: 12),
-            choice(
-              key: const ValueKey('delete-here'),
-              title: 'Remove from this device',
-              text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
-              button: OutlinedButton(
-                key: const ValueKey('delete-here-button'),
-                onPressed: !f.canRemove || _asking ? null : _remove,
-                child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+            if (f.canRemove) ...[
+              choice(
+                key: const ValueKey('delete-here'),
+                title: 'Remove from this device',
+                text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
+                button: OutlinedButton(
+                  key: const ValueKey('delete-here-button'),
+                  onPressed: busy ? null : _remove,
+                  child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+                ),
+                note: _refused,
               ),
-              note: !f.canRemove ? unavailable : _refused,
-            ),
-            const SizedBox(height: 10),
+              const SizedBox(height: 10),
+            ],
+            if (f.canDeleteEverywhere && !f.canDeleteBook(b))
+              // not theirs to delete: only why, no explanation of an action they cannot take and no greyed button
+              Container(
+                key: const ValueKey('delete-all'),
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(color: k.background, borderRadius: BorderRadius.circular(16)),
+                child: Text(kNotYoursToDelete, key: const ValueKey('delete-all-note'), style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
+              )
+            else
             choice(
               key: const ValueKey('delete-all'),
               danger: true,
               title: 'Delete from all your devices',
-              text: 'Deletes the book, its search index and its call number ${b.callNumber ?? ''} on every device you have linked. This cannot be undone.'.replaceAll('number  on', 'number on'),
+              text: deleteEverywhereText(b),
               button: FilledButton(
                 key: const ValueKey('delete-all-button'),
                 style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background),
-                onPressed: f.canDeleteEverywhere && !_asking ? _deleteEverywhere : null,
-                child: const Text('Delete from all your devices'),
+                onPressed: canDelete && !busy ? _deleteEverywhere : null,
+                child: Text(_deleting ? 'Deleting...' : 'Delete from all your devices'),
               ),
-              note: f.canDeleteEverywhere ? null : unavailable,
+              note: deleteNote,
             ),
           ],
         ),

@@ -5,6 +5,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/ui/place_map.dart';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/pin_image.dart';
+import 'package:cache/notebook/place_style.dart' show PinGlyph;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/screens/notebooks/map_spot_picker.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
@@ -12,6 +13,7 @@ import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -358,7 +360,49 @@ void main() {
       expect(cam.initial!.target.latitude, 44.1);
     });
 
-    testWidgets('the picker: "Where I am" goes to the place zoom; a tap keeps the zoom', (tester) async {
+    testWidgets('the picker has no "Current location" button, and "Use this spot" is on one line at 320 and 390', (tester) async {
+      for (final width in [320.0, 390.0]) {
+        tester.view.physicalSize = Size(width * 3, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+        // Tests draw text in the Ahem font, where every letter is a full em wide, about twice a real font's width: the text is scaled
+        // by half so its width is what a phone draws.
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(0.5)), child: child!),
+          home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+        ));
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.byKey(const ValueKey('picker-here')), findsNothing, reason: 'at $width');
+        expect(find.text('Current location'), findsNothing, reason: 'at $width');
+        final label = find.descendant(of: find.byKey(const ValueKey('picker-use')), matching: find.text('Use this spot'));
+        expect(label, findsOneWidget, reason: 'at $width');
+        final paragraph = tester.renderObject<RenderParagraph>(find.descendant(of: label, matching: find.byType(RichText)).first);
+        expect(paragraph.size.width, greaterThanOrEqualTo(paragraph.getMaxIntrinsicWidth(double.infinity) - 0.5), reason: 'not cut short at $width');
+        expect(paragraph.didExceedMaxLines, isFalse, reason: 'at $width');
+        expect(tester.getSize(find.byKey(const ValueKey('picker-use'))).width, closeTo(width - 32, 0.5), reason: 'full width at $width');
+        expect(tester.takeException(), isNull, reason: 'no overflow at $width');
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('the picker marks the middle with the reticle, not a pin', (tester) async {
+      bigView(tester);
+      final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+      ));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const ValueKey('picker-reticle')), findsOneWidget);
+      expect(find.byType(PinGlyph), findsNothing);
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the picker still moves to the phone position on opening; a tap keeps the zoom', (tester) async {
       bigView(tester);
       final cam = _Cam();
       final d = await deps(tester, cam, fixAfter: const Duration(seconds: 5));
@@ -366,12 +410,11 @@ void main() {
         theme: buildTheme(CacheThemeId.light),
         home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
       ));
-      // The opening position fix is slow; the person has the map open on the fallback and presses "Where I am".
+      // The opening position fix is slow; the map is open on the fallback until it arrives.
       await tester.pump(const Duration(seconds: 4));
       await tester.pump();
       expect(cam.initial!.zoom, kPlaceWideView.zoom);
-      await tester.tap(find.byKey(const ValueKey('picker-here')));
-      await tester.pump(const Duration(seconds: 6));
+      await tester.pump(const Duration(seconds: 2));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump();
       _expectClose(cam);
@@ -379,6 +422,54 @@ void main() {
       await tester.pump();
       expect(cam.moves.last.$2, isNull);
       expect(cam.end.zoom, kPlaceZoom);
+    });
+
+    testWidgets('the form: "Current location" sets the pin to the phone position', (tester) async {
+      bigView(tester);
+      final d = await deps(tester, _Cam(), fixAfter: Duration.zero);
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: PlaceForm(deps: d, book: book, at: const NbPlace(lat: 40.0, lon: -100.0))));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(const ValueKey('place-choose-on-map')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-current-location')), findsOneWidget);
+      expect(find.textContaining('40.00000, -100.00000'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('place-current-location')));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(find.textContaining('43.47000, -112.01000'), findsOneWidget);
+      final where = tester.widget<Text>(find.byKey(const ValueKey('place-where')));
+      expect(where.data, contains('43.47000, -112.01000'));
+    });
+
+    testWidgets('the form: "Current location" with no position says so', (tester) async {
+      bigView(tester);
+      final d = await deps(tester, _Cam(), fixAfter: Duration.zero, fix: false);
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: PlaceForm(deps: d, book: book, at: const NbPlace(lat: 40.0, lon: -100.0))));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text("Your position isn't known yet", skipOffstage: false), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('place-current-location')));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text("Your position isn't known yet", skipOffstage: false), findsOneWidget);
+      expect(find.textContaining('40.00000, -100.00000'), findsOneWidget, reason: 'the pin is unchanged');
+    });
+
+    testWidgets('the form: "Current location" and "Choose on map" fit one line at 320 and 390', (tester) async {
+      for (final width in [320.0, 390.0]) {
+        tester.view.physicalSize = Size(width * 3, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final d = await deps(tester, _Cam(), fixAfter: Duration.zero);
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(0.5)), child: child!),
+          home: PlaceForm(deps: d, book: book),
+        ));
+        await tester.pump(const Duration(milliseconds: 100));
+        final a = tester.getRect(find.byKey(const ValueKey('place-choose-on-map')));
+        final b = tester.getRect(find.byKey(const ValueKey('place-current-location')));
+        expect((a.top - b.top).abs(), lessThan(1), reason: 'same line at $width');
+        expect(b.right, lessThanOrEqualTo(width), reason: 'at $width');
+        await tester.pumpWidget(const SizedBox());
+      }
     });
 
     testWidgets('the picker opening on a fix that arrives in time: opens close in', (tester) async {

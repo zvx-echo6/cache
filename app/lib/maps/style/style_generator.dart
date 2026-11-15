@@ -229,6 +229,10 @@ Map<String, dynamic> buildMapStyle({
     'version': 8,
     'name': 'Cache ${palette.id.name}',
     'glyphs': glyphsUrl,
+    // No fades. The phone's arrow is a symbol, and the position source changes many times a second while guiding: on Android each
+    // change can make it a new symbol, which MapLibre fades in over its transition (300 ms by default; placement.cpp,
+    // symbolFadeChange), so the arrow was drawn faint most of the time. Labels then appear at once instead of fading in.
+    'transition': {'duration': 0, 'delay': 0},
     'sources': sources,
     'layers': all,
   };

@@ -179,6 +179,31 @@ class UserLayersState extends ChangeNotifier {
 
   bool focusPending = false;
 
+  /// The imported layer or repeater list [id], or null.
+  UserLayer? layerById(String id) => _all.where((l) => l.id == id).firstOrNull;
+
+  /// A point of an imported layer ([ord]: the point's number in the layer, as `layer:<layer>/<point>` gives it), with the layer
+  /// it is in; null when the layer or the point is not there any more.
+  Future<({UserLayer layer, String name, double lat, double lon})?> layerPoint(String layerId, int ord) async {
+    final l = layerById(layerId);
+    if (l == null || l.isRepeaters) return null;
+    try {
+      final g = await _call('get', l.id);
+      for (final f in (g['features'] as List? ?? const [])) {
+        final m = f as Map;
+        if ((m['id'] as num?)?.toInt() != ord) continue;
+        final geo = m['geometry'] as Map?;
+        final c = geo?['coordinates'];
+        if (geo?['type'] != 'Point' || c is! List || c.length < 2 || c[0] is! num || c[1] is! num) return null;
+        final name = '${(m['properties'] as Map?)?['name'] ?? ''}'.trim();
+        return (layer: l, name: name.isEmpty ? '${l.name} point $ord' : name, lat: (c[1] as num).toDouble(), lon: (c[0] as num).toDouble());
+      }
+    } catch (e) {
+      logError('User layers', error: e);
+    }
+    return null;
+  }
+
   /// The repeaters of list [listId], in its own order (null when it cannot be read).
   Future<RepeaterNotebookSource?> repeaterSource(String listId) async {
     final l = repeaterLists.where((x) => x.id == listId).firstOrNull;

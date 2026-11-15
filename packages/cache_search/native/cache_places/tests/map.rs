@@ -4,6 +4,7 @@
 use cache_places::fixture::{fake_embed, write_fixture_pack, write_fixture_pack_with_vectors, FAKE_MODEL};
 use cache_places::map::{parse_request, SearchOpts};
 use cache_places::{PlacesCfg, PlacesCore};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -285,4 +286,35 @@ fn ids_come_back_as_ends_and_requests_are_checked() {
     assert!(parse_request(&json!({"query": "x", "near": {"lat": 99.0, "lon": 0.0}})).is_err());
     let (q, o) = parse_request(&json!({"query": "x", "near": {"lat": 1.0, "lon": 2.0}, "limit": 4, "meaning": false})).unwrap();
     assert_eq!((q.as_str(), o.near, o.limit, o.meaning), ("x", Some((1.0, 2.0)), 4, false));
+}
+
+/// A made-up locality in the test pack, far from the fixture's real towns, to read the `town` field against.
+fn add_pine_hollow(pack: &std::path::Path) {
+    let c = Connection::open(pack).unwrap();
+    c.execute(
+        "INSERT INTO localities(id, name, kind, lat, lon, population, state, country, source_id) VALUES (900, 'Pine Hollow', 'town', 40.0, -100.0, 500, 'ID', 'US', 'osm:n9900')",
+        [],
+    )
+    .unwrap();
+    c.execute("INSERT INTO localities_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (900, ?1, ?1, ?2, ?2)", params![40.0, -100.0]).unwrap();
+    c.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (900, 'Pine Hollow', '')", []).unwrap();
+}
+
+#[test]
+fn a_coordinates_result_names_its_town_as_data_and_keeps_the_address_text() {
+    let t = Tmp::new("coord-town-field");
+    write_fixture_pack(&t.pack());
+    add_pine_hollow(&t.pack());
+    let c = core(&t);
+    // 0.02 degrees from Pine Hollow
+    let v = search(&c, "40.02,-100.0", None);
+    let r = &v["results"][0];
+    assert_eq!(r["type"], "coordinates");
+    assert_eq!(r["town"], "Pine Hollow, ID");
+    assert!(r["address"].as_str().unwrap().ends_with(" of Pine Hollow, ID"), "the sentence is as it was: {}", r["address"]);
+    // beyond the reach of every locality (the lookup stops at 250 km): null, and the address is empty as before
+    let v = search(&c, "20.0,-150.0", None);
+    let r = &v["results"][0];
+    assert!(r["town"].is_null());
+    assert_eq!(r["address"], "");
 }

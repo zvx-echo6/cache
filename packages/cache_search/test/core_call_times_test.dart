@@ -18,6 +18,17 @@ class _SlowFirst extends FakeNative {
 
 CsNative _slowFirst() => _SlowFirst();
 
+/// A layers call that holds the worker for a while.
+class _SlowLayers extends FakeNative {
+  @override
+  String? layers(int handle, String op, String? arg) {
+    sleep(const Duration(milliseconds: 400));
+    return '{"layers":[]}';
+  }
+}
+
+CsNative _slowLayers() => _SlowLayers();
+
 void main() {
   tearDown(() {
     CoreCallTimes.onSlow = null;
@@ -52,6 +63,20 @@ void main() {
     expect(seen, isEmpty);
     CoreCallTimes.answered('savedPlaces', const Duration(milliseconds: 18000), const Duration(milliseconds: 2));
     expect(seen, ['savedPlaces']);
+  });
+
+  test('a call with an op of its own is reported by both names, and a slow one shows which it was', () async {
+    expect(CoreCallTimes.name('layers', {'op': 'refresh', 'arg': null}), 'layers(refresh)');
+    expect(CoreCallTimes.name('savedPlaces', const {}), 'savedPlaces');
+    expect(CoreCallTimes.name('liveGet', {'request': {'op': 'x'}}), 'liveGet');
+    final seen = <String>[];
+    CoreCallTimes.slowAfter = const Duration(milliseconds: 200);
+    CoreCallTimes.onSlow = (op, queued, ran) => seen.add(op);
+    final core = await SearchCore.open(const [], native: _slowLayers);
+    seen.clear();
+    await core.layers('list');
+    expect(seen, ['layers(list)']);
+    await core.close();
   });
 
   test('the line has the call name and its times only', () {

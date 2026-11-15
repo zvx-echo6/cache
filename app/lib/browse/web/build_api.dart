@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'device_api.dart' show DeviceException, kDeviceCallTimeout;
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// A library built from PDFs on this device (`GET /api/build/libraries`).
 class BuildLibrary {
@@ -520,7 +521,10 @@ class HttpBuildApi implements BuildFilingApi, BuildCompressionApi, BuildLibraryD
     } catch (_) {
       throw const DeviceException('unreachable', 'This device could not be reached.');
     }
-    if (r.statusCode == 401) throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     Object? j;
     try {
       j = jsonDecode(utf8.decode(r.bodyBytes));
