@@ -41,17 +41,19 @@ void main() {
   const sizes = [30.0, 14.4, 18.0, 24.0, 28.8, 31.2];
 
   test('the icon\'s box is centred on the head and its corners sit inside the head\'s fill, for every icon', () {
+    for (final tactical in [false, true]) {
     for (final size in sizes) {
       const at = Offset(100, 200);
-      final head = teardropHead(at, size);
+      final head = teardropHead(at, size, tactical: tactical);
       for (final i in icons) {
         final tp = pinGlyph(i.icon, teardropGlyphSize(size));
-        final box = teardropIconBox(at, size, tp.size);
+        final box = teardropIconBox(at, size, tp.size, tactical: tactical);
         expect((box.center - head.centre).distance, lessThan(1e-9), reason: '${i.id} at $size');
         for (final corner in [box.topLeft, box.topRight, box.bottomLeft, box.bottomRight]) {
           expect((corner - head.centre).distance, lessThan(head.radius * 0.9), reason: '${i.id} at $size: its box reaches the head\'s edge');
         }
       }
+    }
     }
   });
 
@@ -63,7 +65,7 @@ void main() {
     for (final i in icons) {
       final rec = ui.PictureRecorder();
       final canvas = Canvas(rec)..scale(ratio);
-      final at = Offset(side / ratio / 2, side / ratio / 2 + size * 0.95); // so the head's centre is the square's centre
+      final at = Offset(side / ratio / 2, side / ratio / 2 + size * 1.3 + pinOutline(size)); // so the head's centre is the square's centre
       final tp = pinGlyph(i.icon, teardropGlyphSize(size));
       tp.paint(canvas, teardropIconBox(at, size, tp.size).topLeft);
       final (px, w, h) = await _rgba(await rec.endRecording().toImage(side, side));
@@ -76,7 +78,7 @@ void main() {
         }
       }
       expect(ink, greaterThan(0), reason: '${i.id} drew nothing (font not loaded?)');
-      expect(far / ratio, lessThan(size * 0.5 - size * 0.06), reason: '${i.id} reaches the edge of the head');
+      expect(far / ratio, lessThan(size * 0.46 - size * 0.06), reason: '${i.id} reaches the edge of the head');
     }
   });
 
@@ -107,13 +109,16 @@ void main() {
       const size = 30.0;
       final box = pinImageSize(PinStyle.teardrop, size);
       final at = pinImageAt(PinStyle.teardrop, size, tactical: tactical);
-      final head = teardropHead(at, size);
+      final head = teardropHead(at, size, tactical: tactical);
       final reach = head.radius + pinOutline(size, tactical: tactical);
       expect(head.centre.dy - reach, greaterThan(size * 0.05), reason: 'top of the head');
       expect(head.centre.dx - reach, greaterThan(0));
       expect(head.centre.dx + reach, lessThan(box.width));
       expect(box.height - at.dy, closeTo(size * (tactical ? 0.2 : 0.17), 1e-9), reason: 'the point is where the map anchors it (the bottom)');
       expect(box.width, closeTo(size * 1.5, 1e-9), reason: 'as wide as before');
+      // The needle: the fill's apex is an outline above the point, the straight sides are tangent to the round head.
+      expect(at.dy - head.centre.dy - pinOutline(size, tactical: tactical), closeTo(size * 1.3, 1e-9), reason: 'the head sits a needle\'s length above the apex');
+      expect(head.radius, greaterThanOrEqualTo(size * 0.46), reason: 'the head is as big as the icon needs');
     }
   });
 }

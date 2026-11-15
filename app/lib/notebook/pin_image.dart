@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -50,9 +51,14 @@ void _paintGlyph(Canvas canvas, Offset centre, TextPainter tp) => tp.paint(canva
 
 double _ringGrow(double size, bool tactical) => size * (tactical ? 0.08 : 0.05);
 
-/// The teardrop's head for a pin of [size] whose point is [at]: the centre of its round head and the radius of the coloured fill
-/// (the white ring and the dark edge go [pinOutline] beyond it). The icon is drawn centred on this centre.
-({Offset centre, double radius}) teardropHead(Offset at, double size) => (centre: at + Offset(0, -size * 0.95), radius: size * 0.5);
+/// The needle pin's head for a pin of [size] whose point is [at]: the centre of its round head and the radius of the coloured fill
+/// (the white ring and the dark edge go [pinOutline] beyond it). The fill's apex is [pinOutline] above [at], so the edge's rounded
+/// tip ends at [at]; the head sits [_needleLength] of a pin above the apex. The icon is drawn centred on this centre.
+({Offset centre, double radius}) teardropHead(Offset at, double size, {bool tactical = false}) =>
+    (centre: at + Offset(0, -(pinOutline(size, tactical: tactical) + size * _needleLength)), radius: size * 0.46);
+
+/// From the apex to the head's centre, in pins: a round head on straight tangent sides running to a long point.
+const double _needleLength = 1.3;
 
 /// How far the ring and the edge of a teardrop or a badge reach beyond its coloured fill.
 double pinOutline(double size, {bool tactical = false}) => _ringGrow(size, tactical) + size * 0.05;
@@ -62,7 +68,8 @@ double teardropGlyphSize(double size) => size * 0.52;
 
 /// Where the icon of a teardrop of [size] (point [at]) is drawn: its box of [glyph] (the laid-out icon's size), centred on the
 /// head's centre ([teardropHead]), not on the image's.
-Rect teardropIconBox(Offset at, double size, Size glyph) => Rect.fromCenter(center: teardropHead(at, size).centre, width: glyph.width, height: glyph.height);
+Rect teardropIconBox(Offset at, double size, Size glyph, {bool tactical = false}) =>
+    Rect.fromCenter(center: teardropHead(at, size, tactical: tactical).centre, width: glyph.width, height: glyph.height);
 
 /// The laid-out icon as the pins draw it (Material Symbols filled, a little heavier), at [fontSize]: for the tests that measure it.
 TextPainter pinGlyph(IconData icon, double fontSize, {Color color = const Color(0xFFFFFFFF)}) => _glyph(icon, fontSize, color: color);
@@ -85,23 +92,28 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       }
       _paintGlyph(canvas, at, _glyph(icon, fs, color: tint));
     case PinStyle.teardrop:
-      final head = teardropHead(at, size);
+      final head = teardropHead(at, size, tactical: tactical);
       final r = head.radius;
       final c = head.centre;
-      Path drop(double grow) {
-        final rr = r + grow;
-        return Path()
-          ..moveTo(at.dx, at.dy + grow * 1.2)
-          ..cubicTo(at.dx - rr * 0.35, at.dy - size * 0.35, c.dx - rr, c.dy + rr * 0.5, c.dx - rr, c.dy)
-          ..arcToPoint(Offset(c.dx + rr, c.dy), radius: Radius.circular(rr), clockwise: true)
-          ..cubicTo(c.dx + rr, c.dy + rr * 0.5, at.dx + rr * 0.35, at.dy - size * 0.35, at.dx, at.dy + grow * 1.2)
-          ..close();
-      }
-      canvas.drawPath(drop(ringGrow + size * 0.05), Paint()..color = edge);
-      canvas.drawPath(drop(ringGrow), Paint()..color = ring);
-      canvas.drawPath(drop(0), Paint()..color = fill);
+      final apex = Offset(at.dx, at.dy - pinOutline(size, tactical: tactical));
+      final th = math.acos(r / (apex.dy - c.dy));
+      final tl = c + Offset(-r * math.sin(th), r * math.cos(th));
+      final tr = c + Offset(r * math.sin(th), r * math.cos(th));
+      final needle = Path()
+        ..moveTo(apex.dx, apex.dy)
+        ..lineTo(tl.dx, tl.dy)
+        ..arcToPoint(tr, radius: Radius.circular(r), largeArc: true, clockwise: true)
+        ..close();
+      Paint line(Color col, double grow) => Paint()
+        ..color = col
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = grow * 2
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
+      canvas.drawPath(needle, line(ring, ringGrow));
+      canvas.drawPath(needle, Paint()..color = fill);
       final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
-      tp.paint(canvas, teardropIconBox(at, size, tp.size).topLeft);
+      tp.paint(canvas, teardropIconBox(at, size, tp.size, tactical: tactical).topLeft);
     case PinStyle.badge:
       final rect = Rect.fromCenter(center: at, width: size, height: size);
       RRect rr(double grow) => RRect.fromRectAndRadius(rect.inflate(grow), Radius.circular(size * 0.26 + grow));
@@ -134,8 +146,8 @@ double pinImageRatio(double devicePixelRatio, {bool web = kIsWeb}) => web ? kPin
 double pinIconSize({bool web = kIsWeb}) => web ? 1 / kPinImageRatio : 1;
 
 /// The size in points of the image of a pin of [size]: a square half as wide again for the icon and the badge; for the teardrop
-/// as wide, and tall enough for the whole head above its point (in a square the image's top edge cut the top off the head).
-Size pinImageSize(PinStyle style, double size) => style == PinStyle.teardrop ? Size(size * 1.5, size * 1.85) : Size.square(size * 1.5);
+/// (the needle pin) as wide, and tall enough for the whole long pin above its point.
+Size pinImageSize(PinStyle style, double size) => style == PinStyle.teardrop ? Size(size * 1.5, size * 2.3) : Size.square(size * 1.5);
 
 /// Where the pin of [size] is placed in its image ([paintMapPin]'s `at`): the teardrop's point near the bottom middle (room for
 /// its edge below), the others in the middle.
