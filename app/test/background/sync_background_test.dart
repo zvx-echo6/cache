@@ -249,12 +249,14 @@ void main() {
   });
 
   group('the job', () {
-    Future<String> run(SyncCoreLike core, {SyncOpener? opener, Duration budget = const Duration(minutes: 4), BatteryReader? battery, ConnectionKind kind = ConnectionKind.wifi, bool mobile = false, FakeTime? tm}) {
+    Future<String> run(SyncCoreLike core, {SyncOpener? opener, Duration budget = const Duration(minutes: 4), BatteryReader? battery, ConnectionKind kind = ConnectionKind.wifi, bool mobile = false, FakeTime? tm, Duration? openLimit, void Function()? drainLog}) {
       tm ??= FakeTime();
       return syncBackgroundJob(
         support: support.path,
         lock: lock,
         budget: budget,
+        openLimit: openLimit ?? const Duration(seconds: 60),
+        drainLog: drainLog ?? () {},
         opener: opener ?? (_) async => core,
         battery: battery ?? () async => const BatteryReading(percent: 70, charging: false, thermal: Thermal.nominal),
         connection: () async => kind,
@@ -282,6 +284,26 @@ void main() {
       expect(core.closed, isTrue);
       expect(lock.runs(kSyncWork), isFalse);
       expect(lock.generation, 0);
+    });
+
+    test('an engine that never opens ends the round at the open limit with a log line, lets go of the lock, and closes it if it opens late', () async {
+      appLeaves();
+      final hung = Completer<SyncCoreLike>();
+      final late = RoundCore();
+      final out = await run(RoundCore(), opener: (_) => hung.future, openLimit: const Duration(milliseconds: 150));
+      expect(out, 'skipped: the engine did not open in time');
+      expect(lock.runs(kSyncWork), isFalse, reason: 'the lock is let go, so the next run (or the app) can start');
+      hung.complete(late);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(late.closed, isTrue, reason: 'an engine opened after the round gave up is closed at once');
+    });
+
+    test('the engine\'s step lines are taken every second while the open is still running', () async {
+      appLeaves();
+      var drains = 0;
+      final hung = Completer<SyncCoreLike>();
+      await run(RoundCore(), opener: (_) => hung.future, openLimit: const Duration(milliseconds: 2300), drainLog: () => drains++);
+      expect(drains, greaterThanOrEqualTo(3), reason: 'two timer drains while it hung, one at the end');
     });
 
     test('opens nothing when the app is open, its own engine runs, Add PDF runs, or another run holds it', () async {
