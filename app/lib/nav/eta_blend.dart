@@ -6,7 +6,8 @@ import 'dart:math' as math;
 /// or faster than the router's speeds. This blends the measured pace into it, by these rules:
 ///
 /// - Nothing changes until the drive has gone on for [startAfter] and [startAfterM] (the plan's time is shown as it is).
-/// - The pace is the plan's time for the stretch driven in the last [window] against the time it took (a ratio, held between
+/// - The pace is the plan's time for the stretch driven in the last [window] against the time it took moving (stopped time is not
+///   part of it) (a ratio, held between
 ///   [minRatio] and [maxRatio]), and it is blended in slowly ([settle]: an exponential blend at each fix), so the time left
 ///   follows a new pace over minutes, not at one fix.
 /// - Stopped (under [movingMps] along the route since the last fix: a red light, a queue), the time left stays as it is; the
@@ -41,7 +42,10 @@ class EtaBlend {
   double _left = 0;
   double _ratio = 1;
   bool _active = false;
-  final List<(DateTime, double)> _samples = [];
+  double _lastPlan = 0;
+  // Each fix that moved, in the last [window]: when, the seconds it took, the plan's time it covered. A stop adds nothing, so it is
+  // never counted as a slow pace (it would otherwise carry its lost time into the time left for the whole window).
+  final List<(DateTime, double, double)> _samples = [];
 
   /// The blended pace (1 is the plan's pace, 1.4 a drive at 70 % of it); 1 until the blend has started.
   double get ratio => _ratio;
@@ -67,15 +71,14 @@ class EtaBlend {
       _t0 = at;
       _along0 = distanceAlongM;
       _remember(at, distanceAlongM, plan);
-      _samples.add((at, plan));
       return planLeftS;
     }
     final dt = at.difference(last).inMilliseconds / 1000;
     if (dt <= 0) return _left.round();
     final moving = (distanceAlongM - _lastAlong) / dt >= movingMps;
-    _samples.add((at, plan));
+    if (moving) _samples.add((at, dt, _lastPlan - plan));
     final from = at.subtract(window);
-    while (_samples.length > 2 && !_samples[1].$1.isAfter(from)) {
+    while (_samples.isNotEmpty && !_samples.first.$1.isAfter(from)) {
       _samples.removeAt(0);
     }
     if (!_active) {
@@ -87,10 +90,13 @@ class EtaBlend {
       }
     }
     if (moving) {
-      final (oldAt, oldPlan) = _samples.first;
-      final planDriven = oldPlan - plan;
+      var secs = 0.0, planDriven = 0.0;
+      for (final (_, s, p) in _samples) {
+        secs += s;
+        planDriven += p;
+      }
       if (planDriven > 0) {
-        final measured = (at.difference(oldAt).inMilliseconds / 1000 / planDriven).clamp(minRatio, maxRatio).toDouble();
+        final measured = (secs / planDriven).clamp(minRatio, maxRatio).toDouble();
         _ratio += (measured - _ratio) * (1 - math.exp(-dt / (settle.inMilliseconds / 1000)));
       }
       _left = (plan * _ratio).clamp(_left - dt, _left + dt).toDouble();
@@ -98,12 +104,14 @@ class EtaBlend {
     if (_left < 0) _left = 0;
     _lastAt = at;
     _lastAlong = distanceAlongM;
+    _lastPlan = plan;
     return _left.round();
   }
 
   void _remember(DateTime at, double along, double plan) {
     _lastAt = at;
     _lastAlong = along;
+    _lastPlan = plan;
     _left = plan;
   }
 }

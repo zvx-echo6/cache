@@ -125,4 +125,20 @@ void main() {
       expect(f.leftS, f.planS, reason: 'the new plan at ${f.t} s');
     }
   });
+
+  test('after a long stop, near arrival: the time left is the distance left at the drive\'s pace, no lateness carried', () {
+    // Planned at 20 m/s, driven at 14 m/s, 24.6 km: 8 minutes, 3 minutes stopped in a queue, then on to 1.5 mi (2414 m) from the end.
+    const total = 24600.0;
+    final d = drive([(480, 0.7), (180, 0.0), (1650, 0.7)], totalM: total);
+    final mid = d[480];
+    expect(shownMinutes(mid.leftS), inInclusiveRange(20, 22), reason: 'mid-route, 8 minutes in');
+    final stopped = d.sublist(480, 661);
+    for (final f in stopped) {
+      expect(f.leftS, greaterThan(1000), reason: 'stopped at ${f.t} s: the time left neither shrinks to zero nor explodes');
+      expect(f.leftS, lessThanOrEqualTo(mid.leftS + 1), reason: 'stopped at ${f.t} s');
+    }
+    final near = d.firstWhere((f) => total - f.along <= 2414);
+    final truth = (total - near.along) / 14;
+    expect(near.leftS, inInclusiveRange(150, 240), reason: 'near arrival: ${near.leftS} s left, truth ${truth.round()} s');
+  });
 }
