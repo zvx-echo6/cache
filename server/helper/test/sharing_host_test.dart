@@ -311,7 +311,8 @@ void main() {
     // only the host's own start-up share_add calls happened, none with the browser's path
     expect(c.argsOf('share_add').every((a) => a['path'] != '/etc'), isTrue);
     expect(await h.invoke('sharing.call', {'method': 'link_code', 'args': {}}), containsPair('code', 'CACHE1-abc'));
-    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items']) {
+    // set_keep_copies: "Don't replace my copies from this device" on a linked device's page, the device's own say like set_link
+    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'set_keep_copies', 'sync_now', 'share_items']) {
       await h.invoke('sharing.call', {'method': m, 'args': {'x': 1}});
       expect(c.argsOf(m).last, {'x': 1}, reason: m);
     }
