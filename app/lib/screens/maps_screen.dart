@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, MapRoute;
@@ -26,6 +27,7 @@ import '../maps/ui/map_assets.dart';
 import '../maps/ui/vehicle_arrow.dart';
 import '../platform.dart' as plat;
 import '../maps/ui/map_widgets.dart';
+import '../platform/app_log.dart' show LogLevel, appLog;
 import '../platform/phone_window.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
@@ -1555,18 +1557,43 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   /// pixels, iOS in points): lines are a few points wide.
   static const double _tapReach = 12;
 
-  Future<List<dynamic>> _query(MapLibreMapController c, math.Point<double> point, List<String> layers) async {
+  /// What the map's query gives for [layers] around [point]: the features in the box ([_tapReach] each way, in the point's own units);
+  /// when the box finds none (or the platform has no box query), the point's. [note] gets what each query returned, for the log.
+  Future<List<dynamic>> _query(MapLibreMapController c, math.Point<double> point, List<String> layers, [StringBuffer? note]) async {
     if (layers.isEmpty) return const [];
     final r = _tapReach * (plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
+    var found = const <dynamic>[];
     try {
-      return await c.queryRenderedFeaturesInRect(Rect.fromLTRB(point.x - r, point.y - r, point.x + r, point.y + r), layers, null);
-    } catch (_) {
-      // A platform without the box query: the point alone.
-      try {
-        return await c.queryRenderedFeatures(point, layers, null);
-      } catch (_) {
-        return const [];
+      found = await c.queryRenderedFeaturesInRect(Rect.fromLTRB(point.x - r, point.y - r, point.x + r, point.y + r), layers, null);
+      note?.write(' rect=${found.length}');
+    } catch (e) {
+      note?.write(' rect=error(${e.runtimeType})');
+    }
+    if (found.isNotEmpty) return found;
+    try {
+      found = await c.queryRenderedFeatures(point, layers, null);
+      note?.write(' point=${found.length}');
+    } catch (e) {
+      note?.write(' point=error(${e.runtimeType})');
+    }
+    return found;
+  }
+
+  /// The style's source types and the line layers drawn from each, for the tap's log line: whether an overlay's layers are in the
+  /// style at the time of the tap, and from what kind of source.
+  String _styleNote(String? style) {
+    if (style == null) return 'style=none';
+    try {
+      final j = jsonDecode(style) as Map;
+      final sources = (j['sources'] as Map?) ?? const {};
+      final layers = (j['layers'] as List?) ?? const [];
+      final per = <String, int>{};
+      for (final l in layers) {
+        if (l is Map && l['type'] == 'line' && l['source'] is String) per['${l['source']}'] = (per['${l['source']}'] ?? 0) + 1;
       }
+      return 'layers=${layers.length} sources=[${[for (final e in sources.entries) '${e.key}:${(e.value as Map)['type']}:${per[e.key] ?? 0}line'].join(' ')}]';
+    } catch (_) {
+      return 'style=unreadable';
     }
   }
 
@@ -1578,9 +1605,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (c == null) return false;
     final seq = ++_tapSeq;
     final hits = <TapFeature>[];
+    // One line in the app log per tap: what was asked and what came back (Settings > Log, Standard).
+    final note = StringBuffer();
+    final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+    note.write('tap point=(${point.x.toStringAsFixed(1)},${point.y.toStringAsFixed(1)}) at=(${at.latitude.toStringAsFixed(5)},${at.longitude.toStringAsFixed(5)}) ratio=$ratio reach=${(_tapReach * ratio).toStringAsFixed(1)} zoom=${_zoom.toStringAsFixed(1)} ${_styleNote(_styleJson)}');
+    void logTap(String chose) => appLog.add(LogLevel.standard, 'INFO', 'map $note -> $chose');
     TapFeature? read(Object? raw, TapSource source, String kind, {String? notebookId}) =>
         tapFeatureFrom(raw, source: source, kind: kind, tapLat: at.latitude, tapLon: at.longitude, notebookId: notebookId);
-    for (final raw in await _query(c, point, _basemapLabels())) {
+    note.write(' | labels(${_basemapLabels().length}):');
+    for (final raw in await _query(c, point, _basemapLabels(), note)) {
       final f = read(raw, TapSource.basemap, '');
       if (f != null) hits.add(f);
     }
@@ -1588,7 +1621,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (hits.isEmpty) {
       final u = widget.userLayers;
       if (u != null) {
-        for (final raw in await _query(c, point, const [kUserLines, kUserAreas])) {
+        note.write(' | user:');
+        for (final raw in await _query(c, point, const [kUserLines, kUserAreas], note)) {
           final props = raw is Map ? raw['properties'] : null;
           final layer = props is Map && props['layer'] is String ? u.layerById(props['layer'] as String) : null;
           final f = read(raw, TapSource.imported, layer?.name ?? '', notebookId: layer?.notebookId);
@@ -1599,13 +1633,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         if (use.def.kind != LayerKind.vector) continue;
         final style = _styleJson;
         final drawn = style == null ? const <String>[] : overlayHitLayers(style, source: sourceIdOf(use.def));
-        for (final raw in await _query(c, point, drawn.isEmpty ? overlayLayerIds(use.def) : drawn)) {
+        final asked = drawn.isEmpty ? overlayLayerIds(use.def) : drawn;
+        note.write(' | ${use.def.id}(${drawn.isEmpty ? 'ids-not-in-style' : 'from-style'} ${asked.join(',')}):');
+        for (final raw in await _query(c, point, asked, note)) {
           final f = read(raw, TapSource.overlay, use.def.title);
           if (f != null) hits.add(f);
         }
       }
     }
     final f = pickTapFeature(hits);
+    logTap(f == null ? 'nothing (${hits.length} read)' : '${f.source.name}/${f.tier.name} named=${f.named} of ${hits.length} read');
     if (f == null || seq != _tapSeq || !mounted) return false;
     HapticFeedback.selectionClick();
     var candidates = const <MapPlace>[];

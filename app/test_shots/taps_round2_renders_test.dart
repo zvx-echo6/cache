@@ -1,7 +1,7 @@
 // Map taps, round 2, for the owner to review at 390 wide, Light:
 // - the marker of a notebook place with an icon (an antenna), at the size the map draws it (30 points, 3 pixels each): before, the
 //   plain red dot with its halo that the chosen place got; after, its icon in the needle pin (what a notebook pin shows);
-// - the elevation chart of a nearly flat route (3,755 to 3,766 ft): the preview box and the guidance panel.
+// - the elevation chart of a nearly flat route (3,753 to 3,778 ft): the preview box and the guidance panel.
 // Only code that is on rel-1.1 is used, so the file compiles there for the "before" pictures of the chart.
 // flutter test test_shots/taps_round2_renders_test.dart --update-goldens  (pictures in test_shots/taps_round2/)
 
@@ -53,7 +53,7 @@ ElevationProfile _flat() {
   final d = <double>[], e = <double>[];
   for (var x = 0.0; x <= total; x += kProfileStepM) {
     d.add(x);
-    e.add((3755 + 11 * x / total) * _ft);
+    e.add((3753 + 25 * x / total) * _ft);
   }
   return ElevationProfile.fromSamples(d, e, totalM: total);
 }

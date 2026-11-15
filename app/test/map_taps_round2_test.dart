@@ -94,25 +94,28 @@ void main() {
   group('the elevation chart\'s height labels', () {
     const floor = kChartMinSpanM * 3.28084;
 
-    test('a flat route (3,755 to 3,766 ft): the full chart keeps even nice steps that bracket the route', () {
-      final (yMin, yMax) = chartWindow(3755, 3766, floor: floor);
-      final lines = chartGridLines(3755, 3766, floor: floor, plotHeight: 98, full: true);
-      expect(lines, [3600, 3800]);
-      expect(lines.every((g) => g >= yMin && g <= yMax), isTrue);
-      expect(lines.first, lessThan(3755));
-      expect(lines.last, greaterThan(3766));
-    });
-
-    test('a flat route: the preview, which would show one label, adds one at the route\'s height, apart from the others', () {
-      final (yMin, yMax) = chartWindow(3755, 3766, floor: floor);
-      final lines = chartGridLines(3755, 3766, floor: floor, plotHeight: 64, full: false);
-      expect(lines.length, greaterThanOrEqualTo(2), reason: '$lines');
-      expect(lines.any((g) => g >= 3750 && g <= 3770), isTrue, reason: '$lines');
-      expect(lines.every((g) => g >= yMin && g <= yMax && g % 10 == 0), isTrue, reason: '$lines');
-      for (var i = 1; i < lines.length; i++) {
-        expect((lines[i] - lines[i - 1]) / (yMax - yMin) * 64, greaterThanOrEqualTo(kChartLabelGap - 1e-6), reason: '$lines');
+    for (final (lo, hi) in [(3753.0, 3778.0), (3756.0, 3765.0)]) {
+      for (final full in [true, false]) {
+        test('a flat route ($lo to $hi ft), ${full ? 'full chart' : 'preview'}: the window is centred on it, even nice steps bracket it', () {
+          final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
+          expect((yMin + yMax) / 2, closeTo((lo + hi) / 2, 0.01), reason: 'not anchored below the data');
+          expect(yMax - yMin, closeTo(floor * 1.46, 0.01));
+          final ph = full ? 98.0 : 64.0;
+          final lines = chartGridLines(lo, hi, floor: floor, plotHeight: ph, full: full);
+          expect(lines.length, greaterThanOrEqualTo(2), reason: '$lines');
+          expect(lines.every((g) => g >= yMin && g <= yMax), isTrue, reason: '$lines in $yMin..$yMax');
+          expect(lines.any((g) => g < lo), isTrue, reason: '$lines');
+          expect(lines.any((g) => g > hi), isTrue, reason: '$lines');
+          final step = lines[1] - lines[0];
+          expect(lines.every((g) => g % 100 == 0), isTrue, reason: 'nice numbers: $lines');
+          for (var i = 1; i < lines.length; i++) {
+            expect(lines[i] - lines[i - 1], closeTo(step, 1e-6), reason: 'even steps: $lines');
+            expect(step / (yMax - yMin) * ph, greaterThanOrEqualTo(kChartLabelGap - 1e-6));
+          }
+          if (full) expect(lines, containsAll([3700, 3800]));
+        });
       }
-    });
+    }
 
     test('a flat route in metres: nice steps of 10 or 20 m', () {
       final f = 100.0;

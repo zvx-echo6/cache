@@ -54,6 +54,12 @@ double niceStep(double raw, {bool quarter = true}) {
 (double, double) chartWindow(double lo, double hi, {required double floor}) {
   final span = math.max(hi - lo, floor);
   final mid = (hi + lo) / 2;
+  // A profile that spans less than the floor sits in the middle of it; room for the labels is added only to a taller one.
+  if (hi - lo < floor) {
+    var yMin = mid - span * 0.73, yMax = mid + span * 0.73;
+    if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
+    return (yMin, yMax);
+  }
   var yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
   if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
   return (yMin, yMax);
@@ -66,31 +72,33 @@ const double kChartLabelGap = 18.0;
 /// drawn in a plot [plotHeight] points tall ([full]: the guidance panel's chart, else the preview's, which draws every other line of
 /// the big one's). [floor] is the window's least span ([chartWindow]).
 ///
-/// The lines are [niceStep] of the profile's span apart, as ever (every other one in the preview). A flat route sits in a window
-/// several times as tall as it is, so that step can leave the preview one line (3,600 around a route at 3,760 ft). Only then, with
-/// fewer than two lines, the lines are the least nice step that keeps [kChartLabelGap] points between labels, all within the window,
-/// and the one at the profile's own middle (to a tenth of the step, 3,760 for a route from 3,755 to 3,766) in place of any that
-/// would be too close to it.
+/// A profile that spans [floor] or more has lines [niceStep] of its span apart, as ever (every other one in the preview). A flatter
+/// route sits in the middle of a window several times as tall as it is ([chartWindow]); its lines are the least nice step that keeps
+/// [kChartLabelGap] points between labels, all within the window (3,700 and 3,800 around a route at 3,765 ft on the full chart),
+/// and only when that gives fewer than two, one more at the profile's own middle.
 @visibleForTesting
 List<double> chartGridLines(double lo, double hi, {required double floor, required double plotHeight, required bool full}) {
   final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
   final span = math.max(hi - lo, floor);
-  // The lines of a profile as ever: a nice step of its span apart, every other one in the preview.
-  final gStep = niceStep(span / 2.2);
-  final usual = <double>[];
-  var line = 0;
-  for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
-    if (!full && line.isOdd) continue;
-    usual.add(g);
+  if (hi - lo >= floor) {
+    // The lines of a profile as ever: a nice step of its span apart, every other one in the preview.
+    final gStep = niceStep(span / 2.2);
+    final usual = <double>[];
+    var line = 0;
+    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
+      if (!full && line.isOdd) continue;
+      usual.add(g);
+    }
+    return usual;
   }
-  if (hi - lo >= floor || usual.length >= 2) return usual;
   if (plotHeight <= 0) return const [];
-  final window = yMax - yMin;
-  final pointsPer = window / plotHeight;
-  // The least nice step that keeps the labels apart.
+  final pointsPer = (yMax - yMin) / plotHeight;
+  // A flat route: even lines, the least nice step that keeps the labels apart ([kChartLabelGap]).
   final want = kChartLabelGap * pointsPer;
   final decade = math.pow(10, (math.log(want) / math.ln10).floor()).toDouble();
   final step = [for (final m in const [1.0, 2.0, 5.0, 10.0]) m * decade].firstWhere((v) => v >= want - 1e-9);
+  final even = <double>[for (var g = (yMin / step).ceil() * step; g <= yMax + 1e-9; g += step) g];
+  if (even.length >= 2) return even;
   final unit = step / 10;
   final mid = ((hi + lo) / 2 / unit).round() * unit;
   final out = <double>[];
