@@ -1024,6 +1024,15 @@ pub unsafe extern "C" fn cs_layers_refresh(h: *mut Handle) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_refresh()?))
 }
 
+/// `cs_layers_refresh` as a job on a thread of its own (see `Ext::layers_refresh_job`). NULL on error (`cs_last_error(h)`).
+///
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_refresh_start(h: *mut Handle) -> *mut Job {
+    with_handle(h, ptr::null_mut(), |h| Ok(Box::into_raw(Box::new(h.ext.layers_refresh_job()?))))
+}
+
 /// # Safety
 /// `h` NULL or live; `def_json` NULL or NUL-terminated.
 #[no_mangle]
@@ -1119,6 +1128,13 @@ pub unsafe extern "C" fn cs_sync_open(config_json: *const c_char) -> *mut cache_
             ptr::null_mut()
         }
     }
+}
+
+/// Sets the function that gets one short line per step of `cs_sync_open`, or clears it with NULL. The line is a string the function
+/// owns and frees with `cs_free_string` (it may read it later, on another thread). May be called from any thread; must not block.
+#[no_mangle]
+pub extern "C" fn cs_sync_set_log(cb: Option<extern "C" fn(*const c_char)>) {
+    cache_sync::set_log(cb);
 }
 
 /// One sync method (status, link_code, link, share_add, share_join, ...) with JSON args. Always a JSON string: the answer, or

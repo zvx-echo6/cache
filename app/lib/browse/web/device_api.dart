@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// Why a call to this device failed: [code] is the device's own word for it (`no_space`, `unauthorized`, `host_not_allowed`), [status]
 /// the HTTP status (0: no answer at all).
@@ -176,7 +177,10 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   static DeviceException _error(http.Response r) {
-    if (r.statusCode == 401) return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     try {
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       final e = j is Map ? j['error'] : null;

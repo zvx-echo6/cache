@@ -401,7 +401,7 @@ void main() {
       expect(pickNewAlerts({home: [view(home, fireSrc, [fire('home')])]}, told), isEmpty);
       expect(pickNewAlerts({cabin: [view(cabin, fireSrc, [fire('cabin')])]}, told), hasLength(1));
       // "Where I am": the same fire at another position is told already, until it is serious and was not told as serious
-      const here = WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Where I am', subtitle: '', lat: 42.55, lon: -113.79, key: 'at:42.55,-113.79');
+      const here = WatchPlace(id: 'here', kind: PlaceKind.here, name: 'Current location', subtitle: '', lat: 42.55, lon: -113.79, key: 'at:42.55,-113.79');
       LiveItem at(String key, String miles) => LiveItem.fromJson({'address': 'live:wfigs-incidents-near/$key/f1', 'label': 'East Fork fire', 'fields': {'Distance': miles}});
       final before = {at('at:42.54,-113.79', '40 mi N').address};
       expect(pickNewAlerts({here: [view(here, fireSrc, [at('at:42.55,-113.79', '39 mi N')])]}, before), isEmpty);

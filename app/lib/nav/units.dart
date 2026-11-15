@@ -38,10 +38,9 @@ class Fmt {
   /// A height or climb: "120 ft", "40 m".
   String height(num m) => _us ? '${(m * _ftPerM).round()} ft' : '${m.round()} m';
 
-  /// "5 min", "1 h 25 min", "2 d 3 h".
+  /// "5 min", "1 h 25 min", "2 d 3 h": [shownMinutes] of the seconds.
   String duration(int seconds) {
-    final mins = (seconds / 60).round();
-    if (mins < 1) return '1 min';
+    final mins = shownMinutes(seconds);
     if (mins < 60) return '$mins min';
     final h = mins ~/ 60, m = mins % 60;
     if (h < 24) return m == 0 ? '$h h' : '$h h $m min';
@@ -90,6 +89,24 @@ class Fmt {
 
   static int _round(double v, int step) => (v / step).round() * step;
 }
+
+/// The minutes a time left is shown as, on the phone and in the car alike: the seconds rounded to the nearest minute, and never
+/// under one. The one rule for the time left: [Fmt.duration] writes it, and the car is sent it as a whole number of minutes in
+/// seconds ([shownSeconds]), so CarPlay and Android Auto, which write a time themselves, read the same minutes under any rounding.
+int shownMinutes(int seconds) {
+  final m = (seconds / 60).round();
+  return m < 1 ? 1 : m;
+}
+
+/// [shownMinutes] in seconds: what the car is given for a time left or a route's time.
+int shownSeconds(int seconds) => shownMinutes(seconds) * 60;
+
+/// The arrival time that goes with the minutes shown: the core's [eta] is the moment of the fix plus [remainingS] (the plan's
+/// time left), so this is that moment plus [shownMinutes] of [leftS], the time left shown (NavState.leftS: the plan's with the
+/// drive's pace blended in; the plan's when not given). CarPlay works out its own arrival time from the time left it is given,
+/// from the moment it is told; with the phone's clock made the same way, the two agree. Null when [eta] is.
+DateTime? shownArrival(DateTime? eta, int remainingS, {int? leftS}) =>
+    eta?.subtract(Duration(seconds: remainingS)).add(Duration(seconds: shownSeconds(leftS ?? remainingS)));
 
 /// Compass abbreviations from the core ("NE") as words ("northeast").
 String cardinalWord(String? c) => switch (c) {

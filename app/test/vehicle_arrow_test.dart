@@ -112,6 +112,9 @@ void main() {
         expect(layers[kPositionHeading]!['layout']['icon-image'], kHeadingImage);
         expect(layers[kPositionHeading]!['layout']['icon-rotation-alignment'], 'map');
         expect(layers[kPositionHeading]!['layout']['icon-rotate'], ['get', 'heading']);
+        // No fades: the arrow is a symbol and is moved many times a second while guiding; with MapLibre's default 300 ms fade each
+        // move could start it faint again.
+        expect(style['transition'], {'duration': 0, 'delay': 0});
       });
     }
   });

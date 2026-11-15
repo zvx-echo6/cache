@@ -90,7 +90,8 @@ class AboutPage extends StatelessWidget {
                 context: context,
                 applicationName: 'Cache',
                 applicationVersion: kAppVersion,
-                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Library > Cache Documentation > Credits and licenses > Credits.',
+                // No pointer to Credits here: Flutter's licence page cannot hold a link, and Credits is the row above.
+                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId.',
               ),
             ),
           ],

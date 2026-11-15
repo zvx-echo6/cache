@@ -353,6 +353,7 @@ class _EntryEditorState extends State<EntryEditor> {
             const SizedBox(height: 12),
             PlaceRow(
               place: _place,
+              onShowOnMap: widget.onShowOnMap == null || _place == null ? null : () => widget.onShowOnMap!(_place!),
               pending: _placePending,
               places: widget.places,
               onChanged: (p) {

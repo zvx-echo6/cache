@@ -72,7 +72,7 @@ class _PinGlyphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final s = size.width;
     if (style == PinStyle.teardrop) {
-      paintMapPin(canvas, Offset(s / 2, s * 0.94), s * 0.6, icon, tint, style, tactical: tactical);
+      paintMapPin(canvas, Offset(s / 2, s * 0.96), s * 0.45, icon, tint, style, tactical: tactical);
     } else {
       paintMapPin(canvas, Offset(s / 2, s / 2), s * 0.74, icon, tint, style, tactical: tactical);
     }

@@ -1093,6 +1093,12 @@ char *cs_layers_list(cs_handle *h);
  * {"catalogues":[{"url","layers":N,"invalid":[...]}|{"url","error":{"code","message"}}],"updates":{"<id>":"<version>"|{"error"}}}. */
 char *cs_layers_refresh(cs_handle *h);
 
+/* cs_layers_refresh as a job, on a thread of its own: the catalogue's network wait never holds the caller (the app's one core
+ * worker). Poll cs_job_progress: when "done", "result" is what cs_layers_refresh returns; a failed refresh is "failed" with
+ * cs_layers_refresh's error. The handle's catalogue is updated when it is done. Free it with cs_job_free. NULL on error
+ * (cs_last_error(h)): "not_configured" without "layers". */
+cs_job *cs_layers_refresh_start(cs_handle *h);
+
 /* Add or edit a user definition (the Advanced section): the JSON of one definition, validated ("bad_json" lists every
  * problem). A user definition overrides one with the same id. Returns {"id","saved":true}. */
 char *cs_layers_save(cs_handle *h, const char *definition_json);
@@ -1113,7 +1119,7 @@ char *cs_layers_remove(cs_handle *h, const char *id);
  * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
 char *cs_layers_server(cs_handle *h, const char *options_json);
 
-/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..] or [[[lon,lat],..],..] (rings, even-odd),
  * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
  * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
  * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",
@@ -1334,6 +1340,11 @@ typedef struct cs_sync cs_sync;
  * "relay" (bools, default true), "lookup_url", "relay_urls", "reserve_bytes", "interval_secs", "port"}.
  * NULL on failure (reason in cs_last_error(NULL)). Independent of any cs_handle; runs on its own threads. */
 cs_sync *cs_sync_open(const char *config_json);
+
+/* Sets the function that gets one short line per step of cs_sync_open, or clears it with NULL. Each line is a string the function
+ * owns: free it with cs_free_string (it may be read later, on another thread). Called from any thread; must not block. Nothing is
+ * said while none is set. */
+void cs_sync_set_log(void (*cb)(const char *line));
 
 /* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
  * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */

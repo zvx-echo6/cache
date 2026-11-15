@@ -26,6 +26,8 @@ sha2 = "0.10"
 
 [dev-dependencies]
 url = "2"
+# The shared video test server (../native/cache_video/tests/common) builds fragmented MP4s with it.
+mp4-atom = { version = "=0.17.1", default-features = false }
 serde = { workspace = true }
 # The tiny Idaho pack the places tests open (cache_places::fixture).
 cache_places = { path = "../native/cache_places" }

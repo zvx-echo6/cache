@@ -298,8 +298,8 @@ void main() {
         setWatched: (_, _) {},
         alerts: PlaceAlerts.memory(),
         map: (context, pin, onPick, look) => const ColoredBox(key: ValueKey('fake-place-map'), color: Colors.teal),
-        show: (p, name) => shown.add((p.lat, p.lon, name)),
-        openLink: (url) async => links.add(url),
+        showOnMap: (p, name) => shown.add((p.lat, p.lon, name)),
+        openUrl: (url) async => links.add(url),
       );
       final deps = NotebookDeps(notebook: nb, places: const PlaceChoices(here: _noHere, saved: _noSaved), placesDeps: pd, now: DateTime.now);
       tester.view.physicalSize = const Size(1080, 2400);

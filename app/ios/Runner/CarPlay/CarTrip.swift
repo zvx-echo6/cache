@@ -418,6 +418,16 @@ extension CarTrip {
     return arrived ? max(0, s) : max(60, s)
   }
 
+  /// What decides that CarPlay is told the time left again: the minutes the phone shows (the phone sends whole minutes), and the
+  /// minute of the phone's arrival clock. CPTravelEstimates carries no arrival time, so CarPlay's own is the time left counted
+  /// from when it was told: a car that stands still keeps its minutes left while the phone's arrival clock moves on, and is told
+  /// again so that CarPlay's clock moves with it. Nil while the time left is not known.
+  var leftKey: String? {
+    guard let s = leftSeconds else { return nil }
+    let arrivalMinute: String = etaMs.map { String($0 / 60_000) } ?? ""
+    return "\(s / 60)|\(arrivalMinute)"
+  }
+
   /// The time to a turn: its share of the time left, as far as it is of what is left (as the Android car's trip).
   func turnSeconds(_ step: CarStep) -> Int64 {
     let left = remainingM ?? step.distanceM

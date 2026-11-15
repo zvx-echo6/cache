@@ -65,7 +65,7 @@ void main() {
     expect(find.byKey(const ValueKey('home-temperature')), findsNothing, reason: 'the 9 PM reading is not the temperature at 7 AM');
     expect(find.text('38 °F'), findsNothing);
     expect(find.text('Thu Nov 12 · Light rain · High${_nb}49$_nb°F, low${_nb}34$_nb°F'), findsOneWidget, reason: 'today\'s forecast under its own label');
-    expect(find.text('Where I am · 10 hours old'), findsOneWidget);
+    expect(find.text('Current location · 10 hours old'), findsOneWidget);
     // The check of alerts from last night no longer speaks for now: the Weather screen's mark for that, not a tick.
     expect(find.text('No alerts known, data expired'), findsOneWidget);
     expect(_inCard(find.byIcon(Icons.warning_amber_rounded)), findsOneWidget);

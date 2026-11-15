@@ -81,6 +81,30 @@ fn t() -> bool {
     true
 }
 
+/// Where the open's timing lines go: a function the app gave (`cs_sync_set_log`), or nowhere.
+static LOG_SINK: Mutex<Option<extern "C" fn(*const std::ffi::c_char)>> = Mutex::new(None);
+
+/// Sets (or, with `None`, clears) the function that gets one short line per step of opening the engine. The line is a heap string
+/// given to the function, which frees it (`cs_free_string`): the function may hand it to another thread and return at once, as the
+/// app's does (a Dart listener reads it later).  The function must not block.
+pub fn set_log(sink: Option<extern "C" fn(*const std::ffi::c_char)>) {
+    *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner()) = sink;
+}
+
+/// The steps of one open, each said with the milliseconds since the open began. Does nothing while no sink is set.
+struct OpenSteps(Instant);
+
+impl OpenSteps {
+    fn step(&self, name: &str) {
+        let sink = *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner());
+        if let Some(f) = sink {
+            if let Ok(line) = std::ffi::CString::new(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis())) {
+                f(line.into_raw());
+            }
+        }
+    }
+}
+
 /// The `cs_sync_open` config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -165,16 +189,6 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
-    /// Shares of things the person made, by share id: with "Don't replace my copies from this device" on for a linked device
-    /// (`set_keep_copies`), that device's newer version of a file held here is written beside it ("notes (from Pixel).md",
-    /// [`index::beside_name`]) and its new files still come; in every other share that device's changes are not taken at all
-    /// ([`index::keep_mine`]). For Cache: the notebooks (their entries, the saved places notebook and their photos).
-    #[serde(default)]
-    pub beside: Vec<String>,
-    /// Shares the switch never touches, by share id: what each device keeps with its links whatever it holds (the settings and
-    /// Bookshelves logs, the search indexes).
-    #[serde(default)]
-    pub not_copies: Vec<String>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -233,11 +247,6 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
-    /// "Don't replace my copies from this device", switched on here (`set_keep_copies`): what this device takes from that one
-    /// never replaces or removes a file here ([`index::keep_mine`], [`Inner::merge_from`]). This device's own choice, never
-    /// sent; absent (off) in files saved by older versions, which do not read it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    keep_copies: bool,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -358,18 +367,6 @@ type Seen = BTreeMap<String, (u64, i64)>;
 /// seconds), and if Cache is stopped meanwhile the next start finds a half-written file here: it is replaced, never taken for an
 /// edit and sent to the other devices. While a path is listed, its file being missing is not a delete either.
 type Writes = BTreeMap<String, Entry>;
-
-/// The copies a share holds of linked devices' newer versions, each written beside the file it is newer than
-/// ([`index::Action::Beside`]), kept in `index/<share>.beside.json`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Besides {
-    /// By the path of the file kept here: the versions already written beside it (never written twice).
-    #[serde(default)]
-    taken: BTreeMap<String, Vec<Ver>>,
-    /// By the path of each copy: the device whose version it is (never offered back to it).
-    #[serde(default)]
-    from: BTreeMap<String, String>,
-}
 
 /// What [`Inner::relocate`] calls the original while the store hands the same content back.
 const ASIDE_SUFFIX: &str = ".cache-sync-old";
@@ -625,10 +622,6 @@ struct Inner {
     refetch: Mutex<HashMap<String, Vec<String>>>,
     /// [`Config::with`], as `set_share_with` last left it.
     with: Mutex<BTreeMap<String, Vec<String>>>,
-    /// [`Config::beside`].
-    beside: Vec<String>,
-    /// [`Config::not_copies`].
-    not_copies: Vec<String>,
     /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
     /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
@@ -1435,7 +1428,7 @@ impl Inner {
                 .shares
                 .iter()
                 .filter(|sh| self.shares_with(&sh.id, peer))
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered_to(&sh.id, peer) })
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
                 .collect(),
             link,
             links: true,
@@ -1451,39 +1444,9 @@ impl Inner {
     }
 
     /// What to do with `remote` (a linked device's view of `share`, [`Inner::remote_view`]): [`index::merge`] with this device's
-    /// index, less what would replace or remove a file here when "Don't replace my copies from this device" is on for `peer`
-    /// ([`index::keep_mine`], [`Config::beside`], [`Config::not_copies`]), and less a version already written beside the file
-    /// it is newer than. What is left out is not done and does not wait.
-    fn merge_from(&self, share: &str, remote: &Index, peer: &str) -> Vec<Action> {
-        let local = self.load_index(share);
-        let actions = index::merge(&local, remote);
-        let keep = !self.not_copies.iter().any(|s| s == share) && self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer && p.keep_copies);
-        if !keep {
-            return actions;
-        }
-        let beside = self.beside.iter().any(|s| s == share);
-        let done = self.load_besides(share);
-        index::keep_mine(&local, actions, beside)
-            .into_iter()
-            .filter(|a| !matches!(a, Action::Beside { path, entry } if done.taken.get(path).map(|v| v.contains(&entry.ver)).unwrap_or(false)))
-            .collect()
-    }
-
-    fn besides_path(&self, share: &str) -> PathBuf {
-        self.dir.join("index").join(format!("{share}.beside.json"))
-    }
-
-    fn load_besides(&self, share: &str) -> Besides {
-        read_json(&self.besides_path(share)).unwrap_or_default()
-    }
-
-    /// This device's file list for `share` as `peer` gets it: [`Inner::offered`], less the copies written beside files here from
-    /// `peer`'s own versions (it has them already, under their own names).
-    fn offered_to(&self, share: &str, peer: &str) -> Index {
-        let mut idx = self.offered(share);
-        let b = self.load_besides(share);
-        idx.files.retain(|p, _| b.from.get(p).map(|f| f != peer).unwrap_or(true));
-        idx
+    /// index. Everything a linked device changes, replaces or deletes arrives here as it is.
+    fn merge_from(&self, share: &str, remote: &Index, _peer: &str) -> Vec<Action> {
+        index::merge(&self.load_index(share), remote)
     }
 
     /// The linked device `peer` has shown that it holds the link too: the link is no longer waiting ([`Peer::unconfirmed`]).
@@ -1912,24 +1875,6 @@ impl Inner {
                         self.note(format!("{} from {}: {e:#}", sh.name, self.peer_name(from)));
                     }
                 }
-                Action::Beside { path, entry } => match self.fetch_beside(sh, &path, entry, from).await {
-                    Ok(true) => {}
-                    Ok(false) => held = true,
-                    Err(e) => {
-                        held = true;
-                        let msg = format!("{e:#}");
-                        if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
-                            return Err(e);
-                        }
-                        if msg.starts_with("Paused:") {
-                            if no_room.is_none() {
-                                no_room = Some(e);
-                            }
-                        } else {
-                            self.note(format!("{} from {}: {msg}", sh.name, self.peer_name(from)));
-                        }
-                    }
-                },
                 Action::Fetch { path, entry, conflict } => {
                     // Not while anything before it is missing: it stays for a later round.
                     if held && excluded(last, &path) {
@@ -2048,56 +1993,6 @@ impl Inner {
             }
         }
         Ok(hash)
-    }
-
-    /// Writes `from`'s newer version of `path` beside the file here, which stays as it is ([`index::Action::Beside`]): as
-    /// "<name> (from <device>)", or with the time added when that name is taken. The copy is a new file of this device's,
-    /// offered to the others but never back to `from`. False when it was put off (the file here is not what was last indexed).
-    async fn fetch_beside(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, from: &str) -> Result<bool> {
-        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else { return Ok(true) };
-        // As for an in-place fetch: a file here not yet scanned waits for the scan, so the copy is of what is newer than it.
-        if let Ok(m) = std::fs::metadata(&full) {
-            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
-                self.settle_again.store(true, Ordering::Relaxed);
-                return Ok(false);
-            }
-        }
-        let device = self.peer_name(from);
-        let idx = self.load_index(&sh.id);
-        let free = |name: &str| safe_join(&sh.path, name).map(|p| !p.exists()).unwrap_or(false) && idx.files.get(name).map(|e| e.deleted).unwrap_or(true);
-        let mut copy = index::beside_name(path, &device, None);
-        if !free(&copy) {
-            copy = index::beside_name(path, &device, Some(&chrono_stamp()));
-            if !free(&copy) {
-                // A second one within the same minute: the next round.
-                return Ok(false);
-            }
-        }
-        let Some(cfull) = safe_join(&sh.path, &copy) else { return Ok(true) };
-        let hash = self.ensure_blob(sh, &copy, &cfull, &entry).await?;
-        if let Some(parent) = cfull.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mine = Entry { hash: entry.hash.clone(), size: entry.size, deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![] };
-        self.mark_writing(&sh.id, &copy, &mine)?;
-        if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: cfull.clone() }).finish().await {
-            if std::fs::remove_file(&cfull).is_err() && cfull.exists() {
-                self.recovered.store(false, Ordering::Relaxed);
-            }
-            if is_no_space(&e) {
-                bail!("Paused: no room to write {copy} ({} needed). Free up space and it carries on.", human(entry.size));
-            }
-            bail!("could not write {copy}: {e}");
-        }
-        self.wanted.lock().unwrap().remove(&hash);
-        // Recorded before the index takes the copy, so the copy is never offered back to `from`.
-        let mut b = self.load_besides(&sh.id);
-        b.taken.entry(path.to_string()).or_default().push(entry.ver.clone());
-        b.from.insert(copy.clone(), from.to_string());
-        write_json(&self.besides_path(&sh.id), &b)?;
-        self.written(sh, &copy, &cfull, mine).await?;
-        self.note(format!("{}: {device}'s newer {path} kept beside yours as {copy}", sh.name));
-        Ok(true)
     }
 
     /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
@@ -2390,7 +2285,7 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, keep_copies: false });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -2439,8 +2334,16 @@ impl ProtocolHandler for SyncProto {
 impl SyncEngine {
     /// Opens (or creates) the identity, store and settings in `cfg.dir`, binds the endpoint and starts the sync rounds.
     pub fn open(cfg: Config) -> Result<SyncEngine> {
+        let steps = OpenSteps(Instant::now());
+        steps.step("started");
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
-        let (inner, router) = rt.block_on(Self::start(cfg.clone()))?;
+        let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
+            Ok(v) => v,
+            Err(e) => {
+                steps.step("failed");
+                return Err(e);
+            }
+        };
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
         rt.spawn(async move {
@@ -2490,10 +2393,11 @@ impl SyncEngine {
                 let _ = inner4.store.shutdown().await;
             });
         }
+        steps.step("done");
         Ok(SyncEngine { rt, inner, router: Some(router) })
     }
 
-    async fn start(cfg: Config) -> Result<(Arc<Inner>, Router)> {
+    async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {
         std::fs::create_dir_all(&cfg.dir)?;
         // Read before anything is written: if the links cannot be read now, nothing here may be changed.
         let fresh = !cfg.dir.join("sync.json").exists();
@@ -2501,7 +2405,9 @@ impl SyncEngine {
         // Whether the links can be trusted to be complete, for what the Gate may say to a key that is not linked.
         let gate = Arc::new(GateState::default());
         gate.grace_until.store(links_grace_until(&cfg.dir, fresh || saved_note.is_some())?, Ordering::SeqCst);
+        steps.step("links loaded");
         let (secret, _) = identity::load_or_create(&cfg.dir)?;
+        steps.step("identity loaded");
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
         }
@@ -2545,6 +2451,7 @@ impl SyncEngine {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
         let endpoint = b.bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
+        steps.step("endpoint bound");
 
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         let w2 = wanted.clone();
@@ -2559,6 +2466,7 @@ impl SyncEngine {
         let mut opts = StoreOptions::new(&store_dir);
         opts.gc = Some(gc);
         let store = FsStore::load_with_opts(store_dir.join("blobs.db"), opts).await.map_err(|e| anyhow!("could not open the store: {e}"))?;
+        steps.step("blob store opened");
 
         let inner = Arc::new(Inner {
             dir: cfg.dir.clone(),
@@ -2589,12 +2497,11 @@ impl SyncEngine {
             off: Mutex::new(cfg.off.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
-            beside: cfg.beside.clone(),
-            not_copies: cfg.not_copies.clone(),
             secrets: Mutex::new(HashMap::new()),
             received: Mutex::new(HashMap::new()),
         });
         inner.save()?;
+        steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
         let blobs = BlobsProtocol::new(&store, None);
@@ -2983,19 +2890,6 @@ impl SyncEngine {
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
-            "set_keep_copies" => {
-                // "Don't replace my copies from this device", for one linked device: this device's own choice (never sent).
-                let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
-                let on = args.get("on").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("on must be true or false"))?;
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    let p = sv.peers.iter_mut().find(|p| p.id == id).ok_or_else(|| anyhow!("that device is not linked"))?;
-                    p.keep_copies = on;
-                }
-                inner.save()?;
-                inner.wake.notify_one();
-                Ok(json!({"ok": true}))
-            }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
@@ -3045,7 +2939,6 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
-                    "keep_copies": p.keep_copies,
                 })
             })
             .collect();
@@ -3064,7 +2957,7 @@ impl SyncEngine {
                     }
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
                         for a in inner.merge_from(&sh.id, &inner.remote_view(&sh.id, &rs.index), pid) {
-                            if let Action::Fetch { entry, .. } | Action::Beside { entry, .. } = a {
+                            if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;
                             }
@@ -3218,7 +3111,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, keep_copies: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
     }
 
     #[test]

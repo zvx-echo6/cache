@@ -69,7 +69,7 @@ class IsolateTransport implements CoreTransport {
     final id = _nextId++;
     final c = Completer<dynamic>();
     _pending[id] = c;
-    _sent[id] = (op, Stopwatch()..start());
+    _sent[id] = (CoreCallTimes.name(op, args), Stopwatch()..start());
     _toWorker.send({'id': id, 'op': op, 'args': args});
     return c.future;
   }

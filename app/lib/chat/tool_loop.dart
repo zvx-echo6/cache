@@ -287,7 +287,7 @@ class ToolLoop {
         yield TurnUpdate(phase: TurnPhase.searching, activeTool: seed.name, step: step);
         _messages.add({'role': 'assistant', 'content': null, 'tool_calls': [call.toJson()]});
         await _addResult(call);
-        yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
+        yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: _finished(step));
       }
       while (true) {
         // Stop came while no generation was running (the tool schemas were being read, or a tool was running): the step has
@@ -361,7 +361,7 @@ class ToolLoop {
             yield TurnUpdate(phase: TurnPhase.searching, activeTool: call.name, step: step);
             if (usesSources(call.name)) searched = true;
             await _addResult(call);
-            yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: step);
+            yield TurnUpdate(phase: TurnPhase.thinking, finishedStep: _finished(step));
           }
           rounds++;
           continue;
@@ -395,8 +395,20 @@ class ToolLoop {
     final args = call.argumentsMap;
     if (call.name != 'read') return ToolStep(call.name, args);
     final n = args['n'];
-    return ToolStep(call.name, args, n is num ? _results[n.toInt()]?.result.title : null);
+    final read = n is num ? _results[n.toInt()]?.result : null;
+    return ToolStep(call.name, args, read?.title, read);
   }
+
+  /// What the last call gave, for its step's line to open (app side only): its new results and the routes it planned.
+  List<SourceResult> _callResults = const [];
+  List<NavigationAction> _callRoutes = const [];
+
+  /// [step] as it finished: a `navigate` step keeps the routes it planned and an `act` step its first result.
+  ToolStep _finished(ToolStep step) => switch (step.tool) {
+        'navigate' => step.withResult(routes: _callRoutes),
+        'act' => step.withResult(source: _callResults.firstOrNull),
+        _ => step,
+      };
 
   /// Runs [call] and adds its tool message; an `act` call that needs a tap shows its confirm card.
   Future<void> _addResult(ToolCall call) async {
@@ -420,6 +432,8 @@ class ToolLoop {
   }
 
   Future<String> _runCallInner(ToolCall call) async {
+    _callResults = const [];
+    _callRoutes = const [];
     final host = this.host;
     if (host != null) {
       try {
@@ -429,6 +443,8 @@ class ToolLoop {
         for (final id in r.ids) {
           _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote, timeEnd: id.timeEnd, lang: id.lang)));
         }
+        _callResults = [for (final id in r.ids) _results[id.n]!.result];
+        _callRoutes = r.navigationActions;
         if (r.navigationActions.isNotEmpty) onNavigationActions?.call(r.navigationActions);
         return r.content;
       } catch (e) {
