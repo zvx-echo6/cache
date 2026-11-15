@@ -34,7 +34,7 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
         : {'name': r?.destinationName.isNotEmpty == true ? r!.destinationName : dest.name, 'address': dest.address, 'lat': dest.lat, 'lon': dest.lon},
     'routes': [
       for (final (i, x) in nav.routes.indexed)
-        {'index': i, 'distanceM': x.distanceM, 'durationS': x.durationS, 'via': routeVia(x)},
+        {'index': i, 'distanceM': x.distanceM, 'durationS': shownSeconds(x.durationS), 'via': routeVia(x)},
     ],
     // The stops still ahead, in order (Add stop): the car names them on its route screen and in its route overview, each with
     // the number the turn card says for it when it is reached.
@@ -52,8 +52,10 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
       'then': p.then == null || (p.then!.isArrival && (p.next?.isArrival ?? false)) ? null : carStep(p.then!, nav.fmt),
       'currentRoad': p.current.isOffroad ? null : p.current.shownRoadName,
       'remainingM': p.remainingM,
-      'remainingS': p.remainingS,
-      'etaMs': p.eta?.millisecondsSinceEpoch,
+      // The minutes the phone's bar shows, in seconds (shownSeconds; none once arrived), and the arrival clock that goes with
+      // them: the car's host writes the time itself, and a whole number of minutes reads the same however it rounds.
+      'remainingS': nav.arrived ? 0 : shownSeconds(nav.leftS ?? p.remainingS),
+      'etaMs': shownArrival(p.eta, p.remainingS, leftS: nav.leftS)?.millisecondsSinceEpoch,
       'overlay': overlay ?? carOverlaySwitches(),
       'palette': carOverlayPalette(theme),
       if (r != null) ...{

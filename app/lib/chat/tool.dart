@@ -1,5 +1,6 @@
 import '../browse/zim_urls.dart';
 import '../pdf/pdf_address.dart';
+import 'ask_target.dart';
 import 'navigation_action.dart';
 
 /// One thing a tool found.
@@ -43,8 +44,17 @@ class SourceResult {
   /// section, a place, a web page), as before.
   String? get readerAddress {
     final a = openAddress;
-    return isZimAddress(a) ? a : null;
+    if (isZimAddress(a)) return a;
+    // A passage of a ZIM's PDF that came with only the index's own address opens the PDF it is in, at [pdfPage] when the core gave
+    // one (the passage then marked by [quote]).
+    final pdf = pdfEntryOfIndexHit(address);
+    if (pdf != null) return pdfPage != null ? withPdfPage(pdf, pdfPage!) : pdf;
+    return null;
   }
+
+  /// What the citation points at when it is not a page the reader or the player shows: a place, a layer's point, a repeater or
+  /// notebook entry, live data. Null for the rest.
+  AskTarget? get target => askTargetOfAddress(address, title);
 }
 
 /// A tool result with its conversation-wide number.

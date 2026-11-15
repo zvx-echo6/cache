@@ -88,6 +88,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byType(LicensePage), findsOneWidget);
     expect(find.text('Cache'), findsWidgets, reason: 'the licence page names the app');
+    // words that point somewhere link there, and Flutter's licence page cannot: the pointer to Credits (the row above) is gone
+    expect(find.textContaining('Third-party credits are in'), findsNothing);
     await r.dispose(tester);
   });
 

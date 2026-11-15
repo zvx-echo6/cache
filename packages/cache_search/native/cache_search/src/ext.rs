@@ -424,6 +424,14 @@ impl Ext {
         self.layers()?.inner.refresh().map(|v| v.to_string()).map_err(layers_err)
     }
 
+    /// `cs_layers_refresh_start`: `cs_layers_refresh` on a thread of its own, as a job whose "result" is what `cs_layers_refresh`
+    /// answers (a failed refresh makes it `failed` with the same error). The catalogue's network wait (retries, long timeouts) never
+    /// holds the caller: saved places, live data and searches are answered meanwhile. The handle's catalogue is updated in place.
+    pub fn layers_refresh_job(&self) -> Result<crate::job::Job> {
+        let inner = self.layers()?.inner.clone();
+        crate::job::Job::spawn_result("cs-layers-refresh", move |_cancelled| inner.refresh().map_err(layers_err))
+    }
+
     pub fn layers_save(&self, def_json: &str) -> Result<String> {
         self.layers()?.inner.save_user_def(def_json).map(|v| v.to_string()).map_err(layers_err)
     }
@@ -631,7 +639,8 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Array(a)) if a.len() <= 8 => a.iter().enumerate().map(|(i, e)| self.map_end(Some(e), &format!("via[{i}]"))).collect::<Result<Vec<_>>>()?,
             Some(_) => return Err(Error::bad_json("via: must be an array of at most 8 places")),
         };
-        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives };
+        let from_heading_deg = o.get("from").and_then(|f| f.get("heading_deg")).and_then(serde_json::Value::as_f64).filter(|h| h.is_finite() && (0.0..=360.0).contains(h));
+        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives, from_heading_deg };
         let (out, active) = cache_navigate::map::route(nav, &req).map_err(tool_err)?;
         self.ext.routes.add(&active);
         Ok(out.to_string())

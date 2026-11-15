@@ -17,6 +17,7 @@ import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../update/update_ui.dart';
+import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart, unbroken;
 import 'setup_card.dart';
@@ -46,7 +47,12 @@ class HomeScreen extends StatefulWidget {
     this.onChooseModel,
     this.discover,
     this.onOpenDiscover,
+    this.searchFor,
   });
+
+  /// A search asked for from elsewhere (a step line in Ask): the box takes the words and searches them once, then the value goes
+  /// back to null.
+  final ValueNotifier<String?>? searchFor;
 
   /// Discover: once its first run is done, its card takes the Set up card's place (the same Home block); null keeps Set up Cache.
   final DiscoverState? discover;
@@ -110,6 +116,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     homeSearchRequests.addListener(_focusSearch);
+    widget.searchFor?.addListener(_searchForRequested);
+    if (widget.searchFor?.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _searchForRequested());
     // The cursor is in the search box: the search model loads ahead of the first search.
     _focus.addListener(() {
       if (_focus.hasFocus) SearchModel.aboutToSearch();
@@ -121,8 +129,18 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _focus.requestFocus();
   });
 
+  /// The words another screen asked Home to search: typed into the box and searched now.
+  void _searchForRequested() {
+    final text = widget.searchFor?.value;
+    if (text == null || !mounted) return;
+    widget.searchFor!.value = null;
+    _query.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    _submit(text);
+  }
+
   @override
   void dispose() {
+    widget.searchFor?.removeListener(_searchForRequested);
     homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
@@ -632,7 +650,7 @@ String homeConditionsLine(HomeWeather h) {
 /// The one Weather and alerts card: a weather icon and the temperature in large type, the conditions and the day's high and low, and
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it
 /// says so beside a tick, never in words alone.
-class _WeatherCard extends StatelessWidget {
+class _WeatherCard extends StatefulWidget {
   const _WeatherCard({required this.weather, this.onTap, this.turnOn, this.onOpenSettings});
 
   /// "Turn on" when every source is off.
@@ -643,6 +661,24 @@ class _WeatherCard extends StatelessWidget {
 
   /// Shown as "Turn on weather" while weather is not set up.
   final WeatherTurnOn? turnOn;
+
+  @override
+  State<_WeatherCard> createState() => _WeatherCardState();
+}
+
+class _WeatherCardState extends State<_WeatherCard> {
+  WeatherState? get weather => widget.weather;
+  VoidCallback? get onTap => widget.onTap;
+  WeatherTurnOn? get turnOn => widget.turnOn;
+  VoidCallback? get onOpenSettings => widget.onOpenSettings;
+
+  @override
+  void initState() {
+    super.initState();
+    // The card is shown: an update that is due runs (due-checked, so cheap); the card's own lines show it.
+    // (after this build: it tells its listeners, which must not happen while a frame is built)
+    if (weather != null) unawaited(Future.microtask(() => weather!.updateIfDue(kBackgroundEvery)));
+  }
 
   Future<(HomeWeather, bool)> _read(WeatherState w) async => (await w.homeCard(), turnOn != null && await w.needsTurnOn());
 

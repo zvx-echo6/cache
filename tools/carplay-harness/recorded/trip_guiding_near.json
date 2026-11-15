@@ -19,7 +19,7 @@
   "then": {"turn": "right", "type": "right", "cue": "Turn right onto Road 2.", "road": "Road 2", "distanceM": 2150.0, "lanes": [], "lanesLabel": null},
   "currentRoad": "Road 0",
   "remainingM": 22630.0,
-  "remainingS": 1122,
+  "remainingS": 1140,
   "etaMs": 1794168000000,
   "overlay": {"phoneDrive": false},
   "palette": {"theme": "dark", "route": "#6bb4de", "routeDriven": "#4a5866", "badge": "#f4f6f8", "badgeGlyph": "#161b20", "badgeEdge": "#1a1d1f", "startDot": "#8a96a3", "destDot": "#f4f6f8", "posFill": "#ffffff", "posRing": "#6bb4de", "hostCard": "#2a3036", "card": "#2a3036", "cardText": "#dcc9a3", "cardSecondary": "#b0a58a", "hatch": "#dcc9a3", "miniBg": "#1a1d1f", "miniBorder": "#5e5a4f"},

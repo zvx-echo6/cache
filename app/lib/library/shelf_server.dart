@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../browse/web/device_api.dart' show DeviceException, kDeviceCallTimeout;
 import '../platform/app_log.dart' show logError;
+import '../net/signed_out.dart' show reportSignedOut;
 
 /// What Bookshelves in a browser asks of Cache Server (`/api/build/bookshelves...`, server/BUILD-API.md "Bookshelves in the browser").
 /// The browser has no files and no log of its own: the server reads the person's Bookshelves log, resolves it and writes every change
@@ -51,7 +52,10 @@ class HttpShelfServer implements ShelfServer {
     } catch (_) {
       throw const DeviceException('unreachable', 'This device could not be reached.');
     }
-    if (r.statusCode == 401) throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     Object? j;
     try {
       j = jsonDecode(utf8.decode(r.bodyBytes));
@@ -95,7 +99,10 @@ class HttpShelfServer implements ShelfServer {
       logError('Book PDF could not be fetched', error: e);
       throw const DeviceException('unreachable', 'This device could not be reached.');
     }
-    if (r.statusCode == 401) throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      throw const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     if (r.statusCode != 200) throw DeviceException(r.statusCode == 404 ? 'not_found' : 'failed', 'This device answered ${r.statusCode}.', status: r.statusCode);
     return r.bodyBytes;
   }

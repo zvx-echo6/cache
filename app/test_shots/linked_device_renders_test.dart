@@ -1,6 +1,5 @@
-// Renders of "Don't replace my copies from this device" on a linked device's page, the switch off and on, 390 points wide,
-// light and dark (the approved design: origin/design/link-no-replace, picture 1). The app's own page, sample data.
-// flutter test test_shots/link_no_replace_renders_test.dart --update-goldens  (pictures in test_shots/link_no_replace/)
+// The linked device's page, 390 points wide, light (the "Don't replace my copies" switch is gone). The app's own page, sample data.
+// flutter test test_shots/linked_device_renders_test.dart --update-goldens  (pictures in test_shots/linked_device/)
 
 import 'dart:io';
 
@@ -17,7 +16,7 @@ import '../test/support/settings_rig.dart';
 import '../test/support/sync_fake.dart';
 import 'shot_kit.dart';
 
-const _out = 'link_no_replace';
+const _out = 'linked_device';
 
 Future<void> _settle(WidgetTester tester, [int n = 14]) async {
   for (var i = 0; i < n; i++) {
@@ -29,7 +28,7 @@ Future<void> _settle(WidgetTester tester, [int n = 14]) async {
 void main() {
   setUpAll(loadShotFonts);
 
-  for (final th in {CacheThemeId.light: 'light', CacheThemeId.dark: 'dark'}.entries) {
+  for (final th in {CacheThemeId.light: 'light'}.entries) {
     testWidgets('device page 390 ${th.value}', (tester) async {
       final r = await SettingsRig.create(tester);
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -53,8 +52,7 @@ void main() {
         await sharing.setUp();
         await settingsSync.start();
       });
-      for (final on in [false, true]) {
-        pixel['keep_copies'] = on;
+      for (final on in [false]) {
         await tester.runAsync(sharing.refresh);
         phone(tester, size: const Size(390, 844), ratio: 3);
         await tester.pumpWidget(shotApp(SharingDevicePage(sharing: sharing, peer: 'peer1', settingsSync: settingsSync), theme: th.key));

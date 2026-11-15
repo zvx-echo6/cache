@@ -20,12 +20,14 @@ import 'package:cache/nav/nav_geojson.dart';
 import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/speaker.dart';
 import 'package:cache/nav/ui/lane_strip.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'nav_fakes.dart';
@@ -386,6 +388,55 @@ void main() {
           expect([for (final x in LaneDirection.values) x.name], contains(d));
         }
       }
+    });
+
+    // One time left on the phone and in the car. CarPlay (CPTravelEstimates) and Android Auto (TravelEstimate, DurationSpan)
+    // write the time themselves, and neither says how it rounds: the car is sent the phone's minutes as a whole number of
+    // minutes in seconds, which reads the same rounded down, to the nearest or up. The arrival clock is the fix's moment plus
+    // those minutes, on the phone and in the car.
+    test('the time left and the arrival clock are the phone bar\'s in the car, at every rounding edge', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      const fmt = Fmt(UnitSystem.imperial);
+      final fixAtMoment = DateTime.utc(2026, 11, 13, 14, 40, 50);
+      const shown = {0: 1, 20: 1, 59: 1, 61: 1, 89: 1, 91: 2, 179: 3, 181: 3, 209: 3, 211: 4, 239: 4, 241: 4, 269: 4, 271: 5, 3569: 59, 3571: 60};
+      for (final MapEntry(key: s, value: minutes) in shown.entries) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({
+          ...j,
+          'remaining': {...(j['remaining'] as Map<String, dynamic>), 'duration_s': s, 'eta': fixAtMoment.add(Duration(seconds: s)).toIso8601String()},
+        });
+        final t = carTrip(nav);
+        final sent = t['remainingS'] as int;
+        expect(shownMinutes(s), minutes, reason: '$s s: the minutes the phone shows');
+        expect(sent, minutes * 60, reason: '$s s: the car is sent the phone\'s minutes');
+        // However the car's host rounds the seconds to minutes, it gets the phone's minutes.
+        expect([(sent / 60).floor(), (sent / 60).round(), (sent / 60).ceil()], everyElement(minutes), reason: '$s s');
+        expect(fmt.duration(sent), fmt.duration(s), reason: '$s s: the same words');
+        final arrival = fixAtMoment.add(Duration(minutes: minutes));
+        expect(t['etaMs'], arrival.millisecondsSinceEpoch, reason: '$s s: the car\'s arrival is the fix plus the minutes shown');
+        expect(shownArrival(nav.progress!.eta, s), arrival, reason: '$s s: the phone bar\'s arrival clock');
+      }
+      // The route list's times too: the phone's minutes, in seconds.
+      final routes = carTrip(nav)['routes'] as List;
+      expect(routes, isNotEmpty);
+      for (final (i, r) in routes.indexed) {
+        expect((r as Map)['durationS'], shownMinutes(nav.routes[i].durationS) * 60);
+      }
+    });
+
+    test('arrived: the car is sent no time left', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(routeJson, 0.99, arrived: true));
+      nav.arrived = true;
+      expect(carTrip(nav)['remainingS'], 0);
     });
 
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {
@@ -1656,6 +1707,53 @@ void main() {
       promptAnswer = kPromptShort;
       expect(await bridge.prompt('x'), kPromptShort);
     });
+
+    test('when the phone\'s voice has said its prompts the car side is told at once, so the other apps\' sound comes back', () async {
+      final voice = _IdleVoice();
+      final s = CarAwareSpeaker(voice, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      await s.speak('Turn left.');
+      expect(toCar.where((c) => c.method == 'promptDone'), isEmpty);
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+      // With no car attached nothing is sent.
+      await fromCar('connected', {'on': false});
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+    });
+
+    test('an empty prompt asks nothing of the car side (it would make the audio session active for nothing) and says nothing', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      for (final empty in ['', '  ']) {
+        await s.speak(empty);
+      }
+      expect(toCar.where((c) => c.method == 'prompt'), isEmpty);
+      expect(speaker.said, isEmpty);
+    });
+
+    test('with the phone app in front, in the back and hidden, a prompt the car side answers normal is spoken; short and none are not', () async {
+      Future<void> lifecycle(AppLifecycleState state) async {
+        await messenger.handlePlatformMessage('flutter/lifecycle', const StringCodec().encodeMessage(state.toString()), (_) {});
+      }
+
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      final phoneOnly = CarAwareSpeaker(speaker, car: () => null);
+      for (final state in [AppLifecycleState.resumed, AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused, AppLifecycleState.resumed]) {
+        await lifecycle(state);
+        for (final answer in [kPromptNormal, kPromptShort, kPromptNone]) {
+          speaker.said.clear();
+          promptAnswer = answer;
+          await s.speak('Turn left.');
+          expect(speaker.said, answer == kPromptNormal ? ['Turn left.'] : isEmpty, reason: '$state, the car side answering $answer');
+        }
+        speaker.said.clear();
+        await phoneOnly.speak('Turn left.');
+        expect(speaker.said, ['Turn left.'], reason: '$state, no car');
+      }
+    });
   });
 
   group('CoreCarPlaces: the car\'s own handle', () {
@@ -1703,4 +1801,15 @@ void main() {
       expect(opens, 0);
     });
   });
+}
+
+/// A voice that says when it has said its prompts, as the phone's real one does.
+class _IdleVoice implements Speaker, IdleSpeaker {
+  final List<String> said = [];
+  @override
+  void Function()? onIdle;
+  @override
+  Future<void> speak(String text) async => said.add(text);
+  @override
+  Future<void> stop() async {}
 }

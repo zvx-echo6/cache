@@ -1,7 +1,10 @@
+import 'navigation_action.dart';
+import 'tool.dart' show SourceResult;
+
 /// One tool call as the progress line shows it: the tool's name and the arguments the model gave it. UI state only; never sent
 /// to the model.
 class ToolStep {
-  const ToolStep(this.tool, [this.arguments = const {}, this.title]);
+  const ToolStep(this.tool, [this.arguments = const {}, this.title, this.source, this.routes = const []]);
 
   final String tool;
   final Map<String, dynamic> arguments;
@@ -9,7 +12,17 @@ class ToolStep {
   /// A name the app looked up for the call: the title of the source a `read` opens, or of the action an `act` runs.
   final String? title;
 
-  ToolStep withTitle(String? t) => ToolStep(tool, arguments, t);
+  /// What the call opened or made, for its line to open: the result a `read` opened, or the first result of an `act` (app side only).
+  final SourceResult? source;
+
+  /// The routes a `navigate` call planned, for its line to open (app side only).
+  final List<NavigationAction> routes;
+
+  ToolStep withTitle(String? t) => ToolStep(tool, arguments, t, source, routes);
+
+  /// The step with what the finished call gave: [source] and [routes] (each kept when not given).
+  ToolStep withResult({SourceResult? source, List<NavigationAction>? routes}) =>
+      ToolStep(tool, arguments, title, source ?? this.source, routes ?? this.routes);
 }
 
 /// The most characters of a person's or the model's words that go into a step line.
@@ -72,6 +85,19 @@ final Map<String, StepTemplate> kStepTemplates = {
   'act': StepTemplate('Running {}…', 'Ran {}',
       presentBare: 'Running an action…', pastBare: 'Ran an action', value: (s) => _title(s) ?? _arg(s, 'action')),
 };
+
+/// What a call asked for, whole (the step line cuts long values): a `search` step's query.
+String? stepQuery(ToolStep s) {
+  final q = s.arguments['query'];
+  return q is String && q.trim().isNotEmpty ? q.trim() : null;
+}
+
+/// What a `nearby` step looked for, whole: its category in words ("gas station", given with underscores), else its query.
+String? nearbyQuery(ToolStep s) {
+  final c = s.arguments['category'];
+  if (c is String && c.trim().isNotEmpty) return c.replaceAll('_', ' ').trim();
+  return stepQuery(s);
+}
 
 const String kWorkingLine = 'Working…';
 const String kFinishedStepLine = 'Finished a step';

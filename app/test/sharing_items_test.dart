@@ -342,43 +342,34 @@ void main() {
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
 
-  testWidgets("a linked device's page: Don't replace my copies from this device, off until switched on, for that device only", (tester) async {
+  testWidgets("a linked device's page has no \"Don't replace my copies\" switch (sync is fully shared both ways), and the engine is not told about one", (tester) async {
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
-    for (final (id, name) in [('p1', 'Desk'), ('p2', 'Pixel')]) {
-      r.sync.peers.add({'id': id, 'name': name, 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': 'direct', 'error': null});
-    }
+    // 51.3 testers' saved file may still say keep_copies: nothing of it shows or is sent
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': 'direct', 'error': null, 'keep_copies': true});
     await tester.runAsync(s.refresh);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingDevicePage(sharing: s, peer: 'p1')));
     await tester.pump();
-    final row = find.byKey(const ValueKey('device-no-replace'));
-    expect(find.descendant(of: row, matching: find.text("Don't replace my copies from this device")), findsOneWidget);
-    expect(find.descendant(of: row, matching: find.text('Newer versions from Desk never replace yours. Notebooks, places and photos arrive beside yours.')), findsOneWidget);
-    Switch sw() => tester.widget<Switch>(find.descendant(of: row, matching: find.byType(Switch)));
-    expect(sw().value, isFalse, reason: 'off unless switched on');
-    // The engine is told which folders hold things the person made (newer versions arrive beside theirs) and which the switch
-    // never touches (no folder kept with every link is in this rig).
-    expect(r.configs.last['beside'], ['notebooks']);
-    expect(r.configs.last['not_copies'], isEmpty);
-
-    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
-    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': true});
-    expect(sw().value, isTrue);
-    expect(s.keepsCopies('p1'), isTrue);
-    expect(s.keepsCopies('p2'), isFalse, reason: 'one linked device at a time');
-
-    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
-    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': false});
-    expect(sw().value, isFalse);
-
+    expect(find.byKey(const ValueKey('device-no-replace')), findsNothing);
+    expect(find.textContaining("Don't replace my copies"), findsNothing);
+    expect(find.byType(Switch), findsNothing);
+    expect(r.configs.last.containsKey('beside'), isFalse);
+    expect(r.configs.last.containsKey('not_copies'), isFalse);
+    expect(r.calls('set_keep_copies'), isEmpty);
     await tester.pumpWidget(const SizedBox());
     s.dispose();
     await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
+
+  test("the Activity holds this app's own lines (notebook sync) with the engine's, newest first", () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    s.addActivity('Notebooks: 3 entries arrived from your other devices');
+    expect(s.activity.first['text'], 'Notebooks: 3 entries arrived from your other devices');
+    s.dispose();
+    await r.dir.delete(recursive: true);
   });
 
   test("a ZIM's saved icon goes with it: off and synced with the item, never an item of its own", () async {
@@ -435,6 +426,68 @@ void main() {
     // declared once: a second declaration in the app would win over the export and the two would drift apart
     expect(identical(libraries_state.kLibraryNotShared, share_rules.kLibraryNotShared), isTrue);
     expect(identical(sources_state.kZimNotShared, share_rules.kZimNotShared), isTrue);
-    expect(share_rules.kLibraryNotShared, ['*/index', '*/index-snapshots']);
+    expect(share_rules.kLibraryNotShared, [
+      '*/index',
+      '*/index-snapshots',
+      // a person's own library (My books) keeps its shard and lists to each device; only its packs, PDFs and settings sync
+      'my-books*/shard*',
+      'my-books*/copies.jsonl',
+      'my-books*/documents.tsv',
+      'my-books*/SHA256SUMS',
+    ]);
+  });
+
+  // ---- an item's row opens it where the app has a page for it; the Switch alone toggles
+
+  Future<(_Rig, SharingState)> kindPage(WidgetTester tester, {ShareItemOpener? open}) async {
+    final r = (await tester.runAsync(_rig))!;
+    final s = r.make();
+    await tester.runAsync(s.setUp);
+    await tester.runAsync(() => s.setShared(r.kind('notebooks'), true));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingKindPage(sharing: s, kind: r.kind('notebooks'), onOpenItem: open)));
+    await tester.pump();
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      s.dispose();
+      await r.dir.delete(recursive: true);
+    });
+    return (r, s);
+  }
+
+  /// Saving a choice writes a file (outside the test's clock): let real time pass until [done], with a bound.
+  Future<void> settleCalls(WidgetTester tester, [bool Function()? done]) async {
+    for (var i = 0; i < 60; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+      await tester.pump();
+      if (done == null || done()) return;
+    }
+  }
+
+  testWidgets('a row with a target opens it and does not toggle; the Switch still toggles; a row with none toggles as before', (tester) async {
+    final opened = <String>[];
+    final (r, _) = await kindPage(tester, open: (context, kind, item) => item.path == 'Journal' ? () => opened.add(item.path) : null);
+    final before = r.calls('set_off').length;
+    await tester.tap(find.text('Journal'));
+    await settleCalls(tester);
+    expect(opened, ['Journal']);
+    expect(r.calls('set_off'), hasLength(before), reason: 'opening the item changes nothing');
+    final row = find.byKey(const ValueKey('item-notebooks/Journal'));
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await settleCalls(tester, () => r.calls('set_off').length > before);
+    expect(opened, ['Journal'], reason: 'the Switch does not open');
+    expect((r.calls('set_off').last['off'] as List), contains('Journal'));
+    // Health log has no target: its row toggles (a private notebook: its Include in sync and sharing)
+    await tester.tap(find.text('Health log'));
+    await settleCalls(tester, () => r.privateSet.isNotEmpty);
+    expect(r.privateSet, [true]);
+    expect(opened, ['Journal']);
+  });
+
+  testWidgets('where nothing is wired the whole row still toggles sharing', (tester) async {
+    final (r, _) = await kindPage(tester);
+    final before = r.calls('set_off').length;
+    await tester.tap(find.text('Journal'));
+    await settleCalls(tester, () => r.calls('set_off').length > before);
+    expect((r.calls('set_off').last['off'] as List), contains('Journal'));
   });
 }

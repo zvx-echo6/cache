@@ -82,6 +82,8 @@ pub struct MapRouteReq {
     pub land_access: Boundary,
     /// How many alternatives to ask for (0 for none).
     pub alternatives: usize,
+    /// The vehicle's heading at `from` when it is moving (a re-route), degrees clockwise from north.
+    pub from_heading_deg: Option<f64>,
 }
 
 /// The mode, land access and alternatives of a route request (the ends are resolved by the caller).
@@ -372,7 +374,10 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut legs: Vec<Directions> = Vec::new();
     let mut have_offroad = false;
     for (i, pair) in stops.windows(2).enumerate() {
-        let nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
+        let mut nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
+        if i == 0 {
+            nr.from_heading_deg = req.from_heading_deg;
+        }
         let (d, h) = core.navigate(nr)?;
         have_offroad = h;
         if !d.ok {
@@ -384,7 +389,8 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut alternatives: Vec<Value> = Vec::new();
     // alternatives exist for a plain road route (one leg, nothing off-road)
     if req.alternatives > 0 && legs.len() == 1 && main["routing"] == "road" {
-        let nr = NavigateRequest::new(req.from.waypoint(), req.to.waypoint(), req.mode, req.land_access);
+        let mut nr = NavigateRequest::new(req.from.waypoint(), req.to.waypoint(), req.mode, req.land_access);
+        nr.from_heading_deg = req.from_heading_deg;
         for d in core.alternatives(&nr, req.alternatives)? {
             let o = route_object(std::slice::from_ref(&d), &stops, req.mode, req.land_access, have_offroad);
             if o["geometry"] != main["geometry"] && !alternatives.iter().any(|a| a["geometry"] == o["geometry"]) {

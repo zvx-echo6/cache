@@ -26,6 +26,7 @@ class AnswerReport {
     required this.reason,
     this.note = '',
     this.sources = const [],
+    this.chatId,
   });
 
   final DateTime at;
@@ -38,6 +39,9 @@ class AnswerReport {
   /// The titles of the numbered sources the answer had.
   final List<String> sources;
 
+  /// The chat the answer came from, so the report can open it. Null for a report saved before this was kept (it stays plain).
+  final int? chatId;
+
   Map<String, Object?> toJson() => {
     'at': at.toUtc().toIso8601String(),
     'question': question,
@@ -46,6 +50,7 @@ class AnswerReport {
     'reason': reason.name,
     'note': note,
     'sources': sources,
+    'chat_id': ?chatId,
   };
 
   static AnswerReport? fromJson(Object? j) {
@@ -60,6 +65,7 @@ class AnswerReport {
       reason: ReportReason.values.firstWhere((r) => r.name == j['reason'], orElse: () => ReportReason.other),
       note: '${j['note'] ?? ''}',
       sources: [for (final s in (j['sources'] as List? ?? const [])) '$s'],
+      chatId: j['chat_id'] is int ? j['chat_id'] as int : null,
     );
   }
 

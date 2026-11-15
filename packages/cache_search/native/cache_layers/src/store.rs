@@ -8,12 +8,19 @@
 use crate::error::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Queries asked of the tile tables (see [`Store::queries`]).
+    queries: AtomicU64,
 }
+
+/// What the store holds in one box of tiles at one zoom: (x, y) -> (size in bytes, stored at the version asked about).
+pub type Held = HashMap<(u32, u32), (u64, bool)>;
 
 /// What the store holds for one tile.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,7 +59,7 @@ impl Store {
                data BLOB NOT NULL, ver TEXT NOT NULL, PRIMARY KEY(z,x,y)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS areas(id TEXT PRIMARY KEY, state TEXT NOT NULL, meta TEXT NOT NULL);",
         )?;
-        Ok(Store { conn: Mutex::new(c) })
+        Ok(Store { conn: Mutex::new(c), queries: AtomicU64::new(0) })
     }
 
     /// The tile's bytes; `None` if not stored or stored as "the source has no tile here" ([`Store::find`] tells the two apart).
@@ -67,6 +74,7 @@ impl Store {
     /// the tile is not asked for again), or `None` when no download fetched it.
     pub fn find(&self, z: u8, x: u32, y: u32) -> Result<Option<Stored>> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         let d: Option<Vec<u8>> = c.query_row("SELECT data FROM tiles WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| r.get(0)).optional()?;
         Ok(d.map(|d| if d.is_empty() { Stored::Empty } else { Stored::Tile(d) }))
     }
@@ -74,7 +82,29 @@ impl Store {
     /// (size in bytes, version) of a stored tile (size 0 = known to be empty at the source).
     pub fn info(&self, z: u8, x: u32, y: u32) -> Result<Option<(u64, String)>> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         Ok(c.query_row("SELECT length(data), ver FROM tiles WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))).optional()?)
+    }
+
+    /// Every tile stored at zoom `z` with x in `x0..=x1` and y in `y0..=y1`, in one range query: its size, and whether it is
+    /// at version `ver`. From the staging table of an update with [`Table::Staging`]. A download plans with one of these per
+    /// zoom where it asked about every tile on its own (about two million queries for a state).
+    pub fn held(&self, table: Table, z: u8, (x0, x1): (u32, u32), (y0, y1): (u32, u32), ver: &str) -> Result<Held> {
+        let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
+        let mut st = c.prepare_cached(&format!("SELECT x, y, length(data), ver=?6 FROM {} WHERE z=?1 AND x BETWEEN ?2 AND ?3 AND y BETWEEN ?4 AND ?5", table.name()))?;
+        let rows = st.query_map(params![z, x0, x1, y0, y1, ver], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?), (r.get::<_, i64>(2)? as u64, r.get::<_, bool>(3)?))))?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (k, v) = r?;
+            out.insert(k, v);
+        }
+        Ok(out)
+    }
+
+    /// How many queries the tile tables were asked since the store was opened (lookups of one tile and range queries).
+    pub fn queries(&self) -> u64 {
+        self.queries.load(Ordering::Relaxed)
     }
 
     pub fn put_batch(&self, table: Table, tiles: &[(u8, u32, u32, Vec<u8>)], ver: &str) -> Result<()> {
@@ -92,6 +122,7 @@ impl Store {
 
     pub fn staging_has(&self, z: u8, x: u32, y: u32, ver: &str) -> Result<bool> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         let v: Option<String> = c.query_row("SELECT ver FROM staging WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| r.get(0)).optional()?;
         Ok(v.as_deref() == Some(ver))
     }

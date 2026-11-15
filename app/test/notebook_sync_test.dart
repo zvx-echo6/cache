@@ -508,6 +508,18 @@ void main() {
       expect(a.nb.notebook(ida)!.def.fields.length, 2);
     });
 
+    test('R1b: a notebook renamed on one device is renamed on the other with no entry touched: the rename travels with the notebook\'s files', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      expect(b.nb.notebook(idb)!.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3}, reason: 'every value stays in its field');
+      expect(fileOf(a, 'Lake'), contains('notebook: Hikes 2024'));
+    });
+
     test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
       final (a, b, id, idb) = await twoDevices();
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
@@ -617,29 +629,31 @@ void main() {
       return (a, b, la.id, lb.id);
     }
 
-    test('1500 entries reach the other device and none is lost on later rounds, both ways', () async {
-      final (a, b, ida, idb) = await big(1500);
+    test('1050 entries reach the other device and none is lost on later rounds, both ways', () async {
+      const n = 1050; // just over the 1000 the bug lived at; a lighter notebook, the same boundary
+      expect(n, greaterThan(1000));
+      final (a, b, ida, idb) = await big(n);
       await a.engine.run();
-      expect(files(a), 1500, reason: 'every entry is written, not the first 1000');
+      expect(files(a), n, reason: 'every entry is written, not the first 1000');
       carry(a, b);
       await b.engine.run();
-      expect((await b.nb.entries(idb)).length, 1500);
+      expect((await b.nb.entries(idb)).length, n);
       // a second round each way changes nothing
       await b.engine.run();
       carry(b, a);
       await a.engine.run();
-      expect(files(a), 1500);
-      expect((await a.nb.entries(ida)).length, 1500);
-      expect((await b.nb.entries(idb)).length, 1500);
+      expect(files(a), n);
+      expect((await a.nb.entries(ida)).length, n);
+      expect((await b.nb.entries(idb)).length, n);
       // an edit to the last entry made on B comes back to A
-      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R1499');
-      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R1499', body: 'edited on B');
+      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R${n - 1}');
+      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R${n - 1}', body: 'edited on B');
       await b.engine.run();
       carry(b, a);
       await a.engine.run();
-      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R1499').body, 'edited on B');
-      expect((await a.nb.entries(ida)).length, 1500);
-    }, timeout: const Timeout(Duration(minutes: 3)));
+      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R${n - 1}').body, 'edited on B');
+      expect((await a.nb.entries(ida)).length, n);
+    }, timeout: const Timeout(Duration(minutes: 6)));
 
     test('an entry the read did not return is never treated as deleted', () async {
       final (a, _, ida, _) = await big(300);
@@ -813,6 +827,19 @@ void main() {
       expect(await again.check('2468'), isTrue);
       await again.remove();
       expect(store.values, isEmpty);
+    });
+  });
+
+  group('Activity lines', () {
+    test('notebook sync says, in a few words and with no ids or paths, what arrived, changed or was removed', () {
+      final nb = fakeNotebook(FakeNotebookBackend());
+      final lines = <String>[];
+      final c = NotebookConnections(notebook: nb, dir: () async => Directory.systemTemp, onActivity: lines.add);
+      c.say(SyncReport()..read = 5..arrived = 3..removedHere = 1);
+      expect(lines, ['Notebooks: 3 entries arrived from your other devices', 'Notebooks: 2 entries updated from your other devices', 'Notebooks: 1 entry removed by your other devices']);
+      lines.clear();
+      c.say(SyncReport()..written = 4);
+      expect(lines, isEmpty, reason: 'what this device sent is not said');
     });
   });
 

@@ -99,6 +99,8 @@ const IDLE: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// The longest an unpacked index may be.
 const MAX_INDEX: u64 = 512 * 1024 * 1024;
+/// After the server showed a build is still there, a missing tile of it does not ask again for this long.
+const GONE_RECHECK: Duration = Duration::from_secs(30);
 
 const NO_NETWORK: &str = "Paused: no network it may use";
 /// What `paused` says while the person has paused the downloads (`set_policy` `hold`).
@@ -280,12 +282,24 @@ impl State {
     }
 }
 
+/// What the server says of a build the device asked it for.
+enum OnServer {
+    There,
+    /// Gone; the current.json that names the build to move to.
+    Gone(Box<Current>),
+    /// No answer, or one that does not tell.
+    Unknown,
+}
+
 /// Why a tile did not land.
 enum TileFail {
     /// Not the tile's fault (no network, the server cannot be reached, the disk): tried again later.
     Later(String),
     /// The tile itself: the server would not give it, or what came is not the tile the index describes.
     Bad(String),
+    /// The server answered 404 (on the last try): the tile is not there, or its whole build no longer is
+    /// ([`Inner::move_if_gone`] tells which).
+    Missing(String),
 }
 
 struct Batch {
@@ -326,6 +340,8 @@ struct Inner {
     seq: AtomicU64,
     /// The places part, when the config has `places_base_url`.
     places: Option<PlacesPart>,
+    /// One "is this build gone from the server?" check at a time, and when each build was last seen still there.
+    still_there: Mutex<HashMap<String, Instant>>,
 }
 
 pub struct Regions {
@@ -638,14 +654,28 @@ impl Inner {
     }
 
     /// Which build a new region goes in: the device's while it has regions (builds are never mixed); with none yet, the newest,
-    /// or the last one known while the server cannot be asked.
+    /// or the last one known while the server cannot be asked. When the device's index cannot be had because its build is gone
+    /// from the server, the device moves to the current build (as Update does) and the region goes in that one.
     fn build_for_new_region(&self) -> Result<(String, Arc<Index>)> {
         let (dev, has_regions) = {
             let st = self.st();
             (st.build.clone(), st.any_routing())
         };
         if let (Some(b), true) = (&dev, has_regions) {
-            return Ok((b.clone(), self.index_of(b, REQUEST_TIMEOUT)?));
+            return match self.index_of(b, REQUEST_TIMEOUT) {
+                Ok(i) => Ok((b.clone(), i)),
+                Err(e) if self.move_if_gone(b, REQUEST_TIMEOUT) => {
+                    let (now, updating) = {
+                        let st = self.st();
+                        (st.build.clone(), st.updating.clone())
+                    };
+                    match updating.or(now).filter(|t| t != b) {
+                        Some(t) => Ok((t.clone(), self.index_of(&t, REQUEST_TIMEOUT)?)),
+                        None => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
+            };
         }
         let fetched = self.fetch_current(REQUEST_TIMEOUT).and_then(|c| Ok((c.build.clone(), self.fetch_index(&c, REQUEST_TIMEOUT)?)));
         match fetched {
@@ -732,6 +762,79 @@ impl Inner {
         n
     }
 
+    // ---- a build the server no longer has ----
+
+    /// Where `build`'s index is on the server, laid out like the current build's (`<build>/index.tsv.gz`).
+    fn index_path_of(build: &str, c: &Current) -> String {
+        match c.index.strip_prefix(&format!("{}/", c.build)) {
+            Some(rest) => format!("{build}/{rest}"),
+            None => format!("{build}/index.tsv.gz"),
+        }
+    }
+
+    /// Whether the server still publishes `build`: gone only when current.json names another build and `build`'s index
+    /// answers 404. No answer (offline cannot be told from gone), any other status, or the network off: unknown.
+    fn build_on_server(&self, build: &str, timeout: Duration) -> OnServer {
+        if !self.may_use_network() || timeout.is_zero() {
+            return OnServer::Unknown;
+        }
+        let Ok(c) = self.fetch_current(timeout) else { return OnServer::Unknown };
+        if c.build == build {
+            return OnServer::There;
+        }
+        if !self.may_use_network() {
+            return OnServer::Unknown;
+        }
+        let url = format!("{}{}", self.base, Self::index_path_of(build, &c));
+        match http::probe(&self.agent, &url, timeout) {
+            Ok(()) => OnServer::There,
+            Err(http::Fail::Status(404 | 410, _)) => OnServer::Gone(Box::new(c)),
+            Err(_) => OnServer::Unknown,
+        }
+    }
+
+    /// A request for `build` (the device's, or the one an update is filling) found nothing on the server. When the whole
+    /// build is gone, the device moves to the current one exactly as Update does (each region's tiles of it, switched to
+    /// when complete; with no regions, at once). True when the device is off `build` or on its way off it. `timeout` bounds
+    /// each request of the check (a stream's time left); the move itself takes what Update takes.
+    fn move_if_gone(&self, build: &str, timeout: Duration) -> bool {
+        if !self.may_use_network() {
+            return false;
+        }
+        let mut seen = self.still_there.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let st = self.st();
+            if st.build.as_deref() != Some(build) && st.updating.as_deref() != Some(build) {
+                return true;
+            }
+        }
+        if seen.get(build).is_some_and(|t| t.elapsed() < GONE_RECHECK) {
+            return false;
+        }
+        let c = match self.build_on_server(build, timeout) {
+            OnServer::Gone(c) => c,
+            OnServer::There => {
+                seen.insert(build.to_string(), Instant::now());
+                return false;
+            }
+            OnServer::Unknown => return false,
+        };
+        // An update to the current build already under way (the person tapped Update): it is not started again.
+        if self.st().updating.as_deref() == Some(c.build.as_str()) {
+            return true;
+        }
+        match self.check_update().and_then(|_| self.update()) {
+            Ok(_) => {
+                eprintln!("cache_regions: routing build {build} is no longer on the server; moving to {}", c.build);
+                true
+            }
+            Err(e) => {
+                eprintln!("cache_regions: routing build {build} is no longer on the server; could not move to {}: {e}", c.build);
+                false
+            }
+        }
+    }
+
     // ---- one tile ----
 
     fn verify(t: &TileRef, gz: &[u8]) -> std::result::Result<Vec<u8>, String> {
@@ -750,6 +853,7 @@ impl Inner {
     fn fetch_tile(&self, build: &str, t: &TileRef, deadline: Option<Instant>) -> std::result::Result<(), TileFail> {
         let url = format!("{}{}/{}.gph.gz", self.base, build, t.path);
         let mut last = String::new();
+        let mut not_there = false;
         for attempt in 0..TRIES {
             if attempt > 0 {
                 std::thread::sleep(Duration::from_millis(250 * attempt as u64));
@@ -766,17 +870,24 @@ impl Inner {
             }
             match http::get(&self.agent, &url, timeout) {
                 Err(http::Fail::Net(m)) => return Err(TileFail::Later(m)),
-                Err(http::Fail::Status(_, m)) => last = m,
+                Err(http::Fail::Status(code, m)) => {
+                    not_there = code == 404 || code == 410;
+                    last = m
+                }
                 Ok(gz) => match Self::verify(t, &gz) {
                     Ok(raw) => {
                         return write_whole(&self.tile_file(build, &t.path), &raw, self.seq())
                             .map_err(|e| TileFail::Later(format!("could not write {}: {e}", t.path)))
                     }
-                    Err(m) => last = m,
+                    Err(m) => {
+                        not_there = false;
+                        last = m
+                    }
                 },
             }
         }
-        Err(TileFail::Bad(format!("{last} (tried {TRIES} times)")))
+        let m = format!("{last} (tried {TRIES} times)");
+        Err(if not_there { TileFail::Missing(m) } else { TileFail::Bad(m) })
     }
 
     /// A tile the worker fetched is whole on disk. If its region went while it was on its way, it goes too.
@@ -892,10 +1003,12 @@ impl Inner {
     fn run_batch(&self, b: Batch) {
         let queue = Mutex::new(b.tiles.into_iter());
         let later: Mutex<Option<String>> = Mutex::new(None);
+        // The build is gone from the server and the device is moving off it: the rest of the batch is not asked for.
+        let moved = AtomicBool::new(false);
         std::thread::scope(|sc| {
             for _ in 0..POOL {
                 sc.spawn(|| loop {
-                    if !self.downloads_go() || later.lock().map(|l| l.is_some()).unwrap_or(true) {
+                    if !self.downloads_go() || moved.load(Ordering::Relaxed) || later.lock().map(|l| l.is_some()).unwrap_or(true) {
                         break;
                     }
                     let Some(t) = queue.lock().ok().and_then(|mut q| q.next()) else { break };
@@ -909,6 +1022,13 @@ impl Inner {
                     match self.fetch_tile(&b.build, &t, None) {
                         Ok(()) => self.landed(&b.build, &t.path),
                         Err(TileFail::Bad(m)) => self.tile_failed(&b.build, &t.path, &m),
+                        Err(TileFail::Missing(m)) => {
+                            if self.move_if_gone(&b.build, REQUEST_TIMEOUT) {
+                                moved.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            self.tile_failed(&b.build, &t.path, &m)
+                        }
                         Err(TileFail::Later(m)) => {
                             if let Ok(mut l) = later.lock() {
                                 *l = Some(m);
@@ -949,7 +1069,15 @@ impl Inner {
             .regions
             .iter()
             .map(|r| {
-                let list = build.as_ref().and_then(|b| r.lists.get(b));
+                // A region added while the device moves off a build the server no longer has is only in the update's build:
+                // it shows that one's progress.
+                let (list, present) = match build.as_ref().and_then(|b| r.lists.get(b)) {
+                    Some(l) => (Some(l), present),
+                    None => match st.updating.as_ref().and_then(|u| Some((r.lists.get(u)?, st.present.get(u).unwrap_or(&empty)))) {
+                        Some((l, p)) => (Some(l), p),
+                        None => (None, present),
+                    },
+                };
                 let (mut tiles, mut bytes, mut done, mut done_bytes) = (0u64, 0u64, 0u64, 0u64);
                 for t in list.into_iter().flat_map(|l| l.values()) {
                     tiles += 1;
@@ -1156,7 +1284,9 @@ impl Inner {
         let mut trash = None;
         let mut lists: BTreeMap<String, BTreeMap<String, TileRef>> = BTreeMap::new();
         if let Some(build) = &build {
-            if st.build.as_deref() != Some(build.as_str()) {
+            // The build the device is updating to (its own is gone from the server): the region goes in that one only.
+            let into_update = st.updating.as_deref() == Some(build.as_str());
+            if st.build.as_deref() != Some(build.as_str()) && !into_update {
                 if st.any_routing() {
                     return Err(Error::new("busy", "another region was added meanwhile; try again"));
                 }
@@ -1302,7 +1432,20 @@ impl Inner {
         (v, prepared)
     }
 
+    /// One stream, and once more when the device's build turned out to be gone from the server and the device moved to the
+    /// current one at once (it had no regions). While an update to it downloads instead, the answer is the one an update in
+    /// progress gives: the device's build, with what it has (builds are never mixed in a route).
     fn stream_core(&self, points: &[(f64, f64)], deadline: Instant) -> (Value, PrepareOutcome) {
+        let before = self.st().build.clone();
+        let (v, outcome, moved) = self.stream_once(points, deadline);
+        if moved && Instant::now() < deadline && self.st().build != before {
+            let (v, outcome, _) = self.stream_once(points, deadline);
+            return (v, outcome);
+        }
+        (v, outcome)
+    }
+
+    fn stream_once(&self, points: &[(f64, f64)], deadline: Instant) -> (Value, PrepareOutcome, bool) {
         let points = points.to_vec();
         let answer = |fetched: usize, missing: usize, ok: bool| json!({"fetched": fetched, "missing": missing, "ok": ok});
         let failed = || if Instant::now() >= deadline { PrepareOutcome::TimedOut } else { PrepareOutcome::Failed };
@@ -1317,7 +1460,7 @@ impl Inner {
                     idx.tiles_near(&points, STREAM_BOX_DEG, STREAM_NEAR_DEG).iter().filter(|t| !st.has(b, &t.path)).count()
                 })
                 .unwrap_or(0);
-            return (answer(0, missing, false), PrepareOutcome::Offline);
+            return (answer(0, missing, false), PrepareOutcome::Offline, false);
         }
         let left = || deadline.saturating_duration_since(Instant::now());
         let chosen = match &device {
@@ -1341,7 +1484,14 @@ impl Inner {
                 }
             }),
         };
-        let Ok((build, idx)) = chosen else { return (answer(0, 0, false), failed()) };
+        let (build, idx) = match chosen {
+            Ok(c) => c,
+            Err(_) => {
+                // The device's index could not be had: its build may be gone from the server.
+                let moved = device.as_deref().is_some_and(|b| self.move_if_gone(b, left()));
+                return (answer(0, 0, false), failed(), moved);
+            }
+        };
         let need = idx.tiles_near(&points, STREAM_BOX_DEG, STREAM_NEAR_DEG);
         let missing: Vec<TileRef> = {
             let st = self.st();
@@ -1350,24 +1500,39 @@ impl Inner {
         let reserve = self.reserve.load(Ordering::Relaxed);
         let need_bytes: u64 = missing.iter().map(|t| t.bytes).sum();
         if free_bytes(&self.dir).map(|f| f < need_bytes.saturating_add(reserve)).unwrap_or(false) {
-            return (answer(0, missing.len(), false), PrepareOutcome::Failed);
+            return (answer(0, missing.len(), false), PrepareOutcome::Failed, false);
         }
         let fetched = AtomicU64::new(0);
         let queue = Mutex::new(missing.into_iter());
+        // A tile the server does not have: whether the whole build is gone is asked once per stream.
+        let (asked, moved) = (AtomicBool::new(false), AtomicBool::new(false));
         std::thread::scope(|sc| {
             for _ in 0..POOL {
                 sc.spawn(|| loop {
-                    if Instant::now() >= deadline || !self.may_use_network() {
+                    if Instant::now() >= deadline || !self.may_use_network() || moved.load(Ordering::Relaxed) {
                         break;
                     }
                     let Some(t) = queue.lock().ok().and_then(|mut q| q.next()) else { break };
-                    if self.fetch_tile(&build, &t, Some(deadline)).is_ok() {
-                        self.st().present.entry(build.clone()).or_default().insert(t.path.clone());
-                        fetched.fetch_add(1, Ordering::Relaxed);
+                    match self.fetch_tile(&build, &t, Some(deadline)) {
+                        Ok(()) => {
+                            self.st().present.entry(build.clone()).or_default().insert(t.path.clone());
+                            fetched.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(TileFail::Missing(_)) if !asked.swap(true, Ordering::Relaxed) => {
+                            if self.move_if_gone(&build, deadline.saturating_duration_since(Instant::now())) {
+                                moved.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        Err(_) => {}
                     }
                 });
             }
         });
+        let moved = moved.load(Ordering::Relaxed);
+        // Moved at once (no regions): the old build's folder is gone, there is nothing of it to keep.
+        if moved && self.st().build.as_deref() != Some(build.as_str()) {
+            return (answer(fetched.load(Ordering::Relaxed) as usize, need.len(), false), failed(), true);
+        }
         // Every tile of this route that belongs to no region is in the stream cache, used now; then the cap.
         let keep: HashSet<String> = need.iter().map(|t| t.path.clone()).collect();
         {
@@ -1390,7 +1555,7 @@ impl Inner {
             need.iter().filter(|t| !st.has(&build, &t.path)).count()
         };
         let outcome = if still == 0 { PrepareOutcome::Done } else { failed() };
-        (answer(fetched.load(Ordering::Relaxed) as usize, still, still == 0), outcome)
+        (answer(fetched.load(Ordering::Relaxed) as usize, still, still == 0), outcome, moved)
     }
 
     /// Least recently used first, the stream cache's tiles that no region uses go until the rest is within the cap (`keep`: the
@@ -1698,6 +1863,7 @@ impl Regions {
             tick: AtomicU64::new(tick.unwrap_or(0).max(0) as u64),
             seq: AtomicU64::new(0),
             places,
+            still_there: Mutex::new(HashMap::new()),
         });
         let w = inner.clone();
         let worker = std::thread::Builder::new().name("cache-regions".into()).spawn(move || w.work()).map_err(|e| Error::new("internal", format!("could not start the download thread: {e}")))?;

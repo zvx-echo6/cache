@@ -82,6 +82,7 @@ class MapPlace {
     required this.kind,
     this.category,
     this.address = '',
+    this.town,
     required this.lat,
     required this.lon,
     this.distanceM,
@@ -107,6 +108,7 @@ class MapPlace {
         kind: (j['kind'] ?? '') as String,
         category: _s(j['category']),
         address: (j['address'] ?? '') as String,
+        town: _s(j['town']),
         lat: _d(j['lat']) ?? 0,
         lon: _d(j['lon']) ?? 0,
         distanceM: _d(j['distance_m']),
@@ -148,6 +150,9 @@ class MapPlace {
   final String kind;
   final String? category;
   final String address;
+
+  /// For coordinates: the nearest town as data ("Burley, ID"), null when the places data has none near.
+  final String? town;
   final double lat;
   final double lon;
   final double? distanceM;

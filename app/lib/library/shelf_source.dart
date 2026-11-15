@@ -367,6 +367,14 @@ abstract class BookFiles implements Listenable {
   /// Whether "Delete from all your devices" can be done here.
   bool get canDeleteEverywhere;
 
+  /// Whether [book] can be deleted from all the person's devices from here: it has a copy in one of their own libraries on this
+  /// device (a book of a downloaded or shared library is not theirs to delete).
+  bool canDeleteBook(ShelfBook book);
+
+  /// Whether [book] is synced with another device: its own library is in a share that is on, and a linked device takes it
+  /// ([SharingState.libraryTakenByAnotherDevice]). Then Delete says it deletes from all synced devices.
+  bool syncedWithOtherDevice(ShelfBook book);
+
   /// Deletes the book, its search index and its call number on every linked device.
   Future<void> deleteEverywhere(ShelfBook book);
 }
@@ -386,6 +394,10 @@ class BookFilesUnavailable extends ChangeNotifier implements BookFiles {
   @override
   bool get canDeleteEverywhere => false;
   @override
+  bool canDeleteBook(ShelfBook book) => false;
+  @override
+  bool syncedWithOtherDevice(ShelfBook book) => false;
+  @override
   Future<void> deleteEverywhere(ShelfBook book) => throw UnsupportedError('not on this device yet');
 }
 
@@ -396,4 +408,20 @@ abstract class OriginalFileProvider implements Listenable {
   bool available(ShelfBook book);
 
   Future<void> open(ShelfBook book);
+}
+
+/// A book page's lookup: the book [id] when it is on Bookshelves, else the one hidden from them (a hidden book still has its page,
+/// with Show on Bookshelves). Lists and search use [ShelfSource.book], which never finds a hidden book.
+extension ShelfBookPageLookup on ShelfSource {
+  ShelfBook? bookOrHidden(String id) {
+    final shown = book(id);
+    if (shown != null) return shown;
+    for (final b in hidden) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  /// True for a book that is hidden from Bookshelves (and so not found by [ShelfSource.book]).
+  bool isHidden(String id) => book(id) == null && bookOrHidden(id) != null;
 }

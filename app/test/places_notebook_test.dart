@@ -93,7 +93,7 @@ void main() {
       await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
       expect(find.text('Places'), findsOneWidget);
       // Where I am and the downloaded regions are Weather and alerts' watched areas now, not rows here
-      expect(find.text('Where I am'), findsNothing);
+      expect(find.text('Current location'), findsNothing);
       expect(find.byKey(const ValueKey('marker-here')), findsNothing);
       expect(find.text('Idaho'), findsNothing);
       expect(find.text('Home'), findsOneWidget);
@@ -371,7 +371,7 @@ void main() {
       final caches = await r.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Caches', fields: [], sort: NotebookSort.distance));
       await r.place(caches, 'Cache 1', 42.55, -114.45);
       await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: caches.id));
-      expect(find.text('Where I am'), findsNothing);
+      expect(find.text('Current location'), findsNothing);
       await tester.longPress(find.text('Cache 1'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('weather-row')), findsNothing);
@@ -649,5 +649,17 @@ void main() {
     p.single.open();
     expect(opened, ['Rally point 1']);
     expect((await books.search('jour')).map((x) => x.title), contains('Journal'));
+  });
+
+  test("Home search: a saved place found by its name is the Places search's (listed once); another notebook's place stays here", () async {
+    final r = _Rig();
+    final saved = await r.saved();
+    await r.place(saved, 'Alder Home', 42.5630, -114.4610);
+    final other = await r.nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Trail spots', fields: [], sort: NotebookSort.distance));
+    await r.place(other, 'Alder Spring', 42.5640, -114.4620);
+    NotebookPlacesSearchProvider spots({required bool savedByName}) =>
+        NotebookPlacesSearchProvider(notebook: r.nb, open: (n, e) {}, savedByName: savedByName);
+    expect((await spots(savedByName: false).search('alder')).map((x) => x.title), containsAll(['Alder Home', 'Alder Spring']));
+    expect((await spots(savedByName: true).search('alder')).map((x) => x.title), ['Alder Spring']);
   });
 }

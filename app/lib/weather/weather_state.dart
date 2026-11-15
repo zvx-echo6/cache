@@ -24,6 +24,7 @@ import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import '../notebook/places.dart' show distanceM;
 import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
@@ -195,7 +196,11 @@ class WeatherState extends ChangeNotifier {
     DateTime Function()? clock,
     this.hereSettle = const Duration(seconds: 45),
     this.hereGap = const Duration(minutes: 15),
+    this.hereMaxWait = const Duration(minutes: 5),
+    this.townOf,
+    Timer Function(Duration, void Function())? timer,
   }) : _fetch = fetch ?? fetchBytes,
+       _makeTimer = timer ?? Timer.new,
        _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
 
@@ -208,6 +213,15 @@ class WeatherState extends ChangeNotifier {
 
   /// The least time between two fetches for "Where I am" that [positionChanged] starts.
   final Duration hereGap;
+
+  /// The longest a fetch for "Where I am" is put off by it moving: each move restarts the [hereSettle] wait, and in a moving car the
+  /// key never settles, so this long after the first unsettled move its sources are fetched wherever it is ([positionChanged]).
+  final Duration hereMaxWait;
+
+  /// The nearest town to a position, as the places tools name it ("Burley, ID"), from the offline places data; null when there is
+  /// none or the places data is not there. "Where I am" is named after it ([hereName]).
+  final Future<String?> Function(double lat, double lon)? townOf;
+  final Timer Function(Duration, void Function()) _makeTimer;
   final TokenStore secrets;
 
   /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
@@ -475,6 +489,7 @@ class WeatherState extends ChangeNotifier {
     _moveLinkedLists();
     _readStatus();
     _readShown();
+    _readHereData();
     _readSaved();
     await _readKeys();
     _kind = await policy.probe.current();
@@ -1098,7 +1113,7 @@ class WeatherState extends ChangeNotifier {
       WatchPlace(
         id: kWatchHere,
         kind: PlaceKind.here,
-        name: 'Where I am',
+        name: hereName,
         subtitle: p == null ? 'Follows this device · position not known yet' : 'Follows this device',
         lat: p?.lat,
         lon: p?.lon,
@@ -1143,8 +1158,58 @@ class WeatherState extends ChangeNotifier {
     _hereSeen = key;
     unawaited(publishPlan());
     notifyListeners();
-    if (key != null) _scheduleHereFetch(hereSettle);
+    if (key != null) {
+      unawaited(_lookUpHereName());
+      // Each move restarts the settle wait; in a moving car that never ends, so the wait is cut short once [hereMaxWait] has passed
+      // since the first move that did not settle.
+      final now = _now();
+      final since = _hereMovingSince ??= now;
+      final left = hereMaxWait - now.difference(since);
+      final wait = left < hereSettle ? (left.isNegative ? Duration.zero : left) : hereSettle;
+      _scheduleHereFetch(wait);
+    }
   }
+
+  /// When "Where I am" first moved without settling since the last fetch for it; null while it is still or after a fetch.
+  DateTime? _hereMovingSince;
+
+  /// The town "Where I am" is in, by its key, as [townOf] gave it (kept so it is not looked up at every build).
+  final Map<String, String> _hereTowns = {};
+  bool _townLooking = false;
+
+  /// The name of "Where I am": the nearest town when it is known, else "Current location".
+  String get hereName {
+    final p = position?.call();
+    final t = p == null ? null : _hereTowns[_hereKey(p.lat, p.lon)];
+    return t ?? kCurrentLocation;
+  }
+
+  /// Looks up the town for the key "Where I am" is at, once per key and one lookup at a time (a moving car changes its key every
+  /// kilometre; a lookup that finishes after it moved on is kept for its own key and the next one is started).
+  Future<void> _lookUpHereName() async {
+    final lookup = townOf;
+    if (lookup == null || _townLooking || _disposed) return;
+    final p = position?.call();
+    if (p == null) return;
+    final key = _hereKey(p.lat, p.lon);
+    if (_hereTowns.containsKey(key)) return;
+    _townLooking = true;
+    String? town;
+    try {
+      town = await lookup(p.lat, p.lon);
+    } catch (_) {}
+    _townLooking = false;
+    if (_disposed) return;
+    if (town != null && town.isNotEmpty) {
+      if (_hereTowns.length > 20) _hereTowns.clear();
+      _hereTowns[key] = town;
+      notifyListeners();
+    }
+    final now = position?.call();
+    if (now != null && _hereTown(now) == null && _hereKey(now.lat, now.lon) != key) unawaited(_lookUpHereName());
+  }
+
+  String? _hereTown(Position p) => _hereTowns[_hereKey(p.lat, p.lon)];
 
   Timer? _hereTimer;
   DateTime? _hereFetchedAt;
@@ -1160,12 +1225,13 @@ class WeatherState extends ChangeNotifier {
   void _scheduleHereFetch(Duration after) {
     _hereTimer?.cancel();
     if (_disposed || !_started) return;
-    _hereTimer = Timer(after, () async {
+    _hereTimer = _makeTimer(after, () async {
       final last = _hereFetchedAt;
       if (last != null && _now().difference(last) < hereGap) {
         _scheduleHereFetch(hereGap - _now().difference(last));
         return;
       }
+      _hereMovingSince = null;
       await _fetchHere();
     });
   }
@@ -1174,6 +1240,7 @@ class WeatherState extends ChangeNotifier {
     if (_disposed || _updating || _updateRunning) return;
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
+    unawaited(_lookUpHereName());
     if (srcs.isEmpty || here.isEmpty) return;
     if (await policy.probe.current() == ConnectionKind.none) return;
     _hereFetchedAt = _now();
@@ -1184,6 +1251,7 @@ class WeatherState extends ChangeNotifier {
         () async {
           try {
             await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+            _noteHere(c, here.first);
           } catch (e) {
             logInfo('Live update for where I am, ${c.id}: failed');
           }
@@ -1326,6 +1394,7 @@ class WeatherState extends ChangeNotifier {
       try {
         final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
         final got = r['fetched'] == true;
+        _noteHere(c, p);
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
         return (got, null);
       } on CacheSearchException catch (e) {
@@ -1378,7 +1447,8 @@ class WeatherState extends ChangeNotifier {
     if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
-    final last = _lastRunAt;
+    // Only a run that got something counts as recent: a run where every fetch failed must not hold the next one back.
+    final last = _lastOkAt;
     if (last != null && _now().difference(last) < every) return null;
     return updateNow();
   }
@@ -1485,7 +1555,7 @@ class WeatherState extends ChangeNotifier {
     var kept = false;
     Future<(SourceView, Map<String, dynamic>?)> one(Connector c) async {
       try {
-        final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+        final g = await _getFor(c, p);
         // A forecast's answer with no items must not wipe the last good one kept for Home at start. For everything that is
         // happening (warnings, fires and the rest) no items is the answer: the core leaves out what has ended and gives an
         // empty list when nothing is active (the "none active" entry is the assistant's tool's, not this call's), so it
@@ -1512,6 +1582,83 @@ class WeatherState extends ChangeNotifier {
     final out = await Future.wait([for (final c in enabledSources) one(c)]);
     if (kept) _saveShown();
     return out;
+  }
+
+  /// The farthest "Where I am" borrows another key's data from, when its own key has none (metres).
+  static const double kHereBorrowM = 25000;
+
+  /// Keys "Where I am" has had data for, by source: [_noteHere] adds one when a fetch or a read finds data under it.
+  final Map<String, Set<String>> _hereData = {};
+  static const String _hereDataFile = 'here-keys.json';
+
+  void _noteHere(Connector c, WatchPlace p) {
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return;
+    final keys = _hereData.putIfAbsent(c.id, () => <String>{});
+    if (!keys.add(key)) return;
+    // only the nearest few are worth keeping
+    if (keys.length > 200) keys.remove(keys.first);
+    _saveHereData();
+  }
+
+  void _readHereData() {
+    try {
+      final text = _store?.files.read(_hereDataFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
+      if (j is! Map) return;
+      for (final e in j.entries) {
+        if (e.value is List) _hereData.putIfAbsent(e.key as String, () => {for (final k in e.value as List) '$k'});
+      }
+    } catch (_) {}
+  }
+
+  void _saveHereData() {
+    try {
+      _store?.files.write(_hereDataFile, jsonEncode({for (final e in _hereData.entries) e.key: e.value.toList()}));
+    } catch (_) {}
+  }
+
+  /// The position in a "Where I am" key (`at:42.55,-113.79`), or null.
+  static ({double lat, double lon})? _keyPosition(String key) {
+    final m = RegExp(r'^at:(-?[\d.]+),(-?[\d.]+)$').firstMatch(key);
+    final lat = double.tryParse(m?.group(1) ?? ''), lon = double.tryParse(m?.group(2) ?? '');
+    return lat == null || lon == null ? null : (lat: lat, lon: lon);
+  }
+
+  static double _metresBetweenKeys(String a, String b) {
+    final x = _keyPosition(a), y = _keyPosition(b);
+    return x == null || y == null ? double.infinity : distanceM(x.lat, x.lon, y.lat, y.lon);
+  }
+
+  /// [c]'s stored data for [p]; for "Where I am", whose own key has none, the nearest key within [kHereBorrowM] that has some. A
+  /// car moves a kilometre in a minute and its key never settles long enough to be fetched, but the weather is the same a few
+  /// kilometres on. The answer's own age says how old it is. The answer carries `_at`, the key it is from.
+  Future<Map<String, dynamic>> _getFor(Connector c, WatchPlace p) async {
+    Map<String, dynamic> ask(WatchPlace q) => {'source': c.id, 'place': placeRequest(q), 'now': isoWithOffset(_now())};
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return core.get(ask(p));
+    try {
+      final g = await core.get(ask(p));
+      _noteHere(c, p);
+      return {...g, '_at': key};
+    } on CacheSearchException catch (e) {
+      if (e.code != 'not_found') rethrow;
+      final near = [
+        for (final k in _hereData[c.id] ?? const <String>{})
+          if (k != key && _metresBetweenKeys(k, key) <= kHereBorrowM) k,
+      ]..sort((a, b) => _metresBetweenKeys(a, key).compareTo(_metresBetweenKeys(b, key)));
+      for (final k in near) {
+        final at = _keyPosition(k)!;
+        try {
+          final g = await core.get(ask(WatchPlace(id: p.id, kind: p.kind, name: p.name, subtitle: p.subtitle, lat: at.lat, lon: at.lon, key: k)));
+          return {...g, '_at': k};
+        } on CacheSearchException catch (e2) {
+          if (e2.code == 'not_found') _hereData[c.id]?.remove(k);
+        }
+      }
+      rethrow;
+    }
   }
 
   SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
@@ -1553,9 +1700,16 @@ class WeatherState extends ChangeNotifier {
   List<SourceView>? keptViewFor(WatchPlace p) {
     final out = [
       for (final c in enabledSources)
-        if (_shown['${c.id} ${p.id}'] case final g?) _viewOf(c, p, g, kept: true),
+        if (_shown['${c.id} ${p.id}'] case final g? when _keptFits(g, p)) _viewOf(c, p, g, kept: true),
     ];
     return out.isEmpty ? null : out;
+  }
+
+  /// A kept answer for "Where I am" is from the key it was read at: it stands for the place now only within [kHereBorrowM] of it.
+  static bool _keptFits(Map<String, dynamic> g, WatchPlace p) {
+    final at = g['_at'], key = p.key;
+    if (p.kind != PlaceKind.here || at is! String || key == null) return true;
+    return _metresBetweenKeys(at, key) <= kHereBorrowM;
   }
 
   static const String _shownFile = 'last-shown.json';
