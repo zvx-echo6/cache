@@ -756,6 +756,26 @@ class _PlaceFormState extends State<PlaceForm> {
   /// default, is already in [_color]); red in Tactical.
   PinLook _look(BuildContext context) => PinLook(icon: mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)), tint: pinTint(context, _color.color));
 
+  ButtonStyle get _tight => TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), iconSize: 18, textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13));
+
+  /// "Current location": the pin goes to where the phone is now, and a position fix that arrives later leaves it there.
+  Future<void> _useCurrentLocation() async {
+    NbPlace? p;
+    try {
+      p = await widget.deps.places.herePlace();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      if (p == null) {
+        _error = "Your position isn't known yet";
+      } else {
+        _touched = true;
+        _error = null;
+        _pin = NbPlace(lat: p.lat, lon: p.lon);
+      }
+    });
+  }
+
   /// "Choose on map": the full-screen picker; Cancel (null) keeps the pin the place has.
   Future<void> _chooseOnMap() async {
     final pm = pd?.pickerMap;
@@ -888,11 +908,17 @@ class _PlaceFormState extends State<PlaceForm> {
                 borderRadius: BorderRadius.circular(16),
                 child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: PlaceFixScope(coming: _fixComing, child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _touched = true, child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))))),
               ),
-              if (pd?.pickerMap != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+              Align(
+                alignment: Alignment.centerLeft,
+                // Tighter side padding so both fit one line at 320; a Wrap is the fallback where they still do not.
+                child: Wrap(
+                  spacing: 4,
+                  children: [
+                    if (pd?.pickerMap != null) TextButton.icon(style: _tight, key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+                    TextButton.icon(style: _tight, key: const ValueKey('place-current-location'), onPressed: _useCurrentLocation, icon: const Icon(Icons.my_location), label: const Text('Current location')),
+                  ],
                 ),
+              ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
