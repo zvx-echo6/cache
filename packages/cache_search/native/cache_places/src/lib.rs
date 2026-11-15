@@ -22,6 +22,7 @@ pub mod nearby;
 pub mod pack;
 pub mod source;
 pub mod schema;
+pub mod share;
 
 pub use feed::{FeedSlot, PlacesFeed, PrepareAnswer};
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};

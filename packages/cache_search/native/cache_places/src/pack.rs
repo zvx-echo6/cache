@@ -639,6 +639,8 @@ pub struct PackSet {
     /// The folder of `CURRENT` and the merged databases (`regions/places`): from the config, else the regions engine's.
     merged_dir: RwLock<Option<PathBuf>>,
     merged: Mutex<Merged>,
+    /// The peers' snapshots of the same build (`places-share/<build>/<device>.sqlite`), read-only (share.rs).
+    peers: Mutex<HashMap<PathBuf, ((u64, u128), Arc<Pack>)>>,
 }
 
 struct Legacy {
@@ -663,7 +665,7 @@ fn fine_stamp(path: &Path) -> Option<(u64, u128)> {
 impl PackSet {
     pub fn new(paths: Vec<PathBuf>, merged_dir: Option<PathBuf>) -> PackSet {
         let n = paths.len();
-        PackSet { legacy: Mutex::new(Legacy { paths, open: vec![None; n] }), merged_dir: RwLock::new(merged_dir), merged: Mutex::new(Merged::default()) }
+        PackSet { legacy: Mutex::new(Legacy { paths, open: vec![None; n] }), merged_dir: RwLock::new(merged_dir), merged: Mutex::new(Merged::default()), peers: Mutex::new(HashMap::new()) }
     }
 
     /// Replaces the single-region packs (the app's refresh), and makes the next `current()` check everything again.
@@ -676,6 +678,7 @@ impl PackSet {
     /// The next `current()` reads `CURRENT` again and reopens every pack.
     pub fn recheck(&self) {
         *self.merged.lock().unwrap_or_else(|e| e.into_inner()) = Merged::default();
+        self.peers.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let mut l = self.legacy.lock().unwrap_or_else(|e| e.into_inner());
         l.open.iter_mut().for_each(|o| *o = None);
     }
@@ -725,9 +728,43 @@ impl PackSet {
         m.pack.clone()
     }
 
-    /// The packs that exist and open: the merged database first, then the single-region packs in config order.
+    /// The linked devices' snapshots of the device's build, opened read-only and reopened when a file is replaced. The build is
+    /// the one `CURRENT` names, or, on a device with no places of its own yet, the newest one a peer shared.
+    fn peer_packs(&self) -> Vec<Arc<Pack>> {
+        let Some(dir) = self.merged_dir() else { return Vec::new() };
+        let Some(regions) = dir.parent() else { return Vec::new() };
+        let build = std::fs::read_to_string(dir.join("CURRENT")).ok().map(|s| s.trim().to_string()).filter(|b| safe_name(b)).or_else(|| crate::share::newest_shared_build(regions));
+        let Some(build) = build else { return Vec::new() };
+        let mut open = self.peers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = Vec::new();
+        let files = crate::share::peer_files(regions, &build);
+        open.retain(|p, _| files.contains(p));
+        for f in files {
+            let Some(stamp) = fine_stamp(&f) else { continue };
+            let fresh = matches!(open.get(&f), Some((s, _)) if *s == stamp);
+            if !fresh {
+                match Pack::open(&f) {
+                    Ok(p) => {
+                        open.insert(f.clone(), (stamp, Arc::new(p)));
+                    }
+                    Err(_) => {
+                        open.remove(&f);
+                        continue;
+                    }
+                }
+            }
+            if let Some((_, p)) = open.get(&f) {
+                out.push(p.clone());
+            }
+        }
+        out
+    }
+
+    /// The packs that exist and open: the merged database first, then the linked devices' snapshots of it (read-only), then the
+    /// single-region packs in config order.
     pub fn current(&self) -> Vec<Arc<Pack>> {
         let mut out: Vec<Arc<Pack>> = self.merged().into_iter().collect();
+        out.extend(self.peer_packs());
         let mut l = self.legacy.lock().unwrap_or_else(|e| e.into_inner());
         let Legacy { paths, open } = &mut *l;
         for (i, path) in paths.iter().enumerate() {
