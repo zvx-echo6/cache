@@ -329,7 +329,7 @@ void main() {
     final opened = <String>[];
     await _open(tester, r, opened: opened);
     expect(find.text('Nothing is switched on yet.'), findsOneWidget);
-    expect(find.text('Nothing switched on yet'), findsOneWidget, reason: 'the status line');
+    expect(find.text('No weather sources are on'), findsOneWidget, reason: 'the status line');
     await tester.tap(find.text('Open Weather and alerts settings'));
     await tester.pump();
     expect(opened, ['settings']);

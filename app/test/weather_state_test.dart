@@ -831,7 +831,7 @@ void main() {
   group('the status line', () {
     test('nothing on, never updated, fresh, and old by the rule a reading goes by', () async {
       h = await Harness.create();
-      expect(h.weather.status().headline, 'Nothing switched on yet');
+      expect(h.weather.status().headline, 'No weather sources are on');
       await h.weather.setRowOn(row('Weather alerts'), true);
       expect(h.weather.status().headline, 'Not updated yet');
       expect(h.weather.status().tone, StatusTone.warn);
