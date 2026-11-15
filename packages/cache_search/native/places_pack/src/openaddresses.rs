@@ -71,11 +71,20 @@ pub struct SourceStats {
     pub dup_number: usize,
 }
 
-pub fn norm_street(s: &str) -> String {
+/// A street as the duplicate tests compare it: the name with its suffix written out and no directional (lower case), and the
+/// directionals it had. "W University Dr" and "University Dr" have the same name; they are one street when their directionals
+/// agree or one of them has none (`dirs_agree`).
+pub fn street_key(s: &str) -> (String, Vec<String>) {
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let x = crate::usps::suffix_in_title_case(&title_case_capitals(&collapsed));
-    let e = crate::usps::expand(&x).unwrap_or(x);
-    e.to_lowercase().chars().filter(|c| !matches!(c, '.' | ',')).collect()
+    let (core, dirs) = crate::usps::split_directionals(&x);
+    let e = crate::usps::expand(&core).unwrap_or(core);
+    (e.to_lowercase().chars().filter(|c| !matches!(c, '.' | ',')).collect(), dirs)
+}
+
+/// Two directional lists name one street when they are equal or either is empty (a source that leaves the directional out).
+pub fn dirs_agree(a: &[String], b: &[String]) -> bool {
+    a.is_empty() || b.is_empty() || a == b
 }
 
 pub fn norm_town(s: &str) -> String {
@@ -95,8 +104,8 @@ pub fn dist_m(la1: f64, lo1: f64, la2: f64, lo2: f64) -> f64 {
 
 const CELL: f64 = 0.0001; // about 11 m
 
-/// The addresses of one normalised street and number: (lat, lon, normalised town).
-type Spots = Vec<(f64, f64, String)>;
+/// The addresses of one street name and number: (lat, lon, normalised town, directionals).
+type Spots = Vec<(f64, f64, String, Vec<String>)>;
 
 /// What a tile already has, for the duplicate tests.
 #[derive(Default)]
@@ -112,7 +121,8 @@ fn cell(v: f64) -> i64 {
 impl Index {
     pub fn add(&mut self, a: &Addr) {
         let num = norm_number(&a.number);
-        self.by_street_number.entry((norm_street(&a.street), num.clone())).or_default().push((a.lat, a.lon, norm_town(&a.city)));
+        let (name, dirs) = street_key(&a.street);
+        self.by_street_number.entry((name, num.clone())).or_default().push((a.lat, a.lon, norm_town(&a.city), dirs));
         self.by_cell.entry((num, cell(a.lat), cell(a.lon))).or_default().push((a.lat, a.lon));
     }
 
@@ -120,7 +130,9 @@ impl Index {
     pub fn duplicate(&self, a: &Addr, max_m: f64) -> Option<&'static str> {
         let num = norm_number(&a.number);
         let town = norm_town(&a.city);
-        if let Some(v) = self.by_street_number.get(&(norm_street(&a.street), num.clone())) {
+        let (name, dirs) = street_key(&a.street);
+        if let Some(v) = self.by_street_number.get(&(name, num.clone())) {
+            let v: Vec<_> = v.iter().filter(|p| dirs_agree(&dirs, &p.3)).collect();
             if v.iter().any(|p| dist_m(a.lat, a.lon, p.0, p.1) <= max_m) {
                 return Some("near");
             }
@@ -416,9 +428,12 @@ mod tests {
 
     #[test]
     fn street_spellings_match() {
-        assert_eq!(norm_street("W MALBAR ST"), norm_street("West Malbar Street"));
-        assert_eq!(norm_street("3rd St  S"), norm_street("3RD STREET SOUTH"));
-        assert_ne!(norm_street("Main St"), norm_street("Main Ave"));
+        assert_eq!(street_key("W MALBAR ST"), street_key("West Malbar Street"));
+        assert_eq!(street_key("3rd St  S"), street_key("3RD STREET SOUTH"));
+        assert_ne!(street_key("Main St"), street_key("Main Ave"));
+        // The name is the same with or without the directional; the directionals are kept to tell E from W.
+        assert_eq!(street_key("W University Dr").0, street_key("University Dr").0);
+        assert_ne!(street_key("W University Dr").1, street_key("E University Dr").1);
         assert_eq!(norm_number(" 12 a "), "12A");
     }
 
@@ -448,6 +463,31 @@ mod tests {
         assert_eq!((c.added, c.dup_near, c.dup_town, c.dup_number), (2, 1, 1, 1));
         let s = &stats["oa:us/id/statewide"];
         assert_eq!((s.added, s.dup_near), (0, 1));
+    }
+
+    #[test]
+    fn a_missing_directional_matches_but_a_different_one_does_not() {
+        // About 20 m apart (0.00018 degrees of latitude).
+        let mut have = vec![a("200", "W Example Dr", "", 43.5800, -116.5600)];
+        let mut stats = BTreeMap::new();
+        let oa_rows = vec![
+            // The OA source leaves the directional out: the same address.
+            oa("200", "Example Dr", "", 43.58018, -116.5600, "us/id/test"),
+            // The other side of the road: a different street.
+            oa("200", "E Example Dr", "", 43.58018, -116.5600, "us/id/test"),
+            // Written out: the same address as the pack's.
+            oa("200", "West Example Drive", "", 43.58018, -116.5600, "us/id/test"),
+        ];
+        let added = merge_tile(&mut have, oa_rows, DEFAULT_DIST_M, &mut stats);
+        let got: Vec<&str> = added.iter().map(|x| x.street.as_str()).collect();
+        assert_eq!(got, vec!["E Example Dr"]);
+        assert_eq!(stats["oa:us/id/test"].dup_near, 2);
+        // An added row keeps its own spelling.
+        assert_eq!(have[1].street, "E Example Dr");
+        // The pack's row without a directional also matches an OA row with one.
+        let mut have = vec![a("200", "Example Dr", "", 43.5800, -116.5600)];
+        let added = merge_tile(&mut have, vec![oa("200", "W Example Dr", "", 43.58018, -116.5600, "us/id/test")], DEFAULT_DIST_M, &mut BTreeMap::new());
+        assert!(added.is_empty());
     }
 
     #[test]
