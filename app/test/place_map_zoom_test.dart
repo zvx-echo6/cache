@@ -5,6 +5,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/ui/place_map.dart';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/pin_image.dart';
+import 'package:cache/notebook/place_style.dart' show PinGlyph;
 import 'package:cache/notebook/places.dart';
 import 'package:cache/screens/notebooks/map_spot_picker.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
@@ -385,6 +386,20 @@ void main() {
         await tester.pump(const Duration(seconds: 6));
         await tester.pumpWidget(const SizedBox());
       }
+    });
+
+    testWidgets('the picker marks the middle with the reticle, not a pin', (tester) async {
+      bigView(tester);
+      final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+      ));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const ValueKey('picker-reticle')), findsOneWidget);
+      expect(find.byType(PinGlyph), findsNothing);
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpWidget(const SizedBox());
     });
 
     testWidgets('the picker still moves to the phone position on opening; a tap keeps the zoom', (tester) async {
