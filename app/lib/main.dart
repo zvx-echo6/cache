@@ -68,6 +68,7 @@ import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'net/fetch.dart' show fetchText;
+import 'net/signed_out.dart';
 import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
@@ -157,6 +158,8 @@ final LaunchClock launchClock = LaunchClock(logInfo);
 void main() {
   launchClock.begin();
   WidgetsFlutterBinding.ensureInitialized();
+  // A core call the server answers 401 (the browser's session ended) shows the way back to the sign-in page.
+  HttpTransport.onUnauthorized = reportSignedOut;
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
   unawaited(openAppLog());
@@ -1589,6 +1592,8 @@ class _CacheAppState extends State<CacheApp> {
                 // one shape whether the banner shows or not, so the app below keeps its state when it comes and goes
                 builder: (context, _) => Column(
                   children: [
+                    // a browser whose session ended: one way back to the sign-in page, whatever the page said
+                    const SignedOutBanner(),
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
                     Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),

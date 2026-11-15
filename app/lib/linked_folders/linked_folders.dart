@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../browse/web/device_api.dart' show DeviceException, kDeviceCallTimeout;
+import '../net/signed_out.dart' show reportSignedOut;
 
 class LinkedLibraryTarget {
   const LinkedLibraryTarget(this.id, this.title);
@@ -251,6 +252,7 @@ class LinkedFolderApi {
       );
     }
     if (response.statusCode == 401) {
+      reportSignedOut();
       throw const DeviceException(
         'unauthorized',
         'Sign in again.',
