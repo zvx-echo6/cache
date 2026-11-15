@@ -152,7 +152,7 @@ class _PlaceBookDialogState extends State<PlaceBookDialog> {
             ],
             TextField(
               key: const ValueKey('find-division'),
-              decoration: const InputDecoration(labelText: 'Find a division', prefixIcon: Icon(Icons.search)),
+              decoration: const InputDecoration(labelText: 'Find a category', prefixIcon: Icon(Icons.search)),
               onChanged: (value) => setState(() => query = value),
             ),
             const SizedBox(height: 8),
@@ -196,7 +196,7 @@ class _PlaceBookDialogState extends State<PlaceBookDialog> {
         FilledButton(
           key: const ValueKey('confirm-place'),
           onPressed: selected == null ? null : () => Navigator.pop(context, selected),
-          child: Text(selected == null ? 'Choose a division' : 'Place it in $selected'),
+          child: Text(selected == null ? 'Choose a category' : 'Place it in $selected'),
         ),
       ],
     );
