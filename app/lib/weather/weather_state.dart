@@ -347,6 +347,12 @@ class WeatherState extends ChangeNotifier {
 
   bool isOn(String id) => _same(id).any(settings.liveSourcesOn.contains);
 
+  /// For the log: how many sources the settings have on, how many of them the app recognises as on (catalogue loaded), how many the
+  /// catalogues offer, and how many places are watched. Settings on with none recognised means the catalogue, not the switches.
+  String sourcesLine() =>
+      'weather sources: ${settings.liveSourcesOn.length} on in settings, ${enabledSources.length} recognised as on, '
+      '${sources.length} in the catalogues, started $_started; ${settings.watchedPlaces.length} places watched';
+
   /// The sources that are on and can be used.
   List<Connector> get enabledSources => [for (final c in sources) if (isOn(c.id)) c];
 
