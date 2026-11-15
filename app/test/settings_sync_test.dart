@@ -14,6 +14,7 @@ import 'package:cache/sharing/settings_sync.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sharing/synced_settings.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/weather/curated.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -419,6 +420,25 @@ void main() {
     await s.setUp();
     expect(config!['with'], {'settings': ['match', 'send'], 'bookshelves': ['match']});
     s.dispose();
+  });
+
+  // Weather always works (owner, 2026-11-15): a linked device whose list of sources on is empty does not switch weather off here.
+  testWidgets('a synced list of sources on that is empty leaves the default sources on', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final layout = LayoutState(settingsDirOverride: r.dir);
+    await tester.runAsync(layout.init);
+    final list = appSyncedSettings(app: r.app, layout: layout, settings: r.settings, maps: r.maps, weather: r.weather);
+    final sources = list.firstWhere((s) => s.key == 'weather.sources_on');
+    await tester.runAsync(() async {
+      await r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Earthquakes'), true);
+      await sources.write(<String>[]);
+    });
+    final on = {for (final c in r.weather.enabledSources) c.id};
+    expect(on, containsAll(['openmeteo-forecast', 'nws-alerts-point', 'wfigs-incidents-near', 'wfigs-perimeters-near']));
+    expect(on, isNot(contains('usgs-quakes-near')), reason: 'what the other device had off stays off');
+    expect(r.settings.liveSourcesOn, containsAll(['openmeteo-forecast', 'nws-alerts-point']), reason: 'and the setting says so too');
+    layout.dispose();
+    await r.dispose(tester);
   });
 
   testWidgets('what never syncs never travels: the app settings that are not in a group are not sent or taken', (tester) async {

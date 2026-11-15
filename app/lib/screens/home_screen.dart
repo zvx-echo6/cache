@@ -712,6 +712,14 @@ class _WeatherCardState extends State<_WeatherCard> {
               alignment: Alignment.centerLeft,
               child: FilledButton(key: const ValueKey('weather-off-turn-on'), onPressed: onOpenSettings, child: const Text('Turn on')),
             );
+          } else if (w.waitingForPosition) {
+            // The position is not known yet: without the location permission one tap asks for it; with it, the fix is on its way.
+            action = t != null && t.lacksLocationPermission
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton(key: const ValueKey('weather-use-location'), onPressed: () => unawaited(useMyLocation(context, t)), child: const Text('Use my location')),
+                  )
+                : null;
           } else {
             action = t != null && snap.data?.$2 == true ? WeatherTurnOnButtons(turnOn: t, secondary: false) : null;
           }

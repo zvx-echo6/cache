@@ -37,7 +37,8 @@ void main() {
       }
       expect(find.text('Choose a model · web search off'), findsOneWidget);
       expect(find.text('No regions yet · miles'), findsOneWidget);
-      expect(find.text('Nothing on'), findsOneWidget, reason: 'Weather and alerts');
+      expect(find.textContaining(' sources · 1 place'), findsOneWidget, reason: 'Weather and alerts: the defaults are on from the start, not "Nothing on"');
+      expect(find.text('Nothing on'), findsNothing);
       expect(find.text('Serious alerts · quiet 10 PM–6 AM'), findsOneWidget);
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
