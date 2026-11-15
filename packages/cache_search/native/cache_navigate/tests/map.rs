@@ -50,7 +50,6 @@ impl Straight {
                     bearing_after: Some(90.0),
                     bearing_before: None,
                     lanes: if self.lanes && i == 3 { vec![Lane { directions: 16, active: None, valid: None }, Lane { directions: 48, active: Some(32), valid: None }, Lane { directions: 32, active: None, valid: Some(32) }] } else { vec![] },
-                    ..Default::default()
                 }
             })
             .collect();
