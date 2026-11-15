@@ -1,5 +1,5 @@
 // "Synced with another device" (owner's design for Delete, 2026-11-15): the book's own library is in a share that is on, and at
-// least one linked device takes it (its link mode is not off). SharingState.libraryTakenByAnotherDevice answers it.
+// least one device is linked (every linked device takes it: sync is fully shared both ways, a link's mode is not looked at). SharingState.libraryTakenByAnotherDevice answers it.
 
 import 'dart:io';
 
@@ -79,12 +79,9 @@ void main() {
     expect(s.libraryTakenByAnotherDevice('my-books'), isFalse);
   });
 
-  test('not synced: the only linked device is set to Off', () async {
+  test('synced whatever the link mode: a device set to Off still takes the library', () async {
     sync.peers.add(peer('p1', link: {'mode': 'off', 'ask': true}));
     await start();
-    expect(s.libraryTakenByAnotherDevice('my-books'), isFalse);
-    sync.peers.add(peer('p2', link: {'mode': 'match'}));
-    await s.refresh();
-    expect(s.libraryTakenByAnotherDevice('my-books'), isTrue, reason: 'one device that takes it is enough');
+    expect(s.libraryTakenByAnotherDevice('my-books'), isTrue);
   });
 }

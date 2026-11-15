@@ -981,7 +981,7 @@ Future<void> _removeHere(BuildContext context, LibraryDeps d, List<ShelfBook> bo
 /// them).
 String deleteEverywhereText(ShelfBook b) =>
     'Deletes this book, its PDF and its search entries on this device and on your linked devices that get ${b.libraryName ?? 'My books'} '
-    "from it. A device set to keep its own copies from this one keeps it. This can't be undone.";
+    "from it. This can't be undone.";
 const String kDeletedEverywhere = 'Deleted. Your other devices remove it when they next connect.';
 // WORDING QUESTION: a book of a library the person did not make (a downloaded or shared one) cannot be deleted from here.
 const String kNotYoursToDelete = "This book isn't in a library you made, so you can't delete it here.";

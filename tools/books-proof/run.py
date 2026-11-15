@@ -340,8 +340,6 @@ def del_scenario(name):
             c = checks(ev, '1-both-books', [a, b], [W, C], added)
             expect_verdict(ev, '1-both-books', c, {'A': {W: True, C: True}, 'B': {W: True, C: True}}, added)
             before = calls_of(ev, '1-both-books', 'A').get(W)
-            if name == 'del-keep':
-                b.call('keep_copies', {'on': True})
             if name == 'del-apart':
                 b.call('pause')
             a.call('delete', {'title': W})
@@ -351,14 +349,13 @@ def del_scenario(name):
             time.sleep(10)
             rounds([a, b], 2)
             c = checks(ev, '2-after-delete', [a, b], [W, C], added)
-            want_b = name == 'del-keep'
-            v = expect_verdict(ev, '2-after-delete', c, {'A': {W: False, C: True}, 'B': {W: want_b, C: True}}, added)
+            v = expect_verdict(ev, '2-after-delete', c, {'A': {W: False, C: True}, 'B': {W: False, C: True}}, added)
             if name == 'del-keep':
-                # a second sync later (A's delete offered again): B's copy must still stand
+                # a second sync later (A's delete offered again): B's delete stands, nothing comes back
                 time.sleep(15)
                 rounds([a, b], 4)
                 c = checks(ev, '2b-second-sync', [a, b], [W, C], added)
-                v2 = expect_verdict(ev, '2b-second-sync', c, {'A': {W: False, C: True}, 'B': {W: True, C: True}}, added)
+                v2 = expect_verdict(ev, '2b-second-sync', c, {'A': {W: False, C: True}, 'B': {W: False, C: True}}, added)
                 v = {**v2, 'pass': v['pass'] and v2['pass'], 'first': v}
             if name == 'del-readd':
                 added[W] = a.call('add', {'title': W, 'lines': WATER})

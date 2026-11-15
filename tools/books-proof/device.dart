@@ -491,14 +491,6 @@ void main() {
           }
           if (removed.isEmpty) throw StateError('no own copy of "$title" here');
           return {'removed': removed, 'own_sync': fixed ? await ownSync() : null};
-        case 'keep_copies':
-          // "Don't replace my copies from this device", switched on here for every linked device
-          await sharing.refresh();
-          for (final p in sharing.peers) {
-            await sharing.setKeepCopies('${p['id']}', a['on'] != false);
-          }
-          await sharing.refresh();
-          return {'peers': [for (final p in sharing.peers) {'name': p['name'], 'keep_copies': p['keep_copies']}]};
         case 'own_sync':
           return {'own_sync': await ownSync()};
         case 'dump':

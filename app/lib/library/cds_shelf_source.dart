@@ -1223,7 +1223,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// "Delete from all your devices" (owner decisions, 2026-11-14): removes the book's packs and PDFs from the person's own libraries
   /// here. Those two files are what syncs of an own library (kLibraryNotShared), so the deletes reach the person's other devices as
   /// the sync's own deletes, and each device rebuilds its shard and lists from the packs that are left (own_library_sync), which
-  /// takes the book out of search and off the shelves there too. A device that keeps its own copies from this one keeps it, and a
+  /// takes the book out of search and off the shelves there too. A
   /// copy another device added without having seen the delete stays (the sync never deletes what was changed meanwhile). The
   /// Bookshelves events are kept: the shelf place and the call number come back if the book is added again. The packs go first:
   /// a kill before the PDF leaves only a PDF nothing lists, and the rebuild runs at the next start if it did not here.
