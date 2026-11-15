@@ -35,7 +35,10 @@ Map<String, dynamic> routeGeoJson(List<MapRoute> routes, int selected) {
 
 /// The chosen place (large) and the search results (small). [mark]: the turn shown while stepping through a route before Start,
 /// drawn as a small pin (a search result's).
-Map<String, dynamic> pinGeoJson(MapPlace? selected, List<MapPlace> results, {GeoPoint? mark}) {
+///
+/// [pinImages] names, by place id, the map image of a place that is a notebook entry (its icon in the pin style, see PinImages): its
+/// feature carries it as `pin` and the map draws that in place of the plain dot.
+Map<String, dynamic> pinGeoJson(MapPlace? selected, List<MapPlace> results, {GeoPoint? mark, Map<String, String> pinImages = const {}}) {
   final f = <Map<String, dynamic>>[];
   if (mark != null) {
     f.add({
@@ -49,14 +52,14 @@ Map<String, dynamic> pinGeoJson(MapPlace? selected, List<MapPlace> results, {Geo
     f.add({
       'type': 'Feature',
       'geometry': {'type': 'Point', 'coordinates': [p.lon, p.lat]},
-      'properties': {'role': 'result', 'id': p.id},
+      'properties': {'role': 'result', 'id': p.id, if (pinImages[p.id] != null) 'pin': pinImages[p.id]},
     });
   }
   if (selected != null) {
     f.add({
       'type': 'Feature',
       'geometry': {'type': 'Point', 'coordinates': [selected.lon, selected.lat]},
-      'properties': {'role': 'selected', 'id': selected.id},
+      'properties': {'role': 'selected', 'id': selected.id, if (pinImages[selected.id] != null) 'pin': pinImages[selected.id]},
     });
   }
   return _collection(f);
