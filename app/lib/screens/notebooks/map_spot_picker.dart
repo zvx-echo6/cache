@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/place_map.dart' show PlaceFixScope;
@@ -142,7 +140,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
             ),
           ),
           IgnorePointer(
-            child: Center(child: _Crosshair(icon: widget.icon, tint: widget.tint, style: widget.pinStyle, ring: k.surface)),
+            child: Center(child: _Reticle(line: k.text, casing: k.surface)),
           ),
           Positioned(
             left: 0,
@@ -224,57 +222,37 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
   }
 }
 
-/// The fixed crosshair over the middle of the map, with the pin in its style standing on it.
-class _Crosshair extends StatelessWidget {
-  const _Crosshair({required this.icon, required this.tint, required this.style, required this.ring});
+/// The fixed targeting reticle over the middle of the map: a thin circle with a dot in its centre, the exact spot being the dot.
+/// Each stroke is drawn twice, a wider casing in the surface colour under a thin line in the text colour, so it stands out on any
+/// map in light, dark and Tactical alike.
+class _Reticle extends StatelessWidget {
+  const _Reticle({required this.line, required this.casing});
 
-  final IconData icon;
-  final Color tint;
-  final PinStyle style;
-  final Color ring;
+  final Color line, casing;
 
   @override
-  Widget build(BuildContext context) {
-    const size = 48.0;
-    // The teardrop's point is at the foot of its square; the icon and the badge are centred.
-    final lift = style == PinStyle.teardrop ? size * 0.44 : 0.0;
-    final line = context.t.text;
-    return SizedBox(
-      width: 120,
-      height: 120,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          CustomPaint(size: const Size(120, 120), painter: _TicksPainter(line, ring)),
-          Transform.translate(offset: Offset(0, -lift), child: PinGlyph(icon: icon, tint: tint, style: style, size: size)),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      CustomPaint(key: const ValueKey('picker-reticle'), size: const Size(64, 64), painter: _ReticlePainter(line, casing));
 }
 
-class _TicksPainter extends CustomPainter {
-  _TicksPainter(this.line, this.casing);
+class _ReticlePainter extends CustomPainter {
+  _ReticlePainter(this.line, this.casing);
   final Color line, casing;
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
-    for (final (w, col) in [(4.5, casing), (2.0, line)]) {
-      final p = Paint()
+    const radius = 18.0;
+    for (final (w, col) in [(3.5, casing), (1.5, line)]) {
+      canvas.drawCircle(c, radius, Paint()
         ..color = col
-        ..strokeWidth = w
-        ..strokeCap = StrokeCap.round;
-      for (var i = 0; i < 4; i++) {
-        final a = i * math.pi / 2;
-        final d = Offset(math.cos(a), math.sin(a));
-        canvas.drawLine(c + d * 30, c + d * 46, p);
-      }
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w);
     }
     canvas.drawCircle(c, 3.5, Paint()..color = casing);
-    canvas.drawCircle(c, 2, Paint()..color = line);
+    canvas.drawCircle(c, 2.0, Paint()..color = line);
   }
 
   @override
-  bool shouldRepaint(_TicksPainter old) => old.line != line || old.casing != casing;
+  bool shouldRepaint(_ReticlePainter old) => old.line != line || old.casing != casing;
 }
