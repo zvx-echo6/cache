@@ -1684,9 +1684,10 @@ void main() {
       test('arrival time is the clock the phone shows', () async {
         await guide();
         final p = nav.progress!;
-        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS)!;
-        expect(carAnswer(nav, 'eta'), 'Arriving at ${clockTime(at)}.');
-        expect(carAnswer(nav, 'eta'), matches(RegExp(r'^Arriving at \d{1,2}:\d\d (AM|PM)\.$')));
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'eta', now: () => now), 'Arriving at ${clockTime(at)}.');
+        expect(carAnswer(nav, 'eta', now: () => now), matches(RegExp(r'^Arriving at \d{1,2}:\d\d (AM|PM)\.$')));
       });
 
       test('the distance left is said as the phone says distances', () async {
