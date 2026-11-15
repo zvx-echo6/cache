@@ -105,7 +105,13 @@ class Harness {
     clock: () => clock,
     hereSettle: hereSettle,
     hereGap: hereGap,
+    townOf: townOf,
+    timer: timers == null ? null : (d, f) => timers!.make(d, f, () => clock),
   );
+
+  /// The town lookup (null: none); and, when set, timers the test runs by hand with [clock] as their time.
+  Future<String?> Function(double, double)? townOf;
+  FakeTimers? timers;
 
   Duration hereSettle = const Duration(milliseconds: 30);
   Duration hereGap = const Duration(minutes: 15);
@@ -571,7 +577,7 @@ void main() {
       expect(h.core.everythingSeen(), isNot(contains(secret)));
       // the fake core refuses as the real one does when it holds no key
       h.core.keys.remove('firms-viirs-near');
-      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Where I am failed: needs a key');
+      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Current location failed: needs a key');
     });
 
     test('one key serves every source that uses it', () async {
@@ -639,7 +645,7 @@ void main() {
       for (final k in ['a', 'b', 'c']) {
         h.settings.setWatched('place:$k', true);
       }
-      expect(await h.weather.watchedSummary(), 'Where I am\nHome\nCabin\n+1 more');
+      expect(await h.weather.watchedSummary(), 'Current location\nHome\nCabin\n+1 more');
       h.settings.setWatched('here', false);
       expect(await h.weather.watchedSummary(), 'Home\nCabin\nWork');
     });
@@ -654,7 +660,7 @@ void main() {
       expect(h.settings.watchedPlaces.contains('place:cabin'), isFalse);
       expect((await h.weather.placeChoices()).map((p) => p.id), isNot(contains('place:cabin')));
       await h.weather.removePlace((await h.weather.placeChoices()).first);
-      expect(h.core.deleted, ['cabin'], reason: 'Where I am is not a saved place');
+      expect(h.core.deleted, ['cabin'], reason: 'Current location is not a saved place');
     });
 
     test('regions are the finished map areas by name, at the middle of their areas', () {
@@ -814,7 +820,7 @@ void main() {
       expect(r.ok, isFalse);
       expect(r.fetched, 2);
       expect(r.failures.length, 2);
-      expect(r.failures.first, 'NWS for Where I am failed: the service answered HTTP 503');
+      expect(r.failures.first, 'NWS for Current location failed: the service answered HTTP 503');
       expect(r.words, startsWith('Updated, but NWS'));
       expect(h.weather.sourceErrors['nws-alerts-point'], 'the service answered HTTP 503');
       h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('quota', 'limit');
@@ -870,7 +876,7 @@ void main() {
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
       await h.weather.updateNow();
-      expect(h.weather.status().headline, 'Updated just now · USGS for Where I am failed: the service answered HTTP 500');
+      expect(h.weather.status().headline, 'Updated just now · USGS for Current location failed: the service answered HTTP 500');
     });
 
     test('every failing source is in the line, not only the first', () async {
@@ -884,8 +890,8 @@ void main() {
       await h.weather.updateNow();
       final line = h.weather.status().headline;
       expect(line, contains('2 updates failed'));
-      expect(line, contains('USGS for Where I am failed'));
-      expect(line, contains('NWS for Where I am failed'));
+      expect(line, contains('USGS for Current location failed'));
+      expect(line, contains('NWS for Current location failed'));
     });
 
     test('an update writes the definitions of every source that is on first, however it was switched on', () async {
@@ -986,7 +992,7 @@ void main() {
       h.regions = [const WatchRegion(name: 'Idaho', lat: 44.0, lon: -114.7)];
       h.settings.setRegionWatched('Idaho', true);
       final areas = await h.weather.watchAreas();
-      expect([for (final a in areas) (a.place.name, a.on)], [('Where I am', true), ('Idaho', true)]);
+      expect([for (final a in areas) (a.place.name, a.on)], [('Current location', true), ('Idaho', true)]);
       h.settings.setWatchHere(false);
       expect([for (final a in await h.weather.watchAreas()) a.on], [false, true]);
     });
@@ -995,7 +1001,7 @@ void main() {
       h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
     });
 
     // build 48 on a phone: Home said "no forecast yet" while the Weather screen showed Open-Meteo's forecast, because the first
@@ -1441,6 +1447,160 @@ void main() {
       expect(hereKeys(), hasLength(2), reason: 'nothing while offline');
     });
 
+    // A car's key changes about every kilometre and never settles, so the key it is at has nothing fetched for it. The nearest key
+    // with data, within 25 km, stands in; the age line is that data's own.
+    // These tests move "Where I am" about: its own fetch for a settled key is kept an hour away so it does not race them.
+    Future<void> hereNeverSettles() async {
+      h.hereSettle = const Duration(hours: 1);
+      h.weather.dispose();
+      h.weather = h.build();
+      await h.weather.start();
+    }
+
+    test('"Where I am" with no data at its own key shows the nearest kept data within 25 km, and none beyond', () async {
+      h = await Harness.create(clock: noon);
+      await hereNeverSettles();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.storedAt['openmeteo-forecast at:42.54,-113.79'] = forecast();
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
+      // 3 km north: its own key has nothing downloaded
+      h.here = (lat: 42.57, lon: -113.79);
+      h.weather.positionChanged();
+      var c = await h.weather.homeCard();
+      expect(c.forecastMissing, isFalse);
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
+      // the same at once, without the core
+      expect(h.weather.homeCardNow()?.forecastMissing, isFalse);
+      // 40 km north: too far, as before
+      h.here = (lat: 42.90, lon: -113.79);
+      h.weather.positionChanged();
+      c = await h.weather.homeCard();
+      expect(c.forecastMissing, isTrue);
+      expect(c.temperature, isNull);
+      expect(h.weather.homeCardNow()?.forecastMissing ?? true, isTrue);
+    });
+
+    test('the Weather screen\'s view of "Where I am" borrows the nearest kept key too, and the nearest of several', () async {
+      h = await Harness.create(clock: noon);
+      await hereNeverSettles();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final near = forecast(), far = forecast();
+      (near['items'] as List)[0]['fields']['Temperature'] = '41 °F';
+      (far['items'] as List)[0]['fields']['Temperature'] = '60 °F';
+      h.here = (lat: 42.60, lon: -113.79);
+      h.core.storedAt['openmeteo-forecast at:42.60,-113.79'] = far;
+      await h.weather.viewFor((await h.weather.watchedPlaces()).first);
+      h.here = (lat: 42.50, lon: -113.79);
+      h.core.storedAt['openmeteo-forecast at:42.50,-113.79'] = near;
+      await h.weather.viewFor((await h.weather.watchedPlaces()).first);
+      // at 42.52: 42.50 is 2 km away, 42.60 is 9 km away
+      h.here = (lat: 42.52, lon: -113.79);
+      final here = (await h.weather.watchedPlaces()).first;
+      expect(here.key, 'at:42.52,-113.79');
+      final v = await h.weather.viewFor(here);
+      expect(v.single.items.first.fields['Temperature'], '41 °F');
+      expect(v.single.missing, isFalse);
+      expect(v.single.age, '1 hour old');
+    });
+
+    test('"Where I am" is named after its town when the lookup gives one, else "Current location"', () async {
+      h = await Harness.create();
+      final asked = <(double, double)>[];
+      String? answer = 'Pine Hollow, ID';
+      h.townOf = (lat, lon) async {
+        asked.add((lat, lon));
+        return answer;
+      };
+      h.weather.dispose();
+      h.weather = h.build();
+      await h.weather.start();
+      expect((await h.weather.placeChoices()).first.name, 'Current location', reason: 'before the lookup has answered');
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect((await h.weather.placeChoices()).first.name, 'Pine Hollow, ID');
+      expect(h.weather.placeChoicesNow().first.name, 'Pine Hollow, ID');
+      expect((await h.weather.placeChoices()).first.subtitle, 'Follows this device');
+      await h.weather.placeChoices();
+      expect(asked, hasLength(1), reason: 'looked up once for its key, not at every build');
+      // no town known at the next key
+      answer = null;
+      h.here = (lat: 43.20, lon: -113.79);
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(h.weather.placeChoicesNow().first.name, 'Current location');
+      // the core's request still names it as the model has always seen it
+      expect(WeatherState.placeRequest(h.weather.placeChoicesNow().first)['name'], 'current location');
+    });
+
+    test('the town is the `town` field of the point the core gives, not a reading of its address', () {
+      final p = MapPlace.fromJson({'id': 'loc:40.020000,-100.000000', 'type': 'coordinates', 'name': '40.02000, -100.00000', 'kind': 'Coordinates', 'address': '1.4 mi N of Pine Hollow, ID', 'town': 'Pine Hollow, ID', 'lat': 40.02, 'lon': -100.0});
+      expect(p.town, 'Pine Hollow, ID');
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'town': null, 'lat': 1, 'lon': 2}).town, isNull);
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'lat': 1, 'lon': 2}).town, isNull);
+    });
+
+    test('"Where I am" moving without settling is fetched for within 5 minutes; still, after 45 seconds; hereGap is kept', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.weather.dispose();
+      h.timers = FakeTimers();
+      h.hereSettle = const Duration(seconds: 45);
+      h.weather = h.build();
+      await h.weather.start();
+      h.core.fetches.clear();
+      List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
+      // Runs what the fired timers started to its end: waits (a real delay of a few ms at a time, at most 5 s) until the fake core has
+      // recorded [want] fetches and no fetch is still running, so nothing depends on how fast the box is.
+      Future<void> pump({int? want}) async {
+        final end = DateTime.now().add(const Duration(seconds: 5));
+        await pumpEventQueue();
+        while (DateTime.now().isBefore(end) && (want != null && h.core.fetches.length < want)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        await pumpEventQueue();
+      }
+      // still: one fetch, after 45 s
+      h.here = (lat: 42.60, lon: -113.79);
+      h.weather.positionChanged();
+      h.clock = h.clock.add(const Duration(seconds: 44));
+      h.timers!.fireDue(h.clock);
+      await pump();
+      expect(hereKeys(), isEmpty);
+      h.clock = h.clock.add(const Duration(seconds: 2));
+      h.timers!.fireDue(h.clock);
+      await pump(want: 1);
+      expect(hereKeys(), ['at:42.60,-113.79']);
+      // moving: a new key every 30 s for 6 minutes; the settle wait never ends
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.core.fetches.clear();
+      final start = h.clock;
+      for (var i = 1; i <= 12; i++) {
+        h.clock = start.add(Duration(seconds: 30 * i));
+        h.here = (lat: 42.60 + 0.02 * i, lon: -113.79);
+        h.weather.positionChanged();
+        h.timers!.fireDue(h.clock);
+        await pump(want: i >= 11 ? 1 : null);
+      }
+      expect(hereKeys(), hasLength(1), reason: 'a fetch happened while it kept moving');
+      // the fetch says when it was asked for; the first move that did not settle was at start + 30 s
+      final firstMove = start.add(const Duration(seconds: 30));
+      final fetchedAt = DateTime.parse('${h.core.fetches.single['now']}');
+      expect(fetchedAt.difference(firstMove), lessThanOrEqualTo(const Duration(minutes: 5)), reason: 'at most 5 minutes after the first move');
+      expect(fetchedAt.difference(firstMove), greaterThan(const Duration(minutes: 4)), reason: 'not before the wait is out');
+      // hereGap: the next 6 minutes of moving fetch nothing again (the gap is 15 minutes)
+      final after = h.clock;
+      for (var i = 1; i <= 12; i++) {
+        h.clock = after.add(Duration(seconds: 30 * i));
+        h.here = (lat: 43.0 + 0.02 * i, lon: -113.79);
+        h.weather.positionChanged();
+        h.timers!.fireDue(h.clock);
+        await pump();
+      }
+      // a fetch that should not happen would still be running on real file IO: give it a moment to show (a wrong pass is the only risk)
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(hereKeys(), hasLength(1), reason: 'not inside hereGap');
+    });
+
     test('Home weather: the field names the definition uses now', () async {
       h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
@@ -1451,7 +1611,7 @@ void main() {
         'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F'},
       };
       h.core.stored['openmeteo-forecast'] = f;
-      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
     });
 
     test('Home waits for the position while "Where I am" is ticked, and hears when it arrives', () async {
@@ -1477,7 +1637,7 @@ void main() {
       h.weather.positionChanged();
       expect(heard, 2);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await homeWeather(h.weather), contains('Where I am'));
+      expect(await homeWeather(h.weather), contains('Current location'));
       // Not ticked: Home asks for a place, as before.
       h.here = null;
       h.settings.setWatched('here', false);
@@ -1494,17 +1654,17 @@ void main() {
       h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
-      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Where I am', 'Cabin']));
+      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Current location', 'Cabin']));
 
       // the settled end of a restart, at the same moment
       h.weather.dispose();
       h = await Harness.create(again: h, serve: false, clock: noon);
       // The new core has nothing yet and is busy: nothing it says arrives.
       h.core.busy = Completer<void>();
-      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Where I am', 'Cabin']));
+      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Current location', 'Cabin']));
       final now = h.weather.homeCardNow();
       expect(now?.temperature, '45 °F');
-      expect(now?.place, 'Where I am');
+      expect(now?.place, 'Current location');
       expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2));
       h.core.busy!.complete();
     });
@@ -1553,7 +1713,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/none', 'label': 'No active fires', 'none_active': true, 'fields': {}},
         ],
       };
-      expect(await homeAlerts(h.weather), 'None active · Where I am · checked 20 minutes old');
+      expect(await homeAlerts(h.weather), 'None active · Current location · checked 20 minutes old');
       h.core.stored['wfigs-incidents-near'] = {
         'age': '20 minutes old',
         'expired': false,
@@ -1562,7 +1722,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/2', 'label': 'Forleen fire', 'fields': {'Distance': '52 mi W'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       await h.weather.setRowOn(row('Weather alerts'), true);
       h.core.stored['nws-alerts-point'] = {
         'age': '5 minutes old',
@@ -1571,7 +1731,7 @@ void main() {
           {'address': 'live:nws-alerts-point/x/1', 'label': 'Red Flag Warning', 'fields': {'Severity': 'severe'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '1 warning · 2 fires · Red Flag Warning · Where I am');
+      expect(await homeAlerts(h.weather), '1 warning · 2 fires · Red Flag Warning · Current location');
       // a fire reported by both the incident and the perimeter source counts once
       await h.weather.setRowOn(row('Weather alerts'), false);
       h.core.stored['wfigs-perimeters-near'] = {
@@ -1581,7 +1741,7 @@ void main() {
           {'address': 'live:wfigs-perimeters-near/x/1', 'label': 'East Fork fire perimeter', 'fields': {'Distance to fire edge': '38 mi S'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       // earthquakes are not counted on Home
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.stored['usgs-quakes-near'] = {
@@ -1591,12 +1751,12 @@ void main() {
           {'address': 'live:usgs-quakes-near/x/1', 'label': 'M 2.1 near Hyde Park', 'fields': {'Magnitude': '2.1'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       // another watched place's fires are not added in: Home counts the place it names
       h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43, lon: -114)];
       h.settings.setWatched('place:cabin', true);
       expect((await h.weather.watchedPlaces()).length, 2);
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       h.settings.setWatched('here', false);
       expect(await homeAlerts(h.weather), '2 fires · Cabin');
     });
@@ -1666,7 +1826,7 @@ void main() {
       h = await withNotifier(n);
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.title), ['East Fork fire near Where I am']);
+      expect(n.shown.map((a) => a.title), ['East Fork fire near Current location']);
       expect(n.deliveries.single, AlertDelivery.normal);
       await h.weather.updateNow();
       expect(n.shown.length, 1, reason: 'already told');
@@ -1936,6 +2096,45 @@ void main() {
       expect(h.weather.lastOkAt, ran);
     });
   });
+}
+
+/// Timers run by hand: [make] records a timer; [fireDue] runs those due at the given time (a timer's time is the clock it was made at
+/// plus its wait), so a test with a fake clock never waits for real time.
+class FakeTimers {
+  final List<_FakeTimer> _all = [];
+
+  Timer make(Duration wait, void Function() f, DateTime Function() now) {
+    final t = _FakeTimer(now().add(wait), f);
+    _all.add(t);
+    return t;
+  }
+
+  void fireDue(DateTime now) {
+    for (final t in List.of(_all)) {
+      if (!t.cancelled && !t.fired && !t.due.isAfter(now)) {
+        t.fired = true;
+        t.callback();
+      }
+    }
+  }
+}
+
+class _FakeTimer implements Timer {
+  _FakeTimer(this.due, this.callback);
+
+  final DateTime due;
+  final void Function() callback;
+  bool cancelled = false;
+  bool fired = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled && !fired;
+
+  @override
+  int get tick => 0;
 }
 
 /// The Home card's weather part as one line, the way the card lays it out.

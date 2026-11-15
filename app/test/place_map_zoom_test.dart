@@ -12,6 +12,7 @@ import 'package:cache/screens/notebooks/places_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -358,7 +359,34 @@ void main() {
       expect(cam.initial!.target.latitude, 44.1);
     });
 
-    testWidgets('the picker: "Where I am" goes to the place zoom; a tap keeps the zoom', (tester) async {
+    testWidgets('the picker at a phone width of 430 shows "Current location" in full, and at 360 the row does not overflow', (tester) async {
+      for (final width in [430.0, 360.0]) {
+        tester.view.physicalSize = Size(width * 3, 2400);
+        tester.view.devicePixelRatio = 3;
+        addTearDown(tester.view.reset);
+        final d = await deps(tester, _Cam(), fixAfter: const Duration(seconds: 5));
+        // Tests draw text in the Ahem font, where every letter is a full em wide, about twice a real font's width: the text is scaled
+        // by half so its width is what a phone draws.
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.light),
+          builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(0.5)), child: child!),
+          home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
+        ));
+        await tester.pump(const Duration(seconds: 1));
+        final label = find.descendant(of: find.byKey(const ValueKey('picker-here')), matching: find.text('Current location'));
+        expect(label, findsOneWidget, reason: 'at $width');
+        final paragraph = tester.renderObject<RenderParagraph>(find.descendant(of: label, matching: find.byType(RichText)).first);
+        if (width == 430) {
+          expect(paragraph.size.width, greaterThanOrEqualTo(paragraph.getMaxIntrinsicWidth(double.infinity) - 0.5), reason: 'not cut short at 430');
+          expect(paragraph.didExceedMaxLines, isFalse);
+        }
+        expect(tester.takeException(), isNull, reason: 'no overflow at $width');
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('the picker: "Current location" goes to the place zoom; a tap keeps the zoom', (tester) async {
       bigView(tester);
       final cam = _Cam();
       final d = await deps(tester, cam, fixAfter: const Duration(seconds: 5));
@@ -366,10 +394,12 @@ void main() {
         theme: buildTheme(CacheThemeId.light),
         home: MapSpotPicker(map: d.placesDeps!.pickerMap!, places: d.places, start: null, icon: Icons.place, tint: Colors.red, pinStyle: PinStyle.icon),
       ));
-      // The opening position fix is slow; the person has the map open on the fallback and presses "Where I am".
+      // The opening position fix is slow; the person has the map open on the fallback and presses "Current location".
       await tester.pump(const Duration(seconds: 4));
       await tester.pump();
       expect(cam.initial!.zoom, kPlaceWideView.zoom);
+      expect(find.descendant(of: find.byKey(const ValueKey('picker-here')), matching: find.text('Current location')), findsOneWidget);
+      expect(find.text('Where I am'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('picker-here')));
       await tester.pump(const Duration(seconds: 6));
       await tester.pump(const Duration(milliseconds: 100));

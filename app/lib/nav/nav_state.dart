@@ -13,6 +13,7 @@ import '../platform/app_log.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
+import 'saved_first.dart';
 import 'speaker.dart';
 import 'units.dart';
 
@@ -441,10 +442,17 @@ class NavState extends ChangeNotifier {
     if (text.trim().isEmpty) return;
     final seq = ++_searchSeq;
     searching = true;
+    // The saved places that match come first (saved_first.dart), and stay when the place search fails.
+    var saved = const <MapPlace>[];
+    try {
+      saved = [for (final s in await backend.savedPlaces()) savedAsPlace(s)];
+    } catch (_) {
+      // An old core without saved places: the place search alone.
+    }
     try {
       final r = await backend.search(text, near: mapCentre ?? here, limit: 10, meaning: meaning);
       if (seq != _searchSeq) return;
-      results = r.results;
+      results = savedFirst(text, saved, r.results);
       searchError = null;
       final words = meaning && r.kind == 'text';
       searchNote = words && (r.meaning == 'no_vectors' || r.meaning == 'model_mismatch')
@@ -461,7 +469,7 @@ class NavState extends ChangeNotifier {
     } catch (e) {
       if (seq != _searchSeq) return;
       searchError = e is CacheSearchException ? e.message : 'Search failed';
-      results = const [];
+      results = savedFirst(text, saved, const []);
       placesState = PlacesState.ok;
     } finally {
       if (seq == _searchSeq) searching = false;
