@@ -17,6 +17,7 @@ import 'starter_layers.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'regions_ops.dart';
+import 'share_reactions.dart';
 import 'sharing_host.dart';
 import 'video_ops.dart';
 
@@ -91,12 +92,18 @@ Future<void> main() async {
   final SharingHost? sharing = data == null
       ? null
       : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
+  // The rescan after a sync, given the helper's own pieces (the OpenOp/RescanOp below share them).
+  final rescan = RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own);
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
   if (sharing != null) {
-    // a pack of My books that another device added arrives in the libraries share: made searchable here
-    sharing.onShareChanged = (ids) {
-      if (ids.contains('libraries')) unawaited(own.run());
-    };
+    // What a sync brought in is read here (share_reactions.dart): ZIMs and libraries listed again, a pack of My books made
+    // searchable, saved videos' captions indexed.
+    sharing.onShareChanged = ShareReactions(
+      rescanSources: () => rescan.rescanFolders(runOwn: false),
+      ownLibraries: () => unawaited(own.run()),
+      indexVideos: indexer.kick,
+      log: log,
+    ).onChanged;
     unawaited(sharing.init());
   }
   await serveLines(
@@ -112,7 +119,7 @@ Future<void> main() async {
         regionsOps.afterOpen();
         keys.replay(dispatcher);
       }),
-      RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own),
+      rescan,
       IndexStateOp(indexer),
       IndexPauseOp(indexer),
       FeaturesOp(dirs),

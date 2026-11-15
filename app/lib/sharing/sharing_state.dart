@@ -829,7 +829,7 @@ class _PhoneDriver implements SharingDriver {
 /// The browser's driver: the engine runs on Cache Server, in its helper's sharing host, which keeps sharing set up, starts it with
 /// the server and polls its status once for every tab. This reads the host's cached state every 2 s (`sharing.state`) and sends the
 /// person's choices as `sharing.*` ops; nothing here opens an engine, reads a folder or keeps `sharing.json`. Only the kinds the
-/// host can share fully so far are listed (Library and Models); the others come with later slices.
+/// host can share so far are listed (Library, Maps, Models and Videos); Notebooks come with a later slice.
 class _WebDriver implements SharingDriver {
   _WebDriver(this.s, this.t);
 
@@ -837,7 +837,7 @@ class _WebDriver implements SharingDriver {
   final CoreTransport t;
 
   /// The kinds listed in a browser for now.
-  static const Set<String> kindIds = {'library', 'models'};
+  static const Set<String> kindIds = {'library', 'regions', 'models', 'videos'};
 
   /// How long a link may take (the engine waits for the other device) before the browser gives up waiting.
   static const Duration kLinkWait = Duration(minutes: 3);
