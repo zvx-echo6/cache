@@ -445,4 +445,58 @@ void main() {
       'my-books*/SHA256SUMS',
     ]);
   });
+
+  // ---- an item's row opens it where the app has a page for it; the Switch alone toggles
+
+  Future<(_Rig, SharingState)> kindPage(WidgetTester tester, {ShareItemOpener? open}) async {
+    final r = (await tester.runAsync(_rig))!;
+    final s = r.make();
+    await tester.runAsync(s.setUp);
+    await tester.runAsync(() => s.setShared(r.kind('notebooks'), true));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingKindPage(sharing: s, kind: r.kind('notebooks'), onOpenItem: open)));
+    await tester.pump();
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      s.dispose();
+      await r.dir.delete(recursive: true);
+    });
+    return (r, s);
+  }
+
+  /// Saving a choice writes a file (outside the test's clock): let real time pass until [done], with a bound.
+  Future<void> settleCalls(WidgetTester tester, [bool Function()? done]) async {
+    for (var i = 0; i < 60; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+      await tester.pump();
+      if (done == null || done()) return;
+    }
+  }
+
+  testWidgets('a row with a target opens it and does not toggle; the Switch still toggles; a row with none toggles as before', (tester) async {
+    final opened = <String>[];
+    final (r, _) = await kindPage(tester, open: (context, kind, item) => item.path == 'Journal' ? () => opened.add(item.path) : null);
+    final before = r.calls('set_off').length;
+    await tester.tap(find.text('Journal'));
+    await settleCalls(tester);
+    expect(opened, ['Journal']);
+    expect(r.calls('set_off'), hasLength(before), reason: 'opening the item changes nothing');
+    final row = find.byKey(const ValueKey('item-notebooks/Journal'));
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await settleCalls(tester, () => r.calls('set_off').length > before);
+    expect(opened, ['Journal'], reason: 'the Switch does not open');
+    expect((r.calls('set_off').last['off'] as List), contains('Journal'));
+    // Health log has no target: its row toggles (a private notebook: its Include in sync and sharing)
+    await tester.tap(find.text('Health log'));
+    await settleCalls(tester, () => r.privateSet.isNotEmpty);
+    expect(r.privateSet, [true]);
+    expect(opened, ['Journal']);
+  });
+
+  testWidgets('where nothing is wired the whole row still toggles sharing', (tester) async {
+    final (r, _) = await kindPage(tester);
+    final before = r.calls('set_off').length;
+    await tester.tap(find.text('Journal'));
+    await settleCalls(tester, () => r.calls('set_off').length > before);
+    expect((r.calls('set_off').last['off'] as List), contains('Journal'));
+  });
 }

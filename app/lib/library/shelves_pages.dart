@@ -577,6 +577,7 @@ class HiddenBooksPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = deps;
+    final pageContext = context;
     return Scaffold(
       appBar: libraryAppBar(context, title: 'Hidden books'),
       body: ListenableBuilder(
@@ -610,6 +611,7 @@ class HiddenBooksPage extends StatelessWidget {
                           titleLines: 2,
                           statusLines: null,
                           chevron: false,
+                          onTap: () => LibraryNav.of(pageContext).open(pageContext, bookSpec(d, b.id)),
                           statusWidget: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
@@ -619,7 +621,7 @@ class HiddenBooksPage extends StatelessWidget {
                                 TextButton(
                                   key: ValueKey('hidden-show-${b.id}'),
                                   style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4), minimumSize: const Size(0, 40), alignment: Alignment.centerLeft),
-                                  onPressed: () => showOnBookshelves(context, d, b),
+                                  onPressed: () => showOnBookshelves(pageContext, d, b),
                                   child: const Text('Show on Bookshelves'),
                                 ),
                             ],
@@ -642,6 +644,7 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   final copies = d.shelves.copies;
   if (copies == null) return;
   final messenger = ScaffoldMessenger.of(context);
+  final nav = LibraryNav.of(context);
   try {
     await copies.hide(b, hidden: false);
   } catch (_) {
@@ -656,7 +659,18 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   if (where == null) return;
   messenger
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(key: const ValueKey('shown-snack'), content: Text(where)));
+    ..showSnackBar(
+      SnackBar(
+        key: const ValueKey('shown-snack'),
+        content: Text(where),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () {
+            if (context.mounted) nav.open(context, bookSpec(d, b.id));
+          },
+        ),
+      ),
+    );
 }
 
 /// The book rows of a division: call number (without "CDS"), title, size, and one small state mark when needed.
