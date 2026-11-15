@@ -14,6 +14,9 @@ class HttpTransport implements CoreTransport {
       : _client = client ?? http.Client(),
         _endpoint = endpoint ?? Uri.parse('/api/core');
 
+  /// Called when the server answers 401 (the browser's session ended): the app shows its way back to the sign-in page.
+  static void Function()? onUnauthorized;
+
   final http.Client _client;
   final Uri _endpoint;
 
@@ -30,6 +33,7 @@ class HttpTransport implements CoreTransport {
       throw CacheSearchException('internal', 'Cache Server could not be reached: $e');
     }
     if (res.statusCode == 401) {
+      onUnauthorized?.call();
       throw const CacheSearchException('unauthorized', 'Sign in to Cache Server again');
     }
     final Object? body;

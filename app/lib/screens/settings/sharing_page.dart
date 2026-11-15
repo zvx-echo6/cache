@@ -14,6 +14,8 @@ import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
+import '../../update/update_ui.dart' show updateCacheSnackAction;
+import '../../platform/share_or_copy.dart' show shareOrCopy;
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
@@ -98,7 +100,7 @@ class _SharingPageState extends State<SharingPage> {
       try {
         code = _checked(linkCodeFrom(link), strict: true);
       } on BadLinkCode catch (e) {
-        if (mounted) say(context, e.message);
+        if (mounted) say(context, e.message, action: e.newer ? updateCacheSnackAction(context) : null);
         return;
       }
       if (mounted) await _enterCode(initial: code);
@@ -131,7 +133,9 @@ class _SharingPageState extends State<SharingPage> {
       await f();
     } catch (e) {
       // The engine names a code from a newer Cache by its kind, never by its text.
-      if (mounted) say(context, e is CacheSearchException && e.code == kNewerCodeKind ? kNewerCode : '$e');
+      final newer = e is CacheSearchException && e.code == kNewerCodeKind;
+      // "Update Cache here" goes to the update, as the update banner does
+      if (mounted) say(context, newer ? kNewerCode : '$e', action: newer ? updateCacheSnackAction(context) : null);
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -146,7 +150,13 @@ class _SharingPageState extends State<SharingPage> {
     if (sync == null || !mounted || s.peerOf(peer) == null) return;
     await sync.markNew(peer);
     if (!mounted) return;
-    await askSettingsLink(context, sync, peer, s.peerOf(peer)?['name'] as String? ?? 'the other device');
+    await askSettingsLink(
+      context,
+      sync,
+      peer,
+      s.peerOf(peer)?['name'] as String? ?? 'the other device',
+      openDevice: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: s, peer: peer, settingsSync: widget.settingsSync))),
+    );
   }
 
   /// Shows the link code until the other device links with it (the sheet then closes and the question follows) or it is closed.
@@ -210,7 +220,8 @@ class _SharingPageState extends State<SharingPage> {
                   key: const ValueKey('share-link'),
                   icon: const Icon(Icons.share),
                   label: const Text('Share link'),
-                  onPressed: () => (widget.share ?? _systemShare)(buildLinkUrl(code)),
+                  // a browser with no share sheet copies it instead, and says so
+                  onPressed: () => shareOrCopy(context, buildLinkUrl(code), share: widget.share ?? _systemShare, copied: 'Link copied'),
                 ),
               ],
             ),
