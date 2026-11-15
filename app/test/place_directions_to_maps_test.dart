@@ -181,7 +181,7 @@ void main() {
     });
     expect(routeAsks, 2);
     expect(nav.selected?.name, 'Corner Market');
-    await sub.cancel();
+    await tester.runAsync(sub.cancel);
     nav.dispose();
     await r.dispose(tester);
   });
