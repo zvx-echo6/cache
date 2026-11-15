@@ -72,9 +72,9 @@ fn a_stored_keep_copies_flag_is_ignored_edits_and_deletes_arrive_and_old_side_co
         is(&fc.join("Journal/entry.md"), b"desk v1") && is(&fc.join("Journal/del.md"), b"desk keeps this") && is(&fc.join("Journal/entry (from Tablet).md"), b"an old side copy")
     });
 
-    // 51.3 left the flag in the Desk's saved file for the Tablet
+    // 51.3 left the flag in the Desk's saved file for the Tablet (only the Desk restarts: with no discovery the Tablet could not
+    // find a restarted Desk, but the restarted Desk dials the Tablet, which is all this needs)
     a.close();
-    c.close();
     let saved = da.join("sync.json");
     let mut v: Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
     for p in v["peers"].as_array_mut().unwrap() {
@@ -83,7 +83,7 @@ fn a_stored_keep_copies_flag_is_ignored_edits_and_deletes_arrive_and_old_side_co
         }
     }
     std::fs::write(&saved, serde_json::to_vec(&v).unwrap()).unwrap();
-    let (a, c) = (engine(&da, "Desk"), engine(&dc, "Tablet"));
+    let a = engine(&da, "Desk");
     let all = [&a, &c];
     let peer = call(&a, "status", json!({}))["peers"].as_array().unwrap().iter().find(|p| p["id"] == ic).cloned().unwrap();
     assert!(peer.get("keep_copies").is_none(), "the flag is no longer a thing: {peer}");
