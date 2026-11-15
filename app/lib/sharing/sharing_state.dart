@@ -369,6 +369,7 @@ class _PhoneDriver implements SharingDriver {
   bool _starting = false;
   Timer? _poll;
   Timer? _slowStart;
+  Timer? _drain;
   StreamSubscription<ConnectionKind>? _net;
 
   @override
