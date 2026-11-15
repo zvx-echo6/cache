@@ -65,6 +65,54 @@ pub fn taxonomy_text(label: &str, path: &str) -> String {
     }
 }
 
+/// What `common` reads from a directory of blocks, kept small: the places' kinds with their raw types and counts, the states
+/// and the sources text. A build that cuts its blocks region by region (docs/PLACES-TILES.md, RECIPE.md) deletes each region's
+/// blocks after `cut` and keeps this file; `common` reads these files like blocks (a file name that is a number). Returns
+/// (kind and raw type pairs, states).
+pub fn summarize(blocks: &Path, out: &Path) -> Result<(usize, usize), String> {
+    let mut counts: BTreeMap<(String, String), i64> = BTreeMap::new();
+    let mut states: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
+    let mut sources: Vec<String> = Vec::new();
+    for (_, p) in block_files(blocks)? {
+        let c = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{}: {e}", p.display()))?;
+        let mut st = c.prepare("SELECT kind_id, kind, COUNT(*) FROM places WHERE kind_id IS NOT NULL GROUP BY 1, 2").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?))).map_err(|e| e.to_string())?;
+        for r in rows {
+            let (k, raw, n) = r.map_err(|e| e.to_string())?;
+            *counts.entry((k, raw.unwrap_or_default())).or_default() += n;
+        }
+        let mut st = c.prepare("SELECT code, name, country FROM states").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))).map_err(|e| e.to_string())?;
+        for r in rows {
+            let (code, name, country) = r.map_err(|e| e.to_string())?;
+            states.entry(code).or_insert((name, country));
+        }
+        if let Ok(s) = c.query_row("SELECT value FROM meta WHERE key = 'sources'", [], |r| r.get::<_, String>(0)) {
+            if !sources.contains(&s) {
+                sources.push(s);
+            }
+        }
+    }
+    let _ = std::fs::remove_file(out);
+    let mut c = Connection::open(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    c.execute_batch(
+        "CREATE TABLE kind_counts (kind_id TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL);
+         CREATE TABLE states (code TEXT PRIMARY KEY, name TEXT NOT NULL, country TEXT);
+         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;",
+    )
+    .map_err(|e| e.to_string())?;
+    let tx = c.transaction().map_err(|e| e.to_string())?;
+    for ((k, raw), n) in &counts {
+        tx.execute("INSERT INTO kind_counts(kind_id, kind, n) VALUES (?1, ?2, ?3)", params![k, raw, n]).map_err(|e| e.to_string())?;
+    }
+    for (code, (name, country)) in &states {
+        tx.execute("INSERT INTO states(code, name, country) VALUES (?1, ?2, ?3)", params![code, name, country]).map_err(|e| e.to_string())?;
+    }
+    tx.execute("INSERT INTO meta(key, value) VALUES ('sources', ?1)", params![sources.join("; ")]).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok((counts.len(), states.len()))
+}
+
 pub fn common(cfg: &CommonCfg, rules: &Rules, rules_json: &str) -> Result<CommonReport, String> {
     let taxonomy: HashMap<String, String> = match &cfg.taxonomy {
         Some(p) => read_tsv(p)?.into_iter().filter(|r| r.len() >= 2).map(|r| (r[0].clone(), r[1].clone())).collect(),
@@ -80,7 +128,14 @@ pub fn common(cfg: &CommonCfg, rules: &Rules, rules_json: &str) -> Result<Common
     let mut sources = Vec::new();
     for (_, p) in block_files(&cfg.blocks)? {
         let c = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{}: {e}", p.display()))?;
-        let mut st = c.prepare("SELECT kind_id, kind, COUNT(*) FROM places WHERE kind_id IS NOT NULL GROUP BY 1, 2").map_err(|e| e.to_string())?;
+        // A summary file (`summarize`) holds the counts already; a block counts its places.
+        let summary = c.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kind_counts'", [], |_| Ok(())).is_ok();
+        let counts_sql = if summary {
+            "SELECT kind_id, kind, SUM(n) FROM kind_counts WHERE kind_id IS NOT NULL GROUP BY 1, 2"
+        } else {
+            "SELECT kind_id, kind, COUNT(*) FROM places WHERE kind_id IS NOT NULL GROUP BY 1, 2"
+        };
+        let mut st = c.prepare(counts_sql).map_err(|e| e.to_string())?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?))).map_err(|e| e.to_string())?;
         for r in rows {
             let (k, raw, n) = r.map_err(|e| e.to_string())?;

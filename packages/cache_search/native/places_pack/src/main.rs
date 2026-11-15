@@ -12,6 +12,7 @@
 //!   places_pack harvest --out harvest.sqlite [--overture-csv places.csv] [--osm-pbf area.osm.pbf] [--rules categories.json] [--no-general]
 //!   places_pack blocks --harvest harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox W,S,E,N] [--halo 0.25] [--jobs 4]
 //!   places_pack addresses --csv addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite [--bbox W,S,E,N]
+//!   places_pack summarize --blocks work/blocks --out summaries/N.sqlite   (what `common` reads from blocks, kept after the blocks go)
 //!   places_pack oa-merge --overture-csv addresses.csv --sources oa-sources.tsv --out addresses-oa.csv --provenance oa-provenance.tsv --attribution oa-attribution.json [--dist 30] [--bbox W,S,E,N]
 //!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
@@ -145,8 +146,12 @@ fn run() -> Result<(), String> {
             let a = parse_args(&argv[1..])?;
             let (rules, rules_json) = load_rules(&a)?;
             let mut sources: Vec<Box<dyn PlaceSource>> = Vec::new();
+            // --osm-pbf takes several extracts, comma-separated (neighbouring Geofabrik extracts overlap at their edges: an
+            // OSM element read twice is kept once).
             if let Some(p) = a.get("osm-pbf") {
-                sources.push(Box::new(osm::OsmPbf { path: PathBuf::from(p) }));
+                for f in p.split(',').filter(|f| !f.is_empty()) {
+                    sources.push(Box::new(osm::OsmPbf { path: PathBuf::from(f) }));
+                }
             }
             if let Some(p) = a.get("overture-csv") {
                 sources.push(Box::new(overture::OvertureCsv { path: PathBuf::from(p) }));
@@ -197,6 +202,13 @@ fn run() -> Result<(), String> {
                 r.read, r.streets, r.numbers, r.repeats, r.skipped, r.expanded, r.nearest_town, r.blob_bytes, took()
             );
             println!("size {} bytes", std::fs::metadata(&cfg.out).map(|m| m.len()).unwrap_or(0));
+            Ok(())
+        }
+        Some("summarize") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let (kinds, states) = common::summarize(&need("blocks")?, &need("out")?)?;
+            println!("summary: {kinds} kind and raw type pairs, {states} states; in {}", took());
             Ok(())
         }
         Some("oa-merge") => {

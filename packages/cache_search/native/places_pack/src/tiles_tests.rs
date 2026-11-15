@@ -262,11 +262,11 @@ fn a_tiled_build_across_a_block_edge() {
     let cp = out.join("na-places-2026-10-28/common.sqlite");
     let cr = common(
         &CommonCfg {
-            blocks: blocks_dir,
+            blocks: blocks_dir.clone(),
             out: cp.clone(),
             build: "na-places-2026-10-28".into(),
-            taxonomy: Some(tax),
-            described: Some(described),
+            taxonomy: Some(tax.clone()),
+            described: Some(described.clone()),
             overture_release: "2026-10-21.0".into(),
             osm_source: "test".into(),
             oa_attribution: None,
@@ -284,6 +284,36 @@ fn a_tiled_build_across_a_block_edge() {
     assert_eq!(meta(&m, "tile_schema"), "1");
     assert_eq!(meta(&m, "levels"), "[1]");
     assert_eq!(n(&m, "SELECT COUNT(*) FROM categories"), rules.categories.len() as i64);
+
+    // The summary of the blocks (kept when a region's blocks are deleted) gives the same kinds and states.
+    let sum_dir = dir.join("summaries");
+    std::fs::create_dir_all(&sum_dir).unwrap();
+    let (pairs, sum_states) = crate::common::summarize(&blocks_dir, &sum_dir.join("1.sqlite")).unwrap();
+    assert!(pairs > 0 && sum_states == 2, "{pairs} {sum_states}");
+    let cp2 = out.join("na-places-2026-10-28/common-from-summary.sqlite");
+    let cr2 = common(
+        &CommonCfg {
+            blocks: sum_dir,
+            out: cp2.clone(),
+            build: "na-places-2026-10-28".into(),
+            taxonomy: Some(tax),
+            described: Some(described),
+            overture_release: "2026-10-21.0".into(),
+            osm_source: "test".into(),
+            oa_attribution: None,
+        },
+        &rules,
+        RULES,
+    )
+    .unwrap();
+    assert_eq!((cr2.kinds, cr2.described, cr2.from_taxonomy, cr2.states), (cr.kinds, cr.described, cr.from_taxonomy, cr.states));
+    let m2 = Connection::open(&cp2).unwrap();
+    let kinds_of = |c: &Connection| -> Vec<(String, String)> {
+        let mut st = c.prepare("SELECT id, description FROM kinds ORDER BY sort").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(kinds_of(&m), kinds_of(&m2));
+    drop(m2);
 
     // The common file's vectors: every category and every kind, from the text `common` wrote.
     let (cats, kinds) = (n(&m, "SELECT COUNT(*) FROM categories") as usize, n(&m, "SELECT COUNT(*) FROM kinds") as usize);
@@ -374,4 +404,35 @@ fn harvest_rows_round_trip() {
     assert_eq!((back.extent, back.arrival), (p.extent, p.arrival));
     assert_eq!(crate::model::source_name("osm+overture"), Some("osm+overture"));
     assert_eq!(crate::model::source_name("elsewhere"), None);
+}
+
+/// Two extracts that overlap at an edge read the same OSM element twice; the harvest keeps it once.
+struct Fixed(Vec<Raw>);
+impl crate::model::PlaceSource for Fixed {
+    fn describe(&self) -> String {
+        "fixed rows".into()
+    }
+    fn read(&mut self, _rules: &Rules, out: &mut crate::model::Harvest) -> Result<(), String> {
+        for r in &self.0 {
+            out.place(r.clone());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn an_osm_element_read_from_two_extracts_is_kept_once() {
+    let rules = Rules::parse(RULES).unwrap();
+    let dir = std::env::temp_dir().join(format!("harvest_twice_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = vec![place("osm", "osm:w1", "Edge Cafe", Some("cafe"), "cafe", "cafe", 40.5, -112.0), place("osm", "osm:w2", "Other Cafe", Some("cafe"), "cafe", "cafe", 40.6, -112.0)];
+    let b = vec![place("osm", "osm:w1", "Edge Cafe", Some("cafe"), "cafe", "cafe", 40.5, -112.0), place("overture", "overture:o1", "Third Cafe", Some("cafe"), "cafe", "cafe", 40.7, -112.0)];
+    let mut sources: Vec<Box<dyn crate::model::PlaceSource>> = vec![Box::new(Fixed(a)), Box::new(Fixed(b))];
+    let out = dir.join("harvest.sqlite");
+    let r = crate::harvest::harvest(&rules, RULES, &mut sources, true, &out).unwrap();
+    assert_eq!(r.places, 3, "w1 once, w2, and the Overture place");
+    let c = Connection::open(&out).unwrap();
+    let ids: i64 = c.query_row("SELECT COUNT(*) FROM raw WHERE what = 'place' AND json LIKE '%osm:w1%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(ids, 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }
