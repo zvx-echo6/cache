@@ -342,40 +342,21 @@ void main() {
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
 
-  testWidgets("a linked device's page: Don't replace my copies from this device, off until switched on, for that device only", (tester) async {
+  testWidgets("a linked device's page has no \"Don't replace my copies\" switch (sync is fully shared both ways), and the engine is not told about one", (tester) async {
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
-    for (final (id, name) in [('p1', 'Desk'), ('p2', 'Pixel')]) {
-      r.sync.peers.add({'id': id, 'name': name, 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': 'direct', 'error': null});
-    }
+    // 51.3 testers' saved file may still say keep_copies: nothing of it shows or is sent
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': 'direct', 'error': null, 'keep_copies': true});
     await tester.runAsync(s.refresh);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingDevicePage(sharing: s, peer: 'p1')));
     await tester.pump();
-    final row = find.byKey(const ValueKey('device-no-replace'));
-    expect(find.descendant(of: row, matching: find.text("Don't replace my copies from this device")), findsOneWidget);
-    expect(find.descendant(of: row, matching: find.text('Newer versions from Desk never replace yours. Notebooks, places and photos arrive beside yours.')), findsOneWidget);
-    Switch sw() => tester.widget<Switch>(find.descendant(of: row, matching: find.byType(Switch)));
-    expect(sw().value, isFalse, reason: 'off unless switched on');
-    // The engine is told which folders hold things the person made (newer versions arrive beside theirs) and which the switch
-    // never touches (no folder kept with every link is in this rig).
-    expect(r.configs.last['beside'], ['notebooks']);
-    expect(r.configs.last['not_copies'], isEmpty);
-
-    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
-    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': true});
-    expect(sw().value, isTrue);
-    expect(s.keepsCopies('p1'), isTrue);
-    expect(s.keepsCopies('p2'), isFalse, reason: 'one linked device at a time');
-
-    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
-    expect(r.calls('set_keep_copies').last, {'peer': 'p1', 'on': false});
-    expect(sw().value, isFalse);
-
+    expect(find.byKey(const ValueKey('device-no-replace')), findsNothing);
+    expect(find.textContaining("Don't replace my copies"), findsNothing);
+    expect(find.byType(Switch), findsNothing);
+    expect(r.configs.last.containsKey('beside'), isFalse);
+    expect(r.configs.last.containsKey('not_copies'), isFalse);
+    expect(r.calls('set_keep_copies'), isEmpty);
     await tester.pumpWidget(const SizedBox());
     s.dispose();
     await tester.runAsync(() => r.dir.delete(recursive: true));
