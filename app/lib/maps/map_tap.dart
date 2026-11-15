@@ -104,6 +104,22 @@ List<String> basemapLabelLayers(String styleJson, {required String basemapSource
   }
 }
 
+/// The line and area layers an overlay drew into a style ([styleJson], as the screen applied it): its layers of type line (the
+/// route's line and its casing) and fill, from its source. What a tap asks for is what the style has, not the ids worked out again.
+List<String> overlayHitLayers(String styleJson, {required String source}) {
+  try {
+    final s = jsonDecode(styleJson);
+    final layers = s is Map ? s['layers'] : null;
+    if (layers is! List) return const [];
+    return [
+      for (final l in layers)
+        if (l is Map && (l['type'] == 'line' || l['type'] == 'fill') && l['source'] == source && l['id'] is String) l['id'] as String,
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// The one feature a tap opens among [hits]: a label first, then a line, then an area; within each, a named one first, then the
 /// base map, a file the user imported (drawn above the overlays), an overlay, each in the order the map gave them. Null: none.
 TapFeature? pickTapFeature(List<TapFeature> hits) {

@@ -169,6 +169,13 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
   return Rect.fromLTRB(left, top, math.min(map.width, math.max(best.right, left + kRouteFitLeast)), math.min(map.height, math.max(best.bottom, top + kRouteFitLeast)));
 }
 
+/// Where on a [map] with [covers] over it a spot brought into view goes: the middle of the larger free rectangle ([routeFitRect] with
+/// no span to fit), so the header, the buttons and the panel are never over it. The map's middle with nothing over the map.
+Offset spotAnchor(Size map, MapCovers? covers) {
+  if (covers == null || covers.isEmpty) return map.center(Offset.zero);
+  return routeFitRect(map: map, covers: covers, spanX: 1, spanY: 1).center;
+}
+
 /// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
 /// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, or the arrow once a heading is known).
 class RouteEndMark {
@@ -570,7 +577,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       } else if (s.route) {
         if (r != null) _fitWhole(c, r);
       } else if (s.at != null) {
-        _focusOn(s.at!.lat, s.at!.lon);
+        _showSpot(s.at!.lat, s.at!.lon);
       }
     });
     WidgetsBinding.instance.ensureVisualUpdate();
@@ -1072,13 +1079,32 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final c = _controller;
     if (c == null || !_styleReady) return;
     final mark = _stepPoint() ?? _spot;
-    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}';
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
     if (sig == _navSig) return;
     _navSig = sig;
     try {
       await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
-      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark));
+      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
     } catch (_) {}
+  }
+
+  /// The map images of the chosen place and the search results that are notebook entries: the entry's icon in the pin style, as its
+  /// notebook pin is drawn (their pins show it instead of a plain dot). By place id; empty for none.
+  Future<Map<String, String>> _placePinImages() async {
+    final images = _pinImages, nb = widget.notebooks;
+    final out = <String, String>{};
+    if (images == null || nb == null || _pins.isEmpty) return out;
+    final places = [if (nav.selected != null) nav.selected!, if (nav.searchOpen) ...nav.results];
+    for (final p in places) {
+      if (p.isCategory) continue;
+      final e = notebookEntryFor(p, _pins, savedKey: nav.savedFor(p)?.key);
+      if (e == null) continue;
+      final look = PinLook.of(e, nb.notebook(e.notebookId), tactical: widget.themeId == CacheThemeId.tactical);
+      try {
+        out[p.id] = await images.ensure(look.icon.id, look.glyph, look.tint);
+      } catch (_) {}
+    }
+    return out;
   }
 
   void _onNav() {
@@ -1332,6 +1358,22 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     } catch (_) {}
   }
 
+  /// A spot shown from outside the map (the route header's destination, a stop, a point of the elevation chart): brought to the
+  /// middle of the room the header, the buttons and the route panel leave free, at least at zoom 14, north up (as the turn card's
+  /// is). The map's middle was under the panel.
+  Future<void> _showSpot(double lat, double lon) async {
+    final c = _controller;
+    if (c == null) return;
+    maps.setFollow(FollowMode.free);
+    final map = _fitMapSize();
+    final zoom = math.max(_zoom, 14.0);
+    final (clat, clon) = cameraCentreFor(lat, lon, bearing: 0, zoom: zoom, map: map, anchor: spotAnchor(map, _phoneCovers()));
+    try {
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(clat, clon), zoom: zoom, bearing: 0)), duration: const Duration(milliseconds: 500));
+    } catch (_) {}
+  }
+
   Future<void> _focusOn(double lat, double lon) async {
     final c = _controller;
     if (c == null) return;
@@ -1369,6 +1411,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         }
       }
       await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
+      // The chosen place's pin may be one of these entries: drawn again now that they are known.
+      _navSig = null;
+      await _pushNav();
     } catch (_) {}
   }
 
@@ -1508,7 +1553,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// How far around the tapped point the map's query reaches, in the point's own units (Android reports a tap in the screen's
   /// pixels, iOS in points): lines are a few points wide.
-  static const double _tapReach = 10;
+  static const double _tapReach = 12;
 
   Future<List<dynamic>> _query(MapLibreMapController c, math.Point<double> point, List<String> layers) async {
     if (layers.isEmpty) return const [];
@@ -1552,7 +1597,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       }
       for (final use in maps.uses) {
         if (use.def.kind != LayerKind.vector) continue;
-        for (final raw in await _query(c, point, overlayLayerIds(use.def))) {
+        final style = _styleJson;
+        final drawn = style == null ? const <String>[] : overlayHitLayers(style, source: sourceIdOf(use.def));
+        for (final raw in await _query(c, point, drawn.isEmpty ? overlayLayerIds(use.def) : drawn)) {
           final f = read(raw, TapSource.overlay, use.def.title);
           if (f != null) hits.add(f);
         }
