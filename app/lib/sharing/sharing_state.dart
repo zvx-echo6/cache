@@ -39,9 +39,13 @@ class SharingState extends ChangeNotifier {
     bool? phone,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
+    List<String> Function()? drainLog,
+    Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
+       _drainLog = drainLog ?? drainSyncLog,
+       _every = every ?? ((d, run) => Timer.periodic(d, (_) => run())),
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
@@ -85,6 +89,21 @@ class SharingState extends ChangeNotifier {
   /// Where the start's timing lines go (the app's log), and how the one-shot "still starting" timer is made (tests make their own).
   final void Function(String line) _log;
   final Timer Function(Duration after, void Function() run) _timer;
+
+  /// Takes the engine's lines about its start ([SyncCore.takeLog]), and how the 1 s drain while the start runs is made. The engine
+  /// never calls into Dart; the lines are asked for.
+  final List<String> Function() _drainLog;
+  final Timer Function(Duration every, void Function() run) _every;
+  /// How often the engine's lines are taken while a start is running (so a start that hangs leaves its last step in the log).
+  static const Duration kDrainEvery = Duration(seconds: 1);
+
+  void _drainNow() {
+    try {
+      for (final l in _drainLog()) {
+        _log(l);
+      }
+    } catch (_) {}
+  }
 
   /// How long a start may take before the log says it is still going.
   static const Duration kSlowStart = Duration(seconds: 60);
@@ -358,6 +377,7 @@ class _PhoneDriver implements SharingDriver {
   bool _starting = false;
   Timer? _poll;
   Timer? _slowStart;
+  Timer? _drain;
   StreamSubscription<ConnectionKind>? _net;
 
   @override
@@ -443,6 +463,8 @@ class _PhoneDriver implements SharingDriver {
     s._log('Sharing: starting');
     // Only says so: a start that hangs leaves this line as the trace of where it stopped. Cancelled when the start ends.
     _slowStart = s._timer(SharingState.kSlowStart, () => s._log('Sharing: still starting after ${SharingState.kSlowStart.inSeconds} s'));
+    // the engine's own lines about its start, taken (it never calls into Dart) while the start runs
+    _drain = s._every(SharingState.kDrainEvery, s._drainNow);
     try {
       final dir = Directory('${(await s.supportDir()).path}/sync');
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
@@ -502,6 +524,9 @@ class _PhoneDriver implements SharingDriver {
     } finally {
       _slowStart?.cancel();
       _slowStart = null;
+      _drain?.cancel();
+      _drain = null;
+      s._drainNow();
       _starting = false;
       s._changed();
     }
@@ -827,6 +852,7 @@ class _PhoneDriver implements SharingDriver {
   @override
   void dispose() {
     _slowStart?.cancel();
+    _drain?.cancel();
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
@@ -1080,7 +1106,24 @@ abstract class SyncCoreLike {
 typedef SyncOpener = Future<SyncCoreLike> Function(Map<String, Object?> config);
 
 /// The real engine ([SyncCore]) as the state and the background run use it.
-Future<SyncCoreLike> openSyncCore(Map<String, Object?> config) async => _RealCore(await SyncCore.open(config));
+Future<SyncCoreLike> openSyncCore(Map<String, Object?> config) async {
+  try {
+    return _RealCore(await SyncCore.open(config));
+  } finally {
+    // the engine's lines about this open (it never calls into Dart): this isolate's log gets them, the background run's too
+    drainSyncLogToLog();
+  }
+}
+
+/// The engine's lines about its start ([SyncCore.takeLog]), taken now.
+List<String> drainSyncLog() => SyncCore.takeLog();
+
+/// Takes the engine's lines about its start and writes each to the app's log.
+void drainSyncLogToLog() {
+  for (final l in SyncCore.takeLog()) {
+    logInfo(l);
+  }
+}
 
 class _RealCore implements SyncCoreLike {
   _RealCore(this._c);
