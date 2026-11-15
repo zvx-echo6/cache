@@ -394,18 +394,21 @@ class CarBridge {
         if (nav.phase == NavPhase.previewing) nav.cancelDirections();
         return null;
       case 'stop':
+        final wasGuiding = nav.guiding;
         await nav.end();
         // The car has the ended trip before this is answered.
         await push();
-        return null;
+        // Whether a route was running (Siri's "End route" says "No route is running." when none was); the car sides ignore it.
+        return wasGuiding;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
         return nav.voiceOn;
       case 'answer':
         // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
         // straight away, even when guidance prompts are off, since the driver asked.
+        // `say: false` (Siri on an iPhone says the words itself): the words only, nothing spoken by the phone.
         final text = carAnswer(nav, a['kind'] as String?);
-        await nav.speaker.speak(text);
+        if (a['say'] != false) await nav.speaker.speak(text);
         return text;
       case 'autoDrive':
         drive.simulate = a['on'] == true;

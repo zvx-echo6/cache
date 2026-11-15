@@ -749,5 +749,96 @@ check(CarVoiceSaved.remember(twice, voiceDefaults) && CarVoiceSaved.names(voiceD
 check(CarVoiceSaved.remember([], voiceDefaults) && CarVoiceSaved.names(voiceDefaults).isEmpty, "no saved places: no names")
 voiceDefaults.removePersistentDomain(forName: "car-voice-tests")
 
+// ---- Siri's other requests (CarVoice.swift): add a stop, end the route, the voice prompts, the arrival time and the next turn ----
+
+func waitFor<T>(_ start: (@escaping (T) -> Void) -> Void) -> T? {
+  var got: T?
+  start { got = $0 }
+  let end = Date().addingTimeInterval(4)
+  while got == nil && Date() < end { turn() }
+  return got
+}
+
+// The words Siri says.
+check(CarVoice.stopAdded("Place 4") == "Added Place 4 as the next stop.", "Siri's words: stop added")
+check(CarVoice.routeEnded == "Route ended." && CarVoice.noRoute == "No route is running.", "Siri's words: route ended, none running")
+check(CarVoice.promptsOff == "Voice prompts off." && CarVoice.promptsOn == "Voice prompts on.", "Siri's words: voice prompts")
+
+// Add a stop: navigateTo as navigate's, with stop.
+let stopArgs = CarVoice.stopArguments(for: foundVoice)
+check(stopArgs["stop"] as? Bool == true && stopArgs["query"] as? String == foundPlace.name && stopArgs["start"] as? Bool == true, "add stop: navigateTo's arguments, with stop")
+check(isNumber(stopArgs["lat"] as? Double, foundPlace.lat) && isNumber(stopArgs["lon"] as? Double, foundPlace.lon), "add stop: coordinates go along")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "added": true], for: said) == .added(name: "Place 1"), "add stop: added, with the name said")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "added": false], for: said) == .notAdded, "add stop: not added")
+check(CarVoice.stopOutcome(["places": searchPlaces, "forStop": true], for: said) == .places(query: "Place 1", places: CarPlace.list(searchPlaces)), "add stop: places found, to pick from")
+check(CarVoice.stopOutcome(["places": [Any](), "forStop": true], for: said) == .none(query: "Place 1"), "add stop: nothing found")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "name": "Place 4"], for: said) == .navigate(.started(name: "Place 4")), "add stop with no route: a plain navigate")
+check(CarVoice.stopOutcome(["places": searchPlaces], for: said) == .navigate(.places(query: "Place 1", places: CarPlace.list(searchPlaces))), "add stop with no route, a name not saved: navigate's places")
+check(CarVoice.stopOutcome(nil, for: said) == .noAnswer, "add stop: no answer")
+
+link.reset()
+let stopHeard = HeardVoice()
+link.addListener(stopHeard)
+link.setCarConnected(true)
+var stopAsked: [(String, [String: Any])] = []
+var stopAnswer: Any? = ["started": true, "id": "place:1", "added": true]
+link.dartForTests = { method, arguments, done in
+  stopAsked.append((method, arguments as? [String: Any] ?? [:]))
+  done(stopAnswer)
+}
+check(waitFor({ CarVoice.addStop(foundVoice, link: link, wait: 2, done: $0) }) == .added(name: foundPlace.name), "add stop through the link: added")
+check(stopAsked.count == 1 && stopAsked[0].0 == "navigateTo" && stopAsked[0].1["stop"] as? Bool == true, "one navigateTo, with stop")
+check(stopHeard.places.isEmpty && stopHeard.started == 0 && stopHeard.routes.isEmpty, "a stop added: the car is told nothing")
+stopAnswer = ["started": true, "id": "place:1", "name": "Place 1", "lat": 1.0, "lon": 2.0]
+check(waitFor({ CarVoice.addStop(said, link: link, wait: 2, done: $0) }) == .navigate(.started(name: "Place 1")), "add stop with no route: navigate's outcome")
+check(stopHeard.started == 1, "with no route and a car: the car is told guidance began, as navigate does")
+
+// End route: stop; its answer says whether a route was running.
+check(CarVoice.endOutcome(true) == .ended && CarVoice.endOutcome(false) == .notRunning && CarVoice.endOutcome(nil) == .noAnswer, "end route: Dart's answer")
+var stopped = 0
+var wasRunning: Any? = true
+link.dartForTests = { method, _, done in
+  if method == "stop" { stopped += 1 }
+  done(wasRunning)
+}
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .ended && stopped == 1, "end route: stop sent, route ended")
+wasRunning = false
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .notRunning, "end route: none was running")
+wasRunning = nil
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .noAnswer, "end route: no answer")
+
+// The voice prompts.
+check(CarVoice.promptsOutcome(true) == .now(on: true) && CarVoice.promptsOutcome(false) == .now(on: false) && CarVoice.promptsOutcome(nil) == .noAnswer, "voice: Dart's answer")
+var voiceMethod = ""
+var voiceOnSent: Bool?
+link.dartForTests = { method, arguments, done in
+  voiceMethod = method
+  voiceOnSent = (arguments as? [String: Any])?["on"] as? Bool
+  done(voiceOnSent)
+}
+check(waitFor({ CarVoice.setPrompts(on: false, link: link, wait: 2, done: $0) }) == .now(on: false), "voice off")
+check(voiceMethod == "voice" && voiceOnSent == false, "voice off: the `voice` call, on false")
+check(waitFor({ CarVoice.setPrompts(on: true, link: link, wait: 2, done: $0) }) == .now(on: true) && voiceOnSent == true, "voice on")
+
+// The arrival time and the next turn: Dart's words, not spoken by the phone.
+let ask1 = CarVoice.answerArguments("arrival_ios")
+check(ask1["kind"] as? String == "arrival_ios" && ask1["say"] as? Bool == false, "arrival: `answer` with the iOS kind and say false")
+check(CarVoice.answerArguments("turn_ios")["kind"] as? String == "turn_ios", "next turn: the iOS kind")
+var answerAsked: [String: Any] = [:]
+link.dartForTests = { method, arguments, done in
+  answerAsked = (arguments as? [String: Any] ?? [:]).merging(["method": method]) { a, _ in a }
+  done("You'll arrive at 3:40 PM, 12 miles to go.")
+}
+check(waitFor({ CarVoice.tripWords("arrival_ios", link: link, wait: 2, done: { r in $0(r ?? "") }) }) == "You'll arrive at 3:40 PM, 12 miles to go.", "arrival: Dart's words as they are")
+check(answerAsked["method"] as? String == "answer" && answerAsked["say"] as? Bool == false, "arrival: asked as `answer`, say false")
+link.dartForTests = { _, _, done in done("No route is running.") }
+check(waitFor({ CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in $0(r ?? "") }) }) == "No route is running.", "next turn, no route: the no-route words")
+link.dartForTests = { _, _, done in done(nil) }
+check(waitFor({ CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in $0(r ?? "<none>") }) }) == "<none>", "next turn: no words from Dart is none")
+// Dart not up: each request gives up after its wait.
+link.dartForTests = nil
+check(waitFor({ CarVoice.endRoute(link: link, wait: 0.6, done: $0) }) == .noAnswer, "Dart never said hello: end route has no answer")
+link.reset()
+
 print("car link tests: \(checks - failures) of \(checks) passed")
 exit(failures == 0 ? 0 : 1)

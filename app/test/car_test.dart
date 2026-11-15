@@ -1711,6 +1711,45 @@ void main() {
         expect(carAnswer(nav, 'destination'), 'Going to $name.');
       });
 
+      test("Siri's arrival words: the clock the phone shows and the distance left", () async {
+        await guide();
+        final p = nav.progress!;
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS)!;
+        expect(carAnswer(nav, 'arrival_ios'), "You'll arrive at ${clockTime(at)}, ${fmt.spoken(p.remainingM)} to go.");
+        expect(carAnswer(nav, 'arrival_ios'), matches(RegExp(r"^You'll arrive at \d{1,2}:\d\d (AM|PM), .+ to go\.$")));
+      });
+
+      test("Siri's next-turn words: the step, then how far", () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn_ios'), 'Next: $step, in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test("Siri's words with no route are the one no-route answer", () async {
+        expect(carAnswer(nav, 'arrival_ios'), 'No route is running.');
+        expect(carAnswer(nav, 'turn_ios'), 'No route is running.');
+      });
+
+      test('say: false returns the words and the phone says nothing', () async {
+        await guide();
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'arrival_ios', 'say': false});
+        expect(text, startsWith("You'll arrive at "));
+        expect(speaker.said, isEmpty);
+        expect(await fromCar('answer', {'kind': 'turn_ios', 'say': false}), startsWith('Next: '));
+        expect(speaker.said, isEmpty);
+      });
+
+      test('stop answers whether a route was running', () async {
+        expect(await fromCar('stop'), isFalse);
+        await guide();
+        expect(await fromCar('stop'), isTrue);
+        expect(nav.guiding, isFalse);
+        expect(await fromCar('stop'), isFalse);
+      });
+
       test('the answer is spoken even when the voice prompts are off', () async {
         await guide();
         expect(await fromCar('voice', {'on': false}), isFalse);
