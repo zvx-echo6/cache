@@ -277,7 +277,7 @@ void main() {
     await tester.enterText(find.byType(TextField), 'CACHE1-PASTEDCODE');
     expect(host.count('sharing.link_start'), 0);
     await tester.tap(find.text('Link'));
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 10 && find.text('Linked with Desk').evaluate().isEmpty; i++) {
       await tester.pump(const Duration(milliseconds: 500));
     }
     expect(host.count('sharing.link_start'), 1);
@@ -290,7 +290,7 @@ void main() {
     await tester.tap(find.descendant(of: find.byKey(const ValueKey('share-models')), matching: find.byType(Switch)));
     await _settle(tester);
     expect(s.shareOf('models')?['path'], '/srv/models');
-    expect(find.text('Shared · nothing yet'), findsOneWidget);
+    expect(find.textContaining('1 of 1 shared'), findsOneWidget);
 
     // The linked device's page: Sync now and Unlink go to the server.
     await _tap(tester, find.byKey(const ValueKey('peer-peer1')));
