@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore, SyncCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -164,8 +164,6 @@ void main() {
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
   unawaited(openAppLog());
-  // The sync engine's start, step by step, in the same log.
-  SyncCore.setLog((line) => logInfo(line));
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
