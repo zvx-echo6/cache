@@ -258,6 +258,7 @@ void main() {
   late LibrariesState libs;
   late _FakeDownloader downloader;
   String? picked;
+  var disposedBoth = false;
   final saved = <String, Uint8List>{};
 
   Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir, Duration ownBusyRetry = const Duration(seconds: 30)}) async {
@@ -289,12 +290,20 @@ void main() {
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('libraries');
+    disposedBoth = false;
     picked = null;
     saved.clear();
   });
-  tearDown(() {
+  // the file's tearDown disposes both; a test that disposes them itself (a teardown in the middle of work) does it through this
+  void disposeBoth() {
+    if (disposedBoth) return;
+    disposedBoth = true;
     libs.dispose();
     sources.dispose();
+  }
+
+  tearDown(() {
+    disposeBoth();
     try {
       tmp.deleteSync(recursive: true);
     } catch (_) {}
@@ -396,6 +405,47 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       await libs.whenIdle();
+    });
+
+    test('the state is disposed while its delayed look at a busy own library is under way: nothing is used after the dispose', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      List<String> calls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        await setUpLibs(ownBusyRetry: const Duration(milliseconds: 20));
+        // the delayed look has begun (it asked the core a third time)...
+        for (var i = 0; i < 1000 && calls().length < 3; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        expect(calls(), ['my-books', 'busy:my-books', 'my-books']);
+        // ...and the state goes away under it, as a test's or a screen's teardown does
+        disposeBoth();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }, (e, st) => errors.add(e));
+      expect(errors, isEmpty, reason: 'the look that was under way ends quietly');
+    });
+
+    test('a retry that is still waiting when the state is disposed never runs', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        await setUpLibs(ownBusyRetry: const Duration(milliseconds: 100));
+        disposeBoth();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }, (e, st) => errors.add(e));
+      expect(errors, isEmpty);
+      final f = File('${tmp.path}/own-sync-calls.txt');
+      expect(f.readAsLinesSync().where((l) => l == 'my-books'), hasLength(1), reason: 'only the first look was made');
     });
 
     test("only a person's own library is given a my-books folder name, and every own one is", () async {
