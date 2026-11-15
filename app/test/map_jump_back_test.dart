@@ -41,8 +41,12 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   }
 
+  // A page over the tabs makes the tabs offstage (the finders skip them by default), and the bar is still the one that shows
+  // which tab is under the page.
+  final theBar = find.byType(NavigationBar, skipOffstage: false);
+
   String selectedTab(WidgetTester tester) {
-    final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    final bar = tester.widget<NavigationBar>(theBar);
     return (bar.destinations[bar.selectedIndex] as NavigationDestination).label;
   }
 
@@ -92,7 +96,7 @@ void main() {
 
   /// A page over the tabs (as openDetail opens one): shows [name], with a button that runs [jump].
   Future<void> openPage(WidgetTester tester, String name, VoidCallback jump) async {
-    unawaited(Navigator.of(tester.element(find.byType(NavigationBar))).push(MaterialPageRoute<void>(
+    unawaited(Navigator.of(tester.element(theBar)).push(MaterialPageRoute<void>(
       builder: (_) => Scaffold(body: Column(children: [Text(name), TextButton(key: ValueKey('jump-$name'), onPressed: jump, child: const Text('go'))])),
     )));
     await settle(tester);
