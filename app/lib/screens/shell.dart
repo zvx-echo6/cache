@@ -52,6 +52,8 @@ import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
+import '../settings/data_kinds.dart' show DataKind, ShareItem;
+import '../notebook/sync/sync_engine.dart' show NotebookSync;
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../update/app_update.dart' show ReleaseFileSource;
@@ -295,17 +297,28 @@ class _ShellState extends State<Shell> {
     unawaited(_startDiscover());
     // A cachelink: link from outside (a camera scanning a device's link code) opens Sharing and sync, which fills in the code.
     linkInbox.addListener(_openIncomingLink);
+    widget.hub.openShareItem = _shareItemOpener;
     WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
   }
 
   bool _linkPageUp = false;
+
+  /// A row of Sharing and sync opens its item where the app has a page for it: a notebook opens its own screen. (Map layers,
+  /// libraries and ZIMs have no page of their own to go to, so their rows keep toggling.)
+  VoidCallback? _shareItemOpener(BuildContext context, DataKind kind, ShareItem item) {
+    final deps = _notebookDeps;
+    if (kind.id != 'notebooks' || deps == null) return null;
+    final book = deps.notebook.notebooks.where((n) => NotebookSync.folderNameOf(n) == item.path).firstOrNull;
+    if (book == null) return null;
+    return () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: book.id)));
+  }
 
   void _openIncomingLink() {
     final sharing = widget.hub.sharing;
     if (!mounted || sharing == null || _linkPageUp || linkInbox.pending == null || linkInbox.pageOpen) return;
     _linkPageUp = true;
     Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync)))
+        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem)))
         .whenComplete(() => _linkPageUp = false);
   }
 
@@ -357,7 +370,7 @@ class _ShellState extends State<Shell> {
     ownSource: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => OwnSourceFormPage(deps: _settingsDeps))),
     linkDevice: widget.hub.sharing == null
         ? null
-        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync))),
+        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem))),
     searchLibraries: (c, q) {
       unawaited(widget.browse.setFilter(query: q));
       Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse)));
@@ -410,6 +423,7 @@ class _ShellState extends State<Shell> {
   void dispose() {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
+    if (widget.hub.openShareItem == _shareItemOpener) widget.hub.openShareItem = null;
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -701,7 +715,7 @@ class _ShellState extends State<Shell> {
       AppPlace.weatherSettings => WeatherPage(deps: d),
       AppPlace.notifications => NotificationsPage(deps: d),
       AppPlace.storage => StoragePage(deps: d),
-      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem),
       AppPlace.appearance => AppearancePage(app: widget.app),
       AppPlace.credits => const AboutPage(),
       AppPlace.models => ModelsScreen(app: widget.app),

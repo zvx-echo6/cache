@@ -130,9 +130,12 @@ class _PlaceField extends StatelessWidget {
   Widget build(BuildContext context) => PlaceRow(place: value, places: places, onChanged: onChanged, label: null);
 }
 
-/// "Place: Home  [Change]": the entry's place (or "No place"), changed through the place picker.
+/// "Place: Home  [Edit]": the entry's place (or "No place"), changed through the place picker.
 class PlaceRow extends StatelessWidget {
-  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false});
+  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false, this.onShowOnMap});
+
+  /// Tapping the "Place: ..." line opens Maps focused on the place; null leaves the line plain.
+  final VoidCallback? onShowOnMap;
 
   final NbPlace? place;
   final PlaceChoices places;
@@ -150,14 +153,26 @@ class PlaceRow extends StatelessWidget {
       children: [
         Icon(Icons.place_outlined, size: 20, color: k.secondary),
         const SizedBox(width: 8),
-        Expanded(child: Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.text))),
+        Expanded(
+          child: onShowOnMap != null && place != null
+              // the whole line is the link (as the Book page's Subject): it opens Maps at the place
+              ? InkWell(
+                  key: const ValueKey('place-show-on-map'),
+                  onTap: onShowOnMap,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent)),
+                  ),
+                )
+              : Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.text)),
+        ),
         TextButton(
           key: const ValueKey('place-change'),
           onPressed: () async {
             final pick = await pickPlace(context, places);
             if (pick != null) onChanged(pick.place);
           },
-          child: const Text('Change'),
+          child: const Text('Edit'),
         ),
       ],
     );

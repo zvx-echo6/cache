@@ -4,6 +4,9 @@ import '../net/fetch.dart' show isFetchAllowed;
 
 export '../net/fetch.dart' show isLoopbackHost;
 
+/// A source list in a newer format than this version reads (shown with Update Cache, which goes to the update).
+const String kNewerCatalogueFormat = 'This source list is in a newer format than this version of Cache can read. Update Cache to use it.';
+
 /// Why a catalogue or a connector could not be used, in words for people.
 class CatalogueException implements Exception {
   const CatalogueException(this.message);
@@ -142,7 +145,7 @@ class Catalogue {
     final format = json['format'];
     if (format != kCatalogueFormat) {
       throw CatalogueException(format is int && format > kCatalogueFormat
-          ? 'This source list is in a newer format than this version of Cache can read. Update Cache to use it.'
+          ? kNewerCatalogueFormat
           : 'This source list is in a format Cache does not know.');
     }
     String field(String k) {

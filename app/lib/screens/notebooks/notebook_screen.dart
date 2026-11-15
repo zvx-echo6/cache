@@ -99,6 +99,12 @@ class NotebookDeps {
   final DateTime Function() now;
 }
 
+/// "Show on map" for an ordinary entry's place: Maps, focused on it. Null where the app has no map to go to.
+void Function(NbPlace place)? _showPlaceOnMap(NotebookDeps deps, NbEntry e) {
+  final show = deps.placesDeps?.showOnMap;
+  return show == null ? null : (p) => show(p, entryTitle(e));
+}
+
 /// Opens one entry where it is edited: a log's in its quick add sheet, a place on its place screen, any other in the entry
 /// editor.
 void openNotebookEntry(BuildContext context, NotebookDeps deps, Notebook book, NbEntry e) {
@@ -115,7 +121,7 @@ void openNotebookEntry(BuildContext context, NotebookDeps deps, Notebook book, N
         entry: e,
         now: deps.now,
         connections: deps.connections,
-        onShowOnMap: book.isRepeaters && deps.onShowEntry != null ? (_) => deps.onShowEntry!(e, book) : null,
+        onShowOnMap: book.isRepeaters && deps.onShowEntry != null ? (_) => deps.onShowEntry!(e, book) : _showPlaceOnMap(deps, e),
       ),
     ));
   }
@@ -210,7 +216,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
         entry: e,
         now: widget.deps.now,
         connections: widget.deps.connections,
-        onShowOnMap: book.isRepeaters && e != null && show != null ? (_) => show(e, book) : null,
+        onShowOnMap: book.isRepeaters && e != null && show != null ? (_) => show(e, book) : (e == null ? null : _showPlaceOnMap(widget.deps, e)),
       ),
     ));
   }

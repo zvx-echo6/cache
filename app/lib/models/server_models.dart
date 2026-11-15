@@ -7,6 +7,7 @@ import '../browse/web/device_api.dart' show DeviceException;
 import '../browse/web/local_files.dart' show LocalFile, RawUploader, createRawUploader;
 import '../platform/memory.dart' show MemoryReading, memoryFromServerBody;
 import 'hf_hub.dart';
+import '../net/signed_out.dart' show reportSignedOut;
 
 /// One download the server runs for the browser (`GET /api/models/downloads`, server/src/models.rs).
 class ServerDownload {
@@ -66,6 +67,7 @@ class ServerModels {
   final RawUploader Function() _uploader;
 
   static String _why(int status, String body) {
+    if (status == 401) reportSignedOut();
     try {
       final j = jsonDecode(body);
       final m = j is Map && j['error'] is Map ? (j['error'] as Map)['message'] : null;

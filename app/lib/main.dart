@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, MapPlace, SearchCore, SyncCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore, SyncCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -68,6 +68,7 @@ import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'net/fetch.dart' show fetchText;
+import 'net/signed_out.dart';
 import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
@@ -157,6 +158,8 @@ final LaunchClock launchClock = LaunchClock(logInfo);
 void main() {
   launchClock.begin();
   WidgetsFlutterBinding.ensureInitialized();
+  // A core call the server answers 401 (the browser's session ended) shows the way back to the sign-in page.
+  HttpTransport.onUnauthorized = reportSignedOut;
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
   unawaited(openAppLog());
@@ -901,6 +904,7 @@ class _CacheAppState extends State<CacheApp> {
     dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    onActivity: (line) => sharing.addActivity(line),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -944,6 +948,12 @@ class _CacheAppState extends State<CacheApp> {
     map: (context, pin, onPick, look) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick, look: look, fallback: _placeMapFallback),
     pickerMap: (context, target, onMoving, onCentre, onTap) => PlaceMap(maps: maps, themeId: app.theme, pin: target, onPick: onTap, onMoving: onMoving, onCentre: onCentre, showPin: false, fallback: _placeMapFallback),
     directions: (p, name) => placeDirections(nav, p, name),
+    // Show on map: Maps focused on the place (its card), the way Directions gets there, without a route
+    showOnMap: (p, name) {
+      nav.select(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+      nav.requestMap();
+    },
+    openUrl: hub.openUrl,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
@@ -1576,6 +1586,8 @@ class _CacheAppState extends State<CacheApp> {
                 // one shape whether the banner shows or not, so the app below keeps its state when it comes and goes
                 builder: (context, _) => Column(
                   children: [
+                    // a browser whose session ended: one way back to the sign-in page, whatever the page said
+                    const SignedOutBanner(),
                     const LogEverythingBanner(),
                     // the banner holds the status bar's room while it shows
                     Expanded(child: MediaQuery.removePadding(context: context, removeTop: appLog.everythingUntil != null, child: DesktopThemeScope(child: child!))),
