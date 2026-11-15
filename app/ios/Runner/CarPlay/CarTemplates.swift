@@ -525,7 +525,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     ]
     let template = CPVoiceControlTemplate(voiceControlStates: states)
     listenTemplate = template
-    let session = listenSession ?? CarListenSession.make()
+    // A new session for each listen: one that ended is not reused (its recognizer, or the harness's stand-in, is the last one's).
+    let session = CarListenSession.make()
     listenSession = session
     session.onState = { [weak self] state in self?.listenStateChanged(state) }
     session.onText = { [weak self] text in self?.searchHeard(text) }
