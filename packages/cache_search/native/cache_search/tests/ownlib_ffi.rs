@@ -8,6 +8,8 @@
 use cache_ingest::testing::{book, make_pdf, FakeEmbedder, FakePdfEngine, Kind};
 use cache_ingest::{Env, Service};
 use cache_search::ingest::{service_with, CoreStore};
+use cache_search::ffi::*;
+use cache_search::handle::Handle;
 use cache_search::libreg;
 use cache_search::libupdate;
 use cache_search::library::{ensure_init, write_segments_manifest};
@@ -72,9 +74,14 @@ fn service() -> Service {
 
 /// Adds a book as Add PDF does, and puts its PDF beside it (`bookshelf/<copy>.pdf`, as the app does after `done`).
 fn add_book(svc: &Service, root: &Path, lib: &Path, name: &str, topic: &str, pages: usize) -> (String, u64) {
+    add_pages(svc, root, lib, name, &book(topic, pages))
+}
+
+/// [`add_book`] with the pages given.
+fn add_pages(svc: &Service, root: &Path, lib: &Path, name: &str, pages: &[cache_ingest::testing::FakePage]) -> (String, u64) {
     let pdf = root.join("Inbox").join(format!("{name}.pdf"));
     std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
-    std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, &book(topic, pages))).unwrap();
+    std::fs::write(&pdf, make_pdf(Some(name), Kind::Ok, pages)).unwrap();
     let job_dir = root.join("ingest").join(format!("{}-{name}", lib.parent().unwrap().parent().unwrap().file_name().unwrap().to_string_lossy()));
     let s: Value = serde_json::from_str(&svc.start(&json!({"library_dir": lib, "pdf_path": pdf, "job_dir": job_dir}).to_string()).unwrap()).unwrap();
     let job = s["job"].as_u64().unwrap();
@@ -307,4 +314,229 @@ fn a_rebuild_while_a_book_is_being_written_waits_busy_and_changes_nothing() {
     drop(guard);
     assert!(!a.join(ownlib::MARKER).exists());
     assert_eq!(sync(&a)["rebuilt"], true);
+}
+
+// ---- the person's own add must be found by search on the same device (the core opened before the rebuild)
+
+fn take(p: *mut std::ffi::c_char) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(p) }.to_str().unwrap().to_string();
+    unsafe { cs_free_string(p) };
+    Some(s)
+}
+
+fn cstr(s: &str) -> std::ffi::CString {
+    std::ffi::CString::new(s).unwrap()
+}
+
+fn run_job(kind: &str, params: Value) -> Value {
+    let j = unsafe { cs_job_start(cstr(kind).as_ptr(), cstr(&params.to_string()).as_ptr()) };
+    assert!(!j.is_null(), "{kind} did not start: {:?}", take(unsafe { cs_last_error(std::ptr::null_mut()) }));
+    let t0 = std::time::Instant::now();
+    let p = loop {
+        let p: Value = serde_json::from_str(&take(unsafe { cs_job_progress(j) }).unwrap()).unwrap();
+        if p["state"] != "running" {
+            break p;
+        }
+        assert!(t0.elapsed().as_secs() < 120, "{kind} did not finish: {p}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    unsafe { cs_job_free(j) };
+    p
+}
+
+fn core_status(h: *mut Handle) -> Value {
+    serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap()
+}
+
+/// The core as the app opens it on My books: the shard, the library's index folder, the device's indexes folder (where the app builds
+/// the keyword snapshot of a library, `index_library` with `indexes_dir`), the library's settings.
+fn open_core(lib: &Path, indexes: &Path) -> *mut Handle {
+    let src = json!({"kind": "library", "path": lib.join("shard").to_str().unwrap(), "index_dir": lib.join("index").to_str().unwrap(), "settings": settings(true)});
+    let h = unsafe { cs_open(cstr(&json!({"sources": [src], "indexes_dir": indexes.to_str().unwrap()}).to_string()).as_ptr()) };
+    assert!(!h.is_null());
+    wait_open(h);
+    h
+}
+
+fn wait_open(h: *mut Handle) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let v = core_status(h);
+        if v["sources"][0]["opening"] == false && v["sources"][0]["updating"] == false {
+            return v["sources"][0].clone();
+        }
+        assert!(t0.elapsed().as_secs() < 60, "library did not open: {v}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Waits for the keyword snapshot just published to be the one in use (the core picks it on a background thread).
+fn wait_words(h: *mut Handle) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let st = wait_open(h);
+        if st["keyword_source"] == "device" || t0.elapsed().as_secs() > 20 {
+            return st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// What the app does for a library whose keyword index is behind or missing: the job the status asks for.
+fn make_words_current(h: *mut Handle, lib: &Path, indexes: &Path) {
+    let st = wait_open(h);
+    let params = json!({"indexes_dir": indexes.to_str().unwrap(), "library_path": lib.join("shard").to_str().unwrap(), "settings": settings(true), "heap_mb": 50});
+    let kind = if st["keyword_source"] == "none" || st["index"]["location"].is_null() { "index_library" } else { "index_extend" };
+    let p = run_job(kind, params);
+    assert_eq!(p["state"], "done", "{kind}: {p}");
+}
+
+/// The first line of a book's first page, the way a person types an exact line from it.
+fn first_line(topic: &str) -> String {
+    cache_ingest::testing::prose(topic, 1, 120).lines().next().unwrap().to_string()
+}
+
+/// The titles of the results of searching the open core for `line`, by words and by meaning.
+fn found_titles(h: *mut Handle, line: &str) -> Vec<String> {
+    let opts = json!({"k": 8, "query_vector": {"model": "fake-hash-v1", "vector": cache_pack::embed::fake_vector(line)}});
+    let r = take(unsafe { cs_search(h, cstr(line).as_ptr(), cstr(&opts.to_string()).as_ptr()) }).expect("search result");
+    let v: Value = serde_json::from_str(&r).unwrap();
+    v["results"].as_array().unwrap().iter().filter_map(|x| x["title"].as_str().map(String::from)).collect()
+}
+
+#[test]
+fn a_book_added_here_is_found_by_search_in_the_core_before_its_words_are_indexed() {
+    let tmp = TempDir::new("search-own");
+    let svc = service();
+    let indexes = tmp.0.join("indexes");
+    let a = make_library(&tmp.0.join("a"), "my-books", true);
+    add_book(&svc, &tmp.0, &a, "Quasar Guide", "quasar", 6);
+    // the first look on this device: the one rebuild, then the keyword snapshot is built, then the app opens its core
+    assert_eq!(sync(&a)["rebuilt"], true);
+    let p = run_job("index_library", json!({"library_path": a.join("shard").to_str().unwrap(), "indexes_dir": indexes.to_str().unwrap(), "heap_mb": 50, "settings": settings(true)}));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_core(&a, &indexes);
+    let st = wait_words(h);
+    assert_eq!(st["keyword_source"], "device", "{st}");
+    assert!(found_titles(h, &first_line("quasar")).iter().any(|t| t.starts_with("Quasar")));
+
+    // another device's book arrives as a pack (a second library plays that device), and this device adds one of its own
+    let b = tmp.0.join("b").join("libraries").join("my-books");
+    copy_dir(&a, &b);
+    add_book(&svc, &tmp.0, &b, "Nebula Guide", "nebula", 4);
+    bring_new_files(&b, &a, "packs");
+    add_book(&svc, &tmp.0, &a, "Pulsar Guide", "pulsar", 5);
+    let r = sync(&a);
+    assert_eq!(r["rebuilt"], true, "{r}");
+    whole(&a);
+    let st = wait_open(h);
+    eprintln!("AFTER REBUILD: {st}");
+    assert_eq!(st["docs"].as_u64().unwrap(), r["points"].as_u64().unwrap(), "the open core holds the rebuilt shard: {st}");
+    // at once, before any index job: the keyword snapshot still covers only the first book, and its words must not push the books it
+    // does not know behind it (found on a phone: a book added there was not found by its own lines)
+    for (topic, title) in [("quasar", "Quasar"), ("nebula", "Nebula"), ("pulsar", "Pulsar")] {
+        let got = found_titles(h, &first_line(topic));
+        assert!(got.first().map(|t| t.starts_with(title)).unwrap_or(false), "{title}: its own line is the first result, got {got:?}");
+    }
+    // by words: the keyword index must say it is behind, so the app's index job runs, and then every book is found by its words
+    assert!(st["keyword_pending"] == true || st["keyword_source"] == "none", "the keyword index is behind the rebuilt shard and says so: {st}");
+    make_words_current(h, &a, &indexes);
+    let t0 = std::time::Instant::now();
+    let st = loop {
+        let st = wait_words(h);
+        if st["keyword_pending"] != true || t0.elapsed().as_secs() > 20 {
+            break st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    eprintln!("AFTER INDEX JOB: {st}");
+    assert_eq!(st["keyword_source"], "device", "{st}");
+    assert_ne!(st["keyword_pending"], true, "the index job brought the words up to date: {st}");
+    for (topic, title) in [("quasar", "Quasar"), ("nebula", "Nebula"), ("pulsar", "Pulsar")] {
+        let got = found_titles(h, &first_line(topic));
+        assert!(got.first().map(|t| t.starts_with(title)).unwrap_or(false), "{title}: its own line is the first result, got {got:?}");
+    }
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn a_book_added_through_add_pdf_makes_the_open_core_say_its_words_are_behind() {
+    // what the app's index scheduler reads to list the extension: after an Add PDF the status of the core opened before it says
+    // the shard grew (docs) and the keyword snapshot is behind (keyword_pending), with no rebuild and no reopen
+    let tmp = TempDir::new("add-pending");
+    let svc = service();
+    let indexes = tmp.0.join("indexes");
+    let a = make_library(&tmp.0.join("a"), "my-books", true);
+    add_book(&svc, &tmp.0, &a, "Quasar Guide", "quasar", 6);
+    assert_eq!(sync(&a)["rebuilt"], true);
+    let p = run_job("index_library", json!({"library_path": a.join("shard").to_str().unwrap(), "indexes_dir": indexes.to_str().unwrap(), "heap_mb": 50, "settings": settings(true)}));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_core(&a, &indexes);
+    let st = wait_words(h);
+    assert_ne!(st["keyword_pending"], true, "{st}");
+    let (_, p2) = add_book(&svc, &tmp.0, &a, "Pulsar Guide", "pulsar", 5);
+    let st = wait_open(h);
+    assert_eq!(st["docs"].as_u64().unwrap(), st["docs"].as_u64().unwrap().max(p2), "{st}");
+    assert_eq!(st["keyword_pending"], true, "the words of the new book are not in the snapshot yet: {st}");
+    assert!(st["source_id"].is_string() && st["index"]["needs_seal"].is_null(), "{st}");
+    make_words_current(h, &a, &indexes);
+    let t0 = std::time::Instant::now();
+    let st = loop {
+        let st = wait_words(h);
+        if st["keyword_pending"] != true || t0.elapsed().as_secs() > 20 {
+            break st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_ne!(st["keyword_pending"], true, "the extension clears it: {st}");
+    unsafe { cs_close(h) };
+}
+
+/// The core opened with no indexes folder, as a device whose My books has its keyword index in the library's own `index/` folder.
+fn open_core_legacy(lib: &Path) -> *mut Handle {
+    let src = json!({"kind": "library", "path": lib.join("shard").to_str().unwrap(), "index_dir": lib.join("index").to_str().unwrap(), "settings": settings(true)});
+    let h = unsafe { cs_open(cstr(&json!({"sources": [src]}).to_string()).as_ptr()) };
+    assert!(!h.is_null());
+    wait_open(h);
+    h
+}
+
+/// The titles of a keyword-only search (no query vector) for `text`.
+fn keyword_titles(h: *mut Handle, text: &str) -> Vec<String> {
+    let r = take(unsafe { cs_search(h, cstr(text).as_ptr(), cstr(&json!({"k": 8}).to_string()).as_ptr()) }).expect("search result");
+    let v: Value = serde_json::from_str(&r).unwrap();
+    v["results"].as_array().unwrap().iter().filter_map(|x| x["title"].as_str().map(String::from)).collect()
+}
+
+#[test]
+fn a_book_added_by_add_pdf_is_found_by_its_words_and_its_title_through_the_real_sequence() {
+    // the sequence the app runs: Add PDF finishes -> the Library reads again: own_library_sync -> the sources' status -> the keyword
+    // index. A short book (three pages, three subjects, so one piece) on a library whose keyword index is in its own index/ folder.
+    let tmp = TempDir::new("real-seq");
+    let svc = service();
+    let a = make_library(&tmp.0.join("a"), "my-books", true);
+    add_book(&svc, &tmp.0, &a, "Quasar Guide", "quasar", 6);
+    assert_eq!(sync(&a)["rebuilt"], true);
+    let p = run_job("index_library", json!({"library_path": a.join("shard").to_str().unwrap(), "index_dir": a.join("index").to_str().unwrap(), "heap_mb": 50, "settings": settings(true)}));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_core_legacy(&a);
+    let st = wait_words(h);
+    assert_eq!(st["keyword_source"], "device", "{st}");
+    use cache_ingest::testing::FakePage;
+    let pages = [FakePage::text("Harbor lantern keeper winds the brass clock."), FakePage::text("Glacier compass needle points to the iron ridge."), FakePage::text("Meadow telescope watches the violet comet tonight.")];
+    let (_, pieces) = add_pages(&svc, &tmp.0, &a, "R12 one", &pages);
+    // the Library reads again after the add
+    let r = sync(&a);
+    let st = wait_open(h);
+    eprintln!("PIECES {pieces}; sync {r}; status {st}");
+    assert_eq!(st["docs"].as_u64().unwrap(), r["points"].as_u64().unwrap(), "{st}");
+    // by its words, an exact line of page 3 and the title, in the keyword search alone
+    let line3 = keyword_titles(h, "Meadow telescope watches the violet comet tonight.");
+    assert!(line3.iter().any(|t| t.starts_with("R12 one")), "an exact line of page 3 is found by its words, got {line3:?}; status {st}");
+    let by_title = keyword_titles(h, "R12 one");
+    assert!(by_title.iter().any(|t| t.starts_with("R12 one")), "the title is found, got {by_title:?}; status {st}");
+    unsafe { cs_close(h) };
 }
