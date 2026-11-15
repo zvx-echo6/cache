@@ -45,6 +45,7 @@ class SharingState extends ChangeNotifier {
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
+       // ignore: prefer_initializing_formals
        _remote = remote;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
