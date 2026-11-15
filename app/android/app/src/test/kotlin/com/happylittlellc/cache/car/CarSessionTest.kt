@@ -528,6 +528,63 @@ class CarSessionTest {
         assertNull(a["lat"])
     }
 
+    // Voice search ("find gas near me": VIEW of geo:0,0?q=...): the car lists the places found, whatever the name, near the
+    // position. The phone asks Dart for a search (no coordinates, so it is never taken for a place to go to).
+    @Test
+    fun aVoiceSearchThatReachedThePhoneListsThePlacesFoundOnTheCar() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(if (method == "navigateTo") mapOf("places" to listOf(place(1), place(2))) else null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2?q=gas+station"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("gas station", a["query"])
+        assertEquals(true, a["search"])
+        assertNull(a["lat"])
+        assertEquals(false, a["stop"])
+        assertEquals(listOf("Place 1", "Place 2"), searchRows(screens.top as SearchScreen))
+    }
+
+    // Coordinates with no search: the route is shown, not started (as intent=directions).
+    @Test
+    fun aGeoLinkWithOnlyCoordinatesShowsTheRouteOnTheCar() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        start()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2"))))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals(43.6, a["lat"])
+        assertEquals(false, a["start"])
+        assertEquals(false, a["search"])
+    }
+
+    // The car's own delivery (Android Auto hands the session the VIEW intent, at start or later).
+    @Test
+    fun aVoiceSearchFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {
+        val asked = mutableListOf<Pair<String, Any?>>()
+        CarLink.dartForTests = { method, args, done ->
+            asked += method to args
+            done(null)
+        }
+        val session = CarSession(startEngine = {})
+        start(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=coffee")), session)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("coffee", (asked.single { it.first == "navigateTo" }.second as Map<*, *>)["query"])
+        asked.clear()
+        session.onNewIntent(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=pharmacy")))
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = asked.single { it.first == "navigateTo" }.second as Map<*, *>
+        assertEquals("pharmacy", a["query"])
+        assertEquals(true, a["search"])
+    }
+
     // Android Auto's own path: the request comes with the session's first screen, or to a session that is already up.
     @Test
     fun aNavigationRequestFromAndroidAutoIsAskedOfThePhoneAtStartAndLater() {

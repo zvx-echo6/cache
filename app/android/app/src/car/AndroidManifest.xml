@@ -23,6 +23,15 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:scheme="geo.action"/>
             </intent-filter>
+            <!-- Voice search and map links ("geo:0,0?q=gas+station" from Gemini or the Assistant; any app's map link). BROWSABLE
+                 puts Cache in the phone's "Open with" list for them. With a car connected the car lists the places; with none the
+                 phone opens its Maps tab (car/NavIntent.kt, GeoView). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="geo"/>
+            </intent-filter>
         </activity>
         <!-- A navigation app built with the Android for Cars App Library. -->
         <service

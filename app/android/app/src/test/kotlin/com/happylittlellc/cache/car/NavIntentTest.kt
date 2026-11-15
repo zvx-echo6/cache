@@ -42,7 +42,7 @@ class NavIntentTest {
         assertEquals(0, heard)
         // Anything else is the activity's own business.
         assertFalse(NavIntent.fromPhone(Intent(Intent.ACTION_MAIN)))
-        assertFalse(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=Made+Up+Clinic"))))
+        assertFalse(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/"))))
         assertFalse(NavIntent.fromPhone(null))
     }
 
@@ -231,5 +231,76 @@ class NavIntentTest {
         CarLink.setCarConnected(true)
         assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=mute"))))
         assertEquals(listOf<CarAction>(CarAction.Mute), heard)
+    }
+
+    // Voice search and map links: VIEW of a geo: address.
+    @Test
+    fun aVoiceSearchWithNoPlaceIsASearch() {
+        assertEquals(GeoView.Search(null, null, "gas station"), NavIntent.parseView("geo:0,0?q=gas+station"))
+    }
+
+    @Test
+    fun aSearchWithCoordinatesKeepsThemAndTheQuery() {
+        assertEquals(GeoView.Search(43.6, -116.2, "coffee"), NavIntent.parseView("geo:43.6,-116.2?q=coffee"))
+    }
+
+    @Test
+    fun coordinatesWithNoQueryShowTheRouteWithoutStartingIt() {
+        val v = NavIntent.parseView("geo:43.6,-116.2") as GeoView.Point
+        assertEquals(NavRequest(43.6, -116.2, null, NavKind.DIRECTIONS), v.req)
+        assertFalse(v.req.start)
+    }
+
+    @Test
+    fun anEncodedQueryIsDecoded() {
+        assertEquals("Joe's Coffee & Tea", (NavIntent.parseView("geo:0,0?q=Joe%27s%20Coffee%20%26%20Tea") as GeoView.Search).query)
+        assertEquals("caf\u00e9 near me", (NavIntent.parseView("geo:0,0?q=caf%C3%A9+near+me") as GeoView.Search).query)
+    }
+
+    @Test
+    fun aLabelledPointInTheQueryIsAPointNotASearch() {
+        val v = NavIntent.parseView("geo:0,0?q=42.5,-113.5(Burley)") as GeoView.Point
+        assertEquals(NavRequest(42.5, -113.5, "Burley", NavKind.DIRECTIONS), v.req)
+    }
+
+    @Test
+    fun aGeoLinkWithNothingToShowIsNotARequest() {
+        assertNull(NavIntent.parseView("geo:0,0"))
+        assertNull(NavIntent.parseView("geo.action:?act=mute"))
+        assertNull(NavIntent.parseView("https://example.com/?q=x"))
+        assertNull(NavIntent.parseView(Intent(CarContext.ACTION_NAVIGATE, Uri.parse("geo:0,0?q=coffee"))))
+    }
+
+    @Test
+    fun aViewOfAGeoLinkWithNoCarOpensThePhonesMapsAndIsKeptFromFlutter() {
+        val opened = mutableListOf<GeoView>()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=gas+station")), opened::add))
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2")), opened::add))
+        assertEquals(listOf(GeoView.Search(null, null, "gas station"), GeoView.Point(NavRequest(43.6, -116.2, null, NavKind.DIRECTIONS))), opened)
+        // A geo: link with nothing in it is kept from Flutter too, and opens nothing.
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")), opened::add))
+        assertEquals(2, opened.size)
+    }
+
+    @Test
+    fun aViewOfAGeoLinkWithACarGoesToTheCarAndNotToThePhone() {
+        val searches = mutableListOf<GeoView.Search>()
+        val navs = mutableListOf<NavRequest>()
+        CarLink.addListener(object : CarLink.Listener {
+            override fun onSearchRequest(search: GeoView.Search) {
+                searches += search
+            }
+
+            override fun onNavRequest(req: NavRequest) {
+                navs += req
+            }
+        })
+        CarLink.setCarConnected(true)
+        val opened = mutableListOf<GeoView>()
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2?q=coffee")), opened::add))
+        assertTrue(NavIntent.fromPhone(Intent(Intent.ACTION_VIEW, Uri.parse("geo:43.6,-116.2")), opened::add))
+        assertEquals(listOf(GeoView.Search(43.6, -116.2, "coffee")), searches)
+        assertEquals(listOf(NavRequest(43.6, -116.2, null, NavKind.DIRECTIONS)), navs)
+        assertTrue(opened.isEmpty())
     }
 }

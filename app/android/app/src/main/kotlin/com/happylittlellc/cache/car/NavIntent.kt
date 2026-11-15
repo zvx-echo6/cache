@@ -63,12 +63,49 @@ sealed interface CarAction {
     }
 }
 
+/**
+ * A `geo:` link opened with `android.intent.action.VIEW`: what Gemini and the Google Assistant send for a voice search ("find gas
+ * near me" is `geo:0,0?q=gas+station`), and what any app sends to the "Open with" list for a map link. The assistant does the
+ * understanding; only the machine format is read.
+ *
+ * [Search] is a `q` (with or without coordinates, which only say where the link was meant): the car lists the places found.
+ * [Point] is coordinates with no search: the route to it is shown, not started (NAVIGATE's `intent=directions`).
+ */
+sealed interface GeoView {
+    data class Search(val lat: Double?, val lon: Double?, val query: String) : GeoView
+    data class Point(val req: NavRequest) : GeoView
+}
+
 object NavIntent {
     private val coords = Regex("""^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*(?:\((.*)\))?\s*$""")
 
     fun parse(intent: Intent?): NavRequest? {
         if (intent == null || intent.action != CarContext.ACTION_NAVIGATE) return null
         return parse(intent.dataString ?: return null)
+    }
+
+    /** True when [intent] is a `VIEW` of a `geo:` address (a voice search, or a map link picked from "Open with"). */
+    fun isGeoView(intent: Intent?): Boolean {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) return false
+        val scheme = intent.data?.scheme?.lowercase() ?: return false
+        return scheme == "geo" || scheme == "geo.offline"
+    }
+
+    /** The search or point [intent] (a `VIEW` of a `geo:` address) asks for, or null when it is not one or carries neither. */
+    fun parseView(intent: Intent?): GeoView? {
+        if (!isGeoView(intent)) return null
+        return parseView(intent!!.dataString ?: return null)
+    }
+
+    fun parseView(uri: String): GeoView? {
+        val req = parse(uri) ?: return null
+        val q = uri.indexOf('?')
+        val raw = if (q < 0) null else query(uri.substring(q + 1))["q"]?.trim()
+        // "q=42.5,-113.5(Burley)" is a labelled point, not words to search for.
+        val labelled = raw != null && coords.matches(raw)
+        if (req.query != null && !labelled) return GeoView.Search(req.lat, req.lon, req.query)
+        if (req.lat != null && req.lon != null) return GeoView.Point(NavRequest(req.lat, req.lon, req.query, NavKind.DIRECTIONS))
+        return null
     }
 
     /** The custom action [intent] carries (`VIEW` with a `geo.action:` address), or null when it is not one. */
@@ -90,11 +127,24 @@ object NavIntent {
      * activity directly). True when [intent] is one: the caller then keeps it away from Flutter. With a car connected it goes
      * to the car session, the same handling as a request Android Auto delivers; with none, or when it cannot be read, it is
      * dropped (the phone does not open places from "geo:" addresses).
+     *
+     * A `VIEW` of a `geo:` address (a voice search, or Cache picked from "Open with") goes the same way, except that with no
+     * car it is not dropped: [onPhone] gets it, to open the phone's Maps tab with the search or the point.
      */
-    fun fromPhone(intent: Intent?): Boolean {
+    fun fromPhone(intent: Intent?, onPhone: (GeoView) -> Unit = {}): Boolean {
         // A custom action ("geo.action:") goes the same way: to the car session when a car is connected, otherwise dropped.
         parseAction(intent)?.let {
             CarLink.carAction(it)
+            return true
+        }
+        if (isGeoView(intent)) {
+            parseView(intent)?.let { v ->
+                val taken = when (v) {
+                    is GeoView.Search -> CarLink.searchRequest(v)
+                    is GeoView.Point -> CarLink.navRequest(v.req)
+                }
+                if (!taken) onPhone(v)
+            }
             return true
         }
         if (intent == null || intent.action != CarContext.ACTION_NAVIGATE) return false
