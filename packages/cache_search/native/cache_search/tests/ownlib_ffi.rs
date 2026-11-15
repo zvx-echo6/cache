@@ -456,3 +456,36 @@ fn a_book_added_here_is_found_by_search_in_the_core_before_its_words_are_indexed
     }
     unsafe { cs_close(h) };
 }
+
+#[test]
+fn a_book_added_through_add_pdf_makes_the_open_core_say_its_words_are_behind() {
+    // what the app's index scheduler reads to list the extension: after an Add PDF the status of the core opened before it says
+    // the shard grew (docs) and the keyword snapshot is behind (keyword_pending), with no rebuild and no reopen
+    let tmp = TempDir::new("add-pending");
+    let svc = service();
+    let indexes = tmp.0.join("indexes");
+    let a = make_library(&tmp.0.join("a"), "my-books", true);
+    add_book(&svc, &tmp.0, &a, "Quasar Guide", "quasar", 6);
+    assert_eq!(sync(&a)["rebuilt"], true);
+    let p = run_job("index_library", json!({"library_path": a.join("shard").to_str().unwrap(), "indexes_dir": indexes.to_str().unwrap(), "heap_mb": 50, "settings": settings(true)}));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_core(&a, &indexes);
+    let st = wait_words(h);
+    assert_ne!(st["keyword_pending"], true, "{st}");
+    let (_, p2) = add_book(&svc, &tmp.0, &a, "Pulsar Guide", "pulsar", 5);
+    let st = wait_open(h);
+    assert_eq!(st["docs"].as_u64().unwrap(), st["docs"].as_u64().unwrap().max(p2), "{st}");
+    assert_eq!(st["keyword_pending"], true, "the words of the new book are not in the snapshot yet: {st}");
+    assert!(st["source_id"].is_string() && st["index"]["needs_seal"].is_null(), "{st}");
+    make_words_current(h, &a, &indexes);
+    let t0 = std::time::Instant::now();
+    let st = loop {
+        let st = wait_words(h);
+        if st["keyword_pending"] != true || t0.elapsed().as_secs() > 20 {
+            break st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_ne!(st["keyword_pending"], true, "the extension clears it: {st}");
+    unsafe { cs_close(h) };
+}
