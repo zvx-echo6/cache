@@ -313,7 +313,7 @@ Future<void> addMapFile(
   if (kind == 'places') {
     final nb = notebooks!;
     final mine = nb.notebooks.where((n) => n.savedPlaces).firstOrNull;
-    await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now);
+    await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now, onOpen: onShowList);
     return;
   }
   if (notebooks != null) {

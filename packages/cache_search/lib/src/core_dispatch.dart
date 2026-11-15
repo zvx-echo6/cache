@@ -195,6 +195,14 @@ class CoreDispatcher {
           jobs[key] = j;
           result = key;
         }
+      case 'layersRefreshStart':
+        // null: this core has no cs_layers_refresh_start (the caller uses layers('refresh'))
+        final j = eng().layersRefreshJob();
+        if (j != null) {
+          final key = nextKey++;
+          jobs[key] = j;
+          result = key;
+        }
       case 'liveGet':
         result = eng().liveGet((a['request'] as Map).cast<String, dynamic>());
       case 'liveSetFetchPolicy':

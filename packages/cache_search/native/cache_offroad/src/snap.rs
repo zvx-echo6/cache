@@ -45,7 +45,7 @@ pub fn plan_end(v: &dyn Valhalla, p: (f64, f64), costing: &str, to_public: bool)
     let near = v.candidates(p.0, p.1, costing, &EndOptions::default());
     let Some(first) = near.first() else { return EndPlan::plain(p) };
     if service_road(first) {
-        let public = EndOptions { min_road_class: Some(PUBLIC_MIN_CLASS.into()), radius_m: None };
+        let public = EndOptions { min_road_class: Some(PUBLIC_MIN_CLASS.into()), radius_m: None, heading_deg: None };
         if v.candidates(p.0, p.1, costing, &public).first().is_some_and(|c| c.distance_m <= PUBLIC_ROAD_M) {
             return EndPlan { end: RouteEnd { lat: p.0, lon: p.1, opts: public }, public_road: true };
         }
@@ -58,6 +58,12 @@ pub fn route_planned(v: &dyn Valhalla, from: &EndPlan, to: &EndPlan, costing: &s
     match v.route_ends(&from.end, &to.end, costing) {
         Ok(trip) => Ok((trip, from.clone(), to.clone())),
         Err(e) => {
+            // a start that asked for a heading and found no route is tried again without it
+            if from.end.opts.heading_deg.is_some() {
+                let mut f = from.clone();
+                f.end.opts.heading_deg = None;
+                return route_planned(v, &f, to, costing);
+            }
             if !(from.public_road || to.public_road) {
                 return Err(e);
             }
@@ -184,5 +190,34 @@ mod tests {
         assert!(from.public_road);
         let (_, f, _) = route_planned(&v, &from, &EndPlan::plain((40.76, -111.90)), "auto").unwrap();
         assert_eq!(f, EndPlan::plain(P), "the plain end, and the gap is an ordinary snap again");
+    }
+
+    /// A router that finds no route from a start that asks for a heading.
+    struct NoHeading(Roads);
+    impl Valhalla for NoHeading {
+        fn locate(&self, _: f64, _: f64, _: &str) -> Option<LocateSnap> {
+            None
+        }
+        fn route(&self, _: (f64, f64), _: (f64, f64), _: &str) -> Result<Trip, ValhallaError> {
+            unreachable!()
+        }
+        fn route_ends(&self, f: &RouteEnd, t: &RouteEnd, c: &str) -> Result<Trip, ValhallaError> {
+            if f.opts.heading_deg.is_some() {
+                return Err(ValhallaError { code: Some(442), message: "No path could be found for input".into(), timeout: false });
+            }
+            self.0.route_ends(f, t, c)
+        }
+        fn trace_attributes(&self, _: &str) -> Result<Trace, ValhallaError> {
+            Err(ValhallaError::msg("n/a"))
+        }
+    }
+
+    #[test]
+    fn a_start_with_a_heading_that_finds_no_route_is_tried_without_it() {
+        let v = NoHeading(roads(vec![], vec![]));
+        let mut from = EndPlan::plain(P);
+        from.end.opts.heading_deg = Some(90.0);
+        let (_, f, _) = route_planned(&v, &from, &EndPlan::plain((40.76, -111.90)), "auto").unwrap();
+        assert_eq!(f.end.opts.heading_deg, None);
     }
 }

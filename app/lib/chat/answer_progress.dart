@@ -19,6 +19,9 @@ class AnswerProgress extends StatefulWidget {
     this.failed = false,
     this.queuePosition,
     this.dropCitations = false,
+    this.onCite,
+    this.canCite,
+    this.stepTap,
   });
 
   final TurnPhase phase;
@@ -38,6 +41,14 @@ class AnswerProgress extends StatefulWidget {
 
   /// The answer cites nothing (it is done, with no sources): its citation marks are not shown.
   final bool dropCitations;
+
+  /// A tap on a citation mark in the answer, with the source's number; [canCite] says which marks open something (see
+  /// [AnswerMarkdown]).
+  final void Function(int n)? onCite;
+  final bool Function(int n)? canCite;
+
+  /// What tapping a step's line does, or null for a step that points at nothing (its line stays plain).
+  final VoidCallback? Function(ToolStep step)? stepTap;
 
   @override
   State<AnswerProgress> createState() => _AnswerProgressState();
@@ -98,18 +109,27 @@ class _AnswerProgressState extends State<AnswerProgress> {
             ),
           ),
         if (open)
-          for (final s in steps)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                children: [
-                  Icon(Icons.check, size: 13, color: k.secondary),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(stepPast(s), style: line)),
-                ],
-              ),
-            ),
+          for (var i = 0; i < steps.length; i++) _stepLine(context, i, steps[i], line),
       ],
+    );
+  }
+
+  /// One finished step: plain, or, when it points at something, a line that opens it (as a link in the app's theme does).
+  Widget _stepLine(BuildContext context, int i, ToolStep s, TextStyle line) {
+    final k = context.t;
+    final tap = widget.stepTap?.call(s);
+    final row = Row(
+      children: [
+        Icon(Icons.check, size: 13, color: k.secondary),
+        const SizedBox(width: 10),
+        Expanded(child: Text(stepPast(s), style: tap == null ? line : line.copyWith(color: k.accent))),
+      ],
+    );
+    if (tap == null) return Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: row);
+    return InkWell(
+      key: ValueKey('answer-step-$i'),
+      onTap: tap,
+      child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 32), child: Align(alignment: Alignment.centerLeft, child: row)),
     );
   }
 
@@ -166,7 +186,7 @@ class _AnswerProgressState extends State<AnswerProgress> {
               ],
             ),
           ),
-        if (visible.isNotEmpty) AnswerMarkdown(visible, dropCitations: widget.dropCitations),
+        if (visible.isNotEmpty) AnswerMarkdown(visible, dropCitations: widget.dropCitations, onCite: widget.onCite, canCite: widget.canCite),
       ],
     );
   }

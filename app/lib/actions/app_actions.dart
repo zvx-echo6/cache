@@ -1,5 +1,6 @@
 import 'package:cache_search/cache_search.dart';
 
+import '../chat/ask_target.dart';
 import '../weather/curated.dart';
 import '../weather/places.dart';
 import 'action_registry.dart';
@@ -117,24 +118,35 @@ class AppActions {
           return _place(saved);
         },
         'places.list': (_) async => {'places': [for (final p in await places.list()) _place(p)]},
+      }, cardTargets: {
+        // The card's place line opens the place, and its Done opens the place that was saved.
+        'places.save': (f, result) {
+          final place = askPlaceOf(f['place'], name: f['name'] is String ? f['name'] as String : null);
+          return CardTargets(lines: {'Place': ?place}, done: result == null ? null : askPlaceOf(result));
+        },
       });
 
   Map<String, dynamic> _place(SavedPlaceRecord p) => {'name': p.name, 'lat': p.lat, 'lon': p.lon, 'label': ?p.label};
 
   List<String>? _watchNames;
 
+  /// How the assistant's watch actions name a place. The screens now name "Where I am" after its town (or "Current location"), but
+  /// this list is model input: it keeps the label it always had until the model side is decided, so this change gives the model nothing new.
+  static String _modelName(WatchPlace c) => c.kind == PlaceKind.here ? 'Where I am' : c.name;
+
   /// The watch actions name the places of the Places list. Republished only when the names change.
   Future<void> publishWatch() async {
     final choices = await watch.choices();
     final names = <String>[];
     for (final c in choices) {
-      if (c.name.isNotEmpty && !names.contains(c.name)) names.add(c.name);
+      final n = _modelName(c);
+      if (n.isNotEmpty && !names.contains(n)) names.add(n);
     }
     if (_watchNames != null && _watchNames!.join('\n') == names.join('\n')) return;
     _watchNames = names;
     Future<String> id(String name) async {
       for (final c in await watch.choices()) {
-        if (c.name == name) return c.id;
+        if (_modelName(c) == name) return c.id;
       }
       throw const ActionFailure('not_found', 'That place is no longer saved or downloaded.');
     }

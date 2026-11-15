@@ -421,6 +421,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   double? _bannerFoot;
   Size? _bannerFootFor;
 
+  /// Guidance was on at the last change of the navigation state (Start is the change that turns it on).
+  bool _wasGuiding = false;
+
   // ---- guidance: the elevation panel and the route mini map ----
 
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
@@ -922,11 +925,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     );
   }
 
-  /// Where the position sits on the live map while guiding: heading up, low in the free map ([guidanceAnchor]); north up, or
-  /// with the live map in the corner, in its middle.
+  /// Where the position sits on the live map while guiding, heading up or north up (Find me after moving the map comes back here
+  /// too): low in the free map ([guidanceAnchor]); with the live map in the corner, in its middle.
   Offset _guideAnchor() {
     final map = _mapSize;
-    if (maps.follow != FollowMode.headingUp || _swapped || _measure != null) return map.center(Offset.zero);
+    if (_swapped || _measure != null) return map.center(Offset.zero);
     final covers = _guideCovers();
     final free = guidanceFreeMap(map, covers, safe: MediaQuery.paddingOf(context));
     return guidanceAnchor(free, tiles: covers.tiles, reach: math.max(kPositionDotReach, VehicleArrow.reach));
@@ -1045,6 +1048,17 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (!nav.guiding) {
       _bannerFoot = null;
       if (_shownPose != null) _stopGlide();
+    }
+    // Start: the map goes to the guidance view at once from the last known position, moving or not (it no longer waits for the
+    // next fix, which a phone standing still may not send for a long time). Once laid out, so the banner and the bar are measured.
+    final started = nav.guiding && !_wasGuiding;
+    _wasGuiding = nav.guiding;
+    if (started) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final f = location.fix;
+        if (mounted && nav.guiding && f != null && maps.follow != FollowMode.free) _followTo(f);
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
     }
     if (!nav.guiding || nav.arrived) {
       _swapped = false;
@@ -1660,7 +1674,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       return;
     }
     final next = switch (maps.follow) {
-      FollowMode.free => FollowMode.follow,
+      // While guiding, Find me after moving the map goes back to the guidance view (heading up).
+      FollowMode.free => nav.guiding ? FollowMode.headingUp : FollowMode.follow,
       FollowMode.follow => FollowMode.headingUp,
       FollowMode.headingUp => FollowMode.follow,
     };

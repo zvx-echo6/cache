@@ -172,6 +172,14 @@ class _LibNative implements CsNative {
         // the fake core runs in the search worker's isolate: the calls are written beside the libraries folder for the test
         File('${Directory(lib).parent.parent.path}/own-sync-calls.txt').writeAsStringSync('${_base(lib)}\n', mode: FileMode.append);
         final packs = Directory('$lib/packs').existsSync() ? Directory('$lib/packs').listSync().length : 0;
+        // "busy-once" in the library: the first look is refused busy (an index job of the library is running)
+        final once = File('$lib/busy-once');
+        if (once.existsSync()) {
+          once.deleteSync();
+          File('${Directory(lib).parent.parent.path}/own-sync-calls.txt').writeAsStringSync('busy:${_base(lib)}\n', mode: FileMode.append);
+          err = jsonEncode({'code': 'busy', 'message': 'the library is already being updated'});
+          return 0;
+        }
         final rebuilt = !Directory('$lib/shard').existsSync();
         if (rebuilt) {
           Directory('$lib/shard').createSync(recursive: true);
@@ -252,7 +260,7 @@ void main() {
   String? picked;
   final saved = <String, Uint8List>{};
 
-  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir}) async {
+  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir, Duration ownBusyRetry = const Duration(seconds: 30)}) async {
     sources = SourcesState(
       zimsDirOverride: Directory('${tmp.path}/zims'),
       indexesDirOverride: Directory('${tmp.path}/indexes'),
@@ -272,6 +280,7 @@ void main() {
         return true;
       },
       pollInterval: const Duration(milliseconds: 5),
+      ownBusyRetry: ownBusyRetry,
       bundledGuide: guide,
     );
     await sources.init();
@@ -362,6 +371,30 @@ void main() {
       await setUpLibs();
       expect(libs.ownLibraries, hasLength(2));
       expect(libs.defaultOwnLibrary?.folderName, 'my-books');
+      await libs.whenIdle();
+    });
+
+    test('an own library that answers busy (its index job runs) is looked at once more after a while, then is listed', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      List<String> calls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      await setUpLibs(ownBusyRetry: const Duration(milliseconds: 50));
+      for (var i = 0; i < 400 && libs.defaultOwnLibrary == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      // each look is written as it is asked ("my-books"), a refused one also as "busy:my-books"
+      expect(calls(), ['my-books', 'busy:my-books', 'my-books'], reason: 'refused busy, then one delayed look made it');
+      expect(libs.defaultOwnLibrary?.folderName, 'my-books');
+      // the delayed rescan finishes (the core's list, the index job) before the state is disposed
+      for (var i = 0; i < 200 && libs.docsOf(libs.defaultOwnLibrary!) == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
       await libs.whenIdle();
     });
 

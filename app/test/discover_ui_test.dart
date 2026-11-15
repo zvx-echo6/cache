@@ -57,8 +57,10 @@ void main() {
 
       expect(find.text('2 of 5'), findsOneWidget);
       expect(find.text('Where are you?'), findsOneWidget);
+      expect(find.text('Use my current location'), findsOneWidget);
+      expect(find.text('Where I am now'), findsNothing);
       await tapKey(tester, 'wizard-next');
-      expect(asked, 1, reason: 'Where I am now (the default) asks for the location on Next');
+      expect(asked, 1, reason: 'Use my current location (the default) asks for the location on Next');
 
       expect(find.text('3 of 5'), findsOneWidget);
       // Ready and Backcountry are picked by default; Backcountry's size is what it adds on top of Ready

@@ -16,6 +16,7 @@ import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/prompt_read_ahead.dart';
+import '../chat/ask_target.dart';
 import '../chat/navigation_action.dart';
 import '../discover/discover_device.dart';
 import '../discover/discover_state.dart';
@@ -51,6 +52,8 @@ import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
+import '../settings/data_kinds.dart' show DataKind, ShareItem;
+import '../notebook/sync/sync_engine.dart' show NotebookSync;
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../update/app_update.dart' show ReleaseFileSource;
@@ -254,7 +257,12 @@ class _ShellState extends State<Shell> {
     _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
-      if (e is MapRequested && mounted) _goModule(ModuleId.maps);
+      // Maps asked for (a place's Directions, the assistant's route): the Maps tab, over any screen opened above the tabs (a
+      // notebook and its place), so the phone shows the route preview with Start whether or not a car is connected.
+      if (e is MapRequested && mounted) {
+        Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
+        _goModule(ModuleId.maps);
+      }
     });
     // An alert pop-up tapped while the app runs, or the one that started it: open the Weather screen on that alert.
     _alertTaps = LocalAlertNotifier.instance.taps.listen(_openAlert);
@@ -290,6 +298,7 @@ class _ShellState extends State<Shell> {
     unawaited(_startDiscover());
     // A cachelink: link from outside (a camera scanning a device's link code) opens Sharing and sync, which fills in the code.
     linkInbox.addListener(_openIncomingLink);
+    widget.hub.openShareItem = _shareItemOpener;
     WidgetsBinding.instance.addPostFrameCallback((_) => _openIncomingLink());
     // A tap on a guidance notification (Android): the Maps tab, with guidance on it.
     openMapsInbox.addListener(_openMapsFromNotification);
@@ -305,12 +314,22 @@ class _ShellState extends State<Shell> {
 
   bool _linkPageUp = false;
 
+  /// A row of Sharing and sync opens its item where the app has a page for it: a notebook opens its own screen. (Map layers,
+  /// libraries and ZIMs have no page of their own to go to, so their rows keep toggling.)
+  VoidCallback? _shareItemOpener(BuildContext context, DataKind kind, ShareItem item) {
+    final deps = _notebookDeps;
+    if (kind.id != 'notebooks' || deps == null) return null;
+    final book = deps.notebook.notebooks.where((n) => NotebookSync.folderNameOf(n) == item.path).firstOrNull;
+    if (book == null) return null;
+    return () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: book.id)));
+  }
+
   void _openIncomingLink() {
     final sharing = widget.hub.sharing;
     if (!mounted || sharing == null || _linkPageUp || linkInbox.pending == null || linkInbox.pageOpen) return;
     _linkPageUp = true;
     Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync)))
+        .push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: sharing, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem)))
         .whenComplete(() => _linkPageUp = false);
   }
 
@@ -362,7 +381,7 @@ class _ShellState extends State<Shell> {
     ownSource: (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => OwnSourceFormPage(deps: _settingsDeps))),
     linkDevice: widget.hub.sharing == null
         ? null
-        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync))),
+        : (c) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem))),
     searchLibraries: (c, q) {
       unawaited(widget.browse.setFilter(query: q));
       Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: widget.browse)));
@@ -416,6 +435,7 @@ class _ShellState extends State<Shell> {
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
     openMapsInbox.removeListener(_openMapsFromNotification);
+    if (widget.hub.openShareItem == _shareItemOpener) widget.hub.openShareItem = null;
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -425,6 +445,7 @@ class _ShellState extends State<Shell> {
     _navEvents?.cancel();
     _alertTaps?.cancel();
     _lifecycle.dispose();
+    _homeQuery.dispose();
     super.dispose();
   }
 
@@ -476,6 +497,159 @@ class _ShellState extends State<Shell> {
       return;
     }
     if (widget.nav.previewSnapshot(route)) _goModule(ModuleId.maps);
+  }
+
+  /// A search another screen asked Home for (a step line in Ask): Home's box takes it.
+  final ValueNotifier<String?> _homeQuery = ValueNotifier<String?>(null);
+
+  /// What a tap in Ask points at when it is not a page, passage or video: each kind goes to the route the rest of the app already
+  /// has for it (Maps' selection, Notebooks' entry, the Weather screen's focus, Home's search).
+  Future<void> _openTarget(AskTarget target) async {
+    switch (target) {
+      case AskPlace():
+        await _showPlace(target);
+      case AskLayerPoint():
+        await _showLayerPoint(target);
+      case AskRepeaterPoint():
+        await _showListRepeater(target.address);
+      case AskNotebookEntry():
+        await _showNotebookEntry(target.entryId);
+      case AskNotebook():
+        await _showNotebook(target.notebookId);
+      case AskLive():
+        _showLive(target.address);
+      case AskHomeSearch():
+        _homeQuery.value = target.query;
+        _goHome();
+      case AskMapSearch():
+        if (widget.nav.phase != NavPhase.browsing) {
+          _say('Finish or end the route first');
+          return;
+        }
+        widget.nav.openSearch();
+        widget.nav.onQueryChanged(target.query);
+        _goModule(ModuleId.maps);
+    }
+  }
+
+  /// A place of a citation or card: Maps with it selected, as a Home search result opens it. A place the app already has the
+  /// position of (a card's) needs no lookup; a `loc:` address carries its own; a `place:`, `town:` or `addr:` one is found in the
+  /// map data by its name, and it is the result with that same id that opens (never another place of the same name).
+  Future<void> _showPlace(AskPlace p) async {
+    if (widget.nav.phase != NavPhase.browsing) {
+      _say('Finish or end the route first');
+      return;
+    }
+    MapPlace? place;
+    final ll = p.address.startsWith('loc:') ? p.address.substring(4).split(',') : const <String>[];
+    final (lat, lon) = (p.lat ?? (ll.length == 2 ? double.tryParse(ll[0]) : null), p.lon ?? (ll.length == 2 ? double.tryParse(ll[1]) : null));
+    if (lat != null && lon != null) {
+      place = p.address.startsWith('loc:') && p.title.isEmpty
+          ? MapPlace.pin(lat, lon)
+          : MapPlace(id: p.address, type: 'place', name: p.title.isEmpty ? 'Place' : p.title, kind: 'Place', lat: lat, lon: lon);
+    } else {
+      if (!widget.nav.backend.available) {
+        // The way out is the regions download (the Setup card's "Get your area"): its sheet for where the phone is.
+        final m = ScaffoldMessenger.of(context);
+        m.hideCurrentSnackBar();
+        m.showSnackBar(SnackBar(
+          content: const Text('The map data for places is not on this device'),
+          action: SnackBarAction(label: 'Download places', onPressed: () => mounted ? _getArea(context) : null),
+        ));
+        return;
+      }
+      try {
+        final found = await widget.nav.backend.search(p.title, near: _here, limit: 20, meaning: false);
+        place = found.results.where((r) => r.id == p.address).firstOrNull;
+      } catch (_) {
+        place = null;
+      }
+      if (!mounted) return;
+      if (place == null) {
+        _say('That place is not in the map data on this device');
+        return;
+      }
+    }
+    widget.nav.select(place);
+    _goModule(ModuleId.maps);
+  }
+
+  /// A point of an imported map layer: the layer is switched on and Maps selects the point.
+  Future<void> _showLayerPoint(AskLayerPoint p) async {
+    final layers = widget.notebooks?.userLayers;
+    final parts = listItemParts(p.address);
+    final point = layers == null || parts == null ? null : await layers.layerPoint(parts.list, parts.ord);
+    if (!mounted) return;
+    if (layers == null || point == null) {
+      _say('That point is not on the map any more');
+      return;
+    }
+    if (widget.nav.phase != NavPhase.browsing) {
+      _say('Finish or end the route first');
+      return;
+    }
+    if (!point.layer.visible) await layers.setVisible(point.layer, true);
+    if (!mounted) return;
+    widget.nav.select(MapPlace(id: p.address, type: 'place', name: point.name, kind: point.layer.name, lat: point.lat, lon: point.lon));
+    _goModule(ModuleId.maps);
+  }
+
+  /// A repeater of an imported list: Maps on it, with its card (the list is switched on).
+  Future<void> _showListRepeater(String address) async {
+    final layers = widget.notebooks?.userLayers;
+    final parts = listItemParts(address);
+    final source = layers == null || parts == null ? null : await layers.repeaterSource(parts.list);
+    final r = source?.rows.where((x) => x.item == parts!.ord).firstOrNull;
+    if (!mounted) return;
+    if (layers == null || source == null || r == null || r.lat == null || r.lon == null) {
+      _say('That repeater is not on the map any more');
+      return;
+    }
+    if (!source.list.visible) await layers.setVisible(source.list, true);
+    if (!mounted) return;
+    _showRepeater(r);
+  }
+
+  /// A Notebooks entry: its editor, as a list's row opens it.
+  Future<void> _showNotebookEntry(String id) async {
+    final deps = widget.notebooks;
+    NbEntry? e;
+    try {
+      e = deps == null ? null : await deps.notebook.entry(id);
+    } catch (_) {
+      e = null;
+    }
+    if (!mounted) return;
+    if (e == null) {
+      _say('That entry is gone');
+      return;
+    }
+    _openEntry(e);
+  }
+
+  /// A notebook, on top of what is shown (Back returns to the answer).
+  Future<void> _showNotebook(String id) async {
+    final deps = widget.notebooks;
+    if (deps == null) return;
+    await deps.notebook.start();
+    if (!mounted) return;
+    if (deps.notebook.notebook(id) == null) {
+      _say('That notebook is gone');
+      return;
+    }
+    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: id))));
+  }
+
+  /// Live data: the Weather screen on the place and item (the focus route a pop-up uses). With the place no longer watched, the
+  /// Weather screen opens as it is.
+  void _showLive(String address) {
+    final parts = liveParts(address);
+    final place = parts == null ? null : widget.hub.weather.watchedPlacesNow().where((w) => w.key == parts.placeKey).firstOrNull;
+    if (place == null) {
+      _goModule(ModuleId.weather);
+      return;
+    }
+    _openAlert(AlertFocus(placeId: place.id, address: address));
   }
 
   void _openSource(String address, [String? quote]) {
@@ -553,7 +727,7 @@ class _ShellState extends State<Shell> {
       AppPlace.weatherSettings => WeatherPage(deps: d),
       AppPlace.notifications => NotificationsPage(deps: d),
       AppPlace.storage => StoragePage(deps: d),
-      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!, settingsSync: widget.hub.settingsSync, onOpenItem: widget.hub.openShareItem),
       AppPlace.appearance => AppearancePage(app: widget.app),
       AppPlace.credits => const AboutPage(),
       AppPlace.models => ModelsScreen(app: widget.app),
@@ -683,6 +857,7 @@ class _ShellState extends State<Shell> {
         },
         distance: widget.nav.fmt.distance,
         open: (n, e) => openNotebookEntry(context, nb, n, e),
+        savedByName: true,
       ),
     ],
   ]);
@@ -919,7 +1094,7 @@ class _ShellState extends State<Shell> {
             chat: widget.chat,
             onChooseModel: () => openModels(context, widget.app),
             onLeave: _goHome,
-            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
+            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about),
@@ -938,6 +1113,7 @@ class _ShellState extends State<Shell> {
     turnOn: _weatherTurnOn,
     setup: _setup,
     search: _search,
+    searchFor: _homeQuery,
     searchFootnote: pdfIndexShared == null
         ? null
         : PdfSearchNote(

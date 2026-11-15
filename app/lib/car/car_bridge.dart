@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 import '../maps/maps_state.dart';
 import '../nav/elevation/route_elevation.dart';
@@ -11,6 +12,7 @@ import '../maps/palette/map_palette.dart';
 import '../maps/ui/map_assets.dart';
 import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
+import '../nav/saved_first.dart';
 import '../nav/speaker.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
@@ -336,6 +338,12 @@ class CarBridge {
     if (connected.value) await _send('promptStop', null);
   }
 
+  /// The phone's voice has said every prompt it was given: the car side lets the audio session (iPhone) or the navigation
+  /// focus (Android) go at once.
+  Future<void> promptDone() async {
+    if (connected.value) await _send('promptDone', null);
+  }
+
   // ---- the car asking --------------------------------------------------------------------------------------
 
   Future<Object?> _onCall(MethodCall call) async {
@@ -460,7 +468,7 @@ class CarBridge {
     try {
       final saved = await _saved();
       logInfo('Car: ${saved.length} saved places');
-      return [for (final s in saved) _savedPlace(s)];
+      return [for (final s in saved) savedAsPlace(s)];
     } catch (e, st) {
       logError('Car: saved places could not be read', error: e, stack: st);
       return const [];
@@ -495,29 +503,19 @@ class CarBridge {
     return nav.backend.search(q, near: nav.here, limit: 10, meaning: false);
   }
 
-  static MapPlace _savedPlace(SavedPlaceRecord s) => MapPlace(
-      id: 'place:${s.lat.toStringAsFixed(6)},${s.lon.toStringAsFixed(6)}',
-      type: 'place',
-      name: s.name,
-      kind: 'Saved place',
-      address: s.label ?? '',
-      lat: s.lat,
-      lon: s.lon,
-      matched: 'saved');
-
-  /// Saved places whose name is the query come first, then the map search by name, address and category word only: the car never
-  /// asks for a query vector, so the search model is not loaded for it (owner's decision). The phone's own search panel is left as
-  /// it is. Every car search path (the car's search box, a name in a navigation request) comes through here.
+  /// The saved places that match come first, by the phone's rule (saved_first.dart), then the map search by name, address and
+  /// category word only: the car never asks for a query vector, so the search model is not loaded for it (owner's decision).
+  /// Every car search path (the car's search box, a name in a navigation request) comes through here.
   Future<List<MapPlace>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
-    final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
+    final saved = await savedPlaces();
     List<MapPlace> found = const [];
     try {
       final r = await _search(q);
       found = [for (final p in r.results) if (!p.isCategory) p];
     } catch (_) {}
-    return [...saved, ...found].take(12).toList();
+    return savedFirst(q, saved, found).take(12).toList();
   }
 
   /// A navigation request from another app or the assistant (Android Auto's `androidx.car.app.action.NAVIGATE` with a `geo:`
@@ -539,7 +537,7 @@ class CarBridge {
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
       to = MapPlace.pin(lat, lon, name: q.isEmpty ? 'Dropped pin' : q);
     } else if (q.isNotEmpty) {
-      final saved = [for (final s in await savedPlaces()) if (s.name.toLowerCase() == q.toLowerCase()) s];
+      final saved = [for (final s in await savedPlaces()) if (savedMatch(s.name, q) == 0) s];
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
@@ -573,18 +571,37 @@ const String kPromptNone = 'none';
 /// On an iPhone with its car screen attached the car side says how iOS wants the prompt given. For a short one it has played
 /// a tone itself; for that and for none the phone's voice says nothing. Any other answer, or none, and the prompt is spoken.
 class CarAwareSpeaker implements Speaker {
-  CarAwareSpeaker(this.inner, {required this.car});
+  CarAwareSpeaker(this.inner, {required this.car}) {
+    final idle = inner;
+    if (idle is IdleSpeaker) {
+      idle.onIdle = () {
+        try {
+          unawaited(car()?.promptDone());
+        } catch (_) {}
+      };
+    }
+  }
 
   final Speaker inner;
   final CarBridge? Function() car;
 
   @override
   Future<void> speak(String text) async {
+    // Nothing to say: the car side is not asked, so it neither makes the audio session active nor plays a tone for it.
+    if (text.trim().isEmpty) return;
+    final bridge = car();
     String? how;
     try {
-      how = await car()?.prompt(text);
+      how = await bridge?.prompt(text);
     } catch (_) {}
-    if (how == kPromptShort || how == kPromptNone) return;
+    final silent = how == kPromptShort || how == kPromptNone;
+    // What the car side answered, and where the phone app was (no words of the prompt: roads, places). Only with a car
+    // attached.
+    if (bridge != null && bridge.connected.value) {
+      logInfo("Car prompts: the car side answered ${how ?? 'nothing'} with the app ${WidgetsBinding.instance.lifecycleState?.name ?? 'not started'}; "
+          "the phone's voice ${silent ? 'stays silent' : 'speaks'}");
+    }
+    if (silent) return;
     await inner.speak(text);
   }
 

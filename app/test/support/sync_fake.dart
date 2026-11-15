@@ -88,11 +88,6 @@ class FakeSync implements SyncCoreLike {
         if (p == null) throw Exception('that device is not linked');
         p['name'] = args['name'];
         return {'ok': true};
-      case 'set_keep_copies':
-        final k = peers.where((p) => p['id'] == args['peer']).firstOrNull;
-        if (k == null) throw Exception('that device is not linked');
-        k['keep_copies'] = args['on'];
-        return {'ok': true};
       case 'unlink':
         peers.removeWhere((p) => p['id'] == args['peer']);
         return {'ok': true};

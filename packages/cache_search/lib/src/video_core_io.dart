@@ -147,6 +147,10 @@ class VideoCore {
         'params': _req({'dir': dir, 'instance': instance, 'video': video, 'choice': choice, 'token': token}),
       })) as int);
 
+  /// Starts the `video_repair` job: saved HLS videos from before saved videos were rewritten as plain MP4 are rewritten, one at a
+  /// time, on the engine's own thread (it never holds other calls). Poll [VideoJob.progress]; null when there is nothing to start.
+  Future<VideoJob?> startRepair() async => VideoJob._(this, (await _call('jobStart', {'kind': 'video_repair', 'params': {'dir': dir}})) as int);
+
   /// The downloads the engine is running that this app did not just start: none here (a phone's downloads belong to the app that
   /// started them). Cache Server's browser build lists the server's (video_core_web.dart).
   Future<List<({VideoJobInfo info, VideoJob job})>> jobs() async => const [];

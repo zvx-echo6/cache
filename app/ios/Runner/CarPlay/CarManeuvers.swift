@@ -300,11 +300,11 @@ final class CarGuidance: CarLinkListener {
     }
   }
 
-  /// What is left of the trip, told to CarPlay when the numbers on the screen would change. Under a minute is told as one
-  /// minute until the phone says arrived, as on Android.
+  /// What is left of the trip, told to CarPlay when the numbers on the screen would change, or the phone's arrival clock
+  /// (CarTrip.leftKey). Under a minute is told as one minute until the phone says arrived, as on Android.
   private func showLeft(_ t: CarTrip, _ map: CPMapTemplate, _ trip: CPTrip) {
-    guard let meters = t.remainingM, let seconds = t.leftSeconds else { return }
-    let left: String = "\(CarText.distance(meters, imperial: t.imperial))|\(seconds / 60)"
+    guard let meters = t.remainingM, let seconds = t.leftSeconds, let key = t.leftKey else { return }
+    let left: String = "\(CarText.distance(meters, imperial: t.imperial))|\(key)"
     if left == shownLeft { return }
     shownLeft = left
     map.updateEstimates(CPTravelEstimates(distanceRemaining: CarText.length(meters, imperial: t.imperial), timeRemaining: TimeInterval(seconds)), for: trip)

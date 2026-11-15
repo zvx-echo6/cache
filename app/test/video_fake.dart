@@ -193,11 +193,23 @@ class VideoFakeNative implements CsNative {
     return null;
   }
 
+  /// The kind of the job started last: a video_repair marks the saved HLS videos remuxed when it is done.
+  String? _lastKind;
+
   @override
-  int jobStart(String kind, String paramsJson) => 3;
+  int jobStart(String kind, String paramsJson) {
+    _lastKind = kind;
+    return 3;
+  }
 
   @override
   String? jobProgress(int job) {
+    if (_lastKind == 'video_repair') {
+      for (final m in _saved) {
+        if ('${m['source']}'.startsWith('hls')) m['remuxed'] = true;
+      }
+      return '{"state":"done","done":1,"total":1,"error":null}';
+    }
     _progressCalls++;
     if (_progressCalls < 2) return '{"state":"running","done":1000000,"total":3000000,"error":null}';
     if (_saved.isEmpty) {

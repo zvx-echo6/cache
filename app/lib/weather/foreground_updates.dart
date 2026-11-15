@@ -8,8 +8,14 @@ import '../platform.dart' as plat;
 /// off phones there is no scheduled job at all.
 bool foregroundUpdatesWanted({bool? android}) => !(android ?? plat.isAndroid);
 
-/// The update that runs while the app is left open in front: every [every] (the interval of the background schedule), the same
-/// update a background run makes ([update]), while something is switched on ([on]). Someone who drives for hours with Cache on
+/// How often the app in front checks whether weather is due: five minutes. Each tick asks [ForegroundUpdates.update], which is the
+/// due check (`updateIfDue`: it updates only when the last good update is older than the background schedule's interval), so a tick
+/// that is not due does nothing and costs no fetch. Weather is then updated within five minutes of falling due, also when Cache
+/// starts a little before it is due (a start 29 minutes after the last run used to wait a whole interval for the first tick).
+const Duration kForegroundTick = Duration(minutes: 5);
+
+/// The update that runs while the app is left open in front: every [every] ([kForegroundTick]) it makes the update that is due
+/// ([update], the same as a background run), while something is switched on ([on]). Someone who drives for hours with Cache on
 /// the screen got no new alerts: updates started only when the app opened or came back to the front, by the system's scheduled
 /// job, or when "Where I am" settled somewhere new.
 ///
@@ -24,7 +30,8 @@ class ForegroundUpdates {
   /// Whether there is anything to update (a source is switched on): what also decides whether the background job is scheduled.
   final bool Function() on;
 
-  /// The update: the weather part's own, with its own limits (the connection, each source's refresh time and quota, one at a time).
+  /// The update: the weather part's own due check and update (`updateIfDue`), with its own limits (the connection, each source's
+  /// refresh time and quota, one at a time). Called at every tick; it does nothing when no update is due.
   final Future<void> Function() update;
 
   /// False where a scheduled job already updates while the app is in front ([foregroundUpdatesWanted]): then nothing ever starts.

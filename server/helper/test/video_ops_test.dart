@@ -47,7 +47,8 @@ void main() {
     final cfg = jsonDecode(opens.single.substring(5)) as Map;
     expect(cfg['sources'], isEmpty);
     expect(cfg['video'], {'dir': '${docs.path}/videos'});
-    expect(cfg['indexes_dir'], '${support.path}/indexes');
+    // the indexes folder the engine and the index driver use (kIndexesDirName), so a saved video's built captions read as built
+    expect(cfg['indexes_dir'], '${support.path}/shared-indexes');
   });
 
   test('video.call passes the op and request to cs_video_<op> and returns its JSON; a core error is thrown', () {
@@ -129,6 +130,14 @@ void main() {
     });
     expect(ops.savedVideos().single['captions_index'], {'source_id': 'a/u', 'needs_build': true});
     expect(fake.videoCalls.last, 'downloads:');
+  });
+
+  test('the saved HLS videos from before are rewritten in the background: one video_repair job on the videos folder', () async {
+    fake.progressScript.add(jsonEncode({'state': 'done', 'done': 1, 'total': 1}));
+    await ops.repairSaved(poll: Duration.zero);
+    final start = fake.calls.singleWhere((c) => c.startsWith('jobStart:video_repair:'));
+    expect(jsonDecode(start.substring('jobStart:video_repair:'.length)), {'dir': '${docs.path}/videos'});
+    expect(fake.calls.where((c) => c.startsWith('jobFree')), isNotEmpty, reason: 'the job is let go when it ends');
   });
 
   test('an unknown video op is an error', () {

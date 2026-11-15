@@ -226,7 +226,7 @@ class _DiscoverWizardState extends State<DiscoverWizard> {
       BigCard(
         key: const ValueKey('wizard-here'),
         icon: discoverIcon('pin'),
-        title: 'Where I am now',
+        title: 'Use my current location',
         line: "Uses this device's location",
         selected: !_choose,
         onTap: () => setState(() => _choose = false),

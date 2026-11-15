@@ -50,6 +50,7 @@ void main() {
     busyWait: const Duration(milliseconds: 1),
     inUseTries: inUseTries,
     startWait: startWait,
+    clock: () => DateTime(2026, 11, 15, 12), // frozen: a start's wait is its whole time, however slow the machine
     onDone: onDone,
   );
 
