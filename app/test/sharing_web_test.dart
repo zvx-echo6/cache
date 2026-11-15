@@ -1,6 +1,7 @@
 // Sharing and sync in the browser: SharingState with the web driver, which asks Cache Server's sharing host (`sharing.*` ops through
 // /api/core) instead of running the engine. The same cases as sharing_test.dart where they make sense for the server, and the Sharing
-// page on that driver: its code, a pasted link, the linked device's row, and only the Library and Models switches.
+// page on that driver: its code, a pasted link, the linked device's row, and the Library, Maps, Models and Videos switches (Notebooks
+// come in a later slice).
 
 import 'dart:io';
 
@@ -37,9 +38,30 @@ List<DataKind> _kinds() => [
     items: () => const [ShareItem(share: 'models', path: 'gemma.gguf', name: 'Gemma 4 E2B', bytes: 3200 << 20)],
     remoteItem: modelRemoteItem,
   ),
-  DataKind(id: 'regions', label: 'Regions', icon: Icons.map_outlined, shareLabel: 'Maps', shared: () => const {'maps': null, 'regions': null}),
+  DataKind(
+    id: 'regions',
+    label: 'Regions',
+    icon: Icons.map_outlined,
+    shareLabel: 'Maps',
+    shared: () => const {'maps': null, 'regions': null},
+    itemDepth: const {'maps': 2},
+    // As mapRemoteItem, which needs the layer engine (not in a browser): a layer's file, or the regions' folder together.
+    remoteItem: (share, path, bytes) {
+      if (share == 'regions') return ShareItem(share: share, path: '**', name: kDirectionsItemName, bytes: bytes);
+      final m = RegExp(r'^store/(.+?)\.sqlite').firstMatch(path);
+      return m == null ? null : ShareItem(share: share, path: 'store/${m.group(1)}.sqlite*', name: m.group(1)!, bytes: bytes);
+    },
+  ),
   DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => const {'notebooks': null}),
-  DataKind(id: 'videos', label: 'Videos and weather', icon: Icons.smart_display_outlined, shareLabel: 'Videos', shared: () => const {'videos': null}),
+  DataKind(
+    id: 'videos',
+    label: 'Videos and weather',
+    icon: Icons.smart_display_outlined,
+    shareLabel: 'Videos',
+    shared: () => const {'videos': null},
+    itemDepth: const {'videos': 3},
+    remoteItem: videoRemoteItem,
+  ),
 ];
 
 FakeSharingHost _host() => FakeSharingHost(table: {
@@ -242,7 +264,7 @@ void main() {
     s.dispose();
   });
 
-  testWidgets('the page: set up, the code, a pasted link, the linked device row, and only the Library and Models switches', (tester) async {
+  testWidgets('the page: set up, the code, a pasted link, the linked device row, and the Library, Maps, Models and Videos switches, not Notebooks', (tester) async {
     _tall(tester);
     final host = _host();
     final s = _web(host, dir);
@@ -254,13 +276,12 @@ void main() {
     expect(find.text('Show my link code'), findsOneWidget);
     expect(find.text('Enter a link code'), findsOneWidget);
 
-    // Only the kinds that need nothing else yet.
-    expect(find.byKey(const ValueKey('share-library')), findsOneWidget);
-    expect(find.byKey(const ValueKey('share-models')), findsOneWidget);
-    for (final k in ['regions', 'notebooks', 'videos']) {
-      expect(find.byKey(ValueKey('share-$k')), findsNothing, reason: '$k comes in a later slice');
+    // Notebooks come in a later slice.
+    for (final k in ['library', 'regions', 'models', 'videos']) {
+      expect(find.byKey(ValueKey('share-$k')), findsOneWidget, reason: '$k is listed');
     }
-    expect(s.shareKinds.map((k) => k.id), ['library', 'models']);
+    expect(find.byKey(const ValueKey('share-notebooks')), findsNothing, reason: 'notebooks come in a later slice');
+    expect(s.shareKinds.map((k) => k.id), ['library', 'regions', 'models', 'videos']);
 
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
@@ -286,7 +307,7 @@ void main() {
     expect(find.text('Desk'), findsOneWidget);
 
     // A kind's switch shares the server's folder.
-    expect(find.text('Not shared'), findsNWidgets(2));
+    expect(find.text('Not shared'), findsNWidgets(4));
     await tester.tap(find.descendant(of: find.byKey(const ValueKey('share-models')), matching: find.byType(Switch)));
     await _settle(tester);
     expect(s.shareOf('models')?['path'], '/srv/models');
@@ -303,6 +324,57 @@ void main() {
     expect(s.peers, isEmpty);
 
     await tester.pumpWidget(const SizedBox());
+    s.dispose();
+  });
+
+  testWidgets('Maps and Videos list what only the server holds and what only a linked device holds; one switched off stays off on the server', (tester) async {
+    final host = _host()..enabled = true;
+    final s = _web(host, dir);
+    await s.init();
+    final videos = s.kinds.firstWhere((k) => k.id == 'videos');
+    final maps = s.kinds.firstWhere((k) => k.id == 'regions');
+    await s.setShared(videos, true);
+    await s.setShared(maps, true);
+    host.sync.items['videos'] = [
+      {'name': 'downloads/tube/a', 'files': 3, 'bytes': 300, 'peers': <Object?>[]},
+      {'name': 'downloads/tube/b', 'files': 0, 'bytes': 0, 'peers': [{'peer_name': 'Phone', 'bytes': 500}]},
+      {'name': 'downloads/tube/b/notes.txt', 'files': 0, 'bytes': 0, 'peers': [{'peer_name': 'Phone', 'bytes': 5}]},
+    ];
+    host.sync.items['maps'] = [
+      {'name': 'store/topo.sqlite', 'files': 1, 'bytes': 40, 'peers': <Object?>[]},
+      {'name': 'store/topo.sqlite-wal', 'files': 1, 'bytes': 2, 'peers': <Object?>[]},
+      {'name': 'store/sat.sqlite', 'files': 0, 'bytes': 0, 'peers': [{'peer_name': 'Phone', 'bytes': 900}]},
+    ];
+    host.sync.items['regions'] = [
+      {'name': 'regions.sqlite', 'files': 1, 'bytes': 7, 'peers': [{'peer_name': 'Phone', 'bytes': 7}]},
+    ];
+    await s.refreshItems();
+
+    final v = s.itemsOf(videos);
+    expect(v.map((i) => i.item.key), ['videos/downloads/tube/a', 'videos/downloads/tube/b']);
+    expect(v[0].here, isTrue, reason: 'on the server');
+    expect(v[1].here, isFalse, reason: 'only the phone has it');
+    expect(v[1].peers, ['Phone']);
+    expect(v[1].item.name, 'Video from tube');
+
+    final m = s.itemsOf(maps);
+    expect(m.map((i) => i.item.key), unorderedEquals(['maps/store/topo.sqlite*', 'maps/store/sat.sqlite*', 'regions/**']));
+    expect(m.firstWhere((i) => i.item.path == 'store/topo.sqlite*').bytes, 42, reason: 'the database and its -wal add up');
+    expect(m.firstWhere((i) => i.item.path == 'store/sat.sqlite*').here, isFalse);
+
+    // Switched off: the server keeps it, and a new tab sees it off.
+    await s.setItem(videos, v[0].item, false);
+    expect(host.off['videos'], {'videos/downloads/tube/a'});
+    expect(s.itemOn(videos, v[0].item), isFalse);
+    expect(s.itemOn(videos, v[1].item), isTrue);
+    final tab2 = _web(host, dir);
+    await tab2.init();
+    final v2 = tab2.kinds.firstWhere((k) => k.id == 'videos');
+    await tab2.refreshItems();
+    final it = tab2.itemsOf(v2);
+    expect(tab2.itemOn(v2, it[0].item), isFalse);
+    expect(tab2.itemOn(v2, it[1].item), isTrue);
+    tab2.dispose();
     s.dispose();
   });
 }
