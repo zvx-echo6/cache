@@ -178,8 +178,11 @@ class SharingState extends ChangeNotifier {
         if (it == null) continue;
         final had = out[it.key];
         final here = ((row['files'] as num?)?.toInt() ?? 0) > 0;
+        // An item only this list names and that is here (the server's own, in a browser, which lists no local items) is as big as
+        // what is here: the rows add up (a map store and its -wal), not the other device's size.
+        final own = here ? ShareItem(share: it.share, path: it.path, name: it.name, private: it.private, on: it.on) : it;
         out[it.key] = had == null
-            ? SharedItem(it, here: here, peers: names, listedBytes: here ? mine : theirs)
+            ? SharedItem(own, here: here, peers: names, listedBytes: here ? mine : theirs)
             : had.and(peers: names, listedBytes: here ? mine : theirs);
       }
     }
