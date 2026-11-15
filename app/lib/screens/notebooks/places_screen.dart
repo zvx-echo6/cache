@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../layout/adaptive.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
-import 'package:cache_search/cache_search.dart' show CacheSearchException;
+import 'package:cache_search/cache_search.dart' show CacheSearchException, MapPlace;
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../chat/answer_markdown.dart' show answerStyle;
@@ -23,6 +23,7 @@ import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
 import '../../maps/ui/place_map.dart' show PlaceFixScope;
+import '../../nav/nav_state.dart' show NavPhase, NavState;
 import 'map_spot_picker.dart';
 import 'photo_viewer.dart';
 import 'notebook_editor.dart';
@@ -88,6 +89,21 @@ class PlaceNotebookDeps {
   /// "Where I am" on the map (the position dot), and its marker's toggle (for the same screen).
   final bool Function()? hereOnMap;
   final void Function(bool on)? setHereOnMap;
+}
+
+/// Directions to a notebook place (the place screen's Directions): the route preview for the place, with Start, and the Maps
+/// tab over whatever screen asked ([NavState.requestMap]; the shell closes the screens above its tabs). The car shows the same
+/// preview, as for any directions opened on the phone; guidance starts only with Start. False while a route is being followed:
+/// it is not replaced from a place's screen, which says to finish or end the route first. Directions again to the place whose
+/// preview is already shown (a second tap while the screen closes) shows that preview: the route is asked for once.
+bool placeDirections(NavState nav, NbPlace p, String name) {
+  if (nav.guiding) return false;
+  final id = 'place:${p.lat},${p.lon}';
+  if (!(nav.phase == NavPhase.previewing && nav.selected?.id == id)) {
+    nav.openDirections(MapPlace(id: id, type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+  }
+  nav.requestMap();
+  return true;
 }
 
 /// The watched-place id of a saved place's entry.
