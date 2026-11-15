@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import '../../../app/lib/sharing/share_rules.dart' show isOwnLibraryFolderName;
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
+import '../../../packages/cache_search/lib/src/errors.dart';
 import '../../../packages/cache_search/lib/src/models.dart';
 import 'core_open.dart';
 
@@ -13,7 +15,15 @@ import 'core_open.dart';
 /// start of this version rebuilds each once from its packs. When one was rebuilt the core gets the new list ([onChanged] tells the
 /// index driver, which builds its keyword index).
 class OwnLibrarySync {
-  OwnLibrarySync(this.dispatcher, this.dirs, {this.onChanged, this.onDone, this.log, this.poll = const Duration(milliseconds: 200)});
+  OwnLibrarySync(this.dispatcher, this.dirs,
+      {this.onChanged, this.onDone, this.log, this.poll = const Duration(milliseconds: 200), this.busyRetry = const Duration(seconds: 30)});
+
+  /// How long after a library answered `busy` it is looked at once more: the core refuses the rebuild while the index driver builds
+  /// or seals that library's keyword index (or an update writes it), and nothing else would look again until the next open, rescan
+  /// or share change (hours on an idle server). One delayed look, not a loop: a look that is busy again schedules the next.
+  final Duration busyRetry;
+  Timer? _retry;
+  bool _busy = false;
 
   final CoreDispatcher dispatcher;
   final AppDirs dirs;
@@ -45,6 +55,12 @@ class OwnLibrarySync {
     }
   }
 
+  /// Stops a delayed look (the helper is closing; tests).
+  void dispose() {
+    _retry?.cancel();
+    _retry = null;
+  }
+
   /// One look at every own library. A call while one runs is folded into one more look after it. True when one was rebuilt.
   Future<bool> run() async {
     if (_running) {
@@ -60,6 +76,13 @@ class OwnLibrarySync {
       } while (_again);
     } finally {
       _running = false;
+    }
+    if (_busy && _retry == null) {
+      log?.call('own libraries: one was busy; looking again in ${busyRetry.inSeconds} s');
+      _retry = Timer(busyRetry, () {
+        _retry = null;
+        unawaited(run());
+      });
     }
     if (rebuilt) {
       try {
@@ -78,6 +101,7 @@ class OwnLibrarySync {
     final libs = Directory('${dirs.docs.path}/libraries');
     if (!libs.existsSync()) return false;
     var rebuilt = false;
+    _busy = false;
     for (final d in libs.listSync().whereType<Directory>()) {
       final name = d.uri.pathSegments.where((s) => s.isNotEmpty).last;
       if (!isOwnLibraryFolderName(name)) continue;
@@ -100,8 +124,13 @@ class OwnLibrarySync {
           if (removed.isNotEmpty) log?.call('own library $name: removed ${removed.length} sync conflict copies');
         } else {
           results[d.path] = {'error': p.errorCode ?? p.state.name, 'message': p.errorMessage};
+          if (p.errorCode == 'busy') _busy = true;
           log?.call('own library $name: ${p.errorCode ?? p.state.name} ${p.errorMessage ?? ''}');
         }
+      } on CacheSearchException catch (e) {
+        results[d.path] = {'error': e.code, 'message': e.message};
+        if (e.code == 'busy') _busy = true;
+        log?.call('own library $name: ${e.code} ${e.message}');
       } catch (e) {
         results[d.path] = {'error': '$e'};
         log?.call('own library $name could not be made from its packs: $e');
