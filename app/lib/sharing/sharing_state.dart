@@ -468,7 +468,7 @@ class _PhoneDriver implements SharingDriver {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
-        'quiet': quiet,
+        'quiet': s.quiet,
       };
       _lastConfig = config;
       _core = await s._opener(config);
