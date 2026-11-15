@@ -1715,9 +1715,10 @@ void main() {
       test("Siri's arrival words: the clock the phone shows and the distance left", () async {
         await guide();
         final p = nav.progress!;
-        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS)!;
-        expect(carAnswer(nav, 'arrival_ios'), "You'll arrive at ${clockTime(at)}, ${fmt.spoken(p.remainingM)} to go.");
-        expect(carAnswer(nav, 'arrival_ios'), matches(RegExp(r"^You'll arrive at \d{1,2}:\d\d (AM|PM), .+ to go\.$")));
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), "You'll arrive at ${clockTime(at)}, ${fmt.spoken(p.remainingM)} to go.");
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), matches(RegExp(r"^You'll arrive at \d{1,2}:\d\d (AM|PM), .+ to go\.$")));
       });
 
       test("Siri's next-turn words: the step, then how far", () async {
@@ -1729,7 +1730,7 @@ void main() {
       });
 
       test("Siri's words with no route are the one no-route answer", () async {
-        expect(carAnswer(nav, 'arrival_ios'), 'No route is running.');
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), 'No route is running.');
         expect(carAnswer(nav, 'turn_ios'), 'No route is running.');
       });
 
