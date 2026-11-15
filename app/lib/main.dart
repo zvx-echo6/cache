@@ -904,6 +904,7 @@ class _CacheAppState extends State<CacheApp> {
     dir: () async => Directory('${await appSupportPath()}/notebook-sync'),
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    onActivity: (line) => sharing.addActivity(line),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },

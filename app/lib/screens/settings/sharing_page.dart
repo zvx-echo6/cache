@@ -416,7 +416,7 @@ class _SharingPageState extends State<SharingPage> {
               'the other devices. Files and folders whose names start with a dot are never shared.',
             ),
             if (syncBackgroundNote(android: widget.onAndroid, ios: widget.onIos) case final note?) NoteText(note),
-            _Log(entries: [for (final e in (st['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>()]),
+            _Log(entries: s.activity),
           ],
         );
       },

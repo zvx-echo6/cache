@@ -49,7 +49,13 @@ class SyncConflict {
 class SyncReport {
   int written = 0;
   int read = 0;
+
+  /// Of [read], the entries that came new from a file (notebook sync: from another device).
+  int arrived = 0;
   int deleted = 0;
+
+  /// Notebook sync: entries removed here because the other device removed their file.
+  int removedHere = 0;
 
   /// Entries changed in both places whose changes were merged (the person is told, not asked).
   final List<String> merged = [];
@@ -799,6 +805,7 @@ class NotebookSync {
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;
+            r.removedHere++;
           } else {
             // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
             // file or block is written back and the entry stays.
@@ -812,6 +819,10 @@ class NotebookSync {
           final saved = await _apply(id, f.doc, byName, text: f.text);
           _rec(id, f.path, f.text, saved.rev);
           r.read++;
+        } else if (kind == SyncKind.share && !cacheChanged && !fileChanged && f != null && f.doc.notebook != c.$1.name) {
+          // The notebook was renamed here: its entries' files say so too, so the rename travels with the notebook's synced data.
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
+          r.written++;
         } else if (cacheChanged && fileChanged) {
           final m = merge3(s.base, text, f.text);
           if (m.clean) {
@@ -859,6 +870,7 @@ class NotebookSync {
         final saved = await _apply(id, f.doc, byName, text: f.text);
         _rec(id, f.path, f.text, saved.rev);
         r.read++;
+        r.arrived++;
       }
     }
     // Notes the person made with the import tag and no id: imported once, and Cache's id written into them.

@@ -508,6 +508,18 @@ void main() {
       expect(a.nb.notebook(ida)!.def.fields.length, 2);
     });
 
+    test('R1b: a notebook renamed on one device is renamed on the other with no entry touched: the rename travels with the notebook\'s files', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      expect(b.nb.notebook(idb)!.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3}, reason: 'every value stays in its field');
+      expect(fileOf(a, 'Lake'), contains('notebook: Hikes 2024'));
+    });
+
     test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
       final (a, b, id, idb) = await twoDevices();
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
@@ -815,6 +827,19 @@ void main() {
       expect(await again.check('2468'), isTrue);
       await again.remove();
       expect(store.values, isEmpty);
+    });
+  });
+
+  group('Activity lines', () {
+    test('notebook sync says, in a few words and with no ids or paths, what arrived, changed or was removed', () {
+      final nb = fakeNotebook(FakeNotebookBackend());
+      final lines = <String>[];
+      final c = NotebookConnections(notebook: nb, dir: () async => Directory.systemTemp, onActivity: lines.add);
+      c.say(SyncReport()..read = 5..arrived = 3..removedHere = 1);
+      expect(lines, ['Notebooks: 3 entries arrived from your other devices', 'Notebooks: 2 entries updated from your other devices', 'Notebooks: 1 entry removed by your other devices']);
+      lines.clear();
+      c.say(SyncReport()..written = 4);
+      expect(lines, isEmpty, reason: 'what this device sent is not said');
     });
   });
 
