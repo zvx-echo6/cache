@@ -595,7 +595,11 @@ class PlaceView extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          InkWell(
+                            key: const ValueKey('place-coords'),
+                            onTap: p == null || showOnMap == null ? null : () => showOnMap(p, name),
+                            child: Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
+                          ),
                           if (icons != null)
                             Text(e.icon == null ? 'Icon: ${iconForPlace(e, book).label} (notebook icon)' : 'Icon: ${iconForPlace(e, book).label} (this place)', style: TextStyle(fontSize: 14, color: k.secondary)),
                         ],

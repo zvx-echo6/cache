@@ -34,12 +34,16 @@ class DriveScreen extends StatefulWidget {
     required this.elevation,
     required this.palette,
     required this.themeId,
+    this.onMap,
   });
 
   final NavState nav;
   final RouteElevation elevation;
   final MapPalette palette;
   final CacheThemeId themeId;
+
+  /// Map, beside the guidance bar: the phone's map on the tab instead of this screen (until Back). Null leaves it out.
+  final VoidCallback? onMap;
 
   @override
   State<DriveScreen> createState() => _DriveScreenState();
@@ -125,9 +129,25 @@ class _DriveScreenState extends State<DriveScreen> {
               minimum: const EdgeInsets.only(bottom: 8),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-                child: ListenableBuilder(
-                  listenable: nav,
-                  builder: (context, _) => GuidanceBar(nav: nav, fmt: nav.fmt),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ListenableBuilder(
+                        listenable: nav,
+                        builder: (context, _) => GuidanceBar(nav: nav, fmt: nav.fmt),
+                      ),
+                    ),
+                    if (widget.onMap case final onMap?) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        key: const ValueKey('drive-map'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), padding: const EdgeInsets.symmetric(horizontal: 14)),
+                        onPressed: onMap,
+                        icon: const Icon(Icons.map_outlined),
+                        label: const Text('Map'),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -261,7 +281,11 @@ class _DriveTurnsState extends State<DriveTurns> {
     );
   }
 
-  Widget _row(BuildContext context, CacheTokens k, DriveRow r) => DriveTurnRow(key: ValueKey('drive-row-${r.maneuver.index}'), row: r, fmt: nav.fmt);
+  // A tap on a turn or a stop shows it on the phone's map.
+  Widget _row(BuildContext context, CacheTokens k, DriveRow r) => InkWell(
+        onTap: () => nav.showOnMap(GeoPoint(r.maneuver.lat, r.maneuver.lon)),
+        child: DriveTurnRow(key: ValueKey('drive-row-${r.maneuver.index}'), row: r, fmt: nav.fmt),
+      );
 }
 
 /// One turn drawn as the drive screen's list draws it: the turn arrow, the route's own words (a stop's number and name), and how
@@ -495,7 +519,8 @@ class DriveExtras extends StatelessWidget {
         : carOverview(r, distanceAlongM: p?.distanceAlongM, profile: elevation.profile, climbAhead: elevation.climbAhead, destination: dest == null ? null : GeoPoint(dest.lat, dest.lon));
     final chart = DriveElevation(nav: nav, elevation: elevation, palette: palette);
     if (overview == null) return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: chart);
-    final mini = DriveMiniMap(overview: overview, themeId: themeId);
+    // A tap on the mini map shows the whole route on the phone's map.
+    final mini = GestureDetector(behavior: HitTestBehavior.opaque, onTap: nav.showRouteOnMap, child: DriveMiniMap(overview: overview, themeId: themeId));
     final plan = this.plan;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -565,11 +590,15 @@ class DriveElevation extends StatelessWidget {
                 steep: steep,
                 // The plain chart: the line, the position and the climb marked on it, with no point labels to run into each other.
                 full: false,
+                // A touch shows that spot of the route on the phone's map.
+                onSpot: nav.showAlongRoute,
               ),
             ),
           ),
           const SizedBox(height: 4),
-          Row(
+          _steepRow(
+            steep == null || prof.totalM <= 0 ? null : () => nav.showAlongRoute(steep.startM / prof.totalM),
+            Row(
             key: const ValueKey('elevation-steep'),
             children: [
               Container(width: 16, height: 5, decoration: BoxDecoration(color: k.warning, borderRadius: BorderRadius.circular(3))),
@@ -606,6 +635,7 @@ class DriveElevation extends StatelessWidget {
               ),
             ],
           ),
+          ),
         ],
       );
     }
@@ -632,6 +662,9 @@ class DriveElevation extends StatelessWidget {
     );
   }
 }
+
+/// The steepest climb's row, which shows the climb's start on the phone's map when tapped ([onTap]; null: just the row).
+Widget _steepRow(VoidCallback? onTap, Widget row) => onTap == null ? row : InkWell(onTap: onTap, child: row);
 
 /// The route mini map the car's overlay draws (the whole route, the part driven, the steep stretch's pill, the start, the
 /// destination and the moving dot), drawn here in Flutter from the same data ([carOverview]) and colors ([carOverlayColors]).

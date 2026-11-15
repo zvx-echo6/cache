@@ -307,9 +307,38 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     }
 
     fun recenter() {
+        pointPhase = null
         setFollowing(true)
         lastCameraPhase = null
         follow(force = true)
+    }
+
+    /** The spot a stop's row last asked to show ([showPoint]), as latitude and longitude; null before any. */
+    internal var shownPoint: DoubleArray? = null
+        private set
+
+    /** The phase the camera was in when it was brought to a stop ([showPoint]): once the phase changes it follows again. */
+    private var pointPhase: String? = null
+
+    /**
+     * A stop's row on the route screens (the route choice, the route overview): the camera on that spot, north up and flat, at a
+     * street's zoom at least, and left there as a panned map is (Recenter follows again, and so does leaving the screen).
+     */
+    fun showPoint(lat: Double, lon: Double) {
+        shownPoint = doubleArrayOf(lat, lon)
+        val m = map ?: return
+        setFollowing(false)
+        pointPhase = if (overview) "overview" else CarLink.trip.phase
+        val area = stable ?: visible ?: Rect(0, 0, width, height)
+        val cam = CameraPosition.Builder()
+            .target(LatLng(lat, lon))
+            .zoom(max(m.cameraPosition.zoom, STOP_ZOOM))
+            .bearing(ROUTE_VIEW_BEARING)
+            .tilt(ROUTE_VIEW_TILT)
+            .padding(area.left.toDouble(), area.top.toDouble(), max(0, width - area.right).toDouble(), max(0, height - area.bottom).toDouble())
+            .build()
+        m.animateCamera(CameraUpdateFactory.newCameraPosition(cam), 600)
+        cameraTurnedTo(ROUTE_VIEW_BEARING)
     }
 
     /** The whole route in view (the route overview screen), and back to following the position when it goes. */
@@ -556,6 +585,12 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
     override fun onTrip(trip: CarTrip) {
         overlayView?.setTrip(trip, now = false)
         applyTrip(trip)
+        // Brought to a stop on a route screen, and the phase changed since (Start, a route ended): the camera follows again.
+        if (pointPhase != null && (if (overview) "overview" else trip.phase) != pointPhase) {
+            pointPhase = null
+            setFollowing(true)
+            lastCameraPhase = null
+        }
         val force = (if (overview) "overview" else trip.phase) != lastCameraPhase
         // While the driver has panned away the camera does not move, so its phase is not kept up: that must not make the
         // marker jump each second.
@@ -887,6 +922,9 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback, CarL
 
         /** How long after a style change the style is asked for again ([onStyleChanged]). */
         const val STYLE_RELOAD_DELAY_MS = 400L
+
+        /** The least zoom a stop's row shows its stop at ([showPoint]): a street's. */
+        private const val STOP_ZOOM = 15.0
 
         /** The whole-route view (the route overview and the route choice): north up, not tilted. */
         private const val ROUTE_VIEW_BEARING = 0.0

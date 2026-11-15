@@ -35,6 +35,7 @@ class GuidanceDock extends StatelessWidget {
                 palette: palette,
                 distanceAlongM: nav.progress?.distanceAlongM,
                 routeM: nav.route?.distanceM ?? 0,
+                onSpot: nav.showAlongRoute,
               ),
             ElevationHandle(elevation: elevation),
             GuidanceBar(nav: nav, fmt: nav.fmt, bare: true),

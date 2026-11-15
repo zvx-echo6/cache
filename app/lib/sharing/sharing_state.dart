@@ -21,6 +21,10 @@ import '../platform/app_log.dart';
 /// video). Under the hood each kind's folder stays one share, carrying the list of the items switched off on this device (the
 /// engine's `off`, see cache_sync's Config): never one share per item. An item switched off is neither fetched nor offered, and
 /// a kind switched off is not shared at all; either way the files stay.
+///
+/// What drives the engine is a [SharingDriver]: on a phone or desktop the app runs the engine itself ([_PhoneDriver]); in a browser
+/// Cache Server runs it and the browser asks its sharing host ([_WebDriver], given a [remote]). The read side (status, peers,
+/// shares, offers, items) is the same for both.
 class SharingState extends ChangeNotifier {
   SharingState({
     required this.policy,
@@ -35,11 +39,14 @@ class SharingState extends ChangeNotifier {
     bool? phone,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
+    CoreTransport? remote,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
-       _opener = opener ?? openSyncCore;
+       _opener = opener ?? openSyncCore,
+       // ignore: prefer_initializing_formals
+       _remote = remote;
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -57,8 +64,14 @@ class SharingState extends ChangeNotifier {
   /// The kinds that can be shared (the app's one list of kinds and folders, which Storage measures too). Each folder has a fixed share
   /// id, so the same kind of thing on two linked devices is one shared folder (tick Models on both and their models are kept the same).
   final List<DataKind> kinds;
+
+  /// Ignored in a browser: Cache Server names itself.
   final String deviceName;
   final SyncOpener _opener;
+
+  /// Cache Server's `/api/core` in a browser (a test gives a fake): when set, the engine is the server's and this asks its sharing
+  /// host. Null: the app runs the engine itself.
+  final CoreTransport? _remote;
 
   /// A phone (Android or iOS). The Mainline DHT is off there: its socket can fail and spin a CPU, burning the battery on a drive, and
   /// linked devices are still found by mDNS, n0's lookup and the relay. Anywhere else (the server, the desktop) the engine's default (on) stands.
@@ -72,27 +85,27 @@ class SharingState extends ChangeNotifier {
   /// Where the start's timing lines go (the app's log), and how the one-shot "still starting" timer is made (tests make their own).
   final void Function(String line) _log;
   final Timer Function(Duration after, void Function() run) _timer;
-  Timer? _slowStart;
 
   /// How long a start may take before the log says it is still going.
   static const Duration kSlowStart = Duration(seconds: 60);
 
-  SyncCoreLike? _core;
-  bool _enabled = false;
-  bool _starting = false;
+  /// Shared folders earlier versions had and this one does not: the Shared folder (1.0). Each stops being shared at start; its
+  /// files stay where they are, and nothing is deleted on any device.
+  static const List<String> retiredShares = ['shared'];
+
+  late final SharingDriver _driver = _remote != null ? _WebDriver(this, _remote) : _PhoneDriver(this);
+
   String? error;
   Map<String, dynamic> status = const {};
-  Timer? _poll;
-  StreamSubscription<ConnectionKind>? _net;
 
-  bool get enabled => _enabled;
-  bool get running => _core != null;
-  bool get starting => _starting;
+  bool get enabled => _driver.enabled;
+  bool get running => _driver.running;
+  bool get starting => _driver.starting;
 
-  Future<File> _flag() async => File('${(await supportDir()).path}/sharing.json');
+  void _changed() => notifyListeners();
 
-  /// The items switched off, by kind id ([ShareItem.key]s), kept in sharing.json beside "enabled". A kind with none listed has
-  /// every item on: what a kind ticked before items existed shares as it did.
+  /// The items switched off, by kind id ([ShareItem.key]s), kept in sharing.json beside "enabled" (the server's, in a browser). A
+  /// kind with none listed has every item on: what a kind ticked before items existed shares as it did.
   final Map<String, Set<String>> _off = {};
 
   /// Since when links are new ones (ms, kept in sharing.json as `ask_since`): the time this version first ran, or sharing was
@@ -107,6 +120,263 @@ class SharingState extends ChangeNotifier {
   }
 
   /// Starts sharing if it was set up before.
+  Future<void> init() => _driver.init();
+
+  /// The first time: creates this device's identity and starts sharing.
+  Future<void> setUp() => _driver.setUp();
+
+  /// This device's key (its identity for linked devices), once sharing runs.
+  String? get myId => status['id'] as String?;
+
+  /// What this device and [peer] keep about their link (how settings go between them), as last set on either; null until set.
+  Map<String, dynamic>? linkOf(String peer) => (peerOf(peer)?['link'] as Map?)?.cast<String, dynamic>();
+
+  /// Sets what this device and [peer] keep about their link; [peer] takes it with the next sync.
+  Future<void> setLink(String peer, Map<String, Object?> link) => _call('set_link', {'peer': peer, 'link': link});
+
+  /// The keys for [peer] ({secure-storage name: key}): held by the sync engine in memory only and sent only to [peer], over its
+  /// own encrypted connection, when it asks. Empty: none.
+  Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
+
+  /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
+  Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
+
+  /// What this device fetches of the always-shared folder [id] from now on: the paths [patterns] cover (the sync engine's
+  /// patterns), as the sources on this device change. Kept, and given to the engine at its next start too.
+  Future<void> setOnly(String id, List<String> patterns) => _driver.setOnly(id, patterns);
+
+  /// What this device never fetches of the always-shared folder [id] (on top of [setOnly]): kept, and given to the engine at its
+  /// next start too.
+  Future<void> setNeverFetch(String id, List<String> patterns) => _driver.setNeverFetch(id, patterns);
+
+  Future<void> refresh() => _driver.refresh();
+
+  /// The kinds under "Shared with linked devices", in their order there.
+  List<DataKind> get shareKinds {
+    const order = ['library', 'regions', 'models', 'notebooks', 'videos'];
+    final list = [for (final k in kinds) if (k.shared().isNotEmpty && _driver.showsKind(k)) k];
+    int at(DataKind k) => order.contains(k.id) ? order.indexOf(k.id) : order.length + kinds.indexOf(k);
+    return list..sort((a, b) => at(a).compareTo(at(b)));
+  }
+
+  /// The kind shares something here (its switch is on).
+  bool kindOn(DataKind k) => sharesOfKind(k).isNotEmpty;
+
+  /// What this device and each linked device hold of each shared folder, by share id (the engine's `share_items`), as last read.
+  final Map<String, List<Map<String, dynamic>>> _listed = {};
+
+  /// Reads again what each shared folder holds, here and on the linked devices (the items a device has not fetched yet show too).
+  Future<void> refreshItems() => _driver.refreshItems();
+
+  /// Every item of [k]: those on this device (as the app lists them), then those only a linked device holds.
+  List<SharedItem> itemsOf(DataKind k) {
+    final out = <String, SharedItem>{for (final it in k.items?.call() ?? const <ShareItem>[]) it.key: SharedItem(it, here: true)};
+    for (final id in k.shared().keys) {
+      for (final row in _listed[id] ?? const <Map<String, dynamic>>[]) {
+        final path = row['name'];
+        if (path is! String || path.isEmpty) continue;
+        final peers = [for (final p in (row['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+        final mine = (row['bytes'] as num?)?.toInt() ?? 0;
+        final theirs = peers.fold<int>(0, (n, p) => max(n, (p['bytes'] as num?)?.toInt() ?? 0));
+        final names = [for (final p in peers) if (p['peer_name'] is String) p['peer_name'] as String];
+        final it = k.remoteItem != null ? k.remoteItem!(id, path, theirs) : ShareItem.plain(id, path, theirs);
+        if (it == null) continue;
+        final had = out[it.key];
+        final here = ((row['files'] as num?)?.toInt() ?? 0) > 0;
+        out[it.key] = had == null
+            ? SharedItem(it, here: here, peers: names, listedBytes: here ? mine : theirs)
+            : had.and(peers: names, listedBytes: here ? mine : theirs);
+      }
+    }
+    return out.values.toList();
+  }
+
+  /// Whether [it] of [k] is shared: never while the kind is off; a private item only once switched on; any other item unless
+  /// switched off.
+  bool itemOn(DataKind k, ShareItem it) {
+    if (!kindOn(k)) return false;
+    if (it.private) return it.on ?? false;
+    return !(_off[k.id]?.contains(it.key) ?? false);
+  }
+
+  /// Whether the library folder [folder] (an own library such as My books) is synced with another device: its item in the Library
+  /// kind is shared (the kind's switch is on and the item is not switched off) and at least one device is linked. Sync is fully
+  /// shared both ways, so every linked device takes it.
+  bool libraryTakenByAnotherDevice(String folder) {
+    final k = kinds.where((k) => k.id == 'library').firstOrNull;
+    if (k == null || !itemOn(k, ShareItem(share: 'libraries', path: folder, name: folder))) return false;
+    return peers.isNotEmpty;
+  }
+
+  /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
+  Future<void> setItem(DataKind k, ShareItem it, bool on) => _driver.setItem(k, it, on);
+
+  /// Called with the ids of the shared folders whose files a sync added, changed or removed, once the folder has nothing more to
+  /// fetch (a library is never read half-way through). The app reads those folders again (Library's list, for one), so what a
+  /// sync brought shows at once instead of after a restart.
+  void Function(Set<String> shareIds)? onShareChanged;
+
+  /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
+  final Map<String, (int, int)> _settled = {};
+
+  void _noteShareChanges() {
+    final changed = <String>{};
+    for (final sh in shares) {
+      final id = sh['id'];
+      if (id is! String) continue;
+      final now = (((sh['files'] as num?) ?? 0).toInt(), ((sh['bytes'] as num?) ?? 0).toInt());
+      final before = _settled[id];
+      // The first look only notes where the folder stands (what it held at start the app has read already), even mid-sync, so
+      // what that sync brings is still a change when it settles.
+      if (before == null) {
+        _settled[id] = now;
+        continue;
+      }
+      if (((sh['pending_files'] as num?) ?? 0) > 0) continue;
+      _settled[id] = now;
+      if (before != now) changed.add(id);
+    }
+    if (changed.isNotEmpty) onShareChanged?.call(changed);
+  }
+
+  Future<Map<String, dynamic>> _call(String m, [Map<String, Object?> a = const {}]) => _driver.call(m, a);
+
+  String get name => (status['name'] as String?) ?? deviceName;
+
+  final List<Map<String, dynamic>> _extraLog = [];
+
+  /// A line this app adds to the Activity (the notebook sync's: the engine's own log has the file transfers).
+  void addActivity(String text) {
+    _extraLog.insert(0, {'text': text, 'at': DateTime.now().millisecondsSinceEpoch});
+    if (_extraLog.length > 100) _extraLog.removeRange(100, _extraLog.length);
+    notifyListeners();
+  }
+
+  /// The Activity: the engine's log and this app's own lines, newest first.
+  List<Map<String, dynamic>> get activity => [
+        for (final e in (status['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>(),
+        ..._extraLog,
+      ]..sort((a, b) => ((b['at'] as int?) ?? 0).compareTo((a['at'] as int?) ?? 0));
+
+  List<Map<String, dynamic>> get peers => [for (final p in (status['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+  List<Map<String, dynamic>> get shares => [for (final p in (status['shares'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+  List<Map<String, dynamic>> get offers => [for (final p in (status['offers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+  Map<String, dynamic>? get transfer => (status['transfer'] as Map?)?.cast<String, dynamic>();
+  String? get paused => status['paused'] as String?;
+
+  Map<String, dynamic>? shareOf(String id) => shares.where((s) => s['id'] == id).firstOrNull;
+  Map<String, dynamic>? peerOf(String id) => peers.where((p) => p['id'] == id).firstOrNull;
+  List<Map<String, dynamic>> offersOf(String id) => offers.where((o) => o['id'] == id).toList();
+
+  /// The shares of [k]'s folders that are set up.
+  List<Map<String, dynamic>> sharesOfKind(DataKind k) => [for (final id in k.shared().keys) ?shareOf(id)];
+
+  /// What linked devices offer for [k]'s folders.
+  List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
+
+  Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
+
+  /// Links with the device that showed [code]: its key and its name.
+  Future<({String peer, String name})> link(String code) => _driver.link(code);
+
+  Future<void> unlink(String peer) => _call('unlink', {'peer': peer});
+  Future<void> rename(String name) => _call('set_name', {'name': name});
+
+  /// What this device calls the linked device [peer].
+  Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
+
+  /// Sync now: everything ("Sync all now").
+  Future<void> syncNow() => _call('sync_now');
+
+  /// Sync now for one kind ("Sync all" on its page): its shared folders only.
+  Future<void> syncKind(DataKind k) async {
+    final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
+    if (ids.isEmpty) return;
+    await _call('sync_now', {'shares': ids});
+  }
+
+  /// Sync now for one item: its paths in its shared folder only.
+  Future<void> syncItem(ShareItem it) => _call('sync_now', {
+    'share': it.share,
+    'paths': [it.path, for (final k in kinds) ...?k.alongside?.call(it.share, it.path)],
+  });
+
+  /// Sync now with one linked device only.
+  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+
+  /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
+  /// stops sharing it, and the files stay.
+  Future<void> setShared(DataKind k, bool on) => _driver.setShared(k, on);
+
+  @override
+  void dispose() {
+    _driver.dispose();
+    super.dispose();
+  }
+}
+
+/// What drives the engine behind [SharingState]: it starts and stops it, keeps the state's status and share lists current, and runs
+/// the actions that need more than one engine call. Two implementations: [_PhoneDriver] (the app's own engine) and [_WebDriver] (Cache
+/// Server's, through its sharing host).
+abstract class SharingDriver {
+  bool get enabled;
+  bool get running;
+  bool get starting;
+
+  /// Whether the Sharing page lists [k] under "Shared with linked devices" (the phone lists every kind).
+  bool showsKind(DataKind k);
+
+  Future<void> init();
+  Future<void> setUp();
+  Future<void> refresh();
+  Future<void> refreshItems();
+
+  /// One engine method, then the status read again. Throws when sharing is not set up.
+  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]);
+  Future<({String peer, String name})> link(String code);
+  Future<void> setShared(DataKind k, bool on);
+  Future<void> setItem(DataKind k, ShareItem it, bool on);
+  Future<void> setOnly(String id, List<String> patterns);
+  Future<void> setNeverFetch(String id, List<String> patterns);
+  Future<void> setSecrets(String peer, Map<String, String> secrets);
+  Future<Map<String, Map<String, String>>> takeSecrets();
+  void dispose();
+}
+
+/// The phone's (and the desktop's) driver: the app opens the sync engine itself, keeps `sharing.json`, and does everything the
+/// engine needs on its own device.
+class _PhoneDriver implements SharingDriver {
+  _PhoneDriver(this.s);
+
+  final SharingState s;
+
+  SyncCoreLike? _core;
+  bool _enabled = false;
+  bool _starting = false;
+  Timer? _poll;
+  Timer? _slowStart;
+  StreamSubscription<ConnectionKind>? _net;
+
+  @override
+  bool get enabled => _enabled;
+  @override
+  bool get running => _core != null;
+  @override
+  bool get starting => _starting;
+  @override
+  bool showsKind(DataKind k) => true;
+
+  List<AlwaysShared> get always => s.always;
+  List<LinkShare> get linkShares => s.linkShares;
+  List<DataKind> get kinds => s.kinds;
+  DataPolicy get policy => s.policy;
+  List<DataKind> get shareKinds => s.shareKinds;
+  Map<String, Set<String>> get _off => s._off;
+
+  Future<File> _flag() async => File('${(await s.supportDir()).path}/sharing.json');
+
+  /// Starts sharing if it was set up before.
+  @override
   Future<void> init() async {
     try {
       final f = await _flag();
@@ -124,18 +394,18 @@ class SharingState extends ChangeNotifier {
       _enabled = enabled;
       final since = j['ask_since'];
       if (since is int) {
-        _askSince = since;
+        s._askSince = since;
       } else {
         // The first run of this version: every link there is now was made before it.
-        _askSince = DateTime.now().millisecondsSinceEpoch;
+        s._askSince = DateTime.now().millisecondsSinceEpoch;
         await _save();
       }
       if (enabled) {
         await _start();
       }
     } catch (e) {
-      error = 'Sharing could not start: $e';
-      notifyListeners();
+      s.error = 'Sharing could not start: $e';
+      s._changed();
     }
   }
 
@@ -146,16 +416,17 @@ class SharingState extends ChangeNotifier {
       f,
       jsonEncode({
         'enabled': _enabled,
-        'ask_since': ?_askSince,
+        'ask_since': ?s._askSince,
         if (_off.values.any((v) => v.isNotEmpty)) 'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: [...e.value]..sort()},
       }),
     );
   }
 
   /// The first time: creates this device's identity and starts sharing.
+  @override
   Future<void> setUp() async {
     _enabled = true;
-    _askSince ??= DateTime.now().millisecondsSinceEpoch;
+    s._askSince ??= DateTime.now().millisecondsSinceEpoch;
     await _save();
     await _start();
   }
@@ -163,17 +434,17 @@ class SharingState extends ChangeNotifier {
   Future<void> _start() async {
     if (_core != null || _starting) return;
     _starting = true;
-    error = null;
-    notifyListeners();
+    s.error = null;
+    s._changed();
     final took = Stopwatch()..start();
-    _log('Sharing: starting');
+    s._log('Sharing: starting');
     // Only says so: a start that hangs leaves this line as the trace of where it stopped. Cancelled when the start ends.
-    _slowStart = _timer(kSlowStart, () => _log('Sharing: still starting after ${kSlowStart.inSeconds} s'));
+    _slowStart = s._timer(SharingState.kSlowStart, () => s._log('Sharing: still starting after ${SharingState.kSlowStart.inSeconds} s'));
     try {
-      final dir = Directory('${(await supportDir()).path}/sync');
+      final dir = Directory('${(await s.supportDir()).path}/sync');
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
       // given time to close its engine, before this one opens (two engines on one folder made "Sharing could not start").
-      final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await supportDir()).path)));
+      final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await s.supportDir()).path)));
       if (lock.runs(kSyncWork)) {
         logInfo('Sync: a background round is running; asking it to stop');
         if (!await lock.takeOver(kSyncWork)) logInfo('Sync: the background round is still stopping; opening anyway');
@@ -181,10 +452,10 @@ class SharingState extends ChangeNotifier {
       // What each device builds for itself inside a shared folder never syncs (a library's search index).
       final config = <String, Object?>{
         'dir': dir.path,
-        'name': deviceName,
-        if (_phone) 'dht': false,
+        'name': s.deviceName,
+        if (s._phone) 'dht': false,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
-        'reserve_bytes': _reserveBytes((await supportDir()).path),
+        'reserve_bytes': s._reserveBytes((await s.supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
         'local_deletes': {for (final a in always) a.id: a.localDeletes},
         'last': {for (final a in always) a.id: a.last},
@@ -200,7 +471,7 @@ class SharingState extends ChangeNotifier {
         'quiet': quiet,
       };
       _lastConfig = config;
-      _core = await _opener(config);
+      _core = await s._opener(config);
       lock.engineStarted(kSyncWork);
       await _writeSnapshot();
       await _applyPolicy();
@@ -220,16 +491,16 @@ class SharingState extends ChangeNotifier {
       policy.settings.addListener(_onSettings);
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
       await refresh();
-      _log('Sharing: started in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
+      s._log('Sharing: started in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
     } catch (e) {
-      error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
+      s.error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
       // The kind of failure only: the text can carry paths, and this log is shared.
-      _log('Sharing: start failed after ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (${e is CacheSearchException ? e.code : e.runtimeType})');
+      s._log('Sharing: start failed after ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (${e is CacheSearchException ? e.code : e.runtimeType})');
     } finally {
       _slowStart?.cancel();
       _slowStart = null;
       _starting = false;
-      notifyListeners();
+      s._changed();
     }
   }
 
@@ -244,11 +515,11 @@ class SharingState extends ChangeNotifier {
     };
     for (final e in folders.entries) {
       final d = e.value;
-      final sh = shareOf(e.key);
+      final sh = s.shareOf(e.key);
       if (d == null || sh == null || sh['path'] == d.path) continue;
       try {
         await d.create(recursive: true);
-        await _call('share_add', {'id': e.key, 'name': sh['name'], 'path': d.path});
+        await call('share_add', {'id': e.key, 'name': sh['name'], 'path': d.path});
       } catch (e2) {
         logError('Could not point a shared folder at its new place', error: e2, detail: '${sh['name']}');
       }
@@ -263,10 +534,10 @@ class SharingState extends ChangeNotifier {
   Future<void> _addAlways() async {
     for (final a in always) {
       final d = a.dir();
-      if (d == null || shareOf(a.id) != null) continue;
+      if (d == null || s.shareOf(a.id) != null) continue;
       try {
         await d.create(recursive: true);
-        await _call('share_add', {'id': a.id, 'name': a.name, 'path': d.path});
+        await call('share_add', {'id': a.id, 'name': a.name, 'path': d.path});
       } catch (e) {
         logError('Could not share', error: e, detail: a.name);
       }
@@ -277,34 +548,24 @@ class SharingState extends ChangeNotifier {
   Future<void> _addLinkShares() async {
     for (final l in linkShares) {
       final d = l.dir();
-      if (d == null || shareOf(l.id) != null) continue;
+      if (d == null || s.shareOf(l.id) != null) continue;
       try {
         await d.create(recursive: true);
-        await _call('share_add', {'id': l.id, 'name': l.name, 'path': d.path});
+        await call('share_add', {'id': l.id, 'name': l.name, 'path': d.path});
       } catch (e) {
         logError('Could not share', error: e, detail: l.name);
       }
     }
   }
 
-  /// This device's key (its identity for linked devices), once sharing runs.
-  String? get myId => status['id'] as String?;
-
-  /// What this device and [peer] keep about their link (how settings go between them), as last set on either; null until set.
-  Map<String, dynamic>? linkOf(String peer) => (peerOf(peer)?['link'] as Map?)?.cast<String, dynamic>();
-
-  /// Sets what this device and [peer] keep about their link; [peer] takes it with the next sync.
-  Future<void> setLink(String peer, Map<String, Object?> link) => _call('set_link', {'peer': peer, 'link': link});
-
-  /// The keys for [peer] ({secure-storage name: key}): held by the sync engine in memory only and sent only to [peer], over its
-  /// own encrypted connection, when it asks. Empty: none.
+  @override
   Future<void> setSecrets(String peer, Map<String, String> secrets) async {
     final c = _core;
     if (c == null) return;
     await c.call('set_secrets', {'peer': peer, 'secrets': secrets});
   }
 
-  /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
+  @override
   Future<Map<String, Map<String, String>>> takeSecrets() async {
     final c = _core;
     if (c == null) return const {};
@@ -317,8 +578,7 @@ class SharingState extends ChangeNotifier {
     };
   }
 
-  /// What this device fetches of the always-shared folder [id] from now on: the paths [patterns] cover (the sync engine's
-  /// patterns), as the sources on this device change. Kept, and given to the engine at its next start too.
+  @override
   Future<void> setOnly(String id, List<String> patterns) async {
     final sorted = [...patterns]..sort();
     final before = _only[id];
@@ -336,8 +596,7 @@ class SharingState extends ChangeNotifier {
 
   final Map<String, List<String>> _neverFetch = {};
 
-  /// What this device never fetches of the always-shared folder [id] (on top of [setOnly]): kept, and given to the engine at its
-  /// next start too.
+  @override
   Future<void> setNeverFetch(String id, List<String> patterns) async {
     final sorted = [...patterns]..sort();
     if (listEquals(_neverFetch[id] ?? const <String>[], sorted)) return;
@@ -369,13 +628,14 @@ class SharingState extends ChangeNotifier {
     await _core?.call('set_policy', {'network': ok});
   }
 
+  @override
   Future<void> refresh() async {
     final c = _core;
     if (c == null) return;
     try {
-      status = await c.call('status');
-      _noteShareChanges();
-      notifyListeners();
+      s.status = await c.call('status');
+      s._noteShareChanges();
+      s._changed();
     } catch (_) {}
   }
 
@@ -431,18 +691,14 @@ class SharingState extends ChangeNotifier {
     });
     if (snap == _snapshot) return;
     _snapshot = snap;
-    await writeSyncConfig((await supportDir()).path, jsonDecode(snap) as Map<String, Object?>);
+    await writeSyncConfig((await s.supportDir()).path, jsonDecode(snap) as Map<String, Object?>);
   }
 
-  /// Shared folders earlier versions had and this one does not: the Shared folder (1.0). Each stops being shared at start; its
-  /// files stay where they are, and nothing is deleted on any device.
-  static const List<String> retiredShares = ['shared'];
-
   Future<void> _retire() async {
-    for (final id in retiredShares) {
-      if (shareOf(id) == null) continue;
+    for (final id in SharingState.retiredShares) {
+      if (s.shareOf(id) == null) continue;
       try {
-        await _call('share_remove', {'id': id});
+        await call('share_remove', {'id': id});
         logInfo('Sync: stopped sharing a folder this version no longer shares; its files stay', detail: id);
       } catch (e) {
         logError('Sync: could not stop sharing a retired folder', error: e, detail: id);
@@ -450,21 +706,7 @@ class SharingState extends ChangeNotifier {
     }
   }
 
-  /// The kinds under "Shared with linked devices", in their order there.
-  List<DataKind> get shareKinds {
-    const order = ['library', 'regions', 'models', 'notebooks', 'videos'];
-    final list = [for (final k in kinds) if (k.shared().isNotEmpty) k];
-    int at(DataKind k) => order.contains(k.id) ? order.indexOf(k.id) : order.length + kinds.indexOf(k);
-    return list..sort((a, b) => at(a).compareTo(at(b)));
-  }
-
-  /// The kind shares something here (its switch is on).
-  bool kindOn(DataKind k) => sharesOfKind(k).isNotEmpty;
-
-  /// What this device and each linked device hold of each shared folder, by share id (the engine's `share_items`), as last read.
-  final Map<String, List<Map<String, dynamic>>> _listed = {};
-
-  /// Reads again what each shared folder holds, here and on the linked devices (the items a device has not fetched yet show too).
+  @override
   Future<void> refreshItems() async {
     final c = _core;
     if (c == null) return;
@@ -474,58 +716,18 @@ class SharingState extends ChangeNotifier {
         try {
           final r = await c.call('share_items', {'id': id, 'depth': k.itemDepth[id] ?? 1});
           final rows = [for (final i in (r['items'] as List? ?? const [])) (i as Map).cast<String, dynamic>()];
-          _listed[id] = rows;
+          s._listed[id] = rows;
           changed = true;
         } catch (_) {}
       }
     }
-    if (changed) notifyListeners();
+    if (changed) s._changed();
   }
 
-  /// Every item of [k]: those on this device (as the app lists them), then those only a linked device holds.
-  List<SharedItem> itemsOf(DataKind k) {
-    final out = <String, SharedItem>{for (final it in k.items?.call() ?? const <ShareItem>[]) it.key: SharedItem(it, here: true)};
-    for (final id in k.shared().keys) {
-      for (final row in _listed[id] ?? const <Map<String, dynamic>>[]) {
-        final path = row['name'];
-        if (path is! String || path.isEmpty) continue;
-        final peers = [for (final p in (row['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
-        final mine = (row['bytes'] as num?)?.toInt() ?? 0;
-        final theirs = peers.fold<int>(0, (n, p) => max(n, (p['bytes'] as num?)?.toInt() ?? 0));
-        final names = [for (final p in peers) if (p['peer_name'] is String) p['peer_name'] as String];
-        final it = k.remoteItem != null ? k.remoteItem!(id, path, theirs) : ShareItem.plain(id, path, theirs);
-        if (it == null) continue;
-        final had = out[it.key];
-        final here = ((row['files'] as num?)?.toInt() ?? 0) > 0;
-        out[it.key] = had == null
-            ? SharedItem(it, here: here, peers: names, listedBytes: here ? mine : theirs)
-            : had.and(peers: names, listedBytes: here ? mine : theirs);
-      }
-    }
-    return out.values.toList();
-  }
-
-  /// Whether [it] of [k] is shared: never while the kind is off; a private item only once switched on; any other item unless
-  /// switched off.
-  bool itemOn(DataKind k, ShareItem it) {
-    if (!kindOn(k)) return false;
-    if (it.private) return it.on ?? false;
-    return !(_off[k.id]?.contains(it.key) ?? false);
-  }
-
-  /// Whether the library folder [folder] (an own library such as My books) is synced with another device: its item in the Library
-  /// kind is shared (the kind's switch is on and the item is not switched off) and at least one device is linked. Sync is fully
-  /// shared both ways, so every linked device takes it.
-  bool libraryTakenByAnotherDevice(String folder) {
-    final k = kinds.where((k) => k.id == 'library').firstOrNull;
-    if (k == null || !itemOn(k, ShareItem(share: 'libraries', path: folder, name: folder))) return false;
-    return peers.isNotEmpty;
-  }
-
-  /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
+  @override
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
-    if (on && !kindOn(k)) {
-      _off[k.id] = {for (final x in itemsOf(k)) if (!x.item.private && x.item.key != it.key) x.item.key};
+    if (on && !s.kindOn(k)) {
+      _off[k.id] = {for (final x in s.itemsOf(k)) if (!x.item.private && x.item.key != it.key) x.item.key};
       await _save();
       if (it.private) await k.setPrivate?.call(it, true);
       await _addKind(k);
@@ -539,7 +741,7 @@ class SharingState extends ChangeNotifier {
       await _save();
     }
     await _applyOff();
-    notifyListeners();
+    s._changed();
   }
 
   /// The paths switched off in the share [id] of [k], as the engine's patterns: the items switched off, and the private items
@@ -575,35 +777,8 @@ class SharingState extends ChangeNotifier {
     }
   }
 
-  /// Called with the ids of the shared folders whose files a sync added, changed or removed, once the folder has nothing more to
-  /// fetch (a library is never read half-way through). The app reads those folders again (Library's list, for one), so what a
-  /// sync brought shows at once instead of after a restart.
-  void Function(Set<String> shareIds)? onShareChanged;
-
-  /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
-  final Map<String, (int, int)> _settled = {};
-
-  void _noteShareChanges() {
-    final changed = <String>{};
-    for (final sh in shares) {
-      final id = sh['id'];
-      if (id is! String) continue;
-      final now = (((sh['files'] as num?) ?? 0).toInt(), ((sh['bytes'] as num?) ?? 0).toInt());
-      final before = _settled[id];
-      // The first look only notes where the folder stands (what it held at start the app has read already), even mid-sync, so
-      // what that sync brings is still a change when it settles.
-      if (before == null) {
-        _settled[id] = now;
-        continue;
-      }
-      if (((sh['pending_files'] as num?) ?? 0) > 0) continue;
-      _settled[id] = now;
-      if (before != now) changed.add(id);
-    }
-    if (changed.isNotEmpty) onShareChanged?.call(changed);
-  }
-
-  Future<Map<String, dynamic>> _call(String m, [Map<String, Object?> a = const {}]) async {
+  @override
+  Future<Map<String, dynamic>> call(String m, [Map<String, Object?> a = const {}]) async {
     final c = _core;
     if (c == null) throw const CacheSearchException('sync', 'Sharing is not set up');
     final r = await c.call(m, a);
@@ -611,81 +786,20 @@ class SharingState extends ChangeNotifier {
     return r;
   }
 
-  String get name => (status['name'] as String?) ?? deviceName;
-
-  final List<Map<String, dynamic>> _extraLog = [];
-
-  /// A line this app adds to the Activity (the notebook sync's: the engine's own log has the file transfers).
-  void addActivity(String text) {
-    _extraLog.insert(0, {'text': text, 'at': DateTime.now().millisecondsSinceEpoch});
-    if (_extraLog.length > 100) _extraLog.removeRange(100, _extraLog.length);
-    notifyListeners();
-  }
-
-  /// The Activity: the engine's log and this app's own lines, newest first.
-  List<Map<String, dynamic>> get activity => [
-        for (final e in (status['log'] as List? ?? const [])) (e as Map).cast<String, dynamic>(),
-        ..._extraLog,
-      ]..sort((a, b) => ((b['at'] as int?) ?? 0).compareTo((a['at'] as int?) ?? 0));
-
-  List<Map<String, dynamic>> get peers => [for (final p in (status['peers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
-  List<Map<String, dynamic>> get shares => [for (final p in (status['shares'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
-  List<Map<String, dynamic>> get offers => [for (final p in (status['offers'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
-  Map<String, dynamic>? get transfer => (status['transfer'] as Map?)?.cast<String, dynamic>();
-  String? get paused => status['paused'] as String?;
-
-  Map<String, dynamic>? shareOf(String id) => shares.where((s) => s['id'] == id).firstOrNull;
-  Map<String, dynamic>? peerOf(String id) => peers.where((p) => p['id'] == id).firstOrNull;
-  List<Map<String, dynamic>> offersOf(String id) => offers.where((o) => o['id'] == id).toList();
-
-  /// The shares of [k]'s folders that are set up.
-  List<Map<String, dynamic>> sharesOfKind(DataKind k) => [for (final id in k.shared().keys) ?shareOf(id)];
-
-  /// What linked devices offer for [k]'s folders.
-  List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
-
-  Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
-
-  /// Links with the device that showed [code]: its key and its name.
+  @override
   Future<({String peer, String name})> link(String code) async {
-    final r = await _call('link', {'code': code});
+    final r = await call('link', {'code': code});
     return (peer: r['peer'] as String? ?? '', name: r['name'] as String? ?? 'the other device');
   }
 
-  Future<void> unlink(String peer) => _call('unlink', {'peer': peer});
-  Future<void> rename(String name) => _call('set_name', {'name': name});
-
-  /// What this device calls the linked device [peer].
-  Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
-
-  /// Sync now: everything ("Sync all now").
-  Future<void> syncNow() => _call('sync_now');
-
-  /// Sync now for one kind ("Sync all" on its page): its shared folders only.
-  Future<void> syncKind(DataKind k) async {
-    final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
-    if (ids.isEmpty) return;
-    await _call('sync_now', {'shares': ids});
-  }
-
-  /// Sync now for one item: its paths in its shared folder only.
-  Future<void> syncItem(ShareItem it) => _call('sync_now', {
-    'share': it.share,
-    'paths': [it.path, for (final k in kinds) ...?k.alongside?.call(it.share, it.path)],
-  });
-
-  /// Sync now with one linked device only.
-  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
-
-  /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
-  /// stops sharing it, and the files stay.
+  @override
   Future<void> setShared(DataKind k, bool on) async {
     final folders = k.shared();
     if (!on) {
       for (final id in folders.keys) {
-        if (shareOf(id) != null) await _call('share_remove', {'id': id});
+        if (s.shareOf(id) != null) await call('share_remove', {'id': id});
       }
-      notifyListeners();
+      s._changed();
       return;
     }
     if (folders.values.any((d) => d == null)) throw CacheSearchException('sync', '${k.label} is not ready yet');
@@ -699,12 +813,12 @@ class SharingState extends ChangeNotifier {
     if (folders.values.any((d) => d == null)) throw CacheSearchException('sync', '${k.label} is not ready yet');
     await _applyOff();
     for (final e in folders.entries) {
-      if (shareOf(e.key) != null) continue;
+      if (s.shareOf(e.key) != null) continue;
       await e.value!.create(recursive: true);
-      await _call('share_add', {'id': e.key, 'name': folders.length == 1 ? k.label : '${k.label} (${e.key})', 'path': e.value!.path});
+      await call('share_add', {'id': e.key, 'name': folders.length == 1 ? k.label : '${k.label} (${e.key})', 'path': e.value!.path});
     }
     await refreshItems();
-    notifyListeners();
+    s._changed();
   }
 
   @override
@@ -715,7 +829,182 @@ class SharingState extends ChangeNotifier {
     if (_core != null) policy.settings.removeListener(_onSettings);
     _lock?.engineStopped(kSyncWork);
     _core?.close();
-    super.dispose();
+  }
+}
+
+/// The browser's driver: the engine runs on Cache Server, in its helper's sharing host, which keeps sharing set up, starts it with
+/// the server and polls its status once for every tab. This reads the host's cached state every 2 s (`sharing.state`) and sends the
+/// person's choices as `sharing.*` ops; nothing here opens an engine, reads a folder or keeps `sharing.json`. Only the kinds the
+/// host can share fully so far are listed (Library and Models); the others come with later slices.
+class _WebDriver implements SharingDriver {
+  _WebDriver(this.s, this.t);
+
+  final SharingState s;
+  final CoreTransport t;
+
+  /// The kinds listed in a browser for now.
+  static const Set<String> kindIds = {'library', 'models'};
+
+  /// How long a link may take (the engine waits for the other device) before the browser gives up waiting.
+  static const Duration kLinkWait = Duration(minutes: 3);
+
+  bool _enabled = false, _running = false, _starting = false;
+  Timer? _poll;
+  int _ticks = 0;
+  bool _reading = false, _disposed = false;
+
+  @override
+  bool get enabled => _enabled;
+  @override
+  bool get running => _running;
+  @override
+  bool get starting => _starting;
+  @override
+  bool showsKind(DataKind k) => kindIds.contains(k.id);
+
+  Future<Map<String, dynamic>> _op(String op, [Map<String, dynamic> args = const {}]) async {
+    final r = await t.call(op, args);
+    return r is Map ? r.cast<String, dynamic>() : const {};
+  }
+
+  /// Takes what the host says as the state: whether sharing is set up and running, the engine's status, the items switched off.
+  void _apply(Map<String, dynamic> snap) {
+    if (_disposed) return;
+    _enabled = snap['enabled'] == true;
+    _running = snap['running'] == true;
+    _starting = snap['starting'] == true;
+    final err = snap['error'];
+    s.error = err is String && err.isNotEmpty ? err : null;
+    final since = snap['ask_since'];
+    s._askSince = since is int ? since : null;
+    final off = snap['off'];
+    s._off
+      ..clear()
+      ..addAll({if (off is Map) for (final o in off.entries) if (o.value is List) '${o.key}': {for (final k in o.value as List) '$k'}});
+    final st = snap['status'];
+    s.status = st is Map ? st.cast<String, dynamic>() : const {};
+    s._noteShareChanges();
+    s._changed();
+  }
+
+  Future<Map<String, dynamic>> _state() async {
+    final snap = await _op('sharing.state');
+    _apply(snap);
+    return snap;
+  }
+
+  @override
+  Future<void> init() async {
+    try {
+      await _state();
+      if (_enabled) _startPoll();
+    } catch (e) {
+      s.error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
+      s._changed();
+    }
+  }
+
+  @override
+  Future<void> setUp() async {
+    _apply(await _op('sharing.setup'));
+    _startPoll();
+    await refreshItems();
+  }
+
+  void _startPoll() {
+    _poll?.cancel();
+    _ticks = 0;
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
+    unawaited(refreshItems());
+  }
+
+  /// Every 2 s the state; every 10 s what each linked device holds.
+  Future<void> _tick() async {
+    if (_reading) return;
+    _reading = true;
+    try {
+      await refresh();
+      if (++_ticks % 5 == 0) await refreshItems();
+    } finally {
+      _reading = false;
+    }
+  }
+
+  @override
+  Future<void> refresh() async {
+    try {
+      await _state();
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> refreshItems() async {
+    if (!_running) return;
+    var changed = false;
+    for (final k in s.shareKinds) {
+      for (final id in k.shared().keys) {
+        try {
+          final r = await _op('sharing.call', {'method': 'share_items', 'args': {'id': id, 'depth': k.itemDepth[id] ?? 1}});
+          s._listed[id] = [for (final i in (r['items'] as List? ?? const [])) (i as Map).cast<String, dynamic>()];
+          changed = true;
+        } catch (_) {}
+      }
+    }
+    if (changed && !_disposed) s._changed();
+  }
+
+  @override
+  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
+    if (!_running) throw const CacheSearchException('sync', 'Sharing is not set up');
+    final r = await _op('sharing.call', {'method': method, 'args': args});
+    await refresh();
+    return r;
+  }
+
+  /// Starts the link on the server (which returns at once) and reads its progress until it is done or has failed.
+  @override
+  Future<({String peer, String name})> link(String code) async {
+    if (!_running) throw const CacheSearchException('sync', 'Sharing is not set up');
+    await _op('sharing.link_start', {'code': code});
+    final waited = Stopwatch()..start();
+    while (waited.elapsed < kLinkWait && !_disposed) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final l = (await _state())['link'];
+      if (l is! Map) continue;
+      if (l['state'] == 'done') return (peer: l['peer'] as String? ?? '', name: l['name'] as String? ?? 'the other device');
+      if (l['state'] == 'failed') throw CacheSearchException('sync', l['error'] as String? ?? 'Could not link');
+    }
+    throw const CacheSearchException('sync', 'Could not link');
+  }
+
+  @override
+  Future<void> setShared(DataKind k, bool on) async {
+    _apply(await _op('sharing.set_kind', {'kind': k.id, 'on': on}));
+    if (on) await refreshItems();
+  }
+
+  @override
+  Future<void> setItem(DataKind k, ShareItem it, bool on) async {
+    // Switching one on in a kind that is off shares the kind with that item alone, which needs every item of the kind.
+    final all = on && !s.kindOn(k) ? [for (final x in s.itemsOf(k)) if (!x.item.private) x.item.key] : null;
+    _apply(await _op('sharing.set_item', {'kind': k.id, 'key': it.key, 'on': on, 'all': ?all}));
+    if (all != null) await refreshItems();
+  }
+
+  // What each folder fetches and the keys are the server's own work, not the browser's.
+  @override
+  Future<void> setOnly(String id, List<String> patterns) async {}
+  @override
+  Future<void> setNeverFetch(String id, List<String> patterns) async {}
+  @override
+  Future<void> setSecrets(String peer, Map<String, String> secrets) async {}
+  @override
+  Future<Map<String, Map<String, String>>> takeSecrets() async => const {};
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _poll?.cancel();
   }
 }
 

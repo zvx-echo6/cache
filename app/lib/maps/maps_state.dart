@@ -385,6 +385,48 @@ class MapsState extends ChangeNotifier {
 
   void clearDrawRequest() => drawRequest = false;
 
+  // ---- asked for from off the map --------------------------------------------------------------------------
+
+  /// An area asked to be shown on the map from off it (a region's Show on map, a layer's downloaded area): the shell brings the
+  /// Maps tab ([asks]) and the map screen fits the map to it once its map is ready ([takeAreaAsk]). Null: none.
+  GeoBounds? get areaAsk => _areaAsk;
+  GeoBounds? _areaAsk;
+
+  /// A layer of "Get more layers" tapped: the shell brings the Maps tab ([asks]) and the map screen opens the layer sheet at that
+  /// layer's switch ([takeLayerAsk]). Null: none.
+  String? get layerAsk => _layerAsk;
+  String? _layerAsk;
+
+  /// Counts the asks above, so the shell answers each one once.
+  int get asks => _asks;
+  int _asks = 0;
+
+  /// The Maps tab with the map fitted to [area].
+  void showAreaOnMap(GeoBounds area) {
+    _areaAsk = area;
+    _asks++;
+    notifyListeners();
+  }
+
+  /// The Maps tab with the layer sheet open at layer [id].
+  void showLayerOnMap(String id) {
+    _layerAsk = id;
+    _asks++;
+    notifyListeners();
+  }
+
+  GeoBounds? takeAreaAsk() {
+    final a = _areaAsk;
+    _areaAsk = null;
+    return a;
+  }
+
+  String? takeLayerAsk() {
+    final l = _layerAsk;
+    _layerAsk = null;
+    return l;
+  }
+
   void rememberCamera(double lat, double lon, double zoom) {
     savedCamera = SavedCamera(lat, lon, zoom);
     _save();
