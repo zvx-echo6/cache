@@ -133,4 +133,16 @@ void main() {
       expect(chartGridLines(4900, 6900, floor: floor, plotHeight: 64, full: false), [for (var i = 0; i < all.length; i += 2) all[i]]);
     });
   });
+
+  test('the free rectangles start below the status bar when a safe top is given, and as before with none', () {
+    const map = Size(400, 800);
+    const covers = MapCovers(panel: Rect.fromLTRB(0, 600, 400, 800));
+    final (stripOld, columnOld) = freeMapRects(map, covers);
+    expect(stripOld.top, kRouteFitBareEdge);
+    expect(columnOld.top, kRouteFitBareEdge);
+    final (strip, column) = freeMapRects(map, covers, safeTop: 48);
+    expect(strip.top, greaterThanOrEqualTo(48 + kRouteFitBareEdge));
+    expect(column.top, greaterThanOrEqualTo(48 + kRouteFitBareEdge));
+    expect(routeFitRect(map: map, covers: covers, spanX: 1, spanY: 1, safeTop: 48).top, greaterThanOrEqualTo(48 + kRouteFitBareEdge));
+  });
 }
