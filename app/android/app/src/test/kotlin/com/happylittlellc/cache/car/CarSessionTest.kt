@@ -727,6 +727,36 @@ class CarSessionTest {
     }
 
     @Test
+    fun thePhonesVoiceFinishingLetsTheNavigationFocusGoAtOnce() {
+        val audio = CarAudio(RuntimeEnvironment.getApplication())
+        CarLink.audio = audio
+        try {
+            push("prompt", mapOf("text" to "Turn left."))
+            assertTrue(audio.held)
+            var answered = false
+            var unknown = false
+            CarLink.handle(MethodCall("promptDone", null), object : MethodChannel.Result {
+                override fun success(result: Any?) { answered = true }
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {}
+                override fun notImplemented() { unknown = true }
+            })
+            assertTrue(answered)
+            assertFalse(unknown)
+            assertFalse(audio.held)
+        } finally {
+            CarLink.audio = null
+        }
+    }
+
+    @Test
+    fun anyLossOfAudioFocusMakesTheNextPromptAskForItAgain() {
+        assertTrue(CarAudio.heldAfter(android.media.AudioManager.AUDIOFOCUS_GAIN))
+        assertFalse(CarAudio.heldAfter(android.media.AudioManager.AUDIOFOCUS_LOSS))
+        assertFalse(CarAudio.heldAfter(android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT))
+        assertFalse(CarAudio.heldAfter(android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK))
+    }
+
+    @Test
     fun theGuidanceCardTakesTheThemesColorAndShowsTheNextStep() {
         start()
         // The trip's palette is the phone's chosen theme (here Tactical): its card color by day and by night alike.

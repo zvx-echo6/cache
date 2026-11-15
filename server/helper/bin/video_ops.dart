@@ -7,10 +7,11 @@ import '../../../packages/cache_search/lib/src/models.dart' show JobState;
 import '../../../packages/cache_search/lib/src/native_api.dart';
 import 'core_open.dart' show AppDirs;
 import 'line_protocol.dart';
+import '../../../app/lib/search/indexes_dir.dart' show kIndexesDirName;
 
 /// The `video.*` ops: the browser's VideoCore (cache_search video_core_web.dart). The phone's VideoCore opens a core handle of its
 /// own whose `video` folder is `<files>/videos`; this does the same on the server, on `<docs>/videos`, with the `indexes_dir` of the
-/// engine (`<support>/indexes`), and keeps the download jobs, which run in the core's own threads, so a download goes on with no tab
+/// engine (`<support>/shared-indexes`, kIndexesDirName), and keeps the download jobs, which run in the core's own threads, so a download goes on with no tab
 /// open. Not core ops; the helper answers them before the core dispatcher.
 ///
 ///   video.info {}                          -> {dir}     the saved videos' folder (absolute)
@@ -61,7 +62,7 @@ class VideoOps implements OpHandler {
     final cfg = {
       'sources': <Object>[],
       'video': {'dir': dir},
-      'indexes_dir': '${dirs.support.path}/indexes',
+      'indexes_dir': '${dirs.support.path}/$kIndexesDirName',
     };
     _handle = n.open(jsonEncode(cfg));
     if (_handle == 0) throw CacheSearchException.fromJson(n.lastError(0));
@@ -117,6 +118,30 @@ class VideoOps implements OpHandler {
       return request;
     }
     return jsonEncode(r(j));
+  }
+
+  /// Saved HLS videos from before saved videos were rewritten as plain MP4 (Android's player read them as their first few
+  /// seconds) are rewritten: one video_repair job on the core's own thread, which never holds other calls; the helper starts it a
+  /// while after start. Logs what it did.
+  Future<void> repairSaved({Duration poll = const Duration(seconds: 2)}) async {
+    try {
+      final n = _open();
+      final job = CoreJob.start(n, 'video_repair', {'dir': dir});
+      try {
+        while (true) {
+          final p = job.progress();
+          if (p.state != JobState.running) {
+            if (p.state == JobState.failed) log?.call('saved videos not rewritten as plain MP4: ${p.errorMessage}');
+            break;
+          }
+          await Future<void>.delayed(poll);
+        }
+      } finally {
+        job.free();
+      }
+    } catch (e) {
+      log?.call('saved videos not rewritten as plain MP4: $e');
+    }
   }
 
   /// The saved videos, as cs_video_downloads lists them (each with its `captions_index`).

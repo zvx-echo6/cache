@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:cache/library/add_pdf/add_pdf_calls.dart';
 import 'package:cache/library/add_pdf/add_pdf_engines.dart' show kPdfiumVersion;
 import 'package:cache/library/add_pdf/add_pdf_state.dart';
+import 'package:cache/library/cds_shelf_source.dart' show CdsShelfSource;
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
@@ -455,6 +456,41 @@ void main() {
             'shares': [for (final s in sharing.shares) {'id': s['id'], 'files': s['files'], 'pending_files': s['pending_files']}],
             'log': ((sharing.status['log'] as List?) ?? const []).take(20).toList(),
           };
+        case 'delete':
+          // what "Delete from all your devices" does on this device (CdsShelfSource.deleteOwnBook): the book's packs and its PDF
+          // leave the own library, then the library is made to match its packs (LibrariesState.rescan -> own_library_sync)
+          final title = '${a['title']}';
+          final removed = <String>[];
+          for (final l in ownLibs()) {
+            final copies = File('${l.path}/copies.jsonl');
+            if (!copies.existsSync()) continue;
+            for (final line in copies.readAsLinesSync()) {
+              if (line.trim().isEmpty) continue;
+              final j = jsonDecode(line) as Map;
+              final t = (j['title'] ?? (j['book'] is Map ? (j['book'] as Map)['title'] : null))?.toString() ?? '';
+              if (!t.startsWith(title)) continue;
+              final doc = '${j['doc_id']}';
+              // the PDF's name: the document's source BLAKE3 in documents.tsv, as the app reads it (CdsShelfSource.ownFilesOf)
+              var pdfHash = '${j['copy'] ?? j['original_blake3'] ?? doc}';
+              final docs = File('${l.path}/documents.tsv');
+              if (docs.existsSync()) {
+                for (final row in docs.readAsLinesSync().skip(1)) {
+                  final f = row.split('\t');
+                  if (f.length > 3 && f[0] == doc && f[3].length == 64) pdfHash = f[3].toLowerCase();
+                }
+              }
+              // the app's own definition of what a delete removes (CdsShelfSource.deleteTargets), packs first, then the PDF
+              for (final rel in CdsShelfSource.deleteTargets(l.path, doc, pdfHash)) {
+                final f = File('${l.path}/$rel');
+                if (f.existsSync()) {
+                  f.deleteSync();
+                  removed.add(rel);
+                }
+              }
+            }
+          }
+          if (removed.isEmpty) throw StateError('no own copy of "$title" here');
+          return {'removed': removed, 'own_sync': fixed ? await ownSync() : null};
         case 'own_sync':
           return {'own_sync': await ownSync()};
         case 'dump':

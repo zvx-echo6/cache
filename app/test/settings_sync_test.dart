@@ -795,6 +795,29 @@ void main() {
     await tester.runAsync(() async => a.dispose());
   });
 
+  testWidgets('the notice\'s "Change this any time on …\'s page" goes to that device\'s page', (tester) async {
+    tall(tester);
+    late Dev a;
+    await tester.runAsync(() async {
+      a = Dev('me', 'peer1', otherName: 'Pixel');
+      a.core.peers.single['link'] = {'mode': 'send', 'from': 'peer1', 'by': 'peer1', 'at': 900};
+      await a.start();
+    });
+    var opened = 0;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(CacheThemeId.dark),
+      home: Builder(builder: (c) => TextButton(onPressed: () => askSettingsLink(c, a.sync, 'peer1', 'Pixel', openDevice: () => opened++), child: const Text('go'))),
+    ));
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("Change this any time on Pixel's page in Sharing and sync."));
+    await tester.pumpAndSettle();
+    expect(opened, 1);
+    expect(find.byKey(const ValueKey('settings-link-notice')), findsNothing, reason: 'the notice closes first');
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
+  });
+
   testWidgets('Show my link code: the sheet closes when the other device links, then the question; Send mine', (tester) async {
     tall(tester);
     final a = Dev('me', 'B', linked: false);

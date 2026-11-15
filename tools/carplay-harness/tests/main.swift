@@ -97,7 +97,7 @@ let after = guiding.then
 check(after?.turn == "right", "guiding: the one after")
 check(after?.road == "Road 2", "guiding: the road of the one after")
 check(guiding.currentRoad == "Road 0", "guiding: the road now")
-check(isNumber(guiding.remainingM, 22860.45) && isWhole(guiding.remainingS, 1134), "guiding: what is left")
+check(isNumber(guiding.remainingM, 22860.45) && isWhole(guiding.remainingS, 1140), "guiding: what is left")
 check(isWhole(guiding.etaMs, 1_794_168_000_000), "guiding: the arrival time")
 check(!guiding.arrived && !guiding.rerouting && guiding.voiceOn, "guiding: not arrived, not rerouting, the voice on")
 
@@ -179,9 +179,20 @@ let nearLength = CarText.length(320.4, imperial: true)
 check(nearLength.value == 0.2 && nearLength.unit == UnitLength.miles, "a length for CarPlay: the phone's number, in miles")
 let farLength = CarText.length(25400.5, imperial: false)
 check(farLength.value == 25 && farLength.unit == UnitLength.kilometers, "a length for CarPlay: in kilometres")
-check(guiding.leftSeconds == 1134, "the time left is the phone's")
+check(guiding.leftSeconds == 1140, "the time left is the phone's")
+// CarPlay is told again when the minutes change or the phone's arrival clock moves to another minute, and only then.
+check(guiding.leftKey == "19|29902800", "the time left is told by its minutes and the arrival minute")
+let sameMinutes: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_000_000]
+let laterFix: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_059_000]
+let clockMoved: [String: Any] = ["phase": "guiding", "remainingS": 240, "remainingM": 3000.0, "etaMs": 1_794_168_060_000]
+let fewerMinutes: [String: Any] = ["phase": "guiding", "remainingS": 180, "remainingM": 2900.0, "etaMs": 1_794_168_000_000]
+check(CarTrip.from(sameMinutes).leftKey == CarTrip.from(laterFix).leftKey, "the same minutes and arrival minute: not told again")
+check(CarTrip.from(sameMinutes).leftKey != CarTrip.from(clockMoved).leftKey, "the arrival clock moved on: told again")
+check(CarTrip.from(sameMinutes).leftKey != CarTrip.from(fewerMinutes).leftKey, "fewer minutes left: told again")
+check(CarTrip.from(["phase": "guiding", "remainingS": 240, "remainingM": 3000.0]).leftKey == "4|", "no arrival time: the minutes alone")
+check(CarTrip.from([:]).leftKey == nil, "no time left known: nothing to tell")
 if let nextTurn = guiding.step {
-  // 320.4 m of 22860.45 m left, of 1134 s: 16 s.
+  // 320.4 m of 22860.45 m left, of 1140 s: 16 s.
   check(guiding.turnSeconds(nextTurn) == 16, "the time to the turn is its share of the time left")
 }
 let lastStretch: [String: Any] = ["phase": "guiding", "remainingS": 20, "remainingM": 150.0]
@@ -217,6 +228,9 @@ for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
   check(style.answer == row["answer"] as? String, "prompts while \(state): the answer to Dart")
   check((style == .tone) == (row["tone"] as? Bool ?? false), "prompts while \(state): the tone only when a short prompt is asked for")
   check((style == .spoken) == (row["phoneSpeaks"] as? Bool ?? false), "prompts while \(state): the phone speaks only when a spoken prompt is fine")
+  // The session, made active to read the style, is kept for the phone's voice or the tone, and let go at once otherwise.
+  let kept: CarPromptSession = (row["phoneSpeaks"] as? Bool ?? false) ? .heldForVoice : (row["tone"] as? Bool ?? false) ? .heldForTone : .letGo
+  check(CarPromptSession(style) == kept, "prompts while \(state): the session is \(kept)")
   if let letters = row["fourCC"] as? String, letters.count == 4 {
     var number: UInt = 0
     for byte in Array(letters.utf8) { number = number << 8 | UInt(byte) }
@@ -224,6 +238,13 @@ for item in (recorded("prompt_styles.json") as? [Any]) ?? [] {
   }
 }
 check(((recorded("prompt_styles.json") as? [Any]) ?? []).count >= 4, "the recorded prompt states are there")
+// The session held for the phone's voice is let go by the car side only if the voice never does: never before the prompt,
+// and the ones queued before it, could have been said at the guidance rate (about 14 letters a second); never past 40 s.
+check(CarPromptHold.seconds(characters: 0) == 12, "an empty prompt: the safety lets the session go after 12 s")
+check(CarPromptHold.seconds(characters: 60) >= 2 + 60.0 / 14 + 10, "a usual prompt: the safety waits 10 s past the time it takes to say it")
+check(CarPromptHold.seconds(characters: 2000) == 30 && CarPromptHold.seconds(characters: -5) == 12, "the safety waits 30 s at most")
+check(CarPromptDone.letsGo(tonePlaying: false), "the voice finished: the session is let go")
+check(!CarPromptDone.letsGo(tonePlaying: true), "the voice finished while the tone plays: the tone's end lets it go")
 let tone: [Int16] = CarPromptTone.samples()
 check(tone.count == Int(44100 * 0.28), "the tone is 0.28 s long")
 check(tone.first == 0 && abs(Int(tone.last ?? 99)) < 40, "the tone starts and ends without a click")
@@ -559,6 +580,8 @@ link.onPrompt = {
   return "short"
 }
 link.onPromptStop = { stops += 1 }
+var dones = 0
+link.onPromptDone = { dones += 1 }
 reply = []
 let promptText: [String: Any] = ["text": "Turn left"]
 let promptKnown = link.handle(method: "prompt", arguments: promptText, reply: { reply.append($0) })
@@ -568,6 +591,8 @@ check(promptAnswer == "short", "a prompt is answered with what the hook says abo
 let stopKnown = link.handle(method: "promptStop", arguments: nil, reply: { reply.append($0) })
 check(stopKnown && reply.count == 2, "the end of a prompt is answered")
 check(prompts == ["Turn left"] && stops == 1, "the prompt and its end reach the audio hook")
+let doneKnown = link.handle(method: "promptDone", arguments: nil, reply: { reply.append($0) })
+check(doneKnown && reply.count == 3 && dones == 1, "the phone's voice finishing is answered and reaches the audio hook")
 
 // what is not the channel's
 reply = []

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../layout/adaptive.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
-import 'package:cache_search/cache_search.dart' show CacheSearchException;
+import 'package:cache_search/cache_search.dart' show CacheSearchException, MapPlace;
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../chat/answer_markdown.dart' show answerStyle;
@@ -23,6 +23,7 @@ import '../../weather/place_alerts.dart';
 import 'field_inputs.dart';
 import 'icon_picker.dart';
 import '../../maps/ui/place_map.dart' show PlaceFixScope;
+import '../../nav/nav_state.dart' show NavPhase, NavState;
 import 'map_spot_picker.dart';
 import 'photo_viewer.dart';
 import 'notebook_editor.dart';
@@ -46,8 +47,8 @@ class PlaceNotebookDeps {
     this.map,
     this.pickerMap,
     this.directions,
-    this.show,
-    this.openLink,
+    this.showOnMap,
+    this.openUrl,
     this.regions,
     this.hereOnMap,
     this.setHereOnMap,
@@ -75,12 +76,11 @@ class PlaceNotebookDeps {
   /// then says so, as the rest of the app does.
   final bool Function(NbPlace place, String name)? directions;
 
-  /// The place on the Maps tab (its card, or the spot while a route is shown or followed): a place's small map and its
-  /// coordinates line. Null: they are not tappable.
-  final void Function(NbPlace place, String name)? show;
+  /// Maps, focused on the place (its card selected): the same path Directions takes, without the route. Null leaves it out.
+  final void Function(NbPlace place, String name)? showOnMap;
 
-  /// Opens a link from a place's notes (the app's way of opening a web link: the system browser). Null: links do nothing.
-  final Future<void> Function(String url)? openLink;
+  /// Opens a web address (a link in a place's notes) in the system browser; null leaves links unopened.
+  final Future<void> Function(String url)? openUrl;
 
   /// The downloaded regions weather can be kept for (watched-place id `region:<name>`). No longer listed in the Places notebook
   /// (1.0.29); kept for the Weather and alerts screen that lists the watched areas.
@@ -89,6 +89,21 @@ class PlaceNotebookDeps {
   /// "Where I am" on the map (the position dot), and its marker's toggle (for the same screen).
   final bool Function()? hereOnMap;
   final void Function(bool on)? setHereOnMap;
+}
+
+/// Directions to a notebook place (the place screen's Directions): the route preview for the place, with Start, and the Maps
+/// tab over whatever screen asked ([NavState.requestMap]; the shell closes the screens above its tabs). The car shows the same
+/// preview, as for any directions opened on the phone; guidance starts only with Start. False while a route is being followed:
+/// it is not replaced from a place's screen, which says to finish or end the route first. Directions again to the place whose
+/// preview is already shown (a second tap while the screen closes) shows that preview: the route is asked for once.
+bool placeDirections(NavState nav, NbPlace p, String name) {
+  if (nav.guiding) return false;
+  final id = 'place:${p.lat},${p.lon}';
+  if (!(nav.phase == NavPhase.previewing && nav.selected?.id == id)) {
+    nav.openDirections(MapPlace(id: id, type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+  }
+  nav.requestMap();
+  return true;
 }
 
 /// The watched-place id of a saved place's entry.
@@ -500,20 +515,6 @@ class PlaceView extends StatelessWidget {
     );
   }
 
-  /// The place on the Maps tab: the pages over the app's tabs close first, so the map is what shows.
-  void _show(BuildContext context, PlaceNotebookDeps pd, NbPlace p, String name) {
-    Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
-    pd.show!(p, name);
-  }
-
-  /// A link in the notes: opened when it is a full address (a link within the notes' own text has nowhere to go).
-  static void _openLink(PlaceNotebookDeps? pd, String? href) {
-    final open = pd?.openLink;
-    final u = href == null ? null : Uri.tryParse(href);
-    if (open == null || u == null || !u.hasScheme) return;
-    open(href!).catchError((Object _) {});
-  }
-
   @override
   Widget build(BuildContext context) {
     final nb = deps.notebook;
@@ -533,6 +534,8 @@ class PlaceView extends StatelessWidget {
           final pd = deps.placesDeps;
           final id = watchId(e);
           final icons = deps.icons;
+          final showOnMap = pd?.showOnMap;
+          final openUrl = pd?.openUrl;
           return Scaffold(
             appBar: AppBar(
               title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -557,15 +560,16 @@ class PlaceView extends StatelessWidget {
                     child: SizedBox(
                       height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 200.0),
                       child: Stack(
-                        fit: StackFit.expand,
                         children: [
-                          pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context))),
-                          // The map is a view here (the page's scroll keeps the drags): a tap opens the place on the Maps tab.
-                          if (pd!.show != null)
-                            Semantics(
-                              button: true,
-                              label: 'Show on map',
-                              child: GestureDetector(key: const ValueKey('place-map-open'), behavior: HitTestBehavior.translucent, onTap: () => _show(context, pd!, p, name)),
+                          Positioned.fill(child: pd!.map!(context, p, null, PinLook.of(e, nb.notebook(e.notebookId), tactical: isTactical(context)))),
+                          // a tap on the small map opens Maps on this place
+                          if (showOnMap != null)
+                            Positioned.fill(
+                              child: Semantics(
+                                button: true,
+                                label: 'Show on map',
+                                child: GestureDetector(key: const ValueKey('place-map-open'), behavior: HitTestBehavior.opaque, onTap: () => showOnMap(p, name)),
+                              ),
                             ),
                         ],
                       ),
@@ -593,7 +597,7 @@ class PlaceView extends StatelessWidget {
                         children: [
                           InkWell(
                             key: const ValueKey('place-coords'),
-                            onTap: p == null || pd?.show == null ? null : () => _show(context, pd!, p, name),
+                            onTap: p == null || showOnMap == null ? null : () => showOnMap(p, name),
                             child: Text([if (p != null) p.coords, if (p?.label != null && p!.label != e.title) p.label!].join(' · '), style: TextStyle(fontSize: 14, color: k.secondary)),
                           ),
                           if (icons != null)
@@ -621,7 +625,10 @@ class PlaceView extends StatelessWidget {
                 ],
                 if ((e.body ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 14),
-                  MarkdownBody(key: const ValueKey('place-notes'), data: e.body!, styleSheet: answerStyle(k), onTapLink: (text, href, title) => _openLink(pd, href)),
+                  MarkdownBody(key: const ValueKey('place-notes'), data: e.body!, styleSheet: answerStyle(k), onTapLink: (text, href, title) {
+                    final u = href == null ? null : Uri.tryParse(href);
+                    if (openUrl != null && u != null && (u.scheme == 'http' || u.scheme == 'https')) openUrl(href!).ignore();
+                  }),
                 ],
                 if (e.photos.isNotEmpty) ...[
                   const SizedBox(height: 14),
@@ -769,6 +776,26 @@ class _PlaceFormState extends State<PlaceForm> {
   /// default, is already in [_color]); red in Tactical.
   PinLook _look(BuildContext context) => PinLook(icon: mapIconOrTemplate(_icon ?? widget.book.def.icon ?? defaultNotebookIcon(widget.book)), tint: pinTint(context, _color.color));
 
+  ButtonStyle get _tight => TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), iconSize: 18, textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13));
+
+  /// "Current location": the pin goes to where the phone is now, and a position fix that arrives later leaves it there.
+  Future<void> _useCurrentLocation() async {
+    NbPlace? p;
+    try {
+      p = await widget.deps.places.herePlace();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      if (p == null) {
+        _error = "Your position isn't known yet";
+      } else {
+        _touched = true;
+        _error = null;
+        _pin = NbPlace(lat: p.lat, lon: p.lon);
+      }
+    });
+  }
+
   /// "Choose on map": the full-screen picker; Cancel (null) keeps the pin the place has.
   Future<void> _chooseOnMap() async {
     final pm = pd?.pickerMap;
@@ -901,11 +928,17 @@ class _PlaceFormState extends State<PlaceForm> {
                 borderRadius: BorderRadius.circular(16),
                 child: SizedBox(height: (MediaQuery.sizeOf(context).height * 0.35).clamp(120.0, 220.0), child: PlaceFixScope(coming: _fixComing, child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _touched = true, child: pd!.map!(context, pin, (p) => setState(() => _pin = p), _look(context))))),
               ),
-              if (pd?.pickerMap != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+              Align(
+                alignment: Alignment.centerLeft,
+                // Tighter side padding so both fit one line at 320; a Wrap is the fallback where they still do not.
+                child: Wrap(
+                  spacing: 4,
+                  children: [
+                    if (pd?.pickerMap != null) TextButton.icon(style: _tight, key: const ValueKey('place-choose-on-map'), onPressed: _chooseOnMap, icon: const Icon(Icons.fullscreen), label: const Text('Choose on map')),
+                    TextButton.icon(style: _tight, key: const ValueKey('place-current-location'), onPressed: _useCurrentLocation, icon: const Icon(Icons.my_location), label: const Text('Current location')),
+                  ],
                 ),
+              ),
             ],
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
@@ -1072,15 +1105,19 @@ NbPlace? parseLatLon(String s) {
 
 /// "Add places from a file": a KML, KMZ, GPX or GeoJSON file read into the notebook [notebookId] (or a new Places notebook);
 /// says how many places came in.
-Future<void> importPlacesInto(BuildContext context, NotebookState nb, {String? notebookId, required DateTime Function() now}) async {
+Future<void> importPlacesInto(BuildContext context, NotebookState nb, {String? notebookId, required DateTime Function() now, void Function(String notebookId)? onOpen, Future<Map<String, dynamic>?> Function(Future<Map<String, dynamic>> Function(String path, String name) use)? pick}) async {
   final messenger = ScaffoldMessenger.of(context);
   try {
-    final r = await withPickedFile((path, _) => nb.importPlaces(path, notebookId: notebookId, now: isoLocal(now())));
+    final r = await (pick ?? withPickedFile<Map<String, dynamic>>)((path, _) => nb.importPlaces(path, notebookId: notebookId, now: isoLocal(now())));
     if (r == null) return;
     final n = (r['places'] as num?)?.toInt() ?? 0;
     final shapes = ((r['lines'] as num?)?.toInt() ?? 0) + ((r['areas'] as num?)?.toInt() ?? 0);
     final into = (r['notebook'] as Map?)?['def']?['name'] ?? 'the notebook';
-    messenger.showSnackBar(SnackBar(content: Text('${n == 1 ? '1 place' : '$n places'}${shapes > 0 ? ' and $shapes lines and areas' : ''} added to $into')));
+    final nbId = ((r['notebook'] as Map?)?['id'] ?? notebookId) as String?;
+    messenger.showSnackBar(SnackBar(
+      content: Text('${n == 1 ? '1 place' : '$n places'}${shapes > 0 ? ' and $shapes lines and areas' : ''} added to $into'),
+      action: nbId == null || onOpen == null ? null : SnackBarAction(label: 'Open', onPressed: () => onOpen(nbId)),
+    ));
   } catch (e) {
     messenger.showSnackBar(SnackBar(content: Text('Could not read the file: ${e is CacheSearchException ? e.message : e}')));
   }

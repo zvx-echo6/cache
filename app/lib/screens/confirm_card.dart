@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../actions/action_registry.dart' show CardTargets;
 import '../actions/confirm.dart';
+import '../chat/ask_target.dart';
 import '../theme.dart';
 
 /// "place" -> "Place", "route_id" -> "Route id": a field name as a label.
@@ -12,12 +14,30 @@ String fieldLabel(String name) {
 /// What an action the assistant asked for will do, and the two buttons that decide it: the action's title and Cancel. Once decided
 /// it shows the outcome instead of the buttons.
 class ConfirmCardView extends StatelessWidget {
-  const ConfirmCardView({super.key, required this.card, required this.onDecide, this.enabled = true, this.lines});
+  const ConfirmCardView({super.key, required this.card, required this.onDecide, this.enabled = true, this.lines, this.targets, this.onOpen});
 
   final ConfirmCard card;
 
   /// The lines in the module's own words (labels as the user named them); null shows the core's summary by field name.
   final List<MapEntry<String, String>>? lines;
+
+  /// Where the card's title, lines and "Done" point (null: plain text), and what opens one.
+  final CardTargets? targets;
+  final void Function(AskTarget target)? onOpen;
+
+  /// [child] as a tap that opens [target] (the accent colour of a link in the app's theme); plain when there is nothing to open.
+  Widget _link(CacheTokens k, AskTarget? target, String key, Text child) {
+    final open = onOpen;
+    if (target == null || open == null) return child;
+    return InkWell(
+      key: ValueKey(key),
+      onTap: () => open(target),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 32),
+        child: Align(alignment: Alignment.centerLeft, widthFactor: 1, child: Text(child.data ?? '', style: child.style?.copyWith(color: k.accent))),
+      ),
+    );
+  }
 
   /// True to run the action, false to cancel it.
   final void Function(bool confirm) onDecide;
@@ -45,11 +65,11 @@ class ConfirmCardView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(card.title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text)),
+          _link(k, targets?.title, 'confirm-title-${card.confirmId}', Text(card.title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text))),
           for (final e in lines ?? [for (final s in card.summary) MapEntry(fieldLabel(s.key), s.value)])
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text('${e.key}: ${e.value}', style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
+              child: _link(k, targets?.lines[e.key], 'confirm-line-${card.confirmId}-${e.key}', Text('${e.key}: ${e.value}', style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary))),
             ),
           const SizedBox(height: 4),
           if (outcome == null)
@@ -71,11 +91,20 @@ class ConfirmCardView extends StatelessWidget {
           else
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                outcome,
-                key: ValueKey('confirm-outcome-${card.confirmId}'),
-                style: TextStyle(fontSize: 14, color: card.state == ConfirmState.failed ? k.emergency : k.secondary),
-              ),
+              child: card.state == ConfirmState.done && targets?.done != null && onOpen != null
+                  ? InkWell(
+                      key: ValueKey('confirm-outcome-${card.confirmId}'),
+                      onTap: () => onOpen!(targets!.done!),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 32),
+                        child: Align(alignment: Alignment.centerLeft, widthFactor: 1, child: Text(outcome, style: TextStyle(fontSize: 14, color: k.accent))),
+                      ),
+                    )
+                  : Text(
+                      outcome,
+                      key: ValueKey('confirm-outcome-${card.confirmId}'),
+                      style: TextStyle(fontSize: 14, color: card.state == ConfirmState.failed ? k.emergency : k.secondary),
+                    ),
             ),
         ],
       ),

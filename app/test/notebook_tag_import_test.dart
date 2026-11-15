@@ -18,6 +18,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/event_loop.dart';
 import 'support/notebook_fake.dart';
 
 /// A folder in memory; [readOnly] paths refuse writes.
@@ -592,9 +593,7 @@ void main() {
         await c.init();
         await c.connect(SyncKind.obsidian, '/vault', display: 'Vault');
         await c.syncAll();
-        while (c.syncing) {
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
+        await pumpUntil(() => !c.syncing, what: 'the first sync to finish', step: const Duration(milliseconds: 1));
       });
       return (c, mem, nb);
     }
@@ -613,16 +612,9 @@ void main() {
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('import-tag-save'))).onPressed, isNull);
       await tester.enterText(find.byKey(const ValueKey('import-tag-field')), '#camping');
       await tester.pump();
-      await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('import-tag-save')));
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-      });
-      // the tag is saved to disk before the snack bar: give the file write its time
-      for (var i = 0; i < 10 && find.text('Import tag is #camping.').evaluate().isEmpty; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.runAsync(() => tester.tap(find.byKey(const ValueKey('import-tag-save'))));
+      // the sheet closes (fake clock), the tag is saved to disk (real I/O), then the snack bar: wait for those, not for time
+      await pumpWidgetsUntil(tester, () => find.text('Import tag is #camping.').evaluate().isNotEmpty, what: 'the import tag snack bar');
       expect(c.target(SyncKind.obsidian)!.tag, '#camping');
       expect(find.text('Import tag is #camping.'), findsOneWidget);
       expect(find.text('Notes already in Cache keep syncing.'), findsOneWidget);
@@ -654,10 +646,7 @@ void main() {
       await tester.runAsync(() => tester.tap(find.byKey(const ValueKey('stop-sync-confirm'))));
       // stopping writes the note to disk before the snack bar: wait for the snack bar itself (bounded),
       // short pumps so it is not dismissed before the check
-      for (var i = 0; i < 200 && find.text('Stopped syncing. The note stays in both.').evaluate().isEmpty; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-        await tester.pump(const Duration(milliseconds: 16));
-      }
+      await pumpWidgetsUntil(tester, () => find.text('Stopped syncing. The note stays in both.').evaluate().isNotEmpty, what: 'the stop-syncing snack bar');
       expect(find.text('Stopped syncing. The note stays in both.'), findsOneWidget);
       await tester.pumpAndSettle();
       expect(mem.text['Gear.md'], '---\ncachesync: off\n---\nStove #cachesync\n');

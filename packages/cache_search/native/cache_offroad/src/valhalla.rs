@@ -125,6 +125,9 @@ pub struct EndOptions {
     pub min_road_class: Option<String>,
     /// `radius` in metres: every edge within it is a candidate, not only the nearest.
     pub radius_m: Option<u32>,
+    /// `heading` in degrees (0 north, clockwise): the way the vehicle is going, so the end snaps to the edge that goes that way
+    /// and a route from a moving vehicle carries on forward instead of starting with a U-turn.
+    pub heading_deg: Option<f64>,
 }
 
 /// A route end: the point, and how it snaps.

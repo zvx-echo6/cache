@@ -244,6 +244,9 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Whether the stored chat [id] still exists (a deleted chat is gone for good).
+  bool hasConversation(int id) => _store?.get(id) != null;
+
   /// Shows a stored conversation as it was. Sending continues it.
   void openConversation(int id) {
     final store = _store;

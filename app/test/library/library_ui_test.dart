@@ -399,39 +399,63 @@ void main() {
       await tapKey(tester, 'book-aid');
     }
 
-    testWidgets('two separate choices: Remove from this device refuses when no other device has it; Delete from all devices', (tester) async {
-      final files = FakeBookFiles(outcome: RemoveOutcome.noOtherCopy);
+    testWidgets('synced: Delete asks "Delete this book?" with the line about synced devices; Cancel keeps the book, Delete deletes it', (tester) async {
+      final files = FakeBookFiles(remove: false)..synced = true;
       await openBook(tester, files);
-      expect(find.text('On this device · 3 KB'), findsOneWidget);
-      expect(find.byKey(const ValueKey('book-open')), findsOneWidget);
-      expect(find.text('Remove PDF from this device'), findsOneWidget, reason: 'the PDF-only button never shares a name with the book choice');
+      expect(find.text('Delete'), findsOneWidget, reason: 'one button on the book page');
       await tapKey(tester, 'book-delete');
-      expect(find.byKey(const ValueKey('delete-here')), findsOneWidget);
-      expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
-      expect(find.textContaining('its call number CDS 210-001 on every device you have linked. This cannot be undone.'), findsOneWidget);
-      await tapKey(tester, 'delete-here-button');
-      expect(find.text("No other device has this book right now, so it can't be removed from just this device. Delete it instead."), findsOneWidget);
-      expect(files.removed, isEmpty, reason: 'nothing is removed');
-      await tapKey(tester, 'delete-all-button');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsOneWidget);
+      expect(find.text('Delete this book?'), findsOneWidget);
+      expect(find.text('Deleting this will delete this from all synced devices.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-cancel')), findsOneWidget);
+      await tapKey(tester, 'delete-cancel');
+      expect(files.deleted, isEmpty, reason: 'Cancel does nothing');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.byKey(const ValueKey('book-delete')), findsOneWidget, reason: 'still on the book page');
+      await tapKey(tester, 'book-delete');
+      await tapKey(tester, 'delete-confirm-button');
       expect(files.deleted, ['aid']);
-      expect(find.byKey(const ValueKey('delete-all')), findsNothing, reason: 'the sheet closes');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text('Deleted. Your other devices remove it when they next connect.'), findsOneWidget);
     });
 
-    testWidgets('Remove from this device after the live check found a copy', (tester) async {
-      final files = FakeBookFiles();
+    testWidgets('not synced: the question only, no line; Delete deletes it and says "Deleted."', (tester) async {
+      final files = FakeBookFiles(remove: false);
       await openBook(tester, files);
       await tapKey(tester, 'book-delete');
-      await tapKey(tester, 'delete-here-button');
-      expect(files.removed, ['aid']);
-      expect(find.byKey(const ValueKey('delete-here')), findsNothing);
+      expect(find.text('Delete this book?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-synced-line')), findsNothing);
+      expect(find.textContaining('synced devices'), findsNothing);
+      await tapKey(tester, 'delete-confirm-button');
+      expect(files.deleted, ['aid']);
+      expect(find.text('Deleted.'), findsOneWidget);
     });
 
-    testWidgets('on a phone without offload or delete-everywhere yet, both choices say so and do nothing', (tester) async {
+    testWidgets('where nothing can be deleted yet, Delete says so and does nothing', (tester) async {
       await openBook(tester, BookFilesUnavailable());
       await tapKey(tester, 'book-delete');
-      expect(find.text('Not available on this device yet.'), findsNWidgets(2));
-      expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('delete-here-button'))).onPressed, isNull);
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text('Not available on this device yet.'), findsOneWidget);
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('delete-all-button'))).onPressed, isNull);
+    });
+
+    testWidgets("a book of a library the person didn't make: unchanged, the sheet with only the note, no dialog", (tester) async {
+      final files = FakeBookFiles(remove: false)..notYours.add('aid');
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text("This book isn't in a library you made, so you can't delete it here."), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-all-button')), findsNothing, reason: 'no greyed button for an action they cannot take');
+      expect(find.textContaining("This can't be undone."), findsNothing, reason: 'no explanation of it either');
+    });
+
+    testWidgets('a delete that fails says so, and the book page stays', (tester) async {
+      final files = FakeBookFiles(remove: false)..failDelete = true;
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      await tapKey(tester, 'delete-confirm-button');
+      expect(find.text("Couldn't delete the book. Try again."), findsOneWidget);
+      expect(find.byKey(const ValueKey('book-delete')), findsOneWidget);
     });
   });
 

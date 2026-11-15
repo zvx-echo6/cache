@@ -255,6 +255,7 @@ impl Job {
             "library_template" => Self::start_library_template(params_json),
             "own_library_sync" => Self::start_own_library_sync(params_json),
             "video_download" => Self::start_video_download(params_json),
+            "video_repair" => Self::start_video_repair(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_seal" => Self::start_index_seal(params_json),
@@ -718,6 +719,25 @@ impl Job {
                 cache_video::Outcome::Done => Ok(Outcome::Done),
                 cache_video::Outcome::Cancelled => Ok(Outcome::Cancelled),
             }
+        })
+    }
+
+    /// Start a `video_repair` job (`{"dir"}`, the videos folder): the saved HLS videos from before saved videos were rewritten as
+    /// plain MP4 are rewritten, one at a time, on the job's thread. Progress is videos of those to look at.
+    fn start_video_repair(params_json: &str) -> Result<Job> {
+        #[derive(serde::Deserialize)]
+        struct P {
+            dir: String,
+        }
+        let p: P = serde_json::from_str(params_json).map_err(|e| Error::bad_json(format!("params_json: {e}")))?;
+        if p.dir.is_empty() {
+            return Err(Error::bad_json("dir must not be empty"));
+        }
+        let video = cache_video::Video::new(&cache_video::VideoCfg { dir: p.dir });
+        Self::spawn("cs-video-repair", (), 0, move |sh| {
+            let cancel = || sh.cancel.load(Ordering::SeqCst);
+            cache_video::remux::repair_saved(&video, &|d, t| sh.set_progress(d, t), &cancel).map_err(crate::ext::video_err)?;
+            Ok(if cancel() { Outcome::Cancelled } else { Outcome::Done })
         })
     }
 

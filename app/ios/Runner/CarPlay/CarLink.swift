@@ -104,6 +104,8 @@ final class CarLink {
   /// no hook, and the phone then speaks as it would with no car). And a prompt was stopped. Set by CarPrompts.
   var onPrompt: ((String) -> String?)?
   var onPromptStop: (() -> Void)?
+  /// The phone's voice has said every prompt it was given: the session held for it is let go at once.
+  var onPromptDone: (() -> Void)?
 
   /// For the tests: answers in place of Dart (a car scene with no Flutter engine).
   var dartForTests: ((_ method: String, _ arguments: Any?, _ done: @escaping (Any?) -> Void) -> Void)?
@@ -201,6 +203,9 @@ final class CarLink {
     case "promptStop":
       onPromptStop?()
       reply(nil)
+    case "promptDone":
+      onPromptDone?()
+      reply(nil)
     case "pins":
       pins.receive(args ?? [:])
       reply(nil)
@@ -243,6 +248,7 @@ final class CarLink {
     release = nil
     onPrompt = nil
     onPromptStop = nil
+    onPromptDone = nil
     dartForTests = nil
   }
 }

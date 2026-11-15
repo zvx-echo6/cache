@@ -67,7 +67,7 @@ void main() {
       expect(find.text('3 more'), findsOneWidget);
       // Weather alerts and fires have their own icons.
       expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-      expect(find.text('Where I am'), findsNothing, reason: 'the places are the Places notebook now');
+      expect(find.text('Current location'), findsNothing, reason: 'the places are the Places notebook now');
       expect(find.text('Watch these places'), findsNothing);
       expect(find.text('Advanced'), findsNothing);
       await r.dispose(tester);

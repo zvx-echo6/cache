@@ -1125,9 +1125,11 @@ class RegionsState extends ChangeNotifier {
       if (places) k.places = true;
     }
     if (map) {
-      // The layer engine downloads a box: the map part covers the region's bounding box, not its exact outline.
+      // Each layer is sized for the region's box (the zoom is the box's, as the catalogue's sizes are) and downloads only the
+      // tiles of its outline, where the catalogue has one; else the box.
       final bounds = r.bounds;
       if (bounds != null) {
+        final outline = await _mapOutline(r);
         // One download per layer the tiles are kept in: hillshade and contour lines both read the elevation layer's tiles, and
         // 1.0.27 downloaded them twice (two areas, listed four times).
         final asked = <String>{for (final a in _areasOf(k)) maps.engine.downloadLayerOf(a.layerId)};
@@ -1136,7 +1138,7 @@ class RegionsState extends ChangeNotifier {
           if (!asked.add(maps.engine.downloadLayerOf(def.id))) continue;
           final est = await maps.engine.estimate(def.id, bounds);
           if (!est.allowed) continue;
-          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near);
+          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, outline: outline);
           k.areas.add(a.id);
         }
       }
@@ -1146,6 +1148,17 @@ class RegionsState extends ChangeNotifier {
     await _save();
     await refresh();
     notifyListeners();
+  }
+
+  /// The outline [r]'s map part is downloaded for ([mapOutline]); null (the box) for an area drawn on the map, one kept from before
+  /// regions, and when the outline cannot be read now.
+  Future<List<List<List<double>>>?> _mapOutline(RegionRecord r) async {
+    if (r.isDrawn || r.kind == kAreaRegionKind) return null;
+    try {
+      return mapOutline(r, await catalogue.geometry(r));
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The off-road packs that cover [r], each checked against its published SHA-256 (a pack already on the phone is not downloaded

@@ -249,6 +249,9 @@ fn route_request(from: &RouteEnd, to: &RouteEnd, costing: &str, alternates: Opti
     r
 }
 
+/// How far from the vehicle's heading an edge's direction may be for the start to snap to it (Valhalla's default is 60).
+const HEADING_TOLERANCE_DEG: u32 = 60;
+
 /// A Valhalla location: the point and its snapping options.
 fn location(e: &RouteEnd) -> Value {
     let mut l = json!({"lat": e.lat, "lon": e.lon});
@@ -257,6 +260,10 @@ fn location(e: &RouteEnd) -> Value {
     }
     if let Some(r) = e.opts.radius_m {
         l["radius"] = json!(r);
+    }
+    if let Some(h) = e.opts.heading_deg {
+        l["heading"] = json!((h.rem_euclid(360.0).round() as u32) % 360);
+        l["heading_tolerance"] = json!(HEADING_TOLERANCE_DEG);
     }
     l
 }
@@ -342,5 +349,16 @@ mod tests {
         assert!(m[2].lanes.is_empty() && m[3].lanes.is_empty());
         assert_eq!(m[1].lanes[2].to_json(), json!({"directions": 32, "valid": 32}));
         assert_eq!(m[0].lanes[1].to_json(), json!({"directions": 2}));
+    }
+
+    #[test]
+    fn a_start_with_a_heading_asks_valhalla_for_the_edge_that_goes_that_way() {
+        let mut a = end(42.5, -113.8);
+        a.opts.heading_deg = Some(370.4);
+        let r = route_request(&a, &end(42.6, -113.7), "auto", None);
+        assert_eq!(r["locations"][0]["heading"], json!(10));
+        assert_eq!(r["locations"][0]["heading_tolerance"], json!(HEADING_TOLERANCE_DEG));
+        assert!(r["locations"][1].get("heading").is_none(), "the end has none");
+        assert!(route_request(&end(42.5, -113.8), &end(42.6, -113.7), "auto", None)["locations"][0].get("heading").is_none());
     }
 }
