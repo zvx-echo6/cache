@@ -212,6 +212,11 @@ struct CarListenTestSetup {
   var didntCatchFor: TimeInterval
 }
 
+extension Notification.Name {
+  /// The phone asked iOS for the microphone or speech recognition and an answer came: the car's microphone button looks again.
+  static let carListenAccessChanged = Notification.Name("co.cache.car.listenAccessChanged")
+}
+
 enum CarListen {
   /// Nil in the app itself. In the harness: the car's mic button shows and a fixed result is "heard" (no microphone, no audio
   /// session, no permissions asked).
@@ -372,6 +377,65 @@ final class CarListenSpeech: CarListenRecognizer {
     task = nil
     request?.endAudio()
     request = nil
+  }
+}
+
+/// The phone asking iOS for the two permissions (the card on Home and the row in Settings; the car never asks). Dart's side is
+/// lib/car/car_voice_access.dart, on the `co.cache/car` channel: `voiceStatus` and `voiceRequest` both answer
+/// `{"microphone": ..., "speech": ...}`, each `granted`, `denied` (refused, restricted, or turned off) or `undetermined`.
+enum CarListenPermissions {
+  static func status() -> [String: String] {
+    return ["microphone": microphone(), "speech": speech()]
+  }
+
+  private static func microphone() -> String {
+    if #available(iOS 17.0, *) {
+      switch AVAudioApplication.shared.recordPermission {
+      case .granted: return "granted"
+      case .denied: return "denied"
+      default: return "undetermined"
+      }
+    }
+    switch AVAudioSession.sharedInstance().recordPermission {
+    case .granted: return "granted"
+    case .denied: return "denied"
+    default: return "undetermined"
+    }
+  }
+
+  private static func speech() -> String {
+    switch SFSpeechRecognizer.authorizationStatus() {
+    case .authorized: return "granted"
+    case .notDetermined: return "undetermined"
+    default: return "denied"
+    }
+  }
+
+  /// Asks the microphone, then speech recognition; one already answered is not asked again (iOS would not show its prompt).
+  /// `done` gets the status after, on the main queue, and the car is told to look again.
+  static func request(done: @escaping ([String: String]) -> Void) {
+    askMicrophone {
+      askSpeech {
+        DispatchQueue.main.async {
+          NotificationCenter.default.post(name: .carListenAccessChanged, object: nil)
+          done(status())
+        }
+      }
+    }
+  }
+
+  private static func askMicrophone(_ next: @escaping () -> Void) {
+    guard microphone() == "undetermined" else { return next() }
+    if #available(iOS 17.0, *) {
+      AVAudioApplication.requestRecordPermission { _ in next() }
+    } else {
+      AVAudioSession.sharedInstance().requestRecordPermission { _ in next() }
+    }
+  }
+
+  private static func askSpeech(_ next: @escaping () -> Void) {
+    guard speech() == "undetermined" else { return next() }
+    SFSpeechRecognizer.requestAuthorization { _ in next() }
   }
 }
 

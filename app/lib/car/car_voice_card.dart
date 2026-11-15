@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// The one-time card on the phone, shown the first time Cache is opened after a CarPlay connection: it asks whether to allow voice
-/// search from the car. The words are drafts awaiting the owner's approval. Not shown from anywhere yet; "Allow" will later bring
-/// up iOS's microphone and speech prompts. Styled like the background-add notice card (FgsAddNoticeBody).
+/// The one-time card on the phone, at the top of Home the first time Cache is opened after a CarPlay connection (iPhone, only while
+/// the microphone and speech recognition are not both allowed): it asks whether to allow voice search from the car. The words are
+/// the owner's (2026-11-15). "Allow" brings up iOS's microphone and speech prompts (car_voice_access.dart); "Not now" and "Allow"
+/// both put it away for good. Styled like the background-add notice card (FgsAddNoticeBody).
 class CarVoiceCard extends StatelessWidget {
   const CarVoiceCard({super.key, required this.onAllow, required this.onNotNow});
 

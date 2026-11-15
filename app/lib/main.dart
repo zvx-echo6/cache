@@ -56,6 +56,7 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
+import 'car/car_voice_access.dart';
 import 'car/phone_drive.dart';
 import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
@@ -244,6 +245,9 @@ class _CacheAppState extends State<CacheApp> {
   );
   // The layer engine in the core (cs_layers_*): the catalogue, the tile server the map reads from, area downloads.
   late final AppSettings settings = AppSettings();
+
+  /// Voice search from the car: the iPhone's microphone and speech permissions (car/car_voice_access.dart). Only started on an iPhone.
+  late final CarVoiceAccess carVoice = CarVoiceAccess(settings: settings, openSettings: () => location.openAppSettings());
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
   late final ModelDownloads modelDownloads = ModelDownloads(app: app, policy: policy, searchModel: kSearchModel.file);
@@ -1296,6 +1300,8 @@ class _CacheAppState extends State<CacheApp> {
       _car!.connected.addListener(_onCarScreen);
       unawaited(_car!.start());
     } else if (plat.isIOS) {
+      carVoiceShared = carVoice;
+      unawaited(settingsRead.then((_) => carVoice.start()));
       // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
       // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
       // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
@@ -1333,6 +1339,7 @@ class _CacheAppState extends State<CacheApp> {
         onConnected: () async {
           await location.request(explain: () async => false);
         },
+        onCarSeen: plat.isIOS ? carVoice.carConnected : null,
       );
 
   void _onCarScreen() {
@@ -1490,6 +1497,8 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     _car?.connected.removeListener(_onCarScreen);
     _car?.dispose();
+    if (identical(carVoiceShared, carVoice)) carVoiceShared = null;
+    carVoice.dispose();
     _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();

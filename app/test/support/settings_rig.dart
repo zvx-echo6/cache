@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache/app_state.dart';
 import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/browse_state.dart';
+import 'package:cache/car/car_voice_access.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/history/conversation_store.dart';
 import 'package:cache/location/location_service.dart';
@@ -134,6 +135,9 @@ class SettingsRig {
   late Directory modelsDir;
   late Directory videosDir;
 
+  /// Voice search from the car, for the Settings row (null: no row).
+  CarVoiceAccess? carVoice;
+
   SettingsDeps get deps => SettingsDeps(
     app: app,
     chat: chat,
@@ -144,6 +148,7 @@ class SettingsRig {
     location: location,
     hub: hub,
     onOpenAsk: () => opened.add('ask'),
+    carVoice: carVoice,
   );
 
   static Future<SettingsRig> create(

@@ -41,6 +41,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   /// recognizer is there (CarListenAccess). On the map's bar only: CarPlay's search template has no bar buttons.
   private lazy var micButton = CPBarButton(image: UIImage(systemName: "mic") ?? UIImage()) { [weak self] _ in self?.templates?.listen() }
   private var activeObserver: NSObjectProtocol?
+  private var accessObserver: NSObjectProtocol?
   private lazy var savedButton = barButton("bookmark") { [weak self] in self?.templates?.openSaved() }
   private lazy var backButton = barButton("chevron.backward") { [weak self] in self?.templates?.leaveRoutes() }
   private lazy var doneButton = CPBarButton(title: "Done") { [weak self] _ in self?.endPanning() }
@@ -84,6 +85,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     // Whether the microphone button shows is read again whenever the phone's app becomes active: that is where the two
     // permissions can have been given.
     activeObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+      self?.showButtons()
+    }
+    // And when the phone asked iOS for them (the card or the row): the answer may come with no change of active state.
+    accessObserver = NotificationCenter.default.addObserver(forName: .carListenAccessChanged, object: nil, queue: .main) { [weak self] _ in
       self?.showButtons()
     }
     searchButton.isEnabled = lists.searchAllowed
@@ -139,6 +144,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     if let observer = activeObserver {
       NotificationCenter.default.removeObserver(observer)
       activeObserver = nil
+    }
+    if let observer = accessObserver {
+      NotificationCenter.default.removeObserver(observer)
+      accessObserver = nil
     }
     mapController?.release()
     mapController = nil

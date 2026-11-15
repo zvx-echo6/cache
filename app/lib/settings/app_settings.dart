@@ -88,6 +88,8 @@ class AppSettings extends ChangeNotifier {
   bool _mobileForDownloads = false;
   bool _indexingNormal = false;
   bool _webSearchOn = false;
+  bool _carSeen = false;
+  bool _carVoiceCardDone = false;
   Set<String> _liveOn = {};
   Set<String> _watched = {kWatchHere};
   Set<String>? _seenPlaces;
@@ -117,6 +119,12 @@ class AppSettings extends ChangeNotifier {
 
   /// The person's switch for searching the web. Only has an effect once a search service has a key.
   bool get webSearchOn => _webSearchOn;
+
+  /// A CarPlay screen has connected to this phone (iPhone only). The one-time voice search card waits for this.
+  bool get carSeen => _carSeen;
+
+  /// The one-time voice search card from the car was answered (Allow or Not now): it never shows again.
+  bool get carVoiceCardDone => _carVoiceCardDone;
 
   /// The live data sources that are switched on (weather, alerts, fires...), by source id. Nothing is downloaded for a source that
   /// is not here. A source and the built-in one it replaces (see liveReplaces in weather/catalogue.dart) are on or off together.
@@ -163,7 +171,7 @@ class AppSettings extends ChangeNotifier {
 
   static const Set<String> _known = {
     'popUpFor', 'alertPopups', 'toldNoPopUps', 'quiet', 'mobileForDownloads', 'indexingSpeed', 'webSearchOn', 'liveSourcesOn', 'watchedPlaces',
-    'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues',
+    'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues', 'carSeen', 'carVoiceCardDone',
   };
 
   /// Each setting is read on its own: one that cannot be read keeps its default and the rest are still read (one bad value used
@@ -204,6 +212,8 @@ class AppSettings extends ChangeNotifier {
     each(() => _mobileForDownloads = j['mobileForDownloads'] == true);
     each(() => _indexingNormal = j['indexingSpeed'] == 'normal');
     each(() => _webSearchOn = j['webSearchOn'] == true);
+    each(() => _carSeen = j['carSeen'] == true);
+    each(() => _carVoiceCardDone = j['carVoiceCardDone'] == true);
     each(() => _liveOn = _strings(j['liveSourcesOn']).toSet());
     each(() {
       final ww = j['weatherWatch'];
@@ -245,6 +255,8 @@ class AppSettings extends ChangeNotifier {
         'mobileForDownloads': _mobileForDownloads,
         'indexingSpeed': _indexingNormal ? 'normal' : 'gentle',
         'webSearchOn': _webSearchOn,
+        if (_carSeen) 'carSeen': true,
+        if (_carVoiceCardDone) 'carVoiceCardDone': true,
         'liveSourcesOn': _liveOn.toList()..sort(),
         'watchedPlaces': _watched.toList()..sort(),
         'weatherWatch': {
@@ -294,6 +306,20 @@ class AppSettings extends ChangeNotifier {
   void setWebSearchOn(bool v) {
     if (v == _webSearchOn) return;
     _webSearchOn = v;
+    _save();
+  }
+
+  /// A CarPlay screen connected: remembered (see [carSeen]).
+  void setCarSeen() {
+    if (_carSeen) return;
+    _carSeen = true;
+    _save();
+  }
+
+  /// The voice search card was answered: it is not shown again.
+  void setCarVoiceCardDone() {
+    if (_carVoiceCardDone) return;
+    _carVoiceCardDone = true;
     _save();
   }
 
