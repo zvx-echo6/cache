@@ -55,6 +55,12 @@ const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
+/// The chosen place's pin and the search results' pins where the place is a notebook entry: its icon in the person's pin style
+/// (the feature's `pin` names the image, as a notebook pin's does), in place of the plain dot of [kPinSelected] and [kPinResults],
+/// which draw the features without one.
+const String kPinSelectedIcon = 'pin-selected-icon';
+const String kPinResultsIcon = 'pin-results-icon';
+
 /// The name of the vehicle arrow's image (the car's arrow, VehicleArrow) the screen adds to the style.
 const String kHeadingImage = 'position-heading';
 
@@ -537,7 +543,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'id': kPinResults,
         'type': 'circle',
         'source': kPinSource,
-        'filter': ['==', ['get', 'role'], 'result'],
+        'filter': ['all', ['==', ['get', 'role'], 'result'], ['!', ['has', 'pin']]],
         'paint': {
           'circle-radius': 7,
           'circle-color': p.css('pin'),
@@ -549,7 +555,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'id': kPinSelected,
         'type': 'circle',
         'source': kPinSource,
-        'filter': ['==', ['get', 'role'], 'selected'],
+        'filter': ['all', ['==', ['get', 'role'], 'selected'], ['!', ['has', 'pin']]],
         'paint': {
           'circle-radius': kPinSelectedRadius,
           'circle-color': p.css('pin'),
@@ -557,6 +563,21 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'circle-stroke-color': p.css('routeCasing'),
         },
       },
+      if (pinStyle != null)
+        for (final (id, role) in [(kPinResultsIcon, 'result'), (kPinSelectedIcon, 'selected')])
+          {
+            'id': id,
+            'type': 'symbol',
+            'source': kPinSource,
+            'filter': ['all', ['==', ['get', 'role'], role], ['has', 'pin']],
+            'layout': {
+              'icon-image': ['get', 'pin'],
+              'icon-size': pinIconSize(),
+              'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+            },
+          },
     ];
 
 List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
