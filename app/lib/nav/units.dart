@@ -101,11 +101,12 @@ int shownMinutes(int seconds) {
 /// [shownMinutes] in seconds: what the car is given for a time left or a route's time.
 int shownSeconds(int seconds) => shownMinutes(seconds) * 60;
 
-/// The arrival time that goes with the minutes shown: the core's [eta] is the moment of the fix plus [remainingS], so this is that
-/// moment plus [shownMinutes]. CarPlay works out its own arrival time from the time left it is given, from the moment it is told;
-/// with the phone's clock made the same way, the two agree. Null when [eta] is.
-DateTime? shownArrival(DateTime? eta, int remainingS) =>
-    eta?.subtract(Duration(seconds: remainingS)).add(Duration(seconds: shownSeconds(remainingS)));
+/// The arrival time that goes with the minutes shown: the core's [eta] is the moment of the fix plus [remainingS] (the plan's
+/// time left), so this is that moment plus [shownMinutes] of [leftS], the time left shown (NavState.leftS: the plan's with the
+/// drive's pace blended in; the plan's when not given). CarPlay works out its own arrival time from the time left it is given,
+/// from the moment it is told; with the phone's clock made the same way, the two agree. Null when [eta] is.
+DateTime? shownArrival(DateTime? eta, int remainingS, {int? leftS}) =>
+    eta?.subtract(Duration(seconds: remainingS)).add(Duration(seconds: shownSeconds(leftS ?? remainingS)));
 
 /// Compass abbreviations from the core ("NE") as words ("northeast").
 String cardinalWord(String? c) => switch (c) {
