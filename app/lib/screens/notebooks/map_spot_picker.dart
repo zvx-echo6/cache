@@ -11,7 +11,7 @@ import 'places_screen.dart' show parseLatLon;
 /// middle of the map while the camera moves and [onCentre] when it comes to rest, [onTap] when the map is tapped.
 typedef SpotMapBuilder = Widget Function(BuildContext context, NbPlace? target, ValueChanged<NbPlace> onMoving, ValueChanged<NbPlace> onCentre, ValueChanged<NbPlace> onTap);
 
-/// "Choose on map": a full-screen map to put a place's pin on. Pan and zoom the map under a fixed crosshair and press "Use this
+/// "Choose on map": a full-screen map to put a place's pin on. Pan and zoom the map under a fixed reticle and press "Use this
 /// spot"; a tap on the map moves it there; search moves the map. Cancel keeps the previous pin. Answers the chosen
 /// [NbPlace] (its name when the spot is the one a search found), or null.
 class MapSpotPicker extends StatefulWidget {
@@ -204,7 +204,7 @@ class _MapSpotPickerState extends State<MapSpotPicker> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(c == null ? 'Move the map to the spot' : c.coords, key: const ValueKey('picker-coords'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-                    Text('Move the map under the crosshair, or tap it', style: TextStyle(fontSize: 13, color: k.secondary)),
+                    Text('Move the map under the circle, or tap it', style: TextStyle(fontSize: 13, color: k.secondary)),
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
