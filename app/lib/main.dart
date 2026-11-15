@@ -428,7 +428,11 @@ class _CacheAppState extends State<CacheApp> {
   late final SharingState sharing = SharingState(
     policy: policy,
     supportDir: () async => Directory(await appSupportPath()),
+    // Ignored in a browser: Cache Server names itself.
     deviceName: plat.isAndroid ? 'Android device' : (plat.isIOS ? 'iPhone' : plat.hostName),
+    // In a browser the engine runs on Cache Server and this asks its sharing host; nothing else of the phone's driver applies there
+    // (the network rule, the folders, background rounds).
+    remote: plat.isWeb ? HttpTransport() : null,
     kinds: dataKinds,
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
     // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
@@ -1270,6 +1274,9 @@ class _CacheAppState extends State<CacheApp> {
         _sharingReadByBackground = true;
         _onSharingForBackground();
       });
+    } else {
+      // A browser shows what Cache Server's sharing host runs (set up or not); it starts nothing of its own.
+      unawaited(sharing.init());
     }
     // Regions are the server's in a browser (its engine downloads with no tab open), so they start on both.
     settingsRead.then((_) => regions.init());
