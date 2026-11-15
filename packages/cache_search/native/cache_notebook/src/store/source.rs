@@ -149,10 +149,18 @@ fn merge_entry(tx: &Connection, id: &str, base: Option<&Base>, new: &Base) -> Re
     let cur_values = cur.get("values").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut changed = false;
     let mut kept = false;
-    let (title, k) = pick(&cur_title, base.map(|b| &b.title), &new.title, &|a, b| a == b);
+    // The name is what matched the row to the entry: a title that differs only in case or spacing is the same name, and the entry
+    // keeps the way it was written.
+    let same_name = match (&cur_title, &new.title) {
+        (Some(a), Some(b)) => name_key(a) == name_key(b),
+        _ => false,
+    };
+    let (title, k) = if same_name { (cur_title.clone(), false) } else { pick(&cur_title, base.map(|b| &b.title), &new.title, &|a, b| a == b) };
     changed |= title != cur_title;
     kept |= k;
-    let (place, k) = pick(&cur_place, base.map(|b| &b.place), &new.place, &|a, b| a == b);
+    // A file that does not say a position (a CHIRP CSV has none) or a field leaves what the entry has: an import never erases what
+    // another file (a RepeaterBook KML) or the person gave.
+    let (place, k) = if new.place.is_none() { (cur_place, false) } else { pick(&cur_place, base.map(|b| &b.place), &new.place, &|a, b| a == b) };
     changed |= place != cur_place;
     kept |= k;
     let mut values = Map::new();
@@ -162,7 +170,7 @@ fn merge_entry(tx: &Connection, id: &str, base: Option<&Base>, new: &Base) -> Re
     for fid in fids {
         let (cv, nv) = (cur_values.get(fid).cloned(), new.values.get(fid).cloned());
         let bv = base.map(|b| b.values.get(fid).cloned());
-        let (v, k) = pick(&cv, bv.as_ref(), &nv, &veq);
+        let (v, k) = if nv.is_none() { (cv.clone(), false) } else { pick(&cv, bv.as_ref(), &nv, &veq) };
         if !veq(&v, &cv) {
             changed = true;
         }
@@ -366,4 +374,60 @@ pub(crate) fn source_migrated(c: &mut Connection, args: &Value) -> Result<Value>
         _ => None,
     };
     Ok(json!({"notebook_id": id}))
+}
+
+/// How an imported entry's name is compared: trimmed, runs of spaces as one, case-insensitive. The one rule of every import: a row
+/// whose name is the name of an entry of the notebook updates it, any other row is added.
+pub(crate) fn name_key(title: &str) -> String {
+    title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// `source_rekey_by_title`: `{"notebook_id"}`. Makes every ledger row's key the name of the row it holds (`name_key` of the title
+/// of its stored base): the ledgers made before imports matched by name keyed their rows by other things (a repeater's callsign,
+/// frequency and town). Rows with no title keep their key. Where several rows get the same name only the one whose entry is the
+/// oldest (a row with a living entry before one without) keeps the ledger row; the other entries stay, unlinked. `{"rekeyed":n,"dropped":n}`.
+pub(crate) fn source_rekey_by_title(c: &mut Connection, args: &Value) -> Result<Value> {
+    check_keys(args, &["notebook_id"])?;
+    let nb_id = str_arg(args, "notebook_id")?;
+    let tx = c.transaction()?;
+    let rows = ledger(&tx, nb_id)?;
+    // (new key, alive?, entry created, old key) per row
+    let mut order: Vec<(String, bool, i64, String)> = Vec::new();
+    for (key, l) in &rows {
+        let new_key = l.base.title.as_deref().map(name_key).filter(|k| !k.is_empty()).unwrap_or_else(|| key.clone());
+        let live = alive(&tx, nb_id, l.entry_id.as_deref())?;
+        let created: i64 = match (&l.entry_id, live) {
+            (Some(e), true) => tx.query_row("SELECT created FROM entries WHERE id=?1", [e], |r| r.get(0))?,
+            _ => i64::MAX,
+        };
+        order.push((new_key, live, created, key.clone()));
+    }
+    let mut keep: HashMap<String, (bool, i64, String)> = HashMap::new();
+    for (nk, live, created, old) in &order {
+        let better = match keep.get(nk) {
+            None => true,
+            Some((kl, kc, _)) => (*live, std::cmp::Reverse(*created)) > (*kl, std::cmp::Reverse(*kc)),
+        };
+        if better {
+            keep.insert(nk.clone(), (*live, *created, old.clone()));
+        }
+    }
+    let (mut rekeyed, mut dropped) = (0, 0);
+    for (nk, _, _, old) in &order {
+        if keep.get(nk).map(|k| &k.2) != Some(old) {
+            tx.execute("DELETE FROM source_rows WHERE notebook_id=?1 AND key=?2", params![nb_id, old])?;
+            dropped += 1;
+        }
+    }
+    // in two steps, so a key that is another row's old key is never taken twice at once
+    let moving: Vec<(&String, &String)> = keep.iter().filter(|(nk, v)| *nk != &v.2).map(|(nk, v)| (nk, &v.2)).collect();
+    for (nk, old) in &moving {
+        tx.execute("UPDATE source_rows SET key=?3 WHERE notebook_id=?1 AND key=?2", params![nb_id, old, format!("\u{1}{nk}")])?;
+    }
+    for (nk, _) in &moving {
+        tx.execute("UPDATE source_rows SET key=?2 WHERE notebook_id=?1 AND key=?3", params![nb_id, nk, format!("\u{1}{nk}")])?;
+        rekeyed += 1;
+    }
+    tx.commit()?;
+    Ok(json!({"rekeyed": rekeyed, "dropped": dropped}))
 }
