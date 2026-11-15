@@ -305,9 +305,10 @@ class _SharingPageState extends State<SharingPage> {
           return SettingsPage(
             title: 'Sharing and sync',
             children: [
-              const NoteText(
+              NoteText(
                 'Link your Cache devices and keep their library, maps, models and videos the same, over Wi-Fi nearby or the internet. '
-                'Devices talk to each other directly; nothing goes through a Cache server. Setting up creates this device\'s identity.',
+                'Devices talk to each other directly; nothing goes through a Cache server. '
+                '${s.onServer ? 'Setting up gives this server its own identity for linking with your devices.' : 'Setting up creates this device\'s identity.'}',
               ),
               FilledButton(onPressed: _busy ? null : () => _run(s.setUp), child: const Text('Set up sharing')),
             ],
@@ -334,7 +335,7 @@ class _SharingPageState extends State<SharingPage> {
               label: 'This device',
               rows: [
                 SettingsRow(
-                  icon: Icons.smartphone,
+                  icon: s.onServer ? Icons.dns : Icons.smartphone,
                   title: s.name,
                   status: [
                     online ? Part(relay != null ? 'Online' : 'Local network only', relay != null ? Tone.ok : Tone.warn) : const Part('Paused: no network it may use', Tone.warn),
