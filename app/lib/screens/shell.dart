@@ -840,6 +840,7 @@ class _ShellState extends State<Shell> {
         },
         distance: widget.nav.fmt.distance,
         open: (n, e) => openNotebookEntry(context, nb, n, e),
+        savedByName: true,
       ),
     ],
   ]);

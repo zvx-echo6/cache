@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsZimIconNative, CsDocumentNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
+class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsLayersJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsZimIconNative, CsDocumentNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -381,6 +381,21 @@ class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative
     final f = _liveFetchStart;
     if (f == null) return -1;
     return using((a) => f(_p(handle), requestJson.toNativeUtf8(allocator: a)).address);
+  }
+
+  late final Pointer<Void> Function(Pointer<Void>)? _layersRefreshStart = () {
+    try {
+      return _lib.lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>('cs_layers_refresh_start');
+    } on ArgumentError {
+      return null;
+    }
+  }();
+
+  @override
+  int layersRefreshStart(int handle) {
+    final f = _layersRefreshStart;
+    if (f == null) return -1;
+    return f(_p(handle)).address;
   }
 
   @override
