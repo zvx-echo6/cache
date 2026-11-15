@@ -957,9 +957,9 @@ String deleteEverywhereText(ShelfBook b) =>
     "from it. A device set to keep its own copies from this one keeps it. This can't be undone.";
 const String kDeletedEverywhere = 'Deleted. Your other devices remove it when they next connect.';
 // WORDING QUESTION: a book of a library the person did not make (a downloaded or shared one) cannot be deleted from here.
-const String kNotYoursToDelete = "This book came with a library you didn't make, so it can't be deleted here.";
+const String kNotYoursToDelete = "This book isn't in a library you made, so you can't delete it here.";
 // WORDING QUESTION: the delete failed (a file could not be removed).
-const String kDeleteFailed = "The book couldn't be deleted. Try again.";
+const String kDeleteFailed = "Couldn't delete the book. Try again.";
 
 /// Delete book (owner decisions, 2026-11-14): "Delete from all your devices", one red button, with the book's title, its size and
 /// "can't be undone". It is permanent in 1.1 (Recently deleted is 1.2). "Remove from this device" is shown only where this device

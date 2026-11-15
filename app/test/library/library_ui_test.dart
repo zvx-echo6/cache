@@ -457,7 +457,7 @@ void main() {
       final files = FakeBookFiles(remove: false)..notYours.add('aid');
       await openBook(tester, files);
       await tapKey(tester, 'book-delete');
-      expect(find.text("This book came with a library you didn't make, so it can't be deleted here."), findsOneWidget);
+      expect(find.text("This book isn't in a library you made, so you can't delete it here."), findsOneWidget);
       expect(find.byKey(const ValueKey('delete-all-button')), findsNothing, reason: 'no greyed button for an action they cannot take');
       expect(find.textContaining("This can't be undone."), findsNothing, reason: 'no explanation of it either');
     });
@@ -468,7 +468,7 @@ void main() {
       await tapKey(tester, 'book-delete');
       await tapKey(tester, 'delete-all-button');
       expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
-      expect(find.text("The book couldn't be deleted. Try again."), findsOneWidget);
+      expect(find.text("Couldn't delete the book. Try again."), findsOneWidget);
       await tapKey(tester, 'delete-all-button');
       expect(files.deleted, ['aid']);
     });
