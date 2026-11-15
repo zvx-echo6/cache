@@ -648,6 +648,33 @@ pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
     inner: Arc<Inner>,
     router: Option<Router>,
+    /// Held while this engine lives: the folder is not opened a second time in this process.
+    _folder: FolderGuard,
+}
+
+/// The folders engines of this process run on. A second `open` on one of them (the app's own engine is running and a background
+/// round opens another on the same folder, in the same process) answers at once with an error instead of waiting on the first
+/// one's store, which a background round did without ever coming back (found on a Pixel).
+static OPEN_FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+struct FolderGuard(PathBuf);
+
+impl FolderGuard {
+    fn take(dir: &Path) -> Result<FolderGuard> {
+        let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let mut open = OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner());
+        if open.contains(&key) {
+            bail!("another engine of this app already runs on this folder");
+        }
+        open.push(key.clone());
+        Ok(FolderGuard(key))
+    }
+}
+
+impl Drop for FolderGuard {
+    fn drop(&mut self) {
+        OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner()).retain(|p| p != &self.0);
+    }
 }
 
 /// The code a device shows for linking: its address, a one-time token, and its name.
@@ -2354,6 +2381,14 @@ impl SyncEngine {
     pub fn open(cfg: Config) -> Result<SyncEngine> {
         let steps = OpenSteps(Instant::now());
         steps.step("started");
+        std::fs::create_dir_all(&cfg.dir)?;
+        let folder = match FolderGuard::take(&cfg.dir) {
+            Ok(g) => g,
+            Err(e) => {
+                steps.step("folder already open in this process");
+                return Err(e);
+            }
+        };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
         let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
             Ok(v) => v,
@@ -2412,7 +2447,7 @@ impl SyncEngine {
             });
         }
         steps.step("done");
-        Ok(SyncEngine { rt, inner, router: Some(router) })
+        Ok(SyncEngine { rt, inner, router: Some(router), _folder: folder })
     }
 
     async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {

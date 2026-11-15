@@ -8,7 +8,7 @@ import '../platform/battery.dart';
 import '../search/index_throttle.dart' show kHeatPause;
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
-import '../sharing/sharing_state.dart' show SyncCoreLike, SyncOpener, openSyncCore;
+import '../sharing/sharing_state.dart' show SyncCoreLike, SyncOpener, drainSyncLogToLog, openSyncCore;
 import '../platform.dart' as plat;
 import '../weather/background.dart' show backgroundReady, runBackgroundUpdate;
 import 'background_lock.dart';
@@ -31,6 +31,10 @@ const Duration kSyncBudgetRefresh = Duration(seconds: 20);
 
 /// The engine stops itself this long after the budget, in case the system stopped the run before it could close the engine.
 const Duration kSyncEngineGrace = Duration(seconds: 90);
+
+/// How long opening the engine may take before the round gives up on it (it opens in well under a second; an open that waits on
+/// something, such as another engine's store, never came back on a Pixel, so the round's own time limit never began).
+const Duration kSyncOpenLimit = Duration(seconds: 60);
 
 String syncBackgroundDir(String support) => '$support${Platform.pathSeparator}background';
 
@@ -253,6 +257,8 @@ Future<bool> _mobileDataAllowed() async {
 Future<String> syncBackgroundJob({
   required String support,
   Duration budget = kSyncBudgetAndroid,
+  Duration openLimit = kSyncOpenLimit,
+  void Function()? drainLog,
   BackgroundLock? lock,
   SyncOpener opener = openSyncCore,
   BatteryReader battery = readBattery,
@@ -294,16 +300,29 @@ Future<String> syncBackgroundJob({
   if (!l.hold(kSyncWork, bump: false)) return l.appOpen ? 'skipped: Cache is open' : "skipped: the app's own sync or another run holds it";
   final refresh = Timer.periodic(BackgroundLock.refreshEvery, (_) => l.refresh(kSyncWork));
   SyncCoreLike? core;
+  // The engine's own lines about its start are taken every second, while it opens and while it runs, so a start that hangs leaves
+  // its last step in the log (the engine never calls into Dart; the lines are asked for).
+  final drain = drainLog ?? drainSyncLogToLog;
+  final drainTimer = Timer.periodic(const Duration(seconds: 1), (_) => drain());
   try {
     logInfo('Background sync: a round starts (${budget.inSeconds} s at most)');
     try {
-      core = await opener({
+      final opening = opener({
         ...config!,
         'dir': '$support${Platform.pathSeparator}sync',
         // one automatic round (the engine's first); the engine stops itself shortly after the budget if this run is cut off
         'interval_secs': 3600,
         'lifetime_secs': (budget + kSyncEngineGrace).inSeconds,
       });
+      try {
+        core = await opening.timeout(openLimit);
+      } on TimeoutException {
+        // The open is left to finish (it cannot be called back); an engine it opens late is closed at once.
+        unawaited(opening.then((c) => c.close(), onError: (Object _) {}));
+        drain();
+        logInfo('Background sync: the engine did not open within ${openLimit.inSeconds} s; the round is given up');
+        return 'skipped: the engine did not open in time';
+      }
       await core.call('set_policy', {'network': true});
     } catch (e) {
       // most likely another engine holds the folder: nothing was started, and the next run tries again
@@ -323,6 +342,8 @@ Future<String> syncBackgroundJob({
     logInfo('Background sync: ${r.words}');
     return r.words;
   } finally {
+    drainTimer.cancel();
+    drain();
     refresh.cancel();
     try {
       await core?.close().timeout(const Duration(seconds: 10));
