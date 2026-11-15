@@ -217,6 +217,15 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+            // A request this activity was (re)created with while Dart already runs (the shared engine: Dart took at its own start,
+            // not now): pushed as well. Dart not listening yet answers notImplemented and the request stays for its take.
+            pendingOpen?.let { open ->
+                it.invokeMethod("open", open, object : MethodChannel.Result {
+                    override fun success(result: Any?) { if (pendingOpen === open) pendingOpen = null }
+                    override fun error(code: String, message: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
+            }
         }
         systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
             it.setMethodCallHandler { call, result ->

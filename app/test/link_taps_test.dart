@@ -652,6 +652,22 @@ void main() {
       inbox.offer({'what': 'weather'});
       expect(inbox.pending, isFalse);
     });
+
+    test('a geo: link that started the app is taken at start with its search', () async {
+      const channel = MethodChannel('co.cache/open/test-geo');
+      Object? pending = {'what': 'maps', 'query': 'coffee', 'lat': null, 'lon': null};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method != 'take') return null;
+        final p = pending;
+        pending = null;
+        return p;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+      final inbox = OpenMapsInbox(channel: channel);
+      await inbox.start();
+      expect(inbox.take(), isTrue);
+      expect(inbox.takeGeo()?.query, 'coffee');
+    });
   });
 
   batch2();

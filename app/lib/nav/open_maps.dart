@@ -35,7 +35,8 @@ class OpenMapsInbox extends ChangeNotifier {
       return null;
     });
     try {
-      offer(await _channel.invokeMethod<String>('take'));
+      // `maps`, or a map for a geo: link (not a String then).
+      offer(await _channel.invokeMethod<Object?>('take'));
     } on MissingPluginException {
       // No native side here.
     } on PlatformException {
