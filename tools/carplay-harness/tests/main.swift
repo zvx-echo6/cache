@@ -829,12 +829,12 @@ link.dartForTests = { method, arguments, done in
   answerAsked = (arguments as? [String: Any] ?? [:]).merging(["method": method]) { a, _ in a }
   done("You'll arrive at 3:40 PM, 12 miles to go.")
 }
-check(waitFor({ CarVoice.tripWords("arrival_ios", link: link, wait: 2, done: { r in $0(r ?? "") }) }) == "You'll arrive at 3:40 PM, 12 miles to go.", "arrival: Dart's words as they are")
+check(waitFor({ finish in CarVoice.tripWords("arrival_ios", link: link, wait: 2, done: { r in finish(r ?? "") }) }) == "You'll arrive at 3:40 PM, 12 miles to go.", "arrival: Dart's words as they are")
 check(answerAsked["method"] as? String == "answer" && answerAsked["say"] as? Bool == false, "arrival: asked as `answer`, say false")
 link.dartForTests = { _, _, done in done("No route is running.") }
-check(waitFor({ CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in $0(r ?? "") }) }) == "No route is running.", "next turn, no route: the no-route words")
+check(waitFor({ finish in CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in finish(r ?? "") }) }) == "No route is running.", "next turn, no route: the no-route words")
 link.dartForTests = { _, _, done in done(nil) }
-check(waitFor({ CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in $0(r ?? "<none>") }) }) == "<none>", "next turn: no words from Dart is none")
+check(waitFor({ finish in CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in finish(r ?? "<none>") }) }) == "<none>", "next turn: no words from Dart is none")
 // Dart not up: each request gives up after its wait.
 link.dartForTests = nil
 check(waitFor({ CarVoice.endRoute(link: link, wait: 0.6, done: $0) }) == .noAnswer, "Dart never said hello: end route has no answer")
