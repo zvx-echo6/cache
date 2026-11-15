@@ -39,9 +39,15 @@ void main() {
     return (r, a);
   }
 
-  Future<void> open(WidgetTester tester, DownloadedArea a) async {
+  Future<void> open(WidgetTester tester, DownloadedArea a, {bool settle = true}) async {
     await tester.tap(find.byKey(ValueKey('area-${a.id}')));
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      // A download left running (autoFinish off) keeps the engine ticking: bounded pumps, not settle.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
   }
 
   testWidgets('the Settings > Maps row of a downloaded area opens its page', (tester) async {
@@ -70,7 +76,7 @@ void main() {
     expect(find.descendant(of: part, matching: find.textContaining(formatDate(DateTime(2026, 6, 3, 10)))), findsOneWidget);
     // What it holds, read from the layers drawn from its tiles: the hillshade card, and no directions, places or off-road (an area
     // holds one layer's tiles; those come with a region).
-    expect(find.text('Map layers in this area'), findsOneWidget);
+    expect(find.text('Map layers in this area'.toUpperCase()), findsOneWidget);
     expect(find.byKey(const ValueKey('area-layer-hillshade')), findsOneWidget);
     expect(find.text('Directions'), findsNothing);
     expect(find.text('Places'), findsNothing);
@@ -161,7 +167,7 @@ void main() {
       ..error = 'connection lost'
       ..doneTiles = 1
       ..bytes = 1000;
-    await open(tester, a);
+    await open(tester, a, settle: false);
     final part = find.byKey(const ValueKey('part-map'));
     final status = tester.widget<DlStatus>(find.descendant(of: part, matching: find.byType(DlStatus)));
     expect(status.state.phase, DlPhase.failed);
