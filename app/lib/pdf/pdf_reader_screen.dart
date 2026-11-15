@@ -658,22 +658,16 @@ class PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Future<void> _askToOpen(Uri url) async {
-    // Offline: no question first, only "You're offline" with Copy link (web links only).
-    if (isWebLink(url) && await isOffline()) {
-      if (mounted) await openWebLink(context, url.toString());
+    // A web link opens at once (the browser online; offline "You're offline" with Copy link): no question.
+    if (isWebLink(url)) {
+      await openWebLink(context, url.toString());
       return;
     }
-    if (!mounted) return;
     final ok = await askToOpenPdfLink(context);
     if (ok == true) {
-      if (!mounted) return;
-      if (isWebLink(url)) {
-        await openWebLink(context, url.toString());
-      } else {
-        try {
-          await openInSystemBrowser(url.toString());
-        } catch (_) {}
-      }
+      try {
+        await openInSystemBrowser(url.toString());
+      } catch (_) {}
     }
   }
 

@@ -40,10 +40,11 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('online: the link opens in the browser, nothing is said', (tester) async {
+  testWidgets('online: the link opens in the browser at once, with no question and nothing said', (tester) async {
     await tapLink(tester);
     expect(opened, ['https://example.org/a?b=1']);
     expect(find.text("You're offline"), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing, reason: 'no "Open this link in your browser?" question');
   });
 
   testWidgets('on mobile data it opens too', (tester) async {
