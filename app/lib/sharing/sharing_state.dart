@@ -13,7 +13,6 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
-import 'share_rules.dart' show kBesideShares;
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -193,10 +192,6 @@ class SharingState extends ChangeNotifier {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
-        // "Don't replace my copies from this device": newer versions of things the person made arrive beside theirs; the
-        // folders kept with every link whatever is ticked (the search indexes, the settings and Bookshelves logs) are never touched.
-        'beside': kBesideShares,
-        'not_copies': [for (final a in always) a.id, for (final l in linkShares) l.id],
       };
       _lastConfig = config;
       _core = await _opener(config);
@@ -512,6 +507,15 @@ class SharingState extends ChangeNotifier {
     return !(_off[k.id]?.contains(it.key) ?? false);
   }
 
+  /// Whether the library folder [folder] (an own library such as My books) is synced with another device: its item in the Library
+  /// kind is shared (the kind's switch is on and the item is not switched off) and at least one device is linked. Sync is fully
+  /// shared both ways, so every linked device takes it.
+  bool libraryTakenByAnotherDevice(String folder) {
+    final k = kinds.where((k) => k.id == 'library').firstOrNull;
+    if (k == null || !itemOn(k, ShareItem(share: 'libraries', path: folder, name: folder))) return false;
+    return peers.isNotEmpty;
+  }
+
   /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     if (on && !kindOn(k)) {
@@ -632,12 +636,6 @@ class SharingState extends ChangeNotifier {
 
   /// What this device calls the linked device [peer].
   Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
-
-  /// "Don't replace my copies from this device" is on for [peer]: what this device takes from it never replaces or removes a
-  /// file here (its new files still come). This device's own choice, kept by the sync engine and never sent.
-  bool keepsCopies(String peer) => peerOf(peer)?['keep_copies'] == true;
-
-  Future<void> setKeepCopies(String peer, bool on) => _call('set_keep_copies', {'peer': peer, 'on': on});
 
   /// Sync now: everything ("Sync all now").
   Future<void> syncNow() => _call('sync_now');
