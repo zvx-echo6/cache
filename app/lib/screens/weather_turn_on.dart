@@ -25,9 +25,7 @@ class WeatherTurnOn {
   final Future<void> Function(MapPlace place)? savePlace;
 
   /// The switches it turns on: Weather forecast, Weather alerts and Wildfires.
-  static List<CuratedRow> get rows => [
-    for (final title in const ['Weather forecast', 'Weather alerts', 'Wildfires']) kCurated.firstWhere((r) => r.title == title),
-  ];
+  static List<CuratedRow> get rows => WeatherState.defaultRows;
 
   Future<void> switchOn() async {
     for (final r in rows) {

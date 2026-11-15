@@ -701,7 +701,13 @@ class _WeatherCardState extends State<_WeatherCard> {
               ? (w.homeCardNow() ?? const HomeWeather(message: '…'))
               : (snap.connectionState == ConnectionState.done ? earlier : w.homeCardAsOfNow(earlier));
           final Widget? action;
-          if (h.off && onOpenSettings != null) {
+          if (h.hereOff) {
+            // The one state where weather does not work: one tap watches the location again, right here.
+            action = Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton(key: const ValueKey('weather-watch-here'), onPressed: () => unawaited(w.watchHereAgain()), child: const Text('Watch my location')),
+            );
+          } else if (h.off && onOpenSettings != null) {
             action = Align(
               alignment: Alignment.centerLeft,
               child: FilledButton(key: const ValueKey('weather-off-turn-on'), onPressed: onOpenSettings, child: const Text('Turn on')),
