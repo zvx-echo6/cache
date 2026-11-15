@@ -678,7 +678,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } catch (e) {
       error = _words(e);
     } finally {
-      notifyListeners();
+      // a refresh that was under way when the state was disposed ends quietly
+      if (!_closed) notifyListeners();
     }
   }
 
