@@ -119,8 +119,8 @@ class MapCovers {
 /// - the column: between the chip's right edge and the buttons' left edge, from the header's lower edge down to what is at the
 ///   foot there: the credits, or the panel when the credits do not reach that far across (the scale is beside the column).
 /// A piece that is not shown takes no room, so its rectangle grows. A rectangle with no room comes out with no width or height
-/// (or less): see [routeFitRect].
-(Rect strip, Rect column) freeMapRects(Size map, MapCovers covers) {
+/// (or less): see [routeFitRect]. Both rectangles start at least [safeTop] (the screen's status bar) plus [kRouteFitBareEdge] down.
+(Rect strip, Rect column) freeMapRects(Size map, MapCovers covers, {double safeTop = 0}) {
   final headerFoot = covers.header?.bottom ?? 0.0;
   double? lowest(List<Rect?> boxes) {
     double? y;
@@ -142,7 +142,7 @@ class MapCovers {
   // A rectangle less the room kept on each side: the gap beside a cover, more at the map's own edge.
   Rect within(Rect r) => Rect.fromLTRB(
         r.left + (r.left > 0 ? kRouteFitGap : kRouteFitBareEdge),
-        r.top + (r.top > 0 ? kRouteFitGap : kRouteFitBareEdge),
+        math.max(r.top + (r.top > 0 ? kRouteFitGap : kRouteFitBareEdge), safeTop + kRouteFitBareEdge),
         r.right - (r.right < map.width ? kRouteFitGap : kRouteFitBareEdge),
         r.bottom - (r.bottom < map.height ? kRouteFitGap : kRouteFitBareEdge),
       );
@@ -161,8 +161,8 @@ class MapCovers {
 /// With no room in either (a panel that leaves the map next to nothing), the better one is grown to [kRouteFitLeast] each
 /// way, down and to the right: the map must have some room to fit a route into or it does not move at all, so the route's end
 /// goes under what is there.
-Rect routeFitRect({required Size map, required MapCovers covers, required double spanX, required double spanY}) {
-  final (strip, column) = freeMapRects(map, covers);
+Rect routeFitRect({required Size map, required MapCovers covers, required double spanX, required double spanY, double safeTop = 0}) {
+  final (strip, column) = freeMapRects(map, covers, safeTop: safeTop);
   // How large a rectangle shows the route: points for each unit of its bounding box (none, with no room).
   double shown(Rect r) => r.width <= 0 || r.height <= 0 ? 0 : math.min(r.width / math.max(spanX, 1e-12), r.height / math.max(spanY, 1e-12));
   final best = shown(column) > shown(strip) ? column : strip;
@@ -173,9 +173,9 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
 
 /// Where on a [map] with [covers] over it a spot brought into view goes: the middle of the larger free rectangle ([routeFitRect] with
 /// no span to fit), so the header, the buttons and the panel are never over it. The map's middle with nothing over the map.
-Offset spotAnchor(Size map, MapCovers? covers) {
+Offset spotAnchor(Size map, MapCovers? covers, {double safeTop = 0}) {
   if (covers == null || covers.isEmpty) return map.center(Offset.zero);
-  return routeFitRect(map: map, covers: covers, spanX: 1, spanY: 1).center;
+  return routeFitRect(map: map, covers: covers, spanX: 1, spanY: 1, safeTop: safeTop).center;
 }
 
 /// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
@@ -1213,7 +1213,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: _coveredLeft(), coveredRight: _coveredRight());
     }
     final b = r.bounds;
-    final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]));
+    final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]), safeTop: MediaQuery.paddingOf(context).top);
     return EdgeInsets.fromLTRB(rect.left, rect.top, map.width - rect.right, map.height - rect.bottom);
   }
 
@@ -1369,7 +1369,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     maps.setFollow(FollowMode.free);
     final map = _fitMapSize();
     final zoom = math.max(_zoom, 14.0);
-    final (clat, clon) = cameraCentreFor(lat, lon, bearing: 0, zoom: zoom, map: map, anchor: spotAnchor(map, _phoneCovers()));
+    final (clat, clon) = cameraCentreFor(lat, lon, bearing: 0, zoom: zoom, map: map, anchor: spotAnchor(map, _phoneCovers(), safeTop: MediaQuery.paddingOf(context).top));
     try {
       await _padTo(c, EdgeInsets.zero);
       await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(clat, clon), zoom: zoom, bearing: 0)), duration: const Duration(milliseconds: 500));
