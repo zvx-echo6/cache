@@ -7,6 +7,7 @@
 
 import 'dart:io';
 
+import 'package:cache/browse/zim_download.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
@@ -23,6 +24,24 @@ import 'shot_kit.dart';
 const _out = 'area_region';
 const GeoBounds _box = GeoBounds(south: 0.10, west: -0.30, north: 0.20, east: -0.15);
 const String _name = 'Example Ridge';
+
+/// A pack download that finishes at once, so the off-road part is on the phone and ready.
+class _DonePacks extends ZimDownloader {
+  @override
+  Future<DownloadResult> download({
+    required Uri url,
+    required File part,
+    Uri? sha256Url,
+    Uri? md5Url,
+    String? expectedSha256,
+    void Function(int done, int total)? onProgress,
+    void Function()? onVerifying,
+    CancelToken? cancel,
+  }) async {
+    await part.writeAsBytes(const [0]);
+    return DownloadResult(file: part, bytes: 1, verified: true, checksumKind: 'sha256');
+  }
+}
 
 class _StandIn extends CustomPainter {
   _StandIn(this.p);
@@ -88,7 +107,7 @@ void main() {
   });
 
   testWidgets('region page, all parts ready, pushed over a parent', (tester) async {
-    final o = await OwnerState.boot(tester);
+    final o = await OwnerState.boot(tester, packs: _DonePacks());
     phone(tester, size: const Size(390, 844));
     // Every part ready: the core's directions and places, the Forest Service map layer, and the off-road pack on the phone.
     o.core.finish('us-id');
@@ -98,12 +117,12 @@ void main() {
       ..interrupted = false
       ..error = null
       ..doneTiles = usfs.totalTiles;
-    await tester.runAsync(() async {
-      final pack = File('${(await o.regions.offroadDir()).path}/offroad-2026-10/idaho/offroad.sqlite');
-      pack.parent.createSync(recursive: true);
-      pack.writeAsBytesSync(const [0]);
-      await o.regions.refresh();
-    });
+    // The pack download (started when the rig opened) finishes and renames the file into place.
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+    }
+    await tester.runAsync(o.regions.refresh);
+    expect(o.regions.regionOf('us-id')!.offroad.every((p) => p.done), isTrue);
     await tester.pumpWidget(shotApp(_parent(() => RegionPage(regions: o.regions, id: 'us-id'))));
     await _push(tester);
     await snap(tester, _out, '02-region-page-complete');

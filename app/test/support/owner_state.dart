@@ -66,7 +66,7 @@ class OwnerState {
   /// The 1.0.0 per-layer downloads, by name.
   final Map<String, DownloadedArea> legacy = {};
 
-  static Future<OwnerState> boot(WidgetTester tester, {bool legacyOutside = false, bool legacyFiles = true, bool idaho = true, bool offroad = true}) async {
+  static Future<OwnerState> boot(WidgetTester tester, {bool legacyOutside = false, bool legacyFiles = true, bool idaho = true, bool offroad = true, ZimDownloader? packs}) async {
     final o = OwnerState();
     o.s = await SettingsRig.create(tester);
     o.core = FakeRegions(tileDir: '${o.s.dir.path}/regions/tiles/2026-10')..placesEnabled = true;
@@ -155,7 +155,7 @@ class OwnerState {
         maps: o.s.maps,
         opener: (_) async => o.core,
         offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${o.s.dir.path}/region-catalogue'), fetch: o.offroadWeb.fetch),
-        packDownloader: WaitingPacks(),
+        packDownloader: packs ?? WaitingPacks(),
         // A fixed storage for the region's space check (the picture tests have no test configuration that sets one).
         spaceOf: (_) => const Space(free: 200 << 30, reserve: 20 << 30),
       );
