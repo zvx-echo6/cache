@@ -14,6 +14,7 @@ import 'key_sheet.dart';
 import 'source_page.dart';
 import '../../sharing/settings_sync.dart' show kWatchPlacesKey;
 import 'widgets.dart';
+import '../../platform/app_log.dart';
 
 /// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
 Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool replace = false, String? title}) async {
@@ -69,6 +70,7 @@ class _WeatherPageState extends State<WeatherPage> {
   /// The refresh button: the source list first (the connector catalogues, as "Check for updates" does, so a newly published
   /// source shows here), then the data.
   Future<void> _refresh() async {
+    logInfo('Weather: Update now tapped');
     await w.refreshCatalogues();
     final r = await w.updateNow(force: true);
     if (mounted) say(context, r.words);

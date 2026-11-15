@@ -130,18 +130,23 @@ class AppActions {
 
   List<String>? _watchNames;
 
+  /// How the assistant's watch actions name a place. The screens now name "Where I am" after its town (or "Current location"), but
+  /// this list is model input: it keeps the label it always had until the model side is decided, so this change gives the model nothing new.
+  static String _modelName(WatchPlace c) => c.kind == PlaceKind.here ? 'Where I am' : c.name;
+
   /// The watch actions name the places of the Places list. Republished only when the names change.
   Future<void> publishWatch() async {
     final choices = await watch.choices();
     final names = <String>[];
     for (final c in choices) {
-      if (c.name.isNotEmpty && !names.contains(c.name)) names.add(c.name);
+      final n = _modelName(c);
+      if (n.isNotEmpty && !names.contains(n)) names.add(n);
     }
     if (_watchNames != null && _watchNames!.join('\n') == names.join('\n')) return;
     _watchNames = names;
     Future<String> id(String name) async {
       for (final c in await watch.choices()) {
-        if (c.name == name) return c.id;
+        if (_modelName(c) == name) return c.id;
       }
       throw const ActionFailure('not_found', 'That place is no longer saved or downloaded.');
     }

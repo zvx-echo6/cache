@@ -42,7 +42,7 @@ void main() {
     await _open(tester, r);
 
     // the top card: the place, the reading at size, four facts of now and today, and how fresh it is
-    expect(find.text('Where I am'), findsOneWidget);
+    expect(find.text('Current location'), findsOneWidget);
     expect(_textAt(tester, 'weather-temperature'), '45 °F');
     expect(find.text('Feels like 41 °F'), findsOneWidget);
     for (final name in ['Daytime high', 'Low (early morning)', 'Wind', 'Chance of rain']) {
@@ -60,7 +60,7 @@ void main() {
     expect(find.text('Checked 12 min ago'), findsOneWidget);
 
     // the order of the page: the weather, what is happening, the forecast
-    expect(_top(tester, 'Where I am'), lessThan(_top(tester, 'Happening nearby')));
+    expect(_top(tester, 'Current location'), lessThan(_top(tester, 'Happening nearby')));
     expect(_top(tester, 'Happening nearby'), lessThan(_top(tester, 'Forecast')));
 
     // the forecast: one line per day, today first, seven shown
@@ -94,7 +94,7 @@ void main() {
     await _open(tester, r);
     await tester.tap(find.text('Thu Nov 12'));
     await tester.pumpAndSettle();
-    expect(find.text('Weather forecast (Open-Meteo) · Where I am · 12 minutes old'), findsOneWidget, reason: 'the source and the age live in the detail');
+    expect(find.text('Weather forecast (Open-Meteo) · Current location · 12 minutes old'), findsOneWidget, reason: 'the source and the age live in the detail');
     for (final name in ['Daytime high', 'Low (early morning)', 'Chance of rain', 'Precipitation', 'Snow', 'Wind max', 'Conditions']) {
       expect(find.text(name), findsWidgets);
     }
@@ -150,13 +150,13 @@ void main() {
     // tapping an event opens the detail sheet, with the source, the place and the age, and "Ask about this"
     await tester.tap(find.text('Red Flag Warning'));
     await tester.pumpAndSettle();
-    expect(find.text('Weather alerts (NWS, by point) · Where I am · 12 minutes old'), findsOneWidget);
+    expect(find.text('Weather alerts (NWS, by point) · Current location · 12 minutes old'), findsOneWidget);
     expect(find.text('Expires'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('ask-about-this')));
     await tester.pumpAndSettle();
     expect(asked.single.label, 'Red Flag Warning');
     expect(asked.single.sourceId, 'nws-alerts-point');
-    expect(asked.single.place, 'Where I am');
+    expect(asked.single.place, 'Current location');
 
     // the row of a source opens its items
     await tester.tap(find.text('Earthquakes near the place (USGS)'));
@@ -236,7 +236,7 @@ void main() {
     final r = await _rig(tester);
     await useScreenSources(tester, r, kUsualSources);
     await _open(tester, r);
-    expect(find.text('Where I am'), findsOneWidget);
+    expect(find.text('Current location'), findsOneWidget);
     expect(find.text('No forecast yet'), findsOneWidget);
     // Opening the screen runs the update that is due (never updated: due); the fake core has nothing to give, so what is
     // not known stays unknown.
@@ -373,10 +373,10 @@ void main() {
     expect(_in('weather-place', find.text('Cabin')), findsOneWidget);
     expect(_textAt(tester, 'weather-temperature'), '49 °F');
     expect(find.text('Wind Advisory'), findsOneWidget);
-    expect(_in('weather-serious-elsewhere', find.text('Serious at Where I am: Evacuation order for the Tamber Flat area')), findsOneWidget);
+    expect(_in('weather-serious-elsewhere', find.text('Serious at Current location: Evacuation order for the Tamber Flat area')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('weather-serious-elsewhere')));
     await tester.pumpAndSettle();
-    expect(_in('weather-place', find.text('Where I am')), findsOneWidget);
+    expect(_in('weather-place', find.text('Current location')), findsOneWidget);
     expect(_textAt(tester, 'weather-temperature'), '58 °F');
     await r.dispose(tester);
   });
@@ -439,7 +439,7 @@ void main() {
     await _open(tester, r);
     r.weather.focus.value = const AlertFocus(placeId: 'here', address: 'live:nws-alerts-point/x/urn:oid:2.49.0.1.840.0.wa1.001.1');
     await tester.pumpAndSettle();
-    expect(find.text('Weather alerts (NWS, by point) · Where I am · 12 minutes old'), findsOneWidget);
+    expect(find.text('Weather alerts (NWS, by point) · Current location · 12 minutes old'), findsOneWidget);
     expect(find.text('Wind Advisory'), findsNWidgets(2), reason: 'the row and the sheet');
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
