@@ -1219,6 +1219,48 @@ voice_pictures() {  # voice_pictures <label>: "Navigate to <place> with Cache", 
   to_browsing || VOICE_MISSING="$VOICE_MISSING [the stand-in did not go back to its first trip after the voice steps]"
 }
 
+listen_pictures() {  # listen_pictures <label>: the car's voice search with no microphone (CarListen.swift): the voice control template's states
+  local label="$1" before
+  LISTEN=""
+  LISTEN_MISSING=""
+  to_browsing || { LISTEN_MISSING=" [the stand-in did not go back to its first trip]"; return 0; }
+  # Words heard: Listening, then Searching, then the places found for them.
+  before=$(log_count 'car listen: showing listening')
+  notify listen_text
+  if wait_more 'car listen: showing listening' "$before" 30; then
+    sleep 2
+    shot_ext "$label-listen-listening"
+    before=$(log_count 'car listen: showing searching')
+    if wait_more 'car listen: showing searching' "$before" 15; then
+      sleep 1
+      shot_ext "$label-listen-searching"
+      before=$(log_count 'car listen: heard words searched')
+      if wait_more 'car listen: heard words searched' "$before" 15; then
+        sleep 2
+        shot_ext "$label-listen-found"
+        LISTEN="Listening, Searching and then the places found for the words heard"
+      else
+        LISTEN_MISSING="$LISTEN_MISSING [listen_text: no places shown]"
+      fi
+    else
+      LISTEN_MISSING="$LISTEN_MISSING [listen_text: Searching never showed]"
+    fi
+  else
+    LISTEN_MISSING="$LISTEN_MISSING [listen_text: Listening never showed]"
+  fi
+  # Nothing heard: Listening, then Didn't catch that, then the template goes.
+  before=$(log_count "car listen: showing didn't catch that")
+  notify listen_none
+  if wait_more "car listen: showing didn't catch that" "$before" 30; then
+    sleep 2
+    shot_ext "$label-listen-didnt-catch"
+    LISTEN="$LISTEN; nothing heard showed Didn't catch that"
+  else
+    LISTEN_MISSING="$LISTEN_MISSING [listen_none: Didn't catch that never showed]"
+  fi
+  notify listen_off
+}
+
 bring_up() {  # bring_up <W> <H> <S> <label>: the defaults, a boot, the Simulator app, the CarPlay window, the app installed
   local try lit=""
   CAR_W=$1
@@ -1398,6 +1440,16 @@ for size in $SIZES; do
                   result "FAILED $label voice:$VOICE_MISSING; $VOICE"
                 else
                   result "OK $label voice: the Navigate intent's perform() (CarVoiceIntents.swift), given a place name as Siri hands it over: $VOICE; shots/$label-voice-{list,none,started}.png"
+                  # Voice search on the car: the voice control template's states (no microphone in a simulator).
+                  listen_pictures "$label"
+                  if grep -q 'car scene disconnected' "$STREAM"; then
+                    result "FAILED $label listen: the car scene was disconnected during the voice search steps; $LISTEN"
+                    host_crash=1
+                  elif [ -n "$LISTEN_MISSING" ]; then
+                    result "FAILED $label listen:$LISTEN_MISSING; $LISTEN"
+                  else
+                    result "OK $label listen: $LISTEN; shots/$label-listen-{listening,searching,found,didnt-catch}.png"
+                  fi
                 fi
               fi
             fi
