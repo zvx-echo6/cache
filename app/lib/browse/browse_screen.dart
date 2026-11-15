@@ -147,7 +147,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   BookFiles _ownFiles() {
     final s = _shelves;
-    return s is CdsShelfSource && b.device == null && !plat.isWeb ? OwnBookFiles(s) : BookFilesUnavailable();
+    return s is CdsShelfSource && b.device == null && !plat.isWeb ? OwnBookFiles(s, sharing: widget.sharing) : BookFilesUnavailable();
   }
   late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
 

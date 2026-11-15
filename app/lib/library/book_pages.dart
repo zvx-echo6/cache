@@ -489,7 +489,7 @@ class BookPage extends StatelessWidget {
                 onTap: () => hideBook(context, d, b),
               ),
             ],
-            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );
         final desktop = DesktopMetrics.of(context);
@@ -660,7 +660,7 @@ class BookPage extends StatelessWidget {
                       ),
                       Divider(height: 1, color: line),
                     ],
-                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
                   ],
                 ),
               ),
@@ -961,28 +961,61 @@ const String kNotYoursToDelete = "This book isn't in a library you made, so you 
 // WORDING QUESTION: the delete failed (a file could not be removed).
 const String kDeleteFailed = "Couldn't delete the book. Try again.";
 
-/// Delete book (owner decisions, 2026-11-14): "Delete from all your devices", one red button, with the book's title, its size and
-/// "can't be undone". It is permanent in 1.1 (Recently deleted is 1.2). "Remove from this device" is shown only where this device
-/// can do it (offload: 1.2 on phones).
-Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) {
+// WORDING (for cache-pm): the confirmation, owner's design 2026-11-15: the question, and under it, only when the book is synced
+// with another device, the line.
+const String kDeleteQuestion = 'Delete this book?';
+const String kDeleteSyncedLine = 'Deleting this will delete this from all synced devices.';
+// WORDING (for cache-pm): the snackbar after a delete that was not synced (the synced one is [kDeletedEverywhere]).
+const String kDeleted = 'Deleted.';
+
+/// Delete (owner's design, 2026-11-15): always asks "Delete this book?" with Cancel and Delete; a book synced with another device
+/// ([BookFiles.syncedWithOtherDevice]) also says "Deleting this will delete this from all synced devices.". A book of a library the
+/// person did not make (or where deleting is not available) keeps the sheet that says why. It is permanent in 1.1 (Recently
+/// deleted is 1.2).
+Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
-  return showModalBottomSheet<void>(
+  final nav = LibraryNav.of(context);
+  if (!(d.files.canDeleteEverywhere && d.files.canDeleteBook(b))) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => DeleteBookSheet(files: d.files, book: b),
+    );
+  }
+  final synced = d.files.syncedWithOtherDevice(b);
+  final yes = await showDialog<bool>(
     context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (ctx) => DeleteBookSheet(
-      files: d.files,
-      book: b,
-      onDeleted: (everywhere) {
-        if (everywhere) {
-          messenger
-            ?..hideCurrentSnackBar()
-            ..showSnackBar(const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere)));
-        }
-        LibraryNav.of(context).goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
-      },
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('delete-confirm'),
+      title: const Text(kDeleteQuestion),
+      content: synced ? const Text(kDeleteSyncedLine, key: ValueKey('delete-synced-line')) : null,
+      actions: [
+        TextButton(key: const ValueKey('delete-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('delete-confirm-button'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
     ),
   );
+  if (yes != true) return;
+  try {
+    await d.files.deleteEverywhere(b);
+  } catch (_) {
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(key: ValueKey('delete-failed'), content: Text(kDeleteFailed)));
+    return;
+  }
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(synced
+        ? const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere))
+        : const SnackBar(key: ValueKey('deleted'), content: Text(kDeleted)));
+  nav.goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
 }
 
 class DeleteBookSheet extends StatefulWidget {

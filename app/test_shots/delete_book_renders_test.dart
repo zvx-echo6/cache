@@ -1,70 +1,91 @@
-// The Delete book sheet on a phone (owner decisions, 2026-11-14): one red button, "Delete from all your devices", with the book's
-// title, its size and "can't be undone"; and the sheet for a book of a library the person did not make. 390 and 320 wide, light and
-// dark. The words are drafts (lib/library/book_pages.dart; the two marked WORDING QUESTION). Sample data: a made-up book.
-// flutter test test_shots/delete_book_renders_test.dart --update-goldens  (pictures in test_shots/delete_book/)
-import 'package:cache/library/book_pages.dart';
-import 'package:cache/library/shelf_source.dart';
-import 'package:cache/theme.dart';
+// Delete on a Book page (owner's design, 2026-11-15): one "Delete" button on the book page; it always asks "Delete this book?" with
+// Cancel and Delete, and, when the book is synced with another device, the line "Deleting this will delete this from all synced
+// devices.". 390 wide, light. Sample data: the library tests' own fixtures.
+// flutter test test_shots/delete_book_renders_test.dart --update-goldens  (pictures in test_shots/delete_book_v2/)
+import 'dart:io';
+
+import 'package:cache/browse/browse_state.dart';
+import 'package:cache/layout/adaptive.dart' show PanePrefs;
+import 'package:cache/library/cds_shelf_source.dart';
+import 'package:cache/library/library_pages.dart';
+import 'package:cache/library/library_panes.dart';
+import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../test/browse/fakes.dart';
+import '../test/library/fake_shelves.dart';
+import '../test/library/library_fixtures.dart';
 import 'shot_kit.dart';
-
-class _Files extends ChangeNotifier implements BookFiles {
-  _Files({this.yours = true});
-  final bool yours;
-  @override
-  BookFileState stateOf(ShelfBook book) => BookFileState.unknown;
-  @override
-  Future<void> Function()? download(ShelfBook book) => null;
-  @override
-  bool get canRemove => false;
-  @override
-  Future<(RemoveOutcome, int, int)> removeFromDevice(List<ShelfBook> books) async => (RemoveOutcome.noLinkedDevice, 0, books.length);
-  @override
-  bool get canDeleteEverywhere => true;
-  @override
-  bool canDeleteBook(ShelfBook book) => yours;
-  @override
-  Future<void> deleteEverywhere(ShelfBook book) async {}
-}
-
-const _book = ShelfBook(id: 'water', title: 'The water purification handbook', shelf: '530', callNumber: 'CDS 530-001', bytes: 18 << 20, libraryName: 'My books');
 
 void main() {
   setUpAll(loadShotFonts);
-  for (final (width, height) in [(390.0, 844.0), (320.0, 640.0)]) {
-    for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-      for (final yours in [true, false]) {
-        if (!yours && width != 390) continue;
-        final name = '${yours ? 'delete' : 'not-yours'}-${width.toInt()}-${theme.name}';
-        testWidgets('the Delete book sheet: $name', (tester) async {
-          phone(tester, size: Size(width, height), ratio: 2);
-          await tester.pumpWidget(shotApp(
-            Builder(
-              builder: (context) => Scaffold(
-                appBar: AppBar(title: const Text('Bookshelves')),
-                body: Center(
-                  child: TextButton(
-                    key: const ValueKey('open'),
-                    onPressed: () => showModalBottomSheet<void>(
-                      context: context,
-                      showDragHandle: true,
-                      isScrollControlled: true,
-                      builder: (_) => DeleteBookSheet(files: _Files(yours: yours), book: _book),
-                    ),
-                    child: const Text('Delete book'),
-                  ),
-                ),
-              ),
-            ),
-            theme: theme,
-          ));
-          await tester.tap(find.byKey(const ValueKey('open')));
-          await tester.pumpAndSettle();
-          await snap(tester, 'delete_book', name);
-        });
+  const folder = 'delete_book_v2';
+
+  Future<void> bookPage(WidgetTester tester, {required bool synced, required List<String> pictures, bool tapDelete = true}) async {
+    phone(tester, size: const Size(390, 844), ratio: 2);
+    Directory? tmp;
+    FakeSources? sources;
+    LibrariesState? libs;
+    CdsShelfSource? shelves;
+    BrowseState? browse;
+    addTearDown(() {
+      shelves?.dispose();
+      browse?.dispose();
+      libs?.dispose();
+      sources?.dispose();
+      indexSchedulerShared = null;
+      try {
+        tmp?.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    await tester.runAsync(() async {
+      tmp = Directory.systemTemp.createTempSync('delete-shot');
+      writeBookLibrary(Directory('${tmp!.path}/libraries'), 'my-books', const [
+        ('water', 'The water purification handbook', '530', null),
+        ('aid', 'Wilderness first aid', '210', null),
+      ], pdfs: {'water'}, own: true);
+      sources = FakeSources(Directory('${tmp!.path}/zims')..createSync(recursive: true));
+      libs = await librariesAt(Directory('${tmp!.path}/libraries'), sources!);
+      shelves = CdsShelfSource(libs!, calls: FakeShelvesCalls(), bookshelvesDir: () async => Directory('${tmp!.path}/bookshelves'), deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+      await shelves!.whenRead();
+      browse = BrowseState(sources: sources!, libraries: libs!, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
+    });
+    final files = FakeBookFiles(remove: false)..synced = synced;
+    await tester.pumpWidget(shotApp(LibraryPanes(
+      root: (_) => LibraryRootPage(deps: testDeps(browse: browse!, shelves: shelves!, files: files)),
+      prefs: PanePrefs(dirOverride: tmp!),
+    )));
+    await tester.pumpAndSettle();
+    Future<void> tap(String key) async {
+      final f = find.byKey(ValueKey(key));
+      await tester.ensureVisible(f.first);
+      await tester.tap(f.first);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump(const Duration(milliseconds: 50));
       }
+      await tester.pumpAndSettle();
+    }
+
+    for (final k in ['library-bookshelves', 'shelf-500', 'shelf-530', 'book-water']) {
+      await tap(k);
+    }
+    if (pictures.contains('page')) await snap(tester, folder, '1-book-page');
+    if (pictures.contains('dialog')) {
+      await tap('book-delete');
+      await snap(tester, folder, synced ? '2-confirm-synced' : '3-confirm-not-synced');
     }
   }
+
+  testWidgets('1. the book page, with the Delete button', (tester) async {
+    await bookPage(tester, synced: false, pictures: ['page']);
+  });
+  testWidgets('2. the confirmation, synced', (tester) async {
+    await bookPage(tester, synced: true, pictures: ['dialog']);
+  });
+  testWidgets('3. the confirmation, not synced', (tester) async {
+    await bookPage(tester, synced: false, pictures: ['dialog']);
+  });
 }

@@ -140,6 +140,11 @@ class FakeBookFiles extends ChangeNotifier implements BookFiles {
   @override
   bool canDeleteBook(ShelfBook book) => deleteAll && !notYours.contains(book.id);
 
+  /// Whether the books are synced with another device ([syncedWithOtherDevice]).
+  bool synced = false;
+  @override
+  bool syncedWithOtherDevice(ShelfBook book) => synced;
+
   /// Books of a library the person did not make ([canDeleteBook] false).
   final Set<String> notYours = {};
 

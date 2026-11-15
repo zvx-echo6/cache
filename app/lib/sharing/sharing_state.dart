@@ -512,6 +512,15 @@ class SharingState extends ChangeNotifier {
     return !(_off[k.id]?.contains(it.key) ?? false);
   }
 
+  /// Whether the library folder [folder] (an own library such as My books) is synced with another device: its item in the Library
+  /// kind is shared (the kind's switch is on and the item is not switched off), and at least one linked device takes it, that
+  /// is, its link mode is not `off` (a link with no mode counts as `match`, as the engine reads it).
+  bool libraryTakenByAnotherDevice(String folder) {
+    final k = kinds.where((k) => k.id == 'library').firstOrNull;
+    if (k == null || !itemOn(k, ShareItem(share: 'libraries', path: folder, name: folder))) return false;
+    return peers.any((p) => (p['link'] as Map?)?['mode'] != 'off');
+  }
+
   /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     if (on && !kindOn(k)) {
