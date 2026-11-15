@@ -179,8 +179,6 @@ class UserLayersState extends ChangeNotifier {
 
   bool focusPending = false;
 
-  /// The imported layer or repeater list [id], or null.
-  UserLayer? layerById(String id) => _all.where((l) => l.id == id).firstOrNull;
 
   /// A point of an imported layer ([ord]: the point's number in the layer, as `layer:<layer>/<point>` gives it), with the layer
   /// it is in; null when the layer or the point is not there any more.
