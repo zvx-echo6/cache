@@ -156,7 +156,10 @@ void main() {
       return const Scaffold(body: Text('the Sharing and sync page'));
     };
     openAppPlace = (_) {};
-    addTearDown(() => (appPlaceScreen, openAppPlace) = (beforeScreen, beforeOpen));
+    addTearDown(() {
+      appPlaceScreen = beforeScreen;
+      openAppPlace = beforeOpen;
+    });
     await tester.tap(find.text('Not synced: sharing is off').first);
     await tester.pumpAndSettle();
     expect(asked, [AppPlace.sharing]);
