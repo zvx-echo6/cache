@@ -22,7 +22,7 @@
 use crate::addresses::title_case_capitals;
 use cache_places::schema::tile_id_l1;
 use flate2::read::GzDecoder;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -257,6 +257,9 @@ pub struct OaCfg {
     pub attribution: PathBuf,
     pub dist_m: f64,
     pub bbox: Option<[f64; 4]>,
+    /// Where the OA rows wait by tile while the sources are read (deleted after); None: `<out>.spool`. Memory then holds one
+    /// tile's rows, not the whole run's.
+    pub spool: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -280,9 +283,93 @@ fn sort_tile(rows: &mut [Addr]) {
 
 type Out = csv::Writer<BufWriter<File>>;
 
+/// The OA rows of a run, by level 1 tile, in files while the sources are read (in manifest order, so a tile's rows come back
+/// in the same order). One line per row: source index, id, number, street, postcode, city, state, country, lat, lon.
+struct Spool {
+    dir: PathBuf,
+    /// (the `source` value, the country) of each manifest source.
+    sources: Vec<(String, String)>,
+    tiles: BTreeSet<u32>,
+    open: HashMap<u32, BufWriter<File>>,
+}
+
+fn clean(s: &str) -> String {
+    s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect()
+}
+
+impl Spool {
+    fn new(dir: PathBuf, sources: Vec<(String, String)>) -> Result<Spool, String> {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(Spool { dir, sources, tiles: BTreeSet::new(), open: HashMap::new() })
+    }
+
+    fn put(&mut self, si: usize, a: &Addr) -> Result<(), String> {
+        let tile = tile_id_l1(a.lat, a.lon);
+        if self.open.len() >= 300 {
+            for w in self.open.values_mut() {
+                w.flush().map_err(|e| e.to_string())?;
+            }
+            self.open.clear(); // reopened in append mode
+        }
+        if !self.open.contains_key(&tile) {
+            let f = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join(format!("{tile}.tsv"))).map_err(|e| e.to_string())?;
+            self.open.insert(tile, BufWriter::new(f));
+            self.tiles.insert(tile);
+        }
+        let w = self.open.get_mut(&tile).expect("opened above");
+        writeln!(w, "{si}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", clean(&a.id), clean(&a.number), clean(&a.street), clean(&a.postcode), clean(&a.city), clean(&a.state), clean(&a.country), a.lat, a.lon)
+            .map_err(|e| e.to_string())
+    }
+
+    fn finish_writing(&mut self) -> Result<(), String> {
+        for w in self.open.values_mut() {
+            w.flush().map_err(|e| e.to_string())?;
+        }
+        self.open.clear();
+        Ok(())
+    }
+
+    /// The tile's OA rows (and the file is deleted); empty when it has none.
+    fn take(&mut self, tile: u32) -> Result<Vec<Addr>, String> {
+        if !self.tiles.remove(&tile) {
+            return Ok(Vec::new());
+        }
+        let p = self.dir.join(format!("{tile}.tsv"));
+        let mut out = Vec::new();
+        for line in BufReader::new(File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?).lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() != 10 {
+                return Err(format!("{}: a spool line has {} fields", p.display(), f.len()));
+            }
+            let (si, lat, lon) = (f[0].parse::<usize>().map_err(|e| e.to_string())?, f[8].parse::<f64>().map_err(|e| e.to_string())?, f[9].parse::<f64>().map_err(|e| e.to_string())?);
+            let (source, country) = self.sources.get(si).cloned().ok_or("a spool line names no source")?;
+            out.push(Addr {
+                id: f[1].into(),
+                number: f[2].into(),
+                street: f[3].into(),
+                unit: String::new(),
+                postcode: f[4].into(),
+                city: f[5].into(),
+                state: f[6].into(),
+                country: if f[7].is_empty() { country } else { f[7].into() },
+                lat,
+                lon,
+                lat_s: String::new(),
+                lon_s: String::new(),
+                source,
+            });
+        }
+        std::fs::remove_file(&p).map_err(|e| e.to_string())?;
+        Ok(out)
+    }
+}
+
 /// Merges the OA rows of `tile` into its rows, and writes the tile.
-fn flush_tile(oa: &mut BTreeMap<u32, Vec<Addr>>, max_m: f64, tile: u32, mut rows: Vec<Addr>, rep: &mut OaReport, w: &mut Out, prov: &mut BufWriter<File>) -> Result<(), String> {
-    if let Some(o) = oa.remove(&tile) {
+fn flush_tile(spool: &mut Spool, max_m: f64, tile: u32, mut rows: Vec<Addr>, rep: &mut OaReport, w: &mut Out, prov: &mut BufWriter<File>) -> Result<(), String> {
+    let o = spool.take(tile)?;
+    if !o.is_empty() {
         let added = merge_tile(&mut rows, o, max_m, &mut rep.per_source);
         if !added.is_empty() {
             rep.tiles_with_additions += 1;
@@ -300,10 +387,11 @@ fn flush_tile(oa: &mut BTreeMap<u32, Vec<Addr>>, max_m: f64, tile: u32, mut rows
 
 pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
     let sources = read_manifest(&cfg.sources)?;
-    // Every OA row of the run, by tile, in manifest order.
-    let mut oa: BTreeMap<u32, Vec<Addr>> = BTreeMap::new();
+    // Every OA row of the run, by tile, in manifest order (in files: a continent's rows do not fit in memory).
+    let spool_dir = cfg.spool.clone().unwrap_or_else(|| PathBuf::from(format!("{}.spool", cfg.out.display())));
+    let mut oa = Spool::new(spool_dir.clone(), sources.iter().map(|s| (format!("oa:{}", s.id), s.id.split('/').next().unwrap_or("").to_uppercase())).collect())?;
     let mut rep = OaReport::default();
-    for src in &sources {
+    for (si, src) in sources.iter().enumerate() {
         let st = rep.per_source.entry(format!("oa:{}", src.id)).or_default();
         let country = src.id.split('/').next().unwrap_or("").to_uppercase();
         for line in open_lines(&src.path)?.lines() {
@@ -314,13 +402,14 @@ pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
             match parse_oa_line(&line, &src.id, &country) {
                 Some(a) if cfg.bbox.is_none_or(|b| a.lon >= b[0] && a.lat >= b[1] && a.lon < b[2] && a.lat < b[3]) => {
                     st.read += 1;
-                    oa.entry(tile_id_l1(a.lat, a.lon)).or_default().push(a);
+                    oa.put(si, &a)?;
                 }
                 Some(_) => {}
                 None => st.skipped += 1,
             }
         }
     }
+    oa.finish_writing()?;
     let mut rdr = csv::ReaderBuilder::new().from_path(&cfg.overture_csv).map_err(|e| format!("{}: {e}", cfg.overture_csv.display()))?;
     let head = rdr.headers().map_err(|e| e.to_string())?.clone();
     let col = |n: &str| head.iter().position(|h| h == n);
@@ -345,7 +434,7 @@ pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
                 flush_tile(&mut oa, cfg.dist_m, t, rows, &mut rep, &mut w, &mut prov)?;
             }
             // Tiles that only OA has, below this one.
-            let lower: Vec<u32> = oa.range(..tile).map(|(k, _)| *k).collect();
+            let lower: Vec<u32> = oa.tiles.range(..tile).copied().collect();
             for t in lower {
                 flush_tile(&mut oa, cfg.dist_m, t, Vec::new(), &mut rep, &mut w, &mut prov)?;
             }
@@ -372,12 +461,13 @@ pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
     if let Some((t, rows)) = cur.take() {
         flush_tile(&mut oa, cfg.dist_m, t, rows, &mut rep, &mut w, &mut prov)?;
     }
-    let rest: Vec<u32> = oa.keys().copied().collect();
+    let rest: Vec<u32> = oa.tiles.iter().copied().collect();
     for t in rest {
         flush_tile(&mut oa, cfg.dist_m, t, Vec::new(), &mut rep, &mut w, &mut prov)?;
     }
     w.flush().map_err(|e| e.to_string())?;
     prov.flush().map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&oa.dir);
 
     let attrib: Vec<serde_json::Value> = sources
         .iter()
@@ -521,7 +611,7 @@ mod tests {
         std::fs::write(&g, format!("{}{}", feat("100", 43.58), feat("102", 43.5801))).unwrap();
         let man = dir.join("m.tsv");
         std::fs::write(&man, "source\tpath\tlicense\tlicense_url\tattribution\twebsite\nus/id/canyon\tc.geojson\t\t\t\t\n").unwrap();
-        let cfg = OaCfg { overture_csv: ov, sources: man, out: dir.join("out.csv"), provenance: dir.join("p.tsv"), attribution: dir.join("a.json"), dist_m: 30.0, bbox: None };
+        let cfg = OaCfg { overture_csv: ov, sources: man, out: dir.join("out.csv"), provenance: dir.join("p.tsv"), attribution: dir.join("a.json"), dist_m: 30.0, bbox: None, spool: None };
         let rep = oa_merge(&cfg).unwrap();
         assert_eq!(rep.overture_rows, 1);
         assert_eq!(rep.per_source["oa:us/id/canyon"].added, 1);

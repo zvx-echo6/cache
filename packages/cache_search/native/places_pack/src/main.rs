@@ -13,7 +13,7 @@
 //!   places_pack blocks --harvest harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox W,S,E,N] [--halo 0.25] [--jobs 4]
 //!   places_pack addresses --csv addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite [--bbox W,S,E,N]
 //!   places_pack summarize --blocks work/blocks --out summaries/N.sqlite   (what `common` reads from blocks, kept after the blocks go)
-//!   places_pack oa-merge --overture-csv addresses.csv --sources oa-sources.tsv --out addresses-oa.csv --provenance oa-provenance.tsv --attribution oa-attribution.json [--dist 30] [--bbox W,S,E,N]
+//!   places_pack oa-merge --overture-csv addresses.csv --sources oa-sources.tsv --out addresses-oa.csv --provenance oa-provenance.tsv --attribution oa-attribution.json [--dist 30] [--bbox W,S,E,N] [--spool DIR]
 //!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
 //!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--oa-attribution oa-attribution.json] [--rules categories.json]
@@ -222,6 +222,7 @@ fn run() -> Result<(), String> {
                 attribution: need("attribution")?,
                 dist_m: num(&a, "dist", openaddresses::DEFAULT_DIST_M)?,
                 bbox: a.get("bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+                spool: a.get("spool").map(PathBuf::from),
             };
             let r = openaddresses::oa_merge(&cfg)?;
             println!("{} Overture addresses; {} tiles gained OpenAddresses rows; in {}", r.overture_rows, r.tiles_with_additions, took());
