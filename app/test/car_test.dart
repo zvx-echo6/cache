@@ -1730,7 +1730,7 @@ void main() {
       });
 
       test("Siri's words with no route are the one no-route answer", () async {
-        expect(carAnswer(nav, 'arrival_ios', now: () => now), 'No route is running.');
+        expect(carAnswer(nav, 'arrival_ios'), 'No route is running.');
         expect(carAnswer(nav, 'turn_ios'), 'No route is running.');
       });
 
