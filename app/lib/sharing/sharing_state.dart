@@ -32,6 +32,7 @@ class SharingState extends ChangeNotifier {
     required this.kinds,
     this.always = const [],
     this.linkShares = const [],
+    this.quiet = const [],
     this.deviceName = 'Cache device',
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
@@ -49,6 +50,10 @@ class SharingState extends ChangeNotifier {
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
+
+  /// Shares whose files the Activity does not list one by one (the engine's `quiet`): the notebooks, which the notebook sync tells in
+  /// its own words ("3 entries arrived from your other devices"); a file line would name the person's notebook files.
+  final List<String> quiet;
 
   /// Folders kept only with some linked devices, by how settings go between them (the device's page): never listed under
   /// Sharing and sync, set up once sharing is (see [LinkShare]).
@@ -463,6 +468,7 @@ class _PhoneDriver implements SharingDriver {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
+        'quiet': s.quiet,
       };
       _lastConfig = config;
       _core = await s._opener(config);
