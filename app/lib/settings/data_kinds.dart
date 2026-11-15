@@ -60,7 +60,7 @@ class DataKind {
   final List<ShareItem> Function()? items;
 
   /// How deep an item sits in each shared folder, by share id: 1 (the default) for a file or folder at the top (a ZIM, a
-  /// library), 2 for `store/<layer>.sqlite`, 3 for `downloads/<site>/<video>`. What a linked device holds is listed by it.
+  /// library), 2 for `store-share/<layer>` (the layers shared by the devices), 3 for `downloads/<site>/<video>`. What a linked device holds is listed by it.
   final Map<String, int> itemDepth;
 
   /// The item a path listed by a linked device is ([itemDepth] segments of it), or null when it is not one (a file every item

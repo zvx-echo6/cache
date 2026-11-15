@@ -20,8 +20,8 @@ fn app_patterns() -> Value {
         });
     }
     json!({
-        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT"],
-        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*"],
+        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT", "**/* (conflict, *"],
+        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*", "**/* (conflict, *"],
     })
 }
 

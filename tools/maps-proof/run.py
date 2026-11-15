@@ -183,6 +183,21 @@ def save(ev, stage, d, data):
         json.dump(data, f, indent=1)
 
 
+def snapshots(dump):
+    return [f for f in dump['layers_files'] if f.startswith('store-share/basemap/') and f.split(' ')[0].endswith('.sqlite')]
+
+
+def settle(ds, tiles, want=2, tries=15):
+    """Sync rounds until every device holds the snapshots of every device (a snapshot is written 20 s after a store goes quiet)."""
+    for _ in range(tries):
+        rounds(ds, 1)
+        time.sleep(12)
+        dumps = [d.call('dump', {'tiles': tiles}) for d in ds]
+        if all(len(snapshots(x)) >= want for x in dumps):
+            return
+    say('settle: the snapshots did not all arrive')
+
+
 def regions_of(dump):
     return {r['id']: r for r in dump['regions']}
 
@@ -212,6 +227,8 @@ def collide(scen, builds):
         link(a, b)
         rounds([a, b], 4)
         tiles = [tile_for(IDAHO), tile_for(ANGUILLA)]
+        if builds[0][1] == 'fix':
+            settle([a, b], tiles)
         da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
         save(ev, 'after-sync', a, da)
         save(ev, 'after-sync', b, db)
@@ -266,7 +283,9 @@ def fix_delete():
         tiles = [tile_for(IDAHO), tile_for(ANGUILLA)]
         say('A deletes its region: it is deleted on every linked device that shares Maps')
         a.call('delete_region', {'id': IDAHO['id']})
-        rounds([a, b], 4)
+        rounds([a, b], 2)
+        time.sleep(40)
+        rounds([a, b], 3)
         da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
         save(ev, 'after-delete', a, da)
         save(ev, 'after-delete', b, db)
@@ -278,7 +297,9 @@ def fix_delete():
             check(t.get('from') != 'downloaded', f'{who}: its tile is no longer served from a download: {t}')
         say('A downloads it again: newer than the delete, it comes back on both')
         a.call('add_region', IDAHO)
-        rounds([a, b], 4)
+        rounds([a, b], 2)
+        time.sleep(40)
+        rounds([a, b], 3)
         da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
         save(ev, 'after-redownload', a, da)
         save(ev, 'after-redownload', b, db)
@@ -299,15 +320,16 @@ def fix_recover():
         a.call('sharing_setup')
         b.call('sharing_setup')
         time.sleep(15)
-        rounds([a, b], 4)
         tiles = [tile_for(IDAHO), tile_for(ANGUILLA)]
+        rounds([a, b], 4)
+        settle([a, b], tiles)
         da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
         save(ev, 'after-update', a, da)
         save(ev, 'after-update', b, db)
         for who, d, own in (('A', da, IDAHO), ('B', db, ANGUILLA)):
             check(not d['conflict_files'], f'{who}: the conflict copies are taken back in and deleted: {d["conflict_files"]}')
             ids = regions_of(d)
-            check(own['id'] in ids and ids[own['id']]['phase'] == 'ready', f'{who} still has its own region, ready: {ids.get(own["id"])}')
+            check(own['id'] in ids and ids[own['id']]['phase'] == 'ready' and len(ids[own['id']]['areas']) == 1, f'{who} still has its own region and its map area, ready: {ids.get(own["id"])}')
             t = d['tiles'][tile_for(own)]
             check(t.get('from') == 'downloaded' and (t.get('body') or '').startswith(who), f'{who} draws its own region from its own tiles: {t}')
         own_and_peer_ok(a, da, IDAHO, ANGUILLA, 'A', 'B')

@@ -180,6 +180,8 @@ void main() {
       expect(r.regions.regionOf('us-ut')!.name, 'Utah');
       expect(r.regions.regionOf('us-ut')!.routingState, 'ready');
       expect(r.regions.regionOf('us-ut')!.routingBytes, 1234);
+      expect(r.regions.regionOf('us-ut')!.phase, RegionPhase.ready, reason: 'as the other device says it stands');
+      expect(r.regions.regionOf('us-ut')!.parts.map((p) => p.kind), [RegionPartKind.directions]);
       expect(r.regions.regionOf(_county)!.name, 'Twin Falls County', reason: 'own first');
       // nothing of the other device's was added to this device's own engine
       expect(r.core.regions.keys, [_county]);

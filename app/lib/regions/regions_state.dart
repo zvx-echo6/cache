@@ -1713,8 +1713,11 @@ class RegionsState extends ChangeNotifier {
 
   Future<void> _migrateOldDownloads() async {
     final engine = maps.engine;
-    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain]};
-    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running) a];
+    // a region a linked device shares holds its areas too (they are listed with it, not adopted as regions of this device)
+    await _syncShare();
+    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain], for (final p in _peers) ...[...p.areas, ...p.terrain]};
+    // (an area only a linked device's shared copy holds is that device's, listed with its region; never adopted as this device's own)
+    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running && a.sharedFrom == null) a];
     // Each region's box: kept with it, else around its map areas, else the catalogue's.
     final boxes = <String, List<double>>{};
     for (final k in _kept.values) {

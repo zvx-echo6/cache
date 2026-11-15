@@ -182,6 +182,11 @@ fn deleting_an_area_only_a_peer_holds_works_and_is_shared() {
     assert!(b.delete_areas("basemap", Some("never-existed")).is_err());
 }
 
+/// The areas this device's app lists as its own (regions-app.json, beside the layers folder).
+fn own_areas(sc: &Scratch, ids: &[&str]) {
+    std::fs::write(sc.path("regions-app.json"), json!({"regions": {"r": {"areas": ids}}}).to_string()).unwrap();
+}
+
 fn conflict(i: &Inner, name: &str) -> std::path::PathBuf {
     i.store_path("basemap").parent().unwrap().join(name)
 }
@@ -190,6 +195,7 @@ fn conflict(i: &Inner, name: &str) -> std::path::PathBuf {
 fn conflict_copies_are_taken_into_the_live_store_and_deleted_and_the_peers_live_file_is_dropped() {
     let sc = Scratch::new("share-rescue");
     let p = device(&sc, "p");
+    own_areas(&sc, &["anguilla"]);
     // what the old build left on P: the other device's store as the live file, P's own as a conflict copy
     {
         let theirs = Store::open(&p.store_path("basemap"), true).unwrap();
@@ -282,4 +288,63 @@ fn the_share_name_is_made_once_and_kept_out_of_the_synced_files() {
     assert_eq!(a.share_id(), again.share_id());
     assert!(sc.path("a").join(".share-id").is_file());
     assert!(a.share_id().bytes().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn a_rescued_area_that_lost_tiles_with_the_log_the_sync_replaced_becomes_an_unfinished_download() {
+    let sc = Scratch::new("share-rescue-partial");
+    let p = device(&sc, "p");
+    let copy = conflict(&p, "basemap (conflict, A, 2026-11-15 2040 UTC).sqlite");
+    {
+        let s = Store::open(&copy, true).unwrap();
+        // "whole" has its tile; "lost" says complete but its tile was only in the log of the main file
+        s.put_area("whole", "complete", &meta(1)).unwrap();
+        s.put_batch(Table::Tiles, &[(1, 0, 0, b"t".to_vec())], "v1").unwrap();
+        s.put_area("lost", "complete", &json!({"bbox": [10.0, 10.0, 11.0, 11.0], "minzoom": 1, "maxzoom": 1, "created": 1})).unwrap();
+        s.checkpoint();
+    }
+    assert_eq!(p.rescue_conflicts(), 1);
+    let state = |id: &str| p.areas("basemap").iter().find(|a| a.id == id).unwrap().state.clone();
+    assert_eq!(state("whole"), "complete");
+    assert_eq!(state("lost"), "partial", "carry on fetches what is missing");
+}
+
+#[test]
+fn a_conflict_copy_that_is_another_devices_is_deleted_not_merged_and_the_live_file_that_is_this_devices_stays() {
+    let sc = Scratch::new("share-rescue-theirs");
+    let p = device(&sc, "p");
+    own_areas(&sc, &["mine"]);
+    hold(&p, "mine", 0, 0, 5);
+    // the conflict copy synced here from the other device (conflict copies synced too): it holds none of P's areas
+    let theirs = conflict(&p, "basemap (conflict, B, 2026-11-15 2040 UTC).sqlite");
+    {
+        let s = Store::open(&theirs, true).unwrap();
+        s.put_area("anguilla", "complete", &meta(6)).unwrap();
+        s.put_batch(Table::Tiles, &[(1, 1, 1, b"theirs".to_vec())], "v1").unwrap();
+        s.checkpoint();
+    }
+    assert_eq!(p.rescue_conflicts(), 1);
+    assert!(!theirs.exists());
+    assert_eq!(ids(&p), ["mine"], "the other device's data is not P's own: its snapshot brings it");
+    assert_eq!(tile(&p, 0, 0).unwrap(), b"tile-mine");
+    assert_eq!(tile(&p, 1, 1), None);
+}
+
+#[test]
+fn with_no_list_of_its_own_areas_nothing_is_dropped_and_every_copy_is_merged() {
+    let sc = Scratch::new("share-rescue-nolist");
+    let p = device(&sc, "p");
+    hold(&p, "live", 0, 0, 5);
+    let copy = conflict(&p, "basemap (conflict, B, 2026-11-15 2040 UTC).sqlite");
+    {
+        let s = Store::open(&copy, true).unwrap();
+        s.put_area("copy", "complete", &meta(6)).unwrap();
+        s.put_batch(Table::Tiles, &[(1, 1, 1, b"copy".to_vec())], "v1").unwrap();
+        s.checkpoint();
+    }
+    assert_eq!(p.rescue_conflicts(), 1);
+    assert!(!copy.exists());
+    let mut got = ids(&p);
+    got.sort();
+    assert_eq!(got, ["copy", "live"]);
 }

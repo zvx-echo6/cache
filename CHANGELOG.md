@@ -6,6 +6,10 @@ release notes).
 
 ## Unreleased
 
+- Maps: with Maps synced, a region you download on one device no longer replaces the other device's maps: each device keeps its own map database and shares a copy of it, and each lists and draws its own regions and the other's (a region downloaded on one device shows on the other)
+- Maps: deleting a region asks "Delete this region?" and, when Maps is synced with a linked device, says that it will delete it from all synced devices; the region goes from every linked device that shares Maps (a region downloaded again later stays)
+- Maps: map and places databases that an earlier build's sync left as "(conflict ...)" copies are taken back in: a device keeps the regions it had downloaded
+
 ## 1.1.0 (build 51, test) - 2026-11-12
 
 - If you went from 1.0 to build 49, check Settings > Sharing and sync: it may have switched itself off

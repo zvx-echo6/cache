@@ -640,8 +640,11 @@ pub struct PackSet {
     merged_dir: RwLock<Option<PathBuf>>,
     merged: Mutex<Merged>,
     /// The peers' snapshots of the same build (`places-share/<build>/<device>.sqlite`), read-only (share.rs).
-    peers: Mutex<HashMap<PathBuf, ((u64, u128), Arc<Pack>)>>,
+    peers: Mutex<PeerPacks>,
 }
+
+/// The peers' packs by file, with the (length, modified time) each was opened at.
+type PeerPacks = HashMap<PathBuf, ((u64, u128), Arc<Pack>)>;
 
 struct Legacy {
     paths: Vec<PathBuf>,

@@ -11,8 +11,8 @@ use std::{path::Path, time::Duration};
 fn app_patterns() -> Value {
     json!({
         "libraries": ["*/index", "*/index-snapshots"],
-        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT"],
-        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*"],
+        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT", "**/* (conflict, *"],
+        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*", "**/* (conflict, *"],
     })
 }
 
@@ -79,6 +79,17 @@ fn patterns_match_by_segment() {
     assert!(!excluded(&p, "lib1/cache-library.json"));
     assert!(!excluded(&[], "lib1/index/meta.json"));
     assert!(!excluded(&["".to_string()], "lib1"));
+}
+
+#[test]
+fn sync_conflict_copies_never_travel_beside_the_live_databases() {
+    let p: Vec<String> = ["**/* (conflict, *", "regions.sqlite*"].iter().map(|s| s.to_string()).collect();
+    for yes in ["regions (conflict, A, 2026-11-15 2040 UTC).sqlite", "regions (conflict, A, 2026-11-15 2040 UTC).sqlite-wal", "store/basemap (conflict, A, 2026-11-15 2040 UTC).sqlite", "places/2026-10 (conflict, B, 2026-11-14 1010 UTC).sqlite"] {
+        assert!(excluded(&p, yes), "{yes} stays where it was made");
+    }
+    for no in ["store-share/basemap/abc.sqlite", "tiles/2026-10/1/047/701.gph", "regions-share/abc.json"] {
+        assert!(!excluded(&p, no), "{no} syncs");
+    }
 }
 
 #[test]

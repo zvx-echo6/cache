@@ -601,6 +601,20 @@ impl Inner {
         Ok((present, bytes))
     }
 
+    /// How many of the tiles an area covers (by its stored shape) this store holds, empty ones ("the source has no tile") included, and
+    /// how many it covers: `None` when the area has no shape to count by.
+    pub(crate) fn area_held(&self, store: &Store, meta: &Value) -> Result<Option<(u64, u64)>> {
+        let Some(shape) = Shape::from_meta(meta) else { return Ok(None) };
+        let cover = shape.tiles()?;
+        let mut held = 0u64;
+        each_held(Some(store), Table::Tiles, &cover, "", |_, have| {
+            if have.is_some() {
+                held += 1;
+            }
+        })?;
+        Ok(Some((held, cover.len() as u64)))
+    }
+
     /// Run a download, resume or update to the end (or cancellation). `progress(done, total, detail)` is called after
     /// each batch; `total` counts the tiles that had to be fetched, not the tiles already on the device.
     pub fn run_download(&self, req: &AreaReq, progress: &dyn Fn(u64, u64, Value), cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Done> {

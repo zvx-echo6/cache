@@ -56,6 +56,8 @@ const List<String> kZimNotShared = ['*.illustration.png'];
 /// - `**/*-shm`: SQLite's shared-memory index of a WAL file, which also holds the locks of the connections on this device; SQLite
 ///   rebuilds it from the -wal when it opens the database.
 /// - `**/*-journal`: a rollback journal, this device's alone (a copied one would be played back into another device's database).
+/// - `**/* (conflict, *`: a sync conflict copy, which is this device's own (the copies an older build left are taken back in by the
+///   engines; the older builds also synced them, which handed each device the other's).
 ///
 /// Cache builds before this one still send and expect those files. This one never fetches, sends or deletes them (their conflict
 /// copies are never read as data), so a pair with one old build does not see each other's regions; the union holds between
@@ -69,6 +71,7 @@ const List<String> kRegionsNotShared = [
   'places/*.sqlite*',
   'places/*/common.sqlite*',
   'places/CURRENT',
+  '**/* (conflict, *',
 ];
 
 /// What the layer engine's folder (the `maps` shared folder) holds that each device makes for itself, as sync patterns. The
@@ -81,7 +84,7 @@ const List<String> kRegionsNotShared = [
 /// - `tiles.sqlite*`: the cache of tiles viewed online (size-capped, least recently used first), with its -wal and -shm.
 /// - `tilejson`: TileJSON documents as fetched from each source, kept a day.
 /// - `**/*-shm`, `**/*-journal`: as for [kRegionsNotShared].
-const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*'];
+const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*', '**/* (conflict, *'];
 
 /// The always-on share of the indexes folder.
 const String kIndexesShareId = 'indexes';

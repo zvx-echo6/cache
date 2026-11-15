@@ -3,8 +3,9 @@
 //!
 //! The live databases, `regions.sqlite` and `places/<build>.sqlite` (with their -wal), never sync. This device writes:
 //! - `places-share/<build>/<device>.sqlite`: a snapshot of its merged places database ([`Inner::share_places`]), which every linked
-//!   device searches beside its own, read-only;
-//! and an older build's sync conflicts are taken back in when the engine opens ([`rescue_conflicts`]).
+//!   device searches beside its own, read-only.
+//!
+//! An older build's sync conflicts are taken back in when the engine opens ([`rescue_conflicts`]).
 //!
 //! The regions list itself (`regions-share/<device>.json`, and `regions-share/<device>.deletes.json`) is written and read by the
 //! app, which keeps what each region holds (lib/regions/regions_share.dart).
@@ -58,34 +59,71 @@ fn conflict_copies(dir: &Path, live_name: &str) -> (Vec<PathBuf>, Vec<PathBuf>) 
     (mains, logs)
 }
 
+/// The ids of the regions this device's app lists as its own with a part the core holds (`regions-app.json`, beside the regions folder
+/// and never synced), or `None` when there is no such list (then nothing says which of two files is this device's).
+fn own_region_ids(dir: &Path) -> Option<HashSet<String>> {
+    let text = std::fs::read_to_string(dir.parent()?.join("regions-app.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let out: HashSet<String> =
+        v["regions"].as_object()?.iter().filter(|(_, r)| r["routing"] == true || r["places"] == true).map(|(id, _)| id.clone()).collect();
+    (!out.is_empty()).then_some(out)
+}
+
+fn region_ids(p: &Path) -> HashSet<String> {
+    let Ok(c) = Connection::open(p) else { return HashSet::new() };
+    let Ok(mut q) = c.prepare("SELECT id FROM regions") else { return HashSet::new() };
+    let rows = q.query_map([], |r| r.get::<_, String>(0));
+    let ids = rows.map(|r| r.flatten().collect()).unwrap_or_default();
+    drop(q);
+    ids
+}
+
 /// Takes in what a sync conflict left in the regions folder. Before this version the live databases synced, and a device whose
-/// database was replaced by another device's kept its own as `<name> (conflict, ...).sqlite`: that copy is this device's own data.
-/// - `regions.sqlite`: the live file is the other device's, so it is dropped; the first whole copy becomes the live file and the
-///   others' regions, tile lists and stream records are merged into it (by id; insert or ignore).
-/// - `places/<build>.sqlite`: the live file is dropped and the copy with the most tiles becomes the live file. Another copy is
-///   deleted; its tiles that this one lacks are fetched again by the regions that want them.
-///   `places/CURRENT` and `places/<build>/common` conflict copies are deleted (the files themselves are the device's own again).
+/// database was replaced by another device's kept its own as `<name> (conflict, ...).sqlite`; conflict copies synced too, so a device
+/// may also hold another device's. Nothing that is this device's own is dropped:
+/// - `regions.sqlite`: which copies are this device's own, and whether the live file is, is told by the regions its app lists as its
+///   own (`regions-app.json`). A copy that holds one is merged into the live file (regions, tile lists and stream records it lacks, by
+///   id) and deleted; one that holds none is another device's, and is deleted. The live file is replaced by the first copy only when it
+///   holds none of this device's regions. With no such list the live file stays and every copy is merged into it.
+/// - `places/<build>.sqlite`: the database with the most tiles, the live file or a copy, is the live database; the others are deleted
+///   (the regions that want a tile it lacks fetch it again). `places/CURRENT` and `places/<build>/common` conflict copies are deleted.
+///
 /// A copy that is not a whole database stays where it is, and drops nothing. A lone log (a conflict -wal with no database) is
 /// deleted. Returns how many conflict files were dealt with.
 pub fn rescue_conflicts(dir: &Path) -> usize {
     let mut n = 0;
     // regions.sqlite
     let (mains, logs) = conflict_copies(dir, "regions.sqlite");
-    let good: Vec<PathBuf> = mains.iter().filter(|p| is_database(p, "regions")).cloned().collect();
-    if let Some(first) = good.first() {
+    let own = own_region_ids(dir);
+    let good: Vec<(PathBuf, HashSet<String>)> = mains.iter().filter(|p| is_database(p, "regions")).map(|p| (p.clone(), region_ids(p))).collect();
+    let (mine, others): (Vec<_>, Vec<_>) = match &own {
+        Some(o) => good.into_iter().partition(|(_, ids)| !ids.is_disjoint(o)),
+        None => (good, Vec::new()),
+    };
+    for (p, _) in &others {
+        remove_db_files(p);
+        n += 1;
+    }
+    if !mine.is_empty() {
         let live = dir.join("regions.sqlite");
-        remove_db_files(&live);
-        if std::fs::rename(first, &live).is_ok() {
-            n += 1;
-            for ext in ["-wal", "-shm", "-journal"] {
-                let _ = std::fs::remove_file(format!("{}{ext}", first.display()));
+        let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && region_ids(&live).is_disjoint(o));
+        let mut rest: Vec<&(PathBuf, HashSet<String>)> = mine.iter().collect();
+        if live_is_theirs || !live.is_file() {
+            // the first copy becomes the live file
+            let (first, _) = rest.remove(0);
+            remove_db_files(&live);
+            if std::fs::rename(first, &live).is_ok() {
+                n += 1;
+                for ext in ["-wal", "-shm", "-journal"] {
+                    let _ = std::fs::remove_file(format!("{}{ext}", first.display()));
+                }
             }
-            if let Ok(c) = Connection::open(&live) {
-                for other in &good[1..] {
-                    if merge_regions(&c, other).is_ok() {
-                        remove_db_files(other);
-                        n += 1;
-                    }
+        }
+        if let Ok(c) = Connection::open(&live) {
+            for (other, _) in rest {
+                if merge_regions(&c, other).is_ok() {
+                    remove_db_files(other);
+                    n += 1;
                 }
             }
         }
@@ -111,27 +149,32 @@ pub fn rescue_conflicts(dir: &Path) -> usize {
     }
     for (build, mut copies) in builds {
         copies.sort();
-        // the copy that holds the most tiles
-        let mut best: Option<(usize, PathBuf)> = None;
+        let live = places.join(format!("{build}.sqlite"));
+        // the database with the most tiles, the live one or a copy
+        let mut best: Option<(usize, PathBuf)> = merged_tile_count(&live).map(|c| (c, live.clone()));
+        let mut whole = Vec::new();
         for p in &copies {
             if let Some(count) = merged_tile_count(p) {
+                whole.push(p.clone());
                 if best.as_ref().is_none_or(|(c, _)| count > *c) {
                     best = Some((count, p.clone()));
                 }
             }
         }
         let Some((_, keep)) = best else { continue };
-        let live = places.join(format!("{build}.sqlite"));
-        remove_db_files(&live);
-        if std::fs::rename(&keep, &live).is_ok() {
-            n += 1;
+        if keep != live {
+            remove_db_files(&live);
+            if std::fs::rename(&keep, &live).is_err() {
+                continue;
+            }
             for ext in ["-wal", "-shm", "-journal"] {
                 let _ = std::fs::remove_file(format!("{}{ext}", keep.display()));
             }
-            for p in copies.iter().filter(|p| **p != keep && merged_tile_count(p).is_some()) {
-                remove_db_files(p);
-                n += 1;
-            }
+            n += 1;
+        }
+        for p in whole.iter().filter(|p| **p != keep) {
+            remove_db_files(p);
+            n += 1;
         }
     }
     for p in loose {

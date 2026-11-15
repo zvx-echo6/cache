@@ -90,8 +90,8 @@ void main() {
     // shares a snapshot of its own instead: maps_two_writers.rs); the immutable downloaded parts still sync.
     expect(config?['exclude'], {
       'libraries': ['*/index', '*/index-snapshots', 'my-books*/shard*', 'my-books*/copies.jsonl', 'my-books*/documents.tsv', 'my-books*/SHA256SUMS'],
-      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*'],
-      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT'],
+      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*', '**/* (conflict, *'],
+      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT', '**/* (conflict, *'],
     });
     // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
     final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);

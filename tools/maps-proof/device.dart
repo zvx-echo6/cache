@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/core_layer_engine.dart';
+import 'package:cache/maps/layers/layer_def.dart' show AreaPhase, DownloadedArea;
 import 'package:cache/maps/layers/layer_engine.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/regions/region_catalogue.dart';
@@ -32,8 +33,8 @@ import 'package:flutter_test/flutter_test.dart';
 // this file compiles on both).
 const _regionsBefore = ['index', 'places/index', '**/*-shm', '**/*-journal'];
 const _mapsBefore = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'];
-const _regionsFixed = ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT'];
-const _mapsFixed = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*'];
+const _regionsFixed = ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT', '**/* (conflict, *'];
+const _mapsFixed = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*', '**/* (conflict, *'];
 
 class _Probe implements ConnectionProbe {
   ConnectionKind kind = ConnectionKind.wifi;
@@ -84,15 +85,9 @@ void main() {
       req.response.close();
     });
 
-    final extras = buildCoreExtras(filesDir: Directory('${support.path}/files')..createSync(), supportDir: support, regionsBaseUrl: 'http://127.0.0.1:9/', placesBaseUrl: 'http://127.0.0.1:9/');
-    final layersCfg = {...(extras['layers'] as Map<String, dynamic>), 'catalogue_urls': <String>[]};
-    final core = await SearchCore.open(const [], extra: {'layers': layersCfg, 'regions': extras['regions']});
-    final probe = _Probe();
-    final policy = DataPolicy(settings: AppSettings(), probe: probe);
-    final engine = CoreLayerEngine(openCore: () async => core, layersConfig: () => layersCfg, policy: policy, pollEvery: const Duration(milliseconds: 200));
-    final maps = MapsState(engine: engine, settingsDirOverride: settingsDir);
-    await engine.start();
-    await engine.saveDefinition(jsonEncode({
+    // the layer's definition: a read-only starter definition of this device (user definitions sync, and carry this device's port)
+    Directory('${support.path}/layer-defs').createSync(recursive: true);
+    File('${support.path}/layer-defs/basemap.json').writeAsStringSync(jsonEncode({
       'format': 1,
       'id': 'basemap',
       'title': 'Base map',
@@ -103,6 +98,14 @@ void main() {
       'update': {'version': '1'},
       'coverage': {'bbox': [-180, -85, 180, 85]},
     }));
+    final extras = buildCoreExtras(filesDir: Directory('${support.path}/files')..createSync(), supportDir: support, regionsBaseUrl: 'http://127.0.0.1:9/', placesBaseUrl: 'http://127.0.0.1:9/');
+    final layersCfg = {...(extras['layers'] as Map<String, dynamic>), 'catalogue_urls': <String>[]};
+    final core = await SearchCore.open(const [], extra: {'layers': layersCfg, 'regions': extras['regions']});
+    final probe = _Probe();
+    final policy = DataPolicy(settings: AppSettings(), probe: probe);
+    final engine = CoreLayerEngine(openCore: () async => core, layersConfig: () => layersCfg, policy: policy, pollEvery: const Duration(milliseconds: 200));
+    final maps = MapsState(engine: engine, settingsDirOverride: settingsDir);
+    await engine.start();
     await maps.init();
     maps.setOn('basemap', true);
     final catalogue = RegionCatalogue(dir: () async => Directory('${support.path}/region-catalogue'), fetch: (u) async => throw StateError('no catalogue in the proof'));
@@ -152,7 +155,6 @@ void main() {
         }
       }
       await regions.refresh();
-      await engine.refreshOnline(force: true);
       return {'sync_error': err, 'rounds': sharing.status['rounds']};
     }
 
@@ -230,6 +232,16 @@ void main() {
           return {'paused': sharing.status['paused']};
         case 'add_region':
           return addRegion('${a['id']}', '${a['name']}', [for (final v in a['bbox'] as List) (v as num).toDouble()]);
+        case 'carry_on':
+          await regions.carryOn('${a['id']}', anyway: true);
+          final end = DateTime.now().add(const Duration(minutes: 5));
+          while (DateTime.now().isBefore(end)) {
+            await regions.refresh();
+            final l = regions.regionOf('${a['id']}');
+            if (l != null && l.areas.isNotEmpty && l.areas.every((x) => x.phase == AreaPhase.done)) break;
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+          }
+          return {'phase': regions.regionOf('${a['id']}')?.phase.name};
         case 'delete_region':
           await regions.remove('${a['id']}');
           return {'deleted': a['id']};

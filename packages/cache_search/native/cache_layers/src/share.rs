@@ -315,11 +315,31 @@ impl Inner {
         Ok(true)
     }
 
+    /// The ids of the areas this device's app lists as its own (`regions-app.json`, beside the layers folder and never synced), or
+    /// `None` when there is no such list (then nothing says which of two files is this device's).
+    fn own_area_ids(&self) -> Option<HashSet<String>> {
+        let text = std::fs::read_to_string(self.dir.parent()?.join("regions-app.json")).ok()?;
+        let v: Value = serde_json::from_str(&text).ok()?;
+        let mut out = HashSet::new();
+        for r in v["regions"].as_object()?.values() {
+            for key in ["areas", "terrain"] {
+                out.extend(r[key].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)));
+            }
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
     /// Takes in what a sync conflict left in `store/`. Before this version the live stores synced, and a device whose store was
-    /// replaced by another device's kept its own as `<layer> (conflict, ...).sqlite`: that copy is this device's own data, a whole
-    /// store. It is merged into the live store (tiles it lacks, areas by id) and deleted; the live file that came from the other
-    /// device is dropped first, since that device's own snapshot arrives by the share. A copy that fails the integrity check stays
-    /// where it is (and nothing is dropped for it). A lone conflict -wal or -shm (a log without its database) is deleted.
+    /// replaced by another device's kept its own as `<layer> (conflict, ...).sqlite`; conflict copies synced too, so a device may also
+    /// hold another device's. Which copies are this device's own, and whether the live file is its own, is told by the areas its app
+    /// lists as its own (`regions-app.json`):
+    /// - a copy that holds one of them is this device's own data: it is merged into the live store (tiles it lacks, areas by id) and
+    ///   deleted. One that holds none is another device's (that device's own snapshot arrives by the share): deleted, not merged.
+    /// - the live file is dropped first only when it holds none of this device's areas and a copy does (it is the other device's file);
+    ///   otherwise it is kept.
+    /// - with no such list, nothing is dropped or told apart: every copy is merged into the live store and deleted.
+    /// A copy that fails the integrity check is left (and nothing is dropped for it), and a lone conflict -wal is deleted. An area
+    /// that says it is complete but lacks tiles afterwards (they were in the log the sync replaced) is made an unfinished download.
     /// Returns how many conflict files were dealt with.
     pub fn rescue_conflicts(&self) -> usize {
         let dir = self.dir.join("store");
@@ -335,29 +355,56 @@ impl Inner {
                 logs.push((e.path(), name));
             }
         }
+        let own = self.own_area_ids();
+        let remove_files = |p: &Path| {
+            for ext in ["", "-wal", "-shm", "-journal"] {
+                let _ = std::fs::remove_file(format!("{}{ext}", p.display()));
+            }
+        };
         let mut n = 0;
         for (layer, mut copies) in mains {
             copies.sort();
-            // the ones that are whole databases
-            let good: Vec<PathBuf> = copies.into_iter().filter(|p| integrity_ok(p)).collect();
+            // the ones that are whole databases, with the areas each holds
+            let good: Vec<(PathBuf, HashSet<String>)> = copies.into_iter().filter(|p| integrity_ok(p)).map(|p| {
+                let ids = area_ids(&p);
+                (p, ids)
+            }).collect();
             if good.is_empty() {
                 continue;
             }
-            // the live file is the other device's: drop it (and the handle on it), the copies become the live store
-            if let Ok(mut g) = self.stores.lock() {
-                g.remove(&layer);
+            let (mine, others): (Vec<_>, Vec<_>) = match &own {
+                Some(o) => good.into_iter().partition(|(_, ids)| !ids.is_disjoint(o)),
+                None => (good, Vec::new()),
+            };
+            for (p, _) in &others {
+                remove_files(p);
+                n += 1;
+            }
+            if mine.is_empty() {
+                continue;
             }
             let live = self.store_path(&layer);
-            for ext in ["", "-wal", "-shm", "-journal"] {
-                let _ = std::fs::remove_file(format!("{}{ext}", live.display()));
+            let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && area_ids(&live).is_disjoint(o));
+            if live_is_theirs {
+                // the live file is the other device's: drop it (and the handle on it); the copies become the live store
+                if let Ok(mut g) = self.stores.lock() {
+                    g.remove(&layer);
+                }
+                remove_files(&live);
             }
             let Ok(store) = self.store_create(&layer) else { continue };
-            for p in good {
+            for (p, _) in mine {
                 if store.merge_from(&p).is_ok() {
-                    for ext in ["", "-wal", "-shm", "-journal"] {
-                        let _ = std::fs::remove_file(format!("{}{ext}", p.display()));
-                    }
+                    remove_files(&p);
                     n += 1;
+                }
+            }
+            // The copy was made from the main file alone: what the device had written since its last checkpoint was in the log, which
+            // the sync replaced. An area that says it is complete but lacks tiles is now an unfinished download: the app offers
+            // "Carry on", which fetches what is missing (and nothing else).
+            for (id, state, meta) in store.areas().unwrap_or_default() {
+                if state == "complete" && matches!(self.area_held(&store, &meta), Ok(Some((held, total))) if held < total) {
+                    let _ = store.put_area(&id, "partial", &meta);
                 }
             }
         }
@@ -391,6 +438,16 @@ impl Inner {
         }
         Maintained { rescued, deleted, exported }
     }
+}
+
+/// The area ids a store file holds (empty when it cannot be read).
+fn area_ids(p: &Path) -> HashSet<String> {
+    let Ok(c) = rusqlite::Connection::open(p) else { return HashSet::new() };
+    let Ok(mut q) = c.prepare("SELECT id FROM areas") else { return HashSet::new() };
+    let rows = q.query_map([], |r| r.get::<_, String>(0));
+    let ids = rows.map(|r| r.flatten().collect()).unwrap_or_default();
+    drop(q);
+    ids
 }
 
 fn integrity_ok(p: &Path) -> bool {
