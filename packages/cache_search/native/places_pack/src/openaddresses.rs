@@ -10,6 +10,7 @@
 //!   2. an address has the same normalised street and number and the same normalised town (a town written one way by
 //!      one source and another way by the other is why distance is the first test), or
 //!   3. an address has the same number within 5 m, whatever the street says (the two sources spell the street differently).
+//!
 //! An OA address that is added joins the index at once, so a later OA source (listed lower in the manifest) cannot add
 //! it again: put county sources before the statewide one. Units are dropped, as in `addresses`.
 //!
@@ -94,10 +95,13 @@ pub fn dist_m(la1: f64, lo1: f64, la2: f64, lo2: f64) -> f64 {
 
 const CELL: f64 = 0.0001; // about 11 m
 
+/// The addresses of one normalised street and number: (lat, lon, normalised town).
+type Spots = Vec<(f64, f64, String)>;
+
 /// What a tile already has, for the duplicate tests.
 #[derive(Default)]
 pub struct Index {
-    by_street_number: HashMap<(String, String), Vec<(f64, f64, String)>>,
+    by_street_number: HashMap<(String, String), Spots>,
     by_cell: HashMap<(String, i64, i64), Vec<(f64, f64)>>,
 }
 
@@ -296,7 +300,7 @@ pub fn oa_merge(cfg: &OaCfg) -> Result<OaReport, String> {
                 continue;
             }
             match parse_oa_line(&line, &src.id, &country) {
-                Some(a) if cfg.bbox.map_or(true, |b| a.lon >= b[0] && a.lat >= b[1] && a.lon < b[2] && a.lat < b[3]) => {
+                Some(a) if cfg.bbox.is_none_or(|b| a.lon >= b[0] && a.lat >= b[1] && a.lon < b[2] && a.lat < b[3]) => {
                     st.read += 1;
                     oa.entry(tile_id_l1(a.lat, a.lon)).or_default().push(a);
                 }
