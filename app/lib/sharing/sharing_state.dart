@@ -238,6 +238,18 @@ class SharingState extends ChangeNotifier {
   /// sync brought shows at once instead of after a restart.
   void Function(Set<String> shareIds)? onShareChanged;
 
+  /// A browser tab only: called when the server's host says it applied settings from a linked device (its `settings_applied`
+  /// counter moved), so the tab reads its settings files again. Not called for the first reading, which only notes the count.
+  void Function()? onSettingsApplied;
+  int? _settingsApplied;
+
+  void _noteSettingsApplied(Object? count) {
+    if (count is! int) return;
+    final before = _settingsApplied;
+    _settingsApplied = count;
+    if (before != null && before != count) onSettingsApplied?.call();
+  }
+
   /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
   final Map<String, (int, int)> _settled = {};
 
@@ -913,6 +925,7 @@ class _WebDriver implements SharingDriver {
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
     s._noteShareChanges();
+    s._noteSettingsApplied(snap['settings_applied']);
     s._changed();
   }
 

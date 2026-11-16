@@ -5,18 +5,7 @@ import 'dart:io';
 import '../../../app/lib/sharing/settings_files.dart';
 import '../../../app/lib/sharing/settings_log.dart';
 
-/// The group of each synced setting, as the link record names it in `off_groups` (the phone's `SettingsGroupId` names, by the key's
-/// first part; `alerts.*` is the Notifications group). settings_sync.dart cannot be imported here (it needs Flutter).
-const Map<String, String> _kGroupOfPrefix = {
-  'appearance': 'appearance',
-  'home': 'home',
-  'weather': 'weather',
-  'alerts': 'notifications',
-  'maps': 'maps',
-  'ask': 'ask',
-};
-
-String _groupOf(String key) => _kGroupOfPrefix[key.split('.').first] ?? '';
+String _groupOf(String key) => settingsGroupOf(key);
 
 /// Cache for Linux's settings sync, headless: the phone's SettingsSync (app/lib/sharing/settings_sync.dart) with no Flutter, run by the
 /// helper. It keeps the settings log over `<support>/settings-sync` (settings_log.dart) as the one writer of the server's own log,

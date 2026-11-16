@@ -79,6 +79,21 @@ final Map<String, SettingsFileSpec> kSettingsFileMap = {
   'ask.web_search': const SettingsFileSpec('preferences.json', ['webSearchOn']),
 };
 
+/// The group of each synced setting, as the link record names it in `off_groups` (the phone's `SettingsGroupId` names), by the
+/// key's first part; `alerts.*` is the Notifications group. settings_sync.dart cannot be imported by the helper (it needs Flutter),
+/// so a test keeps this equal to `appSyncedSettings`' groups.
+const Map<String, String> kGroupOfPrefix = {
+  'appearance': 'appearance',
+  'home': 'home',
+  'weather': 'weather',
+  'alerts': 'notifications',
+  'maps': 'maps',
+  'ask': 'ask',
+};
+
+/// The group name of [key] ('' for a key that is in no group).
+String settingsGroupOf(String key) => kGroupOfPrefix[key.split('.').first] ?? '';
+
 // ------------------------------------------------------------------ file access
 
 /// The file access the settings need, paths relative to the support folder (with '/'), so the server helper can use its support

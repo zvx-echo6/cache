@@ -165,6 +165,14 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reads preferences.json again (a change from a linked device was applied to the file on the server) and tells listeners,
+  /// without saving: the change came from the file.
+  Future<void> reload() async {
+    if (_fs == null) return;
+    await _read();
+    notifyListeners();
+  }
+
   /// Keys this build does not know (written by a newer or an older build), kept and written back as they were, so moving between
   /// versions never drops a setting.
   Map<String, dynamic> _other = {};
