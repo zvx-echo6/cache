@@ -108,7 +108,6 @@ void main() {
       r.maps.rememberCamera(42.5, -113.8, 9);
       await r.maps.flush();
       await behind(r, 'maps.layers_on', ['hillshade']);
-      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
       await r.maps.reload();
