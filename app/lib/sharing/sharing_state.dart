@@ -903,7 +903,6 @@ class _PhoneDriver implements SharingDriver {
       return;
     }
     if (folders.values.any((d) => d == null)) throw CacheSearchException('sync', '${k.label} is not ready yet');
-    if (_off.remove(k.id) != null) await _save();
     await _addKind(k);
   }
 

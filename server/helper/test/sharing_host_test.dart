@@ -260,6 +260,17 @@ void main() {
     await expectLater(h.setItem('library', 'library/a.zim', true), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')));
   });
 
+  test('a kind switched off and on again keeps the items that were off', () async {
+    final h = host();
+    await h.setUp();
+    await h.setKind('models', true);
+    await h.setItem('models', 'models/x.gguf', false);
+    await h.setKind('models', false);
+    await h.setKind('models', true);
+    expect(opened.single.argsOf('set_off').last, {'id': 'models', 'off': ['x.gguf']});
+    expect(flag()['off'], {'models': ['models/x.gguf']});
+  });
+
   test('a restart starts sharing again by itself and gives the config again; shares kept by the engine are not added twice', () async {
     final h1 = host();
     await h1.setUp();
