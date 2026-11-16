@@ -497,7 +497,17 @@ class SharingHost {
   /// The engine methods a browser may call through `sharing.call`: the ones that need no more than the device's own say. Everything
   /// else is the host's (shares, off lists and what links they are kept with come from the share table and the person's choices
   /// above; a browser does not name folders) or has its own op (`link`: `sharing.link_start`). `status` is served from the cache.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items'};
+  ///
+  /// `key_names` and `set_key_on` are not the engine's: the host answers them itself, from [keyNames] and [setKeyOn] (the settings
+  /// sync's key list and tick). They give a browser the names of the keys that can go to a linked device and which are ticked, and
+  /// take a tick; a key's value is in neither.
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+
+  /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
+  List<Map<String, Object?>> Function()? keyNames;
+
+  /// Ticks or unticks the key [name] for the device [peer]; answers like [keyNames]. Set by the helper.
+  Future<List<Map<String, Object?>>> Function(String peer, String name, bool on)? setKeyOn;
 
   /// The engine's key methods, which a browser may never reach (the host does them itself).
   static const Set<String> secretMethods = {'set_secrets', 'take_secrets'};
@@ -511,6 +521,18 @@ class SharingHost {
     if (!trusted && !browserMethods.contains(method)) {
       final why = secretMethods.contains(method) ? 'Keys are handled on the server only' : 'Not available from a browser';
       throw CacheSearchException('forbidden', '$why: $method');
+    }
+    if (method == 'key_names') {
+      final f = keyNames;
+      if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
+      return {'keys': f()};
+    }
+    if (method == 'set_key_on') {
+      final f = setKeyOn;
+      if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
+      final on = args['on'];
+      if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
+      return {'keys': await f(_str(args, 'peer'), _str(args, 'name'), on)};
     }
     return _locked(() => _engine(method, args.cast<String, Object?>()));
   }

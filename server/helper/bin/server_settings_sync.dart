@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../../app/lib/settings/key_names.dart';
+import '../../../packages/cache_search/lib/src/errors.dart';
 import '../../../app/lib/sharing/settings_files.dart';
 import '../../../app/lib/sharing/settings_log.dart';
 import 'keystore.dart';
@@ -194,6 +195,35 @@ class ServerSettingsSync {
         await _save();
         await _pushKeys();
       });
+
+  /// What a browser may see of the keys: the names of the keys this server holds that can sync (in the phone's form, decoded from the
+  /// keystore's names), and the linked devices each is ticked for. Never a value. A reference (`keystore://...`) is not a key and is
+  /// not listed, nor is a name this app does not sync or one too long to be told from its hash.
+  List<Map<String, Object?>> keyNames() {
+    final store = keys;
+    if (store == null) return const [];
+    final out = <Map<String, Object?>>[];
+    for (final stored in store.names()) {
+      final name = decodeKeyName(stored);
+      if (name == null || !isSyncedKeyName(name)) continue;
+      final v = store.get(stored);
+      if (v == null || v.isEmpty || v.startsWith(KeyStore.refPrefix)) continue;
+      final on = [for (final e in _kept.keysFor.entries) if (e.value.contains(name)) e.key]..sort();
+      out.add({'name': name, 'on': on});
+    }
+    out.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+    return out;
+  }
+
+  /// A browser's tick: [setKeyOn] for a linked device and a key this server holds that can sync, answered with [keyNames] (names and
+  /// ticks only). A tick that is already on for a key no longer held can still be cleared; any other name is refused.
+  Future<List<Map<String, Object?>>> setKeyOnFromBrowser(String peer, String name, bool on) async {
+    if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
+    final held = keyNames().any((k) => k['name'] == name);
+    if (!held && !(!on && keyOn(peer, name))) throw CacheSearchException('bad_args', 'No such key to send: ${_shown(name)}');
+    await setKeyOn(peer, name, on);
+    return keyNames();
+  }
 
   /// Gives the engine, for each linked device, the ticked keys that are in the keystore while that device's link sends; nothing to
   /// the others. A reference (`keystore://...`) is never a key and is never sent.

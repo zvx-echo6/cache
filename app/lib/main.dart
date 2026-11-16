@@ -1219,6 +1219,9 @@ class _CacheAppState extends State<CacheApp> {
           await Future.wait([_appRead, _layoutRead, _mapsRead]);
           await settingsSync.start();
         });
+      } else {
+        // A browser: the server runs the settings log and holds the keys; this reads which keys can be ticked and which are.
+        settingsSync.watchServerKeys();
       }
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;

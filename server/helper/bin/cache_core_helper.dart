@@ -118,6 +118,8 @@ Future<void> main() async {
         log: log, keys: keys, setSecrets: host.setSecrets, takeSecrets: host.takeSecrets,
         onWebKeyKept: () => keys.replay(dispatcher));
     host.settingsApplied = () => settingsSync!.applied;
+    host.keyNames = settingsSync.keyNames;
+    host.setKeyOn = settingsSync.setKeyOnFromBrowser;
     unawaited(settingsSync.start());
   }
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.

@@ -83,6 +83,10 @@ class SyncedSetting {
   final String Function()? shows;
 }
 
+/// The web search key's name and label, as the phone keeps and shows it.
+const String kKagiKeyName = 'search.kagi.key';
+const String kKagiKeyLabel = 'Kagi (web search)';
+
 /// One key kept in secure storage that can be sent to one linked device: [name] is where it is kept, [read] gives it.
 class SyncedKey {
   const SyncedKey({required this.name, required this.label, required this.read});
@@ -107,14 +111,15 @@ class SettingsSync extends ChangeNotifier {
   SettingsSync({
     required this.sharing,
     required this.settings,
-    required this.keys,
+    required List<SyncedKey> Function() keys,
     required this.storeKey,
     required this.dir,
     this.downloadModel,
     this.placesHere,
     DateTime Function()? now,
     this.every = const Duration(seconds: 10),
-  }) : _now = now ?? DateTime.now {
+  }) : _now = now ?? DateTime.now,
+       _appKeys = keys {
     _byKey = {for (final s in settings) s.key: s};
   }
 
@@ -123,8 +128,24 @@ class SettingsSync extends ChangeNotifier {
   /// Every setting that can go between devices. A setting not here never goes, and is never taken from another device's log.
   final List<SyncedSetting> settings;
 
-  /// The keys saved on this device.
-  final List<SyncedKey> Function() keys;
+  /// The keys saved on this device (what this app works out: their names and labels).
+  final List<SyncedKey> Function() _appKeys;
+
+  /// The keys that can be ticked for a linked device. On a phone, the keys saved here ([_appKeys]). In a browser the server is the
+  /// device: the keys its keystore holds that can sync, as the server last said ([watchServerKeys]), named as the phone names
+  /// them where this app can work that out. Never a key's value.
+  List<SyncedKey> keys() {
+    if (!sharing.onServer) return _appKeys();
+    final known = {for (final k in _appKeys()) k.name: k.label};
+    return [for (final n in _serverNames) SyncedKey(name: n, label: known[n] ?? _plainLabel(n), read: () async => null)];
+  }
+
+  /// A key this tab cannot name from its own sources: the web search key's own name, or a source's alias, as a phone says it.
+  static String _plainLabel(String name) {
+    if (name == kKagiKeyName) return kKagiKeyLabel;
+    const prefix = 'live.key.';
+    return name.startsWith(prefix) && name.length > prefix.length ? name.substring(prefix.length) : name;
+  }
 
   /// Keeps a key a linked device sent; false when [name] is not a key this app keeps.
   final Future<bool> Function(String name, String value) storeKey;
@@ -577,12 +598,13 @@ class SettingsSync extends ChangeNotifier {
   // ---------------------------------------------------------------- keys
 
   /// The key [name] is ticked for [peer]. Every key starts off.
-  bool keyOn(String peer, String name) => _keysFor[peer]?.contains(name) ?? false;
+  bool keyOn(String peer, String name) => sharing.onServer ? (_serverOn[name]?.contains(peer) ?? false) : (_keysFor[peer]?.contains(name) ?? false);
 
   /// The keys saved here that are ticked for [peer].
   int keysOn(String peer) => keys().where((k) => keyOn(peer, k.name)).length;
 
   Future<void> setKeyOn(String peer, String name, bool on) async {
+    if (sharing.onServer) return _setServerKeyOn(peer, name, on);
     final set = _keysFor.putIfAbsent(peer, () => <String>{});
     on ? set.add(name) : set.remove(name);
     if (set.isEmpty) _keysFor.remove(peer);
@@ -591,10 +613,65 @@ class SettingsSync extends ChangeNotifier {
     _tell();
   }
 
+  // The server's keys, in a browser (the server is the device: it keeps the keys and the ticks, and sends them itself).
+  List<String> _serverNames = const [];
+  Map<String, Set<String>> _serverOn = const {};
+  Timer? _serverTimer;
+  bool _serverKeysBusy = false;
+  bool _serverKeysRead = false;
+
+  /// In a browser: reads the server's key names and ticks now and every 10 s, and again when sharing starts. Names and ticks only.
+  void watchServerKeys() {
+    if (_serverTimer != null) return;
+    sharing.addListener(_onServerSharing);
+    _serverTimer = Timer.periodic(const Duration(seconds: 10), (_) => unawaited(refreshServerKeys()));
+    _onServerSharing();
+  }
+
+  void _onServerSharing() {
+    if (sharing.onServer && sharing.running && !_serverKeysRead) unawaited(refreshServerKeys());
+  }
+
+  /// Reads the server's key names and ticks again.
+  Future<void> refreshServerKeys() async {
+    if (_disposed || _serverKeysBusy || !sharing.onServer || !sharing.running) return;
+    _serverKeysBusy = true;
+    try {
+      _takeServerKeys(await sharing.serverKeys());
+    } catch (e) {
+      // Tried again by the timer, not at every state read.
+      _serverKeysRead = true;
+      logError('Settings sync: could not read the server\'s keys', error: e);
+    } finally {
+      _serverKeysBusy = false;
+    }
+  }
+
+  void _takeServerKeys(List<({String name, Set<String> on})> list) {
+    _serverKeysRead = true;
+    final names = [for (final k in list) k.name];
+    final on = {for (final k in list) k.name: k.on};
+    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n]));
+    _serverNames = names;
+    _serverOn = on;
+    if (!same) _tell();
+  }
+
+  Future<void> _setServerKeyOn(String peer, String name, bool on) async {
+    try {
+      _takeServerKeys(await sharing.setServerKeyOn(peer, name, on));
+    } catch (e) {
+      logError('Settings sync: the server did not take a key tick', error: e);
+      await refreshServerKeys();
+    }
+    _tell();
+  }
+
   /// Gives the sync engine, for each linked device, the keys ticked for it while this device's settings go there; none to the
   /// others.
   Future<void> pushKeys() async {
-    if (!sharing.running) return;
+    // In a browser the server gives its own keys to the engine; a tab never holds one.
+    if (sharing.onServer || !sharing.running) return;
     final saved = keys();
     for (final p in sharing.peers) {
       final id = p['id'];
@@ -622,6 +699,7 @@ class SettingsSync extends ChangeNotifier {
 
   /// Keeps the keys linked devices sent, from the devices whose settings this one takes.
   Future<void> takeKeys() async {
+    if (sharing.onServer) return;
     Map<String, Map<String, String>> got;
     try {
       got = await sharing.takeSecrets();
@@ -670,6 +748,10 @@ class SettingsSync extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    if (_serverTimer != null) {
+      _serverTimer!.cancel();
+      sharing.removeListener(_onServerSharing);
+    }
     for (final u in _unlisten) {
       u();
     }

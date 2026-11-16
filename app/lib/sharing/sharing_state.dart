@@ -160,6 +160,19 @@ class SharingState extends ChangeNotifier {
   /// own encrypted connection, when it asks. Empty: none.
   Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
 
+  /// Cache Server only: the names of the keys the server keeps that can go to a linked device, each with the devices it is ticked
+  /// for. Names and ticks only: a key itself never reaches a browser.
+  Future<List<({String name, Set<String> on})>> serverKeys() async => _serverKeys(await _call('key_names'));
+
+  /// Cache Server only: ticks or unticks the key [name] for [peer]; answers like [serverKeys].
+  Future<List<({String name, Set<String> on})>> setServerKeyOn(String peer, String name, bool on) async =>
+      _serverKeys(await _call('set_key_on', {'peer': peer, 'name': name, 'on': on}));
+
+  List<({String name, Set<String> on})> _serverKeys(Map<String, dynamic> r) => [
+    for (final k in (r['keys'] as List? ?? const []))
+      if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
+  ];
+
   /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
   Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
 

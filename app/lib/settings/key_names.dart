@@ -31,3 +31,28 @@ String encodeKeyName(String key) {
   return '${full.substring(0, 120 - tail.length)}$tail';
 }
 
+
+/// The key [encodeKeyName] made [stored] from, or null when that cannot be told (a name cut and hashed for its length, or a name
+/// that [encodeKeyName] would not have made). Flutter-free, so the helper lists the names it holds in the phone's own form.
+String? decodeKeyName(String stored) {
+  if (stored.isEmpty) return null;
+  final units = <int>[];
+  var i = 0;
+  while (i < stored.length) {
+    final c = stored[i];
+    if (c == ':') {
+      if (i + 5 > stored.length) return null;
+      final u = int.tryParse(stored.substring(i + 1, i + 5), radix: 16);
+      if (u == null || !RegExp(r'^[0-9a-f]{4}$').hasMatch(stored.substring(i + 1, i + 5))) return null;
+      units.add(u);
+      i += 5;
+    } else if (_plainNameChar.hasMatch(c)) {
+      units.add(c.codeUnitAt(0));
+      i++;
+    } else {
+      return null;
+    }
+  }
+  final key = String.fromCharCodes(units);
+  return encodeKeyName(key) == stored ? key : null;
+}
