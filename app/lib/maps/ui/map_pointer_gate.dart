@@ -29,8 +29,14 @@ class _MapPointerGateState extends State<MapPointerGate> {
     super.initState();
     if (widget.web) {
       modalWatch.addListener(_sync);
-      widget.setter(modalWatch.isOpen);
+      _sync();
     }
+  }
+
+  @override
+  void didUpdateWidget(MapPointerGate old) {
+    super.didUpdateWidget(old);
+    if (widget.web && old.extraBlock != widget.extraBlock) _sync();
   }
 
   @override
@@ -39,7 +45,7 @@ class _MapPointerGateState extends State<MapPointerGate> {
     super.dispose();
   }
 
-  void _sync() => widget.setter(modalWatch.isOpen);
+  void _sync() => widget.setter(modalWatch.isOpen || widget.extraBlock);
 
   @override
   Widget build(BuildContext context) => widget.child;

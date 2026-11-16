@@ -2351,6 +2351,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 }
               },
               child: MapPointerGate(
+                extraBlock: _ring != null,
                 child: MapMouseRing(
                   onRing: _onMouseRing,
                   child: MapLibreMap(
