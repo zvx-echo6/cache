@@ -87,7 +87,7 @@ void main() {
     await choose(tester);
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tester.pump();
-    expect(find.text('The library could not be checked. Try again.'), findsOneWidget);
+    expect(find.text('The library could not be read.'), findsOneWidget);
     expect(browse.checkingUpdates, isFalse);
   });
 
@@ -99,5 +99,27 @@ void main() {
     await tester.pump();
     expect(find.text('The Kiwix library took too long to answer.'), findsOneWidget);
     expect(browse.checkingUpdates, isFalse);
+  });
+
+  testWidgets('the person is told at once that the check is going, while the catalogue has not answered', (tester) async {
+    await open(tester, split((_) => Completer<String>().future));
+    browse.updates.clear();
+    await choose(tester);
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Checking Wikivoyage Europe for updates…'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 60));
+  });
+
+  testWidgets('a check that is already running (the automatic one) still gives its result to a person who asks', (tester) async {
+    final gate = Completer<String>();
+    await open(tester, split((_) => gate.future));
+    expect(browse.checkingUpdates, isTrue, reason: 'the automatic check is under way');
+    await choose(tester);
+    await tester.runAsync(() async {
+      gate.complete(await fixture('kiwix_entries_wikivoyage.xml'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pump();
+    expect(find.textContaining('Update ready'), findsWidgets);
   });
 }
