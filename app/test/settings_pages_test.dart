@@ -121,7 +121,7 @@ void main() {
     final root = File('../CREDITS.md').readAsStringSync();
     expect(File('assets/credits.md').readAsStringSync(), root, reason: 'copy CREDITS.md to app/assets/credits.md when it changes');
     for (final needle in [
-      'OpenStreetMap', 'ODbL', 'Protomaps', 'Overture', 'Mapterhorn', 'ESA WorldCover', 'Open-Meteo', 'CC BY 4.0', 'Kiwix', 'PeerTube',
+      'OpenStreetMap', 'ODbL', 'Protomaps', 'Overture', 'OpenAddresses', 'Mapterhorn', 'ESA WorldCover', 'Open-Meteo', 'CC BY 4.0', 'Kiwix', 'PeerTube',
       'llama.cpp', 'libzim', 'Xapian', 'ICU', 'Valhalla', 'MapLibre', 'PDFium', 'pdfrx', 'AGPL-3.0-or-later',
     ]) {
       expect(root, contains(needle), reason: needle);
