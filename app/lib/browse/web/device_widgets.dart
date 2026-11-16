@@ -4,6 +4,7 @@ import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../settings/space.dart' show reserveFor;
 import '../../theme.dart';
 import '../../video/format.dart';
+import '../../downloads/download_row.dart' show DlActions, DlPhase, DlState, removeDownload, showDownloadMenu;
 import 'build_common.dart' show DashedBox;
 import 'build_list.dart';
 import 'device_api.dart';
@@ -15,7 +16,7 @@ const int _gb = 1 << 30;
 
 /// One card of the Library list, in the phone's transfer card shape: a title, a line, a progress bar, and actions.
 class TransferCard extends StatelessWidget {
-  const TransferCard({super.key, required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey});
+  const TransferCard({super.key, required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey, this.onLongPress});
 
   final String title;
   final String line;
@@ -24,6 +25,9 @@ class TransferCard extends StatelessWidget {
   final bool indeterminate;
   final List<Widget> actions;
   final Key? cardKey;
+
+  /// Press and hold on the card (a running or paused download opens the phone's Pause/Resume and Remove menu).
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +38,10 @@ class TransferCard extends StatelessWidget {
       child: Material(
         color: k.surface,
         borderRadius: BorderRadius.circular(14),
-        child: Padding(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onLongPress: onLongPress,
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -59,6 +66,7 @@ class TransferCard extends StatelessWidget {
                   child: LinearProgressIndicator(value: indeterminate ? null : fraction, minHeight: 3),
                 ),
             ],
+          ),
           ),
         ),
       ),
@@ -120,7 +128,7 @@ class DeviceLibraryTop extends StatelessWidget {
             if (whileClosed && hasWhileClosed(device)) WhileClosedCard(device: device),
             if (up != null) _uploadCard(up),
             if (device.build != null) BuildListCards(ctl: device.build!, onOpen: onOpenBuilt),
-            for (final j in shown) _jobCard(j),
+            for (final j in shown) _jobCard(context, j),
             for (final j in device.readyPackages)
               TransferCard(
                 cardKey: ValueKey('package-${j.id}'),
@@ -169,7 +177,19 @@ class DeviceLibraryTop extends StatelessWidget {
     );
   }
 
-  Widget _jobCard(DeviceJob j) {
+  /// What the phone's Pause/Resume and Remove controls do for [j], so the buttons and the hold menu say and do the same.
+  DlActions _dlActions(BuildContext context, DeviceJob j) => DlActions(
+        pause: j.active ? () => device.pauseJob(j) : null,
+        resume: j.paused ? () => device.resumeJob(j) : null,
+        remove: () => device.cancelJob(j),
+      );
+
+  DlState _dlState(DeviceJob j) => DlState(j.paused ? DlPhase.paused : DlPhase.running, done: j.bytes, total: j.total);
+
+  /// Cancel or Remove: with saved bytes it asks the phone's question first ("Remove the 1.7 GB already downloaded?"; Keep or Remove).
+  Future<void> _remove(BuildContext context, DeviceJob j) => removeDownload(context, _dlState(j), () => device.cancelJob(j));
+
+  Widget _jobCard(BuildContext context, DeviceJob j) {
     final title = device.titleOfJob(j);
     if (j.failed) {
       return TransferCard(
@@ -191,9 +211,10 @@ class DeviceLibraryTop extends StatelessWidget {
         title: title,
         line: j.total > 0 ? 'Paused · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}' : 'Paused · ${formatBytes(j.bytes)}',
         fraction: j.fraction,
+        onLongPress: () => showDownloadMenu(context, _dlState(j), _dlActions(context, j)),
         actions: [
           TextButton(key: ValueKey('resume-${j.id}'), onPressed: () => device.resumeJob(j), child: const Text('Resume')),
-          TextButton(key: ValueKey('remove-${j.id}'), onPressed: () => device.cancelJob(j), child: const Text('Remove')),
+          TextButton(key: ValueKey('remove-${j.id}'), onPressed: () => _remove(context, j), child: const Text('Remove')),
         ],
       );
     }
@@ -205,7 +226,11 @@ class DeviceLibraryTop extends StatelessWidget {
       line: waiting ? 'Waiting its turn…' : (j.total > 0 ? 'Downloading · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}$since' : 'Downloading · ${formatBytes(j.bytes)}$since'),
       fraction: waiting ? null : j.fraction,
       indeterminate: waiting || j.total <= 0,
-      actions: [_cancel(ValueKey('cancel-${j.id}'), 'Cancel', () => device.cancelJob(j))],
+      onLongPress: () => showDownloadMenu(context, _dlState(j), _dlActions(context, j)),
+      actions: [
+        TextButton(key: ValueKey('pause-${j.id}'), onPressed: () => device.pauseJob(j), child: const Text('Pause')),
+        _cancel(ValueKey('cancel-${j.id}'), 'Cancel', () => _remove(context, j)),
+      ],
     );
   }
 }

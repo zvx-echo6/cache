@@ -235,6 +235,8 @@ void main() {
       await show(tester);
       await tester.tap(find.byKey(const ValueKey('remove-p1')));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-download-yes')));
+      await tester.pumpAndSettle();
       expect(api.cancelled, ['p1', 'p1']);
       expect(find.byKey(const ValueKey('job-p1')), findsNothing);
     });
