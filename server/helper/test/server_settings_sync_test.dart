@@ -64,16 +64,18 @@ void main() {
     expect(sync.applied, 0);
   });
 
-  test('ask.model is never applied on the server (the owner has not decided), and the rest of the log still is', () async {
-    expect(kNotAppliedOnServer, contains('ask.model'));
-    peers = [peer('peerA', {'mode': 'send', 'from': 'peerA'})]; // Send mine from the peer: it would apply everything
+  test('ask.model is applied like the other keys: lastModel is written, nothing is loaded', () async {
+    peers = [peer('peerA', {'mode': 'send', 'from': 'peerA'})];
     await sync.start();
+    put('settings.json', {'theme': 'dark', 'names': {'a': 'b'}});
     peerLine('peerA', 'ask.model', 'big.gguf', 9000);
     peerLine('peerA', 'appearance.theme', 'light', 9001);
     await sync.tick();
-    expect(file('settings.json').existsSync() ? json('settings.json').containsKey('lastModel') : false, isFalse);
-    expect(json('settings.json')['theme'], 'light');
-    expect(sync.applied, 1);
+    final j = json('settings.json');
+    expect(j['lastModel'], 'big.gguf');
+    expect(j['theme'], 'light');
+    expect(j['names'], {'a': 'b'});
+    expect(sync.applied, 2);
   });
 
   test('a link that does not take a key does not apply it (Send mine from here, Off, a group left out, a key unticked)', () async {
