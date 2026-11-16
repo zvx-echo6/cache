@@ -45,7 +45,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 40));
     }
     await snap(tester, 'web_location', Platform.environment['SHOT_NAME'] ?? 'after');
-  })
+  });
 
   testWidgets('Ask + sheet, location blocked in the browser', (tester) async {
     await loadShotFonts();
