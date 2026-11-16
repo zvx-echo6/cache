@@ -1,11 +1,18 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../notebook/save_bytes.dart';
 import 'share_check_stub.dart' if (dart.library.js_interop) 'share_check_web.dart' as check;
 
 /// Whether this platform has a share sheet: always on a phone; in a browser only with navigator.share, which most Linux desktop
 /// browsers lack. Replaced in tests.
 bool Function() systemShareAvailable = check.systemShareAvailable;
+
+/// Gives a file to the browser as a download. Replaced in tests (only a browser can save this way).
+void Function(String name, String mime, Uint8List bytes) saveFileInBrowser = saveBytesInBrowser;
 
 /// Shares [text] through [share] (the share sheet) when there is one; otherwise copies it and says [copied] ("Link copied"), so
 /// a Share button never does nothing.
