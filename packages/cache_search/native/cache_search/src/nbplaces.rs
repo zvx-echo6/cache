@@ -334,6 +334,8 @@ impl Ext {
                 }
                 id.to_string()
             }
+            // A file with no points makes no empty notebook: its lines and areas become a map layer of their own (below).
+            None if !parsed.features.iter().any(|f| matches!(f.geom, Geom::Point(..))) => String::new(),
             None => {
                 let stem = std::path::Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                 let given = args.get("name").and_then(Value::as_str).map(mapdata::collapse).filter(|n| !n.is_empty());
@@ -435,7 +437,7 @@ impl Ext {
             },
             None => 0,
         };
-        let notebook = self.nb_call("notebook", &json!({"id": nb_id}))?;
+        let notebook = if nb_id.is_empty() { Value::Null } else { self.nb_call("notebook", &json!({"id": nb_id}))? };
         Ok(json!({"notebook": notebook, "places": places, "updated": updated, "lines": lines, "areas": areas, "skipped": shapes.len() - kept}))
     }
 }
