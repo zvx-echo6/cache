@@ -37,14 +37,32 @@ enum FetchFailure {
 }
 
 class FetchException implements Exception {
-  const FetchException(this.failure, this.host, {this.status});
+  const FetchException(this.failure, this.host, {this.status, this.detail});
 
   final FetchFailure failure;
   final String host;
   final int? status;
 
+  /// The original exception's own text (for the log only; never shown to people), when there was one.
+  final String? detail;
+
   @override
   String toString() => 'Fetching from $host failed: ${failure.name}${status == null ? '' : ' (HTTP $status)'}';
+}
+
+/// The text of a network exception for the log: its type, its message and the OS error when it has one.
+String fetchDetail(Object e) {
+  if (e is SocketException) {
+    final os = e.osError;
+    return '${e.runtimeType}: ${e.message}${os == null ? '' : ' (OS error: ${os.message}, errno ${os.errorCode})'}';
+  }
+  if (e is HandshakeException) {
+    final os = e.osError;
+    return '${e.runtimeType}: ${e.message}${os == null ? '' : ' (OS error: ${os.message}, errno ${os.errorCode})'}';
+  }
+  if (e is HttpException) return '${e.runtimeType}: ${e.message}';
+  if (e is TimeoutException) return '${e.runtimeType}: ${e.message ?? 'timed out'}';
+  return '${e.runtimeType}';
 }
 
 bool isLoopbackHost(String host) => host == 'localhost' || host == '127.0.0.1';
@@ -110,14 +128,14 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024, bool http
     return out;
   } on FetchException {
     rethrow;
-  } on TimeoutException {
-    throw FetchException(FetchFailure.timedOut, url.host);
-  } on SocketException {
-    throw FetchException(FetchFailure.unreachable, url.host);
-  } on HandshakeException {
-    throw FetchException(FetchFailure.insecure, url.host);
-  } on HttpException {
-    throw FetchException(FetchFailure.unreadable, url.host);
+  } on TimeoutException catch (e) {
+    throw FetchException(FetchFailure.timedOut, url.host, detail: fetchDetail(e));
+  } on SocketException catch (e) {
+    throw FetchException(FetchFailure.unreachable, url.host, detail: fetchDetail(e));
+  } on HandshakeException catch (e) {
+    throw FetchException(FetchFailure.insecure, url.host, detail: fetchDetail(e));
+  } on HttpException catch (e) {
+    throw FetchException(FetchFailure.unreadable, url.host, detail: fetchDetail(e));
   } finally {
     client.close(force: true);
   }

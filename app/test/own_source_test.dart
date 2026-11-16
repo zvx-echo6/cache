@@ -170,6 +170,25 @@ void main() {
     });
   });
 
+  group('the log line of a try', () {
+    test('never holds the key, however it was put in the address', () {
+      const secret = 'SECRET KEY/123';
+      final shown = ownAddressForLog('https://x.example.org/a?lat={lat}&lon={lon}&key={api_key}&k2=${Uri.encodeComponent(secret)}&k3=$secret', lat: 43.6, lon: -116.2, key: secret);
+      final line = ownTryLogLine(shown, 43.6, -116.2, OwnTry.failed('x.example.org', OwnTryFailure.unreachable, detail: 'SocketException: Failed host lookup'));
+      expect(line, isNot(contains('SECRET')));
+      expect(line, isNot(contains(Uri.encodeComponent(secret))));
+      expect(line, startsWith('Own source try: https://x.example.org/a?lat=43.6000&lon=-116.2000&key={api_key}&k2={api_key}&k3={api_key} -> unreachable [SocketException: Failed host lookup], place 43.6000,-116.2000'));
+    });
+
+    test('reports a character outside printable ASCII by code and place', () {
+      const addr = 'https://x.example.org/a?lat=1\u200b';
+      final line = ownTryLogLine(addr, 1, 2, OwnTry.ok('x.example.org', const [OwnValue(path: 'a', label: 'A', value: '1')]));
+      expect(line, contains('U+200B at ${addr.length - 1}'));
+      expect(line, contains('-> ok, 1 values, place 1.0000,2.0000'));
+      expect(ownTryLogLine('https://x.example.org/', 1, 2, OwnTry.ok('x', const [])), isNot(contains('U+')));
+    });
+  });
+
   group('the definition it saves', () {
     final values = flattenJson(jsonDecode(File('$_fixtures/own_source_response.json').readAsStringSync()));
     const picks = [OwnPick('water.level', 'Water level'), OwnPick('water.trend', 'Trend'), OwnPick('updated', 'Updated')];

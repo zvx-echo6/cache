@@ -195,7 +195,7 @@ enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, insecure, 
 /// What one try of the address gave: the values found, or why there are none.
 class OwnTry {
   const OwnTry.ok(this.host, this.values) : failure = null, status = null;
-  const OwnTry.failed(this.host, OwnTryFailure this.failure, {this.status}) : values = const [];
+  const OwnTry.failed(this.host, OwnTryFailure this.failure, {this.status, this.detail}) : values = const [];
 
   final String host;
   final List<OwnValue> values;
@@ -203,6 +203,9 @@ class OwnTry {
 
   /// The HTTP status of [OwnTryFailure.status].
   final int? status;
+
+  /// The network exception's own text, for the log only.
+  final String? detail;
 
   bool get ok => failure == null;
 
@@ -220,6 +223,30 @@ class OwnTry {
     OwnTryFailure.empty => '$host answered, but there are no values in it.',
     OwnTryFailure.unreadable => "Couldn't read the answer from $host.",
   };
+}
+
+/// [address] (the form's text) filled with the place as the try fills it, but with the key left as `{api_key}`: what the log may
+/// show. A key typed straight into the address is also replaced, raw or percent-encoded.
+String ownAddressForLog(String address, {required double lat, required double lon, String? key}) {
+  var out = address.replaceAllMapped(_hole, (m) => m.group(1) == 'api_key' ? '{api_key}' : fillAddress(m.group(0)!, lat: lat, lon: lon));
+  final k = (key ?? '').trim();
+  if (k.isNotEmpty) out = out.replaceAll(k, '{api_key}').replaceAll(Uri.encodeComponent(k), '{api_key}');
+  return out;
+}
+
+/// The one log line of a try: `Own source try: <address> -> <outcome>`. Anything outside printable ASCII in the address is listed
+/// as `U+200B at 57` (a code unit and its place in the address as shown).
+String ownTryLogLine(String shownAddress, double lat, double lon, OwnTry t) {
+  final odd = <String>[];
+  for (var i = 0; i < shownAddress.length; i++) {
+    final c = shownAddress.codeUnitAt(i);
+    if (c < 0x20 || c > 0x7e) odd.add('U+${c.toRadixString(16).toUpperCase().padLeft(4, '0')} at $i');
+  }
+  final place = 'place ${lat.toStringAsFixed(4)},${lon.toStringAsFixed(4)}';
+  final outcome = t.ok
+      ? 'ok, ${t.values.length} values, $place'
+      : '${t.failure!.name}${t.status == null ? '' : ' (HTTP ${t.status})'}${t.detail == null ? '' : ' [${t.detail}]'}, $place';
+  return 'Own source try: $shownAddress -> $outcome${odd.isEmpty ? '' : ' (non-ASCII in address: ${odd.join(', ')})'}';
 }
 
 /// Reads an address for a try: the body, or a [net.FetchException].
@@ -243,7 +270,7 @@ Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duratio
       net.FetchFailure.status => OwnTryFailure.status,
       net.FetchFailure.tooLarge => OwnTryFailure.tooLarge,
       net.FetchFailure.unreadable => OwnTryFailure.unreadable,
-    }, status: e.status);
+    }, status: e.status, detail: e.detail);
   } on TimeoutException {
     return OwnTry.failed(host, OwnTryFailure.timedOut);
   }
