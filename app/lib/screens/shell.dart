@@ -182,6 +182,19 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
+/// A question asked while no model was loaded, waiting for it.
+class _HeldAsk {
+  _HeldAsk(this.text, this.seed, this.epoch, this.sawLoad);
+  final String text;
+  final AskAbout? seed;
+
+  /// The chat it was held in ([ChatController.chatEpoch]).
+  final int epoch;
+
+  /// A model load has been seen since it was held.
+  bool sawLoad;
+}
+
 class _ShellState extends State<Shell> {
   /// The module on screen; null with [_onModules] false is Home.
   ModuleId? _module;
@@ -236,8 +249,19 @@ class _ShellState extends State<Shell> {
   /// Set in initState (a lazy initializer would first run after the model had already arrived).
   bool _noModelSeen = false;
 
+  _HeldAsk? _held;
+
   void _onApp() {
     final app = widget.app;
+    final held = _held;
+    if (held != null) {
+      // A load began (the wake, or the person's Load): the question waits for it. One that ended with no model failed: drop it.
+      if (app.loading != null) {
+        held.sawLoad = true;
+      } else if (held.sawLoad && app.active == null) {
+        _held = null;
+      }
+    }
     if (app.modelGeneration != _seenGeneration) {
       _seenGeneration = app.modelGeneration;
       _openingRead = false; // another model is loaded while Ask stays open: it gets its read ahead
@@ -284,6 +308,7 @@ class _ShellState extends State<Shell> {
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     _seenGeneration = widget.app.modelGeneration;
     widget.app.addListener(_onApp);
+    widget.chat.addListener(_sendHeld);
     _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
@@ -495,6 +520,7 @@ class _ShellState extends State<Shell> {
     widget.nav.removeListener(_onNavForJumpBack);
     pagePushWatcher.removeListener(_onPagePushed);
     widget.app.removeListener(_onApp);
+    widget.chat.removeListener(_sendHeld);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     if (askCacheInstead == _askFromGuide) askCacheInstead = null;
@@ -509,8 +535,10 @@ class _ShellState extends State<Shell> {
   /// Tells the app when Ask stops or starts being the screen shown ([Shell.onAskShown]), around a change of [_module].
   void _changeModule(void Function() change) {
     final before = _module == ModuleId.ask;
+    final from = _module;
     setState(() {
       change();
+      if (_module != from) _held = null; // leaving Ask: coming back must not send a stale question
       // Leaving Maps any other way (a tab, Home, Modules) forgets where a jump came from.
       if (!_jumping && _module != ModuleId.maps) _jumpBack = null;
     });
@@ -999,9 +1027,7 @@ class _ShellState extends State<Shell> {
   @visibleForTesting
   void askFromHome(String text) {
     if (!_askOn) return;
-    widget.chat.newChat();
-    _goModule(ModuleId.ask);
-    widget.chat.send(text);
+    _askInNewChat(text);
   }
 
   void _openSettings() {
@@ -1020,9 +1046,36 @@ class _ShellState extends State<Shell> {
   @visibleForTesting
   void askAbout(AskAbout about) {
     if (!_askOn) return;
-    widget.chat.newChat();
+    _askInNewChat(about.question, seed: about);
+  }
+
+  /// A new chat that asks [text] (with [seed], Ask about this) straight away. With no model loaded the chat cannot take it (a model
+  /// file may be on the device while the model rests until Ask opens or Load is pressed), so it is held and sent once the model
+  /// is loaded ([_sendHeld]). Opening Ask wakes the model. One request is held at most; a newer one replaces it.
+  void _askInNewChat(String text, {AskAbout? seed}) {
+    final chat = widget.chat;
+    _held = null;
+    chat.newChat();
     _goModule(ModuleId.ask);
-    widget.chat.send(about.question, seed: about);
+    if (chat.canSend) {
+      unawaited(chat.send(text, seed: seed));
+      return;
+    }
+    _held = _HeldAsk(text, seed, chat.chatEpoch, widget.app.loading != null);
+  }
+
+  /// The chat changed while a question is held: sent when the model is there; dropped when the person sent something else first
+  /// or started another chat.
+  void _sendHeld() {
+    final h = _held;
+    if (h == null) return;
+    final chat = widget.chat;
+    if (chat.chatEpoch != h.epoch || chat.messages.isNotEmpty) {
+      _held = null;
+    } else if (chat.canSend) {
+      _held = null;
+      unawaited(chat.send(h.text, seed: h.seed));
+    }
   }
 
   void _openWeatherSettings() {
