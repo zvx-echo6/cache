@@ -23,13 +23,13 @@ const String kCreditsAsset = 'assets/credits.md';
 /// Library > Cache Documentation > Credits and licences: the version, the licence, the credits and the open-source licences.
 /// (What's new has its own row in Cache Documentation.)
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion, this.updates});
+  const AboutPage({super.key, this.openUrl, this.version = installedVersion, this.updates});
 
   /// The iPhone's update check (the app's when null): the Version line says when a newer build is out, with Open TestFlight.
   final AppUpdates? updates;
 
   /// How a link is opened (the phone's browser; a test passes its own).
-  final UrlOpener openUrl;
+  final UrlOpener? openUrl;
 
   /// The installed version and build (read from the phone; a test passes its own).
   final Future<String> Function() version;
@@ -188,14 +188,18 @@ String sourceNoticeEnd(TargetPlatform platform) => switch (platform) {
 class _SourceNotice extends StatefulWidget {
   const _SourceNotice({required this.openUrl});
 
-  final UrlOpener openUrl;
+  final UrlOpener? openUrl;
 
   @override
   State<_SourceNotice> createState() => _SourceNoticeState();
 }
 
 class _SourceNoticeState extends State<_SourceNotice> {
-  late final TapGestureRecognizer _tap = TapGestureRecognizer()..onTap = () => widget.openUrl(kSourceUrl);
+  late final TapGestureRecognizer _tap = TapGestureRecognizer()..onTap = () {
+    // No opener given (the app): the web-link rule, the browser online and "You're offline" offline (openWebLink).
+    final open = widget.openUrl;
+    open == null ? openWebLink(context, kSourceUrl) : open(kSourceUrl);
+  };
 
   @override
   void dispose() {
