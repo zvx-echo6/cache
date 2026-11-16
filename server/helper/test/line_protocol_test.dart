@@ -124,25 +124,6 @@ void main() {
     expect(h.order, ['wait start', 'wait end', 'fail']);
     expect(ended, 'before close', reason: 'onEnd ran before the core was closed');
   });
-}
-
-class _SlowHandler implements OpHandler {
-  final List<String> order = [];
-
-  @override
-  bool handles(String op) => op.startsWith('slow.');
-
-  @override
-  FutureOr<Object?> handle(String op, Map<String, dynamic> args) async {
-    if (op == 'slow.wait') {
-      order.add('wait start');
-      await Future<void>.delayed(const Duration(milliseconds: 30));
-      order.add('wait end');
-      return 'waited';
-    }
-    order.add('fail');
-    throw const CacheSearchException('busy', 'try later');
-  }
 
   test('a Pause (set_policy) and a job cancel are answered while an earlier request is still waiting', () async {
     final gate = Completer<Object?>();
@@ -162,6 +143,25 @@ class _SlowHandler implements OpHandler {
     await done;
     expect([for (final l in out.skip(1)) (jsonDecode(l) as Map)['id']], [2, 3, 1, 4]);
   });
+}
+
+class _SlowHandler implements OpHandler {
+  final List<String> order = [];
+
+  @override
+  bool handles(String op) => op.startsWith('slow.');
+
+  @override
+  FutureOr<Object?> handle(String op, Map<String, dynamic> args) async {
+    if (op == 'slow.wait') {
+      order.add('wait start');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      order.add('wait end');
+      return 'waited';
+    }
+    order.add('fail');
+    throw const CacheSearchException('busy', 'try later');
+  }
 }
 
 class _Slow implements OpHandler {
