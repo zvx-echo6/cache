@@ -5,6 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import '../chat/tool.dart';
 import '../search/core_numbering.dart';
 import '../platform/app_log.dart';
+import 'confirm.dart' show kDeclinedNote;
 
 /// What the app needs from the core's `act` tool (docs/ACTIONS.md): the core renders the tool description from the installed
 /// definitions and checks every call; a read or open call comes back to the host as host_run (run by [CoreToolHost], finished with
@@ -36,6 +37,7 @@ String hostEventContent(Map<String, dynamic> outcome) => jsonEncode({
       'action': outcome['action'],
       if (outcome.containsKey('result')) 'result': outcome['result'],
       if (outcome.containsKey('error')) 'error': outcome['error'],
+      if (outcome['status'] == 'declined') 'note': kDeclinedNote,
     });
 
 /// The search core's act tool.

@@ -561,7 +561,7 @@ char *cs_act_finish(cs_conv *c, const char *run_id, const char *reply_json);
  * "action":"places.save","result":{...} (done) | "error":{"type","detail"?} (failed)}; ok is true for done and declined, false
  * for failed. Returns the exact content of the system message the host adds to the conversation, keys in this order:
  *   {"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{...}}
- *   {"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}
+ *   {"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save","note":"The person tapped Cancel. Nothing was done or saved."}
  *   {"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c1","action":"places.save","error":{"type":...,"detail":...}}
  * "address" objects in a done result are numbered in c, so they are citable. NULL with cs_last_error(NULL), code "bad_json", for a
  * NULL argument, a status other than the three, a missing key, an ok that does not go with the status, a done without a result or
