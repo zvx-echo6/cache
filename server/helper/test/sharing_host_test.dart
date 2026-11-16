@@ -198,6 +198,25 @@ void main() {
     expect(h.snapshot()['running'], true);
   });
 
+  test('the server\'s own Bookshelves log is never fetched from another device, before the folder is shared, and again at every open', () async {
+    final h = host();
+    await h.setUp();
+    final c = opened.single;
+    // the engine's id is the device id the Bookshelves log is named by (log/<id>.jsonl, written by the Rust server alone)
+    expect(c.argsOf('set_never_fetch'), [
+      {'id': 'bookshelves', 'never_fetch': ['log/me.jsonl']},
+    ]);
+    final order = [for (final call in c.calls) call.$1 == 'share_add' ? 'add:${call.$2['id']}' : call.$1];
+    expect(order.indexOf('set_never_fetch'), lessThan(order.indexOf('add:bookshelves')));
+    // the other devices' logs, and every other share, are left alone
+    await h.stop();
+    final again = host();
+    await again.init();
+    expect(opened.last.config['never_fetch'], {
+      'bookshelves': ['log/me.jsonl'],
+    });
+  });
+
   test('a kind on adds its folders as shares named as on the phone; off removes the shares and keeps the files', () async {
     final h = host();
     await h.setUp();
