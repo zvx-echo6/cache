@@ -424,10 +424,13 @@ class CoreLayerEngine extends LayerEngine {
   /// A page loaded again while the server's downloads go on: each unfinished area whose saved job number is still a running job
   /// is a running download again, so it shows its progress and Pause reaches the job.
   Future<void> _reattach(SearchCore core) async {
-    for (final a in List.of(_areas.values)) {
-      final saved = _saved[a.id];
+    // One download is listed under each layer that shares the store (hillshade, contours and elevation): one job, every listing.
+    final ids = {for (final a in _areas.values) if (a.phase == AreaPhase.failed) a.id};
+    for (final id in ids) {
+      final saved = _saved[id];
       final jobId = saved?.job;
-      if (saved == null || jobId == null || _running.containsKey(a.id) || a.phase != AreaPhase.failed) continue;
+      if (saved == null || jobId == null || _running.containsKey(id)) continue;
+      final listed = [for (final a in _areas.values) if (a.id == id) a];
       try {
         final job = core.attachJob(jobId);
         final p = await job.progress();
@@ -435,12 +438,14 @@ class CoreLayerEngine extends LayerEngine {
           saved.job = null;
           continue;
         }
-        a
-          ..phase = AreaPhase.running
-          ..error = null
-          ..interrupted = false
-          ..paused = false;
-        _running[a.id] = _Run(a, job, false, totalFromJob: saved.outline != null);
+        for (final a in listed) {
+          a
+            ..phase = AreaPhase.running
+            ..error = null
+            ..interrupted = false
+            ..paused = false;
+        }
+        _running[id] = _Run(listed.first, job, false, totalFromJob: saved.outline != null);
         _poll ??= Timer.periodic(pollEvery, (_) => _tick());
       } catch (_) {
         saved.job = null;
@@ -773,10 +778,12 @@ class CoreLayerEngine extends LayerEngine {
       final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
       if (pausedNow) {
         // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
-        a
-          ..phase = AreaPhase.failed
-          ..error = null
-          ..paused = true;
+        for (final x in _areas.values.where((x) => x.id == a.id)) {
+          x
+            ..phase = AreaPhase.failed
+            ..error = null
+            ..paused = true;
+        }
         reload = true;
         continue;
       }
