@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import '../../../app/lib/settings/key_names.dart';
 import '../bin/keystore.dart';
 import '../bin/server_settings_sync.dart';
 
@@ -17,6 +18,7 @@ void main() {
   final given = <(String, Map<String, String>)>[];
   var arrived = <String, Map<String, String>>{};
   final logs = <String>[];
+  var replays = 0;
 
   Map<String, dynamic> peer(String id, Map<String, Object?> link) => {'id': id, 'linked': 1, 'link': link};
 
@@ -28,6 +30,7 @@ void main() {
     given.clear();
     arrived = {};
     logs.clear();
+    replays = 0;
     sync = ServerSettingsSync(
       support: Directory('${support.path}/support')..createSync(),
       running: () => running,
@@ -36,6 +39,7 @@ void main() {
       askSince: () => null,
       log: logs.add,
       keys: store,
+      onWebKeyKept: () => replays++,
       setSecrets: (p, s) async => given.add((p, {...s})),
       takeSecrets: () async {
         final r = arrived;
@@ -163,6 +167,27 @@ void main() {
     expect(logs.where((l) => l.contains('app.pin')), isNotEmpty);
     expect(logs.where((l) => l.contains('video.x.token')), isNotEmpty);
     expect(logs.where((l) => l.contains('ARRIVED')), isEmpty);
+  });
+
+  test('take: a web search key that arrives is replayed once so web search uses it at once', () async {
+    await sync.start();
+    arrived = {'peerA': {'search.kagi.key': 'KAGI-NEW'}};
+    await sync.tick();
+    expect(store.get('search.kagi.key'), 'KAGI-NEW');
+    expect(replays, 1);
+    await sync.tick();
+    expect(replays, 1, reason: 'nothing arrived the second time');
+    arrived = {'peerA': {'search.kagi.key': 'KAGI-NEW', 'live.key.owm': 'OWM-1'}};
+    await sync.tick();
+    expect(replays, 2, reason: 'one replay per take, however many keys');
+  });
+
+  test('take: a weather key does not cause a replay (it is used after a tab next pushes it: the accepted weather gap)', () async {
+    await sync.start();
+    arrived = {'peerA': {'live.key.owm': 'OWM-1', 'app.pin': 'X'}};
+    await sync.tick();
+    expect(store.get('live.key.owm'), 'OWM-1');
+    expect(replays, 0);
   });
 
   test('take: keys from a device whose settings this one does not take are not kept', () async {
