@@ -165,7 +165,8 @@ void main() {
     test('a host that cannot be looked up is not found; a refused or reset connection is unreachable', () {
       expect(socketFailure(const SocketException("Failed host lookup: 'x.example.org'")), FetchFailure.notFound);
       expect(socketFailure(const SocketException('x', osError: OSError('No address associated with hostname', 7))), FetchFailure.notFound);
-      expect(socketFailure(const SocketException('x', osError: OSError('', 7))), FetchFailure.notFound);
+      // An error number alone is not enough (errno 7 is a lookup failure on Android but E2BIG on Linux): the text decides.
+      expect(socketFailure(const SocketException('x', osError: OSError('', 7))), FetchFailure.unreachable);
       expect(socketFailure(const SocketException('Connection refused', osError: OSError('Connection refused', 111))), FetchFailure.unreachable);
       expect(socketFailure(const SocketException('Connection reset by peer', osError: OSError('Connection reset by peer', 104))), FetchFailure.unreachable);
       const t = OwnTry.failed('x.example.org', OwnTryFailure.notFound);
