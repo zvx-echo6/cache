@@ -1,9 +1,10 @@
-import 'dart:convert';
-
 import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceStatus;
+
+import 'indexes_fetch.dart';
 
 // kIndexesDirName lives in indexes_dir.dart: the Cache Server helper (plain Dart, no Flutter packages) reads core_config.dart too.
 export 'indexes_dir.dart' show kIndexesDirName;
+export 'indexes_fetch.dart' show kIndexKindsOfSource, kIndexKindsAlways, encodeSourceId, indexesFetchOnlyOf, indexesNeverFetchOf;
 export '../sharing/share_rules.dart' show kIndexesShareId, kIndexesNotShared, kIndexesHidden, kIndexesLocalDeletes, kIndexesLast;
 
 /// The device's syncable search indexes (the core's `indexes_dir`): one folder, `<kind>/<source id>/`, each with its working
@@ -11,51 +12,14 @@ export '../sharing/share_rules.dart' show kIndexesShareId, kIndexesNotShared, kI
 /// once sharing is set up, whatever kinds are ticked, so an index reaches any device that has the same source, even when the
 /// source itself does not sync (two phones with the same ZIM, each downloaded on its own).
 
-/// The kinds of index folder each kind of source has (the core's kinds): a ZIM's keyword index, its PDFs', its captions' and
-/// its EPUBs'; a library's.
-const Map<String, List<String>> kIndexKindsOfSource = {
-  'zim': ['zim', 'zim-pdf', 'zim-captions', 'zim-epub'],
-  'library': ['library'],
-};
-
-/// Index kinds every device fetches whole, whatever sources it has: the regions' tile indexes (routing and places), one small
-/// snapshot per server build. A device fetches them before it has any region: with a peer's copy it plans and adds regions
-/// with no network, and a device with no network knows no build name to ask for (the core takes the newest snapshot here).
-const List<String> kIndexKindsAlways = ['places-index', 'region-index'];
-
-/// A source id as one folder name, as the core writes it (cache_search snapshot.rs `encode_source_id`): every byte except
-/// letters, digits and `_@-`, and `.` after the first byte, is written `%XX`.
-String encodeSourceId(String id) {
-  final out = StringBuffer();
-  final bytes = utf8.encode(id);
-  for (var i = 0; i < bytes.length; i++) {
-    final b = bytes[i];
-    final plain = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a) || b == 0x5f || b == 0x40 || b == 0x2d || (b == 0x2e && i > 0);
-    out.write(plain ? String.fromCharCode(b) : '%${b.toRadixString(16).toUpperCase().padLeft(2, '0')}');
-  }
-  return out.toString();
-}
-
 /// What this device fetches of the indexes folder: the regions' tile indexes ([kIndexKindsAlways]), the captions of the videos
 /// saved here ([savedVideos], their `<instance>/<uuid>`), and the index folders of the sources the core has open (their
 /// `source_id` in cs_status), every kind each of them has. A source the core could not open (no source id) fetches nothing.
-List<String> indexesFetchOnly(Iterable<SourceStatus> sources, {Iterable<String> savedVideos = const []}) => {
-  ...kIndexKindsAlways,
-  // Each saved video's captions ("<instance>/<video uuid>"), on whichever device indexed them.
-  for (final v in savedVideos)
-    if (v.isNotEmpty) 'captions/${encodeSourceId(v)}',
-  for (final s in sources)
-    if (s.sourceId != null && s.sourceId!.isNotEmpty)
-      for (final kind in kIndexKindsOfSource[s.kind] ?? const <String>[]) '$kind/${encodeSourceId(s.sourceId!)}',
-}.toList()..sort();
+List<String> indexesFetchOnly(Iterable<SourceStatus> sources, {Iterable<String> savedVideos = const []}) =>
+    indexesFetchOnlyOf([for (final s in sources) (kind: s.kind, sourceId: s.sourceId)], savedVideos: savedVideos);
 
 /// What this device never fetches of the indexes folder: the snapshots its core found unusable and removed. Sync already keeps
 /// a snapshot this device deleted from coming back (the delete stays here); this holds even when that record is gone.
 /// The core's own "path" when it gives one (the folder name exactly as it wrote it), else built the same way.
-List<String> indexesNeverFetch(Iterable<RejectedSnapshot> rejected) => {
-  for (final r in rejected)
-    if (r.path != null && r.path!.isNotEmpty)
-      r.path!
-    else if (r.kind.isNotEmpty && r.sourceId.isNotEmpty && r.buildId.isNotEmpty)
-      '${r.kind}/${encodeSourceId(r.sourceId)}/snap/${r.buildId}',
-}.toList()..sort();
+List<String> indexesNeverFetch(Iterable<RejectedSnapshot> rejected) =>
+    indexesNeverFetchOf([for (final r in rejected) (kind: r.kind, sourceId: r.sourceId, buildId: r.buildId, path: r.path)]);
