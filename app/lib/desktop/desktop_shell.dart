@@ -205,9 +205,17 @@ class _DesktopShellState extends State<DesktopShell> {
       child: Row(
         children: [
           sidebar,
-          // A snackbar sits at the bottom left of the page area, so it is told that area's width.
+          // A snackbar sits at the bottom left of the page area, so it is told that area's width. A snackbar is drawn by the
+          // outermost Scaffold, so this one frame (see through, and nothing else) is where every page's messages show: left to a
+          // pane's own Scaffold, a snackbar was laid out inside that narrow pane, given the page area's offsets, and had no width.
           Expanded(
-            child: LayoutBuilder(builder: (context, c) => DesktopThemeScope(regionWidth: c.maxWidth, focusRing: false, child: widget.child)),
+            child: LayoutBuilder(
+              builder: (context, c) => DesktopThemeScope(
+                regionWidth: c.maxWidth,
+                focusRing: false,
+                child: Scaffold(key: const ValueKey('desktop-snack-frame'), backgroundColor: Colors.transparent, body: widget.child),
+              ),
+            ),
           ),
         ],
       ),
