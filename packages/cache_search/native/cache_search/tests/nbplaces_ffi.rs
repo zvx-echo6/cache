@@ -308,6 +308,25 @@ fn a_file_imported_into_a_notebook_is_its_places_and_layer() {
 }
 
 #[test]
+fn lines_imported_into_the_saved_places_are_a_listed_drawable_deletable_layer() {
+    let h = H::open("imp-saved-lines");
+    let pid = h.nb_ok("saved_places", json!({}))["id"].as_str().unwrap().to_string();
+    let r = h.nb_ok("import", json!({"path": fixture("rally-points.geojson"), "notebook_id": pid, "now": NOW}));
+    assert_eq!((r["places"].clone(), r["lines"].clone(), r["areas"].clone(), r["skipped"].clone()), (json!(2), json!(1), json!(1), json!(0)));
+    // the line and the area are a layer of their own: listed, with geometry the map can draw, and deletable
+    let layers = h.ok(unsafe { cs_userlayers_list(h.h) });
+    let y = layers["layers"].as_array().unwrap().iter().find(|l| l["lines"] == json!(1)).expect("a layer with the line");
+    assert_eq!((y["areas"].clone(), y["notebook_id"].clone()), (json!(1), Value::Null));
+    let id = y["id"].as_str().unwrap().to_string();
+    let g = h.ok(unsafe { cs_userlayer_get(h.h, cstr(&id).as_ptr()) });
+    assert!(g["features"].as_array().unwrap().iter().any(|f| f["geometry"]["type"] == "LineString"));
+    assert_eq!(h.ok(unsafe { cs_userlayer_delete(h.h, cstr(&id).as_ptr()) }), json!({"deleted": id}));
+    assert!(h.ok(unsafe { cs_userlayers_list(h.h) })["layers"].as_array().unwrap().is_empty());
+    // the places stay in the saved places
+    assert_eq!(h.nb_ok("notebook", json!({"id": pid}))["entries"], json!(2));
+}
+
+#[test]
 fn repeater_rows_keep_their_recorded_key_order() {
     let g = golden();
     let h = H::open("repeaters");
