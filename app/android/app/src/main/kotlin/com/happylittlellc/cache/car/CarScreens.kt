@@ -395,6 +395,12 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     internal fun showStop(s: CarStop) {
         if (s.lat != null && s.lon != null) map.showPoint(s.lat, s.lon)
     }
+
+    /** The destination's row: the destination on the map. */
+    internal fun showDestination() {
+        val t = CarLink.trip
+        if (t.destinationLat != null && t.destinationLon != null) map.showPoint(t.destinationLat, t.destinationLon)
+    }
 }
 
 /** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
@@ -489,6 +495,8 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
         val left = Row.Builder().setTitle(t.destinationName ?: "Destination")
         CarModels.leftText(t)?.let { left.addText(it) }
         t.destinationAddress?.let { left.addText(it) }
+        // A tap shows the destination on the map, as a stop's row shows the stop.
+        if (t.destinationLat != null && t.destinationLon != null) left.setOnClickListener { showDestination() }
         items.addItem(left.build())
         if (t.routes.size > 1) {
             for (r in t.routes) {
