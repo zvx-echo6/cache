@@ -336,8 +336,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   }
 }
 
-/// How a source of your own will look in Weather and alerts: its name over the line the Weather screen shows (the first ticked
-/// value, then the next two).
+/// How a source of your own will look in Weather and alerts: its name over the first ticked value, then every other ticked value.
 class OwnPreview extends StatelessWidget {
   const OwnPreview({super.key, required this.name, required this.lines});
 
@@ -361,7 +360,12 @@ class OwnPreview extends StatelessWidget {
           Text(name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
           const SizedBox(height: 2),
           Text(lines.isEmpty ? 'Tick a value to show it' : lines.first, style: TextStyle(fontSize: 16, color: lines.isEmpty ? k.secondary : k.text)),
-          if (lines.length > 1) Text(lines.skip(1).take(2).join(' · '), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
+          // every ticked value is on the card; a long run scrolls inside it instead of leaving values out
+          if (lines.length > 1)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 72),
+              child: SingleChildScrollView(child: Text(lines.skip(1).join(' · '), style: TextStyle(fontSize: 14, color: k.secondary))),
+            ),
         ],
       ),
     );
@@ -399,13 +403,14 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     _seed();
   }
 
-  /// Ticks and names for the values of [_t]: kept from before where the value is the same; the first three ticked on a new source.
+  /// Ticks and names for the values of [_t]: kept from before where the value is the same; on a new source what the address asked for
+  /// ([OwnTry.preticked]).
   void _seed() {
     final earlier = {for (final p in widget.earlier ?? const <OwnPick>[]) p.path: p.label};
-    for (var i = 0; i < _t.values.length; i++) {
-      final v = _t.values[i];
+    final first = _t.preticked.toSet();
+    for (final v in _t.values) {
       _names.putIfAbsent(v.path, () => earlier[v.path] ?? v.label);
-      _on.putIfAbsent(v.path, () => widget.earlier == null ? i < 3 : earlier.containsKey(v.path));
+      _on.putIfAbsent(v.path, () => widget.earlier == null ? first.contains(v.path) : earlier.containsKey(v.path));
     }
   }
 
@@ -475,7 +480,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     final k = context.t;
     final picks = tidyPicks(_picks);
     final lines = [
-      for (final p in picks) '${p.label} ${_t.values.firstWhere((v) => v.path == p.path).value}',
+      for (final p in picks) '${p.label} ${_t.values.firstWhere((v) => v.path == p.path).shown}',
     ];
     return SettingsPage(
       title: 'Pick what to show',
@@ -511,7 +516,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
                   key: ValueKey('own-value-${v.path}'),
                   leading: Checkbox(value: _on[v.path] == true, onChanged: (x) => setState(() => _on[v.path] = x == true)),
                   title: _names[v.path] ?? v.label,
-                  status: [Part(v.value)],
+                  status: [Part(v.shown)],
                   trailing: Icon(Icons.edit_outlined, size: 18, color: k.secondary),
                   onTap: () => _rename(v),
                 ),
