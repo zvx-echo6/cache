@@ -21,6 +21,7 @@ import 'add_pdf/add_pdf_state.dart' show addPdfShared;
 import 'add_pdf/fgs_notice_card.dart';
 import 'book_pages.dart';
 import 'catalog_page.dart';
+import 'library_docs_page.dart';
 import 'library_panes.dart';
 import 'library_prefs.dart';
 import 'shelf_source.dart';
@@ -40,6 +41,7 @@ class LibraryDeps {
     required this.openOwnLibrary,
     required this.holdsBooks,
     required this.booksIn,
+    this.documentsIn,
     this.originals,
     this.regions,
     this.sharing,
@@ -73,6 +75,9 @@ class LibraryDeps {
   /// How many books a library of books holds, shelved or not.
   final int Function(LibraryItem item) booksIn;
 
+  /// A library of books' documents, each with where it stands on Bookshelves (null: this source cannot say).
+  final List<LibraryDoc> Function(LibraryItem item)? documentsIn;
+
   /// What shows above the four rows besides the search progress (a library being added).
   final List<Widget> Function(BuildContext context)? rootTop;
 
@@ -96,6 +101,7 @@ LibraryPageSpec bookSpec(LibraryDeps d, String id) => LibraryPageSpec('book:$id'
 LibraryPageSpec unsortedSpec(LibraryDeps d) => LibraryPageSpec('unsorted', (_) => UnsortedPage(deps: d));
 LibraryPageSpec hiddenSpec(LibraryDeps d) => LibraryPageSpec('hidden', (_) => HiddenBooksPage(deps: d), leaf: true);
 LibraryPageSpec catalogSpec(LibraryDeps d, {String? focus}) => LibraryPageSpec('catalog', (_) => CatalogPage(deps: d, focus: focus), leaf: true);
+LibraryPageSpec libraryDocsSpec(LibraryDeps d, LibraryItem l) => LibraryPageSpec('library-docs:${l.folderName}', (_) => LibraryDocsPage(deps: d, library: l), leaf: true);
 LibraryPageSpec docsSpec(LibraryDeps d) => LibraryPageSpec('docs', (_) => DocsPage(deps: d), leaf: true);
 LibraryPageSpec creditsSpec() => LibraryPageSpec('credits', (_) => const AboutPage(), leaf: true);
 

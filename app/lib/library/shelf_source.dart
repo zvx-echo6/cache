@@ -78,6 +78,40 @@ class ShelfGap {
   final int books;
 }
 
+/// Where one document of a library stands on Bookshelves.
+enum DocPlace {
+  /// On a shelf (it has a call number).
+  shelved,
+
+  /// A book on Bookshelves that no shelf holds yet.
+  unsorted,
+
+  /// A book the person hid from Bookshelves.
+  hidden,
+
+  /// In the library, but Bookshelves resolves it to no book at all (no shelf, not Unsorted, not Hidden).
+  none,
+}
+
+/// One document of a library's catalogue (`documents.tsv`) joined with what Bookshelves makes of it.
+@immutable
+class LibraryDoc {
+  const LibraryDoc({required this.docId, required this.title, required this.place, required this.book, this.copies = 1});
+
+  final String docId;
+
+  /// The book's title as Bookshelves shows it (renamed or not); the catalogue's own title for a document on no shelf.
+  final String title;
+  final DocPlace place;
+
+  /// The Bookshelves book when [place] is not [DocPlace.none] (open it with its book page); otherwise the document's own file as a
+  /// book-shaped record (its PDF path or server route), for opening the PDF.
+  final ShelfBook book;
+
+  /// How many files the book has across the person's libraries and devices.
+  final int copies;
+}
+
 /// The person's corrections to which files are one book. Each one is kept on all of the person's own devices.
 abstract class ShelfCopies {
   /// Read [copy] (one of [book]'s spares) instead of the copy Cache picked.
