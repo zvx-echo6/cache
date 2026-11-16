@@ -39,6 +39,8 @@ String deviceJobWords(DeviceJob j) {
   if (e.contains('free space') || e.contains('out of space')) return 'Not enough space on this device.';
   if (e.contains('checksum')) return 'The file did not match its published checksum, so it was thrown away. Try again.';
   if (e.contains('connection')) return 'The connection failed. Try again.';
+  // The server's own sentence for a file no mirror has yet; it names no machine, so it goes through as it is.
+  if (e.contains("isn't on the download servers yet")) return "This file isn't on the download servers yet. Try again later.";
   return 'The download stopped. Try again.';
 }
 

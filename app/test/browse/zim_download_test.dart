@@ -67,6 +67,89 @@ class FakeKiwix {
   Future<void> stop() => server.close(force: true);
 }
 
+/// How one mirror in [FakeMirrors] answers for the file.
+enum MirrorMode { ok, notFound, cutMidBody }
+
+/// A stand-in for download.kiwix.org with a metalink: /zim/f.zim redirects to mirror 1 (the old way), /zim/f.zim.meta4 lists
+/// mirror 1 (priority 1) and mirror 2 (priority 2) with the file's sha-256 and size; the .sha256 file is wrong on purpose, so only
+/// the metalink's hash can pass.
+class FakeMirrors {
+  FakeMirrors(this.bytes, {this.mirror1 = MirrorMode.ok, this.mirror2 = MirrorMode.ok, this.meta4 = true, this.cutAt = 100000});
+
+  final Uint8List bytes;
+  final MirrorMode mirror1;
+  final MirrorMode mirror2;
+  final bool meta4;
+  final int cutAt;
+  late HttpServer server;
+  final Map<String, List<String?>> bodyRanges = {'1': [], '2': []};
+
+  Uri get url => Uri.parse('http://127.0.0.1:${server.port}/zim/f.zim');
+
+  Future<void> start() async {
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final base = 'http://127.0.0.1:${server.port}';
+    server.listen((req) async {
+      final res = req.response;
+      final path = req.uri.path;
+      if (path == '/zim/f.zim') {
+        res.statusCode = 302;
+        res.headers.set('location', '/mirror1/f.zim');
+      } else if (path == '/zim/f.zim.meta4') {
+        if (!meta4) {
+          res.statusCode = 404;
+        } else {
+          res.headers.contentType = ContentType('application', 'metalink4+xml');
+          res.write(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="f.zim"><size>${bytes.length}</size>'
+            '<hash type="sha-256">${sha256.convert(bytes)}</hash>'
+            '<url location="us" priority="2">$base/mirror2/f.zim</url>'
+            '<url location="de" priority="1">$base/mirror1/f.zim</url></file></metalink>',
+          );
+        }
+      } else if (path == '/zim/f.zim.sha256') {
+        res.write('${'ee' * 32}  f.zim\n');
+      } else if (path == '/mirror1/f.zim' || path == '/mirror2/f.zim') {
+        final which = path == '/mirror1/f.zim' ? '1' : '2';
+        final mode = which == '1' ? mirror1 : mirror2;
+        if (mode == MirrorMode.notFound) {
+          res.statusCode = 404;
+        } else if (req.method == 'HEAD') {
+          res.headers.contentLength = bytes.length;
+          res.headers.set('accept-ranges', 'bytes');
+        } else {
+          final range = req.headers.value('range');
+          bodyRanges[which]!.add(range);
+          final from = range == null ? 0 : int.parse(RegExp(r'bytes=(\d+)-').firstMatch(range)!.group(1)!);
+          final head = range == null
+              ? 'HTTP/1.1 200 OK\r\ncontent-length: ${bytes.length}\r\naccept-ranges: bytes\r\n\r\n'
+              : 'HTTP/1.1 206 Partial Content\r\ncontent-range: bytes $from-${bytes.length - 1}/${bytes.length}\r\n'
+                  'content-length: ${bytes.length - from}\r\naccept-ranges: bytes\r\n\r\n';
+          final socket = await res.detachSocket(writeHeaders: false);
+          socket.add(head.codeUnits);
+          if (mode == MirrorMode.cutMidBody) {
+            // The connection ends before the body does.
+            socket.add(bytes.sublist(from, from + cutAt));
+            await socket.flush();
+            socket.destroy();
+          } else {
+            socket.add(bytes.sublist(from));
+            await socket.flush();
+            await socket.close();
+          }
+          return;
+        }
+      } else {
+        res.statusCode = 404;
+      }
+      await res.close();
+    });
+  }
+
+  Future<void> stop() => server.close(force: true);
+}
+
 Uint8List data(int n) => Uint8List.fromList(List.generate(n, (i) => (i * 31 + 7) & 0xff));
 
 void main() {
@@ -233,6 +316,64 @@ void main() {
       );
       await expectLater(d.download(url: k.url, part: part), throwsA(isA<DownloadException>().having((e) => e.code, 'code', 'failed')));
       expect(part.existsSync(), isTrue);
+    });
+  });
+
+  group('Kiwix mirrors (the metalink)', () {
+    Future<DownloadResult> go(FakeMirrors k, File part) => ZimDownloader(freeSpace: (_) => 1 << 40).download(
+          url: k.url,
+          part: part,
+          sha256Url: Uri.parse('${k.url}.sha256'),
+        );
+
+    test('the main mirror answers 404, the second one serves the file, and the metalink sha-256 verifies it', () async {
+      final k = FakeMirrors(data(300000), mirror1: MirrorMode.notFound);
+      await k.start();
+      addTearDown(k.stop);
+      final part = File('${tmp.path}/f.part');
+      final r = await go(k, part);
+      expect(r.verified, isTrue);
+      expect(r.checksumKind, 'sha256');
+      expect(part.readAsBytesSync(), k.bytes);
+      expect(k.bodyRanges['1'], isEmpty);
+      expect(k.bodyRanges['2'], [null]);
+    });
+
+    test('every mirror answers 404: it says the file is not on the download servers yet', () async {
+      final k = FakeMirrors(data(1000), mirror1: MirrorMode.notFound, mirror2: MirrorMode.notFound);
+      await k.start();
+      addTearDown(k.stop);
+      final part = File('${tmp.path}/f.part');
+      await expectLater(
+        go(k, part),
+        throwsA(
+          isA<DownloadException>()
+              .having((e) => e.code, 'code', 'not_mirrored')
+              .having((e) => e.message, 'message', "This file isn't on the download servers yet. Try again later."),
+        ),
+      );
+      expect(part.existsSync(), isFalse);
+    });
+
+    test('a mirror that drops the connection mid-body: the next mirror continues from the partial file with Range', () async {
+      final k = FakeMirrors(data(300000), mirror1: MirrorMode.cutMidBody, cutAt: 100000);
+      await k.start();
+      addTearDown(k.stop);
+      final part = File('${tmp.path}/f.part');
+      final r = await go(k, part);
+      expect(r.verified, isTrue);
+      expect(part.readAsBytesSync(), k.bytes);
+      expect(k.bodyRanges['1'], [null]);
+      expect(k.bodyRanges['2'], ['bytes=100000-']);
+    });
+
+    test('no metalink (404): the redirect and the .sha256 work as before', () async {
+      final k = FakeMirrors(data(100000), meta4: false);
+      await k.start();
+      addTearDown(k.stop);
+      // the published .sha256 of this stand-in is wrong, so the old path ends in a checksum failure, which proves it was used
+      await expectLater(go(k, File('${tmp.path}/f.part')), throwsA(isA<DownloadException>().having((e) => e.code, 'code', 'checksum')));
+      expect(k.bodyRanges['1'], [null]);
     });
   });
 }
