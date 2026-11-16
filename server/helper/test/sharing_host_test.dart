@@ -394,6 +394,26 @@ void main() {
     }
   });
 
+  test('a browser\'s set_link tells the settings sync which link it changed and what that link was before; nothing else does', () async {
+    final h = host();
+    final heard = <(String, Map<String, dynamic>?)>[];
+    h.onLinkSet = (peer, before) async => heard.add((peer, before));
+    await h.setUp();
+    final c = opened.single;
+    c.peers = [
+      {'id': 'peer-1', 'linked': 1, 'link': {'mode': 'off'}},
+    ];
+    await h.invoke('sharing.call', {'method': 'sync_now', 'args': {}});
+    expect(heard, isEmpty);
+    await h.invoke('sharing.call', {'method': 'set_link', 'args': {'peer': 'peer-1', 'link': {'mode': 'match'}}});
+    expect(heard, hasLength(1));
+    expect(heard.single.$1, 'peer-1');
+    expect(heard.single.$2, containsPair('link', {'mode': 'off'}));
+    expect(c.argsOf('set_link').single['peer'], 'peer-1');
+    await h.invoke('sharing.call', {'method': 'set_link', 'args': {'peer': 'peer-1', 'link': {'mode': 'off'}}}, trusted: true);
+    expect(heard, hasLength(1), reason: 'only a browser\'s change is seeded: the host\'s own calls are not');
+  });
+
   test('the key ops of a host with no keys behind it say so and never fall through to the engine', () async {
     final h = host();
     await h.setUp();
