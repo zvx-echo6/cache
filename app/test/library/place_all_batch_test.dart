@@ -108,7 +108,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('placed-snack')), findsNothing, reason: 'it did not all work, so no success message');
     expect(find.byType(SnackBar), findsOneWidget, reason: 'the person is told');
-    expect(find.textContaining('could not'), findsOneWidget);
+    expect(find.textContaining(' of 6000 books placed. The rest could not be saved. Try again.'), findsOneWidget);
     expect(server.sent, hasLength(1), reason: 'the first batch was sent and is not rolled back');
   });
 }
