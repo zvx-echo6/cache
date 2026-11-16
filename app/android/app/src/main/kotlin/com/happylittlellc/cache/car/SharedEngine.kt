@@ -8,6 +8,7 @@ import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import com.happylittlellc.cache.BuildConfig
+import com.happylittlellc.cache.MemoryAnswers
 
 /**
  * The app's one Flutter engine, shared by the phone screen (MainActivity) and the car screen (CacheCarAppService) and kept for
@@ -49,6 +50,7 @@ object SharedEngine {
         FlutterEngineCache.getInstance().put(ID, engine)
         CarLink.attach(engine)
         answerBuild(engine.dartExecutor.binaryMessenger)
+        MemoryAnswers.attach(engine.dartExecutor.binaryMessenger, context)
         return engine
     }
 
