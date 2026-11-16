@@ -252,6 +252,25 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('place search: "No places match." from an older answer is not shown while a newer search runs', (tester) async {
+    final boise = Completer<List<MapPlace>>();
+    final r = await openSheet(tester, (q) => q == 'Boise' ? boise.future : Future.value(<MapPlace>[]));
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Boi');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(find.text('No places match.'), findsOneWidget);
+    await tester.enterText(field, 'Boise');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'the newest search is running');
+    expect(find.text('No places match.'), findsNothing);
+    boise.complete([hilo]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
   testWidgets('place search: clearing the field shows the saved list again', (tester) async {
     final r = await openSheet(tester, (q) async => [hilo]);
     final field = find.byKey(const ValueKey('weather-place-search'));
