@@ -145,4 +145,26 @@ void main() {
       await offlineChecks(tester, 'https://example.org/x');
     });
   });
+
+  group('Credits and licenses: the Source code address', () {
+    Future<void> showAbout(WidgetTester tester) => show(tester, AboutPage(version: () async => '1.1.0'));
+
+    testWidgets('online: the address opens in the phone\'s browser', (tester) async {
+      await showAbout(tester);
+      _tapLink(tester, kSourceUrl);
+      await tester.pump();
+      await tester.pump();
+      expect(opened, [kSourceUrl]);
+      expect(find.text("You're offline"), findsNothing);
+    });
+
+    testWidgets('offline: "You\'re offline" with Copy link, in place; the browser is not called', (tester) async {
+      probe.kind = ConnectionKind.none;
+      await showAbout(tester);
+      _tapLink(tester, kSourceUrl);
+      await tester.pump();
+      await tester.pump();
+      await offlineChecks(tester, kSourceUrl);
+    });
+  });
 }
