@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 
 import '../../../packages/cache_search/lib/src/sync_core_io.dart';
 import '../../../app/lib/sharing/settings_log.dart';
+import '../bin/keystore.dart';
 import '../bin/server_settings_sync.dart';
 import '../bin/sharing_host.dart';
 
@@ -268,6 +269,94 @@ void main() {
       expect(evs.where((e) => e.key == 'home.bar').single.value, ['ask', 'library']);
       expect(evs.every((e) => e.dev == serverId), isTrue);
       expect(evs.where((e) => e.key == 'appearance.theme'), isEmpty, reason: 'what the host applied did not echo back');
+    } finally {
+      sync?.stop();
+      for (final h in hosts) {
+        await h.stop();
+      }
+      await b?.close();
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+  }, timeout: const Timeout(Duration(minutes: 6)), skip: skip);
+
+  test('keys: a key ticked on the server arrives on the other side, and a key from the other side lands in the server\'s keystore file', () async {
+    expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
+    final tmp = Directory.systemTemp.createTempSync('sharing_loopback_keys');
+    final hosts = <SharingHost>[];
+    ServerSettingsSync? sync;
+    SyncCore? b;
+    try {
+      final data = Directory('${tmp.path}/data')..createSync();
+      final support = Directory('${data.path}/app/support')..createSync(recursive: true);
+      final docs = Directory('${data.path}/app/docs')..createSync(recursive: true);
+      final host = SharingHost(dataDir: data, supportDir: support, docsDir: docs, deviceName: 'Server', libraryPath: lib, engineConfig: _noNetwork);
+      hosts.add(host);
+      await host.setUp();
+      expect(host.snapshot()['running'], true, reason: '${host.snapshot()['error']}');
+      final keystoreFile = File('${data.path}/keystore.json');
+      final store = KeyStore(keystoreFile);
+      store.set('live.key.owm', 'SERVER-OWM-KEY');
+      final logs = <String>[];
+      sync = ServerSettingsSync(
+        support: support,
+        running: () => host.running,
+        myId: () => host.myId,
+        peers: () => host.peers,
+        askSince: () => host.askSince,
+        every: const Duration(seconds: 2),
+        log: logs.add,
+        keys: store,
+        setSecrets: host.setSecrets,
+        takeSecrets: host.takeSecrets,
+      );
+      host.onShareChanged = (ids) => sync!.shareChanged(ids);
+      await sync.start();
+
+      b = await SyncCore.open({'dir': '${tmp.path}/b/sync', 'name': 'Phone', ..._noNetwork}, libraryPath: lib);
+      final code = (await b.call('link_code'))['code'] as String;
+      await host.invoke('sharing.link_start', {'code': code});
+      await until(() => (host.snapshot()['link'] as Map)['state'] != 'linking', 'the link');
+      await until(() => ((host.snapshot()['status'] as Map)['peers'] as List).isNotEmpty, 'the peer in the status');
+      final peerOnServer = ((host.snapshot()['status'] as Map)['peers'] as List).map((p) => (p as Map)['id'] as String).single;
+      await host.invoke('sharing.call', {'method': 'set_link', 'args': {'peer': peerOnServer, 'link': {'mode': 'match'}}});
+      final phoneStatus = await b.call('status');
+      final peerOnPhone = (phoneStatus['peers'] as List).map((p) => (p as Map)['id'] as String).single;
+      await b.call('set_link', {'peer': peerOnPhone, 'link': {'mode': 'match'}});
+
+      Future<void> syncBoth() async {
+        await host.invoke('sharing.call', {'method': 'sync_now', 'args': <String, Object?>{}});
+        await b!.call('sync_now');
+      }
+
+      // server to phone: ticked on the server, the phone's take_secrets hands it over
+      await sync.setKeyOn(peerOnServer, 'live.key.owm', true);
+      Map<String, dynamic> taken = {};
+      final end = DateTime.now().add(const Duration(seconds: 120));
+      while (taken.isEmpty) {
+        if (DateTime.now().isAfter(end)) fail('timed out waiting for the key on the other side');
+        await syncBoth();
+        final got = (await b.call('take_secrets'))['secrets'];
+        if (got is Map && got.isNotEmpty) taken = got.cast<String, dynamic>();
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      expect((taken[peerOnPhone] as Map)['live.key.owm'], 'SERVER-OWM-KEY');
+
+      // phone to server: the phone gives a key and a name the server does not keep; the keystore file gets the first only
+      await b.call('set_secrets', {'peer': peerOnPhone, 'secrets': {'search.kagi.key': 'PHONE-KAGI-KEY', 'app.pin': 'NOT-A-SYNCED-KEY'}});
+      final end2 = DateTime.now().add(const Duration(seconds: 120));
+      while (store.get('search.kagi.key') == null) {
+        if (DateTime.now().isAfter(end2)) fail('timed out waiting for the key in the server\'s keystore');
+        await syncBoth();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      final onDisk = KeyStore(keystoreFile);
+      expect(onDisk.get('search.kagi.key'), 'PHONE-KAGI-KEY');
+      expect(onDisk.get('app.pin'), isNull);
+      expect(logs.where((l) => l.contains('app.pin')), isNotEmpty);
+      expect(logs.join('\n'), isNot(contains('PHONE-KAGI-KEY')));
+      expect(logs.join('\n'), isNot(contains('SERVER-OWM-KEY')));
     } finally {
       sync?.stop();
       for (final h in hosts) {
