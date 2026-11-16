@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/net/fetch.dart';
 import 'package:cache/weather/own_source.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -159,6 +160,17 @@ void main() {
       final slow = await tryOwnAddress(Uri.parse('$base/slow'), timeout: const Duration(milliseconds: 300));
       expect(slow.failure, OwnTryFailure.timedOut);
       expect(slow.words, "127.0.0.1 didn't answer in time.");
+    });
+
+    test('a host that cannot be looked up is not found; a refused or reset connection is unreachable', () {
+      expect(socketFailure(const SocketException("Failed host lookup: 'x.example.org'")), FetchFailure.notFound);
+      expect(socketFailure(const SocketException('x', osError: OSError('No address associated with hostname', 7))), FetchFailure.notFound);
+      expect(socketFailure(const SocketException('x', osError: OSError('', 7))), FetchFailure.notFound);
+      expect(socketFailure(const SocketException('Connection refused', osError: OSError('Connection refused', 111))), FetchFailure.unreachable);
+      expect(socketFailure(const SocketException('Connection reset by peer', osError: OSError('Connection reset by peer', 104))), FetchFailure.unreachable);
+      const t = OwnTry.failed('x.example.org', OwnTryFailure.notFound);
+      expect(t.words, "Couldn't find x.example.org. Check the web address.");
+      expect(const OwnTry.failed('x.example.org', OwnTryFailure.unreachable).words, "Couldn't reach x.example.org. Check the address and your connection.");
     });
 
     test('nothing listening: it could not be reached', () async {

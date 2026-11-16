@@ -190,7 +190,7 @@ String labelFromKey(String key) {
 // ------------------------------------------------------------------------------------------------ trying the address
 
 /// Why trying the address did not give values.
-enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, insecure, tooLarge, notAllowed, empty, unreadable }
+enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, notFound, insecure, tooLarge, notAllowed, empty, unreadable }
 
 /// What one try of the address gave: the values found, or why there are none.
 class OwnTry {
@@ -217,6 +217,7 @@ class OwnTry {
     OwnTryFailure.notJson => '$host answered, but not with JSON. This version of Cache only reads JSON.',
     OwnTryFailure.timedOut => "$host didn't answer in time.",
     OwnTryFailure.unreachable => "Couldn't reach $host. Check the address and your connection.",
+    OwnTryFailure.notFound => "Couldn't find $host. Check the web address.", // WORDS: pending approval
     OwnTryFailure.insecure => "Couldn't make a secure connection to $host.",
     OwnTryFailure.tooLarge => 'The answer is too large for Cache to read.',
     OwnTryFailure.notAllowed => 'Enter an address that starts with https://',
@@ -265,6 +266,7 @@ Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duratio
     return OwnTry.failed(host, switch (e.failure) {
       net.FetchFailure.notAllowed => OwnTryFailure.notAllowed,
       net.FetchFailure.unreachable => OwnTryFailure.unreachable,
+      net.FetchFailure.notFound => OwnTryFailure.notFound,
       net.FetchFailure.timedOut => OwnTryFailure.timedOut,
       net.FetchFailure.insecure => OwnTryFailure.insecure,
       net.FetchFailure.status => OwnTryFailure.status,

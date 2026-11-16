@@ -17,8 +17,11 @@ enum FetchFailure {
   /// Not an https address (or this phone's own, for local servers).
   notAllowed,
 
-  /// No connection.
+  /// No connection (refused, reset, no route).
   unreachable,
+
+  /// The host's name could not be looked up.
+  notFound,
 
   /// The server did not answer in time.
   timedOut,
@@ -48,6 +51,13 @@ class FetchException implements Exception {
 
   @override
   String toString() => 'Fetching from $host failed: ${failure.name}${status == null ? '' : ' (HTTP $status)'}';
+}
+
+/// Whether a socket failure is the host's name not being found (a failed lookup) or any other failure to connect.
+FetchFailure socketFailure(SocketException e) {
+  final text = '${e.message} ${e.osError?.message ?? ''}'.toLowerCase();
+  final lookup = text.contains('failed host lookup') || text.contains('no address associated with hostname') || e.osError?.errorCode == 7;
+  return lookup ? FetchFailure.notFound : FetchFailure.unreachable;
 }
 
 /// The text of a network exception for the log: its type, its message and the OS error when it has one.
@@ -131,7 +141,7 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024, bool http
   } on TimeoutException catch (e) {
     throw FetchException(FetchFailure.timedOut, url.host, detail: fetchDetail(e));
   } on SocketException catch (e) {
-    throw FetchException(FetchFailure.unreachable, url.host, detail: fetchDetail(e));
+    throw FetchException(socketFailure(e), url.host, detail: fetchDetail(e));
   } on HandshakeException catch (e) {
     throw FetchException(FetchFailure.insecure, url.host, detail: fetchDetail(e));
   } on HttpException catch (e) {
