@@ -162,7 +162,8 @@ void main() {
       await show(tester);
       expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('resume-j1')));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100)); // the queued row has a bar that never stops moving, so no settle
       expect(api.resumed, ['j1']);
       expect(find.byKey(const ValueKey('resume-j1')), findsNothing);
       expect(find.text('Waiting its turn…'), findsOneWidget, reason: 'queued again');
@@ -202,7 +203,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('download-menu')), findsOneWidget);
       expect(find.text('Remove download'), findsOneWidget);
-      await tester.tap(find.text('Pause'));
+      await tester.tap(find.widgetWithText(ListTile, 'Pause'));
       await tester.pumpAndSettle();
       expect(api.paused, ['j1']);
     });
