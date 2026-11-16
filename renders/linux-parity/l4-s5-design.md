@@ -83,7 +83,8 @@ straight into the keystore. Key values never reach a tab.
    - Recommendation: (a), and record the gap.
    - **Owner's answer (2026-11-15, 23:20): (a).** The gap stands: an arriving weather change is saved at once, and the server
      fetches by it after a tab next opens and publishes the plan.
-2. **Ask model with no tab open** (with the owner; until he answers, the host does not apply `ask.model`). An arriving `ask.model` sets `lastModel`. The server loads it when Ask is next used, as a tab
+2. **Ask model with no tab open.** **Owner's answer (2026-11-15, 23:23): accepted.** The host applies `ask.model` (it writes
+   `lastModel`), and the model loads when Ask is next used. An arriving `ask.model` sets `lastModel`. The server loads it when Ask is next used, as a tab
    does today; nothing loads a model at arrival. Recommendation: accept.
 
 ## Order of work (each step tests first)
