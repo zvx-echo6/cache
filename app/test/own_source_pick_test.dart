@@ -30,15 +30,15 @@ void main() {
       expect(find.textContaining('5.2 \u00b0C'), findsOneWidget, reason: 'the pick list row shows the unit, to help choosing');
       expect(find.textContaining('iso8601'), findsNothing, reason: 'a unit only beside a number');
 
-      // As on the real card: the first value, then the next two.
+      // As on the real card: in the answer's order, the first value, then the next two.
       for (final path in ['elevation', 'timezone', 'utc_offset_seconds']) {
         await tester.tap(find.descendant(of: find.byKey(ValueKey('own-value-$path')), matching: find.byType(Checkbox)));
         await tester.pump();
       }
-      expect(onCard('Temperature 2m 5.2'), findsOneWidget);
-      expect(onCard('Elevation 2371'), findsOneWidget);
+      expect(onCard('Utc offset seconds 0'), findsOneWidget);
       expect(onCard('Timezone GMT'), findsOneWidget);
-      expect(onCard('Utc offset seconds'), findsNothing, reason: 'the fourth is not on the card, as in Weather and alerts');
+      expect(onCard('Elevation 2371'), findsOneWidget);
+      expect(onCard('Temperature 2m'), findsNothing, reason: 'the fourth in the answer\'s order is not on the card, as in Weather and alerts');
       await r.dispose(tester);
     });
   });
