@@ -63,7 +63,7 @@ void main() {
       'junk',
       ev('other', 'z', 0, 3).toLine(), // a line of another device's name in this log is not this peer's
       ev('peer', 'a', 2, 4).toLine(),
-    ].join('\n') + '\n');
+    ].map((l) => '$l\n').join());
     var r = (await log.readPeer('peer'))!;
     expect(r.latest.keys.toSet(), {'a', 'b'});
     expect(r.latest['a']!.$2.value, 2); // the later line of a
@@ -75,14 +75,14 @@ void main() {
     expect(log.state.isUnseen('peer', 'b', 2), isTrue); // b is still not seen
     expect(r.unseen(log.state.seenOf('peer')).keys.toList(), ['b']);
     // A new line arrives: only it is newer than seen.
-    peer.writeAsStringSync(ev('peer', 'a', 3, 9).toLine() + '\n', mode: FileMode.append);
+    peer.writeAsStringSync('${ev('peer', 'a', 3, 9).toLine()}\n', mode: FileMode.append);
     r = (await log.readPeer('peer'))!;
     expect(r.unseen(log.state.seenOf('peer')).keys.toSet(), {'a', 'b'});
     expect(r.latest['a']!.$1, 7);
     // The log is started again, shorter than what was seen: everything is read again.
     log.state.markSeen('peer', 'b', 2);
     log.state.markSeen('peer', 'a', 7);
-    peer.writeAsStringSync(ev('peer', 'a', 'again', 10).toLine() + '\n');
+    peer.writeAsStringSync('${ev('peer', 'a', 'again', 10).toLine()}\n');
     r = (await log.readPeer('peer'))!;
     expect(log.state.seenOf('peer'), isEmpty);
     expect(r.unseen(log.state.seenOf('peer')).keys.toList(), ['a']);

@@ -5,10 +5,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../chat/ask_focus.dart';
-import '../files.dart';
 import '../platform/app_log.dart';
+import 'settings_log.dart';
 import 'sharing_state.dart';
 
+export 'settings_log.dart' show SettingsEvent, SettingsLink, canonical, applies;
 export 'share_rules.dart' show kSettingsShareId, kSettingsShareDir, kBookshelvesShareId, kBookshelvesDir, kSettingsShareModes, kBookshelvesShareModes;
 
 /// The chosen Ask model's setting: a model not on this device waits, with Download.
@@ -52,21 +53,6 @@ const String kNeverSynced =
     'Device name, mobile data downloads, indexing speed, space kept free, log level, Obsidian and Logseq connections, and the '
     'permissions each device asks for itself.';
 
-/// How settings go between this device and one linked device.
-enum SettingsLink {
-  /// Changes on either device go to both.
-  match,
-
-  /// This device's changes go to the other; the other's own changes stay there.
-  sending,
-
-  /// The other device's changes come here; this device's own changes stay here.
-  receiving,
-
-  /// Each keeps its own.
-  off,
-}
-
 /// One setting that can go between devices: its value as JSON ([read]), how it is set here ([write], applied at once, never
 /// needing a restart) and what tells when it changes ([listenable]). [write] returns false when the value cannot be used here
 /// yet (a model not on this device): it is kept waiting, shown, and tried again when [listenable] changes.
@@ -105,60 +91,6 @@ class SyncedKey {
   final String label;
   final Future<String?> Function() read;
 }
-
-/// One change to one setting, as a line of a device's settings log.
-@immutable
-class SettingsEvent {
-  const SettingsEvent({required this.at, required this.dev, required this.key, required this.value, this.hasPrev = false, this.prev, this.note});
-
-  final int at;
-  final String dev;
-  final String key;
-  final Object? value;
-
-  /// The value before the change, when known (a change made here); a device's settings sent as they are when the link is
-  /// switched on have none.
-  final bool hasPrev;
-  final Object? prev;
-  final Object? note;
-
-  static SettingsEvent? fromLine(String line) {
-    Object? j;
-    try {
-      j = jsonDecode(line.trim());
-    } catch (_) {
-      return null;
-    }
-    if (j is! Map || j['v'] != 1) return null;
-    final at = j['at'], dev = j['dev'], key = j['k'];
-    if (at is! int || dev is! String || dev.isEmpty || key is! String || key.isEmpty || !j.containsKey('val')) return null;
-    return SettingsEvent(at: at, dev: dev, key: key, value: j['val'], hasPrev: j.containsKey('prev'), prev: j['prev'], note: j['note']);
-  }
-
-  String toLine() => jsonEncode({'v': 1, 'at': at, 'dev': dev, 'k': key, 'val': value, if (hasPrev) 'prev': prev, if (note != null) 'note': note});
-}
-
-/// A JSON value in one spelling (map keys sorted), so two equal values compare equal.
-String canonical(Object? v) => jsonEncode(_canon(v));
-
-Object? _canon(Object? v) {
-  if (v is Map) {
-    final keys = [for (final k in v.keys) '$k']..sort();
-    return {for (final k in keys) k: _canon(v[k])};
-  }
-  if (v is List) return [for (final x in v) _canon(x)];
-  return v;
-}
-
-/// Whether a change from a linked device is applied here, the value here being [current] ([canonical]) and last changed at
-/// [localAt]. From a device this one follows (Send mine), every change it makes is: a change made here stands until that device
-/// next changes the same setting. With Match the latest change wins, except that a change made on a value this device still
-/// has (its previous value is the value here) applies whatever the clocks say: only one side changed it.
-bool applies(SettingsLink link, SettingsEvent ev, {required String current, required int localAt}) => switch (link) {
-  SettingsLink.receiving => true,
-  SettingsLink.match => (ev.hasPrev && canonical(ev.prev) == current) || ev.at > localAt,
-  SettingsLink.sending || SettingsLink.off => false,
-};
 
 /// Settings between linked devices, per setting, never as one whole settings file. Each change made here is an event (setting,
 /// value, its previous value, time, device) appended to this device's own log in the settings share, `log/<device>.jsonl`, one
@@ -210,23 +142,13 @@ class SettingsSync extends ChangeNotifier {
 
   late final Map<String, SyncedSetting> _byKey;
 
-  /// When each setting last changed here (made here, or taken from another device: that change's time), by key.
-  final Map<String, int> _localAt = {};
-
-  /// Each setting's value as last seen, by key ([canonical]).
-  final Map<String, String> _last = {};
-
-  /// What was read of each device's log: by device, by setting, the line of the latest change taken.
-  final Map<String, Map<String, int>> _seen = {};
-
-  /// The keys ticked for each device, by device (their secure-storage names).
-  final Map<String, Set<String>> _keysFor = {};
-
-  /// Changes taken that cannot be used here yet (a model not on this device), by key, with their note.
-  final Map<String, SettingsEvent> _waiting = {};
-
-  /// The note of the change each setting last took from another device, by key.
-  final Map<String, Object?> _notes = {};
+  /// What this device keeps of the settings sync, in [_log] once the folder is known (see [SettingsLogState]).
+  final SettingsLogState _kept = SettingsLogState();
+  Map<String, int> get _localAt => _kept.localAt;
+  Map<String, String> get _last => _kept.last;
+  Map<String, Set<String>> get _keysFor => _kept.keysFor;
+  Map<String, SettingsEvent> get _waiting => _kept.waiting;
+  Map<String, Object?> get _notes => _kept.notes;
 
   /// The keys last given to the sync engine for each device (in memory only).
   final Map<String, Map<String, String>> _pushed = {};
@@ -235,6 +157,7 @@ class SettingsSync extends ChangeNotifier {
   final List<VoidCallback> _unlisten = [];
   Timer? _timer;
   Directory? _dir;
+  SettingsLog? _log;
   bool _started = false;
   bool _wasRunning = false;
   bool _disposed = false;
@@ -242,9 +165,19 @@ class SettingsSync extends ChangeNotifier {
 
   bool get started => _started;
 
-  Future<Directory?> _folder() async => _dir ??= await dir();
+  Future<Directory?> _folder() async {
+    final d = _dir ??= await dir();
+    return d;
+  }
 
-  File? _stateFile() => _dir == null ? null : File('${_dir!.path}/.local/state.json');
+  /// The log in the settings folder [d], as this device (the state is kept before the device has an id; nothing is appended then).
+  SettingsLog? _logFor(Directory? d) {
+    if (d == null) return null;
+    final me = sharing.myId ?? '';
+    final l = _log;
+    if (l != null && l.dir == d.path && l.device == me) return l;
+    return _log = SettingsLog(dir: d.path, device: me, state: _kept);
+  }
 
   /// Reads what was kept, notes every setting as it is now, and starts listening for changes.
   Future<void> start() async {
@@ -289,20 +222,7 @@ class SettingsSync extends ChangeNotifier {
   /// How settings go between this device and [peer]. A link with nothing chosen yet is Match when it was made before this
   /// version asked ([SharingState.linkedSinceAsking]), and Off when it is new: nothing goes until the person answers.
   SettingsLink linkWith(String peer) {
-    final l = sharing.linkOf(peer);
-    switch (l?['mode']) {
-      case 'off':
-        return SettingsLink.off;
-      case 'send':
-        final from = l?['from'];
-        if (from == peer) return SettingsLink.receiving;
-        if (from == sharing.myId) return SettingsLink.sending;
-        return SettingsLink.off;
-      case 'match':
-        return SettingsLink.match;
-      default:
-        return sharing.linkedSinceAsking(peer) ? SettingsLink.off : SettingsLink.match;
-    }
+    return linkOfRecord(sharing.linkOf(peer), peer: peer, myId: sharing.myId, linkedSinceAsking: sharing.linkedSinceAsking(peer));
   }
 
   /// A new link whose question ("Sync Cache settings with Desk?") neither device has answered yet: Off meanwhile.
@@ -344,8 +264,8 @@ class SettingsSync extends ChangeNotifier {
     return by != null && by != sharing.myId;
   }
 
-  bool _sendsTo(String peer) => const {SettingsLink.match, SettingsLink.sending}.contains(linkWith(peer));
-  bool _takesFrom(String peer) => const {SettingsLink.match, SettingsLink.receiving}.contains(linkWith(peer));
+  bool _sendsTo(String peer) => linkSends(linkWith(peer));
+  bool _takesFrom(String peer) => linkTakes(linkWith(peer));
 
   Map<String, Object?> _linkValue(String peer) => {...?sharing.linkOf(peer)};
 
@@ -385,8 +305,7 @@ class SettingsSync extends ChangeNotifier {
   bool settingOn(String peer, String key) {
     final s = _byKey[key];
     if (s == null) return false;
-    final l = _linkValue(peer);
-    return !_list(l, 'off_groups').contains(s.group.name) && !_list(l, 'off_keys').contains(key);
+    return linkIncludes(_linkValue(peer), group: s.group.name, key: key);
   }
 
   List<SyncedSetting> settingsOf(SettingsGroupId g) => [for (final s in settings) if (s.group == g) s];
@@ -506,12 +425,10 @@ class SettingsSync extends ChangeNotifier {
 
   Future<void> _append(SettingsEvent ev) async {
     final me = sharing.myId;
-    final d = await _folder();
-    if (me == null || d == null || ev.dev != me) return;
+    final log = _logFor(await _folder());
+    if (me == null || log == null || ev.dev != me) return;
     try {
-      final f = File('${d.path}/log/$me.jsonl');
-      await f.parent.create(recursive: true);
-      await f.writeAsString('${ev.toLine()}\n', mode: FileMode.append, flush: true);
+      await log.append(ev);
     } catch (e) {
       logError('Settings sync: could not write a change', error: e, detail: ev.key);
     }
@@ -570,37 +487,22 @@ class SettingsSync extends ChangeNotifier {
   /// Applies what the devices whose settings this one takes changed since the last look.
   Future<void> pull() async {
     final me = sharing.myId;
-    final d = await _folder();
-    if (me == null || d == null) return;
+    final log = _logFor(await _folder());
+    if (me == null || log == null) return;
     var changed = false;
     for (final p in sharing.peers) {
       final id = p['id'];
       if (id is! String || id == me || !_takesFrom(id)) continue;
-      final f = File('${d.path}/log/$id.jsonl');
-      List<String> lines;
-      try {
-        if (!await f.exists()) continue;
-        lines = (await f.readAsString()).split('\n');
-      } catch (_) {
-        continue;
-      }
-      final seen = _seen.putIfAbsent(id, () => {});
-      // A log that got shorter was started again: read it all again.
-      if (seen.values.any((n) => n > lines.length)) seen.clear();
-      final latest = <String, (int, SettingsEvent)>{};
-      for (var i = 0; i < lines.length; i++) {
-        if (lines[i].trim().isEmpty) continue;
-        final ev = SettingsEvent.fromLine(lines[i]);
-        if (ev == null || ev.dev != id) continue;
-        latest[ev.key] = (i + 1, ev);
-      }
+      final read = await log.readPeer(id);
+      if (read == null) continue;
+      final latest = read.latest;
       final link = linkWith(id);
       for (final e in latest.entries) {
         final s = _byKey[e.key];
         if (s == null || !settingOn(id, e.key)) continue;
         final (line, ev) = e.value;
-        if ((seen[e.key] ?? 0) >= line) continue;
-        seen[e.key] = line;
+        if (!log.state.isUnseen(id, e.key, line)) continue;
+        log.state.markSeen(id, e.key, line);
         changed = true;
         final current = _read(s);
         if (current == null) continue;
@@ -743,54 +645,17 @@ class SettingsSync extends ChangeNotifier {
   // ---------------------------------------------------------------- kept on this device
 
   Future<void> _readState() async {
-    await _folder();
-    final f = _stateFile();
-    if (f == null) return;
-    try {
-      if (!await f.exists()) return;
-      final j = jsonDecode(await f.readAsString());
-      if (j is! Map) return;
-      for (final e in ((j['localAt'] as Map?) ?? const {}).entries) {
-        if (e.value is int) _localAt['${e.key}'] = e.value as int;
-      }
-      for (final e in ((j['last'] as Map?) ?? const {}).entries) {
-        if (e.value is String) _last['${e.key}'] = e.value as String;
-      }
-      for (final e in ((j['seen'] as Map?) ?? const {}).entries) {
-        if (e.value is Map) _seen['${e.key}'] = {for (final x in (e.value as Map).entries) if (x.value is int) '${x.key}': x.value as int};
-      }
-      for (final e in ((j['keys'] as Map?) ?? const {}).entries) {
-        if (e.value is List) _keysFor['${e.key}'] = {for (final x in e.value as List) '$x'};
-      }
-      for (final e in ((j['notes'] as Map?) ?? const {}).entries) {
-        _notes['${e.key}'] = e.value;
-      }
-      for (final e in ((j['waiting'] as Map?) ?? const {}).entries) {
-        final ev = e.value is String ? SettingsEvent.fromLine(e.value as String) : null;
-        if (ev != null) _waiting['${e.key}'] = ev;
-      }
-    } catch (_) {
-      // A damaged file: start again (each device's log is read again from its start, which applies nothing twice).
-    }
+    final log = _logFor(await _folder());
+    if (log == null) return;
+    await log.loadState();
   }
 
   /// The key names only: a key itself is never written here.
   Future<void> _saveState() async {
-    final f = _stateFile();
-    if (f == null) return;
+    final log = _logFor(_dir);
+    if (log == null) return;
     try {
-      await f.parent.create(recursive: true);
-      await writeStringAtomic(
-        f,
-        jsonEncode({
-          'localAt': _localAt,
-          'last': _last,
-          'seen': _seen,
-          'keys': {for (final e in _keysFor.entries) e.key: e.value.toList()..sort()},
-          'notes': _notes,
-          'waiting': {for (final e in _waiting.entries) e.key: e.value.toLine()},
-        }),
-      );
+      await log.saveState();
     } catch (e) {
       logError('Settings sync: could not keep its state', error: e);
     }
