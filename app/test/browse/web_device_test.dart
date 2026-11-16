@@ -7,6 +7,7 @@ import 'package:cache/browse/web/build_api.dart';
 import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/browse/web/device_api.dart';
 import 'package:cache/browse/web/device_library.dart';
+import 'package:cache/downloads/download_row.dart';
 import 'package:cache/net/fetch.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -316,6 +317,15 @@ void main() {
       expect(deviceJobWords(job('a', 'failed', error: 'Not enough free space on the server')), 'Not enough space on this device.');
       d.dispose();
     });
+
+    test('a file that no mirror has yet shows that, never "download was cut off"', () {
+      const said = "This file isn't on the download servers yet. Try again later.";
+      expect(deviceJobWords(job('a', 'failed', error: said)), said);
+      final line = dlLine(DlState(DlPhase.failed, reason: DlReason.of(deviceJobWords(job('a', 'failed', error: said)))));
+      expect(line, isNot(contains('cut off')));
+      expect(line, 'Stopped: not on the download servers yet');
+    });
+
   });
 
   group('uploads from this computer', () {

@@ -21,6 +21,9 @@ use std::time::Duration;
 
 const BIG: u64 = 3_000_000;
 const SLOW: u64 = 2_000_000;
+/// The size of the file the mirror scenarios (`/mz-<scenario>/...`) serve, and where a cut mirror drops the connection.
+const MZ: u64 = 300_000;
+const MZ_CUT: u64 = 100_000;
 
 fn byte(i: u64) -> u8 {
     (i.wrapping_mul(31).wrapping_add(7) & 0xff) as u8
@@ -108,6 +111,9 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
         let _ = s.write_all(head(status, extra, Some(body.len() as u64)).as_bytes());
         let _ = s.write_all(body);
     };
+    if let Some(rest) = path.strip_prefix("/mz-") {
+        return serve_mirrors(&mut s, port, rest, range.as_deref());
+    }
     match path.as_str() {
         "/big.zim" => {
             let start = range.as_deref().and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.trim_end_matches('-').parse::<u64>().ok()).unwrap_or(0);
@@ -188,6 +194,52 @@ fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
             }
         }
         _ => small(&mut s, "404 Not Found", "", b"no"),
+    }
+}
+
+/// A stand-in for download.kiwix.org with a metalink, one scenario per path prefix (`rest` is `<scenario>/<file>`):
+/// `<scenario>/m.zim` redirects to mirror 1 (the old way) and `m.zim.meta4` lists mirror 1 (priority 1) and mirror 2 (priority 2)
+/// with the sha-256 and size; the `.sha256` beside it is wrong on purpose, so only the metalink's hash can pass.
+/// Scenarios: `nf1` (mirror 1 answers 404), `all404` (both do), `cut1` (mirror 1 drops the connection mid-body), `nometa`
+/// (no metalink: `m.zim` is served itself with a correct `.sha256`).
+fn serve_mirrors(s: &mut TcpStream, port: u16, rest: &str, range: Option<&str>) {
+    let (scn, file) = rest.split_once('/').unwrap_or((rest, ""));
+    let small = |s: &mut TcpStream, status: &str, extra: &str, body: &[u8]| {
+        let _ = s.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\n{extra}Content-Length: {}\r\n\r\n", body.len()).as_bytes());
+        let _ = s.write_all(body);
+    };
+    let whole = content(0, MZ);
+    let body = |s: &mut TcpStream, cut: bool| {
+        let start = range.and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.trim_end_matches('-').parse::<u64>().ok()).unwrap_or(0);
+        let head = if range.is_some() {
+            format!("HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Range: bytes {start}-{}/{MZ}\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\n\r\n", MZ - 1, MZ - start)
+        } else {
+            format!("HTTP/1.1 200 OK\r\nConnection: close\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\n\r\n", MZ - start)
+        };
+        let _ = s.write_all(head.as_bytes());
+        let stop = if cut { (start + MZ_CUT).min(MZ) } else { MZ };
+        let _ = s.write_all(&content(start, stop));
+        let _ = s.flush();
+    };
+    match (scn, file) {
+        (_, "m.zim.meta4") if scn != "nometa" => {
+            let xml = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\"><file name=\"m.zim\"><size>{MZ}</size>\
+                 <hash type=\"sha-256\">{}</hash>\
+                 <url location=\"us\" priority=\"2\">http://127.0.0.1:{port}/mz-{scn}/mirror2/m.zim</url>\
+                 <url location=\"de\" priority=\"1\">http://127.0.0.1:{port}/mz-{scn}/mirror1/m.zim</url></file></metalink>",
+                sha_of(&whole)
+            );
+            small(s, "200 OK", "Content-Type: application/metalink4+xml\r\n", xml.as_bytes());
+        }
+        ("nometa", "m.zim") => body(s, false),
+        ("nometa", "m.zim.sha256") => small(s, "200 OK", "", format!("{}  m.zim\n", sha_of(&whole)).as_bytes()),
+        (_, "m.zim") => small(s, "302 Found", &format!("Location: /mz-{scn}/mirror1/m.zim\r\n"), b""),
+        (_, "m.zim.sha256") => small(s, "200 OK", "", format!("{}  m.zim\n", "ee".repeat(32)).as_bytes()),
+        ("nf1", "mirror1/m.zim") | ("all404", "mirror1/m.zim") | ("all404", "mirror2/m.zim") => small(s, "404 Not Found", "", b"no"),
+        ("cut1", "mirror1/m.zim") => body(s, true),
+        (_, "mirror1/m.zim") | (_, "mirror2/m.zim") => body(s, false),
+        _ => small(s, "404 Not Found", "", b"no"),
     }
 }
 
@@ -895,6 +947,59 @@ async fn downloads_never_connect_to_a_private_address_even_after_a_redirect() {
     let (s, v) = post(json!({"url": "https://download.kiwix.org/zim/x.zim", "kind": "zim", "name": "pub.zim"})).await;
     assert_eq!((s, v["ok"].clone()), (200, json!(true)));
     rig.call("DELETE", &format!("/api/library/jobs/{}", v["result"]["id"].as_str().unwrap()), "").await;
+    stop(&rig).await;
+}
+
+// ---- Kiwix mirrors (the metalink)
+
+/// Starts a ZIM download of `/mz-<scenario>/m.zim` and waits for its end.
+async fn mirror_job(rig: &Rig, scn: &str) -> Value {
+    let url = rig.origin.url(&format!("/mz-{scn}/m.zim"));
+    let job = rig.download(json!({"url": url, "kind": "zim", "name": "m.zim"})).await;
+    rig.wait_state(job["id"].as_str().unwrap(), &["done", "failed"]).await
+}
+
+#[tokio::test]
+async fn the_main_mirror_answers_404_and_the_second_serves_the_file_verified_by_the_metalink_hash() {
+    let _g = LOCK.lock().await;
+    let rig = rig("mz-nf1", Setup::new()).await;
+    let j = mirror_job(&rig, "nf1").await;
+    assert_eq!(j["state"], json!("done"), "{j}");
+    assert_eq!(std::fs::read(rig.zims().join("m.zim")).unwrap(), content(0, MZ));
+    assert_eq!(rig.origin.requests("/mz-nf1/mirror2/m.zim").len(), 1);
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn when_every_mirror_answers_404_the_job_says_the_file_is_not_on_the_download_servers_yet() {
+    let _g = LOCK.lock().await;
+    let rig = rig("mz-all404", Setup::new()).await;
+    let j = mirror_job(&rig, "all404").await;
+    assert_eq!(j["state"], json!("failed"), "{j}");
+    assert_eq!(j["error"], json!("This file isn't on the download servers yet. Try again later."));
+    assert!(!rig.zims().join("m.zim").exists());
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn a_mirror_that_drops_the_connection_mid_body_is_continued_on_the_next_with_a_range_request() {
+    let _g = LOCK.lock().await;
+    let rig = rig("mz-cut1", Setup::new()).await;
+    let j = mirror_job(&rig, "cut1").await;
+    assert_eq!(j["state"], json!("done"), "{j}");
+    assert_eq!(std::fs::read(rig.zims().join("m.zim")).unwrap(), content(0, MZ));
+    assert_eq!(rig.origin.requests("/mz-cut1/mirror1/m.zim"), vec![None]);
+    assert_eq!(rig.origin.requests("/mz-cut1/mirror2/m.zim"), vec![Some(format!("bytes={MZ_CUT}-"))]);
+    stop(&rig).await;
+}
+
+#[tokio::test]
+async fn without_a_metalink_the_redirect_and_the_published_sha256_work_as_before() {
+    let _g = LOCK.lock().await;
+    let rig = rig("mz-nometa", Setup::new()).await;
+    let j = mirror_job(&rig, "nometa").await;
+    assert_eq!(j["state"], json!("done"), "{j}");
+    assert_eq!(std::fs::read(rig.zims().join("m.zim")).unwrap(), content(0, MZ));
     stop(&rig).await;
 }
 
