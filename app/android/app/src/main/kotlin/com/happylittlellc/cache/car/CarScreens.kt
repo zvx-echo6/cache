@@ -395,12 +395,6 @@ class RoutePreviewScreen(carContext: CarContext, map: CarMapRenderer, private va
     internal fun showStop(s: CarStop) {
         if (s.lat != null && s.lon != null) map.showPoint(s.lat, s.lon)
     }
-
-    /** The destination's row: the destination on the map. */
-    internal fun showDestination() {
-        val t = CarLink.trip
-        if (t.destinationLat != null && t.destinationLon != null) map.showPoint(t.destinationLat, t.destinationLon)
-    }
 }
 
 /** Turn by turn: the phone's guidance, with End route, Route overview and the voice switch. */
@@ -515,5 +509,11 @@ class RouteOverviewScreen(carContext: CarContext, map: CarMapRenderer) : TripScr
     /** A stop's row: that stop on the map. */
     internal fun showStop(s: CarStop) {
         if (s.lat != null && s.lon != null) map.showPoint(s.lat, s.lon)
+    }
+
+    /** The destination's row: the destination on the map. */
+    internal fun showDestination() {
+        val t = CarLink.trip
+        if (t.destinationLat != null && t.destinationLon != null) map.showPoint(t.destinationLat, t.destinationLon)
     }
 }
