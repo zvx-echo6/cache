@@ -74,6 +74,15 @@ class SharingHost {
   Directory get syncDir => Directory('${dataDir.path}/sync');
 
   bool get enabled => _enabled;
+
+  /// The engine's own device id (from its status); null before the engine runs.
+  String? get myId => status['id'] is String && (status['id'] as String).isNotEmpty ? status['id'] as String : null;
+
+  /// When links began to be asked about (`ask_since`).
+  int? get askSince => _askSince;
+
+  /// How many settings changes from linked devices the host applied (set by the helper; tabs read their files again when it moves).
+  int Function()? settingsApplied;
   bool get running => _core != null;
 
   /// Called with the ids of the shared folders whose files a sync added, changed or removed, once the folder has nothing more to
@@ -330,6 +339,7 @@ class SharingHost {
         ],
         'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: ([...e.value]..sort())},
         'changed': {..._changed},
+        'settings_applied': settingsApplied?.call() ?? 0,
         'link': {..._link},
       };
 
