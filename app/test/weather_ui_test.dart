@@ -280,6 +280,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('remove-key')));
       await tester.pumpAndSettle();
       expect(find.textContaining('turns off'), findsOneWidget);
+      expect(find.text('Satellite fire detections near the place (NASA FIRMS) turns off. You can add a key again later.'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isTrue);
@@ -291,6 +292,22 @@ void main() {
       expect(r.secrets.values, isEmpty);
       expect(r.liveCore.keys['firms-viirs-near'], isNull);
       expect(find.text('Get key'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Removing a key shared by two sources', () {
+    testWidgets('says "turn off" (plural) when two sources use the key', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('idaho511-events')!, secret));
+      await r.show(tester, SourcePage(deps: r.deps, sourceId: 'idaho511-events'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.pumpAndSettle();
+      expect(find.text('Road conditions (Idaho 511) and Winter road conditions (Idaho 511) turn off. You can add a key again later.'), findsOneWidget);
+      expect(find.textContaining('turns off'), findsNothing);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
       await r.dispose(tester);
     });
   });
@@ -337,6 +354,17 @@ void main() {
       expect(f().focusNode!.hasFocus, isTrue);
       expect(f().controller!.text, '$api?site=12&lat={lat}&lon={lon}');
       expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+    });
+
+    testWidgets('the empty Web address shows an example, worded as one', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final hint = tester.widget<TextField>(find.byKey(const ValueKey('own-address'))).decoration!.hintText!;
+      expect(hint, 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
     });
 
     testWidgets('typing on through the keyboard after Latitude and Longitude lands right after the placeholder, and the address keeps the focus', (tester) async {
