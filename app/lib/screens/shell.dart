@@ -992,11 +992,12 @@ class _ShellState extends State<Shell> {
   /// "Ask Cache instead" under a guide search that found nothing: the guide closes and Ask asks what was searched for.
   void _askFromGuide(String text) {
     Navigator.of(context).popUntil((r) => r.isFirst);
-    _askFromHome(text);
+    askFromHome(text);
   }
 
   /// Enter in Home's search: a new chat that asks exactly what was typed.
-  void _askFromHome(String text) {
+  @visibleForTesting
+  void askFromHome(String text) {
     if (!_askOn) return;
     widget.chat.newChat();
     _goModule(ModuleId.ask);
@@ -1016,7 +1017,8 @@ class _ShellState extends State<Shell> {
   }
 
   /// "Ask about this" on the Weather screen: a new chat that asks the question straight away, seeded with the item's live data.
-  void _askAbout(AskAbout about) {
+  @visibleForTesting
+  void askAbout(AskAbout about) {
     if (!_askOn) return;
     widget.chat.newChat();
     _goModule(ModuleId.ask);
@@ -1225,7 +1227,7 @@ class _ShellState extends State<Shell> {
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
-        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
@@ -1245,7 +1247,7 @@ class _ShellState extends State<Shell> {
             state: pdfIndexShared!,
             open: (z) => unawaited(showPdfPartSheet(context, pdfIndexShared!, z)),
           ),
-    onAsk: _askFromHome,
+    onAsk: askFromHome,
     askOn: _askOn,
     onChooseModel: () => openModels(context, widget.app),
     onOpenSettings: _openSettings,
