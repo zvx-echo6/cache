@@ -212,9 +212,9 @@ void main() {
     await h.stop();
     final again = host();
     await again.init();
-    expect(opened.last.config['never_fetch'], {
-      'bookshelves': ['log/me.jsonl'],
-    });
+    expect(opened.last.argsOf('set_never_fetch'), [
+      {'id': 'bookshelves', 'never_fetch': ['log/me.jsonl']},
+    ]);
   });
 
   test('a kind on adds its folders as shares named as on the phone; off removes the shares and keeps the files', () async {
