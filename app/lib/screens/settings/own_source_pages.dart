@@ -337,7 +337,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
 }
 
 /// How a source of your own will look in Weather and alerts: its name over the line the Weather screen shows (the first ticked
-/// value, then the next two).
+/// value, then the next two), as the values come (no units: the card shows none).
 class OwnPreview extends StatelessWidget {
   const OwnPreview({super.key, required this.name, required this.lines});
 
@@ -399,13 +399,14 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     _seed();
   }
 
-  /// Ticks and names for the values of [_t]: kept from before where the value is the same; the first three ticked on a new source.
+  /// Ticks and names for the values of [_t]: kept from before where the value is the same; on a new source what the address asked for
+  /// ([OwnTry.preticked]).
   void _seed() {
     final earlier = {for (final p in widget.earlier ?? const <OwnPick>[]) p.path: p.label};
-    for (var i = 0; i < _t.values.length; i++) {
-      final v = _t.values[i];
+    final first = _t.preticked.toSet();
+    for (final v in _t.values) {
       _names.putIfAbsent(v.path, () => earlier[v.path] ?? v.label);
-      _on.putIfAbsent(v.path, () => widget.earlier == null ? i < 3 : earlier.containsKey(v.path));
+      _on.putIfAbsent(v.path, () => widget.earlier == null ? first.contains(v.path) : earlier.containsKey(v.path));
     }
   }
 
@@ -511,7 +512,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
                   key: ValueKey('own-value-${v.path}'),
                   leading: Checkbox(value: _on[v.path] == true, onChanged: (x) => setState(() => _on[v.path] = x == true)),
                   title: _names[v.path] ?? v.label,
-                  status: [Part(v.value)],
+                  status: [Part(v.shown)],
                   trailing: Icon(Icons.edit_outlined, size: 18, color: k.secondary),
                   onTap: () => _rename(v),
                 ),

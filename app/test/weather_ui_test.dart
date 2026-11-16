@@ -410,16 +410,19 @@ void main() {
       expect(find.text('Latitude'), findsOneWidget, reason: 'a value of the answer, named from its key');
       expect(find.text('1.42'), findsOneWidget);
       expect(find.byKey(const ValueKey('own-preview')), findsOneWidget);
-      // the first three are ticked; tick the level and the trend only, and rename the level
+      // untick what was ticked at first; tick the level and the trend only, and rename the level
       for (final p in ['station.id', 'station.latitude', 'station.longitude']) {
         final box = find.descendant(of: find.byKey(ValueKey('own-value-$p')), matching: find.byType(Checkbox));
         if (tester.widget<Checkbox>(box).value == true) await tester.tap(box);
         await tester.pump();
       }
       await tester.scrollUntilVisible(find.byKey(const ValueKey('own-value-water.level')), 200, scrollable: find.byType(Scrollable).first);
-      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.level')), matching: find.byType(Checkbox)));
-      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.trend')), matching: find.byType(Checkbox)));
-      await tester.pump();
+      // Ticked, whatever was ticked at first (the place's own echo is not, so the level may be already).
+      for (final p in ['water.level', 'water.trend']) {
+        final box = find.descendant(of: find.byKey(ValueKey('own-value-$p')), matching: find.byType(Checkbox));
+        if (tester.widget<Checkbox>(box).value != true) await tester.tap(box);
+        await tester.pump();
+      }
       await tester.tap(find.text('Level'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('own-rename')), 'Water level');

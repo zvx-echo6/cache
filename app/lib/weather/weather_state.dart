@@ -984,7 +984,7 @@ class WeatherState extends ChangeNotifier {
     }
     final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
     if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
-    final t = await tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+    final t = await tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout, place: at);
     logInfo(ownTryLogLine(ownAddressForLog(d.keptAddress, lat: at.lat, lon: at.lon, key: key), at.lat, at.lon, t));
     return t;
   }
