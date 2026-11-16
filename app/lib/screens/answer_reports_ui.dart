@@ -55,7 +55,7 @@ class _ReportSheetState extends State<_ReportSheet> {
             const SizedBox(height: 6),
             Text(
               'The report is saved on this device with the question, the answer and the model. Nothing is sent anywhere; '
-              'you can share reports yourself from Settings > Assistant.',
+              'you can share reports yourself from Settings > Cache model and web search.',
               style: TextStyle(fontSize: 15, color: k.secondary, height: 1.4),
             ),
             const SizedBox(height: 8),
@@ -101,7 +101,7 @@ class _ReportSheetState extends State<_ReportSheet> {
   }
 }
 
-/// Settings > Assistant > Reported answers: the saved reports, each shareable and removable.
+/// Settings > Cache model and web search > Reported answers: the saved reports, each shareable and removable.
 class ReportedAnswersPage extends StatelessWidget {
   const ReportedAnswersPage({super.key, required this.reports, this.share = shareMarkdown, this.onOpenChat});
 
