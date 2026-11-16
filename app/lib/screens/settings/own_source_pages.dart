@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -451,7 +452,12 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
       _busy = false;
       _error = err;
     });
-    if (err == null) Navigator.of(context).pop(true);
+    if (err == null) {
+      // The new source is fetched at once, in the background (the same fetch as Update now, for every watched place), so the Weather
+      // card has it without a tap. Save does not wait for it; offline or failing, the next update picks it up as before.
+      unawaited(w.updateNow(force: true).then((_) {}, onError: (_) {}));
+      Navigator.of(context).pop(true);
+    }
   }
 
   Widget _banner(CacheTokens k) {
