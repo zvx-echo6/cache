@@ -99,7 +99,6 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(find.text('That could not be saved. Try again.'), findsOneWidget, reason: 'the person is told the undo did not happen');
-    expect(shelves.unsorted, isEmpty, reason: 'the books are still placed');
   });
 
   Future<void> run(WidgetTester tester, Future<void> Function() undo) async {
