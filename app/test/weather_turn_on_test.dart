@@ -209,4 +209,61 @@ void main() {
     expect(r.liveCore.fetches.every((f) => f['force'] == true), isTrue, reason: "a person's Update now skips the refresh interval");
     await r.dispose(tester);
   });
+
+  // Search as you type: the Choose a place sheet searches after a short pause, without Enter.
+  const hilo = MapPlace(id: 'place:osm:n1', type: 'place', name: 'Hilo Town', kind: 'Town', address: 'Test County', lat: 19.7, lon: -155.1);
+  const hiPlace = MapPlace(id: 'place:osm:n2', type: 'place', name: 'Hi Village', kind: 'Town', address: 'Other County', lat: 20.0, lon: -155.0);
+
+  Future<SettingsRig> openSheet(WidgetTester tester, Future<List<MapPlace>> Function(String) search) async {
+    final r = await SettingsRig.create(tester);
+    r.here = null;
+    r.settings.setWatched('here', false);
+    r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9, label: 'Near Stanley')];
+    final t = WeatherTurnOn(weather: r.weather, location: r.location, searchPlaces: search, savePlace: (p) async {});
+    await r.show(tester, WeatherScreen(weather: r.weather, turnOn: t));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
+    await tester.pumpAndSettle();
+    return r;
+  }
+
+  testWidgets('place search: typing without Enter shows the results after the pause', (tester) async {
+    final r = await openSheet(tester, (q) async => q == 'Hilo' ? [hilo] : []);
+    await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('place search: an older answer arriving last never replaces the newest results', (tester) async {
+    final hi = Completer<List<MapPlace>>();
+    final r = await openSheet(tester, (q) => q == 'Hi' ? hi.future : Future.value([hilo]));
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Hi');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.enterText(field, 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    hi.complete([hiPlace]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n2')), findsNothing);
+    await r.dispose(tester);
+  });
+
+  testWidgets('place search: clearing the field shows the saved list again', (tester) async {
+    final r = await openSheet(tester, (q) async => [hilo]);
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await tester.enterText(field, '');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsNothing);
+    expect(find.byKey(const ValueKey('weather-saved-place:cabin')), findsOneWidget);
+    await r.dispose(tester);
+  });
 }
