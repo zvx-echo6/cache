@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 
@@ -8,8 +9,9 @@ CsNative fakeVideoNative() => VideoFakeNative();
 
 /// A factory of [VideoFakeNative]s with [saved] already on the device (the manifests as cs_video_downloads lists them; the
 /// closure is copied to the worker isolate). [captionFetchFails]: captions_fetch fetches nothing.
-CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false, String auth = 'local'}) =>
+CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false, String auth = 'local', String? arrivalsFile}) =>
     () => VideoFakeNative()
+      .._arrivalsFile = arrivalsFile
       .._saved.addAll([for (final m in saved) {...m}])
       ..captionFetchFails = captionFetchFails
       ..noCaptions = noCaptions
@@ -45,6 +47,8 @@ class VideoFakeNative implements CsNative {
 
   final List<Map<String, dynamic>> _instances = [];
   final List<Map<String, dynamic>> _saved = [];
+  /// A JSON list of manifests that "arrive" (as a sync would write them) the next time the downloads are listed.
+  String? _arrivalsFile;
   String? _error;
   int _progressCalls = 0;
   bool _accessValid = true;
@@ -157,6 +161,12 @@ class VideoFakeNative implements CsNative {
           'downloaded': _saved.isEmpty ? null : {'kind': 'video', 'resolution': '360', 'size': 3000000, 'downloaded_at': 'x'},
         });
       case 'downloads':
+        final f = _arrivalsFile == null ? null : File(_arrivalsFile!);
+        if (f != null && f.existsSync()) {
+          _saved
+            ..clear()
+            ..addAll([for (final m in jsonDecode(f.readAsStringSync()) as List) Map<String, dynamic>.from(m as Map)]);
+        }
         return jsonEncode({'downloads': _saved, 'total_bytes': _saved.fold<int>(0, (a, d) => a + (d['size'] as int))});
       case 'delete':
         _saved.removeWhere((d) => d['uuid'] == r['video']);
