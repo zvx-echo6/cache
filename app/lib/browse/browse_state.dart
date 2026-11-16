@@ -381,8 +381,14 @@ class BrowseState extends ChangeNotifier {
 
   /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant). An update check is small
   /// and uses any connection.
-  Future<void> checkUpdates() async {
-    if (checkingUpdates) return;
+  Future<void> checkUpdates() => _updateCheck ??= _checkUpdates().whenComplete(() => _updateCheck = null);
+
+  Future<void>? _updateCheck;
+
+  /// The longest one question to the catalogue may take before the check says so.
+  static const Duration _updateCheckTimeout = Duration(seconds: 25);
+
+  Future<void> _checkUpdates() async {
     checkingUpdates = true;
     updateError = null;
     notifyListeners();
@@ -392,10 +398,9 @@ class BrowseState extends ChangeNotifier {
       for (final z in sources.zims) {
         final o = sources.originOf(z);
         if (o == null) continue;
-        final list = seen[o.name] ??= (await catalog.entries(
-          name: o.name,
-          count: 20,
-        )).entries;
+        final list = seen[o.name] ??= (await catalog
+            .entries(name: o.name, count: 20)
+            .timeout(_updateCheckTimeout, onTimeout: () => throw const CatalogException('The Kiwix library took too long to answer.'))).entries;
         CatalogEntry? best;
         for (final e in list) {
           if (o.isOlderThan(e) &&
@@ -411,6 +416,10 @@ class BrowseState extends ChangeNotifier {
       lastUpdateCheck = DateTime.now();
     } on CatalogException catch (e) {
       updateError = e.message;
+    } catch (e) {
+      // Anything else still ends in words for the person, never in silence.
+      logError('Check for updates', error: e);
+      updateError = 'The library could not be read.';
     } finally {
       checkingUpdates = false;
       notifyListeners();
