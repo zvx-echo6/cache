@@ -57,6 +57,10 @@ void main() {
         await _show(tester, MoreSourcesPage(deps: r.deps), theme, size);
         await snap(tester, _out, _name('1-more-sources', theme, size));
 
+        // 2a: the empty form, with its example address
+        await _show(tester, OwnSourceFormPage(deps: r.deps), theme, size);
+        await snap(tester, _out, _name('2a-form-empty', theme, size));
+
         // 2: the form, filled in
         await _show(tester, OwnSourceFormPage(deps: r.deps), theme, size);
         await tester.enterText(find.byKey(const ValueKey('own-name')), 'Creek level at the bridge');
