@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../../app/lib/settings/key_names.dart';
 import '../../../app/lib/sharing/settings_files.dart';
 import '../../../app/lib/sharing/settings_log.dart';
 import 'keystore.dart';
@@ -38,6 +39,7 @@ class ServerSettingsSync {
     this.keys,
     this.setSecrets,
     this.takeSecrets,
+    this.onWebKeyKept,
   })  : _now = now ?? DateTime.now,
         _files = SettingsFiles(IoSettingsFileAccess(support), now: now),
         _dir = '${support.path}/$kSettingsShareDirName';
@@ -60,6 +62,11 @@ class ServerSettingsSync {
   final KeyStore? keys;
   final Future<void> Function(String peer, Map<String, String> secrets)? setSecrets;
   final Future<Map<String, Map<String, String>>> Function()? takeSecrets;
+
+  /// Called once after a take that kept the web search key (`search.kagi.key`): the helper gives the core its web search settings
+  /// again (keys.replay), so the new key is used at once. A weather key (`live.key.*`) has no such call: the core holds it from a
+  /// tab's `liveSetKey`, so it is used after a tab next pushes it (the accepted weather gap).
+  final void Function()? onWebKeyKept;
   final SettingsFiles _files;
   final String _dir;
 
@@ -227,6 +234,7 @@ class ServerSettingsSync {
     } catch (_) {
       return;
     }
+    var webKept = false;
     final byId = {for (final p in peers()) if (p['id'] is String) p['id'] as String: p};
     for (final e in got.entries) {
       final p = byId[e.key];
@@ -239,9 +247,17 @@ class ServerSettingsSync {
         }
         try {
           keys!.set(keystoreNameOf(name), k.value);
+          if (name == 'search.kagi.key') webKept = true;
         } catch (_) {
           log?.call('settings sync: could not keep the key ${_shown(name)}');
         }
+      }
+    }
+    if (webKept) {
+      try {
+        onWebKeyKept?.call();
+      } catch (e) {
+        log?.call('settings sync: could not use the web search key at once: $e');
       }
     }
   }

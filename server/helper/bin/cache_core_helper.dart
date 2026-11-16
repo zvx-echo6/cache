@@ -115,7 +115,8 @@ Future<void> main() async {
   if (sharing != null) {
     final host = sharing;
     settingsSync = ServerSettingsSync(support: dirs.support, running: () => host.running, myId: () => host.myId, peers: () => host.peers, askSince: () => host.askSince,
-        log: log, keys: keys, setSecrets: host.setSecrets, takeSecrets: host.takeSecrets);
+        log: log, keys: keys, setSecrets: host.setSecrets, takeSecrets: host.takeSecrets,
+        onWebKeyKept: () => keys.replay(dispatcher));
     host.settingsApplied = () => settingsSync!.applied;
     unawaited(settingsSync.start());
   }

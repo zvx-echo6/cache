@@ -195,32 +195,3 @@ class KeyStore implements OpHandler, CoreHook {
     }
   }
 }
-
-final RegExp _plainNameChar = RegExp(r'[A-Za-z0-9._-]');
-
-/// The name the keystore keeps the app key [key] under: the browser's store (app/lib/settings/server_token_store.dart, `encodeName`)
-/// writes it this way, so a key the helper writes is the one the browser sees. Letters, digits and `. _ -` stay; every other
-/// character, and `:` itself, becomes `:` and four hex digits (one per UTF-16 unit). A name too long (over 120) keeps its start and
-/// a `.user` ending, with `:h` and a 64-bit FNV-1a hash of the whole key between.
-String encodeKeyName(String key) {
-  final b = StringBuffer();
-  for (final u in key.codeUnits) {
-    final c = String.fromCharCode(u);
-    if (_plainNameChar.hasMatch(c)) {
-      b.write(c);
-    } else {
-      b.write(':${u.toRadixString(16).padLeft(4, '0')}');
-    }
-  }
-  final full = b.toString();
-  if (full.isNotEmpty && full.length <= 120) return full;
-  var h = BigInt.parse('cbf29ce484222325', radix: 16);
-  final prime = BigInt.parse('100000001b3', radix: 16);
-  final mask = (BigInt.one << 64) - BigInt.one;
-  for (final u in key.codeUnits) {
-    h = ((h ^ BigInt.from(u)) * prime) & mask;
-  }
-  final tail = ':h${h.toRadixString(16).padLeft(16, '0')}${key.endsWith('.user') ? '.user' : ''}';
-  if (full.isEmpty) return tail;
-  return '${full.substring(0, 120 - tail.length)}$tail';
-}
