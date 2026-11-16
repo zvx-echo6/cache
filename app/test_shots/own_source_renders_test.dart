@@ -24,6 +24,18 @@ const _answer = {
   'battery': 87,
 };
 
+const _openMeteo = {
+  'latitude': 44.07,
+  'longitude': -114.74,
+  'generationtime_ms': 0.1,
+  'utc_offset_seconds': 0,
+  'timezone': 'GMT',
+  'timezone_abbreviation': 'GMT',
+  'elevation': 2371,
+  'current_units': {'time': 'iso8601', 'interval': 'seconds', 'temperature_2m': '\u00b0C'},
+  'current': {'time': '2026-11-16T15:00', 'interval': 900, 'temperature_2m': 5.2},
+};
+
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 8; i++) {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
@@ -86,6 +98,16 @@ void main() {
           size,
         );
         await snap(tester, _out, _name('3-pick', theme, size));
+
+        // 3c: Pick what to show, after the Open-Meteo answer (what the address asked for ticked, the unit with its value)
+        const meteoDraft = OwnDraft(name: 'Temperature', address: 'https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
+        await _show(
+          tester,
+          OwnSourcePickPage(deps: r.deps, draft: meteoDraft, first: OwnTry.ok('api.open-meteo.com', flattenJson(_openMeteo), asked: const ['temperature_2m'], place: (lat: 44.0712, lon: -114.7401))),
+          theme,
+          size,
+        );
+        await snap(tester, _out, _name('3c-pick-open-meteo', theme, size));
 
         // 3b: an answer that is not JSON
         await _show(tester, OwnSourcePickPage(deps: r.deps, draft: draft, first: const OwnTry.failed('sensors.example.org', OwnTryFailure.notJson)), theme, size);

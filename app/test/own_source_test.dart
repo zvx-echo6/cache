@@ -114,6 +114,62 @@ void main() {
     });
   });
 
+  group('what is ticked at first and the units of an answer (Open-Meteo)', () {
+    const meteo =
+        '{"latitude":44.07,"longitude":-114.74,"generationtime_ms":0.1,"utc_offset_seconds":0,"timezone":"GMT","timezone_abbreviation":"GMT","elevation":2371,'
+        '"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"\u00b0C"},"current":{"time":"2026-11-16T15:00","interval":900,"temperature_2m":5.2}}';
+    const place = (lat: 44.0712, lon: -114.7401);
+    Future<List<int>> answer(Uri u, Duration t) async => utf8.encode(meteo);
+    Future<OwnTry> tried(String query) => tryOwnAddress(Uri.parse('https://api.open-meteo.com/v1/forecast?$query&latitude=44.0712&longitude=-114.7401'), fetch: answer, place: place);
+
+    test('the pre-ticked set is exactly what the address asked for (current=temperature_2m)', () async {
+      final t = await tried('current=temperature_2m');
+      expect(t.preticked, ['current.temperature_2m']);
+    });
+
+    test('an address that names nothing pre-ticks the first values that do not echo the place', () async {
+      final t = await tried('hourly=none');
+      expect(t.preticked, ['generationtime_ms', 'utc_offset_seconds', 'timezone']);
+      expect(t.preticked, isNot(contains('latitude')));
+      expect(t.preticked, isNot(contains('longitude')));
+    });
+
+    test('an address that names an object (section=current) pre-ticks the first values under it, not the top-level ones', () async {
+      final t = await tried('section=current');
+      expect(t.preticked, ['current.time', 'current.interval', 'current.temperature_2m']);
+    });
+
+    test('the units object is not listed; its unit is attached to the value it describes', () async {
+      final t = await tried('current=temperature_2m');
+      expect([for (final v in t.values) v.path].where((p) => p.startsWith('current_units')), isEmpty);
+      final temp = t.values.firstWhere((v) => v.path == 'current.temperature_2m');
+      expect(temp.value, '5.2');
+      expect(temp.unit, '\u00b0C');
+      expect(temp.shown, '5.2 \u00b0C');
+      expect(t.values.where((v) => v.label == 'Temperature 2m'), hasLength(1));
+      expect(t.values.firstWhere((v) => v.path == 'elevation').shown, '2371');
+    });
+
+    test('a definition saved from these picks reads 5.2 from the answer', () async {
+      final t = await tried('current=temperature_2m');
+      final picks = [for (final v in t.values) if (t.preticked.contains(v.path)) OwnPick(v.path, v.label)];
+      const draft = OwnDraft(name: 'Temperature', address: 'https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
+      final def = jsonDecode(buildOwnDefinition(id: 'own-temperature', draft: draft, picks: picks)) as Map<String, dynamic>;
+      Object? at(Object? json, String path) {
+        for (final k in path.split('.')) {
+          json = (json as Map)[k];
+        }
+        return json;
+      }
+
+      final item = (def['items'] as List).single as Map;
+      final lead = (((item['label'] as Map)['first_of'] as List).first as Map)['vars'] as Map;
+      expect(at(jsonDecode(meteo), (lead['v'] as Map)['path'] as String), 5.2);
+      expect(at(jsonDecode(meteo), (def['require'] as List).single as String), 5.2);
+      expect(jsonEncode(def), isNot(contains('\u00b0C')), reason: 'a unit is display only');
+    });
+  });
+
   group('Try it, against a server on this machine', () {
     late HttpServer server;
     late String base;
