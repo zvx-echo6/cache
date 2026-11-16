@@ -198,7 +198,7 @@ class SettingsFiles {
         return _quiet((await _json('preferences.json'))['quiet']);
       case 'maps.layers_on':
         final e = (await _json('maps.json'))['enabled'];
-        return e is List ? ([for (final x in e) if (x is String) x].toSet().toList()..sort()) : <String>[];
+        return e is List ? ({for (final x in e) if (x is String) x}.toList()..sort()) : <String>[];
       case 'ask.web_search':
         return (await _json('preferences.json'))['webSearchOn'] == true;
     }
