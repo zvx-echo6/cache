@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../../../app/lib/sharing/settings_files.dart';
 import '../../../app/lib/sharing/settings_log.dart';
+import 'keystore.dart';
 
 String _groupOf(String key) => settingsGroupOf(key);
 
@@ -19,7 +20,11 @@ String _groupOf(String key) => settingsGroupOf(key);
 ///    to a key no link sends, is noted and not sent.
 ///  * [applied] counts the changes applied; the host's `sharing.state` carries it so open tabs read their files again.
 ///
-/// Keys (set_secrets, take_secrets) are not here.
+///  * Keys (the phone's pushKeys and takeKeys, over the host's `setSecrets` and `takeSecrets` and the [KeyStore]): the key names
+///    ticked for a linked device (`.local/state.json`'s `keys`, the phone's own record) that are in the keystore go to it while its
+///    link sends; the keys that arrive from a device whose link takes are written into the keystore, for the names the phone keeps
+///    (`search.kagi.key`, `live.key.<alias>`) and no others. A key's value is never logged, written to the settings log or shown to
+///    a tab: only its name.
 class ServerSettingsSync {
   ServerSettingsSync({
     required this.support,
@@ -30,6 +35,9 @@ class ServerSettingsSync {
     DateTime Function()? now,
     this.every = const Duration(seconds: 10),
     this.log,
+    this.keys,
+    this.setSecrets,
+    this.takeSecrets,
   })  : _now = now ?? DateTime.now,
         _files = SettingsFiles(IoSettingsFileAccess(support), now: now),
         _dir = '${support.path}/$kSettingsShareDirName';
@@ -47,6 +55,11 @@ class ServerSettingsSync {
   final DateTime Function() _now;
   final Duration every;
   final void Function(String message)? log;
+
+  /// The server's keystore and the host's `setSecrets` / `takeSecrets`; keys sync only when all three are given.
+  final KeyStore? keys;
+  final Future<void> Function(String peer, Map<String, String> secrets)? setSecrets;
+  final Future<Map<String, Map<String, String>>> Function()? takeSecrets;
   final SettingsFiles _files;
   final String _dir;
 
@@ -56,6 +69,9 @@ class ServerSettingsSync {
   bool _started = false;
   Future<void> _chain = Future.value();
   int _applied = 0;
+  bool _wasRunning = false;
+  String _links = '';
+  final Map<String, Map<String, String>> _pushed = {};
 
   /// How many setting changes from linked devices were applied here.
   int get applied => _applied;
@@ -142,6 +158,94 @@ class ServerSettingsSync {
         return id is String && linkSends(_linkWith(id, p)) && _on(p, key);
       });
 
+  String _linkSignature() => [for (final p in peers()) '${p['id']}=${canonical(p['link'])}'].join(';');
+
+  // ---------------------------------------------------------------- keys
+
+  bool get _keysOn => keys != null && setSecrets != null && takeSecrets != null;
+
+  /// The key name the browser's store keeps [name] under in the keystore (a name of only letters, digits and `. _ -` is itself).
+  static String keystoreNameOf(String name) => encodeKeyName(name);
+
+  /// The names of keys that sync (the phone's keepSyncedKey): the web search key and a weather source's key.
+  static bool isSyncedKeyName(String name) {
+    if (name == 'search.kagi.key') return true;
+    const prefix = 'live.key.';
+    return name.startsWith(prefix) && name.length > prefix.length;
+  }
+
+  static String _shown(String name) => name.length > 120 ? '${name.substring(0, 120)}...' : name;
+
+  /// The key [name] is ticked for [peer]. Every key starts off.
+  bool keyOn(String peer, String name) => _kept.keysFor[peer]?.contains(name) ?? false;
+
+  /// Ticks or unticks the key [name] for [peer], keeps it, and gives the keys to the engine.
+  Future<void> setKeyOn(String peer, String name, bool on) => _locked(() async {
+        final set = _kept.keysFor.putIfAbsent(peer, () => <String>{});
+        on ? set.add(name) : set.remove(name);
+        if (set.isEmpty) _kept.keysFor.remove(peer);
+        await _save();
+        await _pushKeys();
+      });
+
+  /// Gives the engine, for each linked device, the ticked keys that are in the keystore while that device's link sends; nothing to
+  /// the others. A reference (`keystore://...`) is never a key and is never sent.
+  Future<void> _pushKeys() async {
+    if (!_keysOn || !running()) return;
+    final store = keys!;
+    for (final p in peers()) {
+      final id = p['id'];
+      if (id is! String) continue;
+      final out = <String, String>{};
+      if (linkSends(_linkWith(id, p))) {
+        for (final name in (_kept.keysFor[id] ?? const <String>{}).toList()..sort()) {
+          if (!isSyncedKeyName(name)) continue;
+          final v = store.get(keystoreNameOf(name));
+          if (v != null && v.isNotEmpty && !v.startsWith(KeyStore.refPrefix)) out[name] = v;
+        }
+      }
+      final before = _pushed[id];
+      if (before != null && _sameMap(before, out)) continue;
+      try {
+        await setSecrets!(id, out);
+        _pushed[id] = out;
+      } catch (e) {
+        log?.call('settings sync: could not give the keys for a device (${out.length} key(s))');
+      }
+    }
+  }
+
+  static bool _sameMap(Map<String, String> a, Map<String, String> b) => a.length == b.length && a.entries.every((e) => b[e.key] == e.value);
+
+  /// Writes the keys linked devices sent into the keystore, from the devices whose settings this one takes. A name this app does
+  /// not keep is dropped, and logged by name.
+  Future<void> _takeKeys() async {
+    if (!_keysOn) return;
+    Map<String, Map<String, String>> got;
+    try {
+      got = await takeSecrets!();
+    } catch (_) {
+      return;
+    }
+    final byId = {for (final p in peers()) if (p['id'] is String) p['id'] as String: p};
+    for (final e in got.entries) {
+      final p = byId[e.key];
+      if (p == null || !linkTakes(_linkWith(e.key, p))) continue;
+      for (final k in e.value.entries) {
+        final name = k.key;
+        if (!isSyncedKeyName(name) || k.value.isEmpty) {
+          log?.call('settings sync: dropped a key this server does not keep: ${_shown(name)}');
+          continue;
+        }
+        try {
+          keys!.set(keystoreNameOf(name), k.value);
+        } catch (_) {
+          log?.call('settings sync: could not keep the key ${_shown(name)}');
+        }
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- changes from linked devices
 
   /// The settings share changed (the host's onShareChanged): read the peers' logs.
@@ -151,7 +255,23 @@ class ServerSettingsSync {
 
   /// One look at the peers' logs (the timer and [shareChanged]).
   Future<void> tick() => _locked(() async {
-        if (!_started || !running() || myId() == null) return;
+        if (!_started || !running() || myId() == null) {
+          _wasRunning = false;
+          return;
+        }
+        final sig = _linkSignature();
+        if (!_wasRunning) {
+          // sharing has just started: the keys are given to the engine again
+          _wasRunning = true;
+          _pushed.clear();
+          _links = sig;
+          await _pushKeys();
+        } else if (sig != _links) {
+          // a link changed (here, or the other device's choice arrived)
+          _links = sig;
+          await _pushKeys();
+        }
+        await _takeKeys();
         await _pull();
       });
 
