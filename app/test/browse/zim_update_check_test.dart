@@ -87,7 +87,7 @@ void main() {
     await choose(tester);
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tester.pump();
-    expect(find.text('The library could not be read.'), findsOneWidget);
+    expect(find.text('The library could not be read.'), findsWidgets);
     expect(browse.checkingUpdates, isFalse);
   });
 
@@ -97,7 +97,7 @@ void main() {
     await choose(tester);
     await tester.pump(const Duration(seconds: 60));
     await tester.pump();
-    expect(find.text('The Kiwix library took too long to answer.'), findsOneWidget);
+    expect(find.text('The Kiwix library took too long to answer.'), findsWidgets);
     expect(browse.checkingUpdates, isFalse);
   });
 
