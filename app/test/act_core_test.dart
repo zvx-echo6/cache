@@ -251,6 +251,16 @@ void main() {
       expect(await act.install(defs), isFalse, reason: 'no core, nothing to install');
     });
 
+    test('without the core only a declined outcome carries the note; done and failed are unchanged', () async {
+      const note = '"note":"The person tapped Cancel. Nothing was done or saved."';
+      expect(hostEventContent({'ok': true, 'status': 'declined', 'confirm_id': 'c1', 'action': 'places.save'}),
+          '{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save",$note}');
+      expect(hostEventContent({'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}}),
+          '{"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{"name":"Elk camp"}}');
+      expect(hostEventContent({'ok': false, 'status': 'failed', 'confirm_id': 'c2', 'action': 'a.b', 'error': {'type': 'x'}}),
+          '{"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c2","action":"a.b","error":{"type":"x"}}');
+    });
+
     test('without the core the outcome is the contract\'s message', () async {
       expect(await const ActCoreStandIn().outcome(null, {'ok': false, 'status': 'failed', 'confirm_id': 'c2', 'action': 'a.b', 'error': {'type': 'x'}}),
           '{"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c2","action":"a.b","error":{"type":"x"}}');
