@@ -184,6 +184,7 @@ class SharingHost {
       // The server is always online: sync uses the network (the phone's rule for Wi-Fi).
       await core.call('set_policy', {'network': true});
       await _refresh();
+      await _keepOwnLog();
       await _retire();
       await _addFolders([...table.always.map((a) => (a.id, a.name, a.dir)), ...table.links.map((l) => (l.id, l.name, l.dir))]);
       _poll = Timer.periodic(pollEvery, (_) => _tick());
@@ -217,6 +218,18 @@ class SharingHost {
         log?.call('sharing: stopping the engine failed: $e');
       }
     });
+  }
+
+  /// The server's own Bookshelves log, `log/<its id>.jsonl`, is never replaced by another device's copy of it (a backup put back on a
+  /// phone is an older copy that looks newer to the engine). The Rust server is the one writer of that file; the other devices' logs
+  /// still arrive beside it. The engine's own id is the id the log is named by (`<data>/sync` is the identity the server reads), so it
+  /// is known only after the engine is open; it is set before the folder is shared, and again at every open.
+  Future<void> _keepOwnLog() async {
+    final id = status['id'];
+    if (id is! String || id.isEmpty) return;
+    final own = ['$kBookshelvesLogDir/$id.jsonl'];
+    _neverFetch[kBookshelvesShareId] = own;
+    await _engine('set_never_fetch', {'id': kBookshelvesShareId, 'never_fetch': own});
   }
 
   /// Shared folders earlier versions had and this one does not (the same list the phone retires).
@@ -671,6 +684,9 @@ class ShareTable {
   final List<ShareAlways> always;
   final List<ShareLink> links;
 }
+
+/// The folder of the Bookshelves log's files inside the share (`<data>/bookshelves/log/<device id>.jsonl`, the Rust `LOG_DIR`).
+const String kBookshelvesLogDir = 'log';
 
 /// What never syncs in the server's models folder: a download in progress (`<file>.part`).
 const List<String> kServerModelsNotShared = ['*.part', '**/*.part'];

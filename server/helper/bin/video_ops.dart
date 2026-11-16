@@ -25,7 +25,7 @@ import '../../../app/lib/search/indexes_dir.dart' show kIndexesDirName;
 ///                                              every job the helper holds, so a tab opened later sees them
 /// Errors are the core's own ({code, message}).
 class VideoOps implements OpHandler {
-  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.watchEvery = const Duration(seconds: 5)});
+  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.onRemoved, this.watchEvery = const Duration(seconds: 5)});
 
   final AppDirs dirs;
   final CsNative Function() factory;
@@ -38,6 +38,9 @@ class VideoOps implements OpHandler {
   /// A download finished: a saved video is new on disk (the index driver is kicked, so its captions are made searchable even
   /// with no tab open). Told once per job, by [checkFinished], which a timer runs while a download runs.
   final void Function()? onSaved;
+  /// A saved video was removed (`video.call` with `delete`, or `instance_remove`, which may delete its downloads): the sharing host's
+  /// list of captions indexes to fetch changes ([IndexesSync]).
+  final void Function()? onRemoved;
   final Duration watchEvery;
   Timer? _watch;
   final Set<int> _told = {};
@@ -77,8 +80,11 @@ class VideoOps implements OpHandler {
         return {'dir': dir};
       case 'video.call':
         final n = _open();
-        final r = n.video(_handle, a['op'] as String, _swapRequest((a['request'] as String?) ?? ''));
-        return r ?? (throw CacheSearchException.fromJson(n.lastError(_handle)));
+        final op = a['op'] as String;
+        final r = n.video(_handle, op, _swapRequest((a['request'] as String?) ?? ''));
+        if (r == null) throw CacheSearchException.fromJson(n.lastError(_handle));
+        if (op == 'delete' || op == 'instance_remove') onRemoved?.call();
+        return r;
       case 'video.jobStart':
         return _start(a);
       case 'video.jobProgress':

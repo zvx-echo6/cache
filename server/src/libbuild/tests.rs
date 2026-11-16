@@ -2241,6 +2241,26 @@ fn the_facts_and_the_view_for_the_browser_come_from_the_packs_and_the_log() {
     assert_eq!(svc.bookshelves_stamp(), json!({"stamp": svc.shelves_stamp()}));
 }
 
+#[test]
+fn the_stamp_changes_when_another_devices_log_file_appears_in_the_bookshelves_log() {
+    let d = TempDir::new("w3");
+    let (svc, _) = rig(&d);
+    let log = svc.shelves_dir().join(cache_shelves::store::LOG_DIR);
+    let first = svc.bookshelves_stamp();
+    // the engine puts a linked device's log beside this server's own: `log/<its id>.jsonl`
+    std::fs::create_dir_all(&log).unwrap();
+    std::fs::write(log.join("phone-1.jsonl"), "").unwrap();
+    let with_phone = svc.bookshelves_stamp();
+    assert_ne!(with_phone, first, "a new device's log file is a change a page must see");
+    // and it changes again when that log grows or a second device's arrives
+    std::fs::write(log.join("phone-1.jsonl"), "{\"v\":1}\n").unwrap();
+    let grown = svc.bookshelves_stamp();
+    assert_ne!(grown, with_phone);
+    std::fs::write(log.join("tablet-2.jsonl"), "").unwrap();
+    assert_ne!(svc.bookshelves_stamp(), grown);
+    assert!(svc.bookshelves_stamp()["stamp"].as_str().unwrap().contains("phone-1.jsonl"));
+}
+
 // ---- linked folders and a library Cache builds
 
 fn register_folder(svc: &Arc<BuildService>, lib: &str, id: &str, root: &Path) {
