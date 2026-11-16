@@ -1,3 +1,5 @@
+import 'dart:async' show Timer;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent, KeyDownEvent, LogicalKeyboardKey;
 
@@ -16,7 +18,9 @@ import '../desktop/desktop.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
+import '../linux_ui.dart';
 import '../location/location_service.dart';
+import '../location/location_web_ui.dart';
 import '../location/position_source.dart' show LocationPermissionState;
 import '../theme.dart';
 import '../video/format.dart';
@@ -129,6 +133,7 @@ class _AskScreenState extends State<AskScreen> {
 
   @override
   void dispose() {
+    _stopWatchingWebBlock?.call();
     widget.chat.removeListener(_scrollDown);
     _input.dispose();
     _scroll.dispose();
@@ -156,11 +161,43 @@ class _AskScreenState extends State<AskScreen> {
     if (text.trim().isEmpty || !widget.chat.canSend) return;
     _input.clear();
     widget.chat.send(text);
+    _explainWebBlock();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
   }
 
+
+  /// In the browser, with the location on but blocked there, shows the same "Allow location in your browser" dialog the map shows. The
+  /// question is not held back: it has already gone. The block may only be found while the question's own location read runs, so a
+  /// block that appears within a few seconds of sending is shown too, once.
+  VoidCallback? _stopWatchingWebBlock;
+
+  void _explainWebBlock() {
+    final location = widget.location;
+    if (!linuxUi || location == null || !location.enabled) return;
+    if (webLocationBlocked(location)) {
+      showHowToAllow(context);
+      return;
+    }
+    _stopWatchingWebBlock?.call();
+    late final VoidCallback listener;
+    Timer? stop;
+    void done() {
+      location.removeListener(listener);
+      stop?.cancel();
+      _stopWatchingWebBlock = null;
+    }
+    _stopWatchingWebBlock = done;
+    listener = () {
+      if (!location.enabled) return done();
+      if (!webLocationBlocked(location)) return;
+      done();
+      if (mounted) showHowToAllow(context);
+    };
+    location.addListener(listener);
+    stop = Timer(const Duration(seconds: 5), done);
+  }
 
   /// The "+" menu: the "Use my location" switch (Cache uses the location whenever the phone allows it and never asks). When the
   /// phone blocks it, the switch is off and says why, with the way to the phone's settings.
@@ -193,7 +230,14 @@ class _AskScreenState extends State<AskScreen> {
                     title: const Text('Use my location', style: TextStyle(fontSize: 15)),
                     subtitle: Text(why, style: TextStyle(fontSize: 12, color: blocked || serviceOff ? k.warning : k.secondary)),
                     value: location.enabled && !blocked && !serviceOff,
-                    onChanged: blocked || serviceOff ? null : location.setEnabled,
+                    // In the browser a block is not a dead end: turning the switch on shows how to allow it.
+                    onChanged: serviceOff || (blocked && !linuxUi)
+                        ? null
+                        : blocked
+                        ? (on) {
+                            if (on) showHowToAllow(ctx);
+                          }
+                        : location.setEnabled,
                   ),
                   if (blocked || serviceOff)
                     Align(
