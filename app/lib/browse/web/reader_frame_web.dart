@@ -44,6 +44,9 @@ class _Handle implements ZimFrameHandle {
 
   @override
   void forward() => _tell('forward');
+
+  @override
+  void ignorePointer(bool ignore) {}
 }
 
 class _ZimFrameView extends StatefulWidget {

@@ -8,6 +8,9 @@ abstract class ZimFrameHandle {
   /// One page back or forward in the frame's own history.
   void back();
   void forward();
+
+  /// True: pointer events pass through the frame (a sheet, dialog or menu is open over it); false: the frame takes them again.
+  void ignorePointer(bool ignore);
 }
 
 /// Builds the frame. [onPage] hears the address (`/zim/...`, path and query) and the title of the page the frame has settled on;
