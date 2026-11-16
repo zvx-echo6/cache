@@ -506,6 +506,10 @@ class SharingHost {
   /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
   List<Map<String, Object?>> Function()? keyNames;
 
+  /// Told after a browser's `set_link` went through: the device and its record as it was just before (a copy; null when it was not
+  /// there). The settings sync seeds what the link now sends from it. Set by the helper; not called for the host's own calls.
+  Future<void> Function(String peer, Map<String, dynamic>? before)? onLinkSet;
+
   /// Ticks or unticks the key [name] for the device [peer]; answers like [keyNames]. Set by the helper.
   Future<List<Map<String, Object?>>> Function(String peer, String name, bool on)? setKeyOn;
 
@@ -534,7 +538,23 @@ class SharingHost {
       if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
       return {'keys': await f(_str(args, 'peer'), _str(args, 'name'), on)};
     }
-    return _locked(() => _engine(method, args.cast<String, Object?>()));
+    final hear = !trusted && method == 'set_link' ? onLinkSet : null;
+    if (hear == null) return _locked(() => _engine(method, args.cast<String, Object?>()));
+    Map<String, dynamic>? before;
+    final r = await _locked(() {
+      final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+      before = p == null ? null : (jsonDecode(jsonEncode(p)) as Map).cast<String, dynamic>();
+      return _engine(method, args.cast<String, Object?>());
+    });
+    final peer = args['peer'];
+    if (peer is String) {
+      try {
+        await hear(peer, before);
+      } catch (e) {
+        log?.call('sharing: a link change could not be seeded: $e');
+      }
+    }
+    return r;
   }
 
   /// The one dispatch of the host's `sharing.*` ops (see [SharingOps]); the host's own code may use it as well with [trusted].

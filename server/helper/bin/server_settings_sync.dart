@@ -361,6 +361,47 @@ class ServerSettingsSync {
     if (changed) await _save();
   }
 
+  /// A browser's `set_link` for [peerId] went through the host; [before] is that device's record as it was just before. As the phone's
+  /// `SettingsSync._seed` does when a link is chosen or a setting included: when the link now sends (Match or Send mine) the current
+  /// value of each included setting is appended to the server's own log, once, at the time of the choice, with no previous value, so
+  /// the other device gets the settings as they are now. Every included setting goes when the way settings go changed (or the question
+  /// was just answered); otherwise only the settings that were not included before (a group or a setting switched on). Off, Take
+  /// theirs, a setting switched off, and a record that changed nothing send nothing.
+  Future<void> linkSetByBrowser(String peerId, Map<String, dynamic>? before) => _locked(() async {
+        final me = myId();
+        if (!_started || !running() || me == null || before == null) return;
+        final now = peers().where((p) => p['id'] == peerId).firstOrNull;
+        if (now == null) return;
+        final to = _linkWith(peerId, now);
+        if (!linkSends(to)) return;
+        final all = _linkWith(peerId, before) != to || _unanswered(before);
+        final send = [for (final k in kSettingsFileMap.keys) if (_on(now, k) && (all || !_on(before, k))) k];
+        if (send.isEmpty) return;
+        final at = _now().millisecondsSinceEpoch;
+        var any = false;
+        for (final key in send) {
+          final v = await _read(key);
+          if (v == null) continue;
+          _kept.localAt[key] = at;
+          _kept.last[key] = v;
+          any = true;
+          try {
+            await _logFor().append(SettingsEvent(at: at, dev: me, key: key, value: jsonDecode(v)));
+          } catch (e) {
+            log?.call('settings sync: could not write a change ($key): $e');
+          }
+        }
+        if (any) await _save();
+      });
+
+  /// A link whose question neither device has answered (the phone's `unanswered`).
+  bool _unanswered(Map<String, dynamic> p) {
+    final l = (p['link'] as Map?)?.cast<String, Object?>();
+    final since = askSince();
+    final linked = p['linked'];
+    return l?['ask'] == true || (l?['mode'] == null && since != null && linked is int && linked >= since);
+  }
+
   // ---------------------------------------------------------------- changes made in a browser
 
   /// A browser wrote [rel] (a path under the support folder, with "/"). Each setting in it that is not what was last logged is a

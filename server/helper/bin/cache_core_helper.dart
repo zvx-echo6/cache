@@ -119,6 +119,7 @@ Future<void> main() async {
         onWebKeyKept: () => keys.replay(dispatcher));
     host.settingsApplied = () => settingsSync!.applied;
     host.keyNames = settingsSync.keyNames;
+    host.onLinkSet = settingsSync.linkSetByBrowser;
     host.setKeyOn = settingsSync.setKeyOnFromBrowser;
     unawaited(settingsSync.start());
   }
