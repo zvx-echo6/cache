@@ -20,6 +20,9 @@ class FakeSharingHost implements CoreTransport {
   final Map<String, Set<String>> off = {};
   Map<String, dynamic> link = {'state': 'idle'};
 
+  /// The `settings_applied` counter the host's snapshot carries (settings applied from a linked device).
+  int settingsApplied = 0;
+
   /// How many `sharing.state` reads still answer "linking" after `sharing.link_start` before the engine's answer arrives.
   int linkingReads = 2;
   String? _linkCode;
@@ -52,6 +55,7 @@ class FakeSharingHost implements CoreTransport {
       'name': sync.name,
       'status': enabled ? await sync.call('status') : <String, dynamic>{},
       'ask_since': 1,
+      'settings_applied': settingsApplied,
       'kinds': [for (final e in table.entries) {'id': e.key, 'label': e.key, 'shares': e.value.keys.toList()}],
       'off': {for (final e in off.entries) if (e.value.isNotEmpty) e.key: ([...e.value]..sort())},
       'changed': <String, dynamic>{},
