@@ -201,7 +201,10 @@ class PhotoStrip extends StatelessWidget {
             GestureDetector(
               key: ValueKey('photo-${ids[i]}'),
               onTap: () => openPhotoViewer(context, notebook, ids, i),
-              onLongPress: () => onChanged([for (final x in ids) if (x != ids[i]) x]),
+              onLongPress: () async {
+                final id = ids[i];
+                if (await confirmRemovePhoto(context) && context.mounted) onChanged([for (final x in ids) if (x != id) x]);
+              },
               child: NbThumb(notebook: notebook, id: ids[i]),
             ),
           OutlinedButton.icon(
@@ -217,6 +220,29 @@ class PhotoStrip extends StatelessWidget {
           ),
         ],
       );
+}
+
+const String kRemovePhotoQuestion = 'Remove this photo?';
+
+/// Tap and hold on a photo asks first (same dialog style as "Delete this book?"): only Remove takes it out; Cancel or dismissing keeps it.
+Future<bool> confirmRemovePhoto(BuildContext context) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('remove-photo-confirm'),
+      title: const Text(kRemovePhotoQuestion),
+      actions: [
+        TextButton(key: const ValueKey('remove-photo-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('remove-photo-remove'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+  return yes == true;
 }
 
 /// "Take photo" or "Choose from phone", then the photo is stored.
