@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore, SyncCore;
+import 'package:cache_search/cache_search.dart' show CoreCallTimes, GeoPoint, HttpTransport, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -56,6 +56,7 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
+import 'car/car_voice_access.dart';
 import 'car/phone_drive.dart';
 import 'car/route_pushes.dart';
 import 'nav/demo_backend.dart';
@@ -164,8 +165,6 @@ void main() {
   // Cache's own log (Settings > Storage > Advanced): errors as they happen, and what happened since the last start.
   logDartErrors();
   unawaited(openAppLog());
-  // The sync engine's start, step by step, in the same log.
-  SyncCore.setLog((line) => logInfo(line));
   // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
@@ -246,6 +245,9 @@ class _CacheAppState extends State<CacheApp> {
   );
   // The layer engine in the core (cs_layers_*): the catalogue, the tile server the map reads from, area downloads.
   late final AppSettings settings = AppSettings();
+
+  /// Voice search from the car: the iPhone's microphone and speech permissions (car/car_voice_access.dart). Only started on an iPhone.
+  late final CarVoiceAccess carVoice = CarVoiceAccess(settings: settings, openSettings: () => location.openAppSettings());
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
   late final ModelDownloads modelDownloads = ModelDownloads(app: app, policy: policy, searchModel: kSearchModel.file);
@@ -419,6 +421,9 @@ class _CacheAppState extends State<CacheApp> {
       list: () => NotebooksScreen(deps: notebookDeps),
       items: () => notebookItems(notebooks),
       remoteItem: notebookRemoteItem,
+      // Every notebook's photos share one folder; a photo goes only when an entry of a shared notebook refers to it.
+      gated: const {'notebooks': 'photos'},
+      allowed: (share, off) => notebookPhotosToSend(notebooks, off),
       setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
     // The Shared folder of 1.0 is gone: SharingState stops sharing it at start (retiredShares), and its files stay where they are.
@@ -434,6 +439,8 @@ class _CacheAppState extends State<CacheApp> {
     // (the network rule, the folders, background rounds).
     remote: plat.isWeb ? HttpTransport() : null,
     kinds: dataKinds,
+    // The notebooks are told in the notebook sync's own words (connections.dart say), never file by file.
+    quiet: const ['notebooks'],
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
     // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
     always: [
@@ -614,12 +621,10 @@ class _CacheAppState extends State<CacheApp> {
     if (l != null) {
       _bgAppOpen();
       await l.takeOver(kAddPdfWork);
-      final g = l.generation;
-      if (g != _bgSeen) {
-        _bgSeen = g;
-        await addPdf.reload();
-        await watchFolders.reload();
-      }
+      // a background run wrote to the libraries (a watched folder's PDF became a book in My books) while this app's core held them:
+      // they are read again (the list, the core's view of the shard, the own libraries' packs), and the scheduler, started below,
+      // then lists the words the new book still needs (W2, W3: Pixel and emulator, 2026-11-15)
+      _bgSeen = await l.catchUp(_bgSeen, [addPdf.reload, watchFolders.reload, libraries.rescan]);
     }
     if (!mounted) return;
     // a background add that failed or ended before it was done is said in the app (the service's own notifications are silent)
@@ -763,6 +768,8 @@ class _CacheAppState extends State<CacheApp> {
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
     offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     maps: maps,
+    // Deleting a region deletes it on every linked device that shares Maps: the delete's confirmation says so.
+    syncedWithOtherDevice: () => sharing.mapsTakenByAnotherDevice,
     // A region downloads from where the phone is, outwards.
     position: () {
       final f = location.fix;
@@ -912,6 +919,8 @@ class _CacheAppState extends State<CacheApp> {
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
     onActivity: (line) => sharing.addActivity(line),
+    // Before notebook sync writes photos out, the engine is told which may go (nothing leaves for an entry not shared).
+    prepareShare: () => sharing.refreshGate(),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
@@ -1215,6 +1224,9 @@ class _CacheAppState extends State<CacheApp> {
           await Future.wait([_appRead, _layoutRead, _mapsRead]);
           await settingsSync.start();
         });
+      } else {
+        // A browser: the server runs the settings log and holds the keys; this reads which keys can be ticked and which are.
+        settingsSync.watchServerKeys();
       }
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
@@ -1252,6 +1264,8 @@ class _CacheAppState extends State<CacheApp> {
     // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+      // A video a sync brought shows in the Videos list at once.
+      if (ids.contains('videos')) unawaited(video.shareChanged(ids));
       // A snapshot that came by sync is attached when the core is given its sources again.
       if (ids.contains(kIndexesShareId)) {
         unawaited(sources.refresh());
@@ -1260,6 +1274,16 @@ class _CacheAppState extends State<CacheApp> {
       // A linked device's settings changes arrived: applied at once.
       if (ids.contains(kSettingsShareId) && settingsSync.started) unawaited(settingsSync.pull());
     };
+    // A browser tab: the server applied settings from a linked device to its files, so the tab reads them again (no saving).
+    if (plat.isWeb) {
+      sharing.onSettingsApplied = () {
+        unawaited(app.reload());
+        unawaited(layout.reload());
+        unawaited(settings.reload());
+        unawaited(maps.reload());
+        unawaited(weather.reloadOwn());
+      };
+    }
     sources.addListener(_syncIndexesOnly);
     // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
     sources.addListener(_kickIndexing);
@@ -1296,6 +1320,8 @@ class _CacheAppState extends State<CacheApp> {
       _car!.connected.addListener(_onCarScreen);
       unawaited(_car!.start());
     } else if (plat.isIOS) {
+      carVoiceShared = carVoice;
+      unawaited(settingsRead.then((_) => carVoice.start()));
       // CarPlay: only a build made with the car screen has a car side to link to (car/car_support.dart). This runs with no
       // view when CarPlay started the app, so nothing here waits for a frame or for the app to be resumed. Settings' Car
       // group (carScreenSupported) stays Android's: its switches are for what the Android car draws over the map.
@@ -1333,6 +1359,7 @@ class _CacheAppState extends State<CacheApp> {
         onConnected: () async {
           await location.request(explain: () async => false);
         },
+        onCarSeen: plat.isIOS ? carVoice.carConnected : null,
       );
 
   void _onCarScreen() {
@@ -1490,6 +1517,8 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     _car?.connected.removeListener(_onCarScreen);
     _car?.dispose();
+    if (identical(carVoiceShared, carVoice)) carVoiceShared = null;
+    carVoice.dispose();
     _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
@@ -1573,6 +1602,7 @@ class _CacheAppState extends State<CacheApp> {
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
         navigatorKey: _navKey,
+        navigatorObservers: [pagePushWatcher],
         title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),

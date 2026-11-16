@@ -32,15 +32,20 @@ class SharingState extends ChangeNotifier {
     required this.kinds,
     this.always = const [],
     this.linkShares = const [],
+    this.quiet = const [],
     this.deviceName = 'Cache device',
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
     bool? phone,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
+    List<String> Function()? drainLog,
+    Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
+       _drainLog = drainLog ?? drainSyncLog,
+       _every = every ?? ((d, run) => Timer.periodic(d, (_) => run())),
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
@@ -49,6 +54,10 @@ class SharingState extends ChangeNotifier {
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
+
+  /// Shares whose files the Activity does not list one by one (the engine's `quiet`): the notebooks, which the notebook sync tells in
+  /// its own words ("3 entries arrived from your other devices"); a file line would name the person's notebook files.
+  final List<String> quiet;
 
   /// Folders kept only with some linked devices, by how settings go between them (the device's page): never listed under
   /// Sharing and sync, set up once sharing is (see [LinkShare]).
@@ -80,6 +89,21 @@ class SharingState extends ChangeNotifier {
   /// Where the start's timing lines go (the app's log), and how the one-shot "still starting" timer is made (tests make their own).
   final void Function(String line) _log;
   final Timer Function(Duration after, void Function() run) _timer;
+
+  /// Takes the engine's lines about its start ([SyncCore.takeLog]), and how the 1 s drain while the start runs is made. The engine
+  /// never calls into Dart; the lines are asked for.
+  final List<String> Function() _drainLog;
+  final Timer Function(Duration every, void Function() run) _every;
+  /// How often the engine's lines are taken while a start is running (so a start that hangs leaves its last step in the log).
+  static const Duration kDrainEvery = Duration(seconds: 1);
+
+  void _drainNow() {
+    try {
+      for (final l in _drainLog()) {
+        _log(l);
+      }
+    } catch (_) {}
+  }
 
   /// How long a start may take before the log says it is still going.
   static const Duration kSlowStart = Duration(seconds: 60);
@@ -136,12 +160,29 @@ class SharingState extends ChangeNotifier {
   /// own encrypted connection, when it asks. Empty: none.
   Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
 
+  /// Cache Server only: the names of the keys the server keeps that can go to a linked device, each with the devices it is ticked
+  /// for. Names and ticks only: a key itself never reaches a browser.
+  Future<List<({String name, Set<String> on})>> serverKeys() async => _serverKeys(await _call('key_names'));
+
+  /// Cache Server only: ticks or unticks the key [name] for [peer]; answers like [serverKeys].
+  Future<List<({String name, Set<String> on})>> setServerKeyOn(String peer, String name, bool on) async =>
+      _serverKeys(await _call('set_key_on', {'peer': peer, 'name': name, 'on': on}));
+
+  List<({String name, Set<String> on})> _serverKeys(Map<String, dynamic> r) => [
+    for (final k in (r['keys'] as List? ?? const []))
+      if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
+  ];
+
   /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
   Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
 
   /// What this device fetches of the always-shared folder [id] from now on: the paths [patterns] cover (the sync engine's
   /// patterns), as the sources on this device change. Kept, and given to the engine at its next start too.
   Future<void> setOnly(String id, List<String> patterns) => _driver.setOnly(id, patterns);
+
+  /// Before something writes files into a gated folder (notebook sync, its photos): the engine's list of what may be sent from
+  /// it is made current at once.
+  Future<void> refreshGate() => _driver.refreshGate();
 
   /// What this device never fetches of the always-shared folder [id] (on top of [setOnly]): kept, and given to the engine at its
   /// next start too.
@@ -209,6 +250,13 @@ class SharingState extends ChangeNotifier {
     return peers.isNotEmpty;
   }
 
+  /// Whether a region deleted here is deleted on another device too: the Maps share (the Regions kind) is on and at least one device is
+  /// linked. Sync is fully shared both ways, so every linked device takes the delete.
+  bool get mapsTakenByAnotherDevice {
+    final k = kinds.where((k) => k.id == 'regions').firstOrNull;
+    return k != null && kindOn(k) && peers.isNotEmpty;
+  }
+
   /// Switches one item on or off. Switching one on in a kind that is off shares the kind with that item alone.
   Future<void> setItem(DataKind k, ShareItem it, bool on) => _driver.setItem(k, it, on);
 
@@ -216,6 +264,18 @@ class SharingState extends ChangeNotifier {
   /// fetch (a library is never read half-way through). The app reads those folders again (Library's list, for one), so what a
   /// sync brought shows at once instead of after a restart.
   void Function(Set<String> shareIds)? onShareChanged;
+
+  /// A browser tab only: called when the server's host says it applied settings from a linked device (its `settings_applied`
+  /// counter moved), so the tab reads its settings files again. Not called for the first reading, which only notes the count.
+  void Function()? onSettingsApplied;
+  int? _settingsApplied;
+
+  void _noteSettingsApplied(Object? count) {
+    if (count is! int) return;
+    final before = _settingsApplied;
+    _settingsApplied = count;
+    if (before != null && before != count) onSettingsApplied?.call();
+  }
 
   /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
   final Map<String, (int, int)> _settled = {};
@@ -338,6 +398,9 @@ abstract class SharingDriver {
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
   Future<void> setOnly(String id, List<String> patterns);
+
+  /// Brings what the engine may send from the gated folders (the notebooks' photos) up to date now.
+  Future<void> refreshGate();
   Future<void> setNeverFetch(String id, List<String> patterns);
   Future<void> setSecrets(String peer, Map<String, String> secrets);
   Future<Map<String, Map<String, String>>> takeSecrets();
@@ -356,6 +419,7 @@ class _PhoneDriver implements SharingDriver {
   bool _starting = false;
   Timer? _poll;
   Timer? _slowStart;
+  Timer? _drain;
   StreamSubscription<ConnectionKind>? _net;
 
   @override
@@ -441,6 +505,8 @@ class _PhoneDriver implements SharingDriver {
     s._log('Sharing: starting');
     // Only says so: a start that hangs leaves this line as the trace of where it stopped. Cancelled when the start ends.
     _slowStart = s._timer(SharingState.kSlowStart, () => s._log('Sharing: still starting after ${SharingState.kSlowStart.inSeconds} s'));
+    // the engine's own lines about its start, taken (it never calls into Dart) while the start runs
+    _drain = s._every(SharingState.kDrainEvery, s._drainNow);
     try {
       final dir = Directory('${(await s.supportDir()).path}/sync');
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
@@ -466,9 +532,12 @@ class _PhoneDriver implements SharingDriver {
         'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
         // The items switched off, from the start, so the first round already leaves them out.
         'off': {for (final k in shareKinds) for (final id in k.shared().keys) id: _sentOff[id] = _offOf(k, id)},
+        // What may be sent from a folder every item uses (the notebooks' photos): only what something shared refers to.
+        'gate': await _gates(),
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
+        'quiet': s.quiet,
       };
       _lastConfig = config;
       _core = await s._opener(config);
@@ -499,6 +568,9 @@ class _PhoneDriver implements SharingDriver {
     } finally {
       _slowStart?.cancel();
       _slowStart = null;
+      _drain?.cancel();
+      _drain = null;
+      s._drainNow();
       _starting = false;
       s._changed();
     }
@@ -650,6 +722,8 @@ class _PhoneDriver implements SharingDriver {
       await _applyOff();
       await _writeSnapshot();
     }
+    // The photos that may be sent follow the entries (an entry made private, a photo taken off one) without waiting for a sync.
+    if (_ticks % 15 == 0) await refreshGate();
     // The mark that this app's engine runs (a background round never opens a second one), written again every 30 s.
     if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
   }
@@ -688,6 +762,7 @@ class _PhoneDriver implements SharingDriver {
       'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
       'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
       'off': {for (final e in _sentOff.entries) e.key: e.value},
+      'gate': {for (final e in _sentGate.entries) e.key: e.value},
     });
     if (snap == _snapshot) return;
     _snapshot = snap;
@@ -773,8 +848,61 @@ class _PhoneDriver implements SharingDriver {
         } catch (e) {
           logError('Sync: could not set the items switched off', error: e, detail: id);
         }
+        // An item switched on or off changes which photos something shared refers to.
+        await _applyGate(k, id);
       }
     }
+  }
+
+  /// The gate each share was last given (see [DataKind.gated]): the folder and the files in it that may be sent.
+  final Map<String, Map<String, Object?>> _sentGate = {};
+
+  /// The gate for [id] of [k] as it is now: null when the share has none. A failure to work it out sends nothing from the folder
+  /// rather than everything.
+  Future<Map<String, Object?>?> _gateOf(DataKind k, String id) async {
+    final dir = k.gated[id];
+    final allowed = k.allowed;
+    if (dir == null || allowed == null) return null;
+    try {
+      return {'dir': dir, 'allow': await allowed(id, _offOf(k, id))};
+    } catch (e) {
+      logError('Sync: could not work out which files may be sent', error: e, detail: id);
+      return {'dir': dir, 'allow': const <String>[]};
+    }
+  }
+
+  Future<Map<String, Map<String, Object?>>> _gates() async {
+    final out = <String, Map<String, Object?>>{};
+    for (final k in shareKinds) {
+      for (final id in k.shared().keys) {
+        final g = await _gateOf(k, id);
+        if (g != null) out[id] = _sentGate[id] = g;
+      }
+    }
+    return out;
+  }
+
+  Future<void> _applyGate(DataKind k, String id) async {
+    final c = _core;
+    final g = await _gateOf(k, id);
+    if (c == null || g == null) return;
+    if (_sentGate[id] != null && jsonEncode(_sentGate[id]) == jsonEncode(g)) return;
+    try {
+      await c.call('set_gate', {'id': id, ...g});
+      _sentGate[id] = g;
+    } catch (e) {
+      logError('Sync: could not set which files may be sent', error: e, detail: id);
+    }
+  }
+
+  @override
+  Future<void> refreshGate() async {
+    for (final k in shareKinds) {
+      for (final id in k.shared().keys) {
+        if (k.gated[id] != null) await _applyGate(k, id);
+      }
+    }
+    await _writeSnapshot();
   }
 
   @override
@@ -797,13 +925,12 @@ class _PhoneDriver implements SharingDriver {
     final folders = k.shared();
     if (!on) {
       for (final id in folders.keys) {
-        if (s.shareOf(id) != null) await call('share_remove', {'id': id});
+        if (s.shareOf(id) != null) await call('share_remove', {'id': id, 'keep_history': true});
       }
       s._changed();
       return;
     }
     if (folders.values.any((d) => d == null)) throw CacheSearchException('sync', '${k.label} is not ready yet');
-    if (_off.remove(k.id) != null) await _save();
     await _addKind(k);
   }
 
@@ -824,6 +951,7 @@ class _PhoneDriver implements SharingDriver {
   @override
   void dispose() {
     _slowStart?.cancel();
+    _drain?.cancel();
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
@@ -884,6 +1012,7 @@ class _WebDriver implements SharingDriver {
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
     s._noteShareChanges();
+    s._noteSettingsApplied(snap['settings_applied']);
     s._changed();
   }
 
@@ -995,6 +1124,8 @@ class _WebDriver implements SharingDriver {
   @override
   Future<void> setOnly(String id, List<String> patterns) async {}
   @override
+  Future<void> refreshGate() async {}
+  @override
   Future<void> setNeverFetch(String id, List<String> patterns) async {}
   @override
   Future<void> setSecrets(String peer, Map<String, String> secrets) async {}
@@ -1077,7 +1208,24 @@ abstract class SyncCoreLike {
 typedef SyncOpener = Future<SyncCoreLike> Function(Map<String, Object?> config);
 
 /// The real engine ([SyncCore]) as the state and the background run use it.
-Future<SyncCoreLike> openSyncCore(Map<String, Object?> config) async => _RealCore(await SyncCore.open(config));
+Future<SyncCoreLike> openSyncCore(Map<String, Object?> config) async {
+  try {
+    return _RealCore(await SyncCore.open(config));
+  } finally {
+    // the engine's lines about this open (it never calls into Dart): this isolate's log gets them, the background run's too
+    drainSyncLogToLog();
+  }
+}
+
+/// The engine's lines about its start ([SyncCore.takeLog]), taken now.
+List<String> drainSyncLog() => SyncCore.takeLog();
+
+/// Takes the engine's lines about its start and writes each to the app's log.
+void drainSyncLogToLog() {
+  for (final l in SyncCore.takeLog()) {
+    logInfo(l);
+  }
+}
 
 class _RealCore implements SyncCoreLike {
   _RealCore(this._c);

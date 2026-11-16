@@ -14,9 +14,11 @@ import '../nav/nav_geojson.dart';
 import '../nav/nav_state.dart';
 import '../nav/saved_first.dart';
 import '../nav/speaker.dart';
+import 'car_answer.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
+import 'car_nearest.dart';
 import 'car_overlay.dart';
 import 'car_places.dart';
 import 'car_pins.dart';
@@ -49,6 +51,7 @@ class CarBridge {
     Future<String> Function()? glyphs,
     this.ready,
     this.onConnected,
+    this.onCarSeen,
     this.pins,
     this.places,
     this.throttle = const Duration(milliseconds: 250),
@@ -103,6 +106,9 @@ class CarBridge {
   /// Called when a car screen attaches: the app reads a current position (the car may have started Cache with the phone app
   /// closed, when nothing else has read one yet).
   final Future<void> Function()? onConnected;
+
+  /// Called each time a car screen attaches: the app notes that a car was seen (the one-time voice search card waits for it).
+  final void Function()? onCarSeen;
 
   /// The phone map's pins for the car's map (car_pins.dart); null: the car's map draws none.
   final CarPins? pins;
@@ -180,6 +186,7 @@ class CarBridge {
       _schedule();
       // The tile server may have lost its socket while the app was in the back: a new port reloads the car's map ([_onMaps]).
       unawaited(maps.engine.recheckServer());
+      onCarSeen?.call();
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
@@ -393,13 +400,23 @@ class CarBridge {
         if (nav.phase == NavPhase.previewing) nav.cancelDirections();
         return null;
       case 'stop':
+        final wasGuiding = nav.guiding;
         await nav.end();
         // The car has the ended trip before this is answered.
         await push();
-        return null;
+        // Whether a route was running (Siri's "End route" says "No route is running." when none was); the car sides ignore it.
+        return wasGuiding;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
         return nav.voiceOn;
+      case 'answer':
+        // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
+        // straight away, even when guidance prompts are off, since the driver asked.
+        // `say: false` (Siri on an iPhone says the words itself): the words only, nothing spoken by the phone.
+        final text = carAnswer(nav, a['kind'] as String?);
+        logInfo('Car answers (${a['kind']}): $text');
+        if (a['say'] != false) await nav.speaker.speak(text);
+        return text;
       case 'autoDrive':
         drive.simulate = a['on'] == true;
         return null;
@@ -410,6 +427,7 @@ class CarBridge {
           query: a['query'] as String?,
           start: a['start'] != false,
           stop: a['stop'] == true,
+          search: a['search'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -513,7 +531,8 @@ class CarBridge {
     List<MapPlace> found = const [];
     try {
       final r = await _search(q);
-      found = [for (final p in r.results) if (!p.isCategory) p];
+      // A kind of place (the engine says so) lists nearest first; a name keeps the engine's order (car_nearest.dart).
+      found = carResults(r, nav.here ?? nav.mapCentre);
     } catch (_) {}
     return savedFirst(q, saved, found).take(12).toList();
   }
@@ -530,10 +549,14 @@ class CarBridge {
   /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
   /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
   /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false}) async {
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false, bool search = false}) async {
     final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
+    if (search && q.isNotEmpty) {
+      // A voice search (Android `geo:?q=`): always the list of places found, even for a saved place's exact name.
+      return {'places': [for (final p in await this.search(q)) _placeOut(p)]};
+    }
     if (lat != null && lon != null && !(lat == 0 && lon == 0)) {
       to = MapPlace.pin(lat, lon, name: q.isEmpty ? 'Dropped pin' : q);
     } else if (q.isNotEmpty) {
@@ -541,7 +564,7 @@ class CarBridge {
       if (saved.isNotEmpty) {
         to = saved.first;
       } else {
-        return {'places': [for (final p in await search(q)) _placeOut(p)], if (asStop) 'forStop': true};
+        return {'places': [for (final p in await this.search(q)) _placeOut(p)], if (asStop) 'forStop': true};
       }
     }
     if (to == null) return {'places': const [], if (asStop) 'forStop': true};

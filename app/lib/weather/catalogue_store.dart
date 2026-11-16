@@ -39,6 +39,7 @@ Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024}) async {
       net.FetchFailure.tooLarge => 'The file is larger than expected.',
       net.FetchFailure.timedOut => "Couldn't reach ${url.host}.",
       net.FetchFailure.unreachable => "Couldn't reach ${url.host}. Check your connection.",
+      net.FetchFailure.notFound => "Couldn't reach ${url.host}. Check your connection.",
       net.FetchFailure.insecure => "Couldn't make a secure connection to ${url.host}.",
       net.FetchFailure.unreadable => "Couldn't read from ${url.host}.",
     });

@@ -6,6 +6,7 @@ import '../settings/app_settings.dart';
 import '../settings/web_search_setup.dart';
 import '../theme.dart';
 import '../video/token_store.dart';
+import '../platform/app_log.dart';
 import '../weather/weather_state.dart';
 import 'settings_sync.dart';
 
@@ -109,8 +110,10 @@ List<SyncedSetting> appSyncedSettings({
       listenable: settings,
       read: () => settings.liveSourcesOn.toList()..sort(),
       write: (v) async {
+        final before = settings.liveSourcesOn.length;
         settings.replaceLiveSourcesOn(strings(v));
         await weather.sourcesChanged();
+        logInfo('Settings sync: weather sources on went from $before to ${settings.liveSourcesOn.length}; ${weather.sourcesLine()}');
         return true;
       },
       shows: () => count(weather.enabledSources.length, 'source on', 'sources on'),
@@ -279,7 +282,7 @@ List<SyncedKey> appSyncedKeys({required WeatherState weather, required WebSearch
   }
 
   return [
-    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: 'Kagi (web search)', read: () => real(WebSearchSetup.keyName)),
+    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: kKagiKeyLabel, read: () => real(WebSearchSetup.keyName)),
     for (final alias in weather.savedKeyAliases)
       SyncedKey(name: WeatherState.secretName(alias), label: _keyLabel(weather, alias), read: () => real(WeatherState.secretName(alias))),
   ];

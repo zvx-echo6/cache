@@ -260,6 +260,17 @@ extension CarLink {
   func attach(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: "co.cache/car", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
+      // The phone's own permissions for voice search from the car (the card on Home, the row in Settings): not the car's to ask.
+      #if os(iOS)
+      if call.method == "voiceStatus" {
+        result(CarListenPermissions.status())
+        return
+      }
+      if call.method == "voiceRequest" {
+        CarListenPermissions.request { result($0) }
+        return
+      }
+      #endif
       var arguments = call.arguments
       // The pins' pictures come as the channel's typed bytes: Data for CarLink, which does not know Flutter.
       if call.method == "pins", var m = arguments as? [String: Any], let images = m["images"] as? [String: Any] {

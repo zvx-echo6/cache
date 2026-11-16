@@ -247,9 +247,12 @@ class LibrariesState extends ChangeNotifier {
     if (dir == null || _disposed) return;
     _recoverLeftovers();
     await syncOwnLibraries();
+    if (_disposed) return;
     await _scan();
+    if (_disposed) return;
     notifyListeners();
     await sources.refresh();
+    if (_disposed) return;
     _resumeIndexes();
     notifyListeners();
     // a library the sync brought is opened by the core on its own thread: follow it until it is open
@@ -259,11 +262,14 @@ class LibrariesState extends ChangeNotifier {
   Future<void> _afterCore() async {
     // the person's own libraries first: one that arrived by sync has no shard until this device builds it (so it is not listed
     // before), and the first start of this version rebuilds each once (books an earlier sync lost come back)
-    if (await syncOwnLibraries()) await _scan();
+    if (await syncOwnLibraries() && !_disposed) await _scan();
+    if (_disposed) return;
     await sources.refresh();
+    if (_disposed) return;
     _resumeIndexes();
     await ensureGuide();
     await _whileOpening();
+    if (_disposed) return;
     _resumeIndexes();
   }
 
@@ -272,7 +278,7 @@ class LibrariesState extends ChangeNotifier {
   /// status is read again until no library is opening (for at most ten minutes, like an add).
   Future<void> _whileOpening() async {
     for (var i = 0; i < 2400 && !_disposed; i++) {
-      if (!libraries.any((l) => statusOf(l)?.opening ?? false)) return;
+      if (!libraries.any((l) => (statusOf(l)?.opening ?? false) || (statusOf(l)?.index?.opening ?? false))) return;
       await Future<void>.delayed(pollInterval);
       if (_disposed) return;
       await sources.reloadStatus();
@@ -679,6 +685,7 @@ class LibrariesState extends ChangeNotifier {
       _owning.add(d.path);
       try {
         final p = await _wait(await core.startJob('own_library_sync', {'library_dir': d.path}), (_) {});
+        if (_disposed) return rebuilt;
         if (p.state == JobState.done) {
           final detail = p.detail ?? const <String, dynamic>{};
           ownSyncResults[d.path] = detail;
@@ -713,7 +720,11 @@ class LibrariesState extends ChangeNotifier {
       logInfo('My books: busy; looking again in ${ownBusyRetry.inSeconds} s');
       _ownRetry = Timer(ownBusyRetry, () {
         _ownRetry = null;
-        if (!_disposed) unawaited(rescan());
+        if (_disposed) return;
+        // tracked, so whenIdle (a test's teardown, a hand-off) waits for the delayed look to end
+        final f = rescan();
+        _pending.add(f);
+        unawaited(f.whenComplete(() => _pending.remove(f)));
       });
     }
     return rebuilt;

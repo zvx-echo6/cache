@@ -278,6 +278,35 @@ class RouteSegment {
   bool get isRoad => kind == 'road';
 }
 
+/// One name of a road as the map gives it: the text, and whether the map says it is a route number (a highway's number) rather
+/// than the road's name. The core passes Valhalla's own flag (`StreetName.is_route_number`); nothing here reads the text to decide.
+class StreetName {
+  const StreetName(this.text, {this.isRouteNumber = false});
+
+  final String text;
+  final bool isRouteNumber;
+
+  /// A maneuver's `streets` (`[{"text": ..., "is_route_number": ...}]`), or, when it has none (a core that does not send
+  /// them), its plain `street_names` [fallback] taken as names in the map's order.
+  static List<StreetName> listFrom(Object? v, {Object? fallback}) {
+    final out = [
+      for (final e in _l(v))
+        if (e is Map && e['text'] is String && (e['text'] as String).isNotEmpty) StreetName(e['text'] as String, isRouteNumber: e['is_route_number'] == true),
+    ];
+    if (out.isNotEmpty) return out;
+    return [for (final s in _l(fallback)) if (s.toString().isNotEmpty) StreetName(s.toString())];
+  }
+
+  @override
+  bool operator ==(Object other) => other is StreetName && other.text == text && other.isRouteNumber == isRouteNumber;
+
+  @override
+  int get hashCode => Object.hash(text, isRouteNumber);
+
+  @override
+  String toString() => 'StreetName($text${isRouteNumber ? ', route number' : ''})';
+}
+
 class Maneuver {
   const Maneuver({
     required this.index,
@@ -285,6 +314,8 @@ class Maneuver {
     required this.type,
     required this.instruction,
     this.streetNames = const [],
+    this.streets = const [],
+    this.beginStreets = const [],
     required this.distanceM,
     required this.durationS,
     required this.lat,
@@ -306,6 +337,8 @@ class Maneuver {
         type: (j['type'] ?? '') as String,
         instruction: (j['instruction'] ?? '') as String,
         streetNames: [for (final s in _l(j['street_names'])) s.toString()],
+        streets: StreetName.listFrom(j['streets'], fallback: j['street_names']),
+        beginStreets: StreetName.listFrom(j['begin_streets']),
         distanceM: _d(j['distance_m']) ?? 0,
         durationS: _i(j['duration_s']) ?? 0,
         lat: _d(j['lat']) ?? 0,
@@ -330,6 +363,11 @@ class Maneuver {
   final String type;
   final String instruction;
   final List<String> streetNames;
+
+  /// [streetNames] with the map's word on which are route numbers; [beginStreets] the names where the maneuver starts, when
+  /// Valhalla gives different ones ("turn onto A, continue on B").
+  final List<StreetName> streets;
+  final List<StreetName> beginStreets;
   final double distanceM;
   final int durationS;
   final double lat;
@@ -526,6 +564,8 @@ class ProgressManeuver {
     required this.type,
     required this.instruction,
     this.streetNames = const [],
+    this.streets = const [],
+    this.beginStreets = const [],
     this.travel,
     required this.lat,
     required this.lon,
@@ -547,6 +587,8 @@ class ProgressManeuver {
         type: (j['type'] ?? '') as String,
         instruction: (j['instruction'] ?? '') as String,
         streetNames: [for (final s in _l(j['street_names'])) s.toString()],
+        streets: StreetName.listFrom(j['streets'], fallback: j['street_names']),
+        beginStreets: StreetName.listFrom(j['begin_streets']),
         travel: _s(j['travel']),
         lat: _d(j['lat']) ?? 0,
         lon: _d(j['lon']) ?? 0,
@@ -567,6 +609,10 @@ class ProgressManeuver {
   final String type;
   final String instruction;
   final List<String> streetNames;
+
+  /// As [Maneuver.streets] and [Maneuver.beginStreets].
+  final List<StreetName> streets;
+  final List<StreetName> beginStreets;
   final String? travel;
   final double lat;
   final double lon;

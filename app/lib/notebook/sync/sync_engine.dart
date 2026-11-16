@@ -439,6 +439,9 @@ class NotebookSync {
 
   static String folderNameOf(Notebook n) => folderName(n.name);
 
+  /// Where notebook sync's folder (the share) keeps photo [id]: every notebook's photos live in this one folder.
+  static String photoPath(String id) => 'photos/cache-$id.jpg';
+
   Future<String> _newPath(EntryDoc d, Notebook n) async {
     final dir = folderNameOf(n);
     final base = noteFileName(d);
@@ -631,8 +634,10 @@ class NotebookSync {
     final known = byName.containsKey(d.notebook);
     if (!known) await _followRename(id, d.notebook, byName);
     var book = await _bookFor(d, byName);
-    if (!known && text != null) {
-      // The notebook was just made: read the fields again with its field names.
+    if (text != null) {
+      // Read the fields again with the notebook's field names: the file was read before the notebook was here (the first entry of a
+      // notebook that arrives made it just now; the entries after it in the same round were read before it existed, with no field
+      // names, and kept only their names: found with three repeaters that arrived together on a phone with no such notebook).
       final again = _parseAs(id, text, book, when: d.when);
       if (again != null) d = again;
     }

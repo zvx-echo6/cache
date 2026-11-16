@@ -74,6 +74,15 @@ class SharingHost {
   Directory get syncDir => Directory('${dataDir.path}/sync');
 
   bool get enabled => _enabled;
+
+  /// The engine's own device id (from its status); null before the engine runs.
+  String? get myId => status['id'] is String && (status['id'] as String).isNotEmpty ? status['id'] as String : null;
+
+  /// When links began to be asked about (`ask_since`).
+  int? get askSince => _askSince;
+
+  /// How many settings changes from linked devices the host applied (set by the helper; tabs read their files again when it moves).
+  int Function()? settingsApplied;
   bool get running => _core != null;
 
   /// Called with the ids of the shared folders whose files a sync added, changed or removed, once the folder has nothing more to
@@ -184,6 +193,7 @@ class SharingHost {
       // The server is always online: sync uses the network (the phone's rule for Wi-Fi).
       await core.call('set_policy', {'network': true});
       await _refresh();
+      await _keepOwnLog();
       await _retire();
       await _addFolders([...table.always.map((a) => (a.id, a.name, a.dir)), ...table.links.map((l) => (l.id, l.name, l.dir))]);
       _poll = Timer.periodic(pollEvery, (_) => _tick());
@@ -217,6 +227,18 @@ class SharingHost {
         log?.call('sharing: stopping the engine failed: $e');
       }
     });
+  }
+
+  /// The server's own Bookshelves log, `log/<its id>.jsonl`, is never replaced by another device's copy of it (a backup put back on a
+  /// phone is an older copy that looks newer to the engine). The Rust server is the one writer of that file; the other devices' logs
+  /// still arrive beside it. The engine's own id is the id the log is named by (`<data>/sync` is the identity the server reads), so it
+  /// is known only after the engine is open; it is set before the folder is shared, and again at every open.
+  Future<void> _keepOwnLog() async {
+    final id = status['id'];
+    if (id is! String || id.isEmpty) return;
+    final own = ['$kBookshelvesLogDir/$id.jsonl'];
+    _neverFetch[kBookshelvesShareId] = own;
+    await _engine('set_never_fetch', {'id': kBookshelvesShareId, 'never_fetch': own});
   }
 
   /// Shared folders earlier versions had and this one does not (the same list the phone retires).
@@ -317,6 +339,7 @@ class SharingHost {
         ],
         'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: ([...e.value]..sort())},
         'changed': {..._changed},
+        'settings_applied': settingsApplied?.call() ?? 0,
         'link': {..._link},
       };
 
@@ -361,7 +384,6 @@ class SharingHost {
           }
           return;
         }
-        if (_off.remove(k.id) != null) _save();
         await _addKind(k);
       });
 
@@ -474,7 +496,21 @@ class SharingHost {
   /// The engine methods a browser may call through `sharing.call`: the ones that need no more than the device's own say. Everything
   /// else is the host's (shares, off lists and what links they are kept with come from the share table and the person's choices
   /// above; a browser does not name folders) or has its own op (`link`: `sharing.link_start`). `status` is served from the cache.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items'};
+  ///
+  /// `key_names` and `set_key_on` are not the engine's: the host answers them itself, from [keyNames] and [setKeyOn] (the settings
+  /// sync's key list and tick). They give a browser the names of the keys that can go to a linked device and which are ticked, and
+  /// take a tick; a key's value is in neither.
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+
+  /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
+  List<Map<String, Object?>> Function()? keyNames;
+
+  /// Told after a browser's `set_link` went through: the device and its record as it was just before (a copy; null when it was not
+  /// there). The settings sync seeds what the link now sends from it. Set by the helper; not called for the host's own calls.
+  Future<void> Function(String peer, Map<String, dynamic>? before)? onLinkSet;
+
+  /// Ticks or unticks the key [name] for the device [peer]; answers like [keyNames]. Set by the helper.
+  Future<List<Map<String, Object?>>> Function(String peer, String name, bool on)? setKeyOn;
 
   /// The engine's key methods, which a browser may never reach (the host does them itself).
   static const Set<String> secretMethods = {'set_secrets', 'take_secrets'};
@@ -489,7 +525,35 @@ class SharingHost {
       final why = secretMethods.contains(method) ? 'Keys are handled on the server only' : 'Not available from a browser';
       throw CacheSearchException('forbidden', '$why: $method');
     }
-    return _locked(() => _engine(method, args.cast<String, Object?>()));
+    if (method == 'key_names') {
+      final f = keyNames;
+      if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
+      return {'keys': f()};
+    }
+    if (method == 'set_key_on') {
+      final f = setKeyOn;
+      if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
+      final on = args['on'];
+      if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
+      return {'keys': await f(_str(args, 'peer'), _str(args, 'name'), on)};
+    }
+    final hear = !trusted && method == 'set_link' ? onLinkSet : null;
+    if (hear == null) return _locked(() => _engine(method, args.cast<String, Object?>()));
+    Map<String, dynamic>? before;
+    final r = await _locked(() {
+      final p = peers.where((p) => p['id'] == args['peer']).firstOrNull;
+      before = p == null ? null : (jsonDecode(jsonEncode(p)) as Map).cast<String, dynamic>();
+      return _engine(method, args.cast<String, Object?>());
+    });
+    final peer = args['peer'];
+    if (peer is String) {
+      try {
+        await hear(peer, before);
+      } catch (e) {
+        log?.call('sharing: a link change could not be seeded: $e');
+      }
+    }
+    return r;
   }
 
   /// The one dispatch of the host's `sharing.*` ops (see [SharingOps]); the host's own code may use it as well with [trusted].
@@ -671,6 +735,9 @@ class ShareTable {
   final List<ShareAlways> always;
   final List<ShareLink> links;
 }
+
+/// The folder of the Bookshelves log's files inside the share (`<data>/bookshelves/log/<device id>.jsonl`, the Rust `LOG_DIR`).
+const String kBookshelvesLogDir = 'log';
 
 /// What never syncs in the server's models folder: a download in progress (`<file>.part`).
 const List<String> kServerModelsNotShared = ['*.part', '**/*.part'];

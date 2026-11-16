@@ -39,10 +39,16 @@ bool isOwnLibraryFolderName(String name) => name.startsWith(kOwnLibraryPrefix);
 const List<String> kZimNotShared = ['*.illustration.png'];
 
 /// What the region engine's folder (the `regions` shared folder) holds that each device makes for itself, as sync patterns (see
-/// DataKind.notShared), so it never syncs. The downloaded parts all sync: regions.sqlite (the region records, tile lists and
-/// meta) with its -wal, `tiles/<build>/` (routing tiles, streamed ones among them: they share the folder), `places/<build>.sqlite`
-/// (the merged places, the only copy of the places tiles: each is merged in and its download deleted), `places/<build>/common.sqlite`,
-/// places/CURRENT and offroad/. Left out:
+/// DataKind.notShared), so it never syncs. A database has one writer, so each device's live databases never travel (see
+/// [kMapLayersNotShared], and test/maps_two_writers.rs in cache_sync): when they did, two devices that each downloaded a region
+/// replaced each other's database, kept their own as "(conflict, ...)" copies, and one lost its region. What syncs from this folder:
+/// `tiles/<build>/` (routing tiles, immutable, named by path), `offroad/`, and what each device shares of itself under its own
+/// name: `regions-share/<device>.json` (its regions) and `regions-share/<device>.deletes.json` (the regions it deleted), and
+/// `places-share/<build>/<device>.sqlite` (a snapshot of its merged places). Every device reads its own and the others', read-only.
+/// Left out:
+/// - `regions.sqlite*`: the region records, tile lists and meta, with its -wal.
+/// - `places/*.sqlite*`, `places/*/common.sqlite*`, `places/CURRENT`: the merged places database of each build (the device's own
+///   copy of the places tiles), the build's common file and the name of the build the device reads.
 /// - `index`, `places/index`: where the tile indexes were kept before. They now live, and sync, in the indexes folder as
 ///   snapshots (`region-index/<build>/`, `places-index/<build>/`; search/indexes_share.dart): this version moves what it finds
 ///   here into it, and only Cache 1.0.29 and earlier still write here, so these stay out of the regions share (a file a newer
@@ -50,15 +56,35 @@ const List<String> kZimNotShared = ['*.illustration.png'];
 /// - `**/*-shm`: SQLite's shared-memory index of a WAL file, which also holds the locks of the connections on this device; SQLite
 ///   rebuilds it from the -wal when it opens the database.
 /// - `**/*-journal`: a rollback journal, this device's alone (a copied one would be played back into another device's database).
-const List<String> kRegionsNotShared = ['index', 'places/index', '**/*-shm', '**/*-journal'];
+/// - `**/* (conflict, *`: a sync conflict copy, which is this device's own (the copies an older build left are taken back in by the
+///   engines; the older builds also synced them, which handed each device the other's).
+///
+/// Cache builds before this one still send and expect those files. This one never fetches, sends or deletes them (their conflict
+/// copies are never read as data), so a pair with one old build does not see each other's regions; the union holds between
+/// builds with this rule (accepted: testers update).
+const List<String> kRegionsNotShared = [
+  'index',
+  'places/index',
+  '**/*-shm',
+  '**/*-journal',
+  'regions.sqlite*',
+  'places/*.sqlite*',
+  'places/*/common.sqlite*',
+  'places/CURRENT',
+  '**/* (conflict, *',
+];
 
 /// What the layer engine's folder (the `maps` shared folder) holds that each device makes for itself, as sync patterns. The
-/// downloaded map layers sync: `store/<layer>.sqlite` (every tile downloaded for offline use, and the areas) with its -wal,
-/// catalogue.json and latest.json (the layer definitions those tiles belong to), user-defs/. Left out:
+/// live tile stores (`store/<layer>.sqlite`, the base map among them, with their -wal) are written by their device only and never
+/// travel; each device shares a snapshot of its own under its own name instead, `store-share/<layer>/<device>.sqlite`, and a
+/// record of the areas it deleted, `store-share/<device>.deletes.json`, and reads its own store and every peer's snapshot (the
+/// layer engine, cache_layers/src/share.rs). What syncs: that, catalogue.json and latest.json (the layer definitions those tiles
+/// belong to), user-defs/. Left out:
+/// - `store/*.sqlite*`: the live stores, with their -wal.
 /// - `tiles.sqlite*`: the cache of tiles viewed online (size-capped, least recently used first), with its -wal and -shm.
 /// - `tilejson`: TileJSON documents as fetched from each source, kept a day.
 /// - `**/*-shm`, `**/*-journal`: as for [kRegionsNotShared].
-const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'];
+const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*', '**/* (conflict, *'];
 
 /// The always-on share of the indexes folder.
 const String kIndexesShareId = 'indexes';

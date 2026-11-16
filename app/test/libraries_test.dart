@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:cache/browse/browse_screen.dart' show BrowseScreen, LibraryItemScreen;
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/zim_download.dart';
+import 'package:cache/background/background_lock.dart';
+import 'package:cache/search/core_index_calls.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart';
@@ -102,7 +104,19 @@ class _LibNative implements CsNative {
     // "opening_reads": N: the core is still opening the library (on its background thread) for the next N status reads.
     final reads = (fake['opening_reads'] as int?) ?? 0;
     if (reads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'opening_reads': reads - 1}));
+    // "snapshot_opening_reads": N: the library is open, but the core is still picking its keyword snapshot for the next N status reads:
+    // the index is the old one in the library's own folder (no words pending), then the older snapshot, which lacks the new book.
+    final snapReads = (fake['snapshot_opening_reads'] as int?) ?? 0;
+    if (snapReads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'snapshot_opening_reads': snapReads - 1}));
+    // "words_covered": N: the keyword snapshot covers N points; the words are pending while the shard holds another number (what a
+    // book added after the snapshot was made looks like; the core says so from the counts alone)
+    final covered = fake['words_covered'] as int?;
     return {
+      if (fake.containsKey('snapshot_opening_reads')) 'keyword_pending': snapReads == 0,
+      if (covered != null) 'keyword_pending': (fake['docs'] ?? 0) != covered,
+      if (covered != null) 'source_id': r['library_id'],
+      if (fake.containsKey('snapshot_opening_reads') || covered != null)
+        'index': snapReads > 0 ? {'kind': 'library', 'location': 'legacy', 'opening': true} : {'kind': 'library', 'location': 'snapshot', 'snapshot': 'b1'},
       'id': r['library_id'],
       'kind': 'library',
       'path': path,
@@ -258,6 +272,7 @@ void main() {
   late LibrariesState libs;
   late _FakeDownloader downloader;
   String? picked;
+  var disposedBoth = false;
   final saved = <String, Uint8List>{};
 
   Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir, Duration ownBusyRetry = const Duration(seconds: 30)}) async {
@@ -289,12 +304,20 @@ void main() {
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('libraries');
+    disposedBoth = false;
     picked = null;
     saved.clear();
   });
-  tearDown(() {
+  // the file's tearDown disposes both; a test that disposes them itself (a teardown in the middle of work) does it through this
+  void disposeBoth() {
+    if (disposedBoth) return;
+    disposedBoth = true;
     libs.dispose();
     sources.dispose();
+  }
+
+  tearDown(() {
+    disposeBoth();
     try {
       tmp.deleteSync(recursive: true);
     } catch (_) {}
@@ -360,6 +383,53 @@ void main() {
       expect(libs.ownSyncResults[mine.path]?['rebuilt'], isFalse);
     });
 
+    test('a book a background run added while the app held its libraries: on coming back to the front the library is read again, its words are pending and the scheduler lists the index job', () async {
+      List<String> ownSyncCalls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'own': true, 'own_default': true, 'fields': {'text': 'text'}}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      // the library as the app holds it: one book, its words all in the keyword snapshot
+      File('${d.path}/shard/fake.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(jsonEncode({'docs': 1, 'words_covered': 1}));
+      await setUpLibs(indexesDir: '${tmp.path}/indexes');
+      await libs.whenIdle();
+      final mine = libs.libraries.firstWhere((l) => l.folderName == 'my-books');
+      expect(libs.docsOf(mine), 1);
+      expect(libs.wordsPendingAt(mine.path), isFalse);
+      final calls = AppIndexCoreCalls(statuses: () => sources.statuses, videos: () => const [], startJob: (k, p) async => null, indexesDir: () => '${tmp.path}/indexes');
+      expect([for (final n in await calls.needs()) n.kind], isNot(contains('library-words')));
+      final syncs = ownSyncCalls().length;
+
+      // the app is at the back; a background run (its own core) adds a book to the same library and counts one run
+      final lock = BackgroundLock(Directory('${tmp.path}/background'));
+      var seen = lock.generation;
+      expect(lock.hold(kAddPdfWork), isTrue);
+      File('${d.path}/packs/b1@1.cdoc').createSync(recursive: true);
+      File('${d.path}/shard/fake.json').writeAsStringSync(jsonEncode({'docs': 2, 'words_covered': 1}));
+      lock.release(kAddPdfWork);
+      // what the app still holds: nothing has told it
+      expect(libs.docsOf(mine), 1);
+      expect(libs.wordsPendingAt(mine.path), isFalse);
+
+      // back at the front (main.dart's _backToFront): the run's change is seen and the libraries are read again
+      seen = await lock.catchUp(seen, [libs.rescan]);
+      expect(seen, lock.generation);
+      expect(ownSyncCalls().length, syncs + 1, reason: 'the own library is looked at again');
+      expect(libs.docsOf(libs.libraries.firstWhere((l) => l.folderName == 'my-books')), 2);
+      expect(libs.wordsPendingAt(mine.path), isTrue, reason: 'the status says the new book\'s words are behind');
+      final needs = await calls.needs();
+      expect([for (final n in needs) n.kind], contains('library-words'), reason: 'the scheduler lists the index job of that library');
+      // nothing changed since: no second read
+      final again = await lock.catchUp(seen, [libs.rescan]);
+      expect(again, seen);
+      expect(ownSyncCalls().length, syncs + 1);
+    });
+
     test('two own libraries that both say own_default: defaultOwnLibrary is the folder named exactly my-books', () async {
       for (final (name, id) in [('my-books-2', 'my-books-a'), ('my-books', 'my-books-z')]) {
         final d = Directory('${tmp.path}/libraries/$name')..createSync(recursive: true);
@@ -396,6 +466,47 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       await libs.whenIdle();
+    });
+
+    test('the state is disposed while its delayed look at a busy own library is under way: nothing is used after the dispose', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      List<String> calls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        await setUpLibs(ownBusyRetry: const Duration(milliseconds: 20));
+        // the delayed look has begun (it asked the core a third time)...
+        for (var i = 0; i < 1000 && calls().length < 3; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        expect(calls(), ['my-books', 'busy:my-books', 'my-books']);
+        // ...and the state goes away under it, as a test's or a screen's teardown does
+        disposeBoth();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }, (e, st) => errors.add(e));
+      expect(errors, isEmpty, reason: 'the look that was under way ends quietly');
+    });
+
+    test('a retry that is still waiting when the state is disposed never runs', () async {
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'fields': {'text': 'text'}, 'own': true, 'own_default': true}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      File('${d.path}/busy-once').createSync();
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        await setUpLibs(ownBusyRetry: const Duration(milliseconds: 100));
+        disposeBoth();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }, (e, st) => errors.add(e));
+      expect(errors, isEmpty);
+      final f = File('${tmp.path}/own-sync-calls.txt');
+      expect(f.readAsLinesSync().where((l) => l == 'my-books'), hasLength(1), reason: 'only the first look was made');
     });
 
     test("only a person's own library is given a my-books folder name, and every own one is", () async {
@@ -635,6 +746,22 @@ void main() {
       expect(libs.statusOf(l)!.opening, isFalse, reason: 'the status is read again until the core has opened it');
       expect(libs.phaseOf(l), LibraryPhase.ready);
       expect(notified.last, LibraryPhase.ready, reason: 'the list is told, so the row leaves Getting ready at once');
+    });
+
+    test('a library whose keyword snapshot the core is still picking is read again until it is, so the words still to add are seen', () async {
+      // Pixel testing: right after an add the status showed the old index in the library's own folder (nothing pending), then the core
+      // picked the older snapshot, which lacks the new book; nobody read the status again, so no index job was ever listed.
+      await setUpLibs();
+      await libs.addFile(
+        libFile('m.cache-library', jsonEncode({...jsonDecode(_lib()) as Map, 'snapshot_opening_reads': 3})),
+        confirmUpdate: never,
+        askSettings: noSettings,
+      );
+      await libs.whenIdle();
+      final s = libs.statusOf(libs.libraries.single)!;
+      expect(s.index?.opening, isFalse, reason: 'read again until the snapshot was picked');
+      expect(s.keywordPending, isTrue, reason: 'the final status says the new words are still to be added, so the index work is listed');
+      expect(libs.wordsPendingAt(libs.libraries.single.path), isTrue);
     });
 
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {

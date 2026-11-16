@@ -172,6 +172,25 @@ class MapsState extends ChangeNotifier {
     await _startEngine();
   }
 
+  /// Takes the layers that are on from maps.json again (a change from a linked device was applied to the file on the server) and
+  /// tells listeners, without saving. Only that field is read: the camera, the opacities and the rest stay as they are in memory.
+  /// Async only for the file read; a file that is missing or unreadable changes nothing.
+  Future<void> reload() async {
+    final fs = _fs;
+    if (fs == null) return;
+    try {
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text == null) return;
+      final on = ((jsonDecode(text) as Map<String, dynamic>)['enabled'] as List).cast<String>();
+      _enabled
+        ..clear()
+        ..addAll(on);
+    } catch (_) {
+      return;
+    }
+    notifyListeners();
+  }
+
   Future<void> _startEngine() async {
     await engine.start();
     // The system refuses the layers' server socket: network access is off for the app.

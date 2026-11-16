@@ -2,6 +2,7 @@ import 'package:cache_search/cache_search.dart';
 
 import '../nav/guidance.dart';
 import '../nav/nav_state.dart';
+import '../nav/street_names.dart';
 import '../nav/ui/lane_strip.dart';
 import '../nav/units.dart';
 import '../nav/elevation/elevation_profile.dart';
@@ -49,7 +50,7 @@ Map<String, dynamic> carTrip(NavState nav, {GeoPoint? position, double? heading,
     if (nav.guiding && p != null && !nav.rerouting) ...{
       'step': p.next == null ? null : carStep(p.next!, nav.fmt, lanes: lanesToShow(p.next!, nav.farStageM)),
       'then': p.then == null || (p.then!.isArrival && (p.next?.isArrival ?? false)) ? null : carStep(p.then!, nav.fmt),
-      'currentRoad': p.current.streetNames.isEmpty ? null : p.current.streetNames.first,
+      'currentRoad': p.current.isOffroad ? null : p.current.shownRoadName,
       'remainingM': p.remainingM,
       // The minutes the phone's bar shows, in seconds (shownSeconds; none once arrived), and the arrival clock that goes with
       // them: the car's host writes the time itself, and a whole number of minutes reads the same however it rounds.
@@ -74,8 +75,8 @@ Map<String, dynamic> carStep(ProgressManeuver m, Fmt fmt, {List<Lane> lanes = co
   return {
     'turn': turn.name,
     'type': m.type,
-    'cue': m.isOffroad ? _offroadCue(m, fmt) : m.instruction,
-    'road': m.isOffroad || m.streetNames.isEmpty ? null : m.streetNames.first,
+    'cue': m.isOffroad ? _offroadCue(m, fmt) : m.shownInstruction,
+    'road': m.isOffroad ? null : m.shownRoadName,
     'distanceM': m.distanceM,
     'lanes': carLanes(lanes),
     'lanesLabel': lanes.isEmpty ? null : laneLabel(lanes),
@@ -117,11 +118,8 @@ String _offroadCue(ProgressManeuver m, Fmt fmt) {
 /// "Via US-30" from the route's main road, or null.
 String? routeVia(MapRoute r) {
   final roads = r.raw['major_roads'];
-  if (roads is List && roads.isNotEmpty && roads.first is Map) {
-    final name = (roads.first as Map)['name'];
-    if (name is String && name.trim().isNotEmpty) return 'Via ${name.trim()}';
-  }
-  return null;
+  final name = roads is List && roads.isNotEmpty ? majorRoadShown(roads.first) : null;
+  return name == null ? null : 'Via $name';
 }
 
 /// Why there are no directions, in words for the car screen. Nothing on the car screen asks the driver to use the phone: a missing

@@ -240,6 +240,14 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Reads settings.json again (a change from a linked device was applied to the file on the server) and tells listeners. Nothing is
+  /// written, and the model is not loaded or changed: the chosen model's name is read as the file has it.
+  Future<void> reload() async {
+    if (_fs == null) return;
+    await _readSettings();
+    notifyListeners();
+  }
+
   Future<void> _readSettings() async {
     try {
       final text = await _fs!.readString(AppRoot.support, _settingsName);

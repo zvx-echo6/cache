@@ -170,6 +170,19 @@ void _pureTests() {
       expect(basemapLabelLayers(style, basemapSource: 'src-basemap'), ['places_town', 'roads_labels']);
       expect(basemapLabelLayers('not json', basemapSource: 'src-basemap'), isEmpty);
     });
+
+    test('the base map\'s line layers are its line layers, not its symbols or an overlay\'s', () {
+      const style = '{"layers":[{"id":"water","type":"fill","source":"src-basemap"},{"id":"path","type":"line","source":"src-basemap"},'
+          '{"id":"road_label","type":"symbol","source":"src-basemap"},{"id":"t-line","type":"line","source":"src-t"}]}';
+      expect(basemapLineLayers(style, basemapSource: 'src-basemap'), ['path']);
+    });
+
+    test('an overlay\'s hit layers are its line and fill layers of the style, from its source', () {
+      const style = '{"layers":[{"id":"t-fill","type":"fill","source":"src-t"},{"id":"t-casing","type":"line","source":"src-t"},'
+          '{"id":"t-line","type":"line","source":"src-t"},{"id":"o-line","type":"line","source":"src-o"},{"id":"t-sym","type":"symbol","source":"src-t"}]}';
+      expect(overlayHitLayers(style, source: 'src-t'), ['t-fill', 't-casing', 't-line']);
+      expect(overlayHitLayers('not json', source: 'src-t'), isEmpty);
+    });
   });
 }
 
@@ -181,6 +194,9 @@ class _TapCamera extends CameraController {
   final List<Map<String, dynamic>> labels = [];
   final List<Map<String, dynamic>> trails = [];
   final List<Map<String, dynamic>> user = [];
+
+  /// What the base map's line layers (paths, tracks, roads) answer.
+  final List<Map<String, dynamic>> baseLines = [];
   final List<List<String>> asked = [];
 
   @override
@@ -193,8 +209,10 @@ class _TapCamera extends CameraController {
         out = user;
       } else if (layers.any((l) => l.startsWith('test-trails-'))) {
         out = trails;
-      } else {
+      } else if (layers.contains('places_locality')) {
         out = labels;
+      } else {
+        out = baseLines;
       }
       return Future<List<dynamic>>.value(List<dynamic>.of(out));
     }
@@ -338,6 +356,41 @@ void _screenTests() {
       expect(m.nav.selected?.lat, 42.5001);
       expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
       expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty, reason: 'only a label is looked up');
+      await m.finish(tester);
+    });
+
+    testWidgets('a trail\'s thin line with no label near it opens its card; the query asks for the line layers the style has', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.trails.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'TRAIL_NAME': 'Hollow Fern Trail'}));
+      await m.tap(tester, 42.5, -113.5);
+      final asked = m.camera.asked.firstWhere((l) => l.any((x) => x.startsWith('test-trails-')));
+      expect(asked, containsAll(['test-trails-line', 'test-trails-casing']));
+      expect(m.nav.selected?.name, 'Hollow Fern Trail');
+      expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('a named path of the base map, with no label or overlay there: the card of that name at the tapped spot', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.baseLines.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'name': 'Canyon Rim Trail', 'class': 'path'}));
+      await m.tap(tester, 42.5001, -113.5);
+      expect(m.nav.selected?.name, 'Canyon Rim Trail');
+      expect(m.nav.selected?.lat, 42.5001);
+      expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
+      final lineAsk = m.camera.asked.where((l) => !l.contains('places_locality') && !l.any((x) => x.startsWith('test-trails-')) && !l.contains(kUserLines));
+      expect(lineAsk, isNotEmpty, reason: 'the base map\'s line layers are asked');
+      expect(lineAsk.first.any((x) => x == 'places_locality'), isFalse);
+      await m.finish(tester);
+    });
+
+    testWidgets('an unnamed line of the base map opens nothing', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.baseLines.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'class': 'track'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected, isNull);
       await m.finish(tester);
     });
 

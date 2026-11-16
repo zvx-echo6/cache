@@ -19,6 +19,7 @@ pub mod offroad;
 pub mod pmtiles;
 pub mod sched;
 pub mod server;
+pub mod share;
 pub mod store;
 pub mod tilecache;
 
@@ -36,7 +37,18 @@ pub struct Layers {
 
 impl Layers {
     pub fn new(cfg: LayersCfg) -> Result<Layers> {
-        Ok(Layers { inner: Arc::new(Inner::open(cfg)?), server: Mutex::new(None) })
+        let inner = Arc::new(Inner::open(cfg)?);
+        // The share's upkeep (conflict copies, peers' deletes, this device's snapshots) on a thread that ends with the engine.
+        let weak = Arc::downgrade(&inner);
+        let _ = std::thread::Builder::new().name("cache-layers-share".into()).spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            while let Some(i) = weak.upgrade() {
+                i.maintain_share(share::QUIET);
+                drop(i);
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        });
+        Ok(Layers { inner, server: Mutex::new(None) })
     }
 
     /// Start the tile server if it is not running and say where it is. A server that no longer listens (iOS takes a suspended

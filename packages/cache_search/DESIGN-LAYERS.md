@@ -119,6 +119,24 @@ Regions overlap heavily (a city inside a county inside a state), so downloads ne
 
 The tile server reads this store first (see "The tile server"). hillshade and contours share the elevation layer's store.
 
+### Sharing the stores between linked devices (cache_layers/src/share.rs)
+
+A live store (`store/<layer>.sqlite` with its -wal) is written by its device only and is never synced (the app's not-shared patterns).
+Each device shares a snapshot of its own, `store-share/<layer>/<device>.sqlite` (tiles and areas, never `staging`), written whole under
+a hidden temporary name and renamed into place, only when the store changed and has been quiet for 20 seconds; and a record of the
+areas it deleted, `store-share/<device>.deletes.json` (layer, area, time). The device name is `<layers dir>/.share-id` (hidden, so it
+never syncs). A device shows the union: `areas` lists its own areas, then the peers' that it does not hold and no delete has ended
+(an area is ended by a delete made at or after its `created`; one downloaded later stays), and a tile is read from its own store, else
+from a peer's snapshot, read-only. Nothing is merged into one file. `delete_areas` also writes the delete record, for an area only a peer
+holds too; a peer's record removes the area from this device's own store (`apply_peer_deletes`, which writes no record of its own).
+`rescue_conflicts` takes in the `<layer> (conflict, ...).sqlite` copies an older build's sync left (the app's not-shared patterns now
+keep conflict copies where they are made). The areas the app lists as this device's own (`regions-app.json`, beside the layers folder)
+tell which copies are its own: those are merged into the live store (tiles it lacks, areas by id) and deleted; a copy that holds none of
+them is another device's and is deleted (its snapshot arrives by the share); the live file is dropped only when it holds none of this
+device's areas and a copy does. With no such list every copy is merged and nothing is dropped. A copy that fails the integrity check is
+left, a lone conflict -wal is deleted, and an area that says it is complete but lacks tiles (they were in the log the sync replaced)
+becomes an unfinished download that "Carry on" completes. `Layers::new` runs `maintain_share` every ten seconds.
+
 ### Calls
 
 `cs_layers_plan` (dry run), then `cs_job_start("layer_download", ...)`; see `cache_search.h`. A request is a `bbox` or a `polygon` plus a zoom range; the area id is given (`area`) or derived from the shape and zooms. A polygon is one ring (`[[lon, lat], ...]`, at least 3 points) or several (`[[[lon, lat], ...], ...]`: a region in parts, holes), read even-odd, so parts that do not overlap make their union and a hole is left out; the area's box is the polygon's. **Polygons are first-class**: the app sends a catalogue region's outline (every ring of its GeoJSON Polygon or MultiPolygon) with the box the size was estimated for. The cover of a polygon is computed per zoom (the tiles of its bounding box that touch the polygon: a vertex inside the tile, a tile corner inside the polygon, or crossing edges), from the world tile down, carrying each tile's nearby edges (`cover.rs`), so only the tiles on the outline's line are tested.

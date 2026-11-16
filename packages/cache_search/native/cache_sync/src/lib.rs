@@ -81,27 +81,49 @@ fn t() -> bool {
     true
 }
 
-/// Where the open's timing lines go: a function the app gave (`cs_sync_set_log`), or nowhere.
-static LOG_SINK: Mutex<Option<extern "C" fn(*const std::ffi::c_char)>> = Mutex::new(None);
+/// The lines the open has said and nobody has taken yet, oldest first. Nothing calls out to the app: a callback into Dart from an
+/// engine thread aborted the process in a background (WorkManager) isolate ("Cannot invoke native callback from a leaf call"), so the
+/// app asks for the lines instead ([`take_log`]).
+static LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Sets (or, with `None`, clears) the function that gets one short line per step of opening the engine. The line is a heap string
-/// given to the function, which frees it (`cs_free_string`): the function may hand it to another thread and return at once, as the
-/// app's does (a Dart listener reads it later).  The function must not block.
-pub fn set_log(sink: Option<extern "C" fn(*const std::ffi::c_char)>) {
-    *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner()) = sink;
+/// The most lines kept: an app that never asks must not grow it without end (the oldest go first).
+const LOG_KEEP: usize = 200;
+
+/// Returns the lines said since the last call, oldest first, and clears them.
+pub fn take_log() -> Vec<String> {
+    std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
-/// The steps of one open, each said with the milliseconds since the open began. Does nothing while no sink is set.
+/// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
 impl OpenSteps {
     fn step(&self, name: &str) {
-        let sink = *LOG_SINK.lock().unwrap_or_else(|l| l.into_inner());
-        if let Some(f) = sink {
-            if let Ok(line) = std::ffi::CString::new(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis())) {
-                f(line.into_raw());
-            }
+        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
+        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+        if b.len() >= LOG_KEEP {
+            b.remove(0);
         }
+        b.push(line);
+    }
+}
+
+/// A send-only allow list for one folder of a share ([`Config::send_gate`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SendGate {
+    /// The folder, relative to the share's root ("photos").
+    #[serde(default)]
+    pub dir: String,
+    /// The files under it that may be offered, as paths relative to the share's root.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl SendGate {
+    /// `rel` is held back: it is under the folder and not in the allow list.
+    fn holds_back(&self, rel: &str) -> bool {
+        let dir = self.dir.trim_matches('/');
+        !dir.is_empty() && rel.strip_prefix(dir).is_some_and(|r| r.starts_with('/')) && !self.allow.iter().any(|a| a == rel)
     }
 }
 
@@ -170,6 +192,12 @@ pub struct Config {
     /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
+    /// Shares whose files the Activity does not list one by one (share ids): the app says what arrived in its own words (the
+    /// notebooks: "3 entries arrived from your other devices"), and a file line would name the person's notebook files. Only the
+    /// lines that announce a normal change to a file (got, deleted by a device, kept, conflict copy) are left out; a failure or a
+    /// stop of the share is still said.
+    #[serde(default)]
+    pub quiet: Vec<String>,
     /// What this device has switched off in a shared folder, by share id (patterns as for `exclude`): the person's choice of
     /// items in one share (a library, a map layer, a model). Such a path is neither fetched here nor offered to the others, and
     /// its deletes stay here, but this device keeps listing it with its history, so switching it on again carries on where it
@@ -177,6 +205,13 @@ pub struct Config {
     /// list later.
     #[serde(default)]
     pub off: BTreeMap<String, Vec<String>>,
+    /// Folders of a share whose files are OFFERED only when listed, by share id: `{"dir": "photos", "allow": ["photos/a.jpg"]}`
+    /// offers a file under `photos/` only if it is in `allow` (every other path of the share is unaffected). Unlike `off` it
+    /// governs sending only: a file under `dir` is still fetched from the other devices, so what arrives is never held back.
+    /// Nothing already sent is recalled. `set_gate` replaces a share's gate later.
+    #[serde(default)]
+    #[serde(rename = "gate")]
+    pub send_gate: BTreeMap<String, SendGate>,
     /// Shares kept only with some linked devices, by share id: the link kinds ([`Link`]'s `mode`) a device must have for the share
     /// to be offered to it and taken from it. A link starts `"off"` until the person answers ([`new_link`]); links made before
     /// that were given `"match"` once ([`migrate_links`]). A link with no mode at all counts as `"match"`. A share not listed goes to every linked device. The person's
@@ -613,10 +648,14 @@ struct Inner {
     last: BTreeMap<String, Vec<String>>,
     /// [`Config::hidden`].
     hidden: BTreeMap<String, Vec<String>>,
+    /// [`Config::quiet`].
+    quiet: HashSet<String>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::off`], as `set_off` last left it.
     off: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::send_gate`], as `set_gate` last left it.
+    send_gate: Mutex<BTreeMap<String, SendGate>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
@@ -637,6 +676,33 @@ pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
     inner: Arc<Inner>,
     router: Option<Router>,
+    /// Held while this engine lives: the folder is not opened a second time in this process.
+    _folder: FolderGuard,
+}
+
+/// The folders engines of this process run on. A second `open` on one of them (the app's own engine is running and a background
+/// round opens another on the same folder, in the same process) answers at once with an error instead of waiting on the first
+/// one's store, which a background round did without ever coming back (found on a Pixel).
+static OPEN_FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+struct FolderGuard(PathBuf);
+
+impl FolderGuard {
+    fn take(dir: &Path) -> Result<FolderGuard> {
+        let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let mut open = OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner());
+        if open.contains(&key) {
+            bail!("another engine of this app already runs on this folder");
+        }
+        open.push(key.clone());
+        Ok(FolderGuard(key))
+    }
+}
+
+impl Drop for FolderGuard {
+    fn drop(&mut self) {
+        OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner()).retain(|p| p != &self.0);
+    }
 }
 
 /// The code a device shows for linking: its address, a one-time token, and its name.
@@ -998,13 +1064,14 @@ impl Inner {
     fn offered(&self, share: &str) -> Index {
         let skip = self.skip(share);
         let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
+        let gate = self.send_gate.lock().unwrap().get(share).cloned();
         let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
         let idx = self.load_index(share);
         Index {
             files: idx
                 .files
                 .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
+                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !gate.as_ref().is_some_and(|g| g.holds_back(p)) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
         }
@@ -1159,6 +1226,13 @@ impl Inner {
 
     fn note(&self, msg: impl Into<String>) {
         self.run.lock().unwrap().note(msg);
+    }
+
+    /// A line that announces a normal change to one file of share `share_id`: left out when the share is [`Config::quiet`].
+    fn note_file(&self, share_id: &str, msg: impl Into<String>) {
+        if !self.quiet.contains(share_id) {
+            self.note(msg);
+        }
     }
 
     fn peer_name(&self, id: &str) -> String {
@@ -1840,7 +1914,7 @@ impl Inner {
                         keep.hist.push(r.ver.clone());
                         idx.files.insert(path.clone(), keep);
                         self.store_index(&sh.id, &idx, &seen)?;
-                        self.note(format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
+                        self.note_file(&sh.id, format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
                     }
                 }
                 Action::Delete { path, entry } => {
@@ -1862,7 +1936,7 @@ impl Inner {
                         idx.files.insert(path.clone(), entry);
                         self.store_index(&sh.id, &idx, &seen)?;
                         self.unmark_writing(&sh.id, &path)?;
-                        self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        self.note_file(&sh.id, format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
                         // The content that was here may live on at another path (a rename): the store reads it from there now.
                         if let Some(h) = gone {
                             self.repoint(&h, None).await;
@@ -2028,7 +2102,7 @@ impl Inner {
             let copy = index::conflict_name(path, &self.saved.lock().unwrap().name, &stamp);
             if let Some(cfull) = safe_join(&sh.path, &copy) {
                 std::fs::rename(&full, &cfull)?;
-                self.note(format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
+                self.note_file(&sh.id, format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
                 // Picked up as a new file by the next scan; the store is pointed at it below.
                 conflict_copy = Some(cfull);
             }
@@ -2060,7 +2134,7 @@ impl Inner {
         let entry_hash = entry.hash.clone();
         let size = entry.size;
         self.written(sh, path, &full, entry).await?;
-        self.note(format!("{}: got {path} ({})", sh.name, human(size)));
+        self.note_file(&sh.id, format!("{}: got {path} ({})", sh.name, human(size)));
         // The content that was here: kept as a conflict copy, or still in use at another path.
         if let Some(c) = conflict_copy {
             if let Some(h) = &old_hash {
@@ -2336,6 +2410,14 @@ impl SyncEngine {
     pub fn open(cfg: Config) -> Result<SyncEngine> {
         let steps = OpenSteps(Instant::now());
         steps.step("started");
+        std::fs::create_dir_all(&cfg.dir)?;
+        let folder = match FolderGuard::take(&cfg.dir) {
+            Ok(g) => g,
+            Err(e) => {
+                steps.step("folder already open in this process");
+                return Err(e);
+            }
+        };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
         let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
             Ok(v) => v,
@@ -2394,7 +2476,7 @@ impl SyncEngine {
             });
         }
         steps.step("done");
-        Ok(SyncEngine { rt, inner, router: Some(router) })
+        Ok(SyncEngine { rt, inner, router: Some(router), _folder: folder })
     }
 
     async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {
@@ -2494,7 +2576,9 @@ impl SyncEngine {
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
             hidden: cfg.hidden.clone(),
+            quiet: cfg.quiet.iter().cloned().collect(),
             off: Mutex::new(cfg.off.clone()),
+            send_gate: Mutex::new(cfg.send_gate.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
@@ -2745,10 +2829,17 @@ impl SyncEngine {
                 Ok(json!({"ok": true}))
             }
             "share_remove" => {
-                // Stops sharing; the files stay where they are.
+                // Stops sharing; the files stay where they are. `keep_history` (bool, default false) keeps the share's index, its
+                // seen file and its store tags, so adding the same id again later picks its history up: a kind switched off and
+                // on again then tells an edit or a delete made meanwhile from a file it never had. Without it (a share retired
+                // for good) all of that is deleted.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let keep = args.get("keep_history").and_then(|v| v.as_bool()).unwrap_or(false);
                 inner.saved.lock().unwrap().shares.retain(|x| x.id != id);
                 inner.save()?;
+                if keep {
+                    return Ok(json!({"ok": true}));
+                }
                 let _ = std::fs::remove_file(inner.index_path(&id));
                 let _ = std::fs::remove_file(inner.seen_path(&id));
                 let store = inner.store.clone();
@@ -2828,6 +2919,27 @@ impl SyncEngine {
                 }
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "set_gate" => {
+                // What a share offers from one folder, from now on: only the files in `allow` (see [`Config::send_gate`]); no `dir`
+                // (or null) removes the gate. Receiving is never affected.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let dir = s("dir").unwrap_or_default();
+                let allow: Vec<String> = match args.get("allow") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("allow must be a list of paths or null"),
+                };
+                {
+                    let mut g = inner.send_gate.lock().unwrap();
+                    if dir.is_empty() {
+                        g.remove(&id);
+                    } else {
+                        g.insert(id, SendGate { dir, allow });
+                    }
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
             }
             "share_items" => {
                 // A share's items: its paths grouped by their first `depth` segments (a library's folder, a ZIM, a map layer's

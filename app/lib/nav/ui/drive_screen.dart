@@ -9,6 +9,7 @@ import '../../theme.dart';
 import '../elevation/route_elevation.dart';
 import '../guidance.dart';
 import '../nav_state.dart';
+import '../street_names.dart';
 import '../units.dart';
 import 'elevation_panel.dart';
 import 'guidance_panels.dart';
@@ -367,7 +368,7 @@ class DriveRow {
               gradeClass: m.gradeClass,
             ),
             fmt)
-        : m.instruction.trim();
+        : m.shownInstruction.trim();
     if (t.endsWith('.')) t = t.substring(0, t.length - 1);
     return t;
   }

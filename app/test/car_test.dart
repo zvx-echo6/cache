@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:cache/car/car_answer.dart';
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
 import 'package:cache/app_state.dart';
@@ -150,9 +151,9 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  Future<void> preview() async {
+  Future<void> preview([Map<String, dynamic>? route]) async {
     location.publish(fixAt(42.5, -113.8));
-    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(route ?? routeJson);
     await nav.openDirections(_place('place:4', 'Cassia Regional Hospital'));
   }
 
@@ -187,6 +188,26 @@ void main() {
       expect(t['remainingM'], closeTo((routeJson['distance_m'] as num) * 0.9, 1));
       expect(t['remainingS'], isNotNull);
       expect(t['currentRoad'], 'Road 0');
+    });
+
+    test('a street with a name and a route number: the car shows the name first and the number after it, as the phone does', () async {
+      final named = namedRoadsRouteJson();
+      await preview(named);
+      expect(((carTrip(nav)['routes'] as List).first as Map)['via'], 'Via Lakeside Boulevard (US 99 Bus)');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(named, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(named, 0.1));
+      final t = carTrip(nav);
+      final step = t['step'] as Map;
+      expect(step['cue'], 'Turn left onto Lakeside Boulevard (US 99 Bus).');
+      expect(step['road'], 'Lakeside Boulevard (US 99 Bus)');
+      // A highway with only a number keeps the number.
+      expect((t['then'] as Map)['cue'], 'Turn right onto SH 99.');
+      expect((t['then'] as Map)['road'], 'SH 99');
+      // A street with two names keeps its first.
+      expect(t['currentRoad'], 'Lakeside Boulevard');
     });
 
     // The iPhone car side (app/ios/Runner/CarPlay) is tested on recorded messages (tools/carplay-harness/recorded). They are
@@ -1462,6 +1483,21 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'place 1', 'start': true, 'search': true})) as Map;
+      expect(r['places'], isNotEmpty);
+      expect(r.containsKey('started'), isFalse);
+      expect(nav.guiding, isFalse);
+      expect(asked, everyElement(isFalse), reason: 'the car never loads the search model');
+    });
+
     test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
       backend.saved.add(('Place 1', 42.6, -113.7));
       location.publish(fixAt(42.5, -113.8));
@@ -1646,6 +1682,100 @@ void main() {
       expect(drive.simulate, isTrue);
       expect(await fromCar('voice', {'on': false}), isFalse);
       expect(nav.voiceOn, isFalse);
+    });
+
+    group('the assistant asks about the trip (geo.action)', () {
+      const fmt = Fmt(UnitSystem.imperial);
+
+      test('with no route running every question gets the one no-route answer, said aloud', () async {
+        for (final kind in ['eta', 'distance', 'turn', 'destination', 'route']) {
+          expect(carAnswer(nav, kind), 'No route is running.');
+        }
+        speaker.said.clear();
+        expect(await fromCar('answer', {'kind': 'eta'}), 'No route is running.');
+        expect(speaker.said, ['No route is running.']);
+      });
+
+      test('arrival time is the clock the phone shows', () async {
+        await guide();
+        final p = nav.progress!;
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'eta', now: () => now), 'Arriving at ${clockTime(at)}.');
+        expect(carAnswer(nav, 'eta', now: () => now), matches(RegExp(r'^Arriving at \d{1,2}:\d\d (AM|PM)\.$')));
+      });
+
+      test('the distance left is said as the phone says distances', () async {
+        await guide();
+        final said = fmt.spoken(nav.progress!.remainingM);
+        expect(carAnswer(nav, 'distance'), '${said[0].toUpperCase()}${said.substring(1)} to go.');
+        expect(carAnswer(nav, 'distance'), endsWith(' to go.'));
+      });
+
+      test('the next turn is the step and how far', () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn'), 'Next: $step in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test('the destination is named', () async {
+        await guide();
+        final named = nav.route!.destinationName;
+        final name = named.isNotEmpty ? named : nav.selected!.name;
+        expect(carAnswer(nav, 'destination'), 'Going to $name.');
+      });
+
+      test("Siri's arrival words: the clock the phone shows and the distance left", () async {
+        await guide();
+        final p = nav.progress!;
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), "You'll arrive at ${clockTime(at)}, ${fmt.spoken(p.remainingM)} to go.");
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), matches(RegExp(r"^You'll arrive at \d{1,2}:\d\d (AM|PM), .+ to go\.$")));
+      });
+
+      test("Siri's next-turn words: the step, then how far", () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn_ios'), 'Next: $step, in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test("Siri's words with no route are the one no-route answer", () async {
+        expect(carAnswer(nav, 'arrival_ios'), 'No route is running.');
+        expect(carAnswer(nav, 'turn_ios'), 'No route is running.');
+      });
+
+      test('say: false returns the words and the phone says nothing', () async {
+        await guide();
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'arrival_ios', 'say': false});
+        expect(text, startsWith("You'll arrive at "));
+        expect(speaker.said, isEmpty);
+        expect(await fromCar('answer', {'kind': 'turn_ios', 'say': false}), startsWith('Next: '));
+        expect(speaker.said, isEmpty);
+      });
+
+      test('stop answers whether a route was running', () async {
+        expect(await fromCar('stop'), isFalse);
+        await guide();
+        expect(await fromCar('stop'), isTrue);
+        expect(nav.guiding, isFalse);
+        expect(await fromCar('stop'), isFalse);
+      });
+
+      test('the answer is spoken even when the voice prompts are off', () async {
+        await guide();
+        expect(await fromCar('voice', {'on': false}), isFalse);
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'distance'});
+        expect(text, endsWith(' to go.'));
+        expect(speaker.said, [text]);
+        expect(nav.voiceOn, isFalse);
+      });
     });
 
     test('the voice takes the car audio focus only while a car is connected', () async {

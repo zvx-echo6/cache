@@ -119,6 +119,8 @@ const PLACE_COLS: &str = "name, alt_names, category, kind, kind_id, lat, lon, st
                           arrival_lat, arrival_lon, about";
 const LOCALITY_COLS: &str = "name, alt_names, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id, about";
 const ADDR_COLS: &str = "uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, min_lon, max_lon, n, numbers";
+/// With the `source` column of an addresses file made after OpenAddresses was added (an older file has none).
+const ADDR_COLS_SOURCE: &str = "uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, min_lon, max_lon, n, numbers, source";
 
 /// A block's rows, by tile: (block row id, the columns of the tile's table in order).
 type Rows = BTreeMap<u32, Vec<(i64, Vec<Value>)>>;
@@ -221,13 +223,18 @@ fn write_tile(cfg: &CutCfg, t: TileInput, towns: &Towns, addr: Option<&Connectio
             .map_err(|e| e.to_string())?;
         }
         if let Some(a) = addr {
-            let mut st = a.prepare(&format!("SELECT {ADDR_COLS} FROM addr_streets WHERE tile = ?1 ORDER BY rowid")).map_err(|e| e.to_string())?;
+            let has_source = a
+                .prepare("SELECT 1 FROM pragma_table_info('addr_streets') WHERE name = 'source'")
+                .and_then(|mut q| q.exists([]))
+                .map_err(|e| e.to_string())?;
+            let (cols, ncols) = if has_source { (ADDR_COLS_SOURCE, 17) } else { (ADDR_COLS, 16) };
+            let mut st = a.prepare(&format!("SELECT {cols} FROM addr_streets WHERE tile = ?1 ORDER BY rowid")).map_err(|e| e.to_string())?;
             let mut rows = st.query([tile]).map_err(|e| e.to_string())?;
-            let mut ins = tx.prepare(&format!("INSERT INTO addr_streets(id, {ADDR_COLS}) VALUES ({})", placeholders(17))).map_err(|e| e.to_string())?;
+            let mut ins = tx.prepare(&format!("INSERT INTO addr_streets(id, {cols}) VALUES ({})", placeholders(ncols + 1))).map_err(|e| e.to_string())?;
             while let Some(r) = rows.next().map_err(|e| e.to_string())? {
                 n_streets += 1;
                 let mut vals = vec![Value::Integer(n_streets)];
-                for i in 0..16 {
+                for i in 0..ncols {
                     vals.push(r.get::<_, Value>(i).map_err(|e| e.to_string())?);
                 }
                 if let Value::Integer(n) = vals[15] {

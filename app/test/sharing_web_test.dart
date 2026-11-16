@@ -99,6 +99,31 @@ void main() {
   setUp(() => dir = Directory.systemTemp.createTempSync('sharing-web'));
   tearDown(() => dir.deleteSync(recursive: true));
 
+  testWidgets('a tab reloads its settings when the host\'s settings_applied moves, once per move, and not when it stays', (tester) async {
+    final host = _host()..settingsApplied = 1;
+    final s = _web(host, dir);
+    var reloads = 0;
+    s.onSettingsApplied = () => reloads++;
+    await s.init();
+    await s.setUp();
+    await _settle(tester);
+    expect(reloads, 0, reason: 'the first reading is the baseline, not a change');
+    await tester.pump(const Duration(seconds: 6));
+    expect(reloads, 0, reason: 'the counter did not move');
+    host.settingsApplied = 2;
+    await tester.pump(const Duration(seconds: 2));
+    await _settle(tester);
+    expect(reloads, 1);
+    await tester.pump(const Duration(seconds: 6));
+    expect(reloads, 1, reason: 'the same value again does not reload');
+    host.settingsApplied = 3;
+    await tester.pump(const Duration(seconds: 2));
+    await _settle(tester);
+    expect(reloads, 2);
+    s.dispose();
+  });
+
+
   testWidgets('not set up: nothing is asked of the engine and nothing polls; set up starts it on the server, not in the browser', (tester) async {
     final host = _host();
     final s = _web(host, dir);

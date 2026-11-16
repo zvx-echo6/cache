@@ -45,6 +45,9 @@ enum StatusTone { ok, warn, quiet }
 
 /// Home's Weather and alerts card while the weather part is starting and sources are on (the same placeholder Home shows while it
 /// reads the card).
+/// What Home and the Weather screen say in the one state where weather does not work ([WeatherState.nothingWatched]).
+const String kWeatherHereOff = "Weather is off: your location isn't watched";
+
 const String kWeatherStarting = '…';
 
 /// What the Weather and alerts card on Home shows (see [WeatherState.homeCard]).
@@ -52,6 +55,7 @@ class HomeWeather {
   const HomeWeather({
     this.message,
     this.off = false,
+    this.hereOff = false,
     this.place = '',
     this.temperature,
     this.conditions,
@@ -72,11 +76,15 @@ class HomeWeather {
   /// ([WeatherState.homeCardAsOfNow]); null for words in place of a card.
   final HomeAnswer? answer;
 
-  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
+  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Weather is off: your location isn't watched".
   final String? message;
 
   /// Weather was on and every source is off now: the card says "Weather is off" with Turn on (Settings > Weather and alerts).
   final bool off;
+
+  /// Weather is off because nothing is watched: "Your location" was switched off and no other place is watched. The card offers to
+  /// watch the location again with one tap.
+  final bool hereOff;
   final String place;
 
   /// "45 °F" and "clear sky", as the forecast source writes them.
@@ -347,6 +355,12 @@ class WeatherState extends ChangeNotifier {
 
   bool isOn(String id) => _same(id).any(settings.liveSourcesOn.contains);
 
+  /// For the log: how many sources the settings have on, how many of them the app recognises as on (catalogue loaded), how many the
+  /// catalogues offer, and how many places are watched. Settings on with none recognised means the catalogue, not the switches.
+  String sourcesLine() =>
+      'weather sources: ${settings.liveSourcesOn.length} on in settings, ${enabledSources.length} recognised as on, '
+      '${sources.length} in the catalogues, started $_started; ${settings.watchedPlaces.length} places watched';
+
   /// The sources that are on and can be used.
   List<Connector> get enabledSources => [for (final c in sources) if (isOn(c.id)) c];
 
@@ -364,6 +378,38 @@ class WeatherState extends ChangeNotifier {
 
   bool rowIsOn(CuratedRow r) => rowSources(r).any((c) => isOn(c.id));
 
+  /// The one time weather does not work (owner, 2026-11-15): the person switched off watching "Your location" and watches no
+  /// other place.
+  bool get nothingWatched => !settings.watchedPlaces.contains(kWatchHere) && watchedPlacesNow().isEmpty;
+
+  /// Watching "Your location" again, from the one tap Home and the Weather screen offer when [nothingWatched].
+  Future<void> watchHereAgain() async {
+    logInfo('Weather: Watch my location tapped');
+    settings.setWatched(kWatchHere, true);
+    positionChanged();
+    await updateNow();
+  }
+
+  /// The default switches: what "Turn on weather" turns on, and what comes back by itself whenever no source would be on.
+  static List<CuratedRow> get defaultRows => [
+    for (final title in const ['Weather forecast', 'Weather alerts', 'Wildfires']) kCurated.firstWhere((r) => r.title == title),
+  ];
+
+  /// Weather always works (owner, 2026-11-15): whenever no source would be on (at start, after a settings sync from a linked
+  /// device, after a switch), the default sources come back on by themselves, with no message. Only once the catalogues are there
+  /// (before, no source can be recognised as on). Writes the setting directly, not through [setSourcesOn], so it never loops.
+  Future<bool> _keepDefaultsOn() async {
+    // The catalogues must be there, not only the built-in sources: the built-ins stand in for forecast and alerts but not for Wildfires,
+    // so switching on before the catalogue came left Wildfires off for good. A first start waits for the catalogue.
+    if (!_started || _catalogues.isEmpty || sources.isEmpty || enabledSources.isNotEmpty) return false;
+    final ids = <String>{for (final r in defaultRows) for (final c in rowSources(r)) ..._same(c.id)};
+    if (ids.isEmpty) return false;
+    settings.setLiveSourcesOn(ids, true);
+    logInfo('Weather: no source was on; the default sources are on again; ${sourcesLine()}');
+    await applyAlertDefaults(force: true);
+    return true;
+  }
+
   /// A switch: all of the sources behind it.
   Future<void> setRowOn(CuratedRow r, bool on) => setSourcesOn(rowSources(r), on);
 
@@ -371,6 +417,7 @@ class WeatherState extends ChangeNotifier {
     final ids = <String>{for (final c in list) ..._same(c.id)};
     if (ids.isEmpty) return;
     settings.setLiveSourcesOn(ids, on);
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -502,6 +549,7 @@ class WeatherState extends ChangeNotifier {
     // What is kept on the phone (the sources that are on, the last data shown, the saved places) shows from here, before the core
     // has answered anything: the rest of start waits for the core.
     notifyListeners();
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
     if (_catalogueDue) {
@@ -729,6 +777,7 @@ class WeatherState extends ChangeNotifier {
     }
     _moveLinkedLists();
     await _readKeys();
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -777,6 +826,18 @@ class WeatherState extends ChangeNotifier {
     ];
   }
 
+  /// Reads the own sources from the files again (a change from a linked device was applied to them on the server), takes them into
+  /// the core's view and tells listeners. Nothing is written. The other catalogues stay as they are in memory.
+  Future<void> reloadOwn() async {
+    final store = _store;
+    if (store == null) return;
+    final fresh = store.loadAll().where((c) => c.url == ownListUrl).firstOrNull;
+    _catalogues = [for (final c in _catalogues) if (c.url != ownListUrl) c, ?fresh];
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
   /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
   /// any other, and one that fails is left out. Applied at once.
   Future<void> replaceOwnSources(Object? list) async {
@@ -801,6 +862,7 @@ class WeatherState extends ChangeNotifier {
 
   /// The live sources switched on changed from outside this page (a linked device's settings): the core is told at once.
   Future<void> sourcesChanged() async {
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
   }
@@ -934,7 +996,9 @@ class WeatherState extends ChangeNotifier {
     }
     final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
     if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
-    return tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+    final t = await tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout, place: at);
+    logInfo(ownTryLogLine(ownAddressForLog(d.keptAddress, lat: at.lat, lon: at.lon, key: key), at.lat, at.lon, t));
+    return t;
   }
 
   /// Saves the source [d] makes with the values [picks] (a new one, or the one being edited, [OwnDraft.id]): its definition is
@@ -1493,6 +1557,7 @@ class WeatherState extends ChangeNotifier {
   /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour,
   /// and the screen shows old data in its own ways (no reading after [kReadingLasts], "Last checked").
   WeatherStatus freshness() {
+    if (nothingWatched) return const WeatherStatus(headline: kWeatherHereOff, tone: StatusTone.warn);
     if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
     final now = _now();
     final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
@@ -1848,6 +1913,7 @@ class WeatherState extends ChangeNotifier {
     // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
     // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
+    if (nothingWatched) return const HomeWeather(message: kWeatherHereOff, off: true, hereOff: true);
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".

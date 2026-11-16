@@ -20,7 +20,7 @@ import 'own_libraries.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide, this.own});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide, this.own, this.given});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -40,12 +40,16 @@ class OpenOp implements OpHandler {
   /// Makes the person's own libraries (My books) match their packs after the core is open (null in tests that do not).
   final OwnLibrarySync? own;
 
+  /// Remembers the source list given here, for [IndexesShareReaction] (null in tests that do not).
+  final GivenSources? given;
+
   @override
   bool handles(String op) => op == 'open';
 
   @override
   Object? handle(String op, Map<String, dynamic> a) {
     final given = a['sources'];
+    this.given?.value = given;
     final List<Map<String, dynamic>> sources;
     if (given is List) {
       sources = [for (final s in given) (s as Map).cast<String, dynamic>()];
@@ -72,13 +76,19 @@ class OpenOp implements OpHandler {
   }
 }
 
+/// The source list the server last gave (`open` or `sources.rescan`), kept so the helper can give the core its
+/// sources again by itself.
+class GivenSources {
+  Object? value;
+}
+
 /// The helper's `sources.rescan`, which only cache may call (the server's `/api/core` refuses it from browsers, as it does
 /// `open`, `close` and `setSources`). The server sends it after it has put a ZIM or a library on disk, or removed one:
 /// `sources.rescan {"sources": <array or null>}`. As with [OpenOp], the array is the server's `sources.json` and `null` means
 /// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.
 /// Replies `{"sources": N}` and logs "sources rescanned (N)".
 class RescanOp implements OpHandler {
-  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.own});
+  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.own, this.given, this.onRescanned});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -90,12 +100,19 @@ class RescanOp implements OpHandler {
   /// Makes the person's own libraries match their packs after a rescan (null in tests that do not).
   final OwnLibrarySync? own;
 
+  /// Remembers the source list given here, so the helper can give the core its sources again by itself (null in tests that do not).
+  final GivenSources? given;
+
+  /// Called after the core has its new list: the helper tells the sharing host what the indexes share fetches (null in tests).
+  final void Function()? onRescanned;
+
   @override
   bool handles(String op) => op == 'sources.rescan';
 
   @override
   Object? handle(String op, Map<String, dynamic> a) {
     final given = a['sources'];
+    this.given?.value = given;
     if (given is List) {
       return _use([for (final s in given) (s as Map).cast<String, dynamic>()], runOwn: false);
     }
@@ -120,6 +137,7 @@ class RescanOp implements OpHandler {
     final o = own;
     if (o != null && runOwn) unawaited(o.run());
     log?.call('sources rescanned (${sources.length})');
+    onRescanned?.call();
     return {'sources': sources.length};
   }
 }

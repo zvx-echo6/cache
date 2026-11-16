@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../car/car_voice_access.dart' show carVoiceShared;
 import '../car/phone_drive.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
@@ -96,6 +97,28 @@ import '../platform.dart' as plat;
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
+/// Tells the shell when a page (not a sheet or a pop-up) is opened over the app's screens, so a remembered jump to Maps ends when
+/// something new is opened over the map. Give it to the app's [MaterialApp.navigatorObservers].
+class PagePushWatcher extends NavigatorObserver with ChangeNotifier {
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is PageRoute && previousRoute != null) notifyListeners();
+  }
+}
+
+/// The app's watcher (see [PagePushWatcher]).
+final PagePushWatcher pagePushWatcher = PagePushWatcher();
+
+/// Where the person was when a page sent them to the Maps tab: the screen they were on and the pages that were open over it (the
+/// first is the lowest). Back on Maps returns to it.
+class _JumpBack {
+  const _JumpBack(this.module, this.onModules, this.pages);
+
+  final ModuleId? module;
+  final bool onModules;
+  final List<MaterialPageRoute<dynamic>> pages;
+}
+
 class Shell extends StatefulWidget {
   const Shell({
     super.key,
@@ -164,6 +187,13 @@ class _ShellState extends State<Shell> {
   ModuleId? _module;
   bool _onModules = false;
   final Set<ModuleId> _built = {};
+
+  /// Where a jump to the Maps tab came from; null when nothing is remembered. Cleared when the person leaves Maps another way,
+  /// starts guidance, or opens a page over the map.
+  _JumpBack? _jumpBack;
+
+  /// A jump to Maps, or the return from it, is changing the screen (so [_changeModule] keeps [_jumpBack]).
+  bool _jumping = false;
   StreamSubscription<NavEvent>? _navEvents;
   StreamSubscription<AlertFocus>? _alertTaps;
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: _onResume);
@@ -260,8 +290,7 @@ class _ShellState extends State<Shell> {
       // Maps asked for (a place's Directions, the assistant's route): the Maps tab, over any screen opened above the tabs (a
       // notebook and its place), so the phone shows the route preview with Start whether or not a car is connected.
       if (e is MapRequested && mounted) {
-        Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
-        _goModule(ModuleId.maps);
+        _jumpToMaps();
       }
     });
     // An alert pop-up tapped while the app runs, or the one that started it: open the Weather screen on that alert.
@@ -271,6 +300,8 @@ class _ShellState extends State<Shell> {
     }).catchError((_) {});
     _mapsAsks = widget.maps.asks;
     widget.maps.addListener(_onMaps);
+    widget.nav.addListener(_onNavForJumpBack);
+    pagePushWatcher.addListener(_onPagePushed);
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
     askCacheInstead = _askOn ? _askFromGuide : null;
@@ -309,8 +340,22 @@ class _ShellState extends State<Shell> {
   /// A guidance notification was tapped: the pages over the tabs close and the Maps tab shows.
   void _openMapsFromNotification() {
     if (!mounted || !openMapsInbox.take()) return;
+    final geo = openMapsInbox.takeGeo();
+    _jumpBack = null;
     Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
-    _goModule(ModuleId.maps);
+    // A `geo:` link picked from "Open with" (no car connected): its search, or its point, on the Maps tab. While a route is shown or
+    // followed the tab opens as it is.
+    final nav = widget.nav;
+    if (geo != null && nav.phase == NavPhase.browsing) {
+      if (geo.query != null) {
+        nav.openSearch();
+        nav.onQueryChanged(geo.query!);
+      } else if (geo.lat != null && geo.lon != null) {
+        nav.showOnMap(GeoPoint(geo.lat!, geo.lon!));
+      }
+    }
+    // A tap from outside the app remembers no way back.
+    _jumpToMaps(closePages: false, remember: false);
   }
 
   bool _linkPageUp = false;
@@ -433,8 +478,7 @@ class _ShellState extends State<Shell> {
     // close and the Maps tab shows it.
     if (widget.maps.asks != _mapsAsks && mounted) {
       _mapsAsks = widget.maps.asks;
-      Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
-      _goModule(ModuleId.maps);
+      _jumpToMaps();
     }
   }
 
@@ -448,6 +492,8 @@ class _ShellState extends State<Shell> {
     openMapsInbox.removeListener(_openMapsFromNotification);
     if (widget.hub.openShareItem == _shareItemOpener) widget.hub.openShareItem = null;
     widget.maps.removeListener(_onMaps);
+    widget.nav.removeListener(_onNavForJumpBack);
+    pagePushWatcher.removeListener(_onPagePushed);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
@@ -463,7 +509,11 @@ class _ShellState extends State<Shell> {
   /// Tells the app when Ask stops or starts being the screen shown ([Shell.onAskShown]), around a change of [_module].
   void _changeModule(void Function() change) {
     final before = _module == ModuleId.ask;
-    setState(change);
+    setState(() {
+      change();
+      // Leaving Maps any other way (a tab, Home, Modules) forgets where a jump came from.
+      if (!_jumping && _module != ModuleId.maps) _jumpBack = null;
+    });
     final after = _module == ModuleId.ask;
     if (before != after) widget.onAskShown?.call(after);
   }
@@ -497,6 +547,71 @@ class _ShellState extends State<Shell> {
     });
   }
 
+  /// Closes every page over the tabs and returns them, lowest first (only those a page route can open again).
+  List<MaterialPageRoute<dynamic>> _closePagesOverTabs() {
+    final seen = <Route<dynamic>>[];
+    Navigator.of(context, rootNavigator: true).popUntil((r) {
+      if (!r.isFirst) seen.add(r);
+      return r.isFirst;
+    });
+    return [for (final r in seen.reversed) if (r is MaterialPageRoute) r];
+  }
+
+  /// A page or a link sends the person to the Maps tab: it remembers the screen they were on and the pages open over it, so Back on
+  /// Maps returns there (see [_backFromMaps]). [closePages]: the pages over the tabs close first, as they always did. [remember]
+  /// false (a notification's tap): nothing is remembered and Back is as it was. A jump from Maps itself with nothing over it
+  /// remembers nothing.
+  void _jumpToMaps({bool closePages = true, bool remember = true}) {
+    final pages = closePages ? _closePagesOverTabs() : const <MaterialPageRoute<dynamic>>[];
+    if (!remember) {
+      _jumpBack = null;
+    } else if (pages.isNotEmpty || _onModules || _module != ModuleId.maps) {
+      _jumpBack = _JumpBack(_module, _onModules, pages);
+    }
+    _jumping = true;
+    try {
+      _goModule(ModuleId.maps);
+    } finally {
+      _jumping = false;
+    }
+  }
+
+  /// Back on the Maps tab after a jump: the screen the person was on, with the pages that were open over it opened again in the same
+  /// order. (They are built again from the same builders: a page's own state, a scroll position, is not kept.)
+  void _backFromMaps() {
+    final back = _jumpBack;
+    if (back == null || !mounted) return;
+    _jumping = true;
+    try {
+      setState(() => _jumpBack = null);
+      final m = back.module;
+      if (m != null) {
+        _goModule(m);
+      } else {
+        _changeModule(() {
+          _module = null;
+          _onModules = back.onModules;
+        });
+      }
+    } finally {
+      _jumping = false;
+    }
+    final navigator = Navigator.of(context);
+    for (final p in back.pages) {
+      unawaited(navigator.push(MaterialPageRoute<void>(builder: p.builder, settings: p.settings, maintainState: p.maintainState, fullscreenDialog: p.fullscreenDialog)));
+    }
+  }
+
+  /// Guidance started: Back no longer returns to where a jump came from.
+  void _onNavForJumpBack() {
+    if (_jumpBack != null && widget.nav.guiding) setState(() => _jumpBack = null);
+  }
+
+  /// A page opened over the screens: a jump's way back is forgotten.
+  void _onPagePushed() {
+    if (_jumpBack != null && mounted) setState(() => _jumpBack = null);
+  }
+
   void _openNavigation(NavigationAction action) {
     final route = action.route;
     if (route == null) {
@@ -507,7 +622,7 @@ class _ShellState extends State<Shell> {
       _say('Finish or end the route first');
       return;
     }
-    if (widget.nav.previewSnapshot(route)) _goModule(ModuleId.maps);
+    if (widget.nav.previewSnapshot(route)) _jumpToMaps(closePages: false);
   }
 
   /// A search another screen asked Home for (a step line in Ask): Home's box takes it.
@@ -539,7 +654,7 @@ class _ShellState extends State<Shell> {
         }
         widget.nav.openSearch();
         widget.nav.onQueryChanged(target.query);
-        _goModule(ModuleId.maps);
+        _jumpToMaps(closePages: false);
     }
   }
 
@@ -582,7 +697,7 @@ class _ShellState extends State<Shell> {
       }
     }
     widget.nav.select(place);
-    _goModule(ModuleId.maps);
+    _jumpToMaps(closePages: false);
   }
 
   /// A point of an imported map layer: the layer is switched on and Maps selects the point.
@@ -602,7 +717,7 @@ class _ShellState extends State<Shell> {
     if (!point.layer.visible) await layers.setVisible(point.layer, true);
     if (!mounted) return;
     widget.nav.select(MapPlace(id: p.address, type: 'place', name: point.name, kind: point.layer.name, lat: point.lat, lon: point.lon));
-    _goModule(ModuleId.maps);
+    _jumpToMaps(closePages: false);
   }
 
   /// A repeater of an imported list: Maps on it, with its card (the list is switched on).
@@ -776,6 +891,7 @@ class _ShellState extends State<Shell> {
     location: widget.location,
     hub: widget.hub,
     onOpenAsk: _openAskFromSettings,
+    carVoice: carVoiceShared,
   );
 
   /// "Set up Cache" on Home: each line opens the screen the feature uses everywhere.
@@ -830,7 +946,7 @@ class _ShellState extends State<Shell> {
           return;
         }
         widget.nav.select(p);
-        _goModule(ModuleId.maps);
+        _jumpToMaps(closePages: false);
       },
     ),
     LibrarySearchProvider(
@@ -848,7 +964,7 @@ class _ShellState extends State<Shell> {
       maps: widget.maps,
       open: (l) {
         widget.maps.setOn(l.id, true);
-        _goModule(ModuleId.maps);
+        _jumpToMaps(closePages: false);
       },
     ),
     if (widget.notebooks case final nb?) ...[
@@ -935,7 +1051,7 @@ class _ShellState extends State<Shell> {
           return;
         }
         widget.nav.select(p);
-        _goModule(ModuleId.maps);
+        _jumpToMaps(closePages: false);
       case ShortcutKind.page:
         final address = s.address;
         final id = address == null ? null : zimIdOfAddress(address);
@@ -1016,9 +1132,8 @@ class _ShellState extends State<Shell> {
 
   /// A repeater list's row: Maps, on the repeater, with its card.
   void _showRepeater(Repeater r) {
-    Navigator.of(context).popUntil((route) => route.isFirst);
     widget.notebooks?.userLayers?.showRepeater(r);
-    _goModule(ModuleId.maps);
+    _jumpToMaps();
   }
 
   /// "Show on map" on a repeater notebook's page: Maps, on the repeater, with its card (the same card a list's repeater had).
@@ -1059,8 +1174,7 @@ class _ShellState extends State<Shell> {
       _say('Finish or end the route first');
       return;
     }
-    Navigator.of(context).popUntil((route) => route.isFirst);
-    _goModule(ModuleId.maps);
+    _jumpToMaps();
     widget.nav.openDirections(MapPlace.pin(r.lat!, r.lon!, name: r.name));
   }
 
@@ -1108,7 +1222,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
@@ -1140,6 +1254,7 @@ class _ShellState extends State<Shell> {
     onOpenWeatherSettings: _openWeatherSettings,
     discover: _discover,
     onOpenDiscover: () => openDiscover(context, _discover),
+    carVoice: carVoiceShared,
   );
 
   @override

@@ -74,6 +74,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
     super.initState();
     w.addListener(_changed);
     w.focus.addListener(_onFocus);
+    logInfo('Weather: screen opened; ${w.sourcesLine()}');
     // The screen is shown: an update that is due runs (due-checked); the screen's own updated / updating lines show it.
     // (after this build: it tells its listeners, which must not happen while a frame is built)
     unawaited(Future.microtask(() => w.updateIfDue(kBackgroundEvery)));
@@ -183,7 +184,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
   }
 
   Future<void> _update() async {
-    logInfo('Weather: Update now tapped');
+    logInfo('Weather: Update now tapped; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -227,6 +228,13 @@ class _WeatherScreenState extends State<WeatherScreen> {
           List<Widget> whole(Widget words) => [
             if (!card) ...[
               _statusBox(context, w.status()),
+              const SizedBox(height: 12),
+            ],
+            if (w.nothingWatched) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton(key: const ValueKey('weather-screen-watch-here'), onPressed: () => unawaited(w.watchHereAgain()), child: const Text('Watch my location')),
+              ),
               const SizedBox(height: 12),
             ],
             words,

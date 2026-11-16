@@ -368,7 +368,8 @@ class CoreLayerEngine extends LayerEngine {
         );
         area
           ..bytes = (m['bytes'] as num?)?.toInt() ?? area.bytes
-          ..fetchedAt = _date(m['created']) ?? area.fetchedAt;
+          ..fetchedAt = _date(m['created']) ?? area.fetchedAt
+          ..sharedFrom = m['shared_from'] as String?;
         if (run == null || !run.update) {
           area
             ..doneTiles = (m['tiles_present'] as num?)?.toInt() ?? area.totalTiles

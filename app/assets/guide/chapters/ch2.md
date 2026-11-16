@@ -457,15 +457,15 @@ Under a row, a line can say how its search is going, for example `Making PDFs se
 
 ## Bookshelves
 
-"Bookshelves" shows your books on numbered shelves, the Cache Decimal System, CDS for short. There are ten classes, for example "CDS 200 · Medicine and Health", and each has nine divisions, for example "CDS 210 · First aid and emergency care". Every shelf shows, empty ones too.
+"Bookshelves" shows your books on numbered shelves, the Cache Decimal System, CDS for short. There are ten classes, for example "CDS 200 · Medicine and Health", and each has nine categories, for example "CDS 210 · First aid and emergency care". Every shelf shows, empty ones too.
 
 1. Open "Library" and tap "Bookshelves".
 2. At the top, choose how the shelves look: "List", "Drawers" or "Spines". Cache keeps your choice on this device.
-3. Tap a class to see its divisions, then a division to see its books.
+3. Tap a class to see its categories, then a category to see its books.
 
-Every book has a call number, for example `CDS 210-002`: its division, then its place in the order books arrived. A number never changes and is never used again. A moved book gets a new number in its new division. If two of your devices give out the same number at the same moment, the later book shows `.1` after it, for example `CDS 210-002.1`.
+Every book has a call number, for example `CDS 210-002`: its category, then its place in the order books arrived. A number never changes and is never used again. A moved book gets a new number in its new category. If two of your devices give out the same number at the same moment, the later book shows `.1` after it, for example `CDS 210-002.1`.
 
-To jump to a shelf or a book, type its number in "Go to a number, such as 530". It takes a class (500), a division (530) or a call number (530-002).
+To jump to a shelf or a book, type its number in "Go to a number, such as 530". It takes a class (500), a category (530) or a call number (530-002).
 
 - If you see "No books yet.", tap "Add to Library".
 - If you see "No shelf has that number. Try one such as 530.", check the number.
@@ -478,7 +478,7 @@ Books Cache was not sure about wait in "Unsorted" at the top of "Bookshelves". I
 
 1. On "Bookshelves", tap "Unsorted", then "Place them".
 2. Each book shows its best guesses, the best one first. Tap one to place the book there.
-3. Or tap "All divisions" and pick any division.
+3. Or tap "All categories" and pick any category.
 
 Cache says where the book went and its new call number, for example `Placed in CDS 350 · Beekeeping as CDS 350-004.` Tap "Undo" to take it back.
 
@@ -489,7 +489,7 @@ A book that is not searchable yet can be placed too. Your choice is saved and he
 ## A book's page
 
 Tap a book on a shelf to open its page. At the top is its catalog card: its call number, title, and author and edition when known. Under it:
-- "Subject": its division, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another division;
+- "Subject": its category, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another category;
 - "PDF": its size, and where it is when Cache knows;
 - "Search": "Searchable here", or how far Cache is;
 - "Stored": how much smaller Cache made it, when it did.
@@ -544,7 +544,7 @@ This page says what Cache is and what it is built on.
 
 If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
 
-The maps in this guide's pictures are drawn from these sources. Base map: © OpenStreetMap contributors · Protomaps. Public lands: USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS). Hillshade: © Mapterhorn.
+The maps in this guide's pictures are drawn from these sources. Base map: © OpenStreetMap contributors · Protomaps; its land cover © ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium, CC BY 4.0, from the Daylight Map Distribution. Public lands: USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS). Hillshade: © Mapterhorn.
 
 ## The reader
 

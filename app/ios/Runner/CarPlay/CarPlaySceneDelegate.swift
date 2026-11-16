@@ -37,6 +37,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
   private var lastStep: TimeInterval = 0
 
   private lazy var searchButton = barButton("magnifyingglass") { [weak self] in self?.templates?.openSearch() }
+  /// Voice search: shown only while the microphone and speech recognition were allowed on the phone already and an on-device
+  /// recognizer is there (CarListenAccess). On the map's bar only: CarPlay's search template has no bar buttons.
+  private lazy var micButton = CPBarButton(image: UIImage(systemName: "mic") ?? UIImage()) { [weak self] _ in self?.templates?.listen() }
+  private var activeObserver: NSObjectProtocol?
+  private var accessObserver: NSObjectProtocol?
   private lazy var savedButton = barButton("bookmark") { [weak self] in self?.templates?.openSaved() }
   private lazy var backButton = barButton("chevron.backward") { [weak self] in self?.templates?.leaveRoutes() }
   private lazy var doneButton = CPBarButton(title: "Done") { [weak self] _ in self?.endPanning() }
@@ -77,6 +82,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
     lists.onPreviewChanged = { [weak self] in self?.showButtons() }
     templates = lists
+    // Whether the microphone button shows is read again whenever the phone's app becomes active: that is where the two
+    // permissions can have been given.
+    activeObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+      self?.showButtons()
+    }
+    // And when the phone asked iOS for them (the card or the row): the answer may come with no change of active state.
+    accessObserver = NotificationCenter.default.addObserver(forName: .carListenAccessChanged, object: nil, queue: .main) { [weak self] _ in
+      self?.showButtons()
+    }
     searchButton.isEnabled = lists.searchAllowed
 
     let template = CPMapTemplate()
@@ -127,6 +141,14 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     guidance = nil
     templates?.close()
     templates = nil
+    if let observer = activeObserver {
+      NotificationCenter.default.removeObserver(observer)
+      activeObserver = nil
+    }
+    if let observer = accessObserver {
+      NotificationCenter.default.removeObserver(observer)
+      accessObserver = nil
+    }
     mapController?.release()
     mapController = nil
     mapTemplate = nil
@@ -206,8 +228,27 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
     // Search on the left and Saved places on the right, as on the Android car screen: CarPlay lays the trailing buttons out
     // from the edge inwards, so the one at the edge comes first.
-    template.leadingNavigationBarButtons = []
+    // The microphone is at the leading end, where the bar has room (the trailing end holds the two). It stays enabled while the
+    // car's keyboard is locked: that is when it is the way in.
+    template.leadingNavigationBarButtons = CarListenAccess.current().showsButton ? [micButton] : []
     template.trailingNavigationBarButtons = [savedButton, searchButton]
+  }
+
+  /// For the CarPlay harness only (its steps plugin reaches it by this Objective-C name): the microphone button's path with no
+  /// microphone. `word` is `text` (words are "heard"), `none` (nothing heard) or `off` (back to the real thing).
+  @objc func harnessListen(_ word: NSString) {
+    NSLog("%@", "harness steps: the car scene's harnessListen was reached with \(word)")
+    switch word as String {
+    case "text":
+      CarListen.testSetup = CarListenTestSetup(text: "Coffee", listeningFor: 6, searchingFor: 4, didntCatchFor: 6)
+    case "none":
+      CarListen.testSetup = CarListenTestSetup(text: nil, listeningFor: 3, searchingFor: 0, didntCatchFor: 6)
+    default:
+      CarListen.testSetup = nil
+    }
+    showButtons()
+    NSLog("%@", "harness steps: harnessListen: the buttons were set again, the voice search is \(CarListen.testSetup != nil ? "asked for" : "left")")
+    if CarListen.testSetup != nil { templates?.listen() }
   }
 
   private func barButton(_ symbol: String, _ pressed: @escaping () -> Void) -> CPBarButton {

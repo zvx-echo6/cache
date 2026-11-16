@@ -37,6 +37,9 @@ import UIKit
 ///   far as a simulator allows (no Siri can be spoken to here): the product's Navigate intent is performed, through its
 ///   perform() (CarVoiceNavigation in CarVoiceIntents.swift), with a place name as Siri would hand it over: a recorded saved
 ///   place's name ("Cabin"), a name the stand-in finds places for, and one it finds none for.
+///   `.listen_text`, `.listen_none` and `.listen_off`: the car's voice search with no microphone (CarListen.swift): the voice control
+///   template is shown and a fixed result "heard" ("Coffee", which the stand-in finds places for) or nothing; `.listen_off` is the
+///   real recognizer again. Reached through the car scene's `harnessListen:`.
 public class HarnessStepsPlugin: NSObject, FlutterPlugin {
   private static var channel: FlutterMethodChannel?
   /// What is passed on to the stand-in Dart side as it is.
@@ -56,7 +59,7 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
     }
     channel = steps
     let center = CFNotificationCenterGetDarwinNotifyCenter()
-    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys) + ["promptinterrupted"] + Array(voiceNames.keys)).map { "org.example.carharness." + $0 }
+    let names: [String] = (toDart + ["day", "night"] + Array(promptCodes.keys) + ["promptinterrupted"] + Array(voiceNames.keys) + Array(listenWords.keys)).map { "org.example.carharness." + $0 }
     for name in names {
       CFNotificationCenterAddObserver(
         center, nil,
@@ -71,6 +74,8 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
 
   /// The audio session's codes for a short prompt and for none ('shrt', 'none'); nothing for the system's own.
   /// The place names the voice steps hand to the intent.
+  private static let listenWords: [String: String] = ["listen_text": "text", "listen_none": "none", "listen_off": "off"]
+
   private static let voiceNames: [String: String] = ["voice_saved": "Cabin", "voice_list": "Coffee", "voice_none": "Nowhere"]
 
   private static let promptCodes: [String: UInt?] = ["promptshort": 0x7368_7274, "promptnone": 0x6E6F_6E65, "promptnormal": nil]
@@ -98,6 +103,17 @@ public class HarnessStepsPlugin: NSObject, FlutterPlugin {
       shared?.setValue(code.map { NSNumber(value: $0) }, forKey: "codeForTests")
       NSLog("%@", "harness steps: the car side answers prompts with \(code == nil ? "the system's own style" : "the style the job named") (\(shared == nil ? "CarPrompts not found" : "set"))")
       channel?.invokeMethod("prompt", arguments: nil)
+      return
+    }
+    if let heard = listenWords[word] {
+      NSLog("%@", "harness steps: the voice search step \(heard) arrived (\(UIApplication.shared.connectedScenes.count) scene(s))")
+      var scenes = 0
+      for scene in UIApplication.shared.connectedScenes {
+        guard let car = scene as? CPTemplateApplicationScene, let delegate = car.delegate as? NSObject else { continue }
+        _ = delegate.perform(NSSelectorFromString("harnessListen:"), with: heard as NSString)
+        scenes += 1
+      }
+      NSLog("%@", "harness steps: the car's voice search was asked for with \(heard) (\(scenes) car scene(s))")
       return
     }
     if let said = voiceNames[word] {

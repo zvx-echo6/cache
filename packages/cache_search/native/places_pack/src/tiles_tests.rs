@@ -171,7 +171,7 @@ fn a_tiled_build_across_a_block_edge() {
     let csv = dir.join("addresses.csv");
     let t = tile_id_l1(40.5, -111.99);
     let nvt = tile_id_l1(40.73, -116.5);
-    let mut lines = vec!["id,number,street,unit,postcode,postal_city,state,country,lat,lon,tile".to_string()];
+    let mut lines = vec!["id,number,street,unit,postcode,postal_city,state,country,lat,lon,tile,source".to_string()];
     for (id, num, street, unit, pc, city, lat, lon) in [
         ("a1", "10", "MAIN ST", "", "84000", "EDGEVILLE", 40.501, -111.99),
         ("a2", "12", "MAIN ST", "", "84000", "EDGEVILLE", 40.501, -111.9898),
@@ -181,9 +181,11 @@ fn a_tiled_build_across_a_block_edge() {
         ("a5", "14A", "S STATE ST", "", "84000", "", 40.5002, -111.99),
         ("a6", "10", "S STATE ST", "", "84000", "", 40.4999, -111.99),
     ] {
-        lines.push(format!("{id},{num},{street},{unit},{pc},{city},UT,US,{lat},{lon},{t}"));
+        // One number of Main St (a8) comes from OpenAddresses, as `oa-merge` writes it.
+        let source = if id == "a8" { "oa:us/id/test" } else { "" };
+        lines.push(format!("{id},{num},{street},{unit},{pc},{city},UT,US,{lat},{lon},{t},{source}"));
     }
-    lines.push(format!("a7,1,Front St,,89820,Battle Mountain,NV,US,40.73,-116.5,{nvt}"));
+    lines.push(format!("a7,1,Front St,,89820,Battle Mountain,NV,US,40.73,-116.5,{nvt},"));
     std::fs::write(&csv, lines.join("\n") + "\n").unwrap();
     let addr_db = dir.join("addresses.sqlite");
     let ar = addresses(&AddressesCfg { csv, blocks: blocks_dir.clone(), admins, out: addr_db.clone(), bbox: Some([-113.0, 40.0, -111.0, 41.0]) }).unwrap();
@@ -247,6 +249,8 @@ fn a_tiled_build_across_a_block_edge() {
     assert!((twelve.lat - 40.5).abs() < 1e-6, "the first unit's point");
     let (exp, loc, _, k, _, _, _) = row("Main St");
     assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("Main Street"), Some("Edgeville"), 3));
+    let src = |street: &str| c.query_row("SELECT source FROM addr_streets WHERE street = ?1", [street], |r| r.get::<_, Option<String>>(0)).unwrap();
+    assert_eq!((src("Main St").as_deref(), src("S State St")), (Some("oa:us/id/test"), None));
     let city: String = c.query_row("SELECT postal_city FROM addr_streets WHERE street = 'Main St'", [], |r| r.get(0)).unwrap();
     assert_eq!(city, "Edgeville", "EDGEVILLE in the source");
 
@@ -258,13 +262,14 @@ fn a_tiled_build_across_a_block_edge() {
     let cp = out.join("na-places-2026-10-28/common.sqlite");
     let cr = common(
         &CommonCfg {
-            blocks: blocks_dir,
+            blocks: blocks_dir.clone(),
             out: cp.clone(),
             build: "na-places-2026-10-28".into(),
-            taxonomy: Some(tax),
-            described: Some(described),
+            taxonomy: Some(tax.clone()),
+            described: Some(described.clone()),
             overture_release: "2026-10-21.0".into(),
             osm_source: "test".into(),
+            oa_attribution: None,
         },
         &rules,
         RULES,
@@ -279,6 +284,36 @@ fn a_tiled_build_across_a_block_edge() {
     assert_eq!(meta(&m, "tile_schema"), "1");
     assert_eq!(meta(&m, "levels"), "[1]");
     assert_eq!(n(&m, "SELECT COUNT(*) FROM categories"), rules.categories.len() as i64);
+
+    // The summary of the blocks (kept when a region's blocks are deleted) gives the same kinds and states.
+    let sum_dir = dir.join("summaries");
+    std::fs::create_dir_all(&sum_dir).unwrap();
+    let (pairs, sum_states) = crate::common::summarize(&blocks_dir, &sum_dir.join("1.sqlite")).unwrap();
+    assert!(pairs > 0 && sum_states == 2, "{pairs} {sum_states}");
+    let cp2 = out.join("na-places-2026-10-28/common-from-summary.sqlite");
+    let cr2 = common(
+        &CommonCfg {
+            blocks: sum_dir,
+            out: cp2.clone(),
+            build: "na-places-2026-10-28".into(),
+            taxonomy: Some(tax),
+            described: Some(described),
+            overture_release: "2026-10-21.0".into(),
+            osm_source: "test".into(),
+            oa_attribution: None,
+        },
+        &rules,
+        RULES,
+    )
+    .unwrap();
+    assert_eq!((cr2.kinds, cr2.described, cr2.from_taxonomy, cr2.states), (cr.kinds, cr.described, cr.from_taxonomy, cr.states));
+    let m2 = Connection::open(&cp2).unwrap();
+    let kinds_of = |c: &Connection| -> Vec<(String, String)> {
+        let mut st = c.prepare("SELECT id, description FROM kinds ORDER BY sort").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(kinds_of(&m), kinds_of(&m2));
+    drop(m2);
 
     // The common file's vectors: every category and every kind, from the text `common` wrote.
     let (cats, kinds) = (n(&m, "SELECT COUNT(*) FROM categories") as usize, n(&m, "SELECT COUNT(*) FROM kinds") as usize);
@@ -369,4 +404,35 @@ fn harvest_rows_round_trip() {
     assert_eq!((back.extent, back.arrival), (p.extent, p.arrival));
     assert_eq!(crate::model::source_name("osm+overture"), Some("osm+overture"));
     assert_eq!(crate::model::source_name("elsewhere"), None);
+}
+
+/// Two extracts that overlap at an edge read the same OSM element twice; the harvest keeps it once.
+struct Fixed(Vec<Raw>);
+impl crate::model::PlaceSource for Fixed {
+    fn describe(&self) -> String {
+        "fixed rows".into()
+    }
+    fn read(&mut self, _rules: &Rules, out: &mut crate::model::Harvest) -> Result<(), String> {
+        for r in &self.0 {
+            out.place(r.clone());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn an_osm_element_read_from_two_extracts_is_kept_once() {
+    let rules = Rules::parse(RULES).unwrap();
+    let dir = std::env::temp_dir().join(format!("harvest_twice_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = vec![place("osm", "osm:w1", "Edge Cafe", Some("cafe"), "cafe", "cafe", 40.5, -112.0), place("osm", "osm:w2", "Other Cafe", Some("cafe"), "cafe", "cafe", 40.6, -112.0)];
+    let b = vec![place("osm", "osm:w1", "Edge Cafe", Some("cafe"), "cafe", "cafe", 40.5, -112.0), place("overture", "overture:o1", "Third Cafe", Some("cafe"), "cafe", "cafe", 40.7, -112.0)];
+    let mut sources: Vec<Box<dyn crate::model::PlaceSource>> = vec![Box::new(Fixed(a)), Box::new(Fixed(b))];
+    let out = dir.join("harvest.sqlite");
+    let r = crate::harvest::harvest(&rules, RULES, &mut sources, true, &out).unwrap();
+    assert_eq!(r.places, 3, "w1 once, w2, and the Overture place");
+    let c = Connection::open(&out).unwrap();
+    let ids: i64 = c.query_row("SELECT COUNT(*) FROM raw WHERE what = 'place' AND json LIKE '%osm:w1%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(ids, 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

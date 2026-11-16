@@ -22,6 +22,7 @@ import 'offroad_catalogue.dart';
 import 'problem_words.dart';
 import 'region_catalogue.dart';
 import 'regions_core.dart';
+import 'regions_share.dart';
 
 export '../sharing/share_rules.dart' show kRegionsNotShared, kMapLayersNotShared;
 
@@ -524,10 +525,15 @@ class RegionsState extends ChangeNotifier {
     this.position,
     this.focus,
     this.spaceOf,
+    this.syncedWithOtherDevice,
   }) : _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
   final DataPolicy policy;
+
+  /// Whether a region deleted here is deleted on other devices too: the Maps share is on and at least one device is linked. It
+  /// decides whether the delete asks with the line "Deleting this will delete this from all synced devices." (null: not synced).
+  final bool Function()? syncedWithOtherDevice;
 
   /// While Ask answers, the core starts no new region tile (set_policy hold); the tile in flight finishes and the downloads go on
   /// when the answer is done. Not the person's pause ([held]): that one stays as it is. Null: not observed.
@@ -579,6 +585,13 @@ class RegionsState extends ChangeNotifier {
   ConnectionKind _kind = ConnectionKind.wifi;
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
+
+  /// This device's share of its regions with linked devices (regions_share.dart), once the region engine has opened and named it.
+  RegionsShare? _share;
+
+  /// The regions linked devices share and nobody has deleted since (a delete shared by any device, this one's too, ends one added before it).
+  List<PeerRegion> _peers = const [];
+  bool _applying = false;
 
   /// Each downloading part's speed and time left.
   final TransferMeter _meter = TransferMeter();
@@ -640,6 +653,7 @@ class RegionsState extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (!plat.isWeb) _share = RegionsShare(Directory('${(await supportDir()).path}/regions'));
     await _applyPolicy();
     unawaited(migrateOldDownloads().catchError((_) {}));
     _net = policy.probe.changes.listen((_) => _applyPolicy().catchError((_) {}));
@@ -737,6 +751,7 @@ class RegionsState extends ChangeNotifier {
       return;
     }
     _asked.removeWhere((id) => _statusOf(id) != null);
+    await _syncShare();
     if (plat.isWeb) await _syncServerPacks(c);
     _schedulePoll();
     await _routingCheck();
@@ -856,41 +871,56 @@ class RegionsState extends ChangeNotifier {
 
   /// The map areas a region holds, each once (an elevation area lists under elevation, hillshade and contour lines: counted three
   /// times, its size was three times too big).
-  List<DownloadedArea> _areasOf(_Kept k) => [for (final a in maps.engine.allAreas) if (k.areas.contains(a.id)) a];
+  List<DownloadedArea> _areasOf(_Kept k) => _areasOfIds(k.areas);
 
-  /// Every region on this phone, largest first.
+  List<DownloadedArea> _areasOfIds(Iterable<String> ids) {
+    final want = ids.toSet();
+    return [for (final a in maps.engine.allAreas) if (want.contains(a.id)) a];
+  }
+
+  /// The ids of the regions this device holds itself (the app's list, and the core's).
+  Set<String> get _ownIds => {..._kept.keys, for (final r in _routingRegions) r['id'] as String};
+
+  /// What a linked device shares of region [id], when nobody has deleted it since (the first device's).
+  PeerRegion? _peerFor(String id) => _peers.where((p) => p.id == id).firstOrNull;
+
+  /// Every region on this phone, largest first: its own, then the ones only a linked device shares.
   List<LocalRegion> get local {
-    final ids = <String>{..._kept.keys, for (final r in _routingRegions) r['id'] as String};
+    final ids = <String>{..._ownIds, for (final p in _peers) p.id};
     final out = [for (final id in ids) regionOf(id)!];
     out.sort((a, b) => b.bytes.compareTo(a.bytes));
     return out;
   }
 
-  /// The region [id] as it is on this phone, or null when nothing of it is here.
+  /// The region [id] as it is on this phone (or, for one only a linked device shares, as that device holds it), or null when nothing
+  /// of it is here.
   LocalRegion? regionOf(String id) {
     final k = _kept[id];
     final r = _statusOf(id);
-    if (k == null && r == null) return null;
+    final peer = _peerFor(id);
+    if (k == null && r == null && peer == null) return null;
+    final packs = <String, _KeptPack>{
+      for (final p in peer?.offroad ?? const <Map<String, dynamic>>[]) (p['path'] as String? ?? ''): _KeptPack.fromJson(p),
+      for (final p in k?.offroad ?? const <_KeptPack>[]) p.path: p,
+    };
     return LocalRegion(
       id: id,
-      name: k?.name ?? r?['name'] as String? ?? id,
-      kind: k?.kind ?? (id.startsWith('drawn-') ? kDrawnRegionKind : null),
-      bbox: k?.bbox,
-      routing: _routingOf(r),
-      places: _placesOf(r),
-      areas: k == null ? const [] : _areasOf(k),
+      name: k?.name ?? r?['name'] as String? ?? peer?.name ?? id,
+      kind: k?.kind ?? peer?.kind ?? (id.startsWith('drawn-') ? kDrawnRegionKind : null),
+      bbox: k?.bbox ?? peer?.bbox,
+      routing: _routingOf(r) ?? (k?.routing == true ? null : peer?.routingPart),
+      places: _placesOf(r) ?? (k?.places == true ? null : peer?.placesPart),
+      areas: _areasOfIds([...?k?.areas, ...?peer?.areas]),
       // A part asked for is waited for until the core lists the region; once it does, a part it does not have was never added
       // (1.0.27 waited for places the core had left out, "Places waiting" for ever).
       wantsRouting: (k?.routing ?? false) && (r == null || _routingOf(r) != null),
       wantsPlaces: (k?.places ?? false) && (r == null || _placesOf(r) != null),
       asked: _asked.contains(id),
       meter: _meter,
-      offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
-      terrain: k == null ? const [] : _terrainOf(k),
+      offroad: [for (final p in packs.values) _packState(p)],
+      terrain: [for (final a in maps.engine.areasOf(kOffroadElevationLayer)) if ({...?k?.terrain, ...?peer?.terrain}.contains(a.id)) a],
     );
   }
-
-  List<DownloadedArea> _terrainOf(_Kept k) => [for (final a in maps.engine.areasOf(kOffroadElevationLayer)) if (k.terrain.contains(a.id)) a];
 
   OffroadPackState _packState(_KeptPack p) {
     final run = _packRuns[p.path];
@@ -1358,18 +1388,28 @@ class RegionsState extends ChangeNotifier {
   }
 
   /// Removes the region. Tiles another region still needs stay (the core and the layer engine keep shared tiles once).
-  Future<void> remove(String id) async {
+  ///
+  /// A delete is a delete on every linked device that shares Maps: it is noted in this device's shared folder, each device removes the
+  /// region from its own copy, and a region downloaded after it stays (regions_share.dart). [everywhere] false is for the repair that
+  /// deletes and downloads again ("Delete and start again"), which is not meant to take other devices' copies away.
+  Future<void> remove(String id, {bool everywhere = true}) async {
+    final peer = _peerFor(id);
     final k = _kept.remove(id);
+    final mine = _kept.values;
     if ((k?.routing ?? false) || (k?.places ?? false) || _statusOf(id) != null) await _core?.call('remove', {'id': id});
-    for (final a in k?.areas ?? const <String>[]) {
+    for (final a in {...?k?.areas, ...?peer?.areas}) {
       await maps.engine.delete(a);
     }
     // off-road packs and their terrain heights stay while another region uses them
-    for (final a in k?.terrain ?? const <String>[]) {
-      if (!_kept.values.any((o) => o.terrain.contains(a))) await maps.engine.delete(a);
+    for (final a in {...?k?.terrain, ...?peer?.terrain}) {
+      if (!mine.any((o) => o.terrain.contains(a))) await maps.engine.delete(a);
     }
-    for (final p in k?.offroad ?? const <_KeptPack>[]) {
-      if (_kept.values.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
+    final packs = <String, _KeptPack>{
+      for (final p in peer?.offroad ?? const <Map<String, dynamic>>[]) (p['path'] as String? ?? ''): _KeptPack.fromJson(p),
+      for (final p in k?.offroad ?? const <_KeptPack>[]) p.path: p,
+    };
+    for (final p in packs.values) {
+      if (mine.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
       _packRuns.remove(p.path)?.cancel.cancel();
       if (plat.isWeb) {
         // the server deletes the pack and its part
@@ -1386,17 +1426,27 @@ class RegionsState extends ChangeNotifier {
         } catch (_) {}
       }
     }
+    if (everywhere) {
+      try {
+        _share?.recordDelete(id);
+      } catch (_) {}
+    }
+    _peers = [for (final p in _peers) if (p.id != id) p];
     await _save();
     await refresh();
     notifyListeners();
   }
+
+  /// Whether deleting a region here also deletes it on other devices (the Maps share is on and a device is linked): the delete's
+  /// confirmation then says so.
+  bool get deleteReachesOtherDevices => syncedWithOtherDevice?.call() ?? false;
 
   /// The region [id] as a record to download or carry on: its own box for an area drawn on the map or kept from before regions, else
   /// the catalogue's record (read from the copy on the phone when there is one), else a record made from the box it was downloaded
   /// for. Null when none of these is known.
   Future<RegionRecord?> recordOf(String id) async {
     final k = _kept[id];
-    final box = k?.bbox ?? _boxOfAreas(k);
+    final box = k?.bbox ?? _peerFor(id)?.bbox ?? _boxOfAreas(k);
     if (k != null && (k.kind == kDrawnRegionKind || k.kind == kAreaRegionKind || id.startsWith('drawn-')) && box != null) {
       return RegionRecord(id: id, name: k.name, kind: k.kind ?? kDrawnRegionKind, bbox: box);
     }
@@ -1663,8 +1713,11 @@ class RegionsState extends ChangeNotifier {
 
   Future<void> _migrateOldDownloads() async {
     final engine = maps.engine;
-    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain]};
-    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running) a];
+    // a region a linked device shares holds its areas too (they are listed with it, not adopted as regions of this device)
+    await _syncShare();
+    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain], for (final p in _peers) ...[...p.areas, ...p.terrain]};
+    // (an area only a linked device's shared copy holds is that device's, listed with its region; never adopted as this device's own)
+    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running && a.sharedFrom == null) a];
     // Each region's box: kept with it, else around its map areas, else the catalogue's.
     final boxes = <String, List<double>>{};
     for (final k in _kept.values) {
@@ -1802,6 +1855,68 @@ class RegionsState extends ChangeNotifier {
     await refresh();
   }
 
+  /// Reads what linked devices share of their regions and the deletes shared, ends this device's own regions that another device
+  /// deleted since they were added here, and shares this device's regions.
+  Future<void> _syncShare() async {
+    final sh = _share;
+    if (sh == null || _applying) return;
+    try {
+      final peers = sh.readPeers();
+      final deletes = sh.readDeletes();
+      _peers = [for (final p in peers) if (!deletes.any((d) => d.id == p.id && d.ends(p.added))) p];
+      // A region of kind "area" that an earlier version adopted from a store this device did not download (the other device's file
+      // landed in its live store) is the other device's: it is listed once, with the region that device shares; and one whose areas
+      // are gone everywhere (a delete took them) is not left behind as "0 B".
+      final shared = <String>{for (final p in _peers) ...[...p.areas, ...p.terrain]};
+      final known = maps.engine.ready ? {for (final a in maps.engine.allAreas) a.id} : null;
+      final adopted = [
+        for (final k in _kept.values)
+          if (k.kind == kAreaRegionKind && k.areas.isNotEmpty && (k.areas.every(shared.contains) || (known != null && k.areas.every((a) => !known.contains(a)))))
+            k.id,
+      ];
+      if (adopted.isNotEmpty) {
+        adopted.forEach(_kept.remove);
+        unawaited(_save());
+      }
+      final ended = [for (final id in _ownIds) if (deletes.any((d) => d.id == id && d.ends(_kept[id]?.added ?? 0))) id];
+      if (ended.isNotEmpty) {
+        _applying = true;
+        try {
+          for (final id in ended) {
+            await remove(id, everywhere: false);
+          }
+        } finally {
+          _applying = false;
+        }
+      }
+      sh.writeOwn(_shareOut());
+    } catch (_) {}
+  }
+
+  /// This device's own regions as it shares them: what each holds, and (for the parts the core reports) how each stands.
+  Map<String, Map<String, dynamic>> _shareOut() {
+    Map<String, dynamic>? part(Map<String, dynamic>? p) {
+      final state = p?['state'] as String?;
+      if (state == null) return null;
+      return {'state': state, if (state == 'ready' && p?['bytes'] is num) 'bytes': p!['bytes']};
+    }
+
+    final out = <String, Map<String, dynamic>>{};
+    for (final id in _ownIds) {
+      final k = _kept[id];
+      final r = _statusOf(id);
+      final routing = part(_routingOf(r));
+      final places = part(_placesOf(r));
+      out[id] = {
+        if (k != null) ...k.toJson(),
+        if (k == null) ...{'name': r?['name'] ?? id, 'added': 0, 'routing': routing != null, 'places': places != null},
+        'routingPart': ?routing,
+        'placesPart': ?places,
+      };
+    }
+    return out;
+  }
+
   Future<void> _save() async {
     try {
       final ready = [for (final r in _routingRegions) if (_routingOf(r)?['state'] == 'ready') r['name'] as String? ?? r['id'] as String];
@@ -1838,13 +1953,18 @@ class RegionsState extends ChangeNotifier {
 
 /// What the app remembers of one region: its name and the parts it asked for.
 class _Kept {
-  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas, List<_KeptPack>? offroad, List<String>? terrain, this.kind, this.bbox})
-    : areas = areas ?? [],
+  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas, List<_KeptPack>? offroad, List<String>? terrain, this.kind, this.bbox, int? added})
+    : added = added ?? DateTime.now().millisecondsSinceEpoch,
+      areas = areas ?? [],
       offroad = offroad ?? [],
       terrain = terrain ?? [];
 
   final String id;
   final String name;
+
+  /// When this device added the region (milliseconds; 0 for one kept by a version before this was recorded): a delete shared by a
+  /// linked device ends the region only when it was made after this (regions_share.dart).
+  final int added;
 
   /// [kDrawnRegionKind] or [kAreaRegionKind]; null for a catalogue region.
   String? kind;
@@ -1861,6 +1981,7 @@ class _Kept {
 
   Map<String, dynamic> toJson() => {
     'name': name,
+    'added': added,
     'routing': routing,
     'places': places,
     'areas': areas,
@@ -1873,6 +1994,7 @@ class _Kept {
   factory _Kept.fromJson(String id, Map<String, dynamic> j) => _Kept(
     id: id,
     name: j['name'] as String? ?? '',
+    added: (j['added'] as num?)?.toInt() ?? 0,
     routing: j['routing'] == true,
     places: j['places'] == true,
     areas: [for (final a in (j['areas'] as List? ?? const [])) a as String],

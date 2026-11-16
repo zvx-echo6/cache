@@ -27,6 +27,12 @@ object CarLink {
 
         /** A navigation request that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
         fun onNavRequest(req: NavRequest) {}
+
+        /** A voice search (`VIEW` of a `geo:` address) that reached the phone's activity while this car is connected. */
+        fun onSearchRequest(search: GeoView.Search) {}
+
+        /** A custom action that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
+        fun onCarAction(action: CarAction) {}
     }
 
     private var channel: MethodChannel? = null
@@ -117,6 +123,20 @@ object CarLink {
     fun navRequest(req: NavRequest): Boolean {
         if (!carConnected) return false
         each { it.onNavRequest(req) }
+        return true
+    }
+
+    /** A voice search for the car session that is attached; false when there is none to take it. */
+    fun searchRequest(search: GeoView.Search): Boolean {
+        if (!carConnected) return false
+        each { it.onSearchRequest(search) }
+        return true
+    }
+
+    /** A custom action for the car session that is attached; false when there is none to take it. */
+    fun carAction(action: CarAction): Boolean {
+        if (!carConnected) return false
+        each { it.onCarAction(action) }
         return true
     }
 

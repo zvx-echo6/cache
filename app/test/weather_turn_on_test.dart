@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cache/layout/layout_state.dart';
 import 'package:cache/location/position_source.dart';
-import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/settings/app_settings.dart';
@@ -32,12 +30,15 @@ void main() {
     },
   );
 
-  testWidgets('Weather, nothing on: "Turn on weather" switches on forecast, alerts and fires for Where I am, asks for the location and updates',
+  // Weather always works: the three are on from the start, so the page that offers "Turn on weather" is the one for a location that
+  // is not watched (the person switched it off), where the flow asks for the location and watches it.
+  testWidgets('Weather, location not watched: "Turn on weather" asks for the location, watches it, keeps forecast, alerts and fires on, and updates',
       (tester) async {
     final r = await SettingsRig.create(tester, permission: LocationPermissionState.notAsked);
+    r.settings.setWatched('here', false);
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r), onOpenSettings: () {}));
     await tester.pumpAndSettle();
-    expect(find.text('Weather is off.'), findsOneWidget);
+    expect(find.text('No place is being watched.'), findsOneWidget);
     expect(find.text('Choose a place instead'), findsOneWidget);
     expect(find.text('Open Weather and alerts settings'), findsOneWidget, reason: 'Settings stays reachable');
     await tester.tap(find.byKey(const ValueKey('weather-turn-on')));
@@ -52,13 +53,14 @@ void main() {
     await tester.pumpAndSettle();
     final snack = find.descendant(of: find.byType(SnackBar), matching: find.byType(Text)).evaluate().map((e) => (e.widget as Text).data).join(' | ');
     expect(r.liveCore.fetches, isNotEmpty, reason: 'it updated (snack: $snack, updating: ${r.weather.updating})');
-    expect(find.text('Weather is off.'), findsNothing);
+    expect(find.text('No place is being watched.'), findsNothing);
     await r.dispose(tester);
   });
 
   testWidgets('location refused: it offers a place instead; a saved place is watched and updated', (tester) async {
     final r = await SettingsRig.create(tester, permission: LocationPermissionState.deniedForever);
     r.here = null;
+    r.settings.setWatched('here', false);
     r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9, label: 'Near Stanley')];
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
     await tester.pumpAndSettle();
@@ -76,6 +78,7 @@ void main() {
   testWidgets('"Choose a place instead": a place found by name is saved and watched', (tester) async {
     final r = await SettingsRig.create(tester);
     r.here = null;
+    r.settings.setWatched('here', false);
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r, found: [_stanley])));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
@@ -159,25 +162,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Waiting for your position.'), findsOneWidget);
     expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: 'weather is on');
-    await r.dispose(tester);
-  });
-
-  testWidgets('Home: the Weather and alerts card offers "Turn on weather" while weather is off', (tester) async {
-    final r = await SettingsRig.create(tester);
-    final layout = LayoutState(settingsDirOverride: r.dir);
-    await tester.runAsync(layout.init);
-    await r.show(tester, HomeScreen(layout: layout, weather: r.weather, turnOn: turnOn(r), onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('weather-turn-on')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('weather-turn-on')));
-    await tester.pumpAndSettle();
-    if (find.byKey(const ValueKey('weather-location-continue')).evaluate().isNotEmpty) {
-      await tester.tap(find.byKey(const ValueKey('weather-location-continue')));
-      await tester.pumpAndSettle();
-    }
-    expect(_three(r), _threeIds);
-    expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: 'weather is set up now');
-    layout.dispose();
     await r.dispose(tester);
   });
 

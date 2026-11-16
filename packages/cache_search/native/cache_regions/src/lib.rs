@@ -24,6 +24,8 @@ pub mod http;
 pub mod index;
 mod snap;
 mod places;
+mod share;
+pub use share::rescue_conflicts;
 
 /// How a route's tile fetch ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1750,6 +1752,9 @@ impl Regions {
     pub fn open(cfg: Config) -> Result<Regions> {
         std::fs::create_dir_all(cfg.dir.join("tiles"))?;
         std::fs::create_dir_all(cfg.dir.join("index"))?;
+        // This device's share name, and what an older build's sync conflicts left (share.rs), before anything is opened.
+        let _ = cache_places::share::share_id(&cfg.dir);
+        share::rescue_conflicts(&cfg.dir);
         let mut db = Connection::open(cfg.dir.join("regions.sqlite"))?;
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -1867,6 +1872,19 @@ impl Regions {
         });
         let w = inner.clone();
         let worker = std::thread::Builder::new().name("cache-regions".into()).spawn(move || w.work()).map_err(|e| Error::new("internal", format!("could not start the download thread: {e}")))?;
+        // This device's places snapshot for the linked devices, on a thread that ends with the engine.
+        let weak = Arc::downgrade(&inner);
+        let _ = std::thread::Builder::new().name("cache-regions-share".into()).spawn(move || {
+            std::thread::sleep(Duration::from_secs(2));
+            while let Some(i) = weak.upgrade() {
+                if i.stopped() {
+                    break;
+                }
+                let _ = i.share_places(share::QUIET);
+                drop(i);
+                std::thread::sleep(Duration::from_secs(10));
+            }
+        });
         Ok(Regions { inner, worker: Mutex::new(Some(worker)) })
     }
 
@@ -1946,6 +1964,12 @@ impl Regions {
         let p = self.inner.places.as_ref()?;
         let b = self.inner.st().p.build.clone()?;
         Some(p.db_file(&b))
+    }
+
+    /// Writes this device's snapshot of its places database for the linked devices now, when it changed since the last one and has
+    /// been quiet for `quiet` (it is done in the background every few seconds with a 20 second quiet time). Whether one was written.
+    pub fn share_places_now(&self, quiet: Duration) -> bool {
+        self.inner.share_places(quiet).unwrap_or(false)
     }
 
     /// The folder of `CURRENT` and the merged databases (what `cache_places` reads as `merged_dir`); None with places off.
