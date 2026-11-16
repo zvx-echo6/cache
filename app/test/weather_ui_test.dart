@@ -478,6 +478,21 @@ void main() {
       await r.dispose(tester);
     });
 
+    testWidgets('Save source fetches the new source straight away, for the watched place, without Update now', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      const draft = OwnDraft(name: 'Creek', address: '$api?lat={lat}&lon={lon}');
+      final t = OwnTry.ok('sensors.example.org', flattenJson(answer), asked: const ['water.level'], place: (lat: 42.54, lon: -113.79));
+      await r.show(tester, OwnSourcePickPage(deps: r.deps, draft: draft, first: t));
+      await tester.pump();
+      expect(r.liveCore.fetches, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('own-save')));
+      await settle(tester);
+      expect(r.weather.isOn('own-creek'), isTrue);
+      expect(jsonEncode(r.liveCore.fetches), contains('own-creek'), reason: 'fetched by itself, as Update now does');
+      await r.dispose(tester);
+    });
+
     testWidgets('Try it says plainly why there are no values (HTTP error, not JSON), and Try again', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
