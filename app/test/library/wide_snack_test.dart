@@ -1,23 +1,15 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/desktop/desktop_shell.dart';
 import 'package:cache/linux_ui.dart';
 import 'package:cache/layout/adaptive.dart' show PanePrefs;
-import 'package:cache/library/catalog_page.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
 import 'package:cache/library/library_panes.dart';
-import 'package:cache/library/library_prefs.dart';
-import 'package:cache/library/shelf_source.dart';
-import 'package:cache/platform/battery.dart';
 import 'package:cache/search/index_scheduler.dart';
-import 'package:cache/search/index_throttle.dart' show IndexDuty;
-import 'package:cache/settings/space.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/theme.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,26 +24,6 @@ const _seed = '''
 {"v":1,"at":1000,"dev":"builder-field","ev":"place","doc":"surgery","div":"210","by":"auto"}
 {"v":1,"at":1000,"dev":"builder-field","ev":"assign","doc":"surgery","div":"210","seq":2}
 ''';
-
-class _Run implements IndexRun {
-  final Completer<bool> _done = Completer<bool>();
-  @override
-  void setDuty(IndexDuty duty) {}
-  @override
-  Future<bool> get finished => _done.future;
-  @override
-  Future<void> pause([IndexWait why = IndexWait.none]) async {
-    if (!_done.isCompleted) _done.complete(false);
-  }
-}
-
-class _Work implements IndexWorkSource {
-  final List<String> keys = [];
-  @override
-  Future<List<IndexTask>> pending() async => [
-    for (final k in keys) IndexTask(key: k, title: 'Medical encyclopedia', start: () async => _Run()),
-  ];
-}
 
 void main() {
   late Directory tmp;
