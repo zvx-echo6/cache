@@ -425,6 +425,26 @@ void main() {
     expect(again.areasOf('hillshade').single.error, isNull);
   });
 
+  test('a page loaded again while the server keeps downloading takes the running job back, and Pause stops it (web-region-progress)', () async {
+    final a = await engine.download('hillshade', home, label: 'reloaded');
+    expect(a.phase, AreaPhase.running);
+    // The tab is closed or reloaded; the server's job (the same core) goes on.
+    engine.dispose();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await again.start();
+    final back = again.areasOf('hillshade').single;
+    expect(back.phase, AreaPhase.running, reason: 'before: it read as stopped part way while the server was still downloading');
+    await again.pause(back.id);
+    await until(() => back.phase == AreaPhase.failed);
+    expect(back.paused, isTrue, reason: 'Pause reached the server job and the area reads as paused');
+  });
+
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
     final outline = [
       [

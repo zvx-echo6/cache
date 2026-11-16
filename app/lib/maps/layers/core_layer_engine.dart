@@ -28,8 +28,15 @@ class CoreLayerEngine extends LayerEngine {
     this.maxDownloadBytes = 800 * 1024 * 1024,
     this.policy,
     this.openPlanner,
+    bool? reattachJobs,
     this.estimateFor = const Duration(minutes: 10),
-  }) : _connected = connected ?? _platformConnected;
+  })  : _connected = connected ?? _platformConnected,
+        reattachJobs = reattachJobs ?? plat.isWeb;
+
+  /// In a browser the downloads are the server's and go on with no tab open: the core's job number is kept with the unfinished
+  /// download, and a page loaded again takes the running job back (so Pause and the progress reach it). A phone's jobs end with
+  /// the app, so there it is off.
+  final bool reattachJobs;
 
   /// The search core once it is open (null when it could not open).
   final Future<SearchCore?> Function() openCore;
@@ -147,6 +154,7 @@ class CoreLayerEngine extends LayerEngine {
         _connection ??= policy?.probe.changes.listen((_) => unawaited(refreshOnline(force: true)));
       } catch (_) {}
       await _reload();
+      if (reattachJobs) await _reattach(core);
       _ready = true;
       notifyListeners();
       unawaited(refreshCatalogue());
@@ -413,6 +421,33 @@ class CoreLayerEngine extends LayerEngine {
 
   String _key(String layer, String area) => '$layer/$area';
 
+  /// A page loaded again while the server's downloads go on: each unfinished area whose saved job number is still a running job
+  /// is a running download again, so it shows its progress and Pause reaches the job.
+  Future<void> _reattach(SearchCore core) async {
+    for (final a in List.of(_areas.values)) {
+      final saved = _saved[a.id];
+      final jobId = saved?.job;
+      if (saved == null || jobId == null || _running.containsKey(a.id) || a.phase != AreaPhase.failed) continue;
+      try {
+        final job = core.attachJob(jobId);
+        final p = await job.progress();
+        if (p.isFinished) {
+          saved.job = null;
+          continue;
+        }
+        a
+          ..phase = AreaPhase.running
+          ..error = null
+          ..interrupted = false
+          ..paused = false;
+        _running[a.id] = _Run(a, job, false, totalFromJob: saved.outline != null);
+        _poll ??= Timer.periodic(pollEvery, (_) => _tick());
+      } catch (_) {
+        saved.job = null;
+      }
+    }
+  }
+
   /// What was asked for, kept to carry on a download that stopped (the core's list does not hold the shape of an
   /// unfinished one). Kept in a file beside the tiles too: on iPhone the system stops a download that runs while Cache is in the
   /// background, and Update must carry it on after Cache starts again.
@@ -674,6 +709,11 @@ class CoreLayerEngine extends LayerEngine {
       ..paused = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
+    final kept = _saved[a.id];
+    if (reattachJobs && kept != null && !update) {
+      kept.job = job.id;
+      await _storeSaved();
+    }
     _running[a.id] = _Run(a, job, update, totalFromJob: totalFromJob);
     _areas[_key(a.layerId, a.id)] = a;
     _poll ??= Timer.periodic(pollEvery, (_) => _tick());
@@ -872,7 +912,10 @@ class _Run {
 }
 
 class _Saved {
-  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline});
+  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline, this.job});
+
+  /// The core's number for the download's job, kept in a browser so a reloaded page finds the running job again.
+  int? job;
   final GeoBounds bounds;
   final int minZoom;
   final int maxZoom;
@@ -885,6 +928,7 @@ class _Saved {
         'minzoom': minZoom,
         'maxzoom': maxZoom,
         if (outline != null) 'polygon': outline,
+        if (job != null) 'job': job,
       };
 
   static _Saved? fromJson(Object? j) {
@@ -892,7 +936,7 @@ class _Saved {
     final b = j['bbox'], lo = j['minzoom'], hi = j['maxzoom'];
     if (b is! List || b.length != 4 || b.any((v) => v is! num) || lo is! int || hi is! int) return null;
     final v = [for (final x in b) (x as num).toDouble()];
-    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']));
+    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']), job: j['job'] is int ? j['job'] as int : null);
   }
 
   static List<List<List<double>>>? _rings(Object? p) {

@@ -342,6 +342,11 @@ class SearchCore {
   Future<CoreJobHandle> startJob(String kind, Map<String, dynamic> params) async =>
       CoreJobHandle._(this, (await _call('jobStart', {'kind': kind, 'params': params})) as int);
 
+  /// A handle on a job that is already running in this core: the job a Cache Server keeps going with no tab open, found again
+  /// by the id [CoreJobHandle.id] gave when it started (a page reloaded). Its [CoreJobHandle.progress] throws when the core has no
+  /// such job.
+  CoreJobHandle attachJob(int id) => CoreJobHandle._(this, id);
+
   /// Closes the core and ends the worker.
   Future<void> close() async {
     if (_closed) return;
@@ -360,6 +365,9 @@ class CoreConversation {
   final SearchCore _core;
   final int _id;
   bool _freed = false;
+
+  /// The core's number for the job (kept by an app that must find it again, see [SearchCore.attachJob]).
+  int get id => _id;
 
   /// Numbers [results] (search hits as [SearchHit.toFormatJson], or any {address,title,snippet}) and
   /// returns the exact tool message and the id map so far.
