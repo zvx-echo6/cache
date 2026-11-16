@@ -22,5 +22,22 @@ class MapPointerGate extends StatefulWidget {
 
 class _MapPointerGateState extends State<MapPointerGate> {
   @override
+  void initState() {
+    super.initState();
+    if (widget.web) {
+      modalWatch.addListener(_sync);
+      widget.setter(modalWatch.isOpen);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.web) modalWatch.removeListener(_sync);
+    super.dispose();
+  }
+
+  void _sync() => widget.setter(modalWatch.isOpen);
+
+  @override
   Widget build(BuildContext context) => widget.child;
 }
