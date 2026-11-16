@@ -6,7 +6,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache/screens/settings/settings_link_pages.dart';
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/screens/settings/widgets.dart' show SwitchRow;
 import 'package:cache/sharing/settings_sync.dart';
