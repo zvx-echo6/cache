@@ -237,6 +237,32 @@ void main() {
       await r.dispose(tester);
     });
 
+
+    testWidgets('a region an earlier version adopted from the other device\'s store file is listed once, with the other device\'s; one whose areas are gone is dropped', (tester) async {
+      final r = await _Rig.boot(tester);
+      File('${r.s.dir.path}/regions/.share-id')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('phone1');
+      File('${r.s.dir.path}/$kRegionsAppFile').writeAsStringSync(jsonEncode({
+        'regions': {
+          'area-monaco': {'name': 'Monaco', 'kind': 'area', 'areas': ['a-monaco'], 'routing': false, 'places': false},
+          'area-gone': {'name': 'Gone', 'kind': 'area', 'areas': ['a-nothing'], 'routing': false, 'places': false},
+        },
+      }));
+      peerFile(r, 'peerdev', {'monaco-id': {'name': 'Monaco', 'added': 1000, 'areas': ['a-monaco']}});
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        await again.refresh();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      expect({for (final l in again.local) l.id}, {'monaco-id'}, reason: 'Monaco once, the other device\'s; nothing left as 0 B');
+      final saved = (jsonDecode(File('${r.s.dir.path}/$kRegionsAppFile').readAsStringSync()) as Map)['regions'] as Map;
+      expect(saved, isEmpty, reason: 'both adopted entries were dropped from this device\'s list');
+      again.dispose();
+      await r.dispose(tester);
+    });
+
     testWidgets('files that are not a device\'s share are never read', (tester) async {
       final r = await bootShared(tester);
       final d = Directory('${r.s.dir.path}/regions/regions-share')..createSync(recursive: true);

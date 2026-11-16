@@ -315,13 +315,18 @@ impl Inner {
         Ok(true)
     }
 
-    /// The ids of the areas this device's app lists as its own (`regions-app.json`, beside the layers folder and never synced), or
+    /// The ids of the areas this device's app lists as downloaded here (`regions-app.json`, beside the layers folder and never synced), or
     /// `None` when there is no such list (then nothing says which of two files is this device's).
     fn own_area_ids(&self) -> Option<HashSet<String>> {
         let text = std::fs::read_to_string(self.dir.parent()?.join("regions-app.json")).ok()?;
         let v: Value = serde_json::from_str(&text).ok()?;
         let mut out = HashSet::new();
         for r in v["regions"].as_object()?.values() {
+            // A region of kind "area" is one the app adopted from a layer's list (areas that arrived in a store the device did not
+            // download itself, or map downloads from before regions): it is no evidence that this device downloaded the area.
+            if r["kind"] == "area" {
+                continue;
+            }
             for key in ["areas", "terrain"] {
                 out.extend(r[key].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)));
             }
@@ -416,9 +421,33 @@ impl Inner {
         n
     }
 
+    /// The one-time repair of an earlier recovery's mistake: an area this device's own store holds although the app does not list it as
+    /// downloaded here, and that a linked device's shared copy holds too, is that device's (it came in a store file that was replaced,
+    /// or in a conflict copy that was merged). It is removed from this device's own store (its tiles that no other area covers go with
+    /// it), with no delete record: the other device's copy stays, and is shown and read as before. Nothing is done without the app's
+    /// list. Returns how many areas went.
+    pub fn repair_received_areas(&self) -> usize {
+        let Some(own) = self.own_area_ids() else { return 0 };
+        let layers: Vec<String> = std::fs::read_dir(self.dir.join("store"))
+            .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".sqlite").map(str::to_string)).filter(|l| safe_device(l)).collect())
+            .unwrap_or_default();
+        let mut n = 0;
+        for layer in layers {
+            let Some(store) = self.store_read(&layer) else { continue };
+            let held: HashSet<String> = self.peer_stores(&layer).iter().flat_map(|p| p.store.areas().unwrap_or_default().into_iter().map(|a| a.0)).collect();
+            for (id, _, _) in store.areas().unwrap_or_default() {
+                if !own.contains(&id) && held.contains(&id) && self.delete_areas_inner(&layer, Some(&id)).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
     /// One pass of everything the share needs: conflict copies taken in, peers' deletes applied, own snapshots written.
     pub fn maintain_share(&self, quiet: Duration) -> Maintained {
         let rescued = self.rescue_conflicts();
+        self.repair_received_areas();
         let deleted = self.apply_peer_deletes();
         let mut exported = 0;
         let layers: Vec<String> = std::fs::read_dir(self.dir.join("store"))

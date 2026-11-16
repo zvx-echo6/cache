@@ -193,7 +193,8 @@ def settle(ds, tiles, want=2, tries=15):
         rounds(ds, 1)
         time.sleep(12)
         dumps = [d.call('dump', {'tiles': tiles}) for d in ds]
-        if all(len(snapshots(x)) >= want for x in dumps):
+        lists = lambda x: [f for f in x['regions_files'] if f.startswith('regions-share/') and '.deletes.json' not in f]
+        if all(len(snapshots(x)) >= want and len(lists(x)) >= want for x in dumps):
             return
     say('settle: the snapshots did not all arrive')
     for d in ds:
@@ -372,7 +373,105 @@ def fix_mixed():
         stop_all([a, c])
 
 
-SCENARIOS = {'before-collide': before_collide, 'fix-union': fix_union, 'fix-delete': fix_delete, 'fix-recover': fix_recover, 'fix-mixed': fix_mixed}
+
+def store_areas(d):
+    """The areas in a stopped device's own live store."""
+    import sqlite3
+    c = sqlite3.connect(f'file:{d.dir}/data/layers/store/basemap.sqlite?mode=ro', uri=True)
+    try:
+        return sorted(r[0] for r in c.execute('select id from areas'))
+    finally:
+        c.close()
+
+
+def names_of(dump):
+    return sorted(r['name'] for r in dump['regions'])
+
+
+def fix_recover_theirs():
+    """The 2026-11-15 emulator run: P's live store is the other device's file (P's own is a conflict copy), and the old build adopted
+    the other device's area as its own; then the update, then a delete on the other device."""
+    ev = f'{P}/evidence/fix-recover-theirs'
+    a, b, da, db = collide('fix-recover-theirs', [('A', 'new'), ('B', 'new')])
+    try:
+        a_own = regions_of(da)[IDAHO['id']]['areas']
+        a.stop()
+        import sqlite3
+
+        def holder(d, area):
+            """The store file of device d that holds `area` (the live file or a conflict copy), after folding its log in."""
+            sd = f'{d.dir}/data/layers/store'
+            for f in sorted(os.listdir(sd)):
+                if not f.endswith('.sqlite'):
+                    continue
+                c = sqlite3.connect(f'{sd}/{f}')
+                try:
+                    c.execute('pragma wal_checkpoint(TRUNCATE)')
+                    if area in [r[0] for r in c.execute('select id from areas')]:
+                        return f'{sd}/{f}'
+                finally:
+                    c.close()
+            return None
+
+        st = f'{a.dir}/data/layers/store'
+        b_area = regions_of(db)[ANGUILLA['id']]['areas'][0].split(':')[0]
+        a_file, b_file = holder(a, a_own[0].split(':')[0]), holder(b, b_area)
+        check(a_file is not None and b_file is not None, f'each device\'s own store is somewhere on disk: {a_file} {b_file}')
+        shutil.copy(a_file, '/tmp/a-own.sqlite')
+        shutil.copy(b_file, '/tmp/b-own.sqlite')
+        sd = f'{a.dir}/data/layers/store'
+        for f in os.listdir(sd):
+            if f.startswith('basemap'):
+                os.remove(f'{sd}/{f}')
+        # A's own store becomes the conflict copy and B's file lands as A's live store, as the old build's sync did to P; B keeps its own
+        shutil.copy('/tmp/a-own.sqlite', f'{st}/basemap (conflict, A, 2026-11-16 0521 UTC).sqlite')
+        shutil.copy('/tmp/b-own.sqlite', f'{st}/basemap.sqlite')
+        os.remove('/tmp/a-own.sqlite')
+        os.remove('/tmp/b-own.sqlite')
+        say(f'A\'s live store is now B\'s file; A\'s own areas were {a_own}')
+        # what the old build's restart did on P: it adopted the other device's area as a region of its own (regions-app.json, kind "area")
+        app = f'{a.dir}/data/regions-app.json'
+        j = json.load(open(app))
+        j['regions']['area--63.200_18.150_-63.000_18.280'] = {'name': 'Anguilla box', 'added': 0, 'routing': False, 'places': False, 'areas': [b_area], 'kind': 'area', 'bbox': ANGUILLA['bbox']}
+        json.dump(j, open(app, 'w'))
+        a.restart('fix')
+        a.call('sharing_setup')
+        time.sleep(10)
+        b.restart('fix')
+        b.call('sharing_setup')
+        time.sleep(15)
+        tiles = [tile_for(IDAHO), tile_for(ANGUILLA)]
+        settle([a, b], tiles)
+        da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
+        save(ev, 'after-update', a, da)
+        save(ev, 'after-update', b, db)
+        for who, d in (('A', da), ('B', db)):
+            ns = names_of(d)
+            check(ns.count('Anguilla box') == 1 and ns.count('Idaho box') == 1, f'{who}: each region is listed once: {ns}')
+            check(not d['conflict_files'], f'{who}: no conflict file')
+        check(da['tiles'][tile_for(IDAHO)].get('body', '').startswith('A'), f'A still draws its own region: {da["tiles"][tile_for(IDAHO)]}')
+        say('B deletes its region; A applies it')
+        b.call('delete_region', {'id': ANGUILLA['id']})
+        for _ in range(12):
+            rounds([a, b], 1)
+            time.sleep(10)
+            da, db = a.call('dump', {'tiles': tiles}), b.call('dump', {'tiles': tiles})
+            if 'Anguilla box' not in names_of(da) and da['tiles'][tile_for(ANGUILLA)].get('from') != 'downloaded':
+                break
+        save(ev, 'after-delete', a, da)
+        save(ev, 'after-delete', b, db)
+        for who, d in (('A', da), ('B', db)):
+            check(names_of(d) == ['Idaho box'], f'{who}: only the other region is left, no 0 B row: {names_of(d)}')
+        a.stop()
+        b.stop()
+        ids = store_areas(a)
+        check(ids == [a_own[0].split(':')[0]], f'A\'s own store holds only A\'s own area: {ids}')
+        check(store_areas(b) == [], f'B\'s own store holds nothing after its delete: {store_areas(b)}')
+    finally:
+        stop_all([a, b])
+
+
+SCENARIOS = {'before-collide': before_collide, 'fix-union': fix_union, 'fix-delete': fix_delete, 'fix-recover': fix_recover, 'fix-mixed': fix_mixed, 'fix-recover-theirs': fix_recover_theirs}
 
 if __name__ == '__main__':
     names = sys.argv[1:] or list(SCENARIOS)

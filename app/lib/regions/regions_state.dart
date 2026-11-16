@@ -1864,6 +1864,20 @@ class RegionsState extends ChangeNotifier {
       final peers = sh.readPeers();
       final deletes = sh.readDeletes();
       _peers = [for (final p in peers) if (!deletes.any((d) => d.id == p.id && d.ends(p.added))) p];
+      // A region of kind "area" that an earlier version adopted from a store this device did not download (the other device's file
+      // landed in its live store) is the other device's: it is listed once, with the region that device shares; and one whose areas
+      // are gone everywhere (a delete took them) is not left behind as "0 B".
+      final shared = <String>{for (final p in _peers) ...[...p.areas, ...p.terrain]};
+      final known = maps.engine.ready ? {for (final a in maps.engine.allAreas) a.id} : null;
+      final adopted = [
+        for (final k in _kept.values)
+          if (k.kind == kAreaRegionKind && k.areas.isNotEmpty && (k.areas.every(shared.contains) || (known != null && k.areas.every((a) => !known.contains(a)))))
+            k.id,
+      ];
+      if (adopted.isNotEmpty) {
+        adopted.forEach(_kept.remove);
+        unawaited(_save());
+      }
       final ended = [for (final id in _ownIds) if (deletes.any((d) => d.id == id && d.ends(_kept[id]?.added ?? 0))) id];
       if (ended.isNotEmpty) {
         _applying = true;

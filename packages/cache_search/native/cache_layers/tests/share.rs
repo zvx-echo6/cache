@@ -348,3 +348,58 @@ fn with_no_list_of_its_own_areas_nothing_is_dropped_and_every_copy_is_merged() {
     got.sort();
     assert_eq!(got, ["copy", "live"]);
 }
+
+#[test]
+fn an_area_this_device_holds_only_because_it_arrived_is_removed_once_a_peers_copy_has_it() {
+    let sc = Scratch::new("share-repair");
+    let (a, b) = (device(&sc, "a"), device(&sc, "b"));
+    // A's app lists only "mine" as downloaded here; "theirs" was adopted from a store it did not download (kind "area")
+    std::fs::write(sc.path("regions-app.json"), json!({"regions": {"r": {"areas": ["mine"]}, "area-x": {"kind": "area", "areas": ["theirs"]}}}).to_string()).unwrap();
+    let east = json!({"bbox": [10.0, 10.0, 11.0, 11.0], "minzoom": 1, "maxzoom": 1, "created": 6});
+    hold(&a, "mine", 0, 0, 5);
+    for d in [&a, &b] {
+        let s = d.store_create("basemap").unwrap();
+        s.put_area("theirs", "complete", &east).unwrap();
+        s.put_batch(Table::Tiles, &[(1, 1, 0, b"tile-theirs".to_vec())], "v1").unwrap();
+    }
+    b.maintain_share(NOW);
+    // before B's snapshot is here, nothing can be said of "theirs": it stays
+    assert_eq!(a.repair_received_areas(), 0);
+    sync(&b, &a);
+    assert_eq!(a.repair_received_areas(), 1);
+    let own = Store::open(&a.store_path("basemap"), false).unwrap();
+    let mut got: Vec<String> = own.areas().unwrap().into_iter().map(|x| x.0).collect();
+    got.sort();
+    assert_eq!(got, ["mine"], "A's own store is A's own again");
+    assert_eq!(own.tile_count(), 1);
+    // the other device's copy is read as before, and no delete was written
+    assert_eq!(ids(&a), ["mine", "theirs"]);
+    assert_eq!(tile(&a, 1, 0).unwrap(), b"tile-theirs");
+    a.maintain_share(NOW);
+    sync(&a, &b);
+    assert_eq!(b.maintain_share(NOW).deleted, 0, "nothing of B's was deleted");
+    assert_eq!(ids(&b), ["theirs", "mine"]);
+}
+
+#[test]
+fn an_area_the_app_lists_as_adopted_is_no_evidence_that_the_device_downloaded_it() {
+    let sc = Scratch::new("share-rescue-adopted");
+    let p = device(&sc, "p");
+    // P's app lists Anguilla as downloaded here and Monaco (arrived with the other device's live file) as adopted
+    std::fs::write(sc.path("regions-app.json"), json!({"regions": {"r": {"areas": ["anguilla"]}, "area-m": {"kind": "area", "areas": ["monaco"]}}}).to_string()).unwrap();
+    {
+        let theirs = Store::open(&p.store_path("basemap"), true).unwrap();
+        theirs.put_area("monaco", "complete", &meta(50)).unwrap();
+        theirs.put_batch(Table::Tiles, &[(1, 1, 1, b"monaco".to_vec())], "v1").unwrap();
+    }
+    let own_copy = conflict(&p, "basemap (conflict, Android device, 2026-11-16 0522 UTC).sqlite");
+    {
+        let own = Store::open(&own_copy, true).unwrap();
+        own.put_area("anguilla", "complete", &meta(60)).unwrap();
+        own.put_batch(Table::Tiles, &[(1, 0, 0, b"anguilla".to_vec())], "v1").unwrap();
+        own.checkpoint();
+    }
+    assert_eq!(p.rescue_conflicts(), 1);
+    assert_eq!(ids(&p), ["anguilla"], "the received live file is dropped, not kept because the app adopted its area");
+    assert_eq!(tile(&p, 1, 1), None);
+}
