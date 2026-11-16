@@ -313,7 +313,10 @@ CREATE TABLE addr_streets (
   min_lon REAL NOT NULL,
   max_lon REAL NOT NULL,
   n INTEGER NOT NULL,
-  numbers BLOB NOT NULL
+  numbers BLOB NOT NULL,
+  -- Where the row's numbers came from, when not (only) Overture: "oa:us/id/canyon", comma-joined when several. NULL
+  -- otherwise. Absent from tiles cut before OpenAddresses; the phone's merge names its columns and does not read it.
+  source TEXT
 );
 
 -- Notable places and towns (those with a summary), embedded as "{name}. {summary}". kind is 'place' or 'locality', ref

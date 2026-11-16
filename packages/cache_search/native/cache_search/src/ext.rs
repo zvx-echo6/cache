@@ -7,14 +7,19 @@ use cache_live::{Live, LiveCfg};
 use cache_user::UserStore;
 use cache_video::{Video, VideoCfg};
 use serde::Deserialize;
+use std::sync::Arc;
 
 /// Embeds a search query: the model id and the vector, or None when it cannot.
 type QueryEmbedder = dyn Fn(&str) -> Option<(String, Vec<f32>)>;
 
-/// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite"}`.
+/// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite", "read_only"?: bool}`. `read_only` (default
+/// false) is for a second handle that only lists the saved places (the app's car handle): user.sqlite is opened read-only,
+/// saving and deleting places answer `unsupported`, and the user's map layers and lists are left out.
 #[derive(Debug, Deserialize)]
 pub struct UserCfg {
     pub db_path: String,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Default)]
@@ -40,9 +45,14 @@ pub struct Ext {
     /// The regions engine from the `regions` section: the same one `cs_regions_open` gives for that folder.
     pub regions: Option<std::sync::Arc<cache_regions::Regions>>,
     /// Notebooks from the `notebook` section (`cs_notebook`).
-    pub notebook: Option<cache_notebook::Notebook>,
+    pub notebook: Option<Arc<cache_notebook::Notebook>>,
     /// The saved places and the Places notebooks were brought in step since the notebook was configured (nbplaces.rs).
     pub places_synced: std::sync::atomic::AtomicBool,
+    /// The repeater lists of the older store were turned into notebooks since the notebook was configured (nbrepeaters.rs).
+    pub repeaters_migrated: std::sync::atomic::AtomicBool,
+    /// Test hook for the conversion of repeater lists: 0 runs it whole; 1, 2, 3 make it stop (as an error) before the notebook is
+    /// written, after it is written and before it is read back, and after the read-back before the old list is deleted.
+    pub migrate_stop: std::sync::atomic::AtomicU8,
 }
 
 /// The regions engine as the navigate tool's tile stream: its folder is the one to route on, and a route's tiles are fetched
@@ -130,12 +140,19 @@ impl crate::handle::Handle {
         places: Option<cache_places::PlacesCfg>,
     ) {
         if let Some(u) = user {
-            self.ext.user = Some(UserStore::new(&u.db_path));
-            self.ext.user_db = Some(u.db_path.clone());
-            self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
-            let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
-            *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
-            self.ext.map_data = Some(store);
+            if u.read_only {
+                // no live data and no map layers on such a handle, so nothing else opens the file
+                self.ext.user = Some(UserStore::read_only(&u.db_path));
+                self.set_saved_places(Box::new(UserStore::read_only(&u.db_path)));
+            } else {
+                self.ext.user = Some(UserStore::new(&u.db_path));
+                self.ext.user_db = Some(u.db_path.clone());
+                self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
+                let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
+                *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
+                self.ext.map_data = Some(store);
+                self.ext.plug_repeater_points();
+            }
         }
         if let Some(l) = live {
             // the handle's own engine reads the keys the host pushed (cs_live_set_key) for a fetch whose request has none
@@ -269,9 +286,22 @@ impl Ext {
     pub fn configure_notebook(&mut self, cfg: Option<cache_notebook::NotebookCfg>) {
         if let Some(c) = cfg {
             if self.notebook.as_ref().map(|n| n.cfg() != &c).unwrap_or(true) {
-                self.notebook = Some(cache_notebook::Notebook::new(c));
+                self.notebook = Some(Arc::new(cache_notebook::Notebook::new(c)));
                 self.places_synced.store(false, std::sync::atomic::Ordering::SeqCst);
+                self.repeaters_migrated.store(false, std::sync::atomic::Ordering::SeqCst);
             }
+        }
+        self.plug_repeater_points();
+    }
+
+    /// Turns the repeater lists of the older store into notebooks, once per opened notebook. A list that cannot be converted
+    /// stays as it is (and is logged).
+    pub(crate) fn migrate_repeaters_once(&self) {
+        if self.notebook.is_none() || self.repeaters_migrated.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        if let Err(e) = self.migrate_repeater_lists() {
+            eprintln!("cache_search: a repeater list was not turned into a notebook: {}", e.message);
         }
     }
 
@@ -292,6 +322,7 @@ impl Ext {
     }
 
     pub fn userlayers_list(&self) -> Result<String> {
+        self.migrate_repeaters_once();
         self.map_data()?.list_json().map_err(user_err)
     }
 
@@ -391,6 +422,14 @@ impl Ext {
 
     pub fn layers_refresh(&self) -> Result<String> {
         self.layers()?.inner.refresh().map(|v| v.to_string()).map_err(layers_err)
+    }
+
+    /// `cs_layers_refresh_start`: `cs_layers_refresh` on a thread of its own, as a job whose "result" is what `cs_layers_refresh`
+    /// answers (a failed refresh makes it `failed` with the same error). The catalogue's network wait (retries, long timeouts) never
+    /// holds the caller: saved places, live data and searches are answered meanwhile. The handle's catalogue is updated in place.
+    pub fn layers_refresh_job(&self) -> Result<crate::job::Job> {
+        let inner = self.layers()?.inner.clone();
+        crate::job::Job::spawn_result("cs-layers-refresh", move |_cancelled| inner.refresh().map_err(layers_err))
     }
 
     pub fn layers_save(&self, def_json: &str) -> Result<String> {
@@ -600,7 +639,8 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Array(a)) if a.len() <= 8 => a.iter().enumerate().map(|(i, e)| self.map_end(Some(e), &format!("via[{i}]"))).collect::<Result<Vec<_>>>()?,
             Some(_) => return Err(Error::bad_json("via: must be an array of at most 8 places")),
         };
-        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives };
+        let from_heading_deg = o.get("from").and_then(|f| f.get("heading_deg")).and_then(serde_json::Value::as_f64).filter(|h| h.is_finite() && (0.0..=360.0).contains(h));
+        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives, from_heading_deg };
         let (out, active) = cache_navigate::map::route(nav, &req).map_err(tool_err)?;
         self.ext.routes.add(&active);
         Ok(out.to_string())

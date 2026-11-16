@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../car/car_voice_access.dart';
+import '../car/car_voice_card.dart';
 import '../desktop/desktop.dart';
 import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
@@ -17,6 +19,7 @@ import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../update/update_ui.dart';
+import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart, unbroken;
 import 'setup_card.dart';
@@ -46,7 +49,16 @@ class HomeScreen extends StatefulWidget {
     this.onChooseModel,
     this.discover,
     this.onOpenDiscover,
+    this.searchFor,
+    this.carVoice,
   });
+
+  /// Voice search from the car: its one-time card is shown at the top of Home while [CarVoiceAccess.showCard]; null leaves it out.
+  final CarVoiceAccess? carVoice;
+
+  /// A search asked for from elsewhere (a step line in Ask): the box takes the words and searches them once, then the value goes
+  /// back to null.
+  final ValueNotifier<String?>? searchFor;
 
   /// Discover: once its first run is done, its card takes the Set up card's place (the same Home block); null keeps Set up Cache.
   final DiscoverState? discover;
@@ -101,12 +113,17 @@ class _HomeScreenState extends State<HomeScreen> {
   List<AppSearchResult>? _results;
   int _generation = 0;
 
+  /// True while a module is still searching: Home then shows what has arrived, with a thin bar, and not "Nothing found".
+  bool _searching = false;
+
   LayoutState get layout => widget.layout;
 
   @override
   void initState() {
     super.initState();
     homeSearchRequests.addListener(_focusSearch);
+    widget.searchFor?.addListener(_searchForRequested);
+    if (widget.searchFor?.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _searchForRequested());
     // The cursor is in the search box: the search model loads ahead of the first search.
     _focus.addListener(() {
       if (_focus.hasFocus) SearchModel.aboutToSearch();
@@ -118,8 +135,18 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _focus.requestFocus();
   });
 
+  /// The words another screen asked Home to search: typed into the box and searched now.
+  void _searchForRequested() {
+    final text = widget.searchFor?.value;
+    if (text == null || !mounted) return;
+    widget.searchFor!.value = null;
+    _query.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    _submit(text);
+  }
+
   @override
   void dispose() {
+    widget.searchFor?.removeListener(_searchForRequested);
     homeSearchRequests.removeListener(_focusSearch);
     _debounce?.cancel();
     _query.dispose();
@@ -134,18 +161,54 @@ class _HomeScreenState extends State<HomeScreen> {
   void _changed(String text) {
     _debounce?.cancel();
     final gen = ++_generation;
-    setState(() => _results = null);
-    if (text.trim().isEmpty) return;
-    _debounce = Timer(const Duration(milliseconds: 250), () async {
-      final found = await widget.search?.search(text) ?? const <AppSearchResult>[];
-      if (mounted && gen == _generation) setState(() => _results = found);
+    setState(() {
+      _results = null;
+      _searching = false;
     });
+    if (text.trim().isEmpty) return;
+    _debounce = Timer(const Duration(milliseconds: 250), () => _run(text, gen));
+  }
+
+  /// One search: each module's results show as they arrive (a slow module does not hide a fast one's); the search is over when
+  /// every module has answered or run out of time.
+  Future<void> _run(String text, int gen) async {
+    final search = widget.search;
+    if (search == null) {
+      setState(() => _results = const []);
+      return;
+    }
+    setState(() => _searching = true);
+    final found = await search.search(text, onPartial: (soFar) {
+      if (mounted && gen == _generation) setState(() => _results = soFar);
+    });
+    if (mounted && gen == _generation) {
+      setState(() {
+        _results = found;
+        _searching = false;
+      });
+    }
   }
 
   void _clear() {
     _query.clear();
     _focus.unfocus();
     _changed('');
+  }
+
+  /// Enter in the search box: the search runs now (not after the typing pause) and the keyboard closes; the text and the results
+  /// stay.
+  void _submit(String text) {
+    _focus.unfocus();
+    _debounce?.cancel();
+    final gen = ++_generation;
+    if (text.trim().isEmpty) {
+      setState(() {
+        _results = null;
+        _searching = false;
+      });
+      return;
+    }
+    unawaited(_run(text, gen));
   }
 
   void _ask() {
@@ -175,6 +238,22 @@ class _HomeScreenState extends State<HomeScreen> {
       content: Text('${_discoverCard ? 'Discover' : 'Set up Cache'} hidden. Bring it back in Edit Home.'),
       action: SnackBarAction(label: 'Undo', onPressed: () => widget.layout.setBlockOn(HomeBlock.setup, true)),
     ));
+  }
+
+  /// The one-time card that asks whether to allow voice search from the car (iPhone, after a car was connected). Nothing when it
+  /// is not due; null [HomeScreen.carVoice] draws nothing at all.
+  Widget _carVoiceCard({required bool typing}) {
+    final access = widget.carVoice;
+    if (access == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: access,
+      builder: (context, _) => typing || !access.showCard
+          ? const SizedBox.shrink()
+          : Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: CarVoiceCard(onAllow: () => unawaited(access.allowFromCard()), onNotNow: access.dismissCard),
+            ),
+    );
   }
 
   @override
@@ -255,6 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 key: const ValueKey('home-two-columns'),
                 padding: padding,
                 children: [
+                  _carVoiceCard(typing: false),
                   if (widget.updates != null) UpdateBanner(updates: widget.updates!),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -271,6 +351,9 @@ class _HomeScreenState extends State<HomeScreen> {
             return ListView(
               padding: padding,
               children: [
+                // The voice search card from the car: the first thing on Home, and a slot that stays while typing (empty) for the
+                // same reason as the banner's.
+                _carVoiceCard(typing: typing),
                 // The banner's slot stays while typing (empty), so the children below keep their places: dropping it shifted the
                 // search box one place up, which made a new text field and closed the keyboard at the first letter typed.
                 if (widget.updates != null) typing ? const SizedBox.shrink() : UpdateBanner(updates: widget.updates!),
@@ -291,10 +374,10 @@ class _HomeScreenState extends State<HomeScreen> {
     controller: _query,
     focusNode: _focus,
     onChanged: _changed,
-    // Enter asks Cache: the keyboard's action key is the send key. Search only (no model): the results show as you type, and
-    // the key is the keyboard's search key.
-    onSubmitted: widget.askOn ? (_) => _ask() : null,
-    textInputAction: widget.askOn ? TextInputAction.send : TextInputAction.search,
+    // Enter searches (owner, 2026-11-13): the results, which show as you type, are found at once and the keyboard closes so all
+    // of them can be seen. It never asks Cache: asking is the "Ask Cache" row of the results, or Ask itself.
+    onSubmitted: _submit,
+    textInputAction: TextInputAction.search,
     style: TextStyle(fontSize: 15, color: k.text),
     decoration: InputDecoration(
       hintText: widget.askOn ? 'Search Cache or ask anything' : 'Search Cache',
@@ -361,10 +444,12 @@ class _HomeScreenState extends State<HomeScreen> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 14),
             ),
-            trailing: Text('Enter', style: TextStyle(fontSize: 12, color: k.secondary)),
+            // no "Enter" hint: Enter searches; this row is the way to ask (owner, 2026-11-13)
             onTap: _ask,
           ),
-          if (results != null && results.isEmpty && !widget.askOn)
+          if (_searching && (results == null || results.isEmpty))
+            const SizedBox.shrink()
+          else if (results != null && results.isEmpty && !widget.askOn)
             _nothingOnDevice(k)
           else if (results != null && results.isEmpty)
             row(
@@ -382,6 +467,8 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => _open(r),
             ),
           ],
+          if (_searching)
+            LinearProgressIndicator(key: const ValueKey('search-searching'), minHeight: 2, color: k.accent, backgroundColor: k.surface),
         ],
       ),
     );
@@ -589,7 +676,7 @@ String homeConditionsLine(HomeWeather h) {
 /// The one Weather and alerts card: a weather icon and the temperature in large type, the conditions and the day's high and low, and
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it
 /// says so beside a tick, never in words alone.
-class _WeatherCard extends StatelessWidget {
+class _WeatherCard extends StatefulWidget {
   const _WeatherCard({required this.weather, this.onTap, this.turnOn, this.onOpenSettings});
 
   /// "Turn on" when every source is off.
@@ -600,6 +687,24 @@ class _WeatherCard extends StatelessWidget {
 
   /// Shown as "Turn on weather" while weather is not set up.
   final WeatherTurnOn? turnOn;
+
+  @override
+  State<_WeatherCard> createState() => _WeatherCardState();
+}
+
+class _WeatherCardState extends State<_WeatherCard> {
+  WeatherState? get weather => widget.weather;
+  VoidCallback? get onTap => widget.onTap;
+  WeatherTurnOn? get turnOn => widget.turnOn;
+  VoidCallback? get onOpenSettings => widget.onOpenSettings;
+
+  @override
+  void initState() {
+    super.initState();
+    // The card is shown: an update that is due runs (due-checked, so cheap); the card's own lines show it.
+    // (after this build: it tells its listeners, which must not happen while a frame is built)
+    if (weather != null) unawaited(Future.microtask(() => weather!.updateIfDue(kBackgroundEvery)));
+  }
 
   Future<(HomeWeather, bool)> _read(WeatherState w) async => (await w.homeCard(), turnOn != null && await w.needsTurnOn());
 
@@ -622,11 +727,25 @@ class _WeatherCard extends StatelessWidget {
               ? (w.homeCardNow() ?? const HomeWeather(message: '…'))
               : (snap.connectionState == ConnectionState.done ? earlier : w.homeCardAsOfNow(earlier));
           final Widget? action;
-          if (h.off && onOpenSettings != null) {
+          if (h.hereOff) {
+            // The one state where weather does not work: one tap watches the location again, right here.
+            action = Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton(key: const ValueKey('weather-watch-here'), onPressed: () => unawaited(w.watchHereAgain()), child: const Text('Watch my location')),
+            );
+          } else if (h.off && onOpenSettings != null) {
             action = Align(
               alignment: Alignment.centerLeft,
               child: FilledButton(key: const ValueKey('weather-off-turn-on'), onPressed: onOpenSettings, child: const Text('Turn on')),
             );
+          } else if (w.waitingForPosition) {
+            // The position is not known yet: without the location permission one tap asks for it; with it, the fix is on its way.
+            action = t != null && t.lacksLocationPermission
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton(key: const ValueKey('weather-use-location'), onPressed: () => unawaited(useMyLocation(context, t)), child: const Text('Use my location')),
+                  )
+                : null;
           } else {
             action = t != null && snap.data?.$2 == true ? WeatherTurnOnButtons(turnOn: t, secondary: false) : null;
           }

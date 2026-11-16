@@ -53,22 +53,29 @@ class SearchCore {
       ];
 
   /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  /// The lines the core wrote about how long its last open took, for the app's log (empty from an older core).
+  Future<List<String>> openTimings() async => [for (final t in await _call('openTimings') as List) t as String];
+
   Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
         for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];
 
-  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
+  Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) async =>
       SearchResponse.fromJson(((await _call('search', {
         'query': query,
         'k': k,
         'offset': offset,
         'sources': sources,
         'queryVector': queryVector?.toJson(),
+        'meaningMs': ?meaningLimit?.inMilliseconds,
       })) as Map)
           .cast<String, dynamic>());
 
   Future<ReadResult> read(String address, {int maxChars = 6000}) async =>
       ReadResult.fromJson(((await _call('read', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
+
+  Future<LibraryDocument> readDocument(String address, {int maxChars = 200000}) async =>
+      LibraryDocument.fromJson(((await _call('readDocument', {'address': address, 'maxChars': maxChars})) as Map).cast<String, dynamic>());
 
   Future<ZimBytes> zimGet(String address) async {
     final r = await _call('zimGet', {'address': address}) as List;
@@ -84,6 +91,13 @@ class SearchCore {
             error: (e.value as Map)['error'] as String?,
           ),
       };
+
+  /// Cache Server only: the Catalog's Pause and Resume for the server's index work. `paused` true pauses, false resumes, null only
+  /// reads. `busy` is whether there is index work (running, waiting, or held by the pause).
+  Future<({bool paused, bool busy})> indexPause([bool? paused]) async {
+    final r = (await _call('index.pause', {'paused': ?paused})) as Map;
+    return (paused: r['paused'] == true, busy: r['busy'] == true);
+  }
 
   Future<String> zimMainPage(String zimId) async => (await _call('zimMainPage', {'zimId': zimId})) as String;
 
@@ -256,7 +270,7 @@ class SearchCore {
       } on CacheSearchException catch (e) {
         if (!(e.code == 'internal' && e.message.startsWith('Unknown call'))) rethrow;
       }
-      if (id is int) return _liveJobResult(id);
+      if (id is int) return _jobResult(id, 'The live fetch');
       _noLiveJob = true;
     }
     return _map('liveFetch', {'request': request});
@@ -264,7 +278,8 @@ class SearchCore {
 
   bool _noLiveJob = false;
 
-  Future<Map<String, dynamic>> _liveJobResult(int id) async {
+  /// The "result" of a job that runs one of the handle's long calls on a thread of its own; [what] names it in an error.
+  Future<Map<String, dynamic>> _jobResult(int id, String what) async {
     final job = CoreJobHandle._(this, id);
     try {
       var wait = const Duration(milliseconds: 40);
@@ -275,10 +290,10 @@ class SearchCore {
             await Future<void>.delayed(wait);
             if (wait < const Duration(milliseconds: 320)) wait *= 2;
           case JobState.done:
-            return p.result ?? (throw const CacheSearchException('internal', 'The live fetch gave no answer'));
+            return p.result ?? (throw CacheSearchException('internal', '$what gave no answer'));
           case JobState.cancelled:
           case JobState.failed:
-            throw CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'The live fetch stopped');
+            throw CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? '$what stopped');
         }
       }
     } finally {
@@ -303,7 +318,25 @@ class SearchCore {
 
   /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache; [arg]
   /// is that call's one string (see cache_search.h).
-  Future<Map<String, dynamic>> layers(String op, [String? arg]) => _map('layers', {'op': op, 'arg': arg});
+  ///
+  /// refresh runs as a job on a thread of the core's own (cs_layers_refresh_start) and is polled: the catalogue's network wait
+  /// (retries, long timeouts; once an hour across a suspension) held the core's one worker at every start, and saved places, live
+  /// data and searches waited behind it. A core (or Cache Server helper) without the call refreshes on the worker as before.
+  Future<Map<String, dynamic>> layers(String op, [String? arg]) async {
+    if (op == 'refresh' && !_noLayersJob) {
+      Object? id;
+      try {
+        id = await _call('layersRefreshStart');
+      } on CacheSearchException catch (e) {
+        if (!(e.code == 'internal' && e.message.startsWith('Unknown call'))) rethrow;
+      }
+      if (id is int) return _jobResult(id, 'The layer catalogue refresh');
+      _noLayersJob = true;
+    }
+    return _map('layers', {'op': op, 'arg': arg});
+  }
+
+  bool _noLayersJob = false;
 
   /// Starts a long job: kind "index_zim" with {"zim_path","index_dir","heap_mb"} and so on (see cache_search.h).
   Future<CoreJobHandle> startJob(String kind, Map<String, dynamic> params) async =>

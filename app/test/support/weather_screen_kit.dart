@@ -71,13 +71,18 @@ Map<String, String> screenCatalogue() {
   return buildCatalogue(connectors: connectors, definitions: definitions);
 }
 
-/// Makes [screenCatalogue] the rig's source list and switches the sources [on] on (by id).
+/// Makes [screenCatalogue] the rig's source list and switches exactly the sources [on] on (by id). Weather always works, so the
+/// defaults are on at the rig's start; they are switched off here after [on] is on (an empty [on] cannot stay empty).
+
 Future<void> useScreenSources(WidgetTester tester, SettingsRig r, Iterable<String> on) async {
   r.web.files.clear();
   r.web.serve('https://data.cached.info/connectors/', screenCatalogue());
   await tester.runAsync(() async {
     await r.weather.refreshCatalogues();
     await r.weather.setSourcesOn([for (final id in on) r.weather.sourceById(id)!], true);
+    for (final c in r.weather.enabledSources.toList()) {
+      if (!on.contains(c.id)) await r.weather.setSourceOn(c, false);
+    }
   });
 }
 

@@ -42,7 +42,7 @@ home-shortcut-menu | Home with a shortcut held: "Move earlier", "Move later", "R
 key-sheet | The key sheet opened from "Get key" on "Satellite fire hotspots": the provider link, the Key field and "Check and save"
 layers-sheet | Maps with the layers sheet open over the map: layer switches with their state lines and "Opacity" (with two overlays on, "Show my position", "Download a region" and "Get more layers" are further down the sheet, out of the picture)
 library-own | Library > Add to Library > Your own library: "From a file on this phone", "From a download link" and "Get a blank library template"
-log-editor | New Log notebook: name, "Add field" with a number field "Run time" (unit min) and a yes/no field, "Due again" and "Create"
+log-editor | New Log notebook: name, "Due again", "Private" and "Create" (a notebook keeps the fields it is made with: no field editor)
 log-quick-add | The quick add form of the Generator test log with last values filled and "Save"
 map-measure | The map measuring: dashed line with three points, the running total bar, "Undo" and "Done"
 map-notebook-ring | The map ring after Save: the notebook ring with five notebooks, most used first, and "More"

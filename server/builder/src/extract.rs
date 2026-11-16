@@ -79,6 +79,9 @@ pub struct Extracted {
     pub year: Option<u32>,
     /// Typical resolution of the page images, in pixels per inch (the median over the pages that have a sizeable image).
     pub ppi: Option<u32>,
+    /// 0-based pages whose text is OCR output (see `ocr`): they had no text layer, so their blocks were replaced by what Tesseract read.
+    /// Empty for a plain extraction.
+    pub ocr_pages: Vec<usize>,
 }
 
 /// The extractor's name and version, recorded in every pack.
@@ -123,7 +126,7 @@ pub fn extract_pdf(bytes: &[u8]) -> Result<Extracted> {
     }
     ppis.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let ppi = ppis.get(ppis.len() / 2).map(|p| p.round() as u32);
-    Ok(Extracted { title, pages, year, ppi })
+    Ok(Extracted { title, pages, year, ppi, ocr_pages: Vec::new() })
 }
 
 /// The year in a PDF date ("D:20190512..." or "2019-05-12...").
@@ -133,7 +136,7 @@ fn year_of(date: &str) -> Option<u32> {
     (1800..=2100).contains(&y).then_some(y)
 }
 
-fn extract_page(pdf: &PdfDocument, i: usize, ppis: &mut Vec<f32>) -> Result<RawPage> {
+pub(crate) fn extract_page(pdf: &PdfDocument, i: usize, ppis: &mut Vec<f32>) -> Result<RawPage> {
     let page = pdf.load_page(i as i32).map_err(|e| Error::ctx("loading a page", e))?;
     let bounds = page.bounds().map_err(|e| Error::ctx("page size", e))?;
     // Dehyphenate on; PRESERVE_LIGATURES left off so ligatures come out as letters; images kept so no-text pages that
@@ -213,7 +216,7 @@ fn extract_page(pdf: &PdfDocument, i: usize, ppis: &mut Vec<f32>) -> Result<RawP
 // The child process that reads a PDF (see `isolate`) hands the extraction back as bytes. A hand-written little-endian layout rather than
 // JSON: every f32 comes back bit for bit (NaN and infinity included), so the output is identical to an in-process extraction.
 
-const WIRE_MAGIC: &[u8; 4] = b"CEX1";
+const WIRE_MAGIC: &[u8; 4] = b"CEX2";
 
 fn put_u32(out: &mut Vec<u8>, n: usize) {
     out.extend_from_slice(&(n as u32).to_le_bytes());
@@ -242,6 +245,10 @@ impl Extracted {
         }
         for opt in [self.year, self.ppi] {
             o.extend_from_slice(&opt.map_or(0u64, |v| 1 << 32 | v as u64).to_le_bytes());
+        }
+        put_u32(&mut o, self.ocr_pages.len());
+        for i in &self.ocr_pages {
+            o.extend_from_slice(&(*i as u64).to_le_bytes());
         }
         put_u32(&mut o, self.pages.len());
         for p in &self.pages {
@@ -316,6 +323,11 @@ impl Extracted {
         }
         let title = if r.u8()? == 1 { Some(r.str()?) } else { None };
         let (year, ppi) = (r.opt_u32()?, r.opt_u32()?);
+        let nocr = r.count(8)?;
+        let mut ocr_pages = Vec::with_capacity(nocr);
+        for _ in 0..nocr {
+            ocr_pages.push(r.u64()?);
+        }
         let np = r.count(24)?;
         let mut pages = Vec::with_capacity(np);
         for _ in 0..np {
@@ -342,7 +354,7 @@ impl Extracted {
         if !r.0.is_empty() {
             return Err(Error::new("the extraction has extra bytes"));
         }
-        Ok(Extracted { title, pages, year, ppi })
+        Ok(Extracted { title, pages, year, ppi, ocr_pages })
     }
 }
 

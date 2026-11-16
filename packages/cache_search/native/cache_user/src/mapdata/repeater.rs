@@ -145,6 +145,16 @@ impl Repeater {
         }
     }
 
+    /// The list gives the offset's direction but not its amount (a KML pin), or a split without its transmit frequency.
+    pub fn offset_is_partial(&self) -> bool {
+        matches!((self.duplex, self.offset_hz), (Some(Duplex::Plus | Duplex::Minus | Duplex::Split), None))
+    }
+
+    /// The list gives the tone's frequency but not how it is used (a KML pin).
+    pub fn tone_is_partial(&self) -> bool {
+        matches!(self.tone, Tone::Stated(_))
+    }
+
     pub fn tone_text(&self) -> String {
         match &self.tone {
             Tone::None => "none".into(),

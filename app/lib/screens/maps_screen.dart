@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:cache_search/cache_search.dart' show MapPlace, MapRoute;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../location/coords.dart';
@@ -13,6 +15,8 @@ import '../location/location_web_ui.dart';
 import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
+import '../maps/map_tap.dart';
+import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
@@ -20,7 +24,11 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/vehicle_arrow.dart';
+import '../platform.dart' as plat;
 import '../maps/ui/map_widgets.dart';
+import '../platform/app_log.dart' show LogLevel, appLog;
+import '../platform/phone_window.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
@@ -28,6 +36,9 @@ import '../nav/elevation/route_elevation.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
+import '../nav/overview/route_snapshotter.dart';
+import '../car/phone_drive.dart';
+import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
 import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
@@ -45,7 +56,9 @@ import '../layout/adaptive.dart' show kMapSideWidth, kSideCardWidth, showFittedS
 import '../nav/ui/place_card.dart';
 import '../maps/ui/repeater_card.dart';
 import '../nav/ui/route_panel.dart';
+import '../nav/ui/route_steps.dart';
 import '../nav/ui/search_panel.dart';
+import '../maps/ui/map_overlay.dart';
 import '../regions/regions_state.dart';
 import '../theme.dart';
 
@@ -158,8 +171,15 @@ Rect routeFitRect({required Size map, required MapCovers covers, required double
   return Rect.fromLTRB(left, top, math.min(map.width, math.max(best.right, left + kRouteFitLeast)), math.min(map.height, math.max(best.bottom, top + kRouteFitLeast)));
 }
 
+/// Where on a [map] with [covers] over it a spot brought into view goes: the middle of the larger free rectangle ([routeFitRect] with
+/// no span to fit), so the header, the buttons and the panel are never over it. The map's middle with nothing over the map.
+Offset spotAnchor(Size map, MapCovers? covers) {
+  if (covers == null || covers.isEmpty) return map.center(Offset.zero);
+  return routeFitRect(map: map, covers: covers, spanX: 1, spanY: 1).center;
+}
+
 /// Something drawn at an end of a route shown before starting, as a disc on the screen: where its middle is, and how far it
-/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, with its heading marker).
+/// reaches from there in points, whatever the zoom (the chosen place's pin; the position dot, or the arrow once a heading is known).
 class RouteEndMark {
   const RouteEndMark({required this.lat, required this.lon, required this.reach});
 
@@ -239,6 +259,68 @@ double _mercatorY(double lat) {
   return (1 - math.log(math.tan(l) + 1 / math.cos(l)) / math.pi) / 2;
 }
 
+/// The Places notebook entry a place card's [place] is, among the notebook pins on the map ([pins]): the entry a notebook pin's
+/// place was made from (`notebook:<entry>`), the entry of the saved place with [savedKey], or an entry of the same name at the same
+/// spot. Null when it is none of them (or its entry is not on the map).
+NbEntry? notebookEntryFor(MapPlace place, List<NbEntry> pins, {String? savedKey}) {
+  if (place.isNotebookPlace) {
+    final id = place.id.substring('notebook:'.length);
+    return pins.where((e) => e.id == id).firstOrNull;
+  }
+  if (savedKey != null && savedKey.isNotEmpty) {
+    final e = pins.where((e) => e.place?.key == savedKey).firstOrNull;
+    if (e != null) return e;
+  }
+  return pins
+      .where((e) => e.place != null && (e.place!.lat - place.lat).abs() < 1e-6 && (e.place!.lon - place.lon).abs() < 1e-6 && entryTitle(e) == place.name)
+      .firstOrNull;
+}
+
+/// How far from a route's line, in points on the screen, a tap still counts as on it (the line is a few points wide).
+const double kRouteTapReach = 16;
+
+/// The metres one point of the map covers at [lat] and [zoom] (the map's world is 512 points wide at zoom 0).
+double metresPerPoint(double lat, double zoom) => 40075016.686 * math.cos(lat * math.pi / 180) / (512 * math.pow(2, zoom));
+
+/// The metres from ([lat], [lon]) to the nearest point of the line [pts] (flat-earth, which is close enough at a tap's reach).
+double metresToLine(List<GeoPoint> pts, double lat, double lon) {
+  if (pts.isEmpty) return double.infinity;
+  final kx = 111320 * math.cos(lat * math.pi / 180), ky = 110574.0;
+  (double, double) at(GeoPoint p) => ((p.lon - lon) * kx, (p.lat - lat) * ky);
+  var best = double.infinity;
+  var (ax, ay) = at(pts.first);
+  if (pts.length == 1) return math.sqrt(ax * ax + ay * ay);
+  for (final p in pts.skip(1)) {
+    final (bx, by) = at(p);
+    final dx = bx - ax, dy = by - ay;
+    final len = dx * dx + dy * dy;
+    final t = len <= 0 ? 0.0 : ((-ax * dx - ay * dy) / len).clamp(0.0, 1.0);
+    final x = ax + t * dx, y = ay + t * dy;
+    best = math.min(best, math.sqrt(x * x + y * y));
+    (ax, ay) = (bx, by);
+  }
+  return best;
+}
+
+/// The route whose grey line a tap at ([lat], [lon]) is on in the route preview: the nearest of the routes other than the
+/// [selected] one, within [kRouteTapReach] points, and nearer than the selected route's own line (where the lines run together a
+/// tap keeps the route chosen). Null when the tap is on none.
+int? altRouteAt(List<MapRoute> routes, int selected, double lat, double lon, {required double metresPerPoint}) {
+  final reach = kRouteTapReach * metresPerPoint;
+  final own = selected >= 0 && selected < routes.length ? metresToLine(routes[selected].points, lat, lon) : double.infinity;
+  int? best;
+  var bestM = double.infinity;
+  for (var i = 0; i < routes.length; i++) {
+    if (i == selected) continue;
+    final d = metresToLine(routes[i].points, lat, lon);
+    if (d <= reach && d < own && d < bestM) {
+      best = i;
+      bestM = d;
+    }
+  }
+  return best;
+}
+
 /// How many times a route is fitted again by itself as what covers the map changes under it (its elevation chart arriving, the
 /// position chip appearing), before the view is left as it is.
 const int kRouteRefits = 4;
@@ -247,12 +329,20 @@ const int kRouteRefits = 4;
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump});
 
   /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
   /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
   @visibleForTesting
   final double? imagePixelRatio;
+
+  /// The car link of the drive screen: while a car screen is connected and guiding, this tab shows the drive screen (the list of
+  /// turns, the route mini map and the elevation) instead of the map, and tells the car so ([PhoneDriveSignal]). Null: no car
+  /// screen on this platform, the tab is always the map.
+  final PhoneDrive? drive;
+
+  /// This tab is the one on screen (the app's Maps tab is selected). The drive screen counts as showing only then.
+  final bool active;
 
   /// The route's elevation profile; null: worked out from the layer engine's elevation tiles (tests give their own).
   final RouteElevation? elevation;
@@ -263,8 +353,18 @@ class MapsScreen extends StatefulWidget {
   /// "Open in notebook" on a repeater's card: its list notebook at its row; null leaves the button out.
   final void Function(Repeater repeater)? onOpenRepeaterList;
 
+  /// A notebook under the layer sheet's "My layers", and Show after its Add from a file: that notebook; null: the rows only switch.
+  final void Function(String notebookId)? onOpenNotebook;
+
+  /// A repeater list under "My layers": the list; null: the row only switches.
+  final void Function(String listId)? onOpenList;
+
   /// "Read about it" on a place card (the place's Wikipedia article); null leaves it out.
   final PlaceAbout? about;
+
+  /// Set while a jump here from another screen is remembered ([Shell]): Back, with nothing of the map's own to close, calls it
+  /// (it returns to that screen) instead of leaving. Null: Back is as before.
+  final VoidCallback? onBackToJump;
 
   /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
   final NotebookState? notebooks;
@@ -294,7 +394,7 @@ class MapsScreen extends StatefulWidget {
   State<MapsScreen> createState() => _MapsScreenState();
 }
 
-class _MapsScreenState extends State<MapsScreen> {
+class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateMixin {
   MapLibreMapController? _controller;
   String? _initialStyle;
   String? _glyphs;
@@ -313,10 +413,36 @@ class _MapsScreenState extends State<MapsScreen> {
   /// The map's size on the screen (for where the position sits while guiding).
   Size _mapSize = Size.zero;
 
+  // ---- the camera while guiding (lib/nav/guidance_camera.dart) ----
+
+  /// The padding (content insets) the map was last given; null when not known: a route fitted into view gives the map that
+  /// fit's padding on Android, and it stays until changed. Every camera move that works out its own centre sets it to none first.
+  EdgeInsets? _camPad;
+
+  /// The glide from one fix to the next while guiding ([GuideGlide]), driven by [_glideTicker]; where the map shows the phone
+  /// now ([_shownPose]); when the last fix came; the zoom of the glide; a camera move still on its way to the map.
+  /// Made at the first glide (never in [dispose], where the screen can no longer look up the ticker mode above it).
+  Ticker? _glideTicker;
+  GuideGlide? _glide;
+  Duration _glideStart = Duration.zero;
+  Duration _glideClock = Duration.zero;
+  GuidePose? _shownPose;
+  DateTime? _lastFixAt;
+  double _glideZoom = 16;
+  bool _glideBusy = false;
+
+  /// The lowest the turn banner has reached during this guidance at this map size: the banner grows and shrinks with the turn
+  /// it shows (a second line, lane arrows), and the position must not move with it at each turn.
+  double? _bannerFoot;
+  Size? _bannerFootFor;
+
+  /// Guidance was on at the last change of the navigation state (Start is the change that turns it on).
+  bool _wasGuiding = false;
+
   // ---- guidance: the elevation panel and the route mini map ----
 
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
-  RouteSnapshotter get _snapshotter => widget.snapshotter ?? const ChannelRouteSnapshotter();
+  RouteSnapshotter get _snapshotter => widget.snapshotter ?? platformRouteSnapshotter();
 
   /// The style the live map has (the whole-route picture is rendered from it).
   String? _styleJson;
@@ -358,13 +484,177 @@ class _MapsScreenState extends State<MapsScreen> {
   int _refits = 0;
   bool _fitTouched = false;
 
+  /// Stepping through the route's turns before Start: the turn the step card shows (null: the card is closed and the panel
+  /// shows the routes), and the route it was opened on ([_stepKey]); another route, way of travel or a new set of routes closes it.
+  int? _step;
+  String? _stepFor;
+
   /// Where the corner inset is in the screen's stack (the live map goes there while swapped), and the stack's size.
   Rect? _insetRect;
   Size _stackSize = Size.zero;
 
   /// Drawing an area to download as a region.
   bool _drawing = false;
-  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork(), onStateChange: _onLifecycle);
+
+  // ---- the drive screen (a car screen is connected and guiding) ----
+
+  /// Cache is in front and the phone is unlocked (the app is resumed; a locked or backgrounded phone is not).
+  bool _inFront = (WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed) == AppLifecycleState.resumed;
+
+  /// The last build drew the drive screen, and this screen is in front of the route it is on.
+  bool _driveBuilt = false;
+  bool _routeCurrent = true;
+
+  /// The drive screen replaces the map while a car screen is connected and guiding.
+  bool get _driveOn => widget.drive != null && widget.drive!.carConnected.value && nav.guiding;
+
+  /// A row or the route mini map of the drive screen asked to show something on the map ([NavState.showOnMap]): the map is on the
+  /// tab instead of the drive screen until Back, until the Maps tab is left, or until the drive screen would go anyway (the car
+  /// leaves, guidance ends). [_followBeforePeek]: how the map followed the position before (it comes back with the drive screen).
+  bool _peek = false;
+  FollowMode? _followBeforePeek;
+
+  /// The drive screen is what the tab shows.
+  bool get _driveShown => _driveOn && !_peek;
+
+  void _onLifecycle(AppLifecycleState s) {
+    _inFront = s == AppLifecycleState.resumed;
+    _reportDrive();
+  }
+
+  void _onCarLink() {
+    if (!mounted) return;
+    if (!_driveOn) _peek = false;
+    if (!_driveShown) _driveBuilt = false;
+    _reportDrive();
+    setState(() {});
+  }
+
+  /// Back on the map shown from the drive screen, or the Maps tab left: the drive screen again, following as it was.
+  void _endPeek() {
+    if (!_peek) return;
+    setState(() {
+      _peek = false;
+      _spot = null;
+    });
+    _pushNav();
+    final was = _followBeforePeek;
+    _followBeforePeek = null;
+    // The next fix brings the camera back to the position (the map is not drawn behind the drive screen until then anyway).
+    if (was != null && was != FollowMode.free) maps.setFollow(was);
+  }
+
+  // ---- a spot shown on the map from elsewhere ([NavState.showOnMap]) -------------------------------------------
+
+  /// The spot last shown, marked on the map as the step card marks a turn (null: none). It goes when the phase changes.
+  GeoPoint? _spot;
+  NavPhase? _spotPhase;
+
+  /// Shows what [NavState.mapShow] asks for, or an area [MapsState.showAreaOnMap] asks for, once the map is ready: from the drive
+  /// screen the map comes on first ([_peek]); the camera moves after the frame that lays the map out.
+  void _takeShow() {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    final MapShow s;
+    if (nav.mapShow != null) {
+      s = nav.takeMapShow()!;
+    } else if (maps.areaAsk != null) {
+      s = MapShow(area: maps.takeAreaAsk());
+    } else {
+      return;
+    }
+    _startPeek();
+    maps.setFollow(FollowMode.free);
+    // The view is now the one asked for: a route preview is not fitted again over it.
+    _fitTouched = true;
+    if (s.route || s.area != null) {
+      _spot = null;
+    } else {
+      _spot = s.at;
+      _spotPhase = nav.phase;
+    }
+    _pushNav();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _controller != c) return;
+      final r = nav.route;
+      if (s.area != null) {
+        _fitArea(c, s.area!);
+      } else if (s.route) {
+        if (r != null) _fitWhole(c, r);
+      } else if (s.at != null) {
+        _showSpot(s.at!.lat, s.at!.lon);
+      }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// While the drive screen shows, the map comes on the tab instead ([_peek]) until Back; how the map followed is kept for then.
+  void _startPeek() {
+    if (!_driveOn || _peek) return;
+    _peek = true;
+    _followBeforePeek = maps.follow;
+    _driveBuilt = false;
+    _reportDrive();
+  }
+
+  /// The drive screen's Map: the map on the tab, following as it was, until Back.
+  void _peekMap() {
+    if (!_driveOn || _peek) return;
+    _startPeek();
+    setState(() {});
+  }
+
+  /// [area] fitted into view, clear of the search bar above and the panel or bar below.
+  Future<void> _fitArea(MapLibreMapController c, GeoBounds area) async {
+    const pad = EdgeInsets.fromLTRB(32, 96, 32, 120);
+    _camPad = null;
+    try {
+      await c.animateCamera(
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(area.south, area.west), northeast: LatLng(area.north, area.east)),
+            left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (_) {}
+  }
+
+  /// A layer of "Get more layers" asked for ([MapsState.showLayerOnMap]): the layer sheet opens at its switch, once this tab shows.
+  void _takeLayerAsk() {
+    if (!mounted || !widget.active || maps.layerAsk == null) return;
+    final id = maps.takeLayerAsk()!;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openLayers(focus: id);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// The layer sheet ([focus]: the layer whose switch is brought into view).
+  Future<void> _openLayers({String? focus}) => showLayerSheet(context, maps, location,
+      regions: widget.regions, notebooks: widget.notebooks, userLayers: widget.userLayers, onOpenNotebook: widget.onOpenNotebook, onOpenList: widget.onOpenList, focusLayer: focus);
+
+  /// The whole of [r] in view, clear of what covers the map (any phase: the route fit of the preview is [_fitRoute]).
+  Future<void> _fitWhole(MapLibreMapController c, MapRoute r) async {
+    if (r.points.length < 2) return;
+    final pad = _fitPaddingFor(r);
+    final b = r.bounds;
+    _camPad = null;
+    try {
+      await c.animateCamera(
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (_) {}
+  }
+
+  /// Tells the car the truth at once: the drive screen is showing to a person only when it is built, Cache is in front and
+  /// unlocked, the Maps tab is selected and this page is the one on top. Every way it stops showing comes through here the
+  /// moment it happens, not at the next frame.
+  void _reportDrive() {
+    final d = widget.drive;
+    if (d == null) return;
+    final on = _driveShown && _driveBuilt && _inFront && widget.active && _routeCurrent;
+    if (d.signal.value != on) d.signal.value = on;
+  }
 
   MapsState get maps => widget.maps;
   NavState get nav => widget.nav;
@@ -386,6 +676,7 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
     _elevation.addListener(_onElevation);
+    widget.drive?.carConnected.addListener(_onCarLink);
     _lifecycle;
     // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
     // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
@@ -409,17 +700,35 @@ class _MapsScreenState extends State<MapsScreen> {
       _drawing = widget.regions != null;
     }
     _prepare();
+    // A layer asked for before this screen was first built ("Get more layers" from Settings) opens the layer sheet now.
+    _takeLayerAsk();
   }
 
   @override
   void didUpdateWidget(MapsScreen old) {
     super.didUpdateWidget(old);
     if (old.themeId != widget.themeId) _scheduleRestyle();
+    if (old.drive != widget.drive) {
+      old.drive?.carConnected.removeListener(_onCarLink);
+      widget.drive?.carConnected.addListener(_onCarLink);
+    }
+    if (old.active != widget.active) _reportDrive();
+    if (!old.active && widget.active) _takeLayerAsk();
+    if (old.active && !widget.active && _peek) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !widget.active) _endPeek();
+      });
+    }
   }
 
   @override
   void dispose() {
+    final c = _controller;
+    if (c != null) phoneMapRest.remove(c);
     _lifecycle.dispose();
+    _driveBuilt = false;
+    _reportDrive();
+    widget.drive?.carConnected.removeListener(_onCarLink);
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
     nav.removeListener(_onNav);
@@ -434,6 +743,8 @@ class _MapsScreenState extends State<MapsScreen> {
     _fullPicture?.image.dispose();
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
+    _glideTicker?.dispose();
+    _glideTicker = null;
     super.dispose();
   }
 
@@ -467,6 +778,8 @@ class _MapsScreenState extends State<MapsScreen> {
       maps.clearDrawRequest();
       setState(() => _drawing = widget.regions != null);
     }
+    if (maps.areaAsk != null) _takeShow();
+    _takeLayerAsk();
     setState(() {});
   }
 
@@ -491,7 +804,11 @@ class _MapsScreenState extends State<MapsScreen> {
   // ---- map events ---------------------------------------------------------------------------------------
 
   void _onMapCreated(MapLibreMapController c) {
+    final old = _controller;
+    if (old != null) phoneMapRest.remove(old);
     _controller = c;
+    // The map rests while the phone's window is not on its screen (an iPhone in a pocket with the car screen in use).
+    phoneMapRest.add(c, pause: c.pauseMap, resume: c.resumeMap);
     _keepOnline(c);
   }
 
@@ -517,7 +834,8 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
     try {
       final p = _palette;
-      await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));
+      // The car's arrow, at the map's own scale: a phone reads an added image at the screen's pixels per point, a browser at one.
+      await c.addImage(kHeadingImage, await VehicleArrow.png(p['position'], p['positionRing'], plat.isWeb ? 1.0 : screenRatio));
     } catch (_) {}
     await _pushPosition();
     _navSig = null;
@@ -592,21 +910,25 @@ class _MapsScreenState extends State<MapsScreen> {
     final fix = location.fix;
     final features = <Map<String, dynamic>>[];
     if (fix != null) {
+      // While the camera glides from fix to fix the marker is drawn where the camera has got to, so it stays on its spot.
+      final shown = _gliding ? _shownPose : null;
+      final lat = shown?.lat ?? fix.lat, lon = shown?.lon ?? fix.lon;
       features.add({
         'type': 'Feature',
         'geometry': {
           'type': 'Polygon',
-          'coordinates': [circleRing(fix.lat, fix.lon, fix.accuracyM)],
+          'coordinates': [circleRing(lat, lon, fix.accuracyM)],
         },
         'properties': <String, dynamic>{},
       });
-      final heading = fix.heading ?? _lastHeading;
       if (fix.heading != null) _lastHeading = fix.heading;
+      // Heading up, the map turns to the heading as it glides; the arrow turns with it.
+      final heading = shown != null && maps.follow == FollowMode.headingUp && (fix.heading ?? _lastHeading) != null ? shown.bearing : fix.heading ?? _lastHeading;
       features.add({
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
-          'coordinates': [fix.lon, fix.lat],
+          'coordinates': [lon, lat],
         },
         'properties': {'heading': ?heading},
       });
@@ -624,22 +946,136 @@ class _MapsScreenState extends State<MapsScreen> {
     final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
     final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
     final zoom = math.max(_zoom, guiding ? 16 : 14).toDouble();
-    var target = LatLng(fix.lat, fix.lon);
-    // Guiding heading-up, the position sits low on the map so more of the road ahead shows (lib/nav/guidance_camera.dart).
-    if (guiding && maps.follow == FollowMode.headingUp && !_mapSize.isEmpty && mounted) {
-      final side = MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null && !_swapped;
-      final anchor = guidanceAnchor(_mapSize, side: side, leftInset: MediaQuery.paddingOf(context).left);
-      final (lat, lon) = cameraCentreFor(fix.lat, fix.lon, bearing: bearing, zoom: zoom, map: _mapSize, anchor: anchor);
-      target = LatLng(lat, lon);
-    }
+    if (guiding && !_mapSize.isEmpty && mounted) return _guideTo(c, fix, bearing, zoom);
+    _stopGlide();
+    await _padTo(c, EdgeInsets.zero);
     await c.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
-        target: target,
+        target: LatLng(fix.lat, fix.lon),
         zoom: zoom,
         bearing: bearing,
       )),
-      duration: Duration(milliseconds: guiding ? 900 : 400),
+      duration: const Duration(milliseconds: 400),
     );
+  }
+
+  /// Gives the map [pad] as its padding (content insets, in logical points: the map package turns them into the screen's
+  /// pixels with the screen's pixel ratio), unless it already has it. A platform without them keeps what it has.
+  Future<void> _padTo(MapLibreMapController c, EdgeInsets pad) async {
+    final was = _camPad;
+    if (was != null && (was.left - pad.left).abs() < 0.5 && (was.top - pad.top).abs() < 0.5 && (was.right - pad.right).abs() < 0.5 && (was.bottom - pad.bottom).abs() < 0.5) return;
+    try {
+      await c.updateContentInsets(pad);
+      _camPad = pad;
+    } catch (_) {}
+  }
+
+  /// What is over the map while guiding, measured from the layout ([GuideCovers]); in the map's points, as the live map fills
+  /// the stack.
+  GuideCovers _guideCovers() {
+    final map = _mapSize;
+    if (_coveredLeft() != null) {
+      // Side by side: the banner and the bar are in the column on the left; the scale, the credits, the mini map and the buttons
+      // are in the map's corners.
+      return GuideCovers(left: _coveredLeft(), tiles: [?_boxOf(_scaleKey), ?_boxOf(_creditsKey), ?_boxOf(_insetKey), ?_boxOf(_controlsKey)]);
+    }
+    if (map != _bannerFootFor) {
+      _bannerFootFor = map;
+      _bannerFoot = null;
+    }
+    final banner = _boxOf(_headerKey)?.bottom;
+    if (banner != null) _bannerFoot = math.max(_bannerFoot ?? banner, banner);
+    return GuideCovers(
+      top: _bannerFoot,
+      bottom: _boxOf(_panelKey)?.top,
+      tiles: [?_boxOf(_scaleKey), ?_boxOf(_creditsKey), ?_boxOf(_insetKey), ?_boxOf(_controlsKey)],
+    );
+  }
+
+  /// Where the position sits on the live map while guiding, heading up or north up (Find me after moving the map comes back here
+  /// too): low in the free map ([guidanceAnchor]); with the live map in the corner, in its middle.
+  Offset _guideAnchor() {
+    final map = _mapSize;
+    if (_swapped || _measure != null) return map.center(Offset.zero);
+    final covers = _guideCovers();
+    final free = guidanceFreeMap(map, covers, safe: MediaQuery.paddingOf(context));
+    return guidanceAnchor(free, tiles: covers.tiles, reach: math.max(kPositionDotReach, VehicleArrow.reach));
+  }
+
+  /// Whether the camera and the marker are gliding from fix to fix (guiding and following).
+  bool get _gliding => _shownPose != null && nav.guiding && maps.follow != FollowMode.free;
+
+  void _stopGlide() {
+    _glide = null;
+    _shownPose = null;
+    _lastFixAt = null;
+    _glideTicker?.stop();
+  }
+
+  /// Guiding: the map follows the phone from fix to fix with the position on its anchor ([_guideAnchor]). The map has no padding
+  /// of its own (the centre is worked out here), the first fix (or one far from the last) moves it with the map's animation, and
+  /// each fix after that is a glide of the camera and the marker together ([GuideGlide]).
+  Future<void> _guideTo(MapLibreMapController c, Fix fix, double bearing, double zoom) async {
+    await _padTo(c, EdgeInsets.zero);
+    if (!mounted) return;
+    final to = (lat: fix.lat, lon: fix.lon, bearing: bearing);
+    final now = DateTime.now();
+    final since = _lastFixAt == null ? null : now.difference(_lastFixAt!);
+    _lastFixAt = now;
+    final g = _glide;
+    final from = g != null ? g.at(_glideClock - _glideStart) : _shownPose;
+    final ticker = _glideTicker ??= createTicker(_onGlideTick);
+    final ticking = !ticker.muted; // The map is not drawn (the drive screen shows): no frames to glide in.
+    if (from == null || !ticking || poseDistanceM(from, to) >= kGlideFarthestM || (zoom - _glideZoom).abs() > 0.01) {
+      _glide = null;
+      ticker.stop();
+      _shownPose = to;
+      _glideZoom = zoom;
+      final (lat, lon) = cameraCentreFor(to.lat, to.lon, bearing: to.bearing, zoom: zoom, map: _mapSize, anchor: _guideAnchor());
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: zoom, bearing: to.bearing)), duration: const Duration(milliseconds: 900));
+      return;
+    }
+    _glide = GuideGlide(from: from, to: to, duration: glideDuration(since));
+    _glideStart = _glideClock;
+    if (!ticker.isActive) {
+      _glideClock = Duration.zero;
+      _glideStart = Duration.zero;
+      ticker.start();
+    }
+  }
+
+  /// A frame of the glide: the camera and the marker move to where the glide has got to, together (a frame is skipped while the
+  /// last move is still on its way to the map).
+  void _onGlideTick(Duration elapsed) {
+    _glideClock = elapsed;
+    final g = _glide, c = _controller;
+    if (g == null || c == null || !mounted || !nav.guiding || maps.follow == FollowMode.free || _mapSize.isEmpty) {
+      _stopGlide();
+      return;
+    }
+    if (_glideBusy) return;
+    final t = elapsed - _glideStart;
+    final p = g.at(t);
+    final done = g.doneAt(t);
+    _shownPose = p;
+    if (done) {
+      _glide = null;
+      _glideTicker?.stop();
+    }
+    _glideBusy = true;
+    final (lat, lon) = cameraCentreFor(p.lat, p.lon, bearing: p.bearing, zoom: _glideZoom, map: _mapSize, anchor: _guideAnchor());
+    unawaited(() async {
+      try {
+        // Both are sent before either is waited for, so the map draws them in the same frame.
+        final moved = c.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: _glideZoom, bearing: p.bearing)));
+        final pushed = _pushPosition();
+        await moved;
+        await pushed;
+      } catch (_) {
+      } finally {
+        _glideBusy = false;
+      }
+    }());
   }
 
   // ---- navigation: route, pins, camera --------------------------------------------------------------------
@@ -648,19 +1084,68 @@ class _MapsScreenState extends State<MapsScreen> {
   Future<void> _pushNav() async {
     final c = _controller;
     if (c == null || !_styleReady) return;
-    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}';
+    final mark = _stepPoint() ?? _spot;
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
     if (sig == _navSig) return;
     _navSig = sig;
     try {
       await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
-      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const []));
+      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
     } catch (_) {}
+  }
+
+  /// The map images of the chosen place and the search results that are notebook entries: the entry's icon in the pin style, as its
+  /// notebook pin is drawn (their pins show it instead of a plain dot). By place id; empty for none.
+  Future<Map<String, String>> _placePinImages() async {
+    final images = _pinImages, nb = widget.notebooks;
+    final out = <String, String>{};
+    if (images == null || nb == null || _pins.isEmpty) return out;
+    final places = [if (nav.selected != null) nav.selected!, if (nav.searchOpen) ...nav.results];
+    for (final p in places) {
+      if (p.isCategory) continue;
+      final e = notebookEntryFor(p, _pins, savedKey: nav.savedFor(p)?.key);
+      if (e == null) continue;
+      final look = PinLook.of(e, nb.notebook(e.notebookId), tactical: widget.themeId == CacheThemeId.tactical);
+      try {
+        out[p.id] = await images.ensure(look.icon.id, look.glyph, look.tint);
+      } catch (_) {}
+    }
+    return out;
   }
 
   void _onNav() {
     if (!mounted) return;
+    // The step card shows only turns of the route on screen: another route, way of travel, a new set of routes, Start or Back
+    // close it (a new route is then fitted into view as always).
+    if (_step != null && (nav.phase != NavPhase.previewing || nav.routing || nav.route == null || _stepKey() != _stepFor)) {
+      _step = null;
+      _stepFor = null;
+    }
+    if (!_driveOn) _peek = false;
+    if (!_driveShown) {
+      _driveBuilt = false;
+      _reportDrive();
+    }
+    // A spot shown from elsewhere is marked until the phase changes (a route shown, started or ended).
+    if (_spot != null && nav.phase != _spotPhase) _spot = null;
+    _takeShow();
     _pushNav();
-    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route);
+    _elevation.request(nav.phase == NavPhase.browsing ? null : nav.route, following: nav.guiding);
+    if (!nav.guiding) {
+      _bannerFoot = null;
+      if (_shownPose != null) _stopGlide();
+    }
+    // Start: the map goes to the guidance view at once from the last known position, moving or not (it no longer waits for the
+    // next fix, which a phone standing still may not send for a long time). Once laid out, so the banner and the bar are measured.
+    final started = nav.guiding && !_wasGuiding;
+    _wasGuiding = nav.guiding;
+    if (started) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final f = location.fix;
+        if (mounted && nav.guiding && f != null && maps.follow != FollowMode.free) _followTo(f);
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
     if (!nav.guiding || nav.arrived) {
       _swapped = false;
       if (!nav.guiding) _elevation.setOpen(false);
@@ -761,9 +1246,7 @@ class _MapsScreenState extends State<MapsScreen> {
         RouteEndMark(
           lat: fix.lat,
           lon: fix.lon,
-          reach: (fix.heading ?? _lastHeading) == null
-              ? kPositionDotReach
-              : math.max(kPositionDotReach, MapAssets.headingMarkerReach(widget.imagePixelRatio ?? MediaQuery.devicePixelRatioOf(context))),
+          reach: (fix.heading ?? _lastHeading) == null ? kPositionDotReach : math.max(kPositionDotReach, VehicleArrow.reach),
         ),
     ];
   }
@@ -782,12 +1265,15 @@ class _MapsScreenState extends State<MapsScreen> {
 
   Future<void> _fitRouteNow(MapLibreMapController c, MapRoute r) async {
     if (!mounted) return;
-    if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId) return;
+    if (_controller != c || nav.phase != NavPhase.previewing || nav.route?.routeId != r.routeId || _step != null) return;
     // The room what covers the map leaves ([_fitPad]: a change of it fits the route again). On a phone the pin and the
     // position dot at the route's ends are fitted into that free rectangle too, whole.
     final room = _fitPad = _fitPaddingFor(r);
     final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: r.bounds, marks: _phoneCovers() == null ? const [] : _routeEndMarks());
     final b = fit.bounds, pad = fit.padding;
+    // On Android the map keeps the fit's padding for the moves after it (MapLibre's camera for bounds carries it): whatever moves
+    // the camera next sets the padding it means ([_padTo]).
+    _camPad = null;
     try {
       await c.animateCamera(
         CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
@@ -802,7 +1288,7 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     final r = nav.route;
     final was = _fitPad;
-    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId) return;
+    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId || _step != null) return;
     if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
     if (_refits >= kRouteRefits) return;
     final now = _fitPaddingFor(r);
@@ -811,11 +1297,95 @@ class _MapsScreenState extends State<MapsScreen> {
     _fitRoute(r);
   }
 
+  // ---- stepping through the route's turns before Start ------------------------------------------------------
+
+  /// What the step card was opened on: the route shown, among which routes, and the way of travel.
+  String _stepKey() => '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.mode}';
+
+  /// Where the turn the step card shows is (marked on the map); null while the card is closed.
+  GeoPoint? _stepPoint() {
+    final i = _step, r = nav.route;
+    if (i == null || r == null || nav.phase != NavPhase.previewing || i < 0 || i >= r.maneuvers.length) return null;
+    final m = r.maneuvers[i];
+    return GeoPoint(m.lat, m.lon);
+  }
+
+  /// The route panel's next arrow: the card opens on the route's first turn.
+  void _openSteps() {
+    final r = nav.route;
+    if (r == null || r.maneuvers.isEmpty || nav.routing || nav.phase != NavPhase.previewing) return;
+    setState(() {
+      _step = 0;
+      _stepFor = _stepKey();
+    });
+    _showStep();
+  }
+
+  /// The card's back and next arrows and its swipe (back from the first turn is [_closeSteps]).
+  void _goStep(int i) {
+    final r = nav.route;
+    if (_step == null || r == null || i < 0 || i >= r.maneuvers.length || i == _step) return;
+    setState(() => _step = i);
+    _showStep();
+  }
+
+  /// The card's close button, its back arrow on the first turn, and the system Back: the routes again, and the whole route
+  /// fitted into view as before.
+  void _closeSteps() {
+    if (_step == null) return;
+    setState(() {
+      _step = null;
+      _stepFor = null;
+    });
+    _pushNav();
+    final r = nav.route;
+    if (r != null && nav.phase == NavPhase.previewing) _fitRoute(r);
+  }
+
+  /// Marks the turn shown and brings the map to it at a street's zoom, north up, in the middle of the room the header, the
+  /// buttons and the card leave free (read after the card is laid out).
+  void _showStep() {
+    _pushNav();
+    maps.setFollow(FollowMode.free);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showStepNow());
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  Future<void> _showStepNow() async {
+    final c = _controller, r = nav.route, at = _stepPoint();
+    if (!mounted || c == null || !_styleReady || r == null || at == null) return;
+    final map = _fitMapSize();
+    final room = _fitPaddingFor(r);
+    final anchor = Offset((room.left + map.width - room.right) / 2, (room.top + map.height - room.bottom) / 2);
+    final (lat, lon) = cameraCentreFor(at.lat, at.lon, bearing: 0, zoom: kStepZoom, map: map, anchor: anchor);
+    try {
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(lat, lon), zoom: kStepZoom, bearing: 0)), duration: const Duration(milliseconds: 500));
+    } catch (_) {}
+  }
+
+  /// A spot shown from outside the map (the route header's destination, a stop, a point of the elevation chart): brought to the
+  /// middle of the room the header, the buttons and the route panel leave free, at least at zoom 14, north up (as the turn card's
+  /// is). The map's middle was under the panel.
+  Future<void> _showSpot(double lat, double lon) async {
+    final c = _controller;
+    if (c == null) return;
+    maps.setFollow(FollowMode.free);
+    final map = _fitMapSize();
+    final zoom = math.max(_zoom, 14.0);
+    final (clat, clon) = cameraCentreFor(lat, lon, bearing: 0, zoom: zoom, map: map, anchor: spotAnchor(map, _phoneCovers()));
+    try {
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(clat, clon), zoom: zoom, bearing: 0)), duration: const Duration(milliseconds: 500));
+    } catch (_) {}
+  }
+
   Future<void> _focusOn(double lat, double lon) async {
     final c = _controller;
     if (c == null) return;
     maps.setFollow(FollowMode.free);
     try {
+      await _padTo(c, EdgeInsets.zero);
       await c.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lon), math.max(_zoom, 14)), duration: const Duration(milliseconds: 500));
     } catch (_) {}
   }
@@ -847,6 +1417,9 @@ class _MapsScreenState extends State<MapsScreen> {
         }
       }
       await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
+      // The chosen place's pin may be one of these entries: drawn again now that they are known.
+      _navSig = null;
+      await _pushNav();
     } catch (_) {}
   }
 
@@ -911,6 +1484,26 @@ class _MapsScreenState extends State<MapsScreen> {
     return false;
   }
 
+  /// A tap on a search result's pin opens that result's card; true when there was one.
+  Future<bool> _tapResultPin(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || nav.results.isEmpty) return false;
+    try {
+      final hits = await c.queryRenderedFeatures(point, [kPinResults], null);
+      for (final h in hits) {
+        final props = h is Map ? h['properties'] : null;
+        final id = props is Map ? props['id'] : null;
+        final p = nav.results.where((r) => r.id == id && !r.isCategory).firstOrNull;
+        if (p != null) {
+          HapticFeedback.selectionClick();
+          nav.select(p);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /// A repeater was chosen: its card shows; one chosen outside the map (its list notebook) is brought into view.
   void _onRepeater() {
     final u = widget.userLayers;
@@ -943,6 +1536,152 @@ class _MapsScreenState extends State<MapsScreen> {
     );
   }
 
+  /// The base map's label layers in the style applied last (read again only when the style changes).
+  String? _labelStyle;
+  List<String> _labelIds = const [];
+
+  List<String> _basemapLines() {
+    final style = _styleJson;
+    final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
+    if (style == null || base == null) return const [];
+    return basemapLineLayers(style, basemapSource: sourceIdOf(base.def));
+  }
+
+  List<String> _basemapLabels() {
+    final style = _styleJson;
+    final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
+    if (style == null || base == null) return const [];
+    if (!identical(style, _labelStyle)) {
+      _labelStyle = style;
+      _labelIds = basemapLabelLayers(style, basemapSource: sourceIdOf(base.def));
+    }
+    return _labelIds;
+  }
+
+  /// The card a tap on an imported file's line or area opened, and that file's notebook (its card's Open).
+  ({String placeId, String notebookId})? _tappedBook;
+
+  /// Counts taps, so a slow lookup of an earlier tap never opens over a later one.
+  int _tapSeq = 0;
+
+  /// How far around the tapped point the map's query reaches, in the point's own units (Android reports a tap in the screen's
+  /// pixels, iOS in points): lines are a few points wide.
+  static const double _tapReach = 12;
+
+  /// What the map's query gives for [layers] around [point]: the features in the box ([_tapReach] each way, in the point's own units);
+  /// when the box finds none (or the platform has no box query), the point's. [note] gets what each query returned, for the log.
+  Future<List<dynamic>> _query(MapLibreMapController c, math.Point<double> point, List<String> layers, [StringBuffer? note]) async {
+    if (layers.isEmpty) return const [];
+    final r = _tapReach * (plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
+    var found = const <dynamic>[];
+    try {
+      found = await c.queryRenderedFeaturesInRect(Rect.fromLTRB(point.x - r, point.y - r, point.x + r, point.y + r), layers, null);
+      note?.write(' rect=${found.length}');
+    } catch (e) {
+      note?.write(' rect=error(${e.runtimeType})');
+    }
+    if (found.isNotEmpty) return found;
+    try {
+      found = await c.queryRenderedFeatures(point, layers, null);
+      note?.write(' point=${found.length}');
+    } catch (e) {
+      note?.write(' point=error(${e.runtimeType})');
+    }
+    return found;
+  }
+
+  /// The style's source types and the line layers drawn from each, for the tap's log line: whether an overlay's layers are in the
+  /// style at the time of the tap, and from what kind of source.
+  String _styleNote(String? style) {
+    if (style == null) return 'style=none';
+    try {
+      final j = jsonDecode(style) as Map;
+      final sources = (j['sources'] as Map?) ?? const {};
+      final layers = (j['layers'] as List?) ?? const [];
+      final per = <String, int>{};
+      for (final l in layers) {
+        if (l is Map && l['type'] == 'line' && l['source'] is String) per['${l['source']}'] = (per['${l['source']}'] ?? 0) + 1;
+      }
+      return 'layers=${layers.length} sources=[${[for (final e in sources.entries) '${e.key}:${(e.value as Map)['type']}:${per[e.key] ?? 0}line'].join(' ')}]';
+    } catch (_) {
+      return 'style=unreadable';
+    }
+  }
+
+  /// A tap on a base-map label (a place, a town, a point of interest, a road's name), else on a line or an area of an overlay or
+  /// of a file imported into a Places notebook, opens its card (map_tap.dart chooses). Only on a tap: nothing runs while panning.
+  /// True when there was one.
+  Future<bool> _tapMapFeature(math.Point<double> point, LatLng at) async {
+    final c = _controller;
+    if (c == null) return false;
+    final seq = ++_tapSeq;
+    final hits = <TapFeature>[];
+    // One line in the app log per tap: what was asked and what came back (Settings > Log, Standard).
+    final note = StringBuffer();
+    final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+    note.write('tap point=(${point.x.toStringAsFixed(1)},${point.y.toStringAsFixed(1)}) at=(${at.latitude.toStringAsFixed(5)},${at.longitude.toStringAsFixed(5)}) ratio=$ratio reach=${(_tapReach * ratio).toStringAsFixed(1)} zoom=${_zoom.toStringAsFixed(1)} ${_styleNote(_styleJson)}');
+    void logTap(String chose) => appLog.add(LogLevel.standard, 'INFO', 'map $note -> $chose');
+    TapFeature? read(Object? raw, TapSource source, String kind, {String? notebookId}) =>
+        tapFeatureFrom(raw, source: source, kind: kind, tapLat: at.latitude, tapLon: at.longitude, notebookId: notebookId);
+    note.write(' | labels(${_basemapLabels().length}):');
+    for (final raw in await _query(c, point, _basemapLabels(), note)) {
+      final f = read(raw, TapSource.basemap, '');
+      if (f != null) hits.add(f);
+    }
+    // A label is first whatever lies under it: the overlays and files are asked only when there is none.
+    if (hits.isEmpty) {
+      final u = widget.userLayers;
+      if (u != null) {
+        note.write(' | user:');
+        for (final raw in await _query(c, point, const [kUserLines, kUserAreas], note)) {
+          final props = raw is Map ? raw['properties'] : null;
+          final layer = props is Map && props['layer'] is String ? u.layerById(props['layer'] as String) : null;
+          final f = read(raw, TapSource.imported, layer?.name ?? '', notebookId: layer?.notebookId);
+          if (f != null) hits.add(f);
+        }
+      }
+      for (final use in maps.uses) {
+        if (use.def.kind != LayerKind.vector) continue;
+        final style = _styleJson;
+        final drawn = style == null ? const <String>[] : overlayHitLayers(style, source: sourceIdOf(use.def));
+        final asked = drawn.isEmpty ? overlayLayerIds(use.def) : drawn;
+        note.write(' | ${use.def.id}(${drawn.isEmpty ? 'ids-not-in-style' : 'from-style'} ${asked.join(',')}):');
+        for (final raw in await _query(c, point, asked, note)) {
+          final f = read(raw, TapSource.overlay, use.def.title);
+          if (f != null) hits.add(f);
+        }
+      }
+    }
+    // Nothing else is there: a named line of the base map (a path, a track, a road, a river) is a tap on that name, as its label is.
+    if (hits.isEmpty) {
+      final lines = _basemapLines();
+      note.write(' | basemap-lines(${lines.length}):');
+      for (final raw in await _query(c, point, lines, note)) {
+        final f = read(raw, TapSource.basemap, '');
+        if (f != null) hits.add(f);
+      }
+    }
+    final f = pickTapFeature(hits);
+    logTap(f == null ? 'nothing (${hits.length} read)' : '${f.source.name}/${f.tier.name} named=${f.named} of ${hits.length} read');
+    if (f == null || seq != _tapSeq || !mounted) return false;
+    HapticFeedback.selectionClick();
+    var candidates = const <MapPlace>[];
+    if (f.tier == TapTier.label) {
+      // The places data the search box reads, for the label's name near it: the card then has what a search result has.
+      try {
+        candidates = (await nav.backend.search(f.name!, near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
+      } catch (_) {}
+    }
+    if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
+    final reachM = math.max(kLabelMatchFloorM, kLabelMatchReach * metresPerPoint(f.lat, _zoom));
+    final choice = tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+    final book = choice.notebookId;
+    _tappedBook = book == null ? null : (placeId: choice.place.id, notebookId: book);
+    widget.userLayers?.clearRepeater();
+    nav.select(choice.place);
+    return true;
+  }
+
   void _notebookCard(NbEntry e) {
     final book = widget.notebooks?.notebook(e.notebookId);
     showFittedSheet<void>(
@@ -962,9 +1701,24 @@ class _MapsScreenState extends State<MapsScreen> {
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
+    // A search result's pin opens that result, as its row in the list does.
+    if (nav.searchOpen && await _tapResultPin(point)) return;
+    // Another route's line chooses that route, as its card in the panel does.
+    if (nav.phase == NavPhase.previewing && !nav.routing) {
+      final i = altRouteAt(nav.routes, nav.routeIndex, at.latitude, at.longitude, metresPerPoint: metresPerPoint(at.latitude, _zoom));
+      if (i != null) {
+        HapticFeedback.selectionClick();
+        nav.selectRoute(i);
+        return;
+      }
+    }
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
-    } else if (nav.phase == NavPhase.browsing && nav.selected != null) {
+      return;
+    }
+    // A place, a label, a line or an area of the map opens its card.
+    if (nav.phase == NavPhase.browsing && await _tapMapFeature(point, at)) return;
+    if (nav.phase == NavPhase.browsing && nav.selected != null) {
       nav.clearSelection();
     }
   }
@@ -1128,7 +1882,8 @@ class _MapsScreenState extends State<MapsScreen> {
             ],
           );
     return Positioned.fill(
-      child: Stack(
+      child: MapOverlay(
+        child: Stack(
         children: [
           Positioned.fill(child: GestureDetector(key: const ValueKey('ring-dismiss'), behavior: HitTestBehavior.opaque, onTap: () => setState(() => _ring = null))),
           Positioned(
@@ -1137,6 +1892,7 @@ class _MapsScreenState extends State<MapsScreen> {
             child: RingMenu(key: const ValueKey('ring-menu'), size: size, items: _ringItems(r), onPick: _ringPick, centre: centre, onCentre: _ringBack),
           ),
         ],
+        ),
       ),
     );
   }
@@ -1173,7 +1929,8 @@ class _MapsScreenState extends State<MapsScreen> {
       return;
     }
     final next = switch (maps.follow) {
-      FollowMode.free => FollowMode.follow,
+      // While guiding, Find me after moving the map goes back to the guidance view (heading up).
+      FollowMode.free => nav.guiding ? FollowMode.headingUp : FollowMode.follow,
       FollowMode.follow => FollowMode.headingUp,
       FollowMode.headingUp => FollowMode.follow,
     };
@@ -1257,17 +2014,10 @@ class _MapsScreenState extends State<MapsScreen> {
               Text(u.def.licence, style: TextStyle(fontSize: 14, color: k.secondary)),
               const SizedBox(height: 12),
             ],
-            Text('Map data © OpenStreetMap contributors, ODbL 1.0 (openstreetmap.org/copyright).',
-                style: TextStyle(fontSize: 14, color: k.secondary)),
-            const SizedBox(height: 8),
-            Text(
-              maps.uses.any((u) => u.def.isBase && u.def.layout == 'protomaps-v4')
-                  ? 'Base map: Protomaps basemap tiles and the @protomaps/basemaps style layers (BSD-3-Clause). '
-                      'Map fonts: Noto Sans, SIL Open Font License 1.1.'
-                  : 'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
-                      'Map fonts: Noto Sans, SIL Open Font License 1.1.',
-              style: TextStyle(fontSize: 14, color: k.secondary),
-            ),
+            for (final (i, line) in mapCreditNotes(maps.uses).indexed) ...[
+              if (i > 0) const SizedBox(height: 8),
+              Text(line, style: TextStyle(fontSize: 14, color: k.secondary)),
+            ],
           ],
         ),
       ),
@@ -1450,9 +2200,49 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final style = _initialStyle;
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: style == null ? _waiting(context) : _mapStack(context, style, k),
+    // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
+    // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
+    final map = PopScope(
+      canPop: (_step == null && !_peek && widget.onBackToJump == null) || !widget.active,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_peek) {
+          _endPeek();
+        } else if (_step != null) {
+          _closeSteps();
+        } else {
+          widget.onBackToJump?.call();
+        }
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        body: style == null ? _waiting(context) : _mapStack(context, style, k),
+      ),
+    );
+    final drive = widget.drive;
+    if (drive == null) return map;
+    // While a car screen is connected and guiding the drive screen is what shows; the map is kept (not drawn) so it is there at
+    // once when the car goes or guidance ends. With no car it is exactly the map screen.
+    _routeCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    final on = _driveShown;
+    if (on) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_driveShown) return;
+        _driveBuilt = true;
+        _reportDrive();
+      });
+    } else {
+      _driveBuilt = false;
+    }
+    _reportDrive();
+    return Stack(
+      children: [
+        Positioned.fill(child: Offstage(offstage: on, child: TickerMode(enabled: !on, child: map))),
+        if (on)
+          Positioned.fill(
+            child: DriveScreen(nav: nav, elevation: _elevation, palette: _palette, themeId: widget.themeId, onMap: _peekMap),
+          ),
+      ],
     );
   }
 
@@ -1505,7 +2295,7 @@ class _MapsScreenState extends State<MapsScreen> {
         _ensurePictures(_stackSize);
       });
     }
-    if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched) {
+    if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched && _step == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
     }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
@@ -1588,7 +2378,7 @@ class _MapsScreenState extends State<MapsScreen> {
         if (_measure != null && !drawing)
           Align(
             alignment: Alignment.bottomCenter,
-            child: SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: _measurePanel(context, _measure!, k))),
+            child: SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: MapOverlay(child: _measurePanel(context, _measure!, k)))),
           ),
         if (drawing)
           AreaDrawOverlay(
@@ -1603,11 +2393,13 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget _topLayer(BuildContext context, Fix? fix, FollowMode follow) {
     final guiding = nav.guiding;
     final previewing = nav.phase == NavPhase.previewing;
-    final Widget top = guiding
-        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
-        : previewing
-            ? DirectionsHeader(nav: nav)
-            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
+    final Widget top = MapOverlay(
+      child: guiding
+          ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+          : previewing
+              ? DirectionsHeader(nav: nav)
+              : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions),
+    );
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
     return SafeArea(
       child: Padding(
@@ -1617,15 +2409,15 @@ class _MapsScreenState extends State<MapsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Flexible(child: KeyedSubtree(key: _headerKey, child: top)),
-            if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
+            if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
             if (!searching) ...[
               const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (fix != null && !guiding) KeyedSubtree(key: _chipKey, child: _coordsChip(context, fix)),
+                  if (fix != null && !guiding) KeyedSubtree(key: _chipKey, child: MapOverlay(child: _coordsChip(context, fix))),
                   const Spacer(),
-                  _controls(context, fix, follow),
+                  MapOverlay(child: _controls(context, fix, follow)),
                 ],
               ),
             ],
@@ -1640,11 +2432,16 @@ class _MapsScreenState extends State<MapsScreen> {
       key: _controlsKey,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // The map shown instead of the drive screen while a car guides: Back brings the drive screen again (as the phone's Back does).
+        if (_peek && _driveOn) ...[
+          MapButton(key: const ValueKey('peek-back'), icon: Icons.arrow_back, tooltip: 'Back', onPressed: _endPeek),
+          const SizedBox(height: 12),
+        ],
         if (!nav.guiding)
           MapButton(
             icon: Icons.layers_outlined,
             tooltip: 'Layers',
-            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions, notebooks: widget.notebooks, userLayers: widget.userLayers),
+            onPressed: _openLayers,
           ),
         if (!nav.guiding) const SizedBox(height: 12),
         MapButton(
@@ -1677,12 +2474,40 @@ class _MapsScreenState extends State<MapsScreen> {
   /// The place card, the way to go, the guidance bar or a repeater's card; null when none shows.
   /// [maxHeight]: the room in the map's side column, which the card or the way to go fills before it scrolls.
   Widget? _panel(bool searching, {double? maxHeight}) {
+    final p = _panelBody(searching, maxHeight: maxHeight);
+    return p == null ? null : MapOverlay(child: p);
+  }
+
+  Widget? _panelBody(bool searching, {double? maxHeight}) {
     final sel = nav.selected;
     if (nav.guiding) return GuidanceDock(nav: nav, elevation: _elevation, palette: _palette);
     if (nav.phase == NavPhase.previewing) {
-      return RoutePanel(nav: nav, fmt: nav.fmt, maxHeight: maxHeight, elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette));
+      final step = _step;
+      final rows = step == null ? const <DriveRow>[] : previewStepRows(nav);
+      if (step != null && rows.isNotEmpty) return RouteStepCard(nav: nav, rows: rows, index: step, onStep: _goStep, onClose: _closeSteps);
+      final regions = widget.regions;
+      return RoutePanel(
+        nav: nav,
+        fmt: nav.fmt,
+        maxHeight: maxHeight,
+        elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette, onSpot: nav.showAlongRoute),
+        onNextTurn: _openSteps,
+        // A route error that names missing data: the download for the route's area.
+        onDownloadArea: regions == null ? null : () => getRouteArea(context, regions, nav.routeEnds),
+        onAddOffroad: regions == null ? null : () => addRouteOffroad(context, regions, nav.routeEnds),
+      );
     }
-    if (sel != null && !searching) return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight);
+    if (sel != null && !searching) {
+      final open = widget.onOpenEntry;
+      final entry = open == null || widget.notebooks == null ? null : notebookEntryFor(sel, _pins, savedKey: nav.savedFor(sel)?.key);
+      // A line or an area of an imported file: Open is its notebook.
+      final book = _tappedBook?.placeId == sel.id ? _tappedBook!.notebookId : null;
+      final openBook = widget.onOpenNotebook;
+      final VoidCallback? onOpen = entry != null
+          ? () => open!(entry)
+          : (book != null && openBook != null ? () => openBook(book) : null);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen);
+    }
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;
   }
@@ -1695,11 +2520,13 @@ class _MapsScreenState extends State<MapsScreen> {
     final guiding = nav.guiding;
     final previewing = nav.phase == NavPhase.previewing;
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
-    final Widget top = guiding
-        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
-        : previewing
-            ? DirectionsHeader(nav: nav)
-            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
+    final Widget top = MapOverlay(
+      child: guiding
+          ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+          : previewing
+              ? DirectionsHeader(nav: nav)
+              : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions),
+    );
     final panel = _panel(searching);
     return SafeArea(
       child: Padding(
@@ -1715,7 +2542,7 @@ class _MapsScreenState extends State<MapsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (panel == null) Flexible(child: top) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
-                    if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: _fromChip(context)),
+                    if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
                     if (panel != null) ...[
                       const SizedBox(height: 8),
                       Expanded(
@@ -1740,9 +2567,9 @@ class _MapsScreenState extends State<MapsScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (fix != null && !guiding) Flexible(child: _coordsChip(context, fix)),
+                        if (fix != null && !guiding) Flexible(child: MapOverlay(child: _coordsChip(context, fix))),
                         const Spacer(),
-                        _controls(context, fix, follow),
+                        MapOverlay(child: _controls(context, fix, follow)),
                       ],
                     ),
                   const Spacer(),
@@ -1760,13 +2587,13 @@ class _MapsScreenState extends State<MapsScreen> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2)])),
-                            if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
+                            if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                           ],
                         ),
                         // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                         const SizedBox(height: 6),
-                        Align(alignment: Alignment.centerLeft, child: AttributionChip(lines: maps.attributions, onTap: _showCredits)),
+                        Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
                       ],
                     ),
                 ],
@@ -1827,12 +2654,12 @@ class _MapsScreenState extends State<MapsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
-                    if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), _inset(context)],
+                    if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                   ],
                 ),
                 // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                 const SizedBox(height: 6),
-                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: AttributionChip(lines: maps.attributions, onTap: _showCredits))),
+                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
                 const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)

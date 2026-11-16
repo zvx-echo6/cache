@@ -66,6 +66,10 @@ class ChatMessage {
 
   /// The answer ended because the chat's context filled up: shown with a note and a New chat button. Not stored.
   bool cutShort = false;
+
+  /// The turn searched or read the person's sources (TurnUpdate.searchedSources; for a stored answer, from its turn's tool calls).
+  /// With no [sources] cited, the answer says it searched them but cites none, not "Not from your sources".
+  bool searchedSources = false;
   List<NavigationAction> navigationActions = const [];
 
   /// The confirm cards this answer asked for, in order.
@@ -240,6 +244,9 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Whether the stored chat [id] still exists (a deleted chat is gone for good).
+  bool hasConversation(int id) => _store?.get(id) != null;
+
   /// Shows a stored conversation as it was. Sending continues it.
   void openConversation(int id) {
     final store = _store;
@@ -251,14 +258,22 @@ class ChatController extends ChangeNotifier {
     final inTranscript = [for (var i = 0; i < stored.length; i++) if (stored[i].inTranscript) i];
     final cards = cardsInTranscript([for (final i in inTranscript) stored[i].message]);
     final pending = <ConfirmCard>[];
+    // the transcript of the turn so far (after its question): whether it searched or read the sources
+    final turn = <Map<String, dynamic>>[];
     for (var i = 0, t = 0; i < stored.length; i++) {
       final m = stored[i];
       if (t < inTranscript.length && inTranscript[t] == i) {
         final card = cards[t++];
         if (card != null) pending.add(card);
       }
+      if (m.role == 'user') {
+        turn.clear();
+      } else if (m.inTranscript) {
+        turn.add(m.message);
+      }
       if (!m.shown) continue;
       final shown = ChatMessage.stored(m);
+      if (!shown.isUser) shown.searchedSources = turnUsedSources(turn);
       if (!shown.isUser && pending.isNotEmpty) {
         shown.confirms = List.of(pending);
         pending.clear();
@@ -703,7 +718,10 @@ class ChatController extends ChangeNotifier {
     } else if (update.phase == TurnPhase.answering || update.phase == TurnPhase.done || update.text.isNotEmpty) {
       reply.text = update.text;
     }
-    if (update.phase == TurnPhase.done) reply.sources = update.cited;
+    if (update.phase == TurnPhase.done) {
+      reply.sources = update.cited;
+      reply.searchedSources = update.searchedSources;
+    }
   }
 
   /// Stores what the turn added to the transcript from [start], with the shown answer, its citations and its stats.

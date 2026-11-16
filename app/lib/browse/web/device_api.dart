@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// Why a call to this device failed: [code] is the device's own word for it (`no_space`, `unauthorized`, `host_not_allowed`), [status]
 /// the HTTP status (0: no answer at all).
@@ -65,7 +66,7 @@ class DeviceJob {
   final int bytes;
   final int total;
 
-  /// `queued`, `running`, `done`, `failed` or `cancelled`.
+  /// `queued`, `running`, `paused`, `done`, `failed` or `cancelled`.
   final String state;
   final String? error;
 
@@ -74,6 +75,8 @@ class DeviceJob {
   final DateTime? finishedAt;
 
   bool get active => state == 'queued' || state == 'running';
+  /// Stopped by the person; what was downloaded is kept and Resume continues it.
+  bool get paused => state == 'paused';
   bool get failed => state == 'failed';
   bool get done => state == 'done';
   double? get fraction => total <= 0 ? null : (bytes / total).clamp(0.0, 1.0);
@@ -118,6 +121,10 @@ abstract class DeviceApi {
 
   /// Cancels a waiting or running transfer, or takes a finished one off the list.
   Future<void> cancelJob(String id);
+
+  /// Pauses a waiting or running transfer (the part is kept), or continues a paused one.
+  Future<void> pauseJob(String id);
+  Future<void> resumeJob(String id);
   Future<void> removeItem(String id);
 
   /// The search core reads the library folders again (after the browser put a library in place).
@@ -170,7 +177,10 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   static DeviceException _error(http.Response r) {
-    if (r.statusCode == 401) return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     try {
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       final e = j is Map ? j['error'] : null;
@@ -214,6 +224,16 @@ class HttpDeviceApi implements DeviceApi {
   @override
   Future<void> cancelJob(String id) async {
     await _result('DELETE', '/api/library/jobs/${Uri.encodeComponent(id)}');
+  }
+
+  @override
+  Future<void> pauseJob(String id) async {
+    await _result('POST', '/api/library/jobs/${Uri.encodeComponent(id)}/pause');
+  }
+
+  @override
+  Future<void> resumeJob(String id) async {
+    await _result('POST', '/api/library/jobs/${Uri.encodeComponent(id)}/resume');
   }
 
   @override

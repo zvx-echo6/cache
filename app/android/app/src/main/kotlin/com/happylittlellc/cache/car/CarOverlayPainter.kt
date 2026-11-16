@@ -20,14 +20,15 @@ import kotlin.math.sqrt
  * Paints Cache's own pieces on the car's map: the route mini map and the climb ahead. Pure drawing: a Canvas, the trip's
  * blocks, a size, the host's areas and the density go in; nothing is read from the car, nothing moves, nothing is interactive.
  *
- * The pieces look like the host's own cards, not like the app's theme ([HOST_STYLE]): the same dark fill, outline, corner and
- * text colors by day and by night, as the host draws its cards.
+ * The pieces take the colors of the phone's chosen theme, from the trip's palette (the owner's decision of 2026-11-13: the car
+ * follows the phone's theme, day and night): the card, its text, its outline, the route and the dots. Their shape is the host's
+ * cards' (corner, outline width, text sizes). [HOST_STYLE] is only for a trip that has no palette yet.
  *
  * There are two layouts ([CarOverlayMode], chosen by [modeFor] from the stable area alone, so the choice holds for the whole
  * drive):
  *  - one box, on a screen whose left column has a tall enough gap between the host's turn card and its arrival card: the
  *    mini map on top and the climb under it (label, figure, grade line, shape), on the host cards' left edge, centred in the
- *    gap. With no climb to show it is the mini map alone, in the same place; with the mini map switched off, the climb
+ *    gap. With no climb to show it is the mini map alone, in the same place; with no route shape to show, the climb
  *    alone, where the box's lower part is.
  *  - split, everywhere else: the climb is a one-line card in that gap, as wide as the host's cards; the mini map is a tile in
  *    the bottom right corner of the visible area, full size or two thirds, whichever keeps clear of the vehicle.
@@ -61,8 +62,8 @@ object CarOverlayPainter {
     const val ON_DARK_DRIVEN = 0xFF5A6672.toInt()
     const val ON_DARK_START = 0xFF8A96A3.toInt()
 
-    /** The colors every piece is painted with. The trip's theme palette does not color the pieces any more (it still colors
-     * what is part of the main map: the route, the driven part, the grade badge, and the host's turn card). */
+    /** The colors for a trip that carries no palette (none has come from the phone yet): dark cards like the host's. A trip
+     * with a palette is painted in it ([colorsFor]). */
     val HOST_STYLE = CarOverlayColors(
         theme = "host", route = ON_DARK_ROUTE, routeDriven = ON_DARK_DRIVEN, badge = 0xFFF4F6F8.toInt(), badgeGlyph = 0xFF161B20.toInt(),
         badgeEdge = HOST_CARD_FILL, startDot = ON_DARK_START, destDot = HOST_TEXT, posFill = HOST_TEXT, posRing = ON_DARK_ROUTE,
@@ -322,7 +323,90 @@ object CarOverlayPainter {
         return Layout(mode, mini, climb)
     }
 
-    /** The pieces for [trip] (the switches are the trip's). Nothing is drawn unless the trip is guiding, and nothing while
+    // ---- the screen's class: whether the two extras are drawn at all -------------------------------------------------
+
+    /** The most of the free map the two extras may take on a screen that always carries them: at or below 15 % the screen
+     * is big, above it in-between (set 2026-11-12 so that the wide, short screens are the in-between ones: 1280 x 500
+     * measures 16.9 %, 1280 x 720 measures 11.7 %). Change it here and nowhere else. */
+    const val EXTRAS_BIG_MAX_SHARE = 0.15f
+
+    /** What [extrasMeasure] found: the class, whether both extras fit at full size, the pixels they take and the pixels of
+     * free map. */
+    data class ExtrasMeasure(val cls: CarExtrasClass, val fits: Boolean, val extrasPx: Float, val freePx: Float) {
+        val share: Float get() = if (freePx > 0f) extrasPx / freePx else 1f
+    }
+
+    /** The class from the two figures of the measure. */
+    fun extrasClass(fits: Boolean, extrasPx: Float, freePx: Float): CarExtrasClass = when {
+        !fits || freePx <= 0f -> CarExtrasClass.SMALL
+        extrasPx > EXTRAS_BIG_MAX_SHARE * freePx -> CarExtrasClass.IN_BETWEEN
+        else -> CarExtrasClass.BIG
+    }
+
+    /** The host's band of buttons along the top of the guidance screen (End route and the others): the stable area starts
+     * this far below the surface's top while they show. Measured on the car simulator: 91 at 1280 x 720 (2026-11) and on all
+     * three surfaces of session 95 (1190 x 480, 1190 x 700, 1816 x 1056). */
+    const val HOST_TOP_BAND = 91f
+
+    /** The host's column of map buttons on the right (zoom in and out): the stable area ends at least this far from the
+     * surface's right edge while they show. Measured: 103 at 1280 x 720, 106 on the three surfaces of session 95. */
+    const val HOST_RIGHT_BAND = 103f
+
+    /**
+     * The room the screen's class is measured on: the stable area (falling back as in [layout]), never reaching into the
+     * host's top band ([HOST_TOP_BAND]) or its map buttons' column ([HOST_RIGHT_BAND]). The host takes those buttons away
+     * after a few seconds without a touch and brings them back with a new screen (a re-route, a new instruction), and it
+     * reports a larger stable area while they are away: on the car simulator the 1190 x 480 surface's stable area grew from
+     * 658 x 376 to 658 x 440 and back every few seconds of a drive. Measured on the room as it is with the buttons showing,
+     * the class is the same in both states, so it holds for the whole drive.
+     */
+    fun steadyArea(width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null): Rect {
+        val r = Rect(stable ?: visible ?: Rect(0, 0, width, height))
+        r.top = max(r.top, (HOST_TOP_BAND * density).roundToInt())
+        r.right = min(r.right, width - (HOST_RIGHT_BAND * density).roundToInt())
+        return r
+    }
+
+    /**
+     * How the two extras fit this screen, from the room the car reports: [steadyArea], the stable area as it is with the
+     * host's buttons showing. The visible area's right edge moves when the host shows and hides its buttons and plays no
+     * part, and neither does the stable area's growing while they are away, so the class holds for the whole drive.
+     *
+     * They FIT when [layout] places both of them, with both asked for, at their full size and clear of the vehicle and the
+     * road ahead: the whole box (one-box layout), or the one-line climb card and the full-size corner tile (split layout).
+     * A screen that only has room for the smaller tile, or for one of the two, does not fit them.
+     *
+     * The FREE MAP is the map the host leaves uncovered: the stable area (the car's free room, already less the host's
+     * cards and its buttons) and the gap in the host's left column between its turn card and its arrival card
+     * ([column], [columnGap]), where the map also shows.
+     *
+     * The extras TAKE the area of the pieces as placed. Small: they do not fit. In-between: they take more than
+     * [EXTRAS_BIG_MAX_SHARE] of the free map. Big: otherwise.
+     */
+    fun extrasMeasure(width: Int, height: Int, visible: Rect?, density: Float, stable: Rect? = null): ExtrasMeasure {
+        val full = Rect(0, 0, width, height)
+        val cam = steadyArea(width, height, visible, density, stable)
+        val d = density
+        val l = layout(width, height, cam, d, showClimb = true, showMini = true, stable = cam)
+        val mini = l.mini
+        val climb = l.climb
+        val fullSize = mini != null && (l.mode == CarOverlayMode.ONE_BOX || mini.height() >= MINI_H * d - 1f)
+        val fits = climb != null && fullSize
+        val box = l.box
+        val extras = when {
+            box != null -> box.width() * box.height()
+            else -> (mini?.let { it.width() * it.height() } ?: 0f) + (climb?.let { it.width() * it.height() } ?: 0f)
+        }
+        val inside = Rect(cam).also { if (!it.intersect(full)) it.setEmpty() }
+        val (gapTop, gapBottom) = columnGap(cam, d)
+        val (colLeft, colRight) = column(cam, d)
+        val gap = max(0f, colRight - colLeft) * max(0f, gapBottom - gapTop)
+        val free = inside.width().toFloat() * inside.height().toFloat() + gap
+        return ExtrasMeasure(extrasClass(fits, extras, free), fits, extras, free)
+    }
+
+    /** The pieces for [trip], each where it has its data. Whether they are drawn at all on this screen, and how opaque, is
+     * the view's (the screen's class and the fade, CarOverlayView). Nothing is drawn unless the trip is guiding, and nothing while
      * the route overview screen is up ([overview]): the mini map would repeat what that screen's map already shows. The
      * climb is never drawn on arrival (the phone sends no climb then; this holds for a trip that still carries one). */
     fun draw(
@@ -330,42 +414,48 @@ object CarOverlayPainter {
         lineShapeFilled: Boolean = LINE_SHAPE_FILLED, lineShapeInset: Float = LINE_SHAPE_INSET,
     ) {
         if (!trip.guiding || overview) return
-        val climb = if (trip.overlay.climb && !trip.arrived) trip.climb else null
-        val ov = if (trip.overlay.miniMap) trip.overview else null
+        val climb = if (!trip.arrived) trip.climb else null
+        val ov = trip.overview
         val l = layout(width, height, visible, density, showClimb = climb != null, showMini = ov != null, stable = stable)
         val d = density
+        val pal = colorsFor(trip)
         val box = l.box
         if (box != null) {
-            // One box: one card, the mini map in its upper part, a thin divider, the climb in its lower part.
-            drawCard(canvas, box, d)
+            // One box: one card, the mini map in its upper part (on the theme's page color, as the mini map tile), a thin
+            // divider, the climb in its lower part (on the card color).
+            drawCard(canvas, box, pal, d)
             canvas.save()
             canvas.clipPath(Path().apply { addRoundRect(box, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, Path.Direction.CW) })
             if (l.mini != null && ov != null) {
                 canvas.save()
                 canvas.clipRect(l.mini)
-                drawMiniContent(canvas, l.mini, ov, HOST_STYLE, d)
+                canvas.drawRect(l.mini, fill(pal.miniBg))
+                drawMiniContent(canvas, l.mini, ov, pal, d)
                 canvas.restore()
             }
             if (l.climb != null && climb != null) {
-                drawClimbPart(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d)
-                if (l.mini != null) canvas.drawRect(l.climb.left, l.climb.top, l.climb.right, l.climb.top + max(1f, d), fill(HOST_CARD_EDGE))
+                drawClimbPart(canvas, l.climb, climb, trip.imperial, pal, d)
+                if (l.mini != null) canvas.drawRect(l.climb.left, l.climb.top, l.climb.right, l.climb.top + max(1f, d), fill(pal.miniBorder))
             }
             canvas.restore()
-            drawCardEdge(canvas, box, d)
+            drawCardEdge(canvas, box, pal, d)
             return
         }
-        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, HOST_STYLE, d, lineShapeFilled, lineShapeInset)
-        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, HOST_STYLE, d, scale = l.mini.height() / (MINI_H * d))
+        if (l.climb != null && climb != null) drawClimbLine(canvas, l.climb, climb, trip.imperial, pal, d, lineShapeFilled, lineShapeInset)
+        if (l.mini != null && ov != null) drawMiniMap(canvas, l.mini, ov, pal, d, scale = l.mini.height() / (MINI_H * d))
     }
 
-    /** A card like the host's: the fill, and over the content the outline. */
-    private fun drawCard(canvas: Canvas, r: RectF, d: Float) {
-        canvas.drawRoundRect(r, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, fill(HOST_CARD_FILL))
+    /** The colors the pieces are painted in: the trip's palette (the phone's chosen theme), or [HOST_STYLE] before one came. */
+    fun colorsFor(trip: CarTrip): CarOverlayColors = trip.palette ?: HOST_STYLE
+
+    /** A card in the host's shape: the fill, and over the content the outline. */
+    private fun drawCard(canvas: Canvas, r: RectF, pal: CarOverlayColors, d: Float) {
+        canvas.drawRoundRect(r, HOST_CARD_RADIUS * d, HOST_CARD_RADIUS * d, fill(pal.card))
     }
 
-    private fun drawCardEdge(canvas: Canvas, r: RectF, d: Float) {
+    private fun drawCardEdge(canvas: Canvas, r: RectF, pal: CarOverlayColors, d: Float) {
         val w = HOST_CARD_EDGE_W * d
-        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, HOST_CARD_RADIUS * d - w / 2, HOST_CARD_RADIUS * d - w / 2, stroke(HOST_CARD_EDGE, w))
+        canvas.drawRoundRect(RectF(r).apply { inset(w / 2, w / 2) }, HOST_CARD_RADIUS * d - w / 2, HOST_CARD_RADIUS * d - w / 2, stroke(pal.miniBorder, w))
     }
 
     // ---- the climb part -----------------------------------------------------------------------------------------------
@@ -460,7 +550,7 @@ object CarOverlayPainter {
         canvas: Canvas, r: RectF, c: CarClimb, imperial: Boolean, pal: CarOverlayColors, d: Float,
         shapeFilled: Boolean = LINE_SHAPE_FILLED, shapeInset: Float = LINE_SHAPE_INSET,
     ) {
-        drawCard(canvas, r, d)
+        drawCard(canvas, r, pal, d)
         val figurePaint = text(pal.cardText, LINE_FIGURE_SIZE * d, 700)
         val textPaint = text(pal.cardSecondary, LINE_TEXT_SIZE * d, 400)
         val figure = climbText(c.climbAheadM, imperial)
@@ -488,7 +578,7 @@ object CarOverlayPainter {
         val baseline = r.centerY() + LINE_FIGURE_SIZE * 0.355f * d
         canvas.drawText(figure, x, baseline, figurePaint)
         if (second != null) canvas.drawText(second, x + figureW + gap, baseline, textPaint)
-        drawCardEdge(canvas, r, d)
+        drawCardEdge(canvas, r, pal, d)
     }
 
     /** Where a height is drawn in the shape, between [top] (high) and [bottom] (low), for a stretch whose heights run from
@@ -711,7 +801,7 @@ object CarOverlayPainter {
         return abs(steep[0] - dest[0]) >= (14f + MINI_DEST_R + gap) * d || abs(steep[1] - dest[1]) >= (10f + MINI_DEST_R + gap) * d
     }
 
-    /** The mini map as a tile of its own, in the host's card style: the card, the content, the outline. [scale] is the
+    /** The mini map as a tile of its own, in the host's card shape: the theme's page color, the content, the outline. [scale] is the
      * tile's size against the full one (the lines, the dots and the padding shrink with it; the card's outline and corner do
      * not). */
     fun drawMiniMap(canvas: Canvas, r: RectF, ov: CarOverview, pal: CarOverlayColors, d: Float, scale: Float = 1f) {

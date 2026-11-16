@@ -9,7 +9,9 @@
 //!       of those keyed by input file name) and the suggested division (--labels, source "label"). With an OCR record, every page is
 //!       marked as OCR text (`text_source_ocr_pages`: all pages) unless --ocr-text-pages lists the pages that are (partial OCR).
 //!       Each PDF is read in a child process (this program run as the hidden `extract-pdf`), so a PDF that crashes MuPDF fails alone and
-//!       a long batch goes on; --in-process reads in this process instead (for debugging).
+//!       a long batch goes on; --in-process reads in this process instead (for debugging). --ocr reads the pages that have no text layer
+//!       with the Tesseract built in (trained data: CACHE_TESSDATA_DIR, or lib/tessdata next to this program): their text goes into the
+//!       pack as OCR text (`text_source_ocr_pages`, `book.ocr`), the PDF and its hash are untouched.
 //!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--built-at TIME]
 //!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, log/builder-<id>.jsonl
 //!       (the seed log), SHA256SUMS and .local/docs.json (the view)
@@ -61,10 +63,10 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>\n  cache-build selftest-pdfs <dir> [--pages N]"
     );
     eprintln!(
-        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]\n  cache-build view --bookshelves <dir> --library <library dir> [--library <library dir>...]"
+        "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]\n  cache-build view --bookshelves <dir> --library <library dir> [--library <library dir>...]"
     );
     std::process::exit(2);
 }
@@ -93,7 +95,7 @@ struct Args {
 }
 
 fn parse(args: &[String]) -> Args {
-    let flags = ["--fake-embedder", "--archive", "--survey", "--in-process"];
+    let flags = ["--fake-embedder", "--archive", "--survey", "--in-process", "--ocr"];
     let mut pos = Vec::new();
     let mut opts = Vec::new();
     let mut i = 0;
@@ -145,6 +147,7 @@ fn main() {
         "zim-pdfs" => cmd_zim_pdfs(&a),
         "dump" => cmd_dump(&a),
         "passages" => cmd_passages(&a),
+        "selftest-pdfs" => cmd_selftest_pdfs(&a),
         _ => usage(),
     };
     std::process::exit(code);
@@ -223,6 +226,23 @@ fn cmd_pdf(a: &Args) -> i32 {
     };
     let child = ChildExtractor::current_exe(std::env::temp_dir());
     let in_process = a.has("--in-process");
+    // `--ocr`: read the pages that have no text layer with the Tesseract built in (trained data from CACHE_TESSDATA_DIR or lib/tessdata
+    // next to this program). The OCR text goes into the pack only; the PDF and its hash are untouched.
+    let ocr_settings = if a.has("--ocr") {
+        match cache_builder::ocr::OcrSettings::discover() {
+            Some(s) if !in_process => Some(s),
+            Some(_) => {
+                eprintln!("error: --ocr runs in the child process; drop --in-process");
+                return 2;
+            }
+            None => {
+                eprintln!("error: --ocr needs eng.traineddata: set CACHE_TESSDATA_DIR to its folder or put it in lib/tessdata next to this program");
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
     let mut failed = 0;
     let mut pieces_out = String::new();
     for f in &a.pos {
@@ -277,7 +297,13 @@ fn cmd_pdf(a: &Args) -> i32 {
         if let Some(v) = a.get("--doc-version") {
             o.doc_version = v.parse().unwrap_or(0);
         }
-        let extract = |b: &[u8]| if in_process { extract_pdf(b) } else { child.extract(b) };
+        let extract = |b: &[u8]| {
+            if in_process {
+                extract_pdf(b)
+            } else {
+                child.extract_with_ocr(b, ocr_settings.as_ref(), &mut |done, total| eprintln!("{name}: OCR {done} of {total} scanned pages"))
+            }
+        };
         match build_pack_with_extractor(&bytes, &o, embedder, &mut |_| {}, &extract) {
             Ok((mut pack, r)) => {
                 // Text that came from OCR: with an OCR record, every page's text is OCR (an OCR'd copy has its whole text layer
@@ -829,6 +855,29 @@ fn cmd_zim_pdfs(a: &Args) -> i32 {
             1
         }
     }
+}
+
+/// `selftest-pdfs <dir> [--pages N]`: writes `text.pdf` (N pages of text) and `scan.pdf` (N pages that are only pictures of text, no text
+/// layer) into `<dir>`, for checking a build on the machine it will run on (`pdf --ocr` should make `scan.pdf` searchable).
+fn cmd_selftest_pdfs(a: &Args) -> i32 {
+    use cache_builder::selftest::{make_mixed_pdf, sample_lines, Mixed};
+    let Some(dir) = a.pos.first() else { usage() };
+    let n: usize = a.get("--pages").and_then(|v| v.parse().ok()).unwrap_or(5).max(1);
+    if std::fs::create_dir_all(dir).is_err() {
+        eprintln!("error: cannot make {dir}");
+        return 1;
+    }
+    let text: Vec<Mixed> = (0..n).map(|i| Mixed::Text(sample_lines(i))).collect();
+    let scan: Vec<Mixed> = (0..n).map(|i| Mixed::Scan(sample_lines(i))).collect();
+    for (name, pdf) in [("text.pdf", make_mixed_pdf(&text)), ("scan.pdf", make_mixed_pdf(&scan))] {
+        let path = PathBuf::from(dir).join(name);
+        if let Err(e) = std::fs::write(&path, &pdf) {
+            eprintln!("error: {}: {e}", path.display());
+            return 1;
+        }
+        println!("{}: {} pages, {} bytes", path.display(), n, pdf.len());
+    }
+    0
 }
 
 fn cmd_dump(a: &Args) -> i32 {

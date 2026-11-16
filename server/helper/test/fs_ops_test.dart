@@ -51,6 +51,22 @@ void main() {
     expect((top.single as Map)['name'], 'bin.dat');
   });
 
+  test('onWritten gets the support-relative path after a successful write or rename on support, and nothing for docs or a refused path', () {
+    final told = <String>[];
+    final f = FsOps(support: support, docs: docs, onWritten: told.add);
+    f.handle('fs.write', {'root': 'support', 'path': 'sub/a.json', 'string': '{}'});
+    expect(told, ['sub/a.json']);
+    f.handle('fs.rename', {'root': 'support', 'from': 'sub/a.json', 'to': 'sub/b.json'});
+    expect(told, ['sub/a.json', 'sub/b.json']);
+    f.handle('fs.write', {'root': 'docs', 'path': 'd.json', 'string': '{}'});
+    f.handle('fs.rename', {'root': 'docs', 'from': 'd.json', 'to': 'e.json'});
+    expect(told.length, 2, reason: 'the docs root is never told');
+    expect(codeOf(() => f.handle('fs.write', {'root': 'support', 'path': '../x.json', 'string': '{}'})), 'bad_path');
+    expect(codeOf(() => f.handle('fs.rename', {'root': 'support', 'from': 'nope.json', 'to': 'z.json'})), 'not_found');
+    expect(codeOf(() => f.handle('fs.rename', {'root': 'support', 'from': 'sub/b.json', 'to': '../z.json'})), 'bad_path');
+    expect(told.length, 2, reason: 'a refused or failed call tells nothing');
+  });
+
   test('missing things are not_found', () {
     expect(codeOf(() => fs.handle('fs.read', {'root': 'docs', 'path': 'x'})), 'not_found');
     expect(codeOf(() => fs.handle('fs.list', {'root': 'docs', 'path': 'x'})), 'not_found');
@@ -156,14 +172,14 @@ void main() {
     expect(fs.handles('fs.roots'), isTrue);
   });
 
-  test('over the line protocol: bytes travel as {"\$bytes"}, errors carry the code', () {
+  test('over the line protocol: bytes travel as {"\$bytes"}, errors carry the code', () async {
     final d = CoreDispatcher(() => FakeNative());
-    String run(Map<String, dynamic> req) => handleLine(jsonEncode(req), d, handlers: [fs]);
-    var r = jsonDecode(run({'id': 1, 'op': 'fs.write', 'args': {'root': 'docs', 'path': 'p', 'bytes': {r'$bytes': base64Encode([9, 8])}}}));
+    Future<String> run(Map<String, dynamic> req) => handleLine(jsonEncode(req), d, handlers: [fs]);
+    var r = jsonDecode(await run({'id': 1, 'op': 'fs.write', 'args': {'root': 'docs', 'path': 'p', 'bytes': {r'$bytes': base64Encode([9, 8])}}}));
     expect(r, {'id': 1, 'ok': true, 'result': null});
-    r = jsonDecode(run({'id': 2, 'op': 'fs.read', 'args': {'root': 'docs', 'path': 'p'}}));
+    r = jsonDecode(await run({'id': 2, 'op': 'fs.read', 'args': {'root': 'docs', 'path': 'p'}}));
     expect(r['result'], {r'$bytes': base64Encode([9, 8])});
-    r = jsonDecode(run({'id': 3, 'op': 'fs.read', 'args': {'root': 'docs', 'path': '../p'}}));
+    r = jsonDecode(await run({'id': 3, 'op': 'fs.read', 'args': {'root': 'docs', 'path': '../p'}}));
     expect(r['ok'], isFalse);
     expect(r['error']['code'], 'bad_path');
   });
@@ -187,8 +203,10 @@ void main() {
       'settings': {'name': 'Guide'},
     });
     final x = serverCoreExtras(dirs);
-    expect(x.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'notebook', 'regions'});
+    expect(x.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'video', 'notebook', 'regions'});
     expect((x['live'] as Map)['sources_dir'], '${docs.path}/live-defs');
+    // the saved videos' folder the video ops keep them in, so the core attaches their caption indexes
+    expect(x['video'], {'dir': '${docs.path}/videos'});
     expect((x['notebook'] as Map)['db_path'], '${support.path}/notebook/notebook.sqlite');
     expect(Directory('${docs.path}/live-defs').existsSync(), isTrue);
   });

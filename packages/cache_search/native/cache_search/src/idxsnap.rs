@@ -538,6 +538,16 @@ fn publish_build(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<(String, u64)>> {
     let build = snapshot::build_dir(sd);
+    // A whole library build records the points it covered, as an extension does: the shard's count when the build ran (its record's
+    // total), which counts the points its settings leave out. Without it the keyword status compares the shard with the index's
+    // documents, which a library that leaves points out never matches, so every look found its words pending and brought another
+    // build. A later change to the shard makes the counts differ again, and the next extension records them anew.
+    let mut extra = extra;
+    if kind == KIND_LIBRARY && !extra.contains_key("points") {
+        if let Some(m) = read_meta(&build).filter(|m| m.state == "done") {
+            extra.insert("points".into(), json!(m.total));
+        }
+    }
     let manifest = manifest_for(kind, source_id, tokenizer, extra);
     compat_of(kind)(&manifest).map_err(Error::unsupported)?;
     let Some(stage) = snapshot::stage(&build, &NOT_IN_SNAPSHOT, true, &|d, t| phase("manifest", d, t + 1), cancelled)?

@@ -3,6 +3,13 @@
 # "Family" group for a test build (an internal group that gets every build: export compliance and "What to test", no beta review).
 # Manual trigger only: macOS runner minutes cost about 10x Linux on a private repo.
 #
+# Round builds: `ios_build` gives a Family test build a dotted build number (CFBundleVersion) such as 51.1, 51.2 while pubspec.yaml
+# says +51, so the release builds keep plain numbers (52 later). Apple allows up to three period-separated integers (TN2420).
+# Only the iPhone build number changes; pubspec.yaml, Android and kAppBuild stay whole numbers.
+#
+# The car screen (CarPlay) is off unless `carplay` is ticked: the app then has no CarPlay entitlement and CarPlay never shows it
+# (check-app.sh refuses a signed app whose entitlement does not match the tick box).
+#
 # Signing: a distribution certificate and an App Store provisioning profile made with the App Store Connect API (the account has no
 # registered devices, so Xcode's automatic development signing cannot work headless). They live only in the Actions secrets
 # IOS_DIST_P12_B64, IOS_DIST_P12_PASSWORD and IOS_PROFILE_B64. ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_B64 are the API key (upload).
@@ -38,6 +45,14 @@ on:
         type: choice
         options: [Public, Family]
         default: Public
+      carplay:
+        description: Build with the car screen (CarPlay) on. Its icon then shows on the CarPlay screen of everyone who has the build
+        type: boolean
+        default: false
+      ios_build:
+        description: "Round build for TestFlight Family only: a dotted build number such as 51.1 (empty = pubspec's build number)"
+        type: string
+        default: ''
 
 concurrency:
   group: ios-testflight-${{ github.run_id }}
@@ -59,6 +74,7 @@ jobs:
       upload: ${{ steps.p.outputs.upload }}
       build_name: ${{ steps.v.outputs.build_name }}
       build_number: ${{ steps.v.outputs.build_number }}
+      ios_build_number: ${{ steps.ib.outputs.ios_build_number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +112,30 @@ jobs:
             done
           fi
           echo "Required configuration is present (secret values are not logged)."
+      # The car screen (CarPlay), input `carplay`: the build then claims the CarPlay entitlement (CACHE_CARPLAY=YES picks
+      # Runner/RunnerCarPlay.entitlements). Settled here, before any Mac minutes: the profile must carry the entitlement (an app
+      # that claims one its profile lacks does not sign). The build goes to whichever group is chosen: the car screen is part
+      # of the one build every tester gets.
+      - name: The car screen build's profile carries the CarPlay entitlement
+        if: inputs.carplay && inputs.stage == 'all'
+        env:
+          IOS_PROFILE_B64: ${{ secrets.IOS_PROFILE_B64 }}
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          echo "$IOS_PROFILE_B64" | base64 -d > "$work/profile.mobileprovision"
+          if ! openssl smime -inform der -verify -noverify -in "$work/profile.mobileprovision" -out "$work/profile.plist" 2> /dev/null; then
+            echo "::warning::The profile could not be read here; the Mac job checks it again before it archives."
+            exit 0
+          fi
+          python3 -I - "$work/profile.plist" <<'PY'
+          import plistlib, sys
+          entitlements = plistlib.load(open(sys.argv[1], "rb")).get("Entitlements", {})
+          if entitlements.get("com.apple.developer.carplay-maps") is not True:
+              print("::error::The provisioning profile does not carry com.apple.developer.carplay-maps: a build with the car screen on cannot be signed with it.")
+              sys.exit(1)
+          print("The profile carries the CarPlay entitlement (its contents are not logged).")
+          PY
       # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and build number 31, the same on iPhone and
       # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
       # version are two builds), so it is not tied to the version's last number. It is the build number TestFlight gets (not the run
@@ -104,6 +144,31 @@ jobs:
         id: v
         # Also fails when app/lib/version.dart has a different version or build number, or the build number is 1000 or more.
         run: bash .github/scripts/app-version.sh --store
+      # The iPhone build number: pubspec's, or the round build's dotted number (input ios_build). A round build goes to Family only,
+      # and its first number must be pubspec's build number (pubspec +51 allows 51.1, 51.2), so it sorts above 51 and below 52.
+      - name: The iPhone build number
+        id: ib
+        env:
+          IOS_BUILD: ${{ inputs.ios_build }}
+          PUBSPEC_BUILD: ${{ steps.v.outputs.build_number }}
+          UPLOAD: ${{ inputs.upload }}
+          GROUP: ${{ inputs.group || 'Public' }}
+        run: |
+          number="$PUBSPEC_BUILD"
+          if [[ -n "$IOS_BUILD" ]]; then
+            if [[ ! "$IOS_BUILD" =~ ^[0-9]+(\.[0-9]+){0,2}$ || ${#IOS_BUILD} -gt 18 ]]; then
+              echo "::error::ios_build must be one to three whole numbers separated by periods, at most 18 characters, such as 51.1; got: $IOS_BUILD"; exit 1
+            fi
+            if [[ "$UPLOAD" == true && "$GROUP" != Family ]]; then
+              echo "::error::A round build (ios_build) goes to the Family group only; the group is $GROUP"; exit 1
+            fi
+            if (( 10#${IOS_BUILD%%.*} != 10#$PUBSPEC_BUILD )); then
+              echo "::error::ios_build $IOS_BUILD must start with pubspec's build number $PUBSPEC_BUILD (for example $PUBSPEC_BUILD.1)"; exit 1
+            fi
+            number="$IOS_BUILD"
+          fi
+          echo "ios_build_number=$number" >> "$GITHUB_OUTPUT"
+          echo "iPhone build number: $number"
       - name: The build number is higher than the last TestFlight build
         if: inputs.stage == 'all'
         env:
@@ -111,12 +176,13 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
           UPLOAD: ${{ inputs.upload }}
+          IOS_BUILD_NUMBER: ${{ steps.ib.outputs.ios_build_number }}
         run: |
           if [[ -z "$ASC_KEY_ID" || -z "$ASC_ISSUER_ID" || -z "$ASC_KEY_P8_B64" ]]; then
             if [[ "$UPLOAD" == true ]]; then echo "::error::The App Store Connect key is needed to check the build number"; exit 1; fi
             echo "::warning::No App Store Connect key: the build number was not checked against TestFlight."; exit 0
           fi
-          python3 -I packages/cache_search/ios/testflight_public.py --check-newer "${{ steps.v.outputs.build_number }}"
+          python3 -I packages/cache_search/ios/testflight_public.py --check-newer "$IOS_BUILD_NUMBER"
       - id: p
         run: |
           echo "stage=${{ inputs.stage }}" >> "$GITHUB_OUTPUT"
@@ -311,7 +377,7 @@ jobs:
           flutter pub get
           flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart test/browse/reader_resources_test.dart test/video_player_screen_test.dart
           cmp ../packages/cache_search/ios/tests/offline-reader-rules.json "$RUNNER_TEMP/reader-rules.json"
-          flutter build ios --config-only --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
+          flutter build ios --config-only --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.ios_build_number }}
           cd ios && pod install
       - name: Signing certificate and profile
         env:
@@ -336,19 +402,25 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
           cp "$RUNNER_TEMP/cache.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "profile: $(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist") $UUID"
+          if [[ "${{ inputs.carplay }}" == true ]]; then
+            [[ $(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.carplay-maps' "$RUNNER_TEMP/profile.plist" 2>/dev/null) == true ]] \
+              || { rm -f "$RUNNER_TEMP/profile.plist"; echo "::error::The profile does not carry the CarPlay entitlement: the car screen build cannot be signed."; exit 1; }
+          fi
           rm -f "$RUNNER_TEMP/profile.plist"
       - name: Archive
         working-directory: app/ios
         run: |
           set -o pipefail
+          # The car screen: CACHE_CARPLAY (NO in the project) writes Info.plist's CacheCarPlay and picks the entitlements file.
           xcodebuild archive \
             -workspace Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            CACHE_CARPLAY=${{ inputs.carplay && 'YES' || 'NO' }} \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
       - name: Verify the signed archive
         run: |
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.ios_build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
       - name: Export the .ipa
         run: |
@@ -379,7 +451,7 @@ jobs:
           shasum -a 256 out/*.ipa
           mkdir "$RUNNER_TEMP/ipa-check"
           unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.ios_build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
           rm -rf "$RUNNER_TEMP/ipa-check"
       - uses: actions/upload-artifact@v4
@@ -429,6 +501,7 @@ jobs:
           ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
           WHATS_NEW_INPUT: ${{ inputs.whats_new }}
           GROUP: ${{ inputs.group || 'Public' }}
+          IOS_BUILD_NUMBER: ${{ needs.plan.outputs.ios_build_number }}
         run: |
           export WHATS_NEW="$WHATS_NEW_INPUT"
-          python3 -I packages/cache_search/ios/testflight_public.py "${{ needs.plan.outputs.build_number }}" "$GROUP"
+          python3 -I packages/cache_search/ios/testflight_public.py "$IOS_BUILD_NUMBER" "$GROUP"

@@ -31,7 +31,46 @@ pub(crate) fn load(data: &Path) -> Vec<RemovedEntry> {
     std::fs::read_to_string(data.join("build/removed/manifest.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
+/// A book the person deleted from a library: its file's hash (as kept, and as it arrived), remembered for good. Unlike a Removed
+/// file this is never purged: it is how a linked folder knows not to add the deleted book's file back on its own.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Forgotten {
+    library_id: String,
+    blake3: String,
+    epoch: u64,
+}
+
 impl BuildService {
+    fn forgotten_path(&self) -> PathBuf {
+        self.data.join("build/removed/forgotten.json")
+    }
+
+    fn read_forgotten(&self) -> Vec<Forgotten> {
+        std::fs::read_to_string(self.forgotten_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    /// Remember the hashes of a book deleted from `library_id`.
+    pub(crate) fn remember_deleted(&self, library_id: &str, hashes: &[String]) {
+        if hashes.is_empty() {
+            return;
+        }
+        let mut list = self.read_forgotten();
+        for h in hashes {
+            if !list.iter().any(|f| f.library_id == library_id && &f.blake3 == h) {
+                list.push(Forgotten { library_id: library_id.to_string(), blake3: h.clone(), epoch: super::epoch() });
+            }
+        }
+        let _ = std::fs::create_dir_all(self.data.join("build/removed"));
+        if let Err(e) = super::write_json(&self.forgotten_path(), &list) {
+            eprintln!("cache: writing the record of deleted books: {e}");
+        }
+    }
+
+    /// Was a book with this hash deleted from this library?
+    pub(crate) fn was_deleted(&self, library_id: &str, blake3: &str) -> bool {
+        self.read_forgotten().iter().any(|f| f.library_id == library_id && f.blake3 == blake3)
+    }
+
     fn removed_files(&self) -> PathBuf {
         self.data.join("build/removed/files")
     }

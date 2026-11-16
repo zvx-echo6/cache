@@ -36,7 +36,8 @@ pub struct DocFields<'a> {
 }
 
 /// The payload of one piece: the fields today's libraries use (`title`, `text`, `page`, `source`, `link`, `doc_id`,
-/// `doc_version`; the settings file maps these) plus fields the settings file does not map, so the model never sees them and the
+/// `doc_version`; the settings file maps these), `piece` (the passage's position in its document, the `index` of its point id; read by
+/// "Read the whole document") plus fields the settings file does not map, so the model never sees them and the
 /// keyword index does not cover them: `heading_path`, `pdf_page` and `pdf_page_end` (1-based PDF pages), `page_end` (a page label,
 /// only when the piece crosses a page), `source_blake3`, and, when given, `author`, `zim_id` and `zim_path`.
 pub fn piece_payload(doc: &DocFields, p: &PackPiece) -> Value {
@@ -48,6 +49,7 @@ pub fn piece_payload(doc: &DocFields, p: &PackPiece) -> Value {
         "link": doc.link,
         "doc_id": doc.doc_id,
         "doc_version": doc.doc_version,
+        "piece": p.index,
         "heading_path": p.heading_path,
         "source_blake3": doc.source_blake3,
     });

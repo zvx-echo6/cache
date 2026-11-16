@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../car/car_voice_access.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/wizard.dart' show openSetupAgain;
 import '../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
@@ -125,6 +128,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return [Part('Linked to ${peers.length} devices')];
   }
 
+  /// "Off" (not yet asked), "Blocked in the device's settings" (refused before), "On" (both granted). Words copied from the sharing
+  /// row ("Off"), the location row on the assistant page and the source switch ("On").
+  List<Part> _carVoice(CarVoiceAccess v) {
+    if (v.granted) return const [Part('On', Tone.ok)];
+    if (v.blocked) return const [Part("Blocked in the device's settings", Tone.warn)];
+    return const [Part('Off')];
+  }
+
   @override
   Widget build(BuildContext context) {
     // A tablet shows the pages beside the list, the first one chosen.
@@ -141,7 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions, ?ModelDownloads.shared]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions, ?ModelDownloads.shared, ?d.carVoice]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
@@ -190,7 +201,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'Sharing and sync',
                       status: _sharing(sharing),
                       selected: isPaneSelected(context, 'settings-sharing'),
-                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing, settingsSync: d.hub.settingsSync)),
+                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing, settingsSync: d.hub.settingsSync, onOpenItem: d.hub.openShareItem)),
                     ),
                   ),
                 SettingsRow(
@@ -203,6 +214,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
+            // Voice search from the car: iPhone with the car screen only. Tapping asks iOS for the microphone and speech recognition; when
+            // one was refused before, it opens iOS's Settings for Cache.
+            if (d.carVoice case final v? when v.available)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: SettingsGroup(
+                  rows: [
+                    SettingsRow(
+                      key: const ValueKey('settings-car-voice'),
+                      icon: Icons.mic_none,
+                      title: 'Search by voice from the car',
+                      status: _carVoice(v),
+                      onTap: () => unawaited(v.rowTapped()),
+                    ),
+                  ],
+                ),
+              ),
             // The setup wizard again, with what is chosen now picked (Discover's first-run wizard).
             if (DiscoverState.shared case final discover?)
               Padding(

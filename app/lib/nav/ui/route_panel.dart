@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../../maps/ui/map_widgets.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
+import '../street_names.dart';
 import '../units.dart';
+import 'route_steps.dart';
 
 /// The top pill while choosing how to go: where to, and the way back to the map.
 class DirectionsHeader extends StatelessWidget {
@@ -26,13 +28,27 @@ class DirectionsHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Directions to', style: TextStyle(fontSize: 13, color: k.secondary)),
-                Text(to?.name ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                // Where to: the destination on the map.
+                InkWell(
+                  key: const ValueKey('directions-to'),
+                  onTap: to == null ? null : () => nav.showOnMap(to.point),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Directions to', style: TextStyle(fontSize: 13, color: k.secondary)),
+                      Text(to?.name ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                    ],
+                  ),
+                ),
                 if (nav.fromPlace case final f?)
                   Row(
                     children: [
                       Expanded(
-                        child: Text('From ${f.name}', key: const ValueKey('directions-from'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                        child: InkWell(
+                          onTap: () => nav.showOnMap(f.point),
+                          child: Text('From ${f.name}', key: const ValueKey('directions-from'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                        ),
                       ),
                       IconButton(
                         key: const ValueKey('directions-from-clear'),
@@ -48,7 +64,13 @@ class DirectionsHeader extends StatelessWidget {
                   Row(
                     key: ValueKey('stop-$i'),
                     children: [
-                      Expanded(child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text))),
+                      Expanded(
+                        child: InkWell(
+                          key: ValueKey('stop-show-$i'),
+                          onTap: () => nav.showOnMap(stop.point),
+                          child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
+                        ),
+                      ),
                       IconButton(
                         key: ValueKey('stop-remove-$i'),
                         tooltip: 'Remove stop ${i + 1}',
@@ -71,10 +93,22 @@ class DirectionsHeader extends StatelessWidget {
 
 /// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onNextTurn, this.onDownloadArea, this.onAddOffroad});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// "Download this area" under a route outside the downloaded maps ([NavState.outsideMaps]): the download for the route's area.
+  /// Null leaves it out.
+  final VoidCallback? onDownloadArea;
+
+  /// "Add off-road data" under an off-road route with no off-road data ([NavState.offroadDataMissing]): the off-road data for the
+  /// route's area. Null leaves it out.
+  final VoidCallback? onAddOffroad;
+
+  /// The next arrow beside Start: shows the route's first turn (the step card). Null leaves the arrows out. On the whole route
+  /// the back arrow is off.
+  final VoidCallback? onNextTurn;
 
   /// The chosen route's elevation (RouteElevationSummary), under the routes; null leaves it out.
   final Widget? elevation;
@@ -179,6 +213,26 @@ class RoutePanel extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                            // A place outside the downloaded maps: the download for it.
+                            if (nav.outsideMaps && onDownloadArea != null) ...[
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                key: const ValueKey('route-download-area'),
+                                onPressed: onDownloadArea,
+                                icon: const Icon(Icons.download),
+                                label: const Text('Download this area'),
+                              ),
+                            ],
+                            // No off-road data here: the off-road data for it, or the road modes, which still work.
+                            if (nav.offroadDataMissing && onAddOffroad != null) ...[
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                key: const ValueKey('route-add-offroad'),
+                                onPressed: onAddOffroad,
+                                icon: const Icon(Icons.terrain_outlined),
+                                label: const Text('Add off-road data'),
+                              ),
+                            ],
                             // No off-road data here: the road modes still work.
                             if (nav.offroadDataMissing) ...[
                               const SizedBox(height: 8),
@@ -223,11 +277,21 @@ class RoutePanel extends StatelessWidget {
             const SizedBox(height: 4),
             Padding(
               padding: const EdgeInsets.only(right: 16),
-              child: FilledButton.icon(
-                key: const ValueKey('route-start'),
-                onPressed: nav.route == null || nav.routing ? null : nav.start,
-                icon: const Icon(Icons.navigation),
-                label: const Text('Start'),
+              child: Row(
+                children: [
+                  if (onNextTurn != null) ...[
+                    StepArrows(onBack: null, onNext: nav.route == null || nav.routing || nav.route!.maneuvers.isEmpty ? null : onNextTurn),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const ValueKey('route-start'),
+                      onPressed: nav.route == null || nav.routing ? null : nav.start,
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Start'),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -374,8 +438,9 @@ class _RouteCard extends StatelessWidget {
   /// The main road of the route, for telling alternatives apart.
   String _via() {
     for (final m in route.maneuvers) {
-      if (m.streetNames.isNotEmpty && m.distanceM > 0) {
-        return 'via ${m.streetNames.first}';
+      final road = m.shownRoadName;
+      if (road != null && m.distanceM > 0) {
+        return 'via $road';
       }
     }
     return '';
@@ -384,9 +449,9 @@ class _RouteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final via = (route.raw['major_roads'] is List && (route.raw['major_roads'] as List).isNotEmpty)
-        ? 'via ${((route.raw['major_roads'] as List).first as Map)['name']}'
-        : _via();
+    final roads = route.raw['major_roads'];
+    final major = roads is List && roads.isNotEmpty ? majorRoadShown(roads.first) : null;
+    final via = major != null ? 'via $major' : _via();
     return Semantics(
       button: true,
       selected: selected,

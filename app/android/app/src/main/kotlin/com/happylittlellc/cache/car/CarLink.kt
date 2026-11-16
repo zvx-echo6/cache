@@ -10,7 +10,7 @@ import io.flutter.plugin.common.MethodChannel
  * The car side of the `co.cache/car` channel (lib/car/car_bridge.dart is the other side).
  *
  * Dart pushes the trip (`trip`), the route line (`route`), that the map style changed (`styleChanged`), short notices (`notice`)
- * and spoken prompts (`prompt`, `promptStop`). The car asks Dart for places, directions, start and stop, through [call].
+ * and spoken prompts (`prompt`, `promptStop`), and the phone map's pins (`pins`, held by CarPins). The car asks Dart for places, directions, start and stop, through [call].
  * Main thread only, as the Car App Library and Flutter channels both are.
  */
 object CarLink {
@@ -22,8 +22,17 @@ object CarLink {
         fun onDartReady() {}
         fun onSavedChanged() {}
 
+        /** The phone map's pins changed (CarPins holds them). */
+        fun onPins() {}
+
         /** A navigation request that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
         fun onNavRequest(req: NavRequest) {}
+
+        /** A voice search (`VIEW` of a `geo:` address) that reached the phone's activity while this car is connected. */
+        fun onSearchRequest(search: GeoView.Search) {}
+
+        /** A custom action that reached the phone's activity while this car is connected ([NavIntent.fromPhone]). */
+        fun onCarAction(action: CarAction) {}
     }
 
     private var channel: MethodChannel? = null
@@ -83,6 +92,7 @@ object CarLink {
             trip = CarTrip.EMPTY
             routeGeoJson = null
             routeBounds = null
+            CarPins.clear()
         }
         if (dartReady) channel?.invokeMethod("connected", mapOf("on" to on))
     }
@@ -92,6 +102,10 @@ object CarLink {
      * once, the route line goes, and the phone is asked to end its guidance. Nothing that depends on "guiding" waits for the
      * phone's answer.
      */
+    /** Tells the phone how this car's screen carries the two extras ([CarExtrasClass.carries]): the phone shows them itself
+     * when the car does not. Nothing is sent when the car goes; the phone forgets the word by itself then. */
+    fun extras(carries: String) = call("extras", mapOf("carries" to carries))
+
     fun stopGuidance() {
         if (trip.guiding) {
             stopping = true
@@ -109,6 +123,20 @@ object CarLink {
     fun navRequest(req: NavRequest): Boolean {
         if (!carConnected) return false
         each { it.onNavRequest(req) }
+        return true
+    }
+
+    /** A voice search for the car session that is attached; false when there is none to take it. */
+    fun searchRequest(search: GeoView.Search): Boolean {
+        if (!carConnected) return false
+        each { it.onSearchRequest(search) }
+        return true
+    }
+
+    /** A custom action for the car session that is attached; false when there is none to take it. */
+    fun carAction(action: CarAction): Boolean {
+        if (!carConnected) return false
+        each { it.onCarAction(action) }
         return true
     }
 
@@ -169,6 +197,11 @@ object CarLink {
                 result.success(null)
                 each { it.onRoute(geo, b) }
             }
+            "pins" -> {
+                CarPins.receive(call.arguments as? Map<*, *> ?: emptyMap<String, Any?>())
+                result.success(null)
+                each { it.onPins() }
+            }
             "savedChanged" -> {
                 result.success(null)
                 each { it.onSavedChanged() }
@@ -186,7 +219,8 @@ object CarLink {
                 audio?.prompt(call.argument<String>("text") ?: "")
                 result.success(null)
             }
-            "promptStop" -> {
+            "promptStop", "promptDone" -> {
+                // Stopped, or the phone's voice has said its prompts: the navigation focus is let go at once.
                 audio?.release()
                 result.success(null)
             }
@@ -200,6 +234,7 @@ object CarLink {
         trip = CarTrip.EMPTY
         routeGeoJson = null
         routeBounds = null
+        CarPins.clear()
         carConnected = false
         stopping = false
         dartReady = false

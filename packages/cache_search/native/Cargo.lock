@@ -979,12 +979,12 @@ dependencies = [
  "cache_classify",
  "cache_embed",
  "cache_ingest",
- "cache_pack",
  "cache_layers",
  "cache_live",
  "cache_navigate",
  "cache_netguard",
  "cache_notebook",
+ "cache_pack",
  "cache_places",
  "cache_regions",
  "cache_shelves",
@@ -1024,6 +1024,7 @@ dependencies = [
  "chrono",
  "edge",
  "libloading",
+ "mp4-atom",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1129,6 +1130,7 @@ dependencies = [
  "cache_netguard",
  "chrono",
  "libc",
+ "mp4-atom",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -4171,6 +4173,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4-atom"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "327faeb7d11fc3735194fdaeaa82af72167801bf39dd3d6b2684c8fc5cd7fc19"
+dependencies = [
+ "derive_more",
+ "num 0.4.3",
+ "pastey 0.2.3",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "mupdf"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4622,10 +4637,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9bdb1fb680e609c2e0930c1866cafdd0be7e7c7a1ecf92aec71ed8d99d3e133"
 dependencies = [
  "num-bigint 0.1.45",
- "num-complex",
+ "num-complex 0.1.44",
  "num-integer",
  "num-iter",
- "num-rational",
+ "num-rational 0.1.43",
+ "num-traits",
+]
+
+[[package]]
+name = "num"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-complex 0.4.6",
+ "num-integer",
+ "num-iter",
+ "num-rational 0.4.2",
  "num-traits",
 ]
 
@@ -4667,6 +4696,15 @@ dependencies = [
  "autocfg",
  "num-traits",
  "rustc-serialize",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -4726,6 +4764,17 @@ dependencies = [
  "num-integer",
  "num-traits",
  "rustc-serialize",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint 0.4.8",
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -6959,7 +7008,7 @@ version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d04b5ebc78da44d3a456319d8bc2783e7d8cc7ccbb5cb4dc3f54afbd93bf728"
 dependencies = [
- "num",
+ "num 0.1.43",
 ]
 
 [[package]]

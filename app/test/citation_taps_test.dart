@@ -57,10 +57,20 @@ const _sources = [
     lang: 'es',
     quote: 'barreras de sacos',
   )),
-  // a place, a web page and a guide section: not opened from here (as before)
+  // a place and a web page: not opened from here (as before)
   NumberedResult(6, SourceResult(title: 'Twin Falls', snippet: '', address: 'place:osm:w1')),
   NumberedResult(7, SourceResult(title: 'Boiling water at altitude', snippet: '', address: 'web:https://example.org/boil')),
+  // a library passage (the guide is a library too): the shell opens it (the passage, or the guide at its section). It did
+  // nothing before (2026-11-14): the tap went only to what the reader shows.
   NumberedResult(8, SourceResult(title: 'Cache guide: 1. Getting started: Choose a model', snippet: '', address: 'lib:cache-guide/0f6e')),
+  // a passage of a book in a library, from a PDF: it opens at its own address (the passage), not a #page form of it
+  NumberedResult(9, SourceResult(
+    title: 'INDEPENDENT ENERGY, p. 2',
+    snippet: '',
+    address: 'lib:proof-library-1ab4b7/20686424-aaaa',
+    pdfPage: 2,
+    quote: 'it was hard to tell the engine',
+  )),
 ];
 
 void main() {
@@ -74,7 +84,7 @@ void main() {
     final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
     chat.messages.add(ChatMessage.assistant()
       ..phase = TurnPhase.done
-      ..text = 'Boil it [1][2][3][4][5][6][7][8].'
+      ..text = 'Boil it [1][2][3][4][5][6][7][8][9].'
       ..sources = _sources);
     final opened = <String>[];
     await tester.pumpWidget(MaterialApp(
@@ -87,7 +97,7 @@ void main() {
         onOpenVideo: (l, t, lang) => opened.add('video $l @ $t $lang'),
       ),
     ));
-    await tester.tap(find.text('8 sources'));
+    await tester.tap(find.text('9 sources'));
     await tester.pumpAndSettle();
 
     Future<String?> tap(int n) async {
@@ -107,7 +117,8 @@ void main() {
     expect(await tap(5), 'video https://tube.example.org/w/v1 @ 64.0 es');
     expect(await tap(6), isNull);
     expect(await tap(7), isNull);
-    expect(await tap(8), isNull);
+    expect(await tap(8), 'source lib:cache-guide/0f6e');
+    expect(await tap(9), 'source lib:proof-library-1ab4b7/20686424-aaaa');
 
     // "Open the article" is under what opens in the reader: the page, the PDF passage and the EPUB passage
     expect(find.text('Open the article'), findsNWidgets(3));
@@ -126,6 +137,8 @@ void main() {
       null,
       null,
       null,
+      null,
+      // library passages open through the shell, not the reader (no "Open the article" under them)
       null,
       null,
     ]);

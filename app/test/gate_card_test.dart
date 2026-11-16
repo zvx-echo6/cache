@@ -49,7 +49,8 @@ void main() {
   Color lineColor(WidgetTester tester) => tester.widget<Text>(find.byKey(const ValueKey('ask-fix-line'))).style!.color!;
   Color emergency(WidgetTester tester) => tester.element(find.byKey(const ValueKey('ask-fix'))).t.emergency;
 
-  /// A model with a label in its display name, as a load leaves it in the settings: the start gate then holds it back.
+  /// A model with a label in its display name, as a load leaves it in the settings: the start leaves it resting, and Ask opening
+  /// ([AppState.wake]) finds too little room, so the gate holds it back.
   Future<void> startWithNamedModel(WidgetTester tester) async {
     final f = File('${dir.path}/Gemma-4-E2B-it-Q4_K_M.gguf')..writeAsBytesSync(List.filled(16, 0));
     final key = '${f.uri.pathSegments.last}|16';
@@ -59,6 +60,7 @@ void main() {
       'plainNames': {key: 'Gemma 4 E2B'},
     }));
     await tester.runAsync(app.init);
+    await tester.runAsync(app.wake);
   }
 
   testWidgets('held for memory: the calm card, with its texts and no emergency color', (tester) async {

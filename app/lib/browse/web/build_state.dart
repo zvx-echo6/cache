@@ -145,6 +145,10 @@ class BuildController extends ChangeNotifier {
   /// How much room a built library's files take on the device, and how much the device has free (the Library on the device knows; null
   /// when it does not).
   int? Function(String libraryId)? sizeOf;
+
+  /// What deleting library [libraryId] frees, in bytes: the figure the device gives for the library (its folder, work copy, stored
+  /// PDFs and record), else the size of its folder as the device list gives it; null when neither is known. Never a guess of 0.
+  int? freesOf(String libraryId) => library(libraryId)?.bytes ?? sizeOf?.call(libraryId);
   int? Function()? freeSpace;
 
   /// Whoever is showing a page that takes dropped PDFs sets this: the build page, a library's page.

@@ -41,6 +41,12 @@ LaneRole laneRole(Lane lane, {required bool anyMarked}) {
   return anyMarked ? LaneRole.dim : LaneRole.plain;
 }
 
+/// The lanes to show for the next maneuver: its own, once the turn is as close as the first voice prompt ([farStageM], read
+/// from the guidance engine for the way of travel: 800 m by car). None before that, off-road, on arrival, or when the road
+/// gave none. One rule for the phone's turn banner and for the car screen.
+List<Lane> lanesToShow(ProgressManeuver next, double? farStageM) =>
+    next.lanes.isNotEmpty && !next.isOffroad && !next.isArrival && farStageM != null && next.distanceM <= farStageM ? next.lanes : const [];
+
 /// 1 -> "1st", 2 -> "2nd", 3 -> "3rd", 4 -> "4th", 11 -> "11th", 21 -> "21st".
 String laneOrdinal(int n) {
   final r = n % 100;

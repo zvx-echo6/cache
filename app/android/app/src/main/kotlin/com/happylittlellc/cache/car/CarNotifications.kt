@@ -12,12 +12,14 @@ import androidx.car.app.notification.CarAppExtender
 import androidx.car.app.notification.CarPendingIntent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.happylittlellc.cache.OpenMaps
 import com.happylittlellc.cache.R
 
 /**
  * The turn-by-turn notification (quality rule NF-3): ongoing, category navigation, extended for the car. It shows in the car's
  * rail and, when the next maneuver changes, as a heads-up notification (the host hides those while Cache's own guidance is on
- * the screen). Tapping it opens Cache in the car.
+ * the screen). Tapping it opens Cache in the car; on the phone (its notification shade, its lock screen) it opens the Maps tab,
+ * where guidance is (OpenMaps).
  */
 class CarNotifications(private val context: Context) {
     private val nm = NotificationManagerCompat.from(context)
@@ -64,6 +66,7 @@ class CarNotifications(private val context: Context) {
             .setOnlyAlertOnce(!changed)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setSilent(true)
+            .setContentIntent(OpenMaps.pending(context, PHONE_TAP))
             .extend(extender)
             .build()
         nm.notify(ID, n)
@@ -87,6 +90,9 @@ class CarNotifications(private val context: Context) {
     companion object {
         const val CHANNEL = "cache_car_guidance"
         const val ID = 7300
+
+        /** The request code of the phone's tap (the car's is 7301). */
+        const val PHONE_TAP = 7302
     }
 }
 

@@ -30,7 +30,7 @@ pub fn strip_leaders(s: &str) -> String {
 }
 
 /// Collapse every run of whitespace (including no-break and zero-width spaces) to one space, drop soft hyphens and control
-/// characters, trim.
+/// characters, map old-style private-use digits and letters to ASCII, trim.
 pub fn normalize_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut space = false;
@@ -49,9 +49,20 @@ pub fn normalize_ws(s: &str) -> String {
             out.push(' ');
         }
         space = false;
-        out.push(c);
+        out.push(unmap_old_style(c));
     }
     out
+}
+
+/// Some PDF fonts store old-style digits (U+F730..=U+F739) and old-style lowercase letters (U+F761..=U+F77A) as
+/// private-use characters, which show as boxes and cannot be searched. Map exactly those two ranges to ASCII; every other
+/// private-use character (Symbol or Wingdings bullets, U+F0xx) is left as it is.
+fn unmap_old_style(c: char) -> char {
+    match c {
+        '\u{F730}'..='\u{F739}' => (b'0' + (c as u32 - 0xF730) as u8) as char,
+        '\u{F761}'..='\u{F77A}' => (b'a' + (c as u32 - 0xF761) as u8) as char,
+        _ => c,
+    }
 }
 
 fn is_hyphen(c: char) -> bool {
@@ -198,6 +209,28 @@ pub fn ends_sentence(t: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_style_digits_become_ascii() {
+        assert_eq!(normalize_ws("\u{F731}:\u{F731},\u{F730}\u{F730}\u{F730}"), "1:1,000");
+        assert_eq!(normalize_ws("\u{F730}\u{F731}\u{F732}\u{F733}\u{F734}\u{F735}\u{F736}\u{F737}\u{F738}\u{F739}"), "0123456789");
+    }
+
+    #[test]
+    fn old_style_lowercase_becomes_ascii() {
+        assert_eq!(normalize_ws("\u{F761}\u{F762}\u{F77A}"), "abz");
+    }
+
+    #[test]
+    fn other_private_use_characters_are_left_alone() {
+        assert_eq!(normalize_ws("\u{F0B7}"), "\u{F0B7}");
+        assert_eq!(normalize_ws("\u{F72F}\u{F73A}\u{F760}\u{F77B}"), "\u{F72F}\u{F73A}\u{F760}\u{F77B}");
+    }
+
+    #[test]
+    fn mixed_text_keeps_everything_else() {
+        assert_eq!(normalize_ws(" (\u{F731}:\u{F731},\u{F730}\u{F730}\u{F730} or \u{F730}.\u{F731}% solution)\u{F0B7} Caf\u{E9} "), "(1:1,000 or 0.1% solution)\u{F0B7} Caf\u{E9}");
+    }
 
     #[test]
     fn whitespace_is_normalised() {

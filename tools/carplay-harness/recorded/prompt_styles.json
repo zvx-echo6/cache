@@ -1,0 +1,6 @@
+[
+  {"state": "nothing else is using the phone's audio", "code": 1852992876, "fourCC": "nrml", "style": "spoken", "answer": "normal", "phoneSpeaks": true, "tone": false},
+  {"state": "a voice call is on, Siri is up but not listening, or a voicemail plays", "code": 1936224884, "fourCC": "shrt", "style": "tone", "answer": "short", "phoneSpeaks": false, "tone": true},
+  {"state": "something is listening on the microphone (Siri taking speech)", "code": 1852796517, "fourCC": "none", "style": "silent", "answer": "none", "phoneSpeaks": false, "tone": false},
+  {"state": "a code that is none of the three", "code": 0, "fourCC": "", "style": "spoken", "answer": "normal", "phoneSpeaks": true, "tone": false}
+]

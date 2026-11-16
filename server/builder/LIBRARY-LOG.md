@@ -115,7 +115,7 @@ A log is JSON Lines: one event per line, UTF-8, `\n` after every line, never edi
 | `folder`, `locate`, `unlocate` | as below | Linked-folder locations. |
 
 ```json
-{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"<blake3 A>","div":"210","by":"auto","loc":"recon/b3f1"}
+{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"<blake3 A>","div":"210","by":"auto","loc":"field/b3f1"}
 {"v":1,"at":1793600000001,"dev":"phone-7","ev":"assign","copy":"<blake3 A>","div":"210","seq":1}
 {"v":1,"at":1793600000002,"dev":"phone-7","ev":"same","copy":"<blake3 B>","with":"<blake3 A>","by":"auto","how":"text","score":0.921875}
 {"v":1,"at":1793600100000,"dev":"phone-7","ev":"notsame","copy":"<blake3 B>","with":"<blake3 A>","by":"user"}
@@ -130,7 +130,7 @@ division), `retire` (old number), `assign` (new number), all against the book's 
 ### Book facts (`facts`)
 
 ```json
-{"v":1,"at":1793600000000,"dev":"phone-7","ev":"facts","copy":"<blake3 A>","loc":"recon/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+{"v":1,"at":1793600000000,"dev":"phone-7","ev":"facts","copy":"<blake3 A>","loc":"field/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
 ```
 
 - Checks (the same as the titles file): `author` is 1 to 200 characters after trimming, `edition` 1 to 60 after trimming, `year` a JSON integer from 1400 to 2100. A field that fails its check is **dropped on its own** (a reader keeps the valid fields); an event left with no valid field is skipped, and the writer refuses it. Values are stored trimmed.
@@ -187,7 +187,7 @@ person decides, and a person's choice is a `same` with `by: user`. A copy too sh
 A library arriving can hold thousands of copies, so `shelvesDetect` has a batch form (the request has `libraries`) that reads the features itself:
 
 ```json
-{"libraries":[{"library_id":"recon","dir":"/data/recon"}],"copies":["<key>"],"known":["<key>"],"tuning":{}}
+{"libraries":[{"library_id":"field","dir":"/data/field"}],"copies":["<key>"],"known":["<key>"],"tuning":{}}
 ```
 
 - `libraries`: where the copies are (each library's `copies.jsonl`, else its packs). All their copies are the **visible** copies; a copy in two libraries is one.
@@ -263,7 +263,7 @@ If `A`, `B` and `C` are linked `A-B` (0.90) and `B-C` (0.95), a user `notsame` b
 - **Existing per-device library logs** (only test devices and the build service have any; 1.1 has not shipped): on first run each device imports its OWN events from every library's `log/<own id>.jsonl` into its Bookshelves log (`cache_shelves::import`, core op `shelvesImport`). Each `doc` is mapped to the copy key through that library's copies file, else its live packs; the event keeps its `at` and gets `loc` = `<library_id>/<doc_id>`; an `assign` or `retire` about a `doc` with no pack in that library (a deleted book) is written as a `retire` of that division and number, with `copy` = the `doc_id` (the copy key of a pack with no `original_blake3`), the `loc` and the original `at`, and is counted as `reserved`: no book appears for it, but the number counts toward next free and is never given out again; any other event about such a `doc` is not imported and is counted as `unmapped`. Events are appended oldest first **with their original `at`** (the import does not raise them to the device's last `at`, so an old `place` never overrides a newer move), and an event already present in the device's Bookshelves log is not written again, so a crash between the append and the record cannot duplicate events. A file with no `unmapped` events is recorded in `.local/migrated.json`; a file with unmapped events is not recorded, so a later import maps them once their pack is here:
 
   ```json
-  {"format":1,"files":{"recon/phone-7.jsonl":{"size":4120,"events":31,"unmapped":0,"reserved":2}}}
+  {"format":1,"files":{"field/phone-7.jsonl":{"size":4120,"events":31,"unmapped":0,"reserved":2}}}
   ```
 
   A file recorded there is not imported again; one that is not recorded can be imported again safely. Other devices' library logs are ignored (they import their own), and so is the seed log. After the import, library logs are not written again.
@@ -277,7 +277,7 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
 ```json
 {
   "format": 1,
-  "built_from": {"libraries": {"recon": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
+  "built_from": {"libraries": {"field": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
   "books": {
     "A": {
       "title": "Wilderness Medicine Handbook",
@@ -285,9 +285,9 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
       "aka": ["Wilderness Medicine"],
       "reading": "B",
       "copies": [
-        {"copy": "A", "locs": ["recon/wm"], "available": true, "title": "Wilderness Medicine",
+        {"copy": "A", "locs": ["field/wm"], "available": true, "title": "Wilderness Medicine",
          "own_call": {"div": "210", "seq": 1, "suffix": 0, "text": "CDS 210-001"}, "locations": []},
-        {"copy": "B", "locs": ["recon/wm2"], "available": true, "title": "Wilderness Medicine, 7th ed",
+        {"copy": "B", "locs": ["field/wm2"], "available": true, "title": "Wilderness Medicine, 7th ed",
          "own_call": {"div": "210", "seq": 2, "suffix": 0, "text": "CDS 210-002"},
          "locations": [{"dev": "linux-a", "folder_id": "books", "relpath": "Medicine/wm.pdf", "version": null, "source_blake3": null}]}
       ],
@@ -330,14 +330,14 @@ events), and its `assign` numbers are **never** call numbers and never count tow
 - When `--titles` lines carry `author`, `edition` or `year` (checked as above, invalid fields dropped), a `facts` event follows for each such book, after all the title events, in `doc_id` order. This is the one addition to the seed log; older readers skip the unknown event. The event has `doc`, the book's `copy` (its `original_blake3`) and `loc` (`<library_id>/<doc_id>`) for readability, and only the fields the titles file gave:
 
   ```json
-  {"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"facts","doc":"b3f1","copy":"b3f1","loc":"recon-library/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+  {"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"facts","doc":"b3f1","copy":"b3f1","loc":"field-library/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
   ```
-- Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). The recon build passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
+- Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). A rebuild passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
 - Divisions are written in number order; within a division, books in number order, each as `place` then `assign`.
 
 ```json
-{"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"place","doc":"b3f1","div":"210","by":"auto"}
-{"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"assign","doc":"b3f1","div":"210","seq":1}
+{"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"place","doc":"b3f1","div":"210","by":"auto"}
+{"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"assign","doc":"b3f1","div":"210","seq":1}
 ```
 
 ### The library's local view (`.local/docs.json`, format 2)

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../files.dart';
 import '../notebook_model.dart';
 import '../notebook_state.dart';
+import '../templates.dart';
 import 'folder.dart';
 import 'formats.dart';
 import 'merge.dart';
@@ -48,7 +49,13 @@ class SyncConflict {
 class SyncReport {
   int written = 0;
   int read = 0;
+
+  /// Of [read], the entries that came new from a file (notebook sync: from another device).
+  int arrived = 0;
   int deleted = 0;
+
+  /// Notebook sync: entries removed here because the other device removed their file.
+  int removedHere = 0;
 
   /// Entries changed in both places whose changes were merged (the person is told, not asked).
   final List<String> merged = [];
@@ -57,6 +64,9 @@ class SyncReport {
   /// Notes imported by their tag in this run (their titles), and the notebooks they went to.
   final List<String> imported = [];
   final Set<String> importedBooks = {};
+
+  /// The entries those notes became (so one note added can be opened).
+  final List<String> importedIds = [];
 
   /// Tagged notes Cache could not import (it could not write its id into them: a read-only folder).
   int notAdded = 0;
@@ -149,7 +159,12 @@ class NotebookSync {
     this.logseqConfig,
     this.importTag = kDefaultImportTag,
     DateTime Function()? clock,
-  }) : _now = clock ?? DateTime.now;
+    Future<Templates> Function()? templates,
+  })  : _now = clock ?? DateTime.now,
+        _templates = templates ?? loadTemplates;
+
+  /// The built-in templates (and starter logs): a notebook that arrives without its definition is made from the one its files name.
+  final Future<Templates> Function() _templates;
 
   /// The tag that imports a note (Obsidian and two-way Logseq).
   final String importTag;
@@ -252,6 +267,7 @@ class NotebookSync {
       photos: [for (final p in e.photos) p.id],
       fields: {for (final f in n.def.fields) if (f.fid != null && e.values.containsKey(f.fid) && m[f.fid] != null) m[f.fid]!: e.values[f.fid]},
       private: e.private,
+      template: kind == SyncKind.share ? templateKeyOf(n) : null,
       extra: _items[e.id]?.extra ?? const [],
       // Only the Cache-to-Cache share carries them: a person's own Obsidian vault or Logseq graph gets no Cache properties it
       // did not have.
@@ -423,6 +439,9 @@ class NotebookSync {
 
   static String folderNameOf(Notebook n) => folderName(n.name);
 
+  /// Where notebook sync's folder (the share) keeps photo [id]: every notebook's photos live in this one folder.
+  static String photoPath(String id) => 'photos/cache-$id.jpg';
+
   Future<String> _newPath(EntryDoc d, Notebook n) async {
     final dir = folderNameOf(n);
     final base = noteFileName(d);
@@ -521,6 +540,25 @@ class NotebookSync {
     final have = byName[d.notebook];
     if (have != null) return have;
     final shared = await _sharedBook(d.notebook);
+    // The notebook may be here under another name (this device's `.cache/notebooks.json` is from its last sync: renamed since).
+    // The name and the rest of the definition come from that file; the fields and their property names stay as they are here
+    // (saveNotebook keeps an existing notebook's fields), so every value stays in its field and every file keeps its keys.
+    final sharedId = shared?['id'];
+    final renamed = sharedId is String && notebook.notebook(sharedId) != null;
+    // No definition from this device's last sync, and the files say which built-in template the notebook was made from: made from
+    // that template, with its fields, so every value lands in its field (the property names come from the labels, the same on both
+    // devices). A template this build does not have is made as before.
+    final built = shared == null && d.template != null ? _builtIn(await _templates(), d.template!) : null;
+    if (built != null) {
+      final made = await notebook.saveNotebook(
+        template: built.template,
+        def: built.def.copyWith(name: d.notebook),
+        map: built.map,
+        templateRef: built.ref,
+      );
+      byName[made.name] = made;
+      return made;
+    }
     final made = await notebook.saveNotebook(
       id: shared?['id'] as String?,
       template: (shared?['template'] as String?) ?? 'notes',
@@ -531,7 +569,7 @@ class NotebookSync {
     // The other device's property names, by label, so both write the same ones.
     final sharedProps = shared?['props'];
     final sharedFields = shared?['def'] is Map ? (shared!['def'] as Map)['fields'] as List? ?? const [] : const [];
-    if (sharedProps is Map) {
+    if (sharedProps is Map && !renamed) {
       final byLabel = {for (final f in sharedFields) '${(f as Map)['label']}': sharedProps['${f['fid']}']};
       _props[made.id] = {
         for (final f in made.def.fields)
@@ -541,10 +579,38 @@ class NotebookSync {
     return made;
   }
 
+  /// Notebook sync: an entry this device has, in a file that names a notebook not here, is in a notebook renamed on the other
+  /// device (an entry never moves to another notebook in Cache). Its notebook here takes the new name and keeps its fields and
+  /// their property names, so the entry stays where it is and every value stays in its field. Before, a new notebook with no
+  /// fields was made for the name and the entry went there, its values left out of every field (`.cache/notebooks.json`, which
+  /// would have described the notebook, is a hidden file: it never leaves the device).
+  Future<void> _followRename(String id, String name, Map<String, Notebook> byName) async {
+    if (kind != SyncKind.share || name.trim().isEmpty || notebook.nameTaken(name)) return;
+    final had = await notebook.entry(id);
+    final home = had == null ? null : notebook.notebook(had.notebookId);
+    if (home == null || home.name == name) return;
+    try {
+      final renamed = await notebook.saveNotebook(id: home.id, def: home.def.copyWith(name: name));
+      byName.removeWhere((_, n) => n.id == home.id);
+      byName[renamed.name] = renamed;
+    } catch (e) {
+      // Not renamed (the store refused the name): the entry is read as before this change.
+      logError('Notebook sync: could not follow a notebook renamed on another device', error: e, detail: name);
+    }
+  }
+
   static Map _withoutFids(Map def) => {
         ...def,
         'fields': [for (final f in (def['fields'] as List? ?? const [])) if ((f as Map)['hidden'] != true) {...f}..remove('fid')],
       };
+
+  /// The built-in template or starter log a `cache_template` value names, or null (unknown here, or the Places template, whose
+  /// notebooks hold the saved places and are made as before).
+  static NotebookTemplate? _builtIn(Templates t, String key) {
+    final m = RegExp(r'^(starters|templates)/(.+)@\d+$').firstMatch(key);
+    if (m == null || m.group(2) == 'places') return null;
+    return m.group(1) == 'starters' ? t.starters.where((x) => x.id == m.group(2)).firstOrNull : t.byId(m.group(2)!);
+  }
 
   Map<String, dynamic>? _sharedBooks;
 
@@ -566,9 +632,12 @@ class NotebookSync {
   /// the file as the person's own properties.
   Future<NbEntry> _apply(String id, EntryDoc d, Map<String, Notebook> byName, {String? text}) async {
     final known = byName.containsKey(d.notebook);
+    if (!known) await _followRename(id, d.notebook, byName);
     var book = await _bookFor(d, byName);
-    if (!known && text != null) {
-      // The notebook was just made: read the fields again with its field names.
+    if (text != null) {
+      // Read the fields again with the notebook's field names: the file was read before the notebook was here (the first entry of a
+      // notebook that arrives made it just now; the entries after it in the same round were read before it existed, with no field
+      // names, and kept only their names: found with three repeaters that arrived together on a phone with no such notebook).
       final again = _parseAs(id, text, book, when: d.when);
       if (again != null) d = again;
     }
@@ -741,6 +810,7 @@ class NotebookSync {
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;
+            r.removedHere++;
           } else {
             // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
             // file or block is written back and the entry stays.
@@ -754,6 +824,10 @@ class NotebookSync {
           final saved = await _apply(id, f.doc, byName, text: f.text);
           _rec(id, f.path, f.text, saved.rev);
           r.read++;
+        } else if (kind == SyncKind.share && !cacheChanged && !fileChanged && f != null && f.doc.notebook != c.$1.name) {
+          // The notebook was renamed here: its entries' files say so too, so the rename travels with the notebook's synced data.
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
+          r.written++;
         } else if (cacheChanged && fileChanged) {
           final m = merge3(s.base, text, f.text);
           if (m.clean) {
@@ -771,6 +845,11 @@ class NotebookSync {
           }
         }
       } else if (s != null) {
+        // Not read is not deleted: an entry that is still in the store (and still part of this sync) was left out of the read, so
+        // nothing is removed or written for it this round.
+        final stored = await notebook.entry(id);
+        final home = stored == null ? null : notebook.notebook(stored.notebookId);
+        if (stored != null && home != null && _included(home, stored)) continue;
         if (f == null || kind == SyncKind.logseqExport) {
           // Gone from Cache: gone from the folder too (unless only the folder had it, already gone).
           if (f == null && kind != SyncKind.logseqExport) {
@@ -796,6 +875,7 @@ class NotebookSync {
         final saved = await _apply(id, f.doc, byName, text: f.text);
         _rec(id, f.path, f.text, saved.rev);
         r.read++;
+        r.arrived++;
       }
     }
     // Notes the person made with the import tag and no id: imported once, and Cache's id written into them.
@@ -975,8 +1055,10 @@ class NotebookSync {
       return;
     }
     _items[id] = _Item(u.path, unitText, 0, extra: doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
+    String? savedId;
     try {
       final saved = await _apply(id, doc, byName);
+      savedId = saved.id;
       _items[id] = _Item(u.path, unitText, saved.rev, extra: _items[id]?.extra ?? doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
     } catch (e) {
       _items.remove(id);
@@ -989,6 +1071,7 @@ class NotebookSync {
     }
     r.imported.add((doc.title ?? '').trim().isEmpty ? _baseName(u.path) : doc.title!.trim());
     r.importedBooks.add(book.id);
+    r.importedIds.add(savedId);
     await _save();
   }
 
@@ -1090,4 +1173,12 @@ class NotebookSync {
       if (await stateFile.exists()) await stateFile.delete();
     } catch (_) {}
   }
+}
+
+/// What a notebook's files say about its template (`cache_template`): its template ref when it was made from a starter log or a
+/// built-in template, else null. The Places template is left out (see NotebookSync._builtIn).
+String? templateKeyOf(Notebook n) {
+  final r = n.templateRef;
+  if (r == null || !RegExp(r'^(starters|templates)/.+@\d+$').hasMatch(r) || r.startsWith('templates/places@')) return null;
+  return r;
 }

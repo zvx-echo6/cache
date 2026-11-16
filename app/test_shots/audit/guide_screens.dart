@@ -8,6 +8,7 @@ import 'dart:typed_data';
 
 import 'package:cache/location/position_source.dart' show LocationPermissionState;
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
+import 'package:cache/settings/app_settings.dart' show kWatchHere;
 import 'package:cache/settings/location_access.dart' show LocationAccess;
 import 'package:cache/theme.dart' show CacheThemeId;
 import 'package:cache/browse/zim_download.dart';
@@ -809,9 +810,10 @@ void guideScreens() {
     _ignoreDebugAsserts(tester);
     await shot(tester, 'weather');
 
-    // The Choose a place sheet, from the empty state.
+    // The Choose a place sheet, from the Weather screen with no place watched (Your location switched off, no other place): the
+    // page then offers Choose a place instead.
     final off = await _rig(tester);
-    off.here = null;
+    off.settings.setWatched(kWatchHere, false);
     await show(tester, WeatherScreen(weather: off.weather, turnOn: WeatherTurnOn(
       weather: off.weather,
       location: off.location,
@@ -913,20 +915,6 @@ void guideScreens() {
     await show(tester, NotebookEditor(notebook: n.nb, template: n.templates.byId('log')!));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('notebook-name')), 'Pump house check');
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Run time');
-    await tester.tap(find.text('Number'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-unit')), 'min');
-    await tester.tap(find.byKey(const ValueKey('field-done')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Under load');
-    await tester.tap(find.text('Yes/No'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('field-done')));
     await tester.pumpAndSettle();
     await shot(tester, 'log-editor');
 
@@ -1741,7 +1729,7 @@ class _HitSources extends FakeSources {
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) async =>
       SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
 }
 

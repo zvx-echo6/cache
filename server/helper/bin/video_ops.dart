@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../../../packages/cache_search/lib/src/engine.dart' show CoreJob;
@@ -6,14 +7,15 @@ import '../../../packages/cache_search/lib/src/models.dart' show JobState;
 import '../../../packages/cache_search/lib/src/native_api.dart';
 import 'core_open.dart' show AppDirs;
 import 'line_protocol.dart';
+import '../../../app/lib/search/indexes_dir.dart' show kIndexesDirName;
 
 /// The `video.*` ops: the browser's VideoCore (cache_search video_core_web.dart). The phone's VideoCore opens a core handle of its
 /// own whose `video` folder is `<files>/videos`; this does the same on the server, on `<docs>/videos`, with the `indexes_dir` of the
-/// engine (`<support>/indexes`), and keeps the download jobs, which run in the core's own threads, so a download goes on with no tab
+/// engine (`<support>/shared-indexes`, kIndexesDirName), and keeps the download jobs, which run in the core's own threads, so a download goes on with no tab
 /// open. Not core ops; the helper answers them before the core dispatcher.
 ///
 ///   video.info {}                          -> {dir}     the saved videos' folder (absolute)
-///   video.call {op, request}               -> the JSON string cs_video_<op> returns (`request` a JSON string, "" for none)
+///   video.call {op, request}               -> the JSON string `cs_video_<op>` returns (`request` a JSON string, "" for none)
 ///   video.jobStart {instance, video, choice?, token?, title?, label?}
 ///                                          -> {job}     a download; one already running for the same video is returned as it is
 ///   video.jobProgress {job}                -> {state, done, total, error}      (the same shape the dispatcher's jobProgress has)
@@ -23,11 +25,25 @@ import 'line_protocol.dart';
 ///                                              every job the helper holds, so a tab opened later sees them
 /// Errors are the core's own ({code, message}).
 class VideoOps implements OpHandler {
-  VideoOps(this.dirs, this.factory, {this.log});
+  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.onRemoved, this.watchEvery = const Duration(seconds: 5)});
 
   final AppDirs dirs;
   final CsNative Function() factory;
   final void Function(String message)? log;
+
+  /// Swaps the keystore references (`keystore://<name>`) in a value for the stored keys. The core hook never sees `video.*` (this
+  /// handler answers it), so the browser's tokens are swapped here, in `video.call`'s request and `video.jobStart`'s token. Null: no swap.
+  final Object? Function(Object? value)? resolve;
+
+  /// A download finished: a saved video is new on disk (the index driver is kicked, so its captions are made searchable even
+  /// with no tab open). Told once per job, by [checkFinished], which a timer runs while a download runs.
+  final void Function()? onSaved;
+  /// A saved video was removed (`video.call` with `delete`, or `instance_remove`, which may delete its downloads): the sharing host's
+  /// list of captions indexes to fetch changes ([IndexesSync]).
+  final void Function()? onRemoved;
+  final Duration watchEvery;
+  Timer? _watch;
+  final Set<int> _told = {};
 
   /// The finished, cancelled and failed jobs kept at most (a tab frees them as it sees them; this only bounds one that never does).
   static const int keepStopped = 50;
@@ -49,7 +65,7 @@ class VideoOps implements OpHandler {
     final cfg = {
       'sources': <Object>[],
       'video': {'dir': dir},
-      'indexes_dir': '${dirs.support.path}/indexes',
+      'indexes_dir': '${dirs.support.path}/$kIndexesDirName',
     };
     _handle = n.open(jsonEncode(cfg));
     if (_handle == 0) throw CacheSearchException.fromJson(n.lastError(0));
@@ -64,8 +80,11 @@ class VideoOps implements OpHandler {
         return {'dir': dir};
       case 'video.call':
         final n = _open();
-        final r = n.video(_handle, a['op'] as String, (a['request'] as String?) ?? '');
-        return r ?? (throw CacheSearchException.fromJson(n.lastError(_handle)));
+        final op = a['op'] as String;
+        final r = n.video(_handle, op, _swapRequest((a['request'] as String?) ?? ''));
+        if (r == null) throw CacheSearchException.fromJson(n.lastError(_handle));
+        if (op == 'delete' || op == 'instance_remove') onRemoved?.call();
+        return r;
       case 'video.jobStart':
         return _start(a);
       case 'video.jobProgress':
@@ -92,6 +111,68 @@ class VideoOps implements OpHandler {
         ];
     }
     throw CacheSearchException('internal', 'Unknown call $op');
+  }
+
+  /// [request] (a JSON string) with its references swapped; one that is not a JSON object goes on as it is.
+  String _swapRequest(String request) {
+    final r = resolve;
+    if (r == null || !request.contains('keystore://')) return request;
+    final Object? j;
+    try {
+      j = jsonDecode(request);
+    } catch (_) {
+      return request;
+    }
+    return jsonEncode(r(j));
+  }
+
+  /// Saved HLS videos from before saved videos were rewritten as plain MP4 (Android's player read them as their first few
+  /// seconds) are rewritten: one video_repair job on the core's own thread, which never holds other calls; the helper starts it a
+  /// while after start. Logs what it did.
+  Future<void> repairSaved({Duration poll = const Duration(seconds: 2)}) async {
+    try {
+      final n = _open();
+      final job = CoreJob.start(n, 'video_repair', {'dir': dir});
+      try {
+        while (true) {
+          final p = job.progress();
+          if (p.state != JobState.running) {
+            if (p.state == JobState.failed) log?.call('saved videos not rewritten as plain MP4: ${p.errorMessage}');
+            break;
+          }
+          await Future<void>.delayed(poll);
+        }
+      } finally {
+        job.free();
+      }
+    } catch (e) {
+      log?.call('saved videos not rewritten as plain MP4: $e');
+    }
+  }
+
+  /// The saved videos, as cs_video_downloads lists them (each with its `captions_index`).
+  List<Map<String, dynamic>> savedVideos() {
+    final n = _open();
+    final r = n.video(_handle, 'downloads', '') ?? (throw CacheSearchException.fromJson(n.lastError(_handle)));
+    return [for (final d in ((jsonDecode(r) as Map)['downloads'] as List? ?? const [])) (d as Map).cast<String, dynamic>()];
+  }
+
+  /// Tells [onSaved] of each download that finished since the last look; the watch stops when none runs.
+  void checkFinished() {
+    var running = false;
+    for (final e in _jobs.entries.toList()) {
+      final state = e.value.job.progress().state;
+      if (state == JobState.running) {
+        running = true;
+      } else if (state == JobState.done && _told.add(e.key)) {
+        log?.call('video saved: ${e.value.instance}/${e.value.video}');
+        onSaved?.call();
+      }
+    }
+    if (!running) {
+      _watch?.cancel();
+      _watch = null;
+    }
   }
 
   _Entry _entry(Object? id) => _jobs[id] ?? (throw const CacheSearchException('not_found', 'No such download'));
@@ -129,12 +210,13 @@ class VideoOps implements OpHandler {
       'instance': instance,
       'video': video,
       'choice': choice,
-      if (a['token'] != null) 'token': a['token'],
+      if (a['token'] != null) 'token': resolve == null ? a['token'] : resolve!(a['token']),
     };
     final job = CoreJob.start(n, 'video_download', params);
     final id = _next++;
     _jobs[id] = _Entry(job, instance, video, choice, (a['title'] as String?) ?? '', (a['label'] as String?) ?? '');
     _prune();
+    if (onSaved != null) _watch ??= Timer.periodic(watchEvery, (_) => checkFinished());
     log?.call('video download started: $instance/$video ($choice)');
     return {'job': id};
   }

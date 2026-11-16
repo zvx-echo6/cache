@@ -14,8 +14,10 @@ import android.os.Build
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.GeoView
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
+import com.happylittlellc.cache.fgs.FgsAddArm
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -63,23 +65,58 @@ class MainActivity : FlutterActivity() {
         })
     }
 
+    // A tap on a guidance notification (OpenMaps.kt): the Maps tab. Held until Dart takes it (a cold start) and also pushed to a
+    // running Dart on the co.cache/open channel (lib/nav/open_maps.dart).
+    private var openChannel: MethodChannel? = null
+    private var pendingOpen: Any? = null  // "maps", or a map (what, lat, lon, query) for a geo: link opened here
+
+    private fun readOpen(i: Intent?) {
+        if (!OpenMaps.wants(i)) return
+        // Cleared so a re-created activity does not open the Maps tab again.
+        i!!.removeExtra(OpenMaps.EXTRA)
+        pendingOpen = OpenMaps.MAPS
+        openChannel?.invokeMethod("open", OpenMaps.MAPS, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
+    // A geo: link with no car connected (Cache picked from "Open with"): the Maps tab, with the search or the point. Held until
+    // Dart takes it, and pushed to a running Dart on the co.cache/open channel.
+    private fun openGeo(v: GeoView) {
+        val (lat, lon, query) = when (v) {
+            is GeoView.Search -> Triple(v.lat, v.lon, v.query)
+            is GeoView.Point -> Triple(v.req.lat, v.req.lon, v.req.query)
+        }
+        val what = hashMapOf<String, Any?>("what" to OpenMaps.MAPS, "lat" to lat, "lon" to lon, "query" to query)
+        pendingOpen = what
+        openChannel?.invokeMethod("open", what, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
     override fun onNewIntent(intent: Intent) {
         // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
         // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
         // is dropped. Flutter never sees it: it would read the address as a page to open, and the app has no such pages.
-        if (NavIntent.fromPhone(intent)) return
+        if (NavIntent.fromPhone(intent, ::openGeo)) return
         super.onNewIntent(intent)
         readBenchExtras(intent)
         readLink(intent)
+        readOpen(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
         // The same when the request is what started this activity: the app opens as from its icon.
-        if (NavIntent.fromPhone(intent)) intent = NavIntent.plainLaunch(intent)
+        if (NavIntent.fromPhone(intent, ::openGeo)) intent = NavIntent.plainLaunch(intent)
         super.onCreate(savedInstanceState)
         readBenchExtras(intent)
         readLink(intent)
+        readOpen(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -100,6 +137,38 @@ class MainActivity : FlutterActivity() {
     // session attaches to the same running app (car/SharedEngine.kt says why). Flutter asks this more than once, so it only
     // answers; cleanUpFlutterEngine tells the engine's keeper that this screen has let go.
     override fun shouldDestroyEngineWithHost(): Boolean = false
+
+    // Leaving with adds pending starts the foreground service that carries them on (fgs/FgsAddArm.kt). Home comes here; Back at the
+    // root finishes the activity (onPause sees it); the app switcher (Recents) may give only a pause, so a pause that does not get
+    // its window focus back soon counts; and the stop is the last chance. All while Cache is still just leaving, as Android 12 requires.
+    private val leaveCheck = Runnable { if (!hasWindowFocus() && !isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.PAUSED) }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT) else window.decorView.postDelayed(leaveCheck, 1500)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        window.decorView.removeCallbacks(leaveCheck)
+        FgsAddArm.resumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.STOP)
+    }
+
+    // The app's own launches (the file picker, a permission prompt) make a leave hint that is not the person leaving.
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        FgsAddArm.noteInternalLaunch()
+        super.startActivityForResult(intent, requestCode, options)
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -137,6 +206,27 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        openChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/open").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        val open = pendingOpen
+                        pendingOpen = null
+                        result.success(open)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+            // A request this activity was (re)created with while Dart already runs (the shared engine: Dart took at its own start,
+            // not now): pushed as well. Dart not listening yet answers notImplemented and the request stays for its take.
+            pendingOpen?.let { open ->
+                it.invokeMethod("open", open, object : MethodChannel.Result {
+                    override fun success(result: Any?) { if (pendingOpen === open) pendingOpen = null }
+                    override fun error(code: String, message: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
+            }
+        }
         systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -160,6 +250,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -168,6 +259,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pending = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.INTERNET), REQUEST_CODE)
                         }
                     }
@@ -179,6 +271,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pendingNotifications = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATIONS)
                         }
                     }
@@ -224,8 +317,11 @@ class MainActivity : FlutterActivity() {
         // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
         linkChannel?.setMethodCallHandler(null)
         linkChannel = null
+        openChannel?.setMethodCallHandler(null)
+        openChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)

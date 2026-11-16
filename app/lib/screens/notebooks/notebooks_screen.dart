@@ -78,12 +78,24 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     final apps = {for (final x in news) x.app}.join(' and ');
     final books = {for (final x in news) ...x.books};
     final book = books.length == 1 ? nb.notebook(books.single) : null;
+    final ids = [for (final x in news) ...x.ids];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       key: const ValueKey('imported-snack'),
       persist: false,
       content: Text(titles.length == 1 ? 'Added from $apps: ${titles.single}.' : '${titles.length} notes added from $apps'),
-      action: book == null ? null : SnackBarAction(label: 'Show', onPressed: () => _open(book)),
+      action: book == null ? null : SnackBarAction(label: 'Show', onPressed: () => ids.length == 1 && titles.length == 1 ? _openEntry(book, ids.single) : _open(book)),
     ));
+  }
+
+  /// One note came in: its entry opens (where it is edited); if it can't be read, the notebook does.
+  Future<void> _openEntry(Notebook book, String entryId) async {
+    final e = await nb.entry(entryId);
+    if (!mounted) return;
+    if (e == null) {
+      _open(book);
+    } else {
+      openNotebookEntry(context, widget.deps, book, e);
+    }
   }
 
   /// The shelf's context inside the two panes (a tablet opens a notebook beside the shelf).
@@ -109,7 +121,16 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     );
     if (!mounted) return;
     if (choice == 'new') _new();
-    if (choice == 'file') await addMapFile(context, notebooks: nb, userLayers: widget.deps.userLayers, onShowList: _openRepeaters);
+    if (choice == 'file') {
+      await addMapFile(context, notebooks: nb, userLayers: widget.deps.userLayers, onShowList: (id) {
+        final made = nb.notebook(id);
+        if (made != null) {
+          _open(made);
+        } else {
+          _openRepeaters(id);
+        }
+      });
+    }
   }
 
   void _new() {
@@ -180,7 +201,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                 if (c == 'search') return openSearch();
                 final d = widget.deps;
                 Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
+                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false, deps: d),
                 ));
               },
               itemBuilder: (_) => [

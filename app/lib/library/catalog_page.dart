@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../guide/app_links.dart' show AppPlace;
+import '../guide/place_link.dart';
 import '../pdf/index/pdf_index_app.dart' show pdfIndexShared, pdfZimRef;
 import '../pdf/index/pdf_index_state.dart' show PdfPartPhase, PdfZimRef;
 import '../pdf/index/pdf_index_ui.dart' show PdfIndexPartRow;
@@ -158,7 +160,9 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
     }
     final st = sources.statusAt(z.path);
     for (final (kind, tag, sub) in [('zim-epub', 'EPUBS', st?.epubIndex), ('zim-captions', 'CAPTIONS', st?.captionsIndex)]) {
-      if (sub == null || (sub.state != 'ready' && sub.needsBuild != true)) continue;
+      // listed while the core opens its snapshot too: a fresh start reports 'opening' (with no needs_build yet) for a while, and
+      // the row (and the Library's count of them) must not come and go with that
+      if (sub == null || (sub.state != 'ready' && sub.state != 'opening' && sub.needsBuild != true)) continue;
       final key = '$kind/${sub.sourceId ?? id ?? z.path}';
       final ready = sub.state == 'ready';
       out.add(
@@ -169,7 +173,7 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
           kind: tag,
           ready: ready,
           tone: ready ? Tone.ok : Tone.warn,
-          state: _scheduled(key) ?? (ready ? 'Ready' : indexWaitingWords(kind)),
+          state: _scheduled(key) ?? (ready ? 'Ready' : (sub.state == 'opening' ? 'Getting ready' : indexWaitingWords(kind))),
         ),
       );
     }
@@ -216,6 +220,12 @@ class CatalogPage extends StatelessWidget {
     return null;
   }
 
+  /// The sync line names Sharing and sync when sharing is off: it links there.
+  AppPlace? _syncPlace() {
+    final s = deps.sharing;
+    return s != null && !s.enabled ? AppPlace.sharing : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = deps;
@@ -246,6 +256,17 @@ class CatalogPage extends StatelessWidget {
                         : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: s.pauseAll),
                   ),
                 ),
+              // In a browser the server does the index work; its Pause all and Resume are the same buttons.
+              if (plat.isWeb && d.sources.serverIndexBusy)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                    child: d.sources.serverIndexPaused
+                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: () => d.sources.setServerIndexPaused(false))
+                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: () => d.sources.setServerIndexPaused(true)),
+                  ),
+                ),
               if (entries.isEmpty) ...[
                 Padding(
                   padding: const EdgeInsets.all(8),
@@ -266,7 +287,7 @@ class CatalogPage extends StatelessWidget {
                       children: [
                         for (var i = 0; i < rows.length; i++) ...[
                           if (i > 0) const SizedBox(height: 2),
-                          CatalogRow(entry: rows[i], sync: sync, focused: rows[i].key == focus),
+                          CatalogRow(entry: rows[i], sync: sync, syncPlace: _syncPlace(), focused: rows[i].key == focus),
                         ],
                       ],
                     ),
@@ -283,10 +304,13 @@ class CatalogPage extends StatelessWidget {
 
 /// One search index: name and kind tag, its state (with the bar while it is made) and its one action, then how it syncs.
 class CatalogRow extends StatelessWidget {
-  const CatalogRow({super.key, required this.entry, this.sync, this.focused = false});
+  const CatalogRow({super.key, required this.entry, this.sync, this.syncPlace, this.focused = false});
 
   final CatalogEntry entry;
   final String? sync;
+
+  /// Where the sync line's words point (Sharing and sync, when sharing is off): the line links there.
+  final AppPlace? syncPlace;
   final bool focused;
 
   /// The one thing to do about the work, from the scheduler: Pause while it runs, Resume after the person paused it, Try again
@@ -357,7 +381,13 @@ class CatalogRow extends StatelessWidget {
                 ),
               ),
           ],
-          if (sync != null) ...[const SizedBox(height: 4), Text(sync!, style: TextStyle(fontSize: 12, color: k.secondary))],
+          if (sync != null) ...[
+            const SizedBox(height: 4),
+            if (syncPlace case final place?)
+              placeLink(sync!, place, style: const TextStyle(fontSize: 12))
+            else
+              Text(sync!, style: TextStyle(fontSize: 12, color: k.secondary)),
+          ],
         ],
       ),
     );

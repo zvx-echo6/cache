@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/library/add_pdf/add_pdf_state.dart';
+import 'package:cache/platform/app_log.dart';
 import 'package:cache_ocr/cache_ocr.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,6 +86,24 @@ void main() {
     expect(job.scans, 1);
     expect(job.scansDone, 1);
     expect(job.sawOcr, isTrue);
+  });
+
+  test('a page the engine cannot read is logged with its page, code and message, and the job goes on', () async {
+    final img = File('${tmp.path}/p2.png')..writeAsBytesSync([1, 2, 3]);
+    final calls = FakeIngestCalls({
+      'step': steps([
+        progress('needs_ocr', pagesDone: 1, needsOcr: [
+          {'page': 2, 'image_path': img.path, 'width': 2550, 'height': 3300, 'dpi': 300},
+        ]),
+        progress('done', pagesDone: 3, pieces: 4, piecesDone: 4, result: {'copy': copy, 'pieces': 4, 'same': const [], 'shelf': null, 'suggested': {'div': '720', 'score': 0.3}}),
+      ]),
+    });
+    final s = AddPdfState(calls: calls, dir: () async => Directory('${tmp.path}/ingest'), engines: () async => {}, ocrEngine: () async => _ThrowingOcrEngine(const OcrException('engine', 'X')), permit: (_) async {});
+    final job = await addOne(s);
+    expect(await runOnce(s), isTrue);
+    final lines = appLog.jobLines(job.key).join('\n');
+    expect(lines, contains('1 scanned pages could not be read'));
+    expect(lines, contains('scanned page 2 could not be read (engine): X'));
   });
 
   test('no OCR engine on the device: the job runs with OCR off', () async {
@@ -227,4 +246,12 @@ void main() {
     expect(copied, ['Water/a.pdf']);
     expect(calls.argsOf('start').single['pdf_path'], a.pdfPath);
   });
+}
+
+/// An engine that fails every page with [error].
+class _ThrowingOcrEngine extends FakeOcrEngine {
+  _ThrowingOcrEngine(this.error);
+  final OcrException error;
+  @override
+  Future<OcrPageText> recognize(OcrPageImage image) async => throw error;
 }

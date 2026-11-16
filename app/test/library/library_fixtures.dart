@@ -6,6 +6,8 @@ import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_pages.dart';
 import 'package:cache/library/library_prefs.dart';
 import 'package:cache/library/shelf_source.dart';
+import 'package:cache/regions/regions_state.dart';
+import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
 
@@ -136,7 +138,26 @@ class FakeBookFiles extends ChangeNotifier implements BookFiles {
   @override
   bool get canDeleteEverywhere => deleteAll;
   @override
-  Future<void> deleteEverywhere(ShelfBook book) async => deleted.add(book.id);
+  bool canDeleteBook(ShelfBook book) => deleteAll && !notYours.contains(book.id);
+
+  /// Whether the books are synced with another device ([syncedWithOtherDevice]).
+  bool synced = false;
+  @override
+  bool syncedWithOtherDevice(ShelfBook book) => synced;
+
+  /// Books of a library the person did not make ([canDeleteBook] false).
+  final Set<String> notYours = {};
+
+  /// Makes the next [deleteEverywhere] fail (a file could not be removed).
+  bool failDelete = false;
+  @override
+  Future<void> deleteEverywhere(ShelfBook book) async {
+    if (failDelete) {
+      failDelete = false;
+      throw const FileSystemException('busy');
+    }
+    deleted.add(book.id);
+  }
 }
 
 /// The Library's pages over [shelves], with the rest stood in.
@@ -146,12 +167,16 @@ LibraryDeps testDeps({
   BookFiles? files,
   ShelfLookPrefs? looks,
   List<String>? added,
+  RegionsState? regions,
+  SharingState? sharing,
 }) =>
     LibraryDeps(
       browse: browse,
       shelves: shelves,
       files: files ?? BookFilesUnavailable(),
       looks: looks ?? ShelfLookPrefs(dirOverride: Directory.systemTemp.createTempSync('looks')),
+      regions: regions,
+      sharing: sharing,
       zims: (_) => const Scaffold(body: Center(child: Text('ZIM list'))),
       addToLibrary: (_) => added?.add('add'),
       openGuide: (_) async {},

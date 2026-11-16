@@ -14,9 +14,13 @@ typedef _CloseC = Void Function(Pointer<Void>);
 typedef _Close = void Function(Pointer<Void>);
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _Free = void Function(Pointer<Utf8>);
+typedef _TakeLogC = Pointer<Utf8> Function();
+typedef _TakeLog = Pointer<Utf8> Function();
 typedef _ErrC = Pointer<Utf8> Function(Pointer<Void>);
 
-DynamicLibrary _openLib() {
+/// The core library: [path] when given (the Cache Server helper, which is told the library's full path), else the platform's name.
+DynamicLibrary _openLib([String? path]) {
+  if (path != null) return DynamicLibrary.open(path);
   if (Platform.isAndroid || Platform.isLinux) return DynamicLibrary.open('libcache_search.so');
   if (Platform.isWindows) return DynamicLibrary.open('cache_search.dll');
   if (Platform.isIOS || Platform.isMacOS) return DynamicLibrary.process();
@@ -33,16 +37,35 @@ String? _take(DynamicLibrary lib, Pointer<Utf8> p) {
 /// The sync engine: identity, links, shared folders and transfers, all in the Rust core. Every call runs off the UI thread (a
 /// call such as `link` waits for the other device).
 class SyncCore {
-  SyncCore._(this._address);
+  SyncCore._(this._address, this._path);
 
   final int _address;
+  final String? _path;
   bool _closed = false;
 
-  /// Starts the engine with [config] (`dir`, `name`, and the optional discovery and relay settings).
-  static Future<SyncCore> open(Map<String, Object?> config) async {
+  /// The lines the engine has said about its start (one per step, with the time since it began) since the last call, oldest first;
+  /// they are cleared. The engine never calls into Dart (a callback aborted the process in a background isolate): the app asks, after
+  /// an open returns and now and then while one is still running. Quick, and safe from any isolate. Where the core is not there, or is
+  /// older and lacks the function, there are none.
+  static List<String> takeLog({String? libraryPath}) {
+    try {
+      final lib = _openLib(libraryPath);
+      final take = lib.lookupFunction<_TakeLogC, _TakeLog>('cs_sync_take_log');
+      final text = _take(lib, take());
+      if (text == null) return const [];
+      final j = jsonDecode(text);
+      return j is List ? [for (final l in j) if (l is String) l] : const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Starts the engine with [config] (`dir`, `name`, and the optional discovery and relay settings). [libraryPath] is the full path of
+  /// the core library, for a host that was given it (the Cache Server helper); the apps leave it out and the platform's name is used.
+  static Future<SyncCore> open(Map<String, Object?> config, {String? libraryPath}) async {
     final cfg = jsonEncode(config);
     final address = await Isolate.run(() {
-      final lib = _openLib();
+      final lib = _openLib(libraryPath);
       final open = lib.lookupFunction<_OpenC, _OpenC>('cs_sync_open');
       final p = using((a) => open(cfg.toNativeUtf8(allocator: a)));
       if (p == nullptr) {
@@ -51,22 +74,24 @@ class SyncCore {
       }
       return p.address;
     });
-    return SyncCore._(address);
+    return SyncCore._(address, libraryPath);
   }
 
   /// One method with [args]; the answer, or a [CacheSearchException] with the engine's reason.
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
     if (_closed) throw CacheSearchException('sync', 'Sharing is stopped');
     final address = _address;
+    final path = _path;
     final a = jsonEncode(args);
     final out = await Isolate.run(() {
-      final lib = _openLib();
+      final lib = _openLib(path);
       final call = lib.lookupFunction<_CallC, _CallC>('cs_sync_call');
       return using((al) => _take(lib, call(Pointer<Void>.fromAddress(address), method.toNativeUtf8(allocator: al), a.toNativeUtf8(allocator: al))));
     });
     final j = out == null ? null : jsonDecode(out);
     if (j is! Map<String, dynamic>) throw CacheSearchException('sync', 'No answer from the sync engine');
-    if (j['error'] is String) throw CacheSearchException('sync', j['error'] as String);
+    // `kind` (when the engine gives one) is the stable name of a failure the app tells apart; the text is only for people.
+    if (j['error'] is String) throw CacheSearchException(j['kind'] is String ? j['kind'] as String : 'sync', j['error'] as String);
     return j;
   }
 
@@ -74,8 +99,9 @@ class SyncCore {
     if (_closed) return;
     _closed = true;
     final address = _address;
+    final path = _path;
     await Isolate.run(() {
-      final lib = _openLib();
+      final lib = _openLib(path);
       lib.lookupFunction<_CloseC, _Close>('cs_sync_close')(Pointer<Void>.fromAddress(address));
     });
   }

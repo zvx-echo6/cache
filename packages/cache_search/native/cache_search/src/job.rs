@@ -253,7 +253,9 @@ impl Job {
             "unpack_library" => Self::start_unpack_library(params_json),
             "check_library" => Self::start_check_library(params_json),
             "library_template" => Self::start_library_template(params_json),
+            "own_library_sync" => Self::start_own_library_sync(params_json),
             "video_download" => Self::start_video_download(params_json),
+            "video_repair" => Self::start_video_repair(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_seal" => Self::start_index_seal(params_json),
@@ -677,6 +679,25 @@ impl Job {
         })
     }
 
+    /// Start an `own_library_sync` job: `{"library_dir"}`, a person's own library (My books) made to match its packs on this device
+    /// (`ownlib.rs`). The detail is `{"own","rebuilt","reason","books","points","conflicts_removed","unreadable"}`.
+    fn start_own_library_sync(params_json: &str) -> Result<Job> {
+        let p: Value = serde_json::from_str(params_json)?;
+        let dir = p.get("library_dir").and_then(Value::as_str).unwrap_or_default().to_string();
+        if dir.is_empty() {
+            return Err(Error::bad_json("library_dir must not be empty"));
+        }
+        let lib = PathBuf::from(dir);
+        Self::spawn("cs-own-library", (), 1, move |sh| {
+            let d = crate::ownlib::sync(&lib, &|| sh.cancel.load(Ordering::SeqCst))?;
+            if let Ok(mut g) = sh.detail.lock() {
+                *g = Some(d);
+            }
+            sh.set_progress(1, 1);
+            Ok(Outcome::Done)
+        })
+    }
+
     /// Start a `library_template` job: write the blank library template to `out_path`.
     fn start_library_template(params_json: &str) -> Result<Job> {
         let p: LibraryTemplateParams = serde_json::from_str(params_json)?;
@@ -698,6 +719,25 @@ impl Job {
                 cache_video::Outcome::Done => Ok(Outcome::Done),
                 cache_video::Outcome::Cancelled => Ok(Outcome::Cancelled),
             }
+        })
+    }
+
+    /// Start a `video_repair` job (`{"dir"}`, the videos folder): the saved HLS videos from before saved videos were rewritten as
+    /// plain MP4 are rewritten, one at a time, on the job's thread. Progress is videos of those to look at.
+    fn start_video_repair(params_json: &str) -> Result<Job> {
+        #[derive(serde::Deserialize)]
+        struct P {
+            dir: String,
+        }
+        let p: P = serde_json::from_str(params_json).map_err(|e| Error::bad_json(format!("params_json: {e}")))?;
+        if p.dir.is_empty() {
+            return Err(Error::bad_json("dir must not be empty"));
+        }
+        let video = cache_video::Video::new(&cache_video::VideoCfg { dir: p.dir });
+        Self::spawn("cs-video-repair", (), 0, move |sh| {
+            let cancel = || sh.cancel.load(Ordering::SeqCst);
+            cache_video::remux::repair_saved(&video, &|d, t| sh.set_progress(d, t), &cancel).map_err(crate::ext::video_err)?;
+            Ok(if cancel() { Outcome::Cancelled } else { Outcome::Done })
         })
     }
 

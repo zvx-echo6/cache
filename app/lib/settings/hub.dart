@@ -2,6 +2,7 @@ import '../search/index_scheduler.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'data_kinds.dart' show ShareItemOpener;
 import 'app_settings.dart';
 import 'data_policy.dart';
 import '../regions/regions_state.dart';
@@ -50,6 +51,9 @@ class SettingsHub {
   /// The automatic search index work (its one status line); null where the app has none (tests).
   final IndexScheduler? indexing;
   final UrlOpener openUrl;
+
+  /// What a row of Sharing and sync opens (the shell sets it where it can reach the pages); null: rows only toggle.
+  ShareItemOpener? openShareItem;
 
   Listenable get changes => Listenable.merge([settings, webSearch, storage, weather]);
 }

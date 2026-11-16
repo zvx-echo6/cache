@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 
 import '../../../packages/cache_search/lib/src/errors.dart';
 import '../bin/core_open.dart';
+import '../bin/keystore.dart';
 import '../bin/video_ops.dart';
 import 'fake_native.dart';
 
@@ -46,7 +47,8 @@ void main() {
     final cfg = jsonDecode(opens.single.substring(5)) as Map;
     expect(cfg['sources'], isEmpty);
     expect(cfg['video'], {'dir': '${docs.path}/videos'});
-    expect(cfg['indexes_dir'], '${support.path}/indexes');
+    // the indexes folder the engine and the index driver use (kIndexesDirName), so a saved video's built captions read as built
+    expect(cfg['indexes_dir'], '${support.path}/shared-indexes');
   });
 
   test('video.call passes the op and request to cs_video_<op> and returns its JSON; a core error is thrown', () {
@@ -108,7 +110,65 @@ void main() {
     expect(() => ops.handle('video.jobProgress', {'job': a['job']}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'not_found')));
   });
 
+  test('a download that finishes is told once (the index driver is kicked), and the saved videos are listed from cs_video_downloads', () {
+    var told = 0;
+    ops = VideoOps(AppDirs(support, docs), () => fake, onSaved: () => told++);
+    fake.progressScript.add(running(1, 2));
+    ops.handle('video.jobStart', {'instance': 'a', 'video': 'u'});
+    ops.checkFinished();
+    expect(told, 0);
+    fake.progressScript
+      ..clear()
+      ..add(jsonEncode({'state': 'done', 'done': 2, 'total': 2}));
+    ops.checkFinished();
+    ops.checkFinished();
+    expect(told, 1, reason: 'once per finished download');
+    fake.videoReplies['downloads'] = jsonEncode({
+      'downloads': [
+        {'instance': 'a', 'uuid': 'u', 'captions_index': {'source_id': 'a/u', 'needs_build': true}},
+      ],
+    });
+    expect(ops.savedVideos().single['captions_index'], {'source_id': 'a/u', 'needs_build': true});
+    expect(fake.videoCalls.last, 'downloads:');
+  });
+
+  test('the saved HLS videos from before are rewritten in the background: one video_repair job on the videos folder', () async {
+    fake.progressScript.add(jsonEncode({'state': 'done', 'done': 1, 'total': 1}));
+    await ops.repairSaved(poll: Duration.zero);
+    final start = fake.calls.singleWhere((c) => c.startsWith('jobStart:video_repair:'));
+    expect(jsonDecode(start.substring('jobStart:video_repair:'.length)), {'dir': '${docs.path}/videos'});
+    expect(fake.calls.where((c) => c.startsWith('jobFree')), isNotEmpty, reason: 'the job is let go when it ends');
+  });
+
   test('an unknown video op is an error', () {
     expect(() => ops.handle('video.nope', {}), throwsA(isA<CacheSearchException>()));
+  });
+
+  test('a keystore reference in a video op reaches the instance as the real token; the browser never gets the value', () {
+    final keys = KeyStore(File('${tmp.path}/keystore.json'));
+    keys.set('video.a.example.access', 'REAL-ACCESS');
+    keys.set('video.a.example.refresh', 'REAL-REFRESH');
+    final o = VideoOps(AppDirs(support, docs), () => fake, resolve: keys.resolve);
+    fake.videoReplies['list'] = '{"items":[]}';
+    final reply = o.handle('video.call', {
+      'op': 'list',
+      'request': jsonEncode({'instance': 'a.example', 'token': KeyStore.refOf('video.a.example.access'), 'refresh': KeyStore.refOf('video.a.example.refresh'), 'n': 3}),
+    });
+    expect(reply, '{"items":[]}');
+    final sent = jsonDecode(fake.videoCalls.single.substring('list:'.length)) as Map;
+    expect(sent, {'instance': 'a.example', 'token': 'REAL-ACCESS', 'refresh': 'REAL-REFRESH', 'n': 3});
+    expect(reply, isNot(contains('REAL')));
+    fake.progressScript.add(running(1, 2));
+    o.handle('video.jobStart', {'instance': 'a.example', 'video': 'u1', 'token': KeyStore.refOf('video.a.example.access')});
+    final start = fake.calls.firstWhere((c) => c.startsWith('jobStart:video_download:'));
+    expect((jsonDecode(start.substring('jobStart:video_download:'.length)) as Map)['token'], 'REAL-ACCESS');
+    // a request that is not JSON, or has no reference, goes on as it is; a reference to nothing is an error
+    fake.videoReplies['x'] = '{}';
+    o.handle('video.call', {'op': 'x', 'request': 'not json keystore://x'});
+    expect(fake.videoCalls.last, 'x:not json keystore://x');
+    expect(
+      () => o.handle('video.call', {'op': 'list', 'request': jsonEncode({'token': KeyStore.refOf('video.gone')})}),
+      throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'not_found')),
+    );
   });
 }

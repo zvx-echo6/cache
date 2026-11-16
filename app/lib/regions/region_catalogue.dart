@@ -131,8 +131,8 @@ class RegionRecord {
     sizes: RegionSizes.fromJson(j['sizes']),
   );
 
-  /// The box the map layers are downloaded for. The layer engine takes a box, never a polygon, so the map part of a region
-  /// covers its whole bounding box. A box across the antimeridian is cut to its larger side (the map does not wrap).
+  /// The box the map layers are sized for and downloaded within ([mapOutline] is the shape downloaded inside it). A box across
+  /// the antimeridian is cut to its larger side (the map does not wrap).
   GeoBounds? get bounds {
     final b = bbox;
     if (b == null) return null;
@@ -148,6 +148,43 @@ class RegionRecord {
     }
     return GeoBounds(south: b[1], west: west, north: b[3], east: east);
   }
+}
+
+/// The outline the map part of [r] is downloaded for, from its [geometry] (a GeoJSON Polygon or MultiPolygon): every ring of every
+/// part as [lon, lat] pairs, which the layer engine reads even-odd, so the parts make their union and a hole stays out. When the
+/// region's box crosses the antimeridian only the parts inside [RegionRecord.bounds] (the side the box was cut to) are kept. Null
+/// when there is no usable outline (a drawn area, another geometry, coordinates that are not numbers): the map then covers the box.
+///
+/// The catalogue's map sizes are worked out for the box, so an outline downloads less than the size shown.
+List<List<List<double>>>? mapOutline(RegionRecord r, Map<String, dynamic> geometry) {
+  final b = r.bounds, box = r.bbox;
+  if (r.isDrawn || b == null || box == null) return null;
+  final type = geometry['type'], coords = geometry['coordinates'];
+  if (coords is! List) return null;
+  final List<Object?> parts = switch (type) {
+    'Polygon' => [coords],
+    'MultiPolygon' => coords,
+    _ => const [],
+  };
+  final crosses = box[0] > box[2];
+  final rings = <List<List<double>>>[];
+  for (final part in parts) {
+    if (part is! List) return null;
+    final own = <List<List<double>>>[];
+    for (final ring in part) {
+      if (ring is! List) return null;
+      final pts = <List<double>>[];
+      for (final p in ring) {
+        if (p is! List || p.length < 2 || p[0] is! num || p[1] is! num) return null;
+        pts.add([(p[0] as num).toDouble(), (p[1] as num).toDouble()]);
+      }
+      if (pts.length >= 3) own.add(pts);
+    }
+    if (own.isEmpty) continue;
+    if (crosses && !own.first.every((p) => p[0] >= b.west && p[0] <= b.east)) continue;
+    rings.addAll(own);
+  }
+  return rings.isEmpty ? null : rings;
 }
 
 /// The states or provinces (kind `region`) the region list says region [id] is in, from one country's [records]:

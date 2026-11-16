@@ -254,10 +254,46 @@ Under the data folder (`/var/lib/cache-app` when installed):
 | `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
 | `zims/`, `libraries/`, `index/` | the older folders, no longer read |
 
+## Indexing
+
+With no browser open, the helper indexes what the phone indexes (`server/helper/bin/index_driver.dart`): the keyword index of each
+ZIM and library, seals of older indexes, the EPUBs and caption files inside ZIMs (`index_source`), and the PDFs inside ZIMs. The
+PDF text comes from MuPDF, through the hidden `cache pdf-text` command that the helper runs for each PDF (`CACHE_PDF_TEXT_EXE`,
+which the server sets to itself); the chunks and records are the core's own, so the indexes are the phone's format. Work yields to
+the host's heat (thermal zones) and memory (`/proc/meminfo`). Design: `renders/linux-parity/indexing-design.md`.
+
+Pause and Resume (the Catalog's "Pause all" and "Resume", helper op `index.pause`) stop what runs, keeping what it did, and start
+nothing until Resume; like the phone's they are kept in memory, so a restart resumes. Design: `renders/linux-parity/library-rest-design.md`.
+
+## The guide library
+
+The setup guide the app bundles is installed on the server with no browser open, so guide search works in a browser as on a phone.
+The server gives the helper the package from its web build (`<web>/assets/assets/guide/cache-guide.cache-library`, as
+`CACHE_GUIDE_LIBRARY`); after the core opens, `server/helper/bin/guide_install.dart` unpacks it to `app/docs/libraries/cache-guide`
+(the steps of the phone's `LibrariesState.ensureGuide`) and replaces it when the app carries another `version`. Not done when
+`sources.json` gives the sources (that list is the operator's own).
+
+## The starter map layers
+
+The map layers the app bundles (hillshade, contour lines, the elevation layer from Mapterhorn that route elevation charts and
+off-road routing read, imagery, WorldCover and OpenFreeMap) are put in place as on a phone. The server gives the helper the folder
+from its web build (`<web>/assets/packages/cache_search/layers`, as `CACHE_STARTER_LAYERS`); before the core opens,
+`server/helper/bin/starter_layers.dart` writes each definition to `app/support/layer-defs` when it is missing or differs (the
+phone's `installStarterLayers`).
+
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`
-(the two `app/` folders above). It answers three kinds of op over the line protocol:
+(the two `app/` folders above) and `CACHE_DATA` (the data folder). It answers these ops over the line protocol (`sharing.*` only with
+`CACHE_DATA`):
+
+- **`sharing.*`**: the sharing host (`server/helper/bin/sharing_host.dart`), the one owner of the sync engine on the server: it opens the
+  engine on `<data>/sync`, shares the folders of the share table (the phone's share ids on the server's folders), polls the engine's
+  status every 2 s into a cache, and keeps `<data>/sharing.json` (the phone's format). It starts with the helper when `sharing.json`
+  says sharing is set up, and stops when the helper's input ends. A browser asks it through `sharing.state`, `sharing.setup`,
+  `sharing.set_kind`, `sharing.set_item`, `sharing.link_start` and `sharing.call` (only `link_code`, `unlink`, `set_name`,
+  `set_peer_name`, `set_link`, `sync_now`, `share_items`, and `status` from the cache; the keys, `set_secrets` and `take_secrets`,
+  are never reachable from a browser). The network settings are the engine's own defaults, as on the phone; nothing here opens a port.
 
 - **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
   (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the
@@ -270,8 +306,19 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   (`bad_path`); missing files give `not_found`, other failures `io_error`. Bytes travel as `{"$bytes": "<base64>"}`.
 - every other op goes to the core's dispatcher.
 
-Not done yet: **`history.*`**. The browser's chat history is not saved on the server; it waits for the shared Flutter-free
-package split (step 4), because `ConversationStore` imports Flutter-dependent code.
+- **`history.*`**: the Ask conversations, kept on the server (one JSON file per conversation in `app/support/history/`, no
+  SQLite in the helper) so every tab and browser lists, reopens, renames and deletes the same ones. The browser's store is
+  `app/lib/history/server_conversation_store.dart`. Ops are in `server/helper/bin/history_ops.dart`.
+- **`keys.*`**: the keystore, `<data>/keystore.json` (owner only, outside the `fs.*` roots): the Kagi and data-source keys, video
+  tokens and the app PIN. `keys.names`, `keys.set`, `keys.delete`, and `keys.get` for names the phone UI shows (`*.user`) and
+  the PIN hash only. A browser hands a key to the engine as a reference, `keystore://<name>`, which the helper swaps for the
+  value before the core op runs, so the browser never holds the key. The helper remembers the last `setWeb` and sends it to the
+  engine again after `open`. Code inside the helper (the sharing host's `set_secrets` and `take_secrets`) calls the `KeyStore`
+  class directly (`get`, `set`, `delete`, `names`). These are not the sign-in keys of `src/keys.rs`. The swap also reaches the
+  video ops (`video.call`'s request and `video.jobStart`'s token, which the helper answers itself) and `GET /api/fetch` (a
+  reference in `url`, for trying an own data source with its saved key: the server asks the helper's `keys.expandUrl`, which a
+  tab may not call). Code on a signed-in page can still use a reference to send a stored key to an address of its own choosing
+  (within what the fetch rules allow), so "the browser never holds the key" is about normal use, not a script on the page.
 
 ## TLS
 

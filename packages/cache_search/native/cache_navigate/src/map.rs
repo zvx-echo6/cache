@@ -15,7 +15,7 @@ use cache_offroad::grid::haversine_m;
 use cache_offroad::navigate::{NavigateRequest, Waypoint};
 use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step};
 use cache_offroad::router::Boundary;
-use cache_offroad::valhalla::{decode_polyline6, encode_polyline6};
+use cache_offroad::valhalla::{decode_polyline6, encode_polyline6, StreetName};
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -82,6 +82,8 @@ pub struct MapRouteReq {
     pub land_access: Boundary,
     /// How many alternatives to ask for (0 for none).
     pub alternatives: usize,
+    /// The vehicle's heading at `from` when it is moving (a re-route), degrees clockwise from north.
+    pub from_heading_deg: Option<f64>,
 }
 
 /// The mode, land access and alternatives of a route request (the ends are resolved by the caller).
@@ -160,6 +162,13 @@ fn fnv(s: &str) -> u32 {
 }
 
 /// One route object from the legs of a trip (one leg, or one per via point): geometry, segments, maneuvers, totals and warnings.
+/// The flagged names of a major road ([`Directions::major_roads`] goes by a maneuver's first name): those of the first road
+/// maneuver it names, so the app words it as it words the turns.
+fn major_road_streets(steps: &[Step], name: &str) -> Value {
+    let streets = steps.iter().find(|s| s.street_names.first().map(String::as_str) == Some(name)).map(|s| s.streets.as_slice()).unwrap_or(&[]);
+    StreetName::list_json(streets)
+}
+
 fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: Boundary, have_offroad: bool) -> Value {
     let mut pts: Vec<(f64, f64)> = Vec::new();
     // (step, begin index, end index in the combined geometry, leg)
@@ -223,6 +232,9 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
         m.insert("type".into(), json!(s.type_));
         m.insert("instruction".into(), json!(build::step_text(s, mode.name())));
         m.insert("street_names".into(), json!(s.street_names));
+        // The same names with the map's word on which is a route number: the app shows the name first and speaks it.
+        m.insert("streets".into(), StreetName::list_json(&s.streets));
+        m.insert("begin_streets".into(), StreetName::list_json(&s.begin_streets));
         m.insert("distance_m".into(), json!(round_py(at(e) - at(b), 1)));
         m.insert("duration_s".into(), json!(s.duration_s));
         let start = pts.get(b).copied().unwrap_or(s.start);
@@ -297,7 +309,7 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
     o.insert("point_count".into(), json!(pts.len()));
     o.insert("segments".into(), Value::Array(segments));
     o.insert("maneuvers".into(), Value::Array(maneuvers));
-    o.insert("major_roads".into(), Value::Array(first.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
+    o.insert("major_roads".into(), Value::Array(first.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k, "streets": major_road_streets(&first.steps, n)})).collect()));
     let mut warnings: Vec<Value> = Vec::new();
     for d in legs {
         warnings.extend(build::warnings(d, have_offroad, DEFAULT_OFFROAD_SNAP_M));
@@ -362,7 +374,10 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut legs: Vec<Directions> = Vec::new();
     let mut have_offroad = false;
     for (i, pair) in stops.windows(2).enumerate() {
-        let nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
+        let mut nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
+        if i == 0 {
+            nr.from_heading_deg = req.from_heading_deg;
+        }
         let (d, h) = core.navigate(nr)?;
         have_offroad = h;
         if !d.ok {
@@ -374,7 +389,8 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut alternatives: Vec<Value> = Vec::new();
     // alternatives exist for a plain road route (one leg, nothing off-road)
     if req.alternatives > 0 && legs.len() == 1 && main["routing"] == "road" {
-        let nr = NavigateRequest::new(req.from.waypoint(), req.to.waypoint(), req.mode, req.land_access);
+        let mut nr = NavigateRequest::new(req.from.waypoint(), req.to.waypoint(), req.mode, req.land_access);
+        nr.from_heading_deg = req.from_heading_deg;
         for d in core.alternatives(&nr, req.alternatives)? {
             let o = route_object(std::slice::from_ref(&d), &stops, req.mode, req.land_access, have_offroad);
             if o["geometry"] != main["geometry"] && !alternatives.iter().any(|a| a["geometry"] == o["geometry"]) {
@@ -630,6 +646,7 @@ impl ActiveRoute {
             let m = &self.mans[i].json;
             let mut v = json!({
                 "index": m["index"], "kind": m["kind"], "type": m["type"], "instruction": m["instruction"], "street_names": m["street_names"],
+                "streets": m["streets"], "begin_streets": m["begin_streets"],
                 "travel": m["travel"], "lat": m["lat"], "lon": m["lon"], "distance_m": round_py(dist.max(0.0), 1),
                 "length_m": m["distance_m"], "cardinal": m["cardinal"], "bearing_deg": m["bearing_deg"],
             });

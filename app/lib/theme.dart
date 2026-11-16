@@ -5,6 +5,9 @@ import 'package:flutter/services.dart';
 
 import 'platform/system_ui.dart';
 
+/// The wash over a cited or opened passage: the PDF reader's cited passage and the library document's opened passage.
+const Color kPassageMark = Color(0x66FFD54F);
+
 /// The colour tokens of one theme. Screens read colours from here (via `context.t`) and never
 /// hard-code them.
 @immutable

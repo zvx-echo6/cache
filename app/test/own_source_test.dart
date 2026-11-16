@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/net/fetch.dart';
 import 'package:cache/weather/own_source.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -113,6 +114,62 @@ void main() {
     });
   });
 
+  group('what is ticked at first and the units of an answer (Open-Meteo)', () {
+    const meteo =
+        '{"latitude":44.07,"longitude":-114.74,"generationtime_ms":0.1,"utc_offset_seconds":0,"timezone":"GMT","timezone_abbreviation":"GMT","elevation":2371,'
+        '"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"\u00b0C"},"current":{"time":"2026-11-16T15:00","interval":900,"temperature_2m":5.2}}';
+    const place = (lat: 44.0712, lon: -114.7401);
+    Future<List<int>> answer(Uri u, Duration t) async => utf8.encode(meteo);
+    Future<OwnTry> tried(String query) => tryOwnAddress(Uri.parse('https://api.open-meteo.com/v1/forecast?$query&latitude=44.0712&longitude=-114.7401'), fetch: answer, place: place);
+
+    test('the pre-ticked set is exactly what the address asked for (current=temperature_2m)', () async {
+      final t = await tried('current=temperature_2m');
+      expect(t.preticked, ['current.temperature_2m']);
+    });
+
+    test('an address that names nothing pre-ticks the first values that do not echo the place', () async {
+      final t = await tried('hourly=none');
+      expect(t.preticked, ['generationtime_ms', 'utc_offset_seconds', 'timezone']);
+      expect(t.preticked, isNot(contains('latitude')));
+      expect(t.preticked, isNot(contains('longitude')));
+    });
+
+    test('an address that names an object (section=current) pre-ticks the first values under it, not the top-level ones', () async {
+      final t = await tried('section=current');
+      expect(t.preticked, ['current.time', 'current.interval', 'current.temperature_2m']);
+    });
+
+    test('the units object is not listed; its unit is attached to the value it describes', () async {
+      final t = await tried('current=temperature_2m');
+      expect([for (final v in t.values) v.path].where((p) => p.startsWith('current_units')), isEmpty);
+      final temp = t.values.firstWhere((v) => v.path == 'current.temperature_2m');
+      expect(temp.value, '5.2');
+      expect(temp.unit, '\u00b0C');
+      expect(temp.shown, '5.2 \u00b0C');
+      expect(t.values.where((v) => v.label == 'Temperature 2m'), hasLength(1));
+      expect(t.values.firstWhere((v) => v.path == 'elevation').shown, '2371');
+    });
+
+    test('a definition saved from these picks reads 5.2 from the answer', () async {
+      final t = await tried('current=temperature_2m');
+      final picks = [for (final v in t.values) if (t.preticked.contains(v.path)) OwnPick(v.path, v.label)];
+      const draft = OwnDraft(name: 'Temperature', address: 'https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
+      final def = jsonDecode(buildOwnDefinition(id: 'own-temperature', draft: draft, picks: picks)) as Map<String, dynamic>;
+      Object? at(Object? json, String path) {
+        for (final k in path.split('.')) {
+          json = (json as Map)[k];
+        }
+        return json;
+      }
+
+      final item = (def['items'] as List).single as Map;
+      final lead = (((item['label'] as Map)['first_of'] as List).first as Map)['vars'] as Map;
+      expect(at(jsonDecode(meteo), (lead['v'] as Map)['path'] as String), 5.2);
+      expect(at(jsonDecode(meteo), (def['require'] as List).single as String), 5.2);
+      expect(jsonEncode(def), isNot(contains('\u00b0C')), reason: 'a unit is display only');
+    });
+  });
+
   group('Try it, against a server on this machine', () {
     late HttpServer server;
     late String base;
@@ -161,12 +218,43 @@ void main() {
       expect(slow.words, "127.0.0.1 didn't answer in time.");
     });
 
+    test('a host that cannot be looked up is not found; a refused or reset connection is unreachable', () {
+      expect(socketFailure(const SocketException("Failed host lookup: 'x.example.org'")), FetchFailure.notFound);
+      expect(socketFailure(const SocketException('x', osError: OSError('No address associated with hostname', 7))), FetchFailure.notFound);
+      // An error number alone is not enough (errno 7 is a lookup failure on Android but E2BIG on Linux): the text decides.
+      expect(socketFailure(const SocketException('x', osError: OSError('', 7))), FetchFailure.unreachable);
+      expect(socketFailure(const SocketException('Connection refused', osError: OSError('Connection refused', 111))), FetchFailure.unreachable);
+      expect(socketFailure(const SocketException('Connection reset by peer', osError: OSError('Connection reset by peer', 104))), FetchFailure.unreachable);
+      const t = OwnTry.failed('x.example.org', OwnTryFailure.notFound);
+      expect(t.words, "Couldn't find x.example.org. Check the web address.");
+      expect(const OwnTry.failed('x.example.org', OwnTryFailure.unreachable).words, "Couldn't reach x.example.org. Check the address and your connection.");
+    });
+
     test('nothing listening: it could not be reached', () async {
       final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       final port = s.port;
       await s.close();
       final t = await tryOwnAddress(Uri.parse('http://127.0.0.1:$port/x'));
       expect(t.failure, OwnTryFailure.unreachable);
+    });
+  });
+
+  group('the log line of a try', () {
+    test('never holds the key, however it was put in the address', () {
+      const secret = 'SECRET KEY/123';
+      final shown = ownAddressForLog('https://x.example.org/a?lat={lat}&lon={lon}&key={api_key}&k2=${Uri.encodeComponent(secret)}&k3=$secret', lat: 43.6, lon: -116.2, key: secret);
+      final line = ownTryLogLine(shown, 43.6, -116.2, OwnTry.failed('x.example.org', OwnTryFailure.unreachable, detail: 'SocketException: Failed host lookup'));
+      expect(line, isNot(contains('SECRET')));
+      expect(line, isNot(contains(Uri.encodeComponent(secret))));
+      expect(line, startsWith('Own source try: https://x.example.org/a?lat=43.6000&lon=-116.2000&key={api_key}&k2={api_key}&k3={api_key} -> unreachable [SocketException: Failed host lookup], place 43.6000,-116.2000'));
+    });
+
+    test('reports a character outside printable ASCII by code and place', () {
+      const addr = 'https://x.example.org/a?lat=1\u200b';
+      final line = ownTryLogLine(addr, 1, 2, OwnTry.ok('x.example.org', const [OwnValue(path: 'a', label: 'A', value: '1')]));
+      expect(line, contains('U+200B at ${addr.length - 1}'));
+      expect(line, contains('-> ok, 1 values, place 1.0000,2.0000'));
+      expect(ownTryLogLine('https://x.example.org/', 1, 2, OwnTry.ok('x', const [])), isNot(contains('U+')));
     });
   });
 

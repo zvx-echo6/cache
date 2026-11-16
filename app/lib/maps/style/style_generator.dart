@@ -55,7 +55,13 @@ const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
-/// The name of the heading marker image the screen adds to the style.
+/// The chosen place's pin and the search results' pins where the place is a notebook entry: its icon in the person's pin style
+/// (the feature's `pin` names the image, as a notebook pin's does), in place of the plain dot of [kPinSelected] and [kPinResults],
+/// which draw the features without one.
+const String kPinSelectedIcon = 'pin-selected-icon';
+const String kPinResultsIcon = 'pin-results-icon';
+
+/// The name of the vehicle arrow's image (the car's arrow, VehicleArrow) the screen adds to the style.
 const String kHeadingImage = 'position-heading';
 
 /// The chosen place's pin (a route's destination while it is shown): its circle's radius and the edge around it, in points.
@@ -229,6 +235,10 @@ Map<String, dynamic> buildMapStyle({
     'version': 8,
     'name': 'Cache ${palette.id.name}',
     'glyphs': glyphsUrl,
+    // No fades. The phone's arrow is a symbol, and the position source changes many times a second while guiding: on Android each
+    // change can make it a new symbol, which MapLibre fades in over its transition (300 ms by default; placement.cpp,
+    // symbolFadeChange), so the arrow was drawn faint most of the time. Labels then appear at once instead of fading in.
+    'transition': {'duration': 0, 'delay': 0},
     'sources': sources,
     'layers': all,
   };
@@ -533,7 +543,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'id': kPinResults,
         'type': 'circle',
         'source': kPinSource,
-        'filter': ['==', ['get', 'role'], 'result'],
+        'filter': ['all', ['==', ['get', 'role'], 'result'], ['!', ['has', 'pin']]],
         'paint': {
           'circle-radius': 7,
           'circle-color': p.css('pin'),
@@ -545,7 +555,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'id': kPinSelected,
         'type': 'circle',
         'source': kPinSource,
-        'filter': ['==', ['get', 'role'], 'selected'],
+        'filter': ['all', ['==', ['get', 'role'], 'selected'], ['!', ['has', 'pin']]],
         'paint': {
           'circle-radius': kPinSelectedRadius,
           'circle-color': p.css('pin'),
@@ -553,6 +563,21 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'circle-stroke-color': p.css('routeCasing'),
         },
       },
+      if (pinStyle != null)
+        for (final (id, role) in [(kPinResultsIcon, 'result'), (kPinSelectedIcon, 'selected')])
+          {
+            'id': id,
+            'type': 'symbol',
+            'source': kPinSource,
+            'filter': ['all', ['==', ['get', 'role'], role], ['has', 'pin']],
+            'layout': {
+              'icon-image': ['get', 'pin'],
+              'icon-size': pinIconSize(),
+              'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+            },
+          },
     ];
 
 List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
@@ -574,7 +599,8 @@ List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
         'id': kPositionDot,
         'type': 'circle',
         'source': kPositionSource,
-        'filter': ['==', ['geometry-type'], 'Point'],
+        // The dot only while no heading was ever known: once there is one, the arrow (kPositionHeading) is the marker, as the car's.
+        'filter': ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'heading']]],
         'paint': {
           'circle-radius': kPositionDotRadius,
           'circle-color': p.css('position'),

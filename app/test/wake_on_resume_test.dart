@@ -68,6 +68,26 @@ class FakeSession implements LlamaSession {
   dynamic noSuchMethod(Invocation i) => null;
 }
 
+/// A grace timer the test fires by hand: it keeps the callback and says whether it is still pending.
+class _FakeTimer implements Timer {
+  _FakeTimer(this._cb);
+  final void Function() _cb;
+  bool _active = true;
+
+  void fire() {
+    if (!_active) return;
+    _active = false;
+    _cb();
+  }
+
+  @override
+  void cancel() => _active = false;
+  @override
+  bool get isActive => _active;
+  @override
+  int get tick => 0;
+}
+
 void main() {
   late FakeSession session;
   var avail = 6 * _gb;
@@ -99,15 +119,15 @@ void main() {
       }
     }
 
-    /// Real time passes (file reads in the memory gate) until [done] holds, at most about two seconds.
+    /// Real time passes (file reads in the memory gate) until [done] holds, at most about ten seconds.
     Future<void> until(WidgetTester tester, bool Function() done) async {
-      for (var i = 0; i < 40 && !done(); i++) {
+      for (var i = 0; i < 200 && !done(); i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
         await tester.pump(const Duration(milliseconds: 50));
       }
     }
 
-    Future<void> setUpShell(WidgetTester tester) async {
+    Future<void> setUpShell(WidgetTester tester, {void Function(bool shown)? onAskShown}) async {
       r = await SettingsRig.create(tester, appFactory: makeApp);
       final dir = Directory('${r.dir.path}/layout')..createSync();
       PanePrefs.testDir = dir;
@@ -127,7 +147,7 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}, isHot: () async => hot), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout'))),
+        home: Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, readAhead: PromptReadAhead(engine: engine, request: (_) async => {'messages': []}, isHot: () async => hot), railPrefs: RailPrefs(dirOverride: Directory('${r.dir.path}/layout')), onAskShown: onAskShown),
       ));
       await settle(tester);
     }
@@ -158,10 +178,25 @@ void main() {
       await settle(tester);
     }
 
+    testWidgets('the app is told when Ask becomes the screen shown and when it is left (the chat model\'s idle release)', (tester) async {
+      final shown = <bool>[];
+      await setUpShell(tester, onAskShown: shown.add);
+      expect(shown, isEmpty, reason: 'the shell starts on Home');
+      await openAsk(tester);
+      expect(shown, [true]);
+      await openAsk(tester);
+      expect(shown, [true], reason: 'Ask again is no change');
+      await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text('Home')));
+      await settle(tester);
+      expect(shown, [true, false]);
+      await tearDownShell(tester);
+    });
+
     testWidgets('Ask shown and room: the model loads, the loading title shows, and there is no card', (tester) async {
       avail = 1 * _gb; // opening Ask finds no room: stays resting, with the card
       await setUpShell(tester);
       await openAsk(tester);
+      await until(tester, () => find.byKey(const ValueKey('ask-fix')).evaluate().isNotEmpty);
       expect(r.app.resting, isNotNull);
       expect(find.byKey(const ValueKey('ask-fix')), findsOneWidget);
       expect(session.calls, isEmpty);
@@ -170,12 +205,13 @@ void main() {
       avail = 6 * _gb;
       session.loadGate = Completer<void>();
       await resume(tester);
+      await until(tester, () => session.calls.isNotEmpty && r.app.loading != null && find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Loading…')).evaluate().isNotEmpty);
       expect(session.calls, ['load']);
       expect(r.app.loading, isNotNull);
       expect(find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Loading…')), findsOneWidget);
       expect(find.byKey(const ValueKey('ask-fix')), findsNothing);
       session.loadGate!.complete();
-      await settle(tester);
+      await until(tester, () => r.app.active != null && r.app.resting == null);
       expect(r.app.active, isNotNull);
       expect(r.app.resting, isNull);
       await tearDownShell(tester);
@@ -231,7 +267,7 @@ void main() {
       r.app.resting = null;
       session.loadGate = Completer<void>();
       unawaited(r.app.activate(r.app.models.first));
-      await settle(tester);
+      await until(tester, () => r.app.loading != null);
       expect(r.app.loading, isNotNull);
       await openAsk(tester);
       expect(engine.checks, isEmpty, reason: 'no model yet: no read');
@@ -251,7 +287,7 @@ void main() {
       r.app.resting = null;
       session.loadGate = Completer<void>();
       unawaited(r.app.activate(r.app.models.first));
-      await settle(tester);
+      await until(tester, () => r.app.loading != null);
       await openAsk(tester);
       session.loadGate!.complete();
       await settle(tester);
@@ -290,11 +326,25 @@ void main() {
     late AppState app;
     late BackgroundModelRelease bg;
     const grace = Duration(milliseconds: 80);
+    late List<_FakeTimer> timers;
 
-    Future<void> pause(int ms) => Future<void>.delayed(Duration(milliseconds: ms));
+    /// Lets everything already queued run (the event queue turns over many times); no wall-clock wait.
+    Future<void> flush() => pumpEventQueue(times: 200);
 
-    // The model is loaded, and the background release is wired as in main.dart.
+    /// Waits on a condition (real I/O in the app's activate), not on a fixed time; generous cap.
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 5000 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(done(), isTrue, reason: 'the condition never held');
+    }
+
+    /// The grace timer fires now: the newest timer still pending.
+    void fireTimer() => timers.lastWhere((t) => t.isActive).fire();
+
+    // The model is loaded, and the background release is wired as in main.dart; its grace timer is fired by hand.
     setUp(() async {
+      timers = [];
       dir = Directory.systemTemp.createTempSync('wake-races');
       Directory('${dir.path}/models').createSync();
       File('${dir.path}/models/$_file').writeAsBytesSync(List.filled(16, 0));
@@ -309,6 +359,12 @@ void main() {
         release: app.release,
         changes: app,
         grace: grace,
+        timer: (d, cb) {
+          expect(d, grace);
+          final t = _FakeTimer(cb);
+          timers.add(t);
+          return t;
+        },
       );
     });
     tearDown(() {
@@ -324,10 +380,11 @@ void main() {
 
     test('back in front just before the timer fires: toFront cancels it, nothing is released, the wake finds the model loaded', () async {
       bg.toBackground();
-      await pause(60);
+      expect(timers.single.isActive, isTrue, reason: 'the grace timer is pending and has not fired');
       bg.toFront();
+      expect(timers.single.isActive, isFalse, reason: 'toFront cancelled it');
       await app.wake();
-      await pause(200);
+      await flush();
       expect(session.calls, isEmpty);
       expect(app.active, isNotNull);
       consistent();
@@ -335,11 +392,10 @@ void main() {
 
     test('the wake runs before toFront: the same result', () async {
       bg.toBackground();
-      await pause(60);
       final w = app.wake();
       bg.toFront();
       await w;
-      await pause(200);
+      await flush();
       expect(session.calls, isEmpty);
       expect(app.active, isNotNull);
     });
@@ -347,13 +403,14 @@ void main() {
     test('back in front just after the timer fired: the wake waits for the unload, then loads; the model ends loaded', () async {
       session.unloadGate = Completer<void>();
       bg.toBackground();
-      await pause(120); // fired: the release is in progress, its unload not done
+      fireTimer(); // fired: the release is in progress, its unload not done
+      await until(() => session.calls.isNotEmpty);
       expect(session.calls, ['unload']);
       expect(app.active, isNull);
       expect(app.resting, isNotNull);
       bg.toFront();
       final w = app.wake();
-      await pause(30);
+      await flush();
       expect(session.calls, ['unload'], reason: 'the load does not begin under the unload');
       session.unloadGate!.complete();
       await w;
@@ -367,7 +424,7 @@ void main() {
       session.unloadGate = Completer<void>();
       final rel = app.release();
       final w = app.wake();
-      await pause(30);
+      await flush();
       expect(session.calls, ['unload']);
       session.unloadGate!.complete();
       await Future.wait([rel, w]);
@@ -380,7 +437,7 @@ void main() {
       session.unloadGate = Completer<void>();
       final un = app.unload();
       final act = app.activate(app.models.first);
-      await pause(30);
+      await flush();
       expect(session.calls, ['unload'], reason: 'the load has not begun under the unload');
       session.unloadGate!.complete();
       await Future.wait([un, act]);
@@ -393,7 +450,9 @@ void main() {
       session.loadGate = Completer<void>();
       bg.toBackground();
       final w = app.wake();
-      await pause(250); // well past the grace, load still in flight
+      await until(() => session.calls.isNotEmpty);
+      fireTimer(); // well past the grace, load still in flight
+      await flush();
       expect(session.calls, ['load']);
       expect(app.loading, isNotNull);
       expect(app.resting, isNull);
@@ -402,12 +461,15 @@ void main() {
       expect(app.active, isNotNull);
       consistent();
       // Cache is still in the back: a new grace period starts when the load ends, then the model is released
-      await pause(40);
+      final armed = timers.length;
+      await flush();
+      expect(timers.last.isActive, isTrue, reason: 'a new grace period started when the load ended');
       expect(session.calls, ['load'], reason: 'not before the new grace period has passed');
-      await pause(150);
+      expect(timers.length, armed);
+      fireTimer();
+      await until(() => app.resting != null);
       expect(session.calls, ['load', 'unload']);
       expect(app.active, isNull);
-      expect(app.resting, isNotNull);
       consistent();
     });
 
@@ -417,7 +479,8 @@ void main() {
       session.loadGate = Completer<void>();
       final a = app.wake();
       final b = app.wake();
-      await pause(30);
+      await until(() => session.calls.isNotEmpty);
+      await flush();
       session.loadGate!.complete();
       await Future.wait([a, b]);
       expect(session.calls, ['load']);

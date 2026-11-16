@@ -26,9 +26,13 @@ class AddPdfSliceResult {
 /// Why background work must stop now, or null: unplugged (the slice runs only while charging), else the app's own indexing
 /// rules through its throttle ([IndexThrottle]: the thermal headroom forecast and status, and the battery), the same rules as
 /// adding a PDF in the app.
-String? addPdfHeld(IndexThrottle t) {
+///
+/// [unplugged]: the foreground service's rule (approved for build 52): it runs on the battery too, above the low-battery
+/// threshold (the throttle's own: under 20% unplugged, back on from 25%), so being unplugged is not a reason to stop. The
+/// charging run keeps the default.
+String? addPdfHeld(IndexThrottle t, {bool unplugged = false}) {
   final r = t.reading;
-  if (r != null && !r.charging) return 'unplugged';
+  if (!unplugged && r != null && !r.charging) return 'unplugged';
   final d = t.duty;
   if (!d.paused) return null;
   return switch (d.hold) {
@@ -39,9 +43,9 @@ String? addPdfHeld(IndexThrottle t) {
 }
 
 /// [addPdfHeld] for a reading on its own (the throttle reads it first).
-Future<String?> addPdfHeldNow(IndexThrottle t) async {
+Future<String?> addPdfHeldNow(IndexThrottle t, {bool unplugged = false}) async {
   await t.read(fresh: true);
-  return addPdfHeld(t);
+  return addPdfHeld(t, unplugged: unplugged);
 }
 
 /// One background slice of Add PDF's jobs: each job in turn through the same runs the app's index scheduler starts (the core's
@@ -50,7 +54,7 @@ Future<String?> addPdfHeldNow(IndexThrottle t) async {
 /// Pause pauses it: the core keeps what is done, nothing is visible in the library until its journaled commit, and the next run
 /// resumes it from the same job folder.
 class AddPdfSlice {
-  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.throttle, this.lookEvery = const Duration(seconds: 15), DateTime Function()? clock})
+  AddPdfSlice(this.state, {this.budget = kAddPdfSliceBudget, this.stopAsked, this.held, this.only, this.throttle, this.lookEvery = const Duration(seconds: 15), this.wake, DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
 
   final AddPdfState state;
@@ -65,6 +69,9 @@ class AddPdfSlice {
   /// follow its duty through [indexThrottleShared].
   final IndexThrottle? throttle;
   final Duration lookEvery;
+
+  /// Completes when something asks the slice to stop (the service's Pause): it looks at once, not at the next [lookEvery].
+  final Future<void>? wake;
   final DateTime Function() _clock;
 
   bool _wanted(String key) {
@@ -107,7 +114,7 @@ class AddPdfSlice {
       final run = await task.start();
       String? stopWhy;
       var looking = false;
-      final timer = Timer.periodic(lookEvery, (_) async {
+      Future<void> look() async {
         if (looking || stopWhy != null) return;
         looking = true;
         try {
@@ -119,8 +126,15 @@ class AddPdfSlice {
         } finally {
           looking = false;
         }
-      });
+      }
+
+      final timer = Timer.periodic(lookEvery, (_) => look());
+      var ended = false;
+      unawaited(wake?.then((_) {
+        if (!ended) return look();
+      }));
       final ok = await run.finished;
+      ended = true;
       timer.cancel();
       if (ok) {
         added++;

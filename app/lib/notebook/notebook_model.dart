@@ -344,6 +344,9 @@ class Notebook {
   /// Made from the Places template: listed with coloured markers, and each place is edited on the place screen.
   bool get isPlaces => template == 'places';
 
+  /// A repeater list: one entry per repeater (the callsign its title), frequency, offset, tone and the rest as fixed fields.
+  bool get isRepeaters => template == 'repeaters';
+
   String get name => def.name;
 
   /// A log: entries made from the fields with quick add, "Last done" and "Due again".

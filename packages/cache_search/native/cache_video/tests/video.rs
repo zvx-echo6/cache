@@ -242,7 +242,7 @@ fn interrupted_download_resumes_with_range() {
     assert_eq!(gets.len(), 2, "one cut request and one resumed request");
     assert!(gets[0].header("Range").is_none());
     let from: usize = gets[1].header("Range").unwrap().strip_prefix("bytes=").unwrap().strip_suffix('-').unwrap().parse().unwrap();
-    assert!(from >= 500_000 && from < WEB_SIZE, "resumed at {from}");
+    assert!((500_000..WEB_SIZE).contains(&from), "resumed at {from}");
     let f = std::fs::read(t.0.join("downloads").join(&id).join(WEB_UUID).join("video.mp4")).unwrap();
     assert_eq!(sha_hex(&f), sha_hex(&blob(WEB_SIZE, 7)));
 }
@@ -341,6 +341,29 @@ fn hls_files_audio_only_and_the_joined_pair() {
     let e = job(&v, &t, &id, HLS_UUID, "audio", json!({})).unwrap_err();
     assert_eq!(e.code, "damaged");
     assert!(!t.0.join("downloads").join(&id).join(HLS_UUID).join(".video.part").exists());
+}
+
+#[test]
+fn a_saved_hls_video_is_a_plain_mp4_every_player_can_seek() {
+    // Android's player read a saved HLS video (fragmented MP4, one index per fragment) as its first fragment: "0:04 / 0:04" for
+    // a 1:59 video. A saved one is rewritten as a plain MP4: one moov with the whole length, then the samples.
+    let (t, m, v, id) = setup("hlsplain");
+    let (frag, samples) = fragmented_mp4();
+    m.knobs.lock().unwrap().generated = Some(frag.clone());
+    assert_eq!(job(&v, &t, &id, HLS_UUID, "720", json!({})).unwrap(), Outcome::Done);
+    let dir = t.0.join("downloads").join(&id).join(HLS_UUID);
+    let saved = std::fs::read(dir.join("video.mp4")).unwrap();
+    let names: Vec<String> = top_kinds(&saved).into_iter().map(|k| k.0).collect();
+    assert_eq!(names, ["ftyp", "moov", "mdat"], "no fragments left");
+    assert!(!dir.join(".video.remux").exists());
+    let man = j(v.downloads_json())["downloads"][0].clone();
+    assert_eq!(man["source"], "hls+audio");
+    assert_eq!(man["remuxed"], true);
+    assert_eq!(man["size"].as_u64().unwrap(), saved.len() as u64, "the manifest describes the saved file");
+    assert_eq!(man["sha256"].as_str().unwrap(), sha_hex(&saved));
+    // every sample's bytes are in the saved file, in order
+    let data: Vec<u8> = samples.concat();
+    assert!(saved.windows(data.len()).any(|w| w == data.as_slice()));
 }
 
 #[test]

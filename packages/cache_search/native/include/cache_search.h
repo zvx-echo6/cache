@@ -257,6 +257,22 @@ char *cs_search(cs_handle *h, const char *query, const char *options_json);
  *          (fields are null when the library's settings do not map them) */
 char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
 
+/* A library document read whole, page by page: "lib:<library-id>/<point-id>" only (any other address returns NULL with code
+ * "bad_json"; not_found and busy as for cs_read). The document is every point of the library whose mapped document field
+ * equals the opened point's (at most 5000 points, points matching a leave-out rule dropped). Order: by the payload field
+ * "piece" (whole number from 0) when every point has one, otherwise by the mapped page (numbers in numeric order, else
+ * as text), then by point id. Consecutive passages with the same page are one page; a page's text is its passages' texts
+ * joined with a blank line. The opened passage is always in the answer (even when the 5000-point scroll did not reach it).
+ * Around it the answer takes a window of whole passages, grown one at a time after, then before, while the text (with
+ * 2 characters per joined passage) stays within max_chars; a window that does not reach the start or the end of the
+ * document says so in "more_before" / "more_after". When the opened passage alone is over max_chars it is cut at a paragraph
+ * end. With no mapped document field, or no value for it on the opened point, the document is the one passage as a
+ * single page ("more_after" is true when it was cut).
+ * {"address","title","at_page":N,"more_before":bool,"more_after":bool,
+ *  "pages":[{"page":null|number|"text","text","addresses":["lib:<id>/<point-id>",...]}]}
+ * (title is the opened point's title without a page suffix; at_page is the index in "pages" of the page holding the opened point, in the window) */
+char *cs_read_document(cs_handle *h, const char *address, int32_t max_chars);
+
 /* --- Browse: raw ZIM entries --- */
 
 /* Raw bytes of a ZIM entry (HTML, CSS, image, ...), following redirects.
@@ -1077,6 +1093,12 @@ char *cs_layers_list(cs_handle *h);
  * {"catalogues":[{"url","layers":N,"invalid":[...]}|{"url","error":{"code","message"}}],"updates":{"<id>":"<version>"|{"error"}}}. */
 char *cs_layers_refresh(cs_handle *h);
 
+/* cs_layers_refresh as a job, on a thread of its own: the catalogue's network wait never holds the caller (the app's one core
+ * worker). Poll cs_job_progress: when "done", "result" is what cs_layers_refresh returns; a failed refresh is "failed" with
+ * cs_layers_refresh's error. The handle's catalogue is updated when it is done. Free it with cs_job_free. NULL on error
+ * (cs_last_error(h)): "not_configured" without "layers". */
+cs_job *cs_layers_refresh_start(cs_handle *h);
+
 /* Add or edit a user definition (the Advanced section): the JSON of one definition, validated ("bad_json" lists every
  * problem). A user definition overrides one with the same id. Returns {"id","saved":true}. */
 char *cs_layers_save(cs_handle *h, const char *definition_json);
@@ -1097,7 +1119,7 @@ char *cs_layers_remove(cs_handle *h, const char *id);
  * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
 char *cs_layers_server(cs_handle *h, const char *options_json);
 
-/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..] or [[[lon,lat],..],..] (rings, even-odd),
  * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
  * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
  * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",
@@ -1208,6 +1230,14 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "own_library_sync": {"library_dir"}
+ *   a person's own library (My books: "own": true in its cache-library.json and a folder name starting with "my-books")
+ *   made to match its packs on this device: sync conflict copies in it are removed, then, unless this device rebuilt it
+ *   before (.local/own-shard.json) and its copies.jsonl, documents.tsv and shard hold exactly the packs, a new shard is
+ *   made from the packs' own vectors and the lists from the packs, swapped in by the Add PDF commit journal (all or
+ *   nothing); the device keyword index is removed for index_library to build again. Any other library is left alone.
+ *   "detail": {"own","rebuilt","reason","books","points","conflicts_removed":[paths],"unreadable":[...]}. busy while an
+ *   Add PDF or an update writes the library. See src/ownlib.rs.
  * kind "zim_pdfs": {"zim_path"}
  *   the list cs_zim_pdfs gives, made on the job's thread (the ZIM is opened by path; "zim_name" is its metadata Name, else the
  *   file name). Progress is directory entries looked at, of all; when done the progress JSON adds "result" (the list).
@@ -1311,8 +1341,14 @@ typedef struct cs_sync cs_sync;
  * NULL on failure (reason in cs_last_error(NULL)). Independent of any cs_handle; runs on its own threads. */
 cs_sync *cs_sync_open(const char *config_json);
 
+/* The lines cs_sync_open has said since the last call, as a JSON array of strings, oldest first (one short line per step, with the
+ * time since the open began); they are cleared. "[]" when there are none. Free with cs_free_string. Thread-safe, also while an open is
+ * running on another thread. The engine never calls into the app: the app asks. */
+char *cs_sync_take_log(void);
+
 /* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
- * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
+ * sync_now, set_policy, network_changed. share_remove takes an optional "keep_history" (bool, default false): true keeps the
+ * share's index, seen file and stored tags, so adding the same id again reuses them. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
 char *cs_sync_call(cs_sync *s, const char *method, const char *args_json);
 
 /* Stops the engine and frees it. */

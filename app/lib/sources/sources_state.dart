@@ -18,11 +18,9 @@ import '../search/search_access.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
-/// One ZIM file in the sources folder.
-/// What a ZIM's folder holds that never syncs (see DataKind.notShared): the picture read from the ZIM itself, which each device makes
-/// for itself (the saved `.icon.png` does sync, with its ZIM).
-const List<String> kZimNotShared = ['*.illustration.png'];
+export '../sharing/share_rules.dart' show kZimNotShared;
 
+/// One ZIM file in the sources folder.
 class ZimFile {
   ZimFile({required this.path, required this.size});
 
@@ -132,6 +130,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return _retrying ?? _coreOpened.future;
   }
 
+  final Completer<Map<String, dynamic>?> _configBuilt = Completer<Map<String, dynamic>?>();
+
+  /// The sections of the cs_open config besides the sources ([openedExtra]) once they are built, before the core opens its
+  /// sources (the car's own places handle, car/car_places.dart, opens with some of them); null when they could not be built.
+  Future<Map<String, dynamic>?> whenConfigReady() => _configBuilt.future;
+
   /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
   /// starts once the core is up waits on this, so a core opened by Try again starts it too.
   Future<SearchCore> whenCoreOpen() => _everOpened.future;
@@ -188,9 +192,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// One start of the core: null (with [unavailable] saying why) when it could not open.
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
+    final clock = Stopwatch()..start();
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
       final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
+      if (!_configBuilt.isCompleted) _configBuilt.complete(extra);
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -198,6 +204,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       );
     } catch (e, stack) {
       logError('Search core startup failed', error: e, stack: stack);
+      if (!_configBuilt.isCompleted) _configBuilt.complete(null);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -208,7 +215,18 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     unavailable = null;
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
+    logInfo('Search core opened in ${clock.elapsedMilliseconds} ms (${_configs().length} sources)');
+    unawaited(_logOpenTimings(core));
     return core;
+  }
+
+  /// The core's own lines about how long its open took (the ZIM opens and the steps after them), into the log.
+  Future<void> _logOpenTimings(SearchCore core) async {
+    try {
+      for (final line in await core.openTimings()) {
+        logInfo(line);
+      }
+    } catch (_) {}
   }
 
   /// In a browser the server holds the folders, so the config sections come from it (`server.features`): the whole `extras` the
@@ -493,9 +511,58 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
       });
 
+  /// In a browser: whether the server's index work is paused by the person (Catalog's Pause all) and whether there is any, as the
+  /// server says (`index.pause`). The same Pause and Resume as the phone's, working on the server's work.
+  bool serverIndexPaused = false;
+  bool serverIndexBusy = false;
+  bool _pauseReading = false;
+
+  Future<void> _readServerPause() async {
+    final core = _core;
+    if (core == null || _pauseReading) return;
+    _pauseReading = true;
+    try {
+      final r = await core.indexPause();
+      if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
+        serverIndexPaused = r.paused;
+        serverIndexBusy = r.busy;
+        // Work that began, or a Pause from another tab: the watcher must run to see it change again.
+        _keepServerWatch();
+        notifyListeners();
+      }
+    } on CacheSearchException {
+      // A server older than index.pause: there is nothing to pause.
+    } finally {
+      _pauseReading = false;
+    }
+  }
+
+  /// Pause all (true) or Resume (false) for the server's index work.
+  Future<void> setServerIndexPaused(bool paused) async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      final r = await core.indexPause(paused);
+      serverIndexPaused = r.paused;
+      serverIndexBusy = r.busy;
+    } on CacheSearchException catch (e) {
+      error = _words(e);
+    }
+    _watchServerIndexing();
+    notifyListeners();
+  }
+
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
-    if (!_serverWorkLeft) {
+    unawaited(_readServerPause());
+    _keepServerWatch();
+  }
+
+  /// The 2-second watcher runs while a ZIM waits for its keyword index, and also while the server says it has index work or that
+  /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
+  /// must follow them (each round reads `index.pause` again).
+  void _keepServerWatch() {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;
@@ -611,7 +678,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } catch (e) {
       error = _words(e);
     } finally {
-      notifyListeners();
+      // a refresh that was under way when the state was disposed ends quietly
+      if (!_closed) notifyListeners();
     }
   }
 
@@ -886,9 +954,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     List<String>? zimIds,
     int k = 20,
     int offset = 0,
+    Duration? meaningLimit,
   }) async {
     final core = _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
-    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds));
+    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds), meaningLimit: meaningLimit);
   }
 
   /// The embedding models the searchable sources in [ids] (every source when null) name, the search model first.
@@ -1009,6 +1078,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
     return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
+  }
+
+  @override
+  Future<ReadDocument> readDocument(String address) async {
+    final core =
+        _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
+    final d = await core.readDocument(address);
+    return ReadDocument(
+      title: d.title,
+      atPage: d.atPage,
+      moreBefore: d.moreBefore,
+      moreAfter: d.moreAfter,
+      pages: [for (final p in d.pages) DocumentPageText(text: p.text, pageLabel: p.pageLabel, addresses: p.addresses)],
+    );
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).

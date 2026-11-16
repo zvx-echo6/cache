@@ -703,6 +703,7 @@ class WatchCheckSummary extends StatelessWidget {
     final d = deps;
     final book = addPdfBook(d, job);
     final fill = k.background;
+    final VoidCallback? openBook = d == null || book == null ? null : () => LibraryNav.of(context).open(context, bookSpec(d, book.id));
     if (same.isNotEmpty) {
       final copies = d?.shelves.copies;
       return _Note(
@@ -710,6 +711,7 @@ class WatchCheckSummary extends StatelessWidget {
         fill: fill,
         tone: k.accent,
         title: job.title,
+        onTapTitle: openBook,
         body: 'A spare copy of an existing book.',
         actions: [
           if (!job.noteDone)
@@ -728,7 +730,7 @@ class WatchCheckSummary extends StatelessWidget {
     if (shelf != null) {
       final div = (shelf['div'] ?? '') as String;
       final call = book?.callNumber;
-      return _Note(key: ValueKey('watch-note-${job.id}'), fill: fill, tone: k.ok, title: job.title, body: 'Filed in ${cdsChipLabel(div)}${call == null ? '' : ' · $call'}');
+      return _Note(key: ValueKey('watch-note-${job.id}'), fill: fill, tone: k.ok, title: job.title, onTapTitle: openBook, body: 'Filed in ${cdsChipLabel(div)}${call == null ? '' : ' · $call'}');
     }
     final guess = suggested?['div'] as String?;
     final placer = d?.shelves.placer;
@@ -737,6 +739,7 @@ class WatchCheckSummary extends StatelessWidget {
       fill: fill,
       tone: k.warning,
       title: job.title,
+      onTapTitle: openBook,
       body: guess == null ? "In Unsorted. Cache wasn't sure where it goes." : 'In Unsorted. Looks like ${cdsChipLabel(guess)}.',
       actions: job.noteDone
           ? const []

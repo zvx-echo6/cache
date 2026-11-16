@@ -8,6 +8,7 @@ import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag
 import '../../notebook/sync/sync_engine.dart';
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
+import 'notebook_screen.dart' show NotebookDeps, openNotebookEntry;
 
 /// Chooses a folder: its stored form and name, or null when none was chosen (tests give their own).
 typedef PickFolder = Future<({String path, String display})?> Function();
@@ -15,7 +16,10 @@ typedef PickFolder = Future<({String path, String display})?> Function();
 /// Notebooks > Connections: Obsidian and Logseq folders, and notebook sync between your devices. Each says once what it does,
 /// its status line, and the changes that need a decision.
 class ConnectionsScreen extends StatelessWidget {
-  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone});
+  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone, this.deps});
+
+  /// Opens a conflict's entry ("Changed in two places: …"); null leaves the title plain.
+  final NotebookDeps? deps;
 
   /// On a phone (Android, iOS): the Obsidian section says that Obsidian syncs only while it is open. Null: this device.
   final bool? phone;
@@ -242,6 +246,16 @@ class ConnectionsScreen extends StatelessWidget {
     messenger.showSnackBar(SnackBar(content: Text('Import tag is $tag.')));
   }
 
+  /// The entry a conflict is about, where it is edited.
+  Future<void> _openEntry(BuildContext context, SyncConflict c) async {
+    final d = deps;
+    if (d == null) return;
+    final e = await d.notebook.entry(c.entryId);
+    final book = e == null ? null : d.notebook.notebook(e.notebookId);
+    if (e == null || book == null || !context.mounted) return;
+    openNotebookEntry(context, d, book, e);
+  }
+
   Widget _conflict(BuildContext context, String id, SyncConflict c) {
     final k = context.t;
     final (title, keepLabel, otherLabel, note) = switch (c.kind) {
@@ -257,7 +271,17 @@ class ConnectionsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+            if (c.kind == ConflictKind.bothChanged && deps != null)
+              Semantics(
+                button: true,
+                child: InkWell(
+                  key: ValueKey('conflict-open-${c.entryId}'),
+                  onTap: () => _openEntry(context, c),
+                  child: Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent)),
+                ),
+              )
+            else
+              Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
             if (c.kind == ConflictKind.bothChanged) ...[
               const SizedBox(height: 6),
               Text('In Cache', style: TextStyle(fontSize: 12, color: k.secondary)),

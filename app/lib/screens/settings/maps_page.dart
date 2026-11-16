@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../maps/layers/layer_def.dart';
+import '../../maps/ui/area_page.dart';
 import '../../maps/ui/catalogue_screen.dart';
 import '../../maps/ui/format.dart';
 import '../../notebook/map_icons.dart';
@@ -92,7 +93,8 @@ class _MapsPageState extends State<MapsPage> {
                         AreaPhase.failed => [Part(a.error ?? 'Stopped', Tone.danger)],
                         AreaPhase.done => [Part('${formatBytes(a.bytes)}${a.fetchedAt == null ? '' : ' · ${formatDate(a.fetchedAt!)}'}')],
                       },
-                      onTap: openLayers,
+                      // The area's own page (its map, size, date, what is in it, Update and Delete).
+                      onTap: () => openAreaPage(context, maps, a.id),
                     ),
                 ],
               ],

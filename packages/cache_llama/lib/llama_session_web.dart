@@ -143,6 +143,9 @@ class LlamaSession {
     run.abort.abort();
   }
 
+  /// Nothing is freed here (the server keeps its model): always null.
+  String? get lastFreeReport => null;
+
   /// Forgets the model here. The server keeps its model loaded (it is shared by every browser).
   Future<void> unload() async {
     stop();

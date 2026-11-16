@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/chat/answer_reports.dart';
 import 'package:cache/screens/answer_reports_ui.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/platform/share_or_copy.dart' show systemShareAvailable;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 AnswerReport _report(String q, {DateTime? at, ReportReason reason = ReportReason.harmful}) => AnswerReport(
@@ -49,6 +52,18 @@ void main() {
       expect(await AnswerReports(dirOverride: dir).count(), 0);
     });
 
+    test('a report keeps the chat it came from; an old report without one reads as before', () async {
+      final a = AnswerReports(dirOverride: dir);
+      await a.add(AnswerReport(at: DateTime.utc(2026, 11, 1), question: 'new', answer: 'x', model: 'm', reason: ReportReason.wrong, chatId: 42));
+      File('${dir.path}${Platform.pathSeparator}reported_answers.json').writeAsStringSync(
+        '[${jsonEncode((await a.list()).first.toJson())},'
+        '{"at":"2026-10-01T00:00:00Z","question":"old","answer":"y","model":"m","reason":"wrong","note":"","sources":[]}]',
+      );
+      final items = await AnswerReports(dirOverride: dir).list();
+      expect(items.map((r) => (r.question, r.chatId)), [('new', 42), ('old', null)]);
+      expect(_report('plain').toJson().containsKey('chat_id'), isFalse);
+    });
+
     test('the shared Markdown has the question, the answer, the model, the reason and the sources', () {
       final md = _report('Is this safe?').toMarkdown();
       for (final s in ['Offensive or harmful', 'Gemma 4 E2B', 'Is this safe?', 'An answer [1].', 'it made this up', '1. WikiMed: Burns']) {
@@ -58,6 +73,23 @@ void main() {
   });
 
   group('the screens', () {
+    testWidgets('a report row with a chat id opens that chat; one without stays plain', (tester) async {
+      final a = AnswerReports(dirOverride: dir);
+      await tester.runAsync(() async {
+        await a.add(AnswerReport(at: DateTime.utc(2026, 10, 28), question: 'with chat', answer: 'x', model: 'm', reason: ReportReason.wrong, chatId: 7));
+        await a.add(AnswerReport(at: DateTime.utc(2026, 10, 27), question: 'old report', answer: 'x', model: 'm', reason: ReportReason.wrong));
+      });
+      final opened = <int>[];
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ReportedAnswersPage(reports: a, onOpenChat: opened.add)));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('with chat'));
+      expect(opened, [7]);
+      opened.clear();
+      await tester.tap(find.text('old report'));
+      expect(opened, isEmpty);
+    });
+
     testWidgets('the report sheet needs a reason before it saves, and returns the note', (tester) async {
       ReportChoice? got;
       await tester.pumpWidget(MaterialApp(
@@ -79,6 +111,29 @@ void main() {
       await tester.pumpAndSettle();
       expect(got?.reason, ReportReason.wrong);
       expect(got?.note, 'the dates are wrong');
+    });
+
+    testWidgets('a browser with no share sheet: a report\'s Share copies it and says Copied, so the button never does nothing', (tester) async {
+      final before = systemShareAvailable;
+      systemShareAvailable = () => false;
+      addTearDown(() => systemShareAvailable = before);
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied.add('${(call.arguments as Map)['text']}');
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      final a = AnswerReports(dirOverride: dir);
+      String? shared;
+      await tester.runAsync(() => a.add(_report('How do I treat a burn?')));
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ReportedAnswersPage(reports: a, share: (t, md) async => shared = md)));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Share'));
+      await tester.pump();
+      expect(shared, isNull, reason: 'no share sheet to hand it to');
+      expect(copied.single, contains('How do I treat a burn?'));
+      expect(find.text('Copied'), findsOneWidget);
     });
 
     testWidgets('Reported answers lists, shares and removes reports', (tester) async {

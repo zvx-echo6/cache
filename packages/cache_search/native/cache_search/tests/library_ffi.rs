@@ -776,6 +776,37 @@ fn keyword_and_vector_together_put_the_point_found_by_both_first() {
     unsafe { cs_close(h) };
 }
 
+/// Home's search gives the meaning part of a library search a time limit (`meaning_ms`): a library whose vectors cannot be searched
+/// in time (an unindexed segment of gigabytes, read from disk on a phone or a small box) is searched by its keywords only for that
+/// query, and the response names it in `meaning_timed_out`. With no limit (Ask's tool calls) nothing changes.
+#[test]
+fn a_meaning_search_over_its_time_limit_falls_back_to_keywords_and_says_so() {
+    let k = shared_kw();
+    let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), true)), k.idx.to_str().unwrap());
+    let run = |opts: &Value| -> Value {
+        serde_json::from_str(&take(unsafe { cs_search(h, cstr("xylophonic").as_ptr(), cstr(&opts.to_string()).as_ptr()) }).unwrap()).unwrap()
+    };
+    // vector near point 777, keyword for point 1234
+    let vec777 = json!({"model": MODEL, "vector": random_vec(777)});
+    let r = run(&json!({"k": 10, "query_vector": vec777}));
+    assert_eq!(r["vector_sources"], json!(["t"]), "no limit: the vector list as before");
+    assert_eq!(r["meaning_timed_out"], json!([]), "{r}");
+    assert!(addrs(&r).contains(&"lib:t/777".to_string()));
+    // a limit already over: the vector search is stopped; the keyword hit is still found
+    let r = run(&json!({"k": 10, "meaning_ms": 0, "query_vector": vec777}));
+    assert_eq!(r["meaning_timed_out"], json!(["t"]), "{r}");
+    assert_eq!(r["vector_sources"], json!([]), "{r}");
+    assert!(r["keyword_only_sources"].as_array().unwrap().iter().any(|x| x == "t"), "{r}");
+    let a = addrs(&r);
+    assert!(a.contains(&"lib:t/1234".to_string()), "the keyword result is there: {a:?}");
+    assert!(!a.contains(&"lib:t/777".to_string()), "the vector-only result is not: {a:?}");
+    // a limit with room: the vector list is used
+    let r = run(&json!({"k": 10, "meaning_ms": 10000, "query_vector": vec777}));
+    assert_eq!(r["vector_sources"], json!(["t"]), "{r}");
+    assert_eq!(r["meaning_timed_out"], json!([]), "{r}");
+    unsafe { cs_close(h) };
+}
+
 #[test]
 fn keyword_source_in_status() {
     let k = shared_kw();

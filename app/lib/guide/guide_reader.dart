@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../layout/adaptive.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../net/web_link.dart';
 import '../theme.dart';
 import 'app_links.dart';
 import 'guide_book.dart';
@@ -531,20 +532,14 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
       if (s != null) await Navigator.of(context).push(_section(widget.book, s, menu: widget.menu));
       return;
     }
-    if (!isAppLink(href)) return; // the guide works offline: web links do not open
+    if (!isAppLink(href)) {
+      // A web link: the phone's browser online, "You're offline" with Copy link otherwise. Any other kind of link is ignored.
+      final uri = Uri.tryParse(href);
+      if (uri != null && isWebLink(uri)) await openWebLink(context, href);
+      return;
+    }
     final place = appPlaceOf(href);
-    if (place == AppPlace.drawArea && openAppPlace != null) {
-      // Drawing an area happens on the map itself.
-      Navigator.of(context).popUntil((r) => r.isFirst);
-      openAppPlace!(place!);
-      return;
-    }
-    final screen = place == null ? null : appPlaceScreen?.call(place);
-    if (screen == null) {
-      _say(kUnknownAppLink);
-      return;
-    }
-    await Navigator.of(context).push(AppPlaceRoute(child: screen));
+    if (place == null || !goToAppPlace(context, place, fromGuide: true)) _say(kUnknownAppLink);
   }
 
   @override
@@ -629,6 +624,22 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
 
 /// A part of Cache opened from the guide: it slides up over the reader, full height, with "Back to the guide" at the top. Closing
 /// it in any way returns to the guide exactly where it was (the reader stays underneath).
+/// Opens [place] from [context]: drawing an area on the map itself, anything else as its screen (built once) over what is open,
+/// with the "Back to the guide" bar only when [fromGuide]. False when this build has no screen for it, or no shell set the place
+/// screens.
+bool goToAppPlace(BuildContext context, AppPlace place, {bool fromGuide = false}) {
+  if (place == AppPlace.drawArea) {
+    if (openAppPlace == null) return false;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    openAppPlace!(place);
+    return true;
+  }
+  final screen = appPlaceScreen?.call(place);
+  if (screen == null) return false;
+  Navigator.of(context).push(fromGuide ? AppPlaceRoute(child: screen) : MaterialPageRoute<void>(builder: (_) => screen));
+  return true;
+}
+
 class AppPlaceRoute extends PageRouteBuilder<void> {
   AppPlaceRoute({required Widget child})
     : super(
