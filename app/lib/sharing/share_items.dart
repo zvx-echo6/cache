@@ -46,9 +46,9 @@ List<String> libraryAlongside(String share, String path) => share == 'library' &
 /// The name of the regions' item: their road routing, places and off-road packs (kept together, shared by every region).
 const String kDirectionsItemName = 'Directions, places and off-road';
 
-/// Maps: each map layer with downloaded areas (its file in `maps/store/`, with SQLite's -wal beside it) and the regions'
-/// directions, places and off-road together (the `regions` folder: one database and tiles every region shares, so it cannot be
-/// split by region).
+/// Maps: each map layer with downloaded areas (this device's shared snapshot of its store, `maps/store-share/<layer>/<device>.sqlite`;
+/// the live store never syncs) and the regions' directions, places and off-road together (the `regions` folder: tiles every region
+/// shares, and each device's regions record, so it cannot be split by region).
 List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
   final byLayer = <String, int>{};
   for (final a in engine.allAreas) {
@@ -57,7 +57,7 @@ List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
   final local = regions.local;
   final rest = local.fold<int>(0, (n, r) => n + r.routingBytes + r.placesBytes + r.offroadBytes);
   return [
-    for (final e in byLayer.entries) ShareItem(share: 'maps', path: 'store/${e.key}.sqlite*', name: engine.layer(e.key)?.title ?? e.key, bytes: e.value),
+    for (final e in byLayer.entries) ShareItem(share: 'maps', path: 'store-share/${e.key}', name: engine.layer(e.key)?.title ?? e.key, bytes: e.value),
     if (local.any((r) => r.hasRouting || r.hasPlaces || r.hasOffroad)) ShareItem(share: 'regions', path: '**', name: kDirectionsItemName, bytes: rest),
   ];
 }
@@ -65,10 +65,10 @@ List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
 /// A map layer's file, or the regions' folder, on a linked device; the layer engine's other files travel with the kind.
 ShareItem? mapRemoteItem(LayerEngine engine, String share, String path, int bytes) {
   if (share == 'regions') return ShareItem(share: share, path: '**', name: kDirectionsItemName, bytes: bytes);
-  final m = RegExp(r'^store/(.+?)\.sqlite').firstMatch(path);
+  final m = RegExp(r'^store-share/([^/]+)/[^/]+\.sqlite$').firstMatch(path);
   if (m == null) return null;
   final id = m.group(1)!;
-  return ShareItem(share: share, path: 'store/$id.sqlite*', name: engine.layer(id)?.title ?? id, bytes: bytes);
+  return ShareItem(share: share, path: 'store-share/$id', name: engine.layer(id)?.title ?? id, bytes: bytes);
 }
 
 /// Models: each chat model, and the search model.

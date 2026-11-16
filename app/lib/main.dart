@@ -765,6 +765,8 @@ class _CacheAppState extends State<CacheApp> {
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
     offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${await appSupportPath()}/region-catalogue')),
     maps: maps,
+    // Deleting a region deletes it on every linked device that shares Maps: the delete's confirmation says so.
+    syncedWithOtherDevice: () => sharing.mapsTakenByAnotherDevice,
     // A region downloads from where the phone is, outwards.
     position: () {
       final f = location.fix;
