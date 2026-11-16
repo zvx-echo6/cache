@@ -10,7 +10,33 @@
 
 use crate::model::{format_phone, Harvest, PlaceSource, Raw, Wiki};
 use crate::rules::{generic_kind_id, Rules};
+use std::io::Read;
 use std::path::PathBuf;
+
+/// Drops NUL bytes from the stream: Overture has a few place names with one in them, and a NUL in a text field breaks
+/// the build downstream. "Caf\0e" reads as "Cafe".
+struct DropNul<R>(R);
+
+impl<R: Read> Read for DropNul<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let n = self.0.read(buf)?;
+            if n == 0 {
+                return Ok(0);
+            }
+            let mut k = 0;
+            for i in 0..n {
+                if buf[i] != 0 {
+                    buf[k] = buf[i];
+                    k += 1;
+                }
+            }
+            if k > 0 {
+                return Ok(k);
+            }
+        }
+    }
+}
 
 pub struct OvertureCsv {
     pub path: PathBuf,
@@ -49,7 +75,8 @@ impl PlaceSource for OvertureCsv {
     }
 
     fn read(&mut self, rules: &Rules, out: &mut Harvest) -> Result<(), String> {
-        let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&self.path).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let file = std::fs::File::open(&self.path).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let mut rdr = csv::ReaderBuilder::new().flexible(true).from_reader(DropNul(file));
         let head = rdr.headers().map_err(|e| e.to_string())?.clone();
         let col = |n: &str| head.iter().position(|h| h == n).ok_or_else(|| format!("overture csv: column {n:?} is missing"));
         let (c_id, c_geom, c_name, c_cat, c_conf) = (col("id")?, col("geometry")?, col("name")?, col("basic_category")?, col("confidence")?);
@@ -138,6 +165,14 @@ mod tests {
 
     const HEAD: &str = "id,geometry,name,basic_category,confidence,phone,website,socials,brand_name,brand_wikidata,osm_type,osm_id,source_record_id,raw_sources";
     const ROW: &str = "a1,0101000020E610000026FF93BF7B785CC0DDB1D826151F4540,Walgreens,pharmacy_and_drug_store,0.95,2086783050,,,Walgreens,Q1591889,,,,meta";
+
+    #[test]
+    fn nul_bytes_in_a_name_are_dropped() {
+        let row = ROW.replacen("Walgreens", "Caf\0e Prairie Town", 1);
+        let h = read(&format!("{HEAD}\n{row}\n"));
+        assert_eq!(h.places.len(), 1);
+        assert_eq!(h.places[0].name.as_deref(), Some("Cafe Prairie Town"));
+    }
 
     #[test]
     fn address_columns_are_optional() {
