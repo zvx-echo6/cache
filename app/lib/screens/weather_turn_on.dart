@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/material.dart';
 
@@ -214,6 +216,8 @@ class _ChoosePlaceSheetState extends State<_ChoosePlaceSheet> {
   List<MapPlace>? _found;
   bool _searching = false;
   String? _error;
+  Timer? _debounce;
+  int _searchSeq = 0;
 
   WeatherState get w => widget.t.weather;
 
@@ -225,6 +229,7 @@ class _ChoosePlaceSheetState extends State<_ChoosePlaceSheet> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _query.dispose();
     super.dispose();
   }
@@ -239,21 +244,39 @@ class _ChoosePlaceSheetState extends State<_ChoosePlaceSheet> {
     Navigator.pop(context, true);
   }
 
+  /// The field changed: search after a short pause in typing (as the map's search does). An empty field shows the saved list.
+  void _onQueryChanged(String text) {
+    _debounce?.cancel();
+    if (text.trim().isEmpty) {
+      _searchSeq++;
+      setState(() {
+        _found = null;
+        _searching = false;
+        _error = null;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 300), _search);
+  }
+
+  /// Only the newest search may show its answer; an older one that arrives late is dropped.
   Future<void> _search() async {
+    _debounce?.cancel();
     final q = _query.text.trim();
     final search = widget.t.searchPlaces;
     if (q.isEmpty || search == null) return;
+    final seq = ++_searchSeq;
     setState(() {
       _searching = true;
       _error = null;
     });
     try {
       final r = await search(q);
-      if (mounted) setState(() => _found = r);
+      if (mounted && seq == _searchSeq) setState(() => _found = r);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not search for places.');
+      if (mounted && seq == _searchSeq) setState(() => _error = 'Could not search for places.');
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted && seq == _searchSeq) setState(() => _searching = false);
     }
   }
 
@@ -297,6 +320,7 @@ class _ChoosePlaceSheetState extends State<_ChoosePlaceSheet> {
                   key: const ValueKey('weather-place-search'),
                   controller: _query,
                   textInputAction: TextInputAction.search,
+                  onChanged: _onQueryChanged,
                   onSubmitted: (_) => _search(),
                   decoration: InputDecoration(
                     hintText: 'Find a town or place',
