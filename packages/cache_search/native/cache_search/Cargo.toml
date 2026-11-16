@@ -71,6 +71,8 @@ cache_netguard = { path = "../cache_netguard" }
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1" }
 shard = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
+# The shared pools of the library shards (library.rs shard_pools); the rayon edge itself builds on (already in the lockfile).
+rayon = "1"
 # Writes the blank library template (a tar holding a shard snapshot, itself a tar); the same tar crate Qdrant unpacks
 # snapshots with (already in the lockfile through edge).
 tar = { version = "0.4", default-features = false }
