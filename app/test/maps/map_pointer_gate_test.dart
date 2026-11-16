@@ -8,11 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   late List<bool> calls;
 
-  Widget app({bool web = true}) {
+  Widget app({bool web = true, bool extraBlock = false}) {
     calls = [];
     return MaterialApp(
       navigatorObservers: [ModalWatchObserver()],
-      home: MapPointerGate(setter: calls.add, web: web, child: const Scaffold(body: Text('the map'))),
+      home: MapPointerGate(setter: calls.add, web: web, extraBlock: extraBlock, child: const Scaffold(body: Text('the map'))),
     );
   }
 
@@ -63,8 +63,29 @@ void main() {
       expect(calls.length, before);
     });
 
+    testWidgets('extraBlock (the ring is open): the map ignores pointer events with no modal open, and takes them back when it is off', (tester) async {
+      await tester.pumpWidget(app(extraBlock: true));
+      await tester.pump();
+      expect(modalWatch.isOpen, isFalse);
+      expect(calls.last, isTrue);
+      await tester.pumpWidget(app(extraBlock: false));
+      await tester.pump();
+      expect(calls.last, isFalse);
+    });
+
+    testWidgets('extraBlock stays on while a dialog opens and closes over the ring', (tester) async {
+      await tester.pumpWidget(app(extraBlock: true));
+      await tester.pump();
+      final closed = showDialog<void>(context: tester.element(find.text('the map')), builder: (_) => const AlertDialog(title: Text('Remove it?')));
+      await tester.pumpAndSettle();
+      Navigator.of(tester.element(find.text('Remove it?'))).pop();
+      await closed;
+      await tester.pumpAndSettle();
+      expect(calls.last, isTrue);
+    });
+
     testWidgets('not a browser (a phone): the map element is never touched', (tester) async {
-      await tester.pumpWidget(app(web: false));
+      await tester.pumpWidget(app(web: false, extraBlock: true));
       await tester.pump();
       unawaited(showDialog<void>(context: tester.element(find.text('the map')), builder: (_) => const AlertDialog(title: Text('Remove it?'))));
       await tester.pumpAndSettle();
