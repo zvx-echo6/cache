@@ -203,7 +203,15 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
 
   OwnDraft get _draft => OwnDraft(name: _name.text, address: _address.text, key: _key.text, refreshMinutes: _every, id: widget.editing?.id, savedKey: _savedKey);
 
-  void _insert(String placeholder) => setState(() => _address.value = insertPlaceholder(_address.value, placeholder));
+  // Where the cursor is when the address has the focus; at the end when it has not. The value is set whole (composing cleared) so the
+  // keyboard takes it, and the focus stays or comes back with the cursor right after the placeholder.
+  void _insert(String placeholder) {
+    final v = _address.value;
+    final from = _addressFocus.hasFocus ? v : v.copyWith(selection: TextSelection.collapsed(offset: v.text.length));
+    final next = insertPlaceholder(from, placeholder);
+    setState(() => _address.value = next.copyWith(composing: TextRange.empty));
+    _addressFocus.requestFocus();
+  }
 
   Future<void> _try() async {
     final d = _draft;
@@ -226,8 +234,9 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
     if (added == true && mounted) Navigator.of(context).pop(true);
   }
 
-  // ExcludeFocus: tapping an insert button never takes the keyboard's focus from the address, so the cursor stays where it is.
-  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => ExcludeFocus(child: OutlinedButton(
+  // ExcludeFocus + TextFieldTapRegion: the insert buttons never take the focus, and a tap on one is not a tap outside the address,
+  // so the keyboard stays on it.
+  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => TextFieldTapRegion(child: ExcludeFocus(child: OutlinedButton(
     key: ValueKey(key),
     onPressed: () => _insert(placeholder),
     style: OutlinedButton.styleFrom(
@@ -238,7 +247,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
       shape: const StadiumBorder(),
     ),
     child: Text(label, style: const TextStyle(fontSize: 14)),
-  ));
+  )));
 
   @override
   Widget build(BuildContext context) {
