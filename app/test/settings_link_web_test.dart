@@ -169,7 +169,7 @@ void main() {
     await r.start(tester);
     await tester.pumpWidget(r.page());
     await _settle(tester);
-    expect(find.text('6 groups of settings'), findsOneWidget);
+    expect(find.text('1 of 6 groups'), findsOneWidget);
     await _tap(tester, 'link-included');
     await tester.tap(find.descendant(of: find.byKey(const ValueKey('group-appearance')), matching: find.byType(Switch)));
     await _settle(tester);
