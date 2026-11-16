@@ -109,6 +109,9 @@ class FakeWeb {
   final List<Uri> requested = [];
   bool offline = false;
 
+  /// While set, Try it's fetch waits for it: a host that does not answer.
+  Completer<void>? hold;
+
   /// Serves [catalogue] (see [buildCatalogue]) under [base].
   void serve(String base, Map<String, String> catalogue) {
     for (final e in catalogue.entries) {
@@ -127,6 +130,7 @@ class FakeWeb {
   /// The same server as Try it of Add your own source reads it (net/fetch.dart's failures).
   Future<List<int>> tryFetch(Uri u, Duration timeout) async {
     requested.add(u);
+    if (hold != null) await hold!.future;
     if (offline) throw FetchException(FetchFailure.unreachable, u.host);
     final b = files[u.toString()];
     if (b == null) throw FetchException(FetchFailure.status, u.host, status: 404);
