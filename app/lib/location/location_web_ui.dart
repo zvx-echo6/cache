@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'location_service.dart';
+import 'position_source.dart' show LocationPermissionState;
 
 /// Reloads this browser tab. The browser build sets it; until then it does nothing.
 void Function() reloadPage = () {};
@@ -61,6 +62,20 @@ Future<void> showHowToAllow(BuildContext context) => showDialog<void>(
     ],
   ),
 );
+
+/// The browser has the location blocked or denied: the case where the way out is [showHowToAllow].
+bool webLocationBlocked(LocationService location) =>
+    location.permission == LocationPermissionState.deniedForever ||
+    location.permission == LocationPermissionState.denied ||
+    location.problem == LocationProblem.permissionBlocked ||
+    location.problem == LocationProblem.permissionDenied;
+
+/// Shows [showHowToAllow] when the browser blocks the location. Returns whether it did.
+Future<bool> showHowToAllowIfBlocked(BuildContext context, LocationService location) async {
+  if (!webLocationBlocked(location)) return false;
+  await showHowToAllow(context);
+  return true;
+}
 
 /// A browser shares its location only on a secure page.
 Future<void> showNeedsSecureAddress(BuildContext context) => showDialog<void>(
