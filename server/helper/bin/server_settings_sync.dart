@@ -168,21 +168,21 @@ class ServerSettingsSync {
 
   Future<void> _pull() async {
     final me = myId()!;
-    final log = _logFor();
+    final slog = _logFor();
     var changed = false;
     for (final p in peers()) {
       final id = p['id'];
       if (id is! String || id == me) continue;
       final link = _linkWith(id, p);
       if (!linkTakes(link)) continue;
-      final read = await log.readPeer(id);
+      final read = await slog.readPeer(id);
       if (read == null) continue;
       for (final e in read.latest.entries) {
         final key = e.key;
         if (!kSettingsFileMap.containsKey(key) || !_on(p, key)) continue;
         final (line, ev) = e.value;
-        if (!log.state.isUnseen(id, key, line)) continue;
-        log.state.markSeen(id, key, line);
+        if (!slog.state.isUnseen(id, key, line)) continue;
+        slog.state.markSeen(id, key, line);
         changed = true;
         final current = await _read(key);
         if (current == null) continue;
