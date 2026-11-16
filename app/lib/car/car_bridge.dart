@@ -18,6 +18,7 @@ import 'car_answer.dart';
 import '../platform/app_log.dart';
 import '../theme.dart';
 import 'car_drive.dart';
+import 'car_nearest.dart';
 import 'car_overlay.dart';
 import 'car_places.dart';
 import 'car_pins.dart';
@@ -530,7 +531,8 @@ class CarBridge {
     List<MapPlace> found = const [];
     try {
       final r = await _search(q);
-      found = [for (final p in r.results) if (!p.isCategory) p];
+      // A kind of place (the engine says so) lists nearest first; a name keeps the engine's order (car_nearest.dart).
+      found = carResults(r, nav.here ?? nav.mapCentre);
     } catch (_) {}
     return savedFirst(q, saved, found).take(12).toList();
   }
