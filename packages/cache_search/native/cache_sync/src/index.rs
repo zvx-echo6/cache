@@ -166,18 +166,6 @@ mod tests {
         assert_eq!(merge(&l, &r), vec![Action::Adopt { path: "a".into(), entry: e("h1", 12, "B") }]);
     }
 
-    fn kinds(actions: &[Action]) -> Vec<(String, &'static str)> {
-        actions
-            .iter()
-            .map(|a| match a {
-                Action::Fetch { path, .. } => (path.clone(), "fetch"),
-                Action::Delete { path, .. } => (path.clone(), "delete"),
-                Action::Adopt { path, .. } => (path.clone(), "adopt"),
-                Action::Keep { path } => (path.clone(), "keep"),
-            })
-            .collect()
-    }
-
     #[test]
     fn conflict_names_keep_folder_and_extension() {
         assert_eq!(conflict_name("docs/notes.txt", "Pixel", "2026-10-28 0412"), "docs/notes (conflict, Pixel, 2026-10-28 0412).txt");
