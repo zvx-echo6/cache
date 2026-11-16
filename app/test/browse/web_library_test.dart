@@ -136,10 +136,75 @@ void main() {
       expect(find.text('Downloads keep going if you close this tab.'), findsOneWidget);
       expect(find.text('wiki.zim'), findsOneWidget);
       expect(find.text('Downloading · 1.0 GB of 5.0 GB'), findsOneWidget);
-      expect(find.byTooltip('Pause'), findsNothing, reason: 'there is no pause in a browser');
       await tester.tap(find.byKey(const ValueKey('cancel-j1')));
       await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('remove-download-confirm')), findsOneWidget, reason: 'the cancel asks, as on the phone');
+      await tester.tap(find.byKey(const ValueKey('remove-download-yes')));
+      await tester.pumpAndSettle();
       expect(api.cancelled, contains('j1'));
+    });
+
+    testWidgets('a running download has Pause: it pauses on the device and the row says Paused with Resume', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.byKey(const ValueKey('pause-j1')), findsOneWidget);
+      expect(find.text('Pause'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('pause-j1')));
+      await tester.pumpAndSettle();
+      expect(api.paused, ['j1']);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      expect(find.byKey(const ValueKey('resume-j1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pause-j1')), findsNothing);
+    });
+
+    testWidgets('Resume on a paused download calls resume and the row goes back to running', (tester) async {
+      api.jobList = [job('j1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('resume-j1')));
+      await tester.pumpAndSettle();
+      expect(api.resumed, ['j1']);
+      expect(find.byKey(const ValueKey('resume-j1')), findsNothing);
+      expect(find.text('Waiting its turn…'), findsOneWidget, reason: 'queued again');
+    });
+
+    testWidgets('the cancel asks first, and Keep leaves the download running', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('cancel-j1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove the 1.0 GB already downloaded?'), findsOneWidget);
+      expect(api.cancelled, isEmpty, reason: 'nothing is cancelled before the answer');
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, isEmpty);
+      expect(find.byKey(const ValueKey('cancel-j1')), findsOneWidget);
+      expect(find.text('Downloading · 1.0 GB of 5.0 GB'), findsOneWidget);
+    });
+
+    testWidgets('Remove on a paused download asks first too', (tester) async {
+      api.jobList = [job('j1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('remove-j1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('remove-download-confirm')), findsOneWidget);
+      expect(api.cancelled, isEmpty);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, isEmpty);
+      expect(find.byKey(const ValueKey('resume-j1')), findsOneWidget);
+    });
+
+    testWidgets('holding a download row opens the phone\'s menu: Pause and Remove download', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.longPress(find.byKey(const ValueKey('job-j1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('download-menu')), findsOneWidget);
+      expect(find.text('Remove download'), findsOneWidget);
+      await tester.tap(find.text('Pause'));
+      await tester.pumpAndSettle();
+      expect(api.paused, ['j1']);
     });
 
     testWidgets('a transfer that stopped has Try again and Dismiss, in words that do not name the machine', (tester) async {
