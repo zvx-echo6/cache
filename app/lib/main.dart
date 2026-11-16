@@ -1573,6 +1573,7 @@ class _CacheAppState extends State<CacheApp> {
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
         navigatorKey: _navKey,
+        navigatorObservers: [pagePushWatcher],
         title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),

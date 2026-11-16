@@ -329,7 +329,7 @@ const int kRouteRefits = 4;
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump});
 
   /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
   /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
@@ -361,6 +361,10 @@ class MapsScreen extends StatefulWidget {
 
   /// "Read about it" on a place card (the place's Wikipedia article); null leaves it out.
   final PlaceAbout? about;
+
+  /// Set while a jump here from another screen is remembered ([Shell]): Back, with nothing of the map's own to close, calls it
+  /// (it returns to that screen) instead of leaving. Null: Back is as before.
+  final VoidCallback? onBackToJump;
 
   /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
   final NotebookState? notebooks;
@@ -2199,13 +2203,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_step == null && !_peek) || !widget.active,
+      canPop: (_step == null && !_peek && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_peek) {
           _endPeek();
-        } else {
+        } else if (_step != null) {
           _closeSteps();
+        } else {
+          widget.onBackToJump?.call();
         }
       },
       child: Scaffold(
