@@ -68,6 +68,19 @@ void main() {
     expect(chat.messages.where((m) => m.isUser), isNotEmpty);
   });
 
+  testWidgets('web, blocked: the + sheet says "Blocked in this browser" and "How to allow" opens the dialog', (tester) async {
+    await show(tester, web: true);
+    await tester.tap(find.byKey(const ValueKey('ask-plus')));
+    await tester.pumpAndSettle();
+    expect(find.text('Blocked in this browser'), findsOneWidget);
+    expect(find.text("Blocked in the device's settings"), findsNothing);
+    expect(find.text("Open the device's settings"), findsNothing);
+    expect(dialog, findsNothing);
+    await tester.tap(find.text('How to allow'));
+    await tester.pumpAndSettle();
+    expect(dialog, findsOneWidget);
+  });
+
   testWidgets('web, allowed: no dialog on send', (tester) async {
     await show(tester, web: true, state: LocationPermissionState.granted);
     await tester.enterText(box, 'what is near me');
