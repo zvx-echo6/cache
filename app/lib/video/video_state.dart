@@ -293,6 +293,12 @@ class VideoState extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  /// A device-to-device sync added, changed or removed files in these shared folders: the saved videos are read again when
+  /// the videos folder is one, so the Videos page shows what arrived without a restart (a download does the same by [refresh]).
+  Future<void> shareChanged(Set<String> shareIds) async {
+    if (shareIds.contains('videos')) await refresh();
+  }
+
   static String _k(String instance, String what) => 'video.$instance.$what';
 
   /// The signed-in user of an instance, or null.

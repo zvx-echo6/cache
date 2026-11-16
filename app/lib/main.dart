@@ -1256,6 +1256,8 @@ class _CacheAppState extends State<CacheApp> {
     // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+      // A video a sync brought shows in the Videos list at once.
+      if (ids.contains('videos')) unawaited(video.shareChanged(ids));
       // A snapshot that came by sync is attached when the core is given its sources again.
       if (ids.contains(kIndexesShareId)) {
         unawaited(sources.refresh());
