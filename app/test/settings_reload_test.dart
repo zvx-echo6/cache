@@ -40,6 +40,7 @@ void main() {
       await behind(r, 'appearance.theme', 'tactical');
       await behind(r, 'appearance.module_icons', 'large');
       await behind(r, 'ask.model', 'z.gguf');
+      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
       await r.app.reload();
@@ -62,6 +63,7 @@ void main() {
       layout.applyPinned(['weather']);
       await behind(r, 'home.bar', ['library', 'maps']);
       await behind(r, 'home.blocks', {'order': ['weather', 'ask'], 'off': ['shortcuts']});
+      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
       await layout.reload();
@@ -84,6 +86,7 @@ void main() {
       await behind(r, 'ask.web_search', true);
       await behind(r, 'alerts.pop_up', 'none');
       await behind(r, 'weather.sources_on', ['river-a']);
+      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
       await r.settings.reload();
@@ -105,9 +108,10 @@ void main() {
       r.maps.rememberCamera(42.5, -113.8, 9);
       await r.maps.flush();
       await behind(r, 'maps.layers_on', ['hillshade']);
+      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
-      r.maps.reload();
+      await r.maps.reload();
       expect(r.maps.isOn('hillshade'), isTrue);
       expect(r.maps.isOn('contours'), isFalse);
       expect(r.maps.savedCamera?.zoom, 9, reason: 'the camera stays as it is in memory');
@@ -127,6 +131,7 @@ void main() {
       await behind(r, 'weather.own_sources', [
         {'entry': entry('own-a', 'water', 'River A', path: 'defs/own-a.json'), 'definition': miniDefinition('own-a')},
       ]);
+      await r.maps.flush(); // the layers' own first save, so only what reload does is measured
       final before = snapshot(r.dir);
       final n = heard;
       await r.weather.reloadOwn();
