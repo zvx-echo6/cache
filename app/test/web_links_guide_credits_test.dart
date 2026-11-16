@@ -39,6 +39,13 @@ void _tapLink(WidgetTester tester, String text) {
   fail('no link with "$text"');
 }
 
+/// The Source code notice is a SelectableText (the address is a span in it), not a RichText: its recognizer is found there.
+void _tapSource(WidgetTester tester) {
+  final notice = find.byWidgetPredicate((w) => w is SelectableText && w.textSpan?.toPlainText().contains(kSourceUrl) == true);
+  final span = tester.widget<SelectableText>(notice).textSpan!.children!.whereType<TextSpan>().firstWhere((c) => c.text == kSourceUrl);
+  (span.recognizer! as TapGestureRecognizer).onTap!();
+}
+
 void main() {
   final opened = <String>[];
   final copied = <String>[];
@@ -151,7 +158,7 @@ void main() {
 
     testWidgets('online: the address opens in the phone\'s browser', (tester) async {
       await showAbout(tester);
-      _tapLink(tester, kSourceUrl);
+      _tapSource(tester);
       await tester.pump();
       await tester.pump();
       expect(opened, [kSourceUrl]);
@@ -161,7 +168,7 @@ void main() {
     testWidgets('offline: "You\'re offline" with Copy link, in place; the browser is not called', (tester) async {
       probe.kind = ConnectionKind.none;
       await showAbout(tester);
-      _tapLink(tester, kSourceUrl);
+      _tapSource(tester);
       await tester.pump();
       await tester.pump();
       await offlineChecks(tester, kSourceUrl);
