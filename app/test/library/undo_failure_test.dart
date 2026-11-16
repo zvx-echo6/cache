@@ -99,6 +99,9 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(find.text('That could not be saved. Try again.'), findsOneWidget, reason: 'the person is told the undo did not happen');
+    // the snackbar's timer was started in real time: let it run out while the page is still there
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 4500)));
+    await tester.pumpAndSettle();
   });
 
   Future<void> run(WidgetTester tester, Future<void> Function() undo) async {
