@@ -42,10 +42,14 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
   Placement p;
   try {
     p = await placer.place(moves);
-  } catch (_) {
+  } catch (e) {
+    // A big set goes in batches: the ones already sent stay placed, so say how far it got.
+    final text = e is PartialPlacementException
+        ? 'Only ${e.placed} of ${booksWord(e.total)} placed. The rest could not be saved. Try again.'
+        : 'That could not be saved. Try again.';
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      ..showSnackBar(SnackBar(content: Text(text)));
     return null;
   }
   final text = p.books.length == 1
