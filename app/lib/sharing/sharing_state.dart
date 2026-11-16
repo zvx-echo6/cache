@@ -167,6 +167,10 @@ class SharingState extends ChangeNotifier {
   /// patterns), as the sources on this device change. Kept, and given to the engine at its next start too.
   Future<void> setOnly(String id, List<String> patterns) => _driver.setOnly(id, patterns);
 
+  /// Before something writes files into a gated folder (notebook sync, its photos): the engine's list of what may be sent from
+  /// it is made current at once.
+  Future<void> refreshGate() => _driver.refreshGate();
+
   /// What this device never fetches of the always-shared folder [id] (on top of [setOnly]): kept, and given to the engine at its
   /// next start too.
   Future<void> setNeverFetch(String id, List<String> patterns) => _driver.setNeverFetch(id, patterns);
@@ -359,6 +363,9 @@ abstract class SharingDriver {
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
   Future<void> setOnly(String id, List<String> patterns);
+
+  /// Brings what the engine may send from the gated folders (the notebooks' photos) up to date now.
+  Future<void> refreshGate();
   Future<void> setNeverFetch(String id, List<String> patterns);
   Future<void> setSecrets(String peer, Map<String, String> secrets);
   Future<Map<String, Map<String, String>>> takeSecrets();
@@ -490,6 +497,8 @@ class _PhoneDriver implements SharingDriver {
         'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
         // The items switched off, from the start, so the first round already leaves them out.
         'off': {for (final k in shareKinds) for (final id in k.shared().keys) id: _sentOff[id] = _offOf(k, id)},
+        // What may be sent from a folder every item uses (the notebooks' photos): only what something shared refers to.
+        'gate': await _gates(),
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
@@ -678,6 +687,8 @@ class _PhoneDriver implements SharingDriver {
       await _applyOff();
       await _writeSnapshot();
     }
+    // The photos that may be sent follow the entries (an entry made private, a photo taken off one) without waiting for a sync.
+    if (_ticks % 15 == 0) await refreshGate();
     // The mark that this app's engine runs (a background round never opens a second one), written again every 30 s.
     if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
   }
@@ -716,6 +727,7 @@ class _PhoneDriver implements SharingDriver {
       'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
       'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
       'off': {for (final e in _sentOff.entries) e.key: e.value},
+      'gate': {for (final e in _sentGate.entries) e.key: e.value},
     });
     if (snap == _snapshot) return;
     _snapshot = snap;
@@ -801,8 +813,61 @@ class _PhoneDriver implements SharingDriver {
         } catch (e) {
           logError('Sync: could not set the items switched off', error: e, detail: id);
         }
+        // An item switched on or off changes which photos something shared refers to.
+        await _applyGate(k, id);
       }
     }
+  }
+
+  /// The gate each share was last given (see [DataKind.gated]): the folder and the files in it that may be sent.
+  final Map<String, Map<String, Object?>> _sentGate = {};
+
+  /// The gate for [id] of [k] as it is now: null when the share has none. A failure to work it out sends nothing from the folder
+  /// rather than everything.
+  Future<Map<String, Object?>?> _gateOf(DataKind k, String id) async {
+    final dir = k.gated[id];
+    final allowed = k.allowed;
+    if (dir == null || allowed == null) return null;
+    try {
+      return {'dir': dir, 'allow': await allowed(id, _offOf(k, id))};
+    } catch (e) {
+      logError('Sync: could not work out which files may be sent', error: e, detail: id);
+      return {'dir': dir, 'allow': const <String>[]};
+    }
+  }
+
+  Future<Map<String, Map<String, Object?>>> _gates() async {
+    final out = <String, Map<String, Object?>>{};
+    for (final k in shareKinds) {
+      for (final id in k.shared().keys) {
+        final g = await _gateOf(k, id);
+        if (g != null) out[id] = _sentGate[id] = g;
+      }
+    }
+    return out;
+  }
+
+  Future<void> _applyGate(DataKind k, String id) async {
+    final c = _core;
+    final g = await _gateOf(k, id);
+    if (c == null || g == null) return;
+    if (_sentGate[id] != null && jsonEncode(_sentGate[id]) == jsonEncode(g)) return;
+    try {
+      await c.call('set_gate', {'id': id, ...g});
+      _sentGate[id] = g;
+    } catch (e) {
+      logError('Sync: could not set which files may be sent', error: e, detail: id);
+    }
+  }
+
+  @override
+  Future<void> refreshGate() async {
+    for (final k in shareKinds) {
+      for (final id in k.shared().keys) {
+        if (k.gated[id] != null) await _applyGate(k, id);
+      }
+    }
+    await _writeSnapshot();
   }
 
   @override
@@ -1023,6 +1088,8 @@ class _WebDriver implements SharingDriver {
   // What each folder fetches and the keys are the server's own work, not the browser's.
   @override
   Future<void> setOnly(String id, List<String> patterns) async {}
+  @override
+  Future<void> refreshGate() async {}
   @override
   Future<void> setNeverFetch(String id, List<String> patterns) async {}
   @override

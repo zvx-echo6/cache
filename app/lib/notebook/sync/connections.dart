@@ -54,7 +54,7 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.onActivity, DateTime Function()? clock})
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.onActivity, this.prepareShare, DateTime Function()? clock})
     : _now = clock ?? DateTime.now;
 
   /// The time now: for the "Synced" line and for what each sync stamps (a fixed clock in tests and the guide's pictures).
@@ -65,6 +65,10 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   /// Told one short line when notebook entries arrive, change or are removed by a sync with the other devices (the Sharing page's
   /// Activity); the app log gets the same line.
   final void Function(String line)? onActivity;
+
+  /// Run before the sync with the other devices' folder writes anything: the share's list of photos that may be sent is made
+  /// current, so a photo that is not for sharing is never offered in the time between its writing and the next update.
+  final Future<void> Function()? prepareShare;
 
   /// Where the connections and each one's record live (`<support>/notebook-sync`).
   final Future<Directory> Function() dir;
@@ -325,6 +329,13 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
           _status[t.id] = 'Syncing...';
           notifyListeners();
           try {
+            if (t.kind == SyncKind.share) {
+              try {
+                await prepareShare?.call();
+              } catch (x) {
+                logError('Notebook sync: could not update the photos that may be sent', error: x);
+              }
+            }
             final e = await _engine(t);
             final r = await e.run();
             _conflicts[t.id] = e.conflicts;
