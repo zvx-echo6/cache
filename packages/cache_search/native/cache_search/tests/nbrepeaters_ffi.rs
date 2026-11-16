@@ -392,6 +392,16 @@ fn rb_kml(h: &H, file: &str, rows: &[(&str, &str, &str, f64, f64)]) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Like `rb_kml` but the frequency line carries `sign` ("+", "-", "s") and the tone `tone`.
+fn rb_kml_with(h: &H, file: &str, name: &str, town: &str, freq: &str, sign: &str, tone: &str) -> String {
+    let t = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document>\n<Placemark><name>{name}</name><description><![CDATA[{town}<br>{freq}{sign} {tone}<br>On-air: Yes]]></description><Point><coordinates>-116.2,43.6,0</coordinates></Point></Placemark>\n</Document></kml>\n"
+    );
+    let p = h.t.0.join(file);
+    std::fs::write(&p, t).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
 fn imp(h: &H, path: &str, nb: Option<&str>) -> Value {
     let mut a = json!({"paths": [path], "now": NOW});
     if let Some(n) = nb {
@@ -527,4 +537,53 @@ fn a_places_import_into_a_notebook_updates_a_point_of_the_same_name_and_adds_the
     let camp = es.iter().find(|e| e["title"] == "Camp").unwrap();
     assert_eq!(camp["place"]["lat"], 42.5, "moved to the file's position");
     assert_eq!(camp["body"], "my own notes", "the person's notes stay");
+}
+
+// ---- a partial value never replaces a fuller one ----
+
+fn offset_tone(h: &H, id: &str, nb: &Value) -> (Option<Value>, Option<Value>) {
+    let e = h.entries(id).into_iter().next().unwrap();
+    (field(nb, &e, "Offset"), field(nb, &e, "Tone"))
+}
+
+#[test]
+fn a_kml_that_gives_only_the_sign_never_replaces_the_offset_amount_a_csv_gave() {
+    let h = H::open("partial-same-sign");
+    let out = imp(&h, &chirp(&h, "r.csv", &[("R11 Boise", "146.760000", "100.0")]), None);
+    let (id, nb) = (out["notebook"]["id"].as_str().unwrap().to_string(), out["notebook"].clone());
+    assert_eq!(offset_tone(&h, &id, &nb).0, Some(json!("-600 kHz")));
+    let up = imp(&h, &rb_kml(&h, "r.kml", &[("R11 Boise", "Boise", "146.760000", 43.6, -116.2)]), Some(&id));
+    assert_eq!((up["added"].as_i64(), up["updated"].as_i64()), (Some(0), Some(1)), "{up}");
+    assert_eq!(offset_tone(&h, &id, &nb).0, Some(json!("-600 kHz")), "the sign agrees: the amount stays");
+    imp(&h, &rb_kml(&h, "r2.kml", &[("R11 Boise", "Boise", "146.760000", 43.6, -116.2)]), Some(&id));
+    assert_eq!(offset_tone(&h, &id, &nb).0, Some(json!("-600 kHz")), "and again");
+}
+
+#[test]
+fn a_kml_with_the_other_sign_keeps_the_csv_offset_and_invents_no_amount() {
+    let h = H::open("partial-other-sign");
+    let out = imp(&h, &chirp(&h, "r.csv", &[("R11 Boise", "146.760000", "100.0")]), None);
+    let (id, nb) = (out["notebook"]["id"].as_str().unwrap().to_string(), out["notebook"].clone());
+    imp(&h, &rb_kml_with(&h, "r.kml", "R11 Boise", "Boise", "146.760000", "+", "100.0"), Some(&id));
+    assert_eq!(offset_tone(&h, &id, &nb).0, Some(json!("-600 kHz")));
+}
+
+#[test]
+fn a_kml_tone_without_its_use_never_replaces_the_tone_a_csv_gave() {
+    let h = H::open("partial-tone");
+    let out = imp(&h, &chirp(&h, "r.csv", &[("R11 Boise", "146.760000", "100.0")]), None);
+    let (id, nb) = (out["notebook"]["id"].as_str().unwrap().to_string(), out["notebook"].clone());
+    assert_eq!(offset_tone(&h, &id, &nb).1, Some(json!("100.0 Hz to transmit")));
+    imp(&h, &rb_kml_with(&h, "r.kml", "R11 Boise", "Boise", "146.760000", "-", "107.2"), Some(&id));
+    assert_eq!(offset_tone(&h, &id, &nb).1, Some(json!("100.0 Hz to transmit")), "the CSV's tone, with its use, stays");
+}
+
+#[test]
+fn a_kml_first_fills_the_blanks_and_a_csv_after_it_gives_the_full_values() {
+    let h = H::open("partial-kml-first");
+    let out = imp(&h, &rb_kml(&h, "r.kml", &[("R11 Boise", "Boise", "146.760000", 43.6, -116.2)]), None);
+    let (id, nb) = (out["notebook"]["id"].as_str().unwrap().to_string(), out["notebook"].clone());
+    assert_eq!(offset_tone(&h, &id, &nb), (Some(json!("- (amount not in the imported list)")), Some(json!("100.0 Hz (use not stated in the imported list)"))));
+    imp(&h, &chirp(&h, "r.csv", &[("R11 Boise", "146.760000", "100.0")]), Some(&id));
+    assert_eq!(offset_tone(&h, &id, &nb), (Some(json!("-600 kHz")), Some(json!("100.0 Hz to transmit"))));
 }
