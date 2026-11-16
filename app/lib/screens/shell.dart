@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../car/car_voice_access.dart' show carVoiceShared;
 import '../car/phone_drive.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
@@ -890,6 +891,7 @@ class _ShellState extends State<Shell> {
     location: widget.location,
     hub: widget.hub,
     onOpenAsk: _openAskFromSettings,
+    carVoice: carVoiceShared,
   );
 
   /// "Set up Cache" on Home: each line opens the screen the feature uses everywhere.
@@ -1252,6 +1254,7 @@ class _ShellState extends State<Shell> {
     onOpenWeatherSettings: _openWeatherSettings,
     discover: _discover,
     onOpenDiscover: () => openDiscover(context, _discover),
+    carVoice: carVoiceShared,
   );
 
   @override

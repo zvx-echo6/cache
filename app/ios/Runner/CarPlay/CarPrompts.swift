@@ -176,6 +176,12 @@ final class CarPrompts: NSObject, AVAudioPlayerDelegate {
   }
 
   private func asked(_ text: String) -> String {
+    // The microphone is open for a search by voice (CarListen.swift): the audio session is its, and is not touched. The answer
+    // is the one iOS gives while something listens: no prompt (the phone's voice stays quiet; a tone is not played either).
+    if CarListening.active {
+      Self.log.info("car prompts: asked while the car listens, no prompt is given and the audio session is left alone")
+      return CarPromptStyle.silent.answer
+    }
     let session = AVAudioSession.sharedInstance()
     // The style is the system's hint to a session in the voice prompt mode. The phone's voice sets that up when it first
     // speaks, which is after this question the first time: the same set-up is made here if it is not there yet.
@@ -265,6 +271,8 @@ final class CarPrompts: NSObject, AVAudioPlayerDelegate {
   /// The audio session is let go, and the other apps are told so their sound comes back.
   private func release() {
     player = nil
+    // Listening has the session (CarListen.swift) and lets it go itself.
+    if CarListening.active { return }
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 

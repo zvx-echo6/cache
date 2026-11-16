@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../brand.dart';
+import '../car/car_voice_access.dart';
+import '../car/car_voice_card.dart';
 import '../desktop/desktop.dart';
 import '../desktop/shortcuts.dart' show homeSearchRequests;
 import '../discover/discover_state.dart';
@@ -48,7 +50,11 @@ class HomeScreen extends StatefulWidget {
     this.discover,
     this.onOpenDiscover,
     this.searchFor,
+    this.carVoice,
   });
+
+  /// Voice search from the car: its one-time card is shown at the top of Home while [CarVoiceAccess.showCard]; null leaves it out.
+  final CarVoiceAccess? carVoice;
 
   /// A search asked for from elsewhere (a step line in Ask): the box takes the words and searches them once, then the value goes
   /// back to null.
@@ -234,6 +240,22 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
   }
 
+  /// The one-time card that asks whether to allow voice search from the car (iPhone, after a car was connected). Nothing when it
+  /// is not due; null [HomeScreen.carVoice] draws nothing at all.
+  Widget _carVoiceCard({required bool typing}) {
+    final access = widget.carVoice;
+    if (access == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: access,
+      builder: (context, _) => typing || !access.showCard
+          ? const SizedBox.shrink()
+          : Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: CarVoiceCard(onAllow: () => unawaited(access.allowFromCard()), onNotNow: access.dismissCard),
+            ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -312,6 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 key: const ValueKey('home-two-columns'),
                 padding: padding,
                 children: [
+                  _carVoiceCard(typing: false),
                   if (widget.updates != null) UpdateBanner(updates: widget.updates!),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,6 +351,9 @@ class _HomeScreenState extends State<HomeScreen> {
             return ListView(
               padding: padding,
               children: [
+                // The voice search card from the car: the first thing on Home, and a slot that stays while typing (empty) for the
+                // same reason as the banner's.
+                _carVoiceCard(typing: typing),
                 // The banner's slot stays while typing (empty), so the children below keep their places: dropping it shifted the
                 // search box one place up, which made a new text field and closed the keyboard at the first letter typed.
                 if (widget.updates != null) typing ? const SizedBox.shrink() : UpdateBanner(updates: widget.updates!),

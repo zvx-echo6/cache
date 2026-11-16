@@ -52,6 +52,8 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
   private var retry: DispatchWorkItem?
 
   private var voiceTemplate: CPListTemplate?
+  private var listenTemplate: CPVoiceControlTemplate?
+  private var listenSession: CarListenSession?
   private var searchTemplate: CPSearchTemplate?
   private var searchSeq = 0
   private var searchText = ""
@@ -103,6 +105,9 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     waiting = nil
     savedTemplate = nil
     voiceTemplate = nil
+    listenTemplate = nil
+    listenSession?.cancel()
+    listenSession = nil
     searchTemplate = nil
     session = nil
     onSearchAllowedChanged = nil
@@ -496,6 +501,112 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
     interface?.dismissTemplate(animated: true) { _, _ in }
   }
 
+  // ---- search by voice (CarListen.swift) ---------------------------------------------------------------------------------
+
+  private static let listeningState = "listening"
+  private static let searchingState = "searching"
+  private static let didntCatchState = "didntcatch"
+
+  /// The microphone button was pressed: CarPlay's voice control template, and the phone listens while it is up. The words
+  /// heard are searched as if typed (the same call to Dart as the search box's), and shown as a list of the places found.
+  func listen() {
+    Self.log.info("car listen: asked to listen (a car: \(self.interface != nil), already up: \(self.listenTemplate != nil), button allowed: \(CarListenAccess.current().showsButton))")
+    guard let interface = interface, listenTemplate == nil, CarListenAccess.current().showsButton else { return }
+    let states = [
+      CPVoiceControlState(
+        identifier: Self.listeningState, titleVariants: [CarListenWords.listening],
+        image: UIImage(systemName: "mic.fill"), repeats: true),
+      CPVoiceControlState(
+        identifier: Self.searchingState, titleVariants: [CarListenWords.searching],
+        image: UIImage(systemName: "magnifyingglass"), repeats: false),
+      CPVoiceControlState(
+        identifier: Self.didntCatchState, titleVariants: [CarListenWords.didntCatch],
+        image: UIImage(systemName: "mic.slash"), repeats: false),
+    ]
+    let template = CPVoiceControlTemplate(voiceControlStates: states)
+    listenTemplate = template
+    // A new session for each listen: one that ended is not reused (its recognizer, or the harness's stand-in, is the last one's).
+    let session = CarListenSession.make()
+    listenSession = session
+    session.onState = { [weak self] state in self?.listenStateChanged(state) }
+    session.onText = { [weak self] text in self?.searchHeard(text) }
+    // CarPlay presents a voice control template (as it does an alert); it is not pushed onto the stack, and pushing it raises.
+    Self.log.info("car listen: presenting the voice control template")
+    interface.presentTemplate(template, animated: true) { [weak self] ok, error in
+      if let error = error {
+        Self.log.error("car listen: the voice control template could not be shown: \(error.localizedDescription, privacy: .public)")
+      }
+      Self.log.info("car listen: the voice control template presented, ok \(ok)")
+      // Listening begins only with the template up (Apple: recording only together with it).
+      if ok, self?.listenTemplate === template {
+        self?.listenSession?.begin()
+      } else if self?.listenTemplate === template {
+        self?.listenTemplate = nil
+      }
+    }
+    Self.log.info("car listen: the microphone button was pressed")
+  }
+
+  private func listenStateChanged(_ state: CarListenState) {
+    guard let template = listenTemplate else { return }
+    switch state {
+    case .listening:
+      Self.log.info("car listen: showing listening")
+      template.activateVoiceControlState(withIdentifier: Self.listeningState)
+    case .searching:
+      Self.log.info("car listen: showing searching")
+      template.activateVoiceControlState(withIdentifier: Self.searchingState)
+    case .didntCatch:
+      Self.log.info("car listen: showing didn't catch that")
+      template.activateVoiceControlState(withIdentifier: Self.didntCatchState)
+    case .idle:
+      // Over without a search (no words heard, or cancelled): the template goes.
+      listenTemplate = nil
+      if isPresented(template) { interface?.dismissTemplate(animated: true) { _, _ in } }
+    }
+  }
+
+  /// The words heard go to the phone's search as if typed: the same call as the search box's. The list of places found
+  /// replaces the voice control template; its title is the words heard.
+  private func searchHeard(_ text: String) {
+    let mine = listenSession?.generation ?? 0
+    // No words in the log.
+    Self.log.info("car listen: words heard, \(text.count) characters")
+    let started = Date()
+    CarLink.shared.call("search", ["query": text]) { [weak self] answer in
+      guard let self = self else { return }
+      let items = self.rows(CarPlace.list(answer), imperial: CarLink.shared.trip.imperial)
+      // The harness can keep "Searching" up long enough to be pictured.
+      let stay = max(0, (CarListen.testSetup?.searchingFor ?? 0) - Date().timeIntervalSince(started))
+      DispatchQueue.main.asyncAfter(deadline: .now() + stay) { [weak self] in
+        self?.showHeardResults(text, items, mine)
+      }
+    }
+  }
+
+  private func showHeardResults(_ text: String, _ items: [CPListItem], _ mine: Int) {
+    // Left or cancelled while the phone looked: nothing is shown.
+    guard let interface = interface, let session = listenSession, session.generation == mine, let template = listenTemplate else { return }
+    listenTemplate = nil
+    let list = CPListTemplate(title: text, sections: items.isEmpty ? [] : [CPListSection(items: items)])
+    if items.isEmpty {
+      list.emptyViewTitleVariants = [Self.noPlacesFound]
+    }
+    if isPresented(template) {
+      interface.dismissTemplate(animated: false) { _, _ in
+        interface.pushTemplate(list, animated: true) { _, _ in }
+      }
+    } else {
+      interface.pushTemplate(list, animated: true) { _, _ in }
+    }
+    session.finished()
+    Self.log.info("car listen: heard words searched, \(items.count) places shown")
+  }
+
+  private func isPresented(_ template: CPTemplate) -> Bool {
+    interface?.presentedTemplate === template
+  }
+
   // ---- what is on the screen -------------------------------------------------------------------------------------------
 
   private func isShown(_ template: CPTemplate?) -> Bool {
@@ -513,6 +624,12 @@ final class CarTemplates: NSObject, CPInterfaceControllerDelegate, CPSearchTempl
       waiting = nil
       shownResults = []
       Self.log.info("car lists: search closed")
+    }
+    if let template = listenTemplate, aTemplate === template, !isPresented(template) {
+      // CarPlay's own Cancel (or the car leaving it): listening stops and the audio is let go.
+      listenTemplate = nil
+      listenSession?.cancel()
+      Self.log.info("car listen: the voice control template was left")
     }
     if let template = voiceTemplate, aTemplate === template, !isShown(template) {
       voiceTemplate = nil

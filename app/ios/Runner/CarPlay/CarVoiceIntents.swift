@@ -87,6 +87,131 @@ struct CarNavigateIntent: AppIntent {
   }
 }
 
+/// "Add a stop at <place> in Cache": the place becomes the next stop while guiding (the same `navigateTo` with `stop` the
+/// Android car's add-a-stop request sends). With no route it is "navigate to", as on Android. A name that is no saved place
+/// comes back as the places found, and Siri asks which one, in its own list.
+struct CarAddStopIntent: AppIntent {
+  static let title: LocalizedStringResource = "Add stop"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @Parameter(title: "Place", requestValueDialog: IntentDialog("Where to?"))
+  var place: CarPlaceEntity
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    CarVoiceRun.log.info("car voice: add stop asked")
+    CarVoiceRun.startEngine()
+    var outcome = await CarVoiceRun.addStop(place.place)
+    if case .places(_, let places) = outcome {
+      // Siri asks which one (a single place found is the one meant).
+      let choices = places.map { CarPlaceEntity(place: .found($0)) }
+      var chosen = choices.first
+      if choices.count != 1 {
+        chosen = try await $place.requestDisambiguation(among: choices, dialog: IntentDialog("Where to?"))
+      }
+      guard let picked = chosen else { throw CarVoiceFailed() }
+      outcome = await CarVoiceRun.addStop(picked.place)
+    }
+    CarVoiceRun.log.info("car voice: add stop answered")
+    switch outcome {
+    case .added(let name):
+      return .result(dialog: "\(CarVoice.stopAdded(name))")
+    case .none(let query):
+      return .result(dialog: "\(CarVoice.noneFound(query))")
+    case .navigate(var plain):
+      // No route: a plain navigate, with navigate's own words and its Siri question when no car shows the list.
+      var connected = CarLink.shared.carConnected
+      if case .places(_, let places) = plain, !connected {
+        let choices = places.map { CarPlaceEntity(place: .found($0)) }
+        let chosen = try await $place.requestDisambiguation(among: choices, dialog: IntentDialog("Where to?"))
+        plain = await CarVoiceRun.navigate(chosen.place)
+        connected = CarLink.shared.carConnected
+      }
+      guard let words = CarVoice.words(plain, carConnected: connected) else { throw CarVoiceFailed() }
+      return .result(dialog: "\(words)")
+    case .places, .notAdded, .noAnswer:
+      throw CarVoiceFailed()
+    }
+  }
+}
+
+/// "End route in Cache": the same `stop` the car's End route button sends.
+struct CarEndRouteIntent: AppIntent {
+  static let title: LocalizedStringResource = "End route"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    CarVoiceRun.log.info("car voice: end route asked")
+    CarVoiceRun.startEngine()
+    switch await CarVoiceRun.endRoute() {
+    case .ended: return .result(dialog: "\(CarVoice.routeEnded)")
+    case .notRunning: return .result(dialog: "\(CarVoice.noRoute)")
+    case .noAnswer: throw CarVoiceFailed()
+    }
+  }
+}
+
+/// "Mute Cache" (and "Turn Cache's voice off"): the voice prompts off. Two intents, one for each way, so each has its own phrases.
+struct CarVoiceOffIntent: AppIntent {
+  static let title: LocalizedStringResource = "Voice off"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let words = try await CarVoiceRun.setPromptsWords(on: false)
+    return .result(dialog: "\(words)")
+  }
+}
+
+/// "Unmute Cache" (and "Turn Cache's voice on"): the voice prompts on.
+struct CarVoiceOnIntent: AppIntent {
+  static let title: LocalizedStringResource = "Voice on"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let words = try await CarVoiceRun.setPromptsWords(on: true)
+    return .result(dialog: "\(words)")
+  }
+}
+
+/// "When will I get there with Cache": Siri says the words, not Cache's speaker (Dart's `answer` with `say: false`).
+struct CarArrivalIntent: AppIntent {
+  static let title: LocalizedStringResource = "Arrival time"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let words = try await CarVoiceRun.tripWords("arrival_ios")
+    return .result(dialog: "\(words)")
+  }
+}
+
+/// "What's my next turn in Cache": Siri says the words, not Cache's speaker.
+struct CarNextTurnIntent: AppIntent {
+  static let title: LocalizedStringResource = "Next turn"
+
+  @available(iOS 26.0, *)
+  static var supportedModes: IntentModes { .background }
+
+  @MainActor
+  func perform() async throws -> some IntentResult & ProvidesDialog {
+    let words = try await CarVoiceRun.tripWords("turn_ios")
+    return .result(dialog: "\(words)")
+  }
+}
+
 struct CacheShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
@@ -97,6 +222,43 @@ struct CacheShortcuts: AppShortcutsProvider {
         // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way.
         "Navigate with \(.applicationName)",
       ]
+    )
+    // Seven App Shortcuts in all (Apple allows ten).
+    AppShortcut(
+      intent: CarAddStopIntent(),
+      phrases: ["Add a stop at \(\.$place) in \(.applicationName)"],
+      shortTitle: "Add stop",
+      systemImageName: "mappin.and.ellipse"
+    )
+    AppShortcut(
+      intent: CarEndRouteIntent(),
+      phrases: ["End route in \(.applicationName)", "Stop navigating in \(.applicationName)"],
+      shortTitle: "End route",
+      systemImageName: "xmark.circle"
+    )
+    AppShortcut(
+      intent: CarVoiceOffIntent(),
+      phrases: ["Mute \(.applicationName)", "Turn \(.applicationName)'s voice off"],
+      shortTitle: "Voice off",
+      systemImageName: "speaker.slash"
+    )
+    AppShortcut(
+      intent: CarVoiceOnIntent(),
+      phrases: ["Unmute \(.applicationName)", "Turn \(.applicationName)'s voice on"],
+      shortTitle: "Voice on",
+      systemImageName: "speaker.wave.2"
+    )
+    AppShortcut(
+      intent: CarArrivalIntent(),
+      phrases: ["When will I get there with \(.applicationName)"],
+      shortTitle: "Arrival time",
+      systemImageName: "clock"
+    )
+    AppShortcut(
+      intent: CarNextTurnIntent(),
+      phrases: ["What's my next turn in \(.applicationName)"],
+      shortTitle: "Next turn",
+      systemImageName: "arrow.turn.up.right"
     )
   }
 }
@@ -118,6 +280,44 @@ enum CarVoiceRun {
     await withCheckedContinuation { (done: CheckedContinuation<CarVoiceOutcome, Never>) in
       CarVoice.navigate(place) { done.resume(returning: $0) }
     }
+  }
+
+  @MainActor
+  static func addStop(_ place: CarVoicePlace) async -> CarStopOutcome {
+    await withCheckedContinuation { (done: CheckedContinuation<CarStopOutcome, Never>) in
+      CarVoice.addStop(place) { done.resume(returning: $0) }
+    }
+  }
+
+  @MainActor
+  static func endRoute() async -> CarEndOutcome {
+    await withCheckedContinuation { (done: CheckedContinuation<CarEndOutcome, Never>) in
+      CarVoice.endRoute { done.resume(returning: $0) }
+    }
+  }
+
+  /// Starts the engine, sets the voice prompts and returns Siri's words; throws when Dart did not answer.
+  @MainActor
+  static func setPromptsWords(on: Bool) async throws -> String {
+    log.info("car voice: voice prompts asked")
+    startEngine()
+    let outcome: CarVoicePromptsOutcome = await withCheckedContinuation { done in
+      CarVoice.setPrompts(on: on) { done.resume(returning: $0) }
+    }
+    guard case .now(let isOn) = outcome else { throw CarVoiceFailed() }
+    return isOn ? CarVoice.promptsOn : CarVoice.promptsOff
+  }
+
+  /// Starts the engine and returns the words Dart composed for Siri (`arrival_ios` or `turn_ios`); throws when Dart did not answer.
+  @MainActor
+  static func tripWords(_ kind: String) async throws -> String {
+    log.info("car voice: a trip question asked")
+    startEngine()
+    let words: String? = await withCheckedContinuation { done in
+      CarVoice.tripWords(kind) { done.resume(returning: $0) }
+    }
+    guard let said = words else { throw CarVoiceFailed() }
+    return said
   }
 
   /// Which of the approved sentences Siri says, for the log (no place names in the log).

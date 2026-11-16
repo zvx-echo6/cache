@@ -50,6 +50,7 @@ class CarBridge {
     Future<String> Function()? glyphs,
     this.ready,
     this.onConnected,
+    this.onCarSeen,
     this.pins,
     this.places,
     this.throttle = const Duration(milliseconds: 250),
@@ -104,6 +105,9 @@ class CarBridge {
   /// Called when a car screen attaches: the app reads a current position (the car may have started Cache with the phone app
   /// closed, when nothing else has read one yet).
   final Future<void> Function()? onConnected;
+
+  /// Called each time a car screen attaches: the app notes that a car was seen (the one-time voice search card waits for it).
+  final void Function()? onCarSeen;
 
   /// The phone map's pins for the car's map (car_pins.dart); null: the car's map draws none.
   final CarPins? pins;
@@ -181,6 +185,7 @@ class CarBridge {
       _schedule();
       // The tile server may have lost its socket while the app was in the back: a new port reloads the car's map ([_onMaps]).
       unawaited(maps.engine.recheckServer());
+      onCarSeen?.call();
       final c = onConnected;
       if (c != null) unawaited(c().catchError((Object _) {}));
       // Saved places the car asked for before the core was open: tell it to ask again once it is.
@@ -394,19 +399,22 @@ class CarBridge {
         if (nav.phase == NavPhase.previewing) nav.cancelDirections();
         return null;
       case 'stop':
+        final wasGuiding = nav.guiding;
         await nav.end();
         // The car has the ended trip before this is answered.
         await push();
-        return null;
+        // Whether a route was running (Siri's "End route" says "No route is running." when none was); the car sides ignore it.
+        return wasGuiding;
       case 'voice':
         if ((a['on'] == true) != nav.voiceOn) nav.toggleVoice();
         return nav.voiceOn;
       case 'answer':
         // An assistant's question about the trip (Android Auto, `geo.action:?act=eta` and the like): said by the phone's voice
         // straight away, even when guidance prompts are off, since the driver asked.
+        // `say: false` (Siri on an iPhone says the words itself): the words only, nothing spoken by the phone.
         final text = carAnswer(nav, a['kind'] as String?);
         logInfo('Car answers (${a['kind']}): $text');
-        await nav.speaker.speak(text);
+        if (a['say'] != false) await nav.speaker.speak(text);
         return text;
       case 'autoDrive':
         drive.simulate = a['on'] == true;

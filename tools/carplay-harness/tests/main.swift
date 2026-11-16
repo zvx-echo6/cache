@@ -749,5 +749,240 @@ check(CarVoiceSaved.remember(twice, voiceDefaults) && CarVoiceSaved.names(voiceD
 check(CarVoiceSaved.remember([], voiceDefaults) && CarVoiceSaved.names(voiceDefaults).isEmpty, "no saved places: no names")
 voiceDefaults.removePersistentDomain(forName: "car-voice-tests")
 
+// ---- Siri's other requests (CarVoice.swift): add a stop, end the route, the voice prompts, the arrival time and the next turn ----
+
+func waitFor<T>(_ start: (@escaping (T) -> Void) -> Void) -> T? {
+  var got: T?
+  start { got = $0 }
+  let end = Date().addingTimeInterval(4)
+  while got == nil && Date() < end { turn() }
+  return got
+}
+
+// The words Siri says.
+check(CarVoice.stopAdded("Place 4") == "Added Place 4 as the next stop.", "Siri's words: stop added")
+check(CarVoice.routeEnded == "Route ended." && CarVoice.noRoute == "No route is running.", "Siri's words: route ended, none running")
+check(CarVoice.promptsOff == "Voice prompts off." && CarVoice.promptsOn == "Voice prompts on.", "Siri's words: voice prompts")
+
+// Add a stop: navigateTo as navigate's, with stop.
+let stopArgs = CarVoice.stopArguments(for: foundVoice)
+check(stopArgs["stop"] as? Bool == true && stopArgs["query"] as? String == foundPlace.name && stopArgs["start"] as? Bool == true, "add stop: navigateTo's arguments, with stop")
+check(isNumber(stopArgs["lat"] as? Double, foundPlace.lat) && isNumber(stopArgs["lon"] as? Double, foundPlace.lon), "add stop: coordinates go along")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "added": true], for: said) == .added(name: "Place 1"), "add stop: added, with the name said")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "added": false], for: said) == .notAdded, "add stop: not added")
+check(CarVoice.stopOutcome(["places": searchPlaces, "forStop": true], for: said) == .places(query: "Place 1", places: CarPlace.list(searchPlaces)), "add stop: places found, to pick from")
+check(CarVoice.stopOutcome(["places": [Any](), "forStop": true], for: said) == .none(query: "Place 1"), "add stop: nothing found")
+check(CarVoice.stopOutcome(["started": true, "id": "place:1", "name": "Place 4"], for: said) == .navigate(.started(name: "Place 4")), "add stop with no route: a plain navigate")
+check(CarVoice.stopOutcome(["places": searchPlaces], for: said) == .navigate(.places(query: "Place 1", places: CarPlace.list(searchPlaces))), "add stop with no route, a name not saved: navigate's places")
+check(CarVoice.stopOutcome(nil, for: said) == .noAnswer, "add stop: no answer")
+
+link.reset()
+let stopHeard = HeardVoice()
+link.addListener(stopHeard)
+link.setCarConnected(true)
+var stopAsked: [(String, [String: Any])] = []
+var stopAnswer: Any? = ["started": true, "id": "place:1", "added": true]
+link.dartForTests = { method, arguments, done in
+  stopAsked.append((method, arguments as? [String: Any] ?? [:]))
+  done(stopAnswer)
+}
+check(waitFor({ CarVoice.addStop(foundVoice, link: link, wait: 2, done: $0) }) == .added(name: foundPlace.name), "add stop through the link: added")
+check(stopAsked.count == 1 && stopAsked[0].0 == "navigateTo" && stopAsked[0].1["stop"] as? Bool == true, "one navigateTo, with stop")
+check(stopHeard.places.isEmpty && stopHeard.started == 0 && stopHeard.routes.isEmpty, "a stop added: the car is told nothing")
+stopAnswer = ["started": true, "id": "place:1", "name": "Place 1", "lat": 1.0, "lon": 2.0]
+check(waitFor({ CarVoice.addStop(said, link: link, wait: 2, done: $0) }) == .navigate(.started(name: "Place 1")), "add stop with no route: navigate's outcome")
+check(stopHeard.started == 1, "with no route and a car: the car is told guidance began, as navigate does")
+
+// End route: stop; its answer says whether a route was running.
+check(CarVoice.endOutcome(true) == .ended && CarVoice.endOutcome(false) == .notRunning && CarVoice.endOutcome(nil) == .noAnswer, "end route: Dart's answer")
+var stopped = 0
+var wasRunning: Any? = true
+link.dartForTests = { method, _, done in
+  if method == "stop" { stopped += 1 }
+  done(wasRunning)
+}
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .ended && stopped == 1, "end route: stop sent, route ended")
+wasRunning = false
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .notRunning, "end route: none was running")
+wasRunning = nil
+check(waitFor({ CarVoice.endRoute(link: link, wait: 2, done: $0) }) == .noAnswer, "end route: no answer")
+
+// The voice prompts.
+check(CarVoice.promptsOutcome(true) == .now(on: true) && CarVoice.promptsOutcome(false) == .now(on: false) && CarVoice.promptsOutcome(nil) == .noAnswer, "voice: Dart's answer")
+var voiceMethod = ""
+var voiceOnSent: Bool?
+link.dartForTests = { method, arguments, done in
+  voiceMethod = method
+  voiceOnSent = (arguments as? [String: Any])?["on"] as? Bool
+  done(voiceOnSent)
+}
+check(waitFor({ CarVoice.setPrompts(on: false, link: link, wait: 2, done: $0) }) == .now(on: false), "voice off")
+check(voiceMethod == "voice" && voiceOnSent == false, "voice off: the `voice` call, on false")
+check(waitFor({ CarVoice.setPrompts(on: true, link: link, wait: 2, done: $0) }) == .now(on: true) && voiceOnSent == true, "voice on")
+
+// The arrival time and the next turn: Dart's words, not spoken by the phone.
+let ask1 = CarVoice.answerArguments("arrival_ios")
+check(ask1["kind"] as? String == "arrival_ios" && ask1["say"] as? Bool == false, "arrival: `answer` with the iOS kind and say false")
+check(CarVoice.answerArguments("turn_ios")["kind"] as? String == "turn_ios", "next turn: the iOS kind")
+var answerAsked: [String: Any] = [:]
+link.dartForTests = { method, arguments, done in
+  answerAsked = (arguments as? [String: Any] ?? [:]).merging(["method": method]) { a, _ in a }
+  done("You'll arrive at 3:40 PM, 12 miles to go.")
+}
+check(waitFor({ finish in CarVoice.tripWords("arrival_ios", link: link, wait: 2, done: { r in finish(r ?? "") }) }) == "You'll arrive at 3:40 PM, 12 miles to go.", "arrival: Dart's words as they are")
+check(answerAsked["method"] as? String == "answer" && answerAsked["say"] as? Bool == false, "arrival: asked as `answer`, say false")
+link.dartForTests = { _, _, done in done("No route is running.") }
+check(waitFor({ finish in CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in finish(r ?? "") }) }) == "No route is running.", "next turn, no route: the no-route words")
+link.dartForTests = { _, _, done in done(nil) }
+check(waitFor({ finish in CarVoice.tripWords("turn_ios", link: link, wait: 2, done: { r in finish(r ?? "<none>") }) }) == "<none>", "next turn: no words from Dart is none")
+// Dart not up: each request gives up after its wait.
+link.dartForTests = nil
+check(waitFor({ CarVoice.endRoute(link: link, wait: 0.6, done: $0) }) == .noAnswer, "Dart never said hello: end route has no answer")
+link.reset()
+
+// ---- voice search on the car (CarListen.swift) ----------------------------------------------------------------------------------
+
+/// Runs the main loop until the condition holds or `seconds` pass.
+func pump(_ seconds: TimeInterval, until condition: () -> Bool) {
+  let end = Date().addingTimeInterval(seconds)
+  while !condition() && Date() < end { turn() }
+}
+
+// The words of the three states.
+check(CarListenWords.listening == "Listening" && CarListenWords.searching == "Searching" && CarListenWords.didntCatch == "Didn't catch that", "listen: the three approved words")
+
+// The mic button shows only with the microphone, speech recognition and an on-device recognizer, every combination.
+var combos = 0
+for mic in [false, true] {
+  for speech in [false, true] {
+    for device in [false, true] {
+      let access = CarListenAccess(microphoneGranted: mic, speechAuthorized: speech, onDeviceRecognizer: device)
+      check(access.showsButton == (mic && speech && device), "listen: button for mic \(mic), speech \(speech), on-device \(device)")
+      combos += 1
+    }
+  }
+}
+check(combos == 8, "listen: all eight permission combinations were tried")
+check(CarListenAccess(microphoneGranted: true, speechAuthorized: true, onDeviceRecognizer: true).showsButton, "listen: button shown with all three")
+check(!CarListenAccess(microphoneGranted: true, speechAuthorized: true, onDeviceRecognizer: false).showsButton, "listen: no button without an on-device recognizer")
+
+/// One listening on stand-ins: what the audio did, what states were shown, what was searched.
+final class ListenRun {
+  let audio = CarListenFakeAudio()
+  let recognizer = CarListenFakeRecognizer()
+  var states: [CarListenState] = []
+  var texts: [String] = []
+  let session: CarListenSession
+  init(cap: TimeInterval = 8, grace: TimeInterval = 1.5, hold: TimeInterval = 0.2) {
+    session = CarListenSession(audio: audio, recognizer: recognizer, cap: cap, grace: grace, didntCatchFor: hold)
+    session.onState = { [unowned self] in self.states.append($0) }
+    session.onText = { [unowned self] in self.texts.append($0) }
+  }
+}
+
+// A fake recognizer's text reaches the search call, the audio is let go when it finishes, and never stays open.
+do {
+  let run = ListenRun()
+  run.recognizer.results = [.partial("coff"), .final("  coffee shop ")]
+  run.session.begin()
+  check(CarListening.active && run.audio.begins == 1 && run.audio.active, "listen: the audio session is active while listening")
+  pump(2) { !run.texts.isEmpty }
+  check(run.texts == ["coffee shop"], "listen: the recognizer's text (trimmed) is what is searched")
+  check(run.states == [.listening, .searching], "listen: states are Listening then Searching")
+  check(run.audio.ends == 1 && !run.audio.active && !CarListening.active, "listen: finish lets the audio session go at once")
+  check(run.recognizer.cancels == 1, "listen: the recognizer is let go at the end")
+  run.session.finished()
+  check(run.session.state == .idle, "listen: after the search the session is ready again")
+}
+
+// The words reach the same Dart call as the typed search: `search`, query only (the car's search is never by meaning).
+do {
+  var asked: [(String, [String: Any])] = []
+  link.dartForTests = { method, arguments, done in
+    asked.append((method, arguments as? [String: Any] ?? [:]))
+    done([])
+  }
+  let run = ListenRun()
+  run.recognizer.results = [.final("gas station")]
+  run.session.onText = { text in link.call("search", ["query": text]) }
+  run.session.begin()
+  pump(2) { !asked.isEmpty }
+  check(asked.count == 1 && asked[0].0 == "search" && asked[0].1["query"] as? String == "gas station" && asked[0].1.count == 1, "listen: the heard words go to Dart's `search` as the typed ones do")
+  link.dartForTests = nil
+  link.reset()
+}
+
+// Cancel (the template's own Cancel, or the template left): audio let go, nothing searched.
+do {
+  let run = ListenRun()
+  run.session.begin()
+  check(run.audio.active && CarListening.active, "listen: cancel test: listening")
+  run.session.cancel()
+  check(run.audio.ends == 1 && !run.audio.active && !CarListening.active, "listen: cancel lets the audio session go")
+  check(run.recognizer.cancels == 1 && run.states == [.listening, .idle] && run.texts.isEmpty, "listen: cancel searches nothing")
+  run.recognizer.say(.final("too late"))
+  turn()
+  check(run.texts.isEmpty, "listen: words that arrive after a cancel are dropped")
+}
+
+// Something else took the audio (a call, Siri): the same as cancel.
+do {
+  let run = ListenRun()
+  run.session.begin()
+  run.audio.onLost?()
+  check(run.audio.ends == 1 && run.session.state == .idle && !CarListening.active, "listen: audio taken by another app ends listening")
+}
+
+// Fail: the recognizer fails, or the audio session cannot start; "Didn't catch that" for a moment, audio let go.
+do {
+  let run = ListenRun()
+  run.recognizer.results = [.failed]
+  run.session.begin()
+  pump(2) { run.states.last == .idle }
+  check(run.states == [.listening, .didntCatch, .idle], "listen: a failure shows Didn't catch that and then goes")
+  check(run.audio.ends == 1 && !run.audio.active && !CarListening.active && run.texts.isEmpty, "listen: a failure lets the audio session go and searches nothing")
+}
+do {
+  let run = ListenRun()
+  run.audio.failToBegin = true
+  run.session.begin()
+  check(run.audio.ends == 1 && !run.audio.active && !CarListening.active && run.recognizer.starts == 0, "listen: audio that cannot start never starts the recognizer, and is let go")
+  pump(2) { run.states.last == .idle }
+  check(run.states == [.didntCatch, .idle], "listen: audio that cannot start shows Didn't catch that")
+}
+
+// No words (silence): Didn't catch that, about the hold, then it goes; nothing searched.
+do {
+  let run = ListenRun(hold: 0.3)
+  run.recognizer.results = [.final("   ")]
+  let began = Date()
+  run.session.begin()
+  pump(2) { run.states.last == .idle }
+  check(run.states == [.listening, .didntCatch, .idle] && run.texts.isEmpty, "listen: no words shows Didn't catch that and searches nothing")
+  check(Date().timeIntervalSince(began) >= 0.3, "listen: Didn't catch that stays for its hold")
+  check(CarListenSession.didntCatchFor == 2 && CarListenSession.cap == 8, "listen: the real hold is 2 s and the cap 8 s")
+}
+
+// The cap: a recognizer that never finishes is stopped at the cap, then the last words are taken after the grace.
+do {
+  let run = ListenRun(cap: 0.3, grace: 0.2)
+  run.session.begin()
+  run.recognizer.say(.partial("pizza"))
+  pump(0.1) { false }
+  check(run.session.state == .listening && run.audio.active, "listen: still listening before the cap")
+  pump(3) { !run.texts.isEmpty }
+  check(run.recognizer.audioEnds == 1, "listen: at the cap the recognizer is told no more sound is coming")
+  check(run.texts == ["pizza"] && run.audio.ends == 1 && !run.audio.active, "listen: after the cap the words so far are searched and the audio let go")
+}
+
+// The prompts' answer while the car listens is in CarPrompts.swift (iOS only): its flag is the one this file sets.
+do {
+  let run = ListenRun()
+  run.session.begin()
+  check(CarListening.active, "listen: the flag the spoken prompts read is on while listening")
+  run.session.cancel()
+  check(!CarListening.active, "listen: and off after")
+}
+
 print("car link tests: \(checks - failures) of \(checks) passed")
 exit(failures == 0 ? 0 : 1)
