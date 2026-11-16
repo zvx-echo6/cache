@@ -124,7 +124,7 @@ class _AskScreenState extends State<AskScreen> {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(const SnackBar(content: Text('Report saved on this device. Find it in Settings > Assistant.')));
+    messenger.showSnackBar(const SnackBar(content: Text('Report saved on this device. Find it in Settings > Cache model and web search.')));
   }
 
   @override
