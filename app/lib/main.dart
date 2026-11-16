@@ -51,6 +51,7 @@ import 'background/sync_background.dart';
 import 'library/cds_shelf_source.dart' show libraryDeviceIdShared;
 import 'library/library_device.dart';
 import 'layout/layout_state.dart';
+import 'layout/modal_watch.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
@@ -1602,7 +1603,7 @@ class _CacheAppState extends State<CacheApp> {
       listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
         navigatorKey: _navKey,
-        navigatorObservers: [pagePushWatcher],
+        navigatorObservers: [pagePushWatcher, rootModalObserver],
         title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
