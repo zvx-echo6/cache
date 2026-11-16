@@ -76,7 +76,7 @@ void main() {
     expect(copied, [url]);
   }
 
-  GuideBook book() => GuideBook.parse(['# 9. Test\n\n## One\n\nSee [a site](https://example.org/page) and [Two](#two).\n\n## Two\n\nSecond.\n']);
+  GuideBook book() => GuideBook.parse(['# 9. Test\n\n## One\n\nSee [a site](https://example.org/page) and [Two](#test--two).\n\n## Two\n\nSecond.\n']);
 
   group('the guide', () {
     testWidgets('online: a web link opens in the phone\'s browser', (tester) async {
