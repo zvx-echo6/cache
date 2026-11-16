@@ -32,7 +32,16 @@ class FakeSharingHost implements CoreTransport {
   Object? stateError;
 
   /// The methods a browser may call (SharingHost.browserMethods).
-  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items'};
+  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+
+  /// The keys the server's keystore holds that can sync, by name, with their values: the values stay in here and no answer carries one.
+  final Map<String, String> keyValues = {};
+
+  /// The devices each key name is ticked for (the server's `.local/state.json`).
+  final Map<String, Set<String>> keyTicks = {};
+
+  /// When set, `set_key_on` fails with it.
+  Object? keyError;
 
   int count(String op) => ops.where((o) => o == op).length;
 
@@ -62,6 +71,11 @@ class FakeSharingHost implements CoreTransport {
       'link': {...link},
     };
   }
+
+  /// What the host answers about keys: names and the devices each is ticked for, never a value.
+  Map<String, dynamic> _keys() => {
+    'keys': [for (final n in keyValues.keys.toList()..sort()) {'name': n, 'on': [...?keyTicks[n]]..sort()}],
+  };
 
   bool _shared(String id) => sync.shares.any((s) => s['id'] == id);
 
@@ -116,6 +130,15 @@ class FakeSharingHost implements CoreTransport {
         final method = args['method'] as String;
         final a = (args['args'] as Map?)?.cast<String, Object?>() ?? const <String, Object?>{};
         if (method == 'status') return sync.call('status');
+        if (method == 'key_names') return _keys();
+        if (method == 'set_key_on') {
+          if (keyError != null) throw keyError!;
+          final peer = a['peer'], name = a['name'];
+          if (!sync.peers.any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
+          if (name is! String || !keyValues.containsKey(name)) throw CacheSearchException('bad_args', 'No such key to send: $name');
+          (a['on'] == true) ? keyTicks.putIfAbsent(name, () => {}).add(peer as String) : keyTicks[name]?.remove(peer);
+          return _keys();
+        }
         if (!allowed.contains(method)) throw CacheSearchException('forbidden', 'Not available from a browser: $method');
         return sync.call(method, a);
     }

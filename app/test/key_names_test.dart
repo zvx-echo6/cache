@@ -19,4 +19,15 @@ void main() {
     expect(encodeKeyName('live.key.a~b'), 'live.key.a:007eb');
     expect(encodeKeyName('a b:c'), 'a:0020b:003ac');
   });
+
+  test('decodeKeyName gives the name back for every name that can be decoded, and null for a hashed or foreign one', () {
+    for (final k in ['search.kagi.key', 'live.key.owm', 'live.key.a~b', 'live.key.é ü', 'live.key.日本', 'live.key.a:b', 'video.host:8080.access']) {
+      expect(decodeKeyName(encodeKeyName(k)), k, reason: k);
+    }
+    expect(decodeKeyName(encodeKeyName('live.key.${'x' * 200}')), isNull, reason: 'a name cut and hashed cannot be told');
+    expect(decodeKeyName('live.key.a:zz'), isNull);
+    expect(decodeKeyName('live.key.a:00'), isNull);
+    expect(decodeKeyName('has space'), isNull);
+    expect(decodeKeyName(''), isNull);
+  });
 }

@@ -339,6 +339,72 @@ void main() {
     expect((jsonDecode(out) as Map)['error'], containsPair('code', 'forbidden'));
   });
 
+  test('a browser may ask the key names and tick one: names and ticks only, answered by the host and never by the engine', () async {
+    final h = host();
+    final asked = <String>[];
+    h.keyNames = () => [
+      {'name': 'live.key.owm', 'on': ['peer-1']},
+    ];
+    h.setKeyOn = (peer, name, on) async {
+      asked.add('$peer|$name|$on');
+      return [
+        {'name': name, 'on': on ? [peer] : <String>[]},
+      ];
+    };
+    await h.setUp();
+    final c = opened.single;
+    expect(SharingHost.browserMethods, containsAll(['key_names', 'set_key_on']));
+    expect(SharingHost.secretMethods, containsAll(['set_secrets', 'take_secrets']));
+    final names = await h.invoke('sharing.call', {'method': 'key_names', 'args': {}});
+    expect(names, {
+      'keys': [
+        {'name': 'live.key.owm', 'on': ['peer-1']},
+      ],
+    });
+    final set = await h.invoke('sharing.call', {'method': 'set_key_on', 'args': {'peer': 'peer-1', 'name': 'live.key.owm', 'on': true}});
+    expect(asked, ['peer-1|live.key.owm|true']);
+    expect(set, {
+      'keys': [
+        {'name': 'live.key.owm', 'on': ['peer-1']},
+      ],
+    });
+    expect(c.names('key_names'), isEmpty);
+    expect(c.names('set_key_on'), isEmpty);
+    // the same over the line protocol a browser uses
+    final out = await handleLine(
+      jsonEncode({'id': 1, 'op': 'sharing.call', 'args': {'method': 'set_key_on', 'args': {'peer': 'peer-1', 'name': 'live.key.owm', 'on': false}}}),
+      CoreDispatcher(() => FakeNative()),
+      handlers: [SharingOps(h)],
+    );
+    expect((jsonDecode(out) as Map)['error'], isNull);
+    expect(asked.last, 'peer-1|live.key.owm|false');
+    // a request that is not shaped right never reaches the keys
+    for (final bad in [
+      <String, dynamic>{'name': 'live.key.owm', 'on': true},
+      {'peer': 'peer-1', 'on': true},
+      {'peer': 'peer-1', 'name': 'live.key.owm'},
+      {'peer': 'peer-1', 'name': 'live.key.owm', 'on': 'yes'},
+    ]) {
+      await expectLater(h.invoke('sharing.call', {'method': 'set_key_on', 'args': bad}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')), reason: '$bad');
+    }
+    expect(asked, hasLength(2));
+    // the keys themselves stay refused
+    for (final m in ['set_secrets', 'take_secrets']) {
+      await expectLater(h.invoke('sharing.call', {'method': m, 'args': {}}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'forbidden')), reason: m);
+    }
+  });
+
+  test('the key ops of a host with no keys behind it say so and never fall through to the engine', () async {
+    final h = host();
+    await h.setUp();
+    final c = opened.single;
+    for (final m in ['key_names', 'set_key_on']) {
+      await expectLater(h.invoke('sharing.call', {'method': m, 'args': {'peer': 'p', 'name': 'n', 'on': true}}), throwsA(isA<CacheSearchException>()), reason: m);
+    }
+    expect(c.names('key_names'), isEmpty);
+    expect(c.names('set_key_on'), isEmpty);
+  });
+
   test('the host does the keys itself, from inside, and a trusted call may use any method', () async {
     final h = host();
     await h.setUp();

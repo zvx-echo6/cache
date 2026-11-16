@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
 
 import '../../../app/lib/settings/key_names.dart';
+import '../../../packages/cache_search/lib/src/errors.dart';
 import '../bin/keystore.dart';
 import '../bin/server_settings_sync.dart';
 
@@ -259,5 +261,75 @@ void main() {
     expect(RegExp(r'^[A-Za-z0-9._:-]{1,120}$').hasMatch(long), isTrue);
     expect(encodeKeyName('video.${'ö' * 90}.user').endsWith('.user'), isTrue);
     expect(encodeKeyName('live.key.${'ö' * 90}'), isNot(encodeKeyName('live.key.${'ö' * 91}')));
+  });
+
+  // ---- what a browser may ask (names and ticks only)
+
+  test('keyNames: the keystore names that can sync, decoded, with the devices each is ticked for, and never a value', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    store.set('live.key.owm', 'OWM-SECRET-2');
+    store.set(encodeKeyName('live.key.a~b'), 'TILDE-SECRET-3');
+    store.set('live.key.refonly', 'keystore://live.key.refonly');
+    store.set('app.pin', 'PIN-HASH-9');
+    store.set('video.host.user', 'VIDEO-USER-4');
+    store.set(encodeKeyName('live.key.${'x' * 200}'), 'HASHED-SECRET-5');
+    peers = [peer('peerA', {'mode': 'match'}), peer('peerB', {'mode': 'match'})];
+    await sync.start();
+    await sync.setKeyOn('peerA', 'live.key.owm', true);
+    await sync.setKeyOn('peerB', 'live.key.owm', true);
+    await sync.setKeyOn('peerB', 'search.kagi.key', true);
+    final names = sync.keyNames();
+    expect([for (final k in names) k['name']], ['live.key.a~b', 'live.key.owm', 'search.kagi.key']);
+    expect({for (final k in names) k['name']: k['on']}, {
+      'live.key.a~b': <String>[],
+      'live.key.owm': ['peerA', 'peerB'],
+      'search.kagi.key': ['peerB'],
+    });
+    final text = jsonEncode(names);
+    for (final v in ['KAGI-SECRET-1', 'OWM-SECRET-2', 'TILDE-SECRET-3', 'PIN-HASH-9', 'VIDEO-USER-4', 'HASHED-SECRET-5', 'keystore://']) {
+      expect(text, isNot(contains(v)));
+    }
+  });
+
+  test('setKeyOnFromBrowser: ticks and unticks like setKeyOn, gives the keys to the engine, and answers names and ticks only', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    await sync.start();
+    final r = await sync.setKeyOnFromBrowser('peerA', 'search.kagi.key', true);
+    expect(r, [
+      {'name': 'search.kagi.key', 'on': ['peerA']},
+    ]);
+    expect(jsonEncode(r), isNot(contains('KAGI-SECRET-1')));
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1'});
+    final off = await sync.setKeyOnFromBrowser('peerA', 'search.kagi.key', false);
+    expect(off, [
+      {'name': 'search.kagi.key', 'on': <String>[]},
+    ]);
+    expect(lastGivenTo('peerA'), isEmpty);
+  });
+
+  test('setKeyOnFromBrowser: refuses a name that is not a key this server holds that syncs, and a device that is not linked', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    store.set('app.pin', 'PIN-HASH-9');
+    store.set('live.key.refonly', 'keystore://live.key.refonly');
+    await sync.start();
+    for (final bad in ['app.pin', 'live.key.absent', 'live.key.refonly', 'nope', '', 'live.key.']) {
+      await expectLater(sync.setKeyOnFromBrowser('peerA', bad, true), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')), reason: bad);
+      expect(sync.keyOn('peerA', bad), isFalse, reason: bad);
+    }
+    await expectLater(sync.setKeyOnFromBrowser('nobody', 'search.kagi.key', true), throwsA(isA<CacheSearchException>()));
+    expect(sync.keyOn('nobody', 'search.kagi.key'), isFalse);
+    expect(given, isEmpty, reason: 'nothing was given to the engine for a refused tick');
+    expect(File('${support.path}/support/settings-sync/.local/state.json').readAsStringSync(), isNot(contains('app.pin')));
+  });
+
+  test('setKeyOnFromBrowser: a tick whose key has left the keystore can still be cleared, and nothing else can be unticked blind', () async {
+    store.set('live.key.owm', 'OWM-SECRET-2');
+    await sync.start();
+    await sync.setKeyOnFromBrowser('peerA', 'live.key.owm', true);
+    store.delete('live.key.owm');
+    expect(sync.keyNames(), isEmpty);
+    await sync.setKeyOnFromBrowser('peerA', 'live.key.owm', false);
+    expect(sync.keyOn('peerA', 'live.key.owm'), isFalse);
+    await expectLater(sync.setKeyOnFromBrowser('peerA', 'live.key.never', false), throwsA(isA<CacheSearchException>()));
   });
 }
