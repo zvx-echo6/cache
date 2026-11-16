@@ -188,7 +188,7 @@ class _PlacePanelState extends State<PlacePanel> {
         SnackBar(
           key: const ValueKey('unsorted-snack'),
           content: const Text('Moved to Unsorted.'),
-          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => placer.undo(was))),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () async => await placer?.undo(was))),
         ),
       );
     widget.onDone(true);
