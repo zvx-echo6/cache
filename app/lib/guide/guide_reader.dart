@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../layout/adaptive.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../net/web_link.dart';
 import '../theme.dart';
 import 'app_links.dart';
 import 'guide_book.dart';
@@ -531,7 +532,12 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
       if (s != null) await Navigator.of(context).push(_section(widget.book, s, menu: widget.menu));
       return;
     }
-    if (!isAppLink(href)) return; // the guide works offline: web links do not open
+    if (!isAppLink(href)) {
+      // A web link: the phone's browser online, "You're offline" with Copy link otherwise. Any other kind of link is ignored.
+      final uri = Uri.tryParse(href);
+      if (uri != null && isWebLink(uri)) await openWebLink(context, href);
+      return;
+    }
     final place = appPlaceOf(href);
     if (place == null || !goToAppPlace(context, place, fromGuide: true)) _say(kUnknownAppLink);
   }

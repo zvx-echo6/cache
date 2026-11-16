@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../net/web_link.dart';
 import '../../pdf/index/pdf_index_app.dart';
 import '../../pdf/index/pdf_timing.dart' show kPdfTimingSwitch, kPdfTimingCount;
 import '../../pdf/index/pdf_timing_ui.dart';
@@ -136,6 +137,9 @@ class CreditsPage extends StatelessWidget {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           return Markdown(
             data: snap.data!,
+            onTapLink: (text, href, title) {
+              if (href != null) openWebLink(context, href);
+            },
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
               p: TextStyle(fontSize: 15, height: 1.45, color: k.text),
