@@ -307,7 +307,7 @@ impl Ext {
     /// becomes an entry (its name the title, its notes the text; a point with the name of an entry already there updates that entry
 /// instead, see below), lines and areas stay with the notebook's map layer.
     /// `now` is the entries' "When" (local ISO 8601 with offset; default now in UTC). Returns
-    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas a notebook without a layer cannot keep).
+    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas that could not be kept).
     fn import(&self, args: &Value) -> Result<Value> {
         for k in args.as_object().into_iter().flat_map(|o| o.keys()) {
             if !["path", "notebook_id", "name", "now"].contains(&k.as_str()) {
@@ -367,6 +367,7 @@ impl Ext {
                 }
             }
         }
+        let (layer_name, layer_private) = (parsed.name.as_deref().map(mapdata::collapse), parsed.private);
         let (mut places, mut updated) = (0, 0);
         let mut shapes: Vec<Feature> = Vec::new();
         for f in parsed.features {
@@ -422,7 +423,16 @@ impl Ext {
             shapes.iter().filter(|f| matches!(f.geom, Geom::Area(..))).count(),
         );
         let kept = match self.map_data.as_deref() {
-            Some(m) => m.add_notebook_shapes(&nb_id, &shapes).map_err(user_err)?,
+            Some(m) => match m.add_notebook_shapes(&nb_id, &shapes).map_err(user_err)? {
+                // A notebook with no layer of its own (the saved places) keeps them as a map layer named after the file.
+                0 if !shapes.is_empty() => {
+                    let stem = std::path::Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = layer_name.filter(|n| !n.is_empty()).unwrap_or_else(|| mapdata::collapse(&stem));
+                    let name = if name.is_empty() { "Imported lines".to_string() } else { name };
+                    m.add_shape_layer(&name, &file, layer_private.unwrap_or(false), &shapes).map_err(user_err)?
+                }
+                n => n,
+            },
             None => 0,
         };
         let notebook = self.nb_call("notebook", &json!({"id": nb_id}))?;

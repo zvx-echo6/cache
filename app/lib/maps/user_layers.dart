@@ -10,7 +10,7 @@ typedef UserLayerCall = Future<Map<String, dynamic>> Function(String call, [Stri
 
 /// One repeater list or map layer of the user's map data, as cs_userlayers_list gives it.
 class UserLayer {
-  const UserLayer({required this.id, required this.kind, required this.name, required this.visible, this.notebookId, this.count = 0});
+  const UserLayer({required this.id, required this.kind, required this.name, required this.visible, this.notebookId, this.count = 0, this.shapes = 0});
 
   final String id;
 
@@ -25,6 +25,9 @@ class UserLayer {
   /// Repeaters (a list) or points (a layer).
   final int count;
 
+  /// Lines and areas (a layer).
+  final int shapes;
+
   bool get isRepeaters => kind == 'repeaters';
 
   static UserLayer fromJson(Map j) => UserLayer(
@@ -34,6 +37,7 @@ class UserLayer {
         visible: j['visible'] != false,
         notebookId: j['notebook_id'] as String?,
         count: ((j['repeaters'] ?? j['points']) as num?)?.toInt() ?? 0,
+        shapes: (((j['lines'] as num?) ?? 0) + ((j['areas'] as num?) ?? 0)).toInt(),
       );
 }
 
@@ -148,6 +152,10 @@ class UserLayersState extends ChangeNotifier {
   int get revision => _revision;
 
   List<UserLayer> get repeaterLists => [for (final l in _all) if (l.isRepeaters) l];
+
+  /// The layers of lines and areas that belong to no notebook (what a file's lines became when it went into the saved places):
+  /// listed under My layers with a switch and a delete, as the repeater lists are.
+  List<UserLayer> get shapeLayers => [for (final l in _all) if (!l.isRepeaters && l.notebookId == null) l];
 
   /// The layer or list with [id], or null.
   UserLayer? layerById(String id) => _all.where((l) => l.id == id).firstOrNull;
