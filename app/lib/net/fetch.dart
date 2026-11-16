@@ -56,7 +56,7 @@ class FetchException implements Exception {
 /// Whether a socket failure is the host's name not being found (a failed lookup) or any other failure to connect.
 FetchFailure socketFailure(SocketException e) {
   final text = '${e.message} ${e.osError?.message ?? ''}'.toLowerCase();
-  final lookup = text.contains('failed host lookup') || text.contains('no address associated with hostname') || e.osError?.errorCode == 7;
+  final lookup = text.contains('failed host lookup') || text.contains('no address associated with hostname');
   return lookup ? FetchFailure.notFound : FetchFailure.unreachable;
 }
 

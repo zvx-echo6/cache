@@ -217,7 +217,7 @@ class OwnTry {
     OwnTryFailure.notJson => '$host answered, but not with JSON. This version of Cache only reads JSON.',
     OwnTryFailure.timedOut => "$host didn't answer in time.",
     OwnTryFailure.unreachable => "Couldn't reach $host. Check the address and your connection.",
-    OwnTryFailure.notFound => "Couldn't find $host. Check the web address.", // WORDS: pending approval
+    OwnTryFailure.notFound => "Couldn't find $host. Check the web address.",
     OwnTryFailure.insecure => "Couldn't make a secure connection to $host.",
     OwnTryFailure.tooLarge => 'The answer is too large for Cache to read.',
     OwnTryFailure.notAllowed => 'Enter an address that starts with https://',
