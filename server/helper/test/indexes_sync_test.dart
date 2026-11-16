@@ -64,7 +64,8 @@ void main() {
   });
 
   List<Map<String, Object?>> only() => opened.single.argsOf('set_only');
-  List<Map<String, Object?>> never() => opened.single.argsOf('set_never_fetch');
+  // the engine is also told never to fetch the server's own Bookshelves log: only the indexes share's calls are looked at here
+  List<Map<String, Object?>> never() => [for (final a in opened.single.argsOf('set_never_fetch')) if (a['id'] == 'indexes') a];
 
   test('the fetch list is the regions indexes, the open sources\' index folders and the saved videos\' captions; the never-fetch list the rejected snapshots', () async {
     fake.statusFn = () => _status([
