@@ -426,6 +426,16 @@ void main() {
   });
 
   test('a page loaded again while the server keeps downloading takes the running job back, and Pause stops it (web-region-progress)', () async {
+    // As in a browser: the engine keeps the job's number with the unfinished download.
+    engine.dispose();
+    engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await engine.start();
     final a = await engine.download('hillshade', home, label: 'reloaded');
     expect(a.phase, AreaPhase.running);
     // The tab is closed or reloaded; the server's job (the same core) goes on.
