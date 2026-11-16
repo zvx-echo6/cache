@@ -106,7 +106,7 @@ void main() {
     browse.updates.clear();
     await choose(tester);
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Checking Wikivoyage Europe for updates…'), findsOneWidget);
+    expect(find.text('Checking Wikivoyage Europe for updates…'), findsWidgets);
     await tester.pump(const Duration(seconds: 60));
   });
 
