@@ -171,13 +171,37 @@ void main() {
     expect(r.calls('set_off').last, {'id': 'models', 'off': ['gemma.gguf']}, reason: 'given before the share is added');
     expect(r.sync.calls.lastIndexOf('set_off'), lessThan(r.sync.calls.lastIndexOf('share_add')));
     expect(s.itemOn(models, qwen), isTrue);
-    // Switching the kind off and on again: every item.
+    // Switching the kind off and on again keeps the item switches: gemma stays off.
     await s.setShared(models, false);
     expect(s.itemsOf(models).any((i) => s.itemOn(models, i.item)), isFalse);
     await s.setShared(models, true);
-    expect(s.itemsOf(models).every((i) => s.itemOn(models, i.item)), isTrue);
-    expect(r.calls('set_off').last, {'id': 'models', 'off': <String>[]});
+    expect(s.itemOn(models, qwen), isTrue);
+    expect(r.calls('set_off').last, {'id': 'models', 'off': ['gemma.gguf']});
     s.dispose();
+    await r.dir.delete(recursive: true);
+  });
+
+  test('item switches keep their state through the kind off and on, and through a restart', () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    final lib = r.kind('library');
+    await s.setShared(lib, true);
+    final items = s.itemsOf(lib);
+    await s.setItem(lib, items[1].item, false);
+    expect(r.calls('set_off').last, {'id': 'library', 'off': ['canning.zim']});
+    await s.setShared(lib, false);
+    await s.setShared(lib, true);
+    expect(s.itemOn(lib, items[1].item), isFalse, reason: 'it was off, it is still off');
+    expect(s.itemOn(lib, items[0].item), isTrue);
+    expect(r.calls('set_off').last, {'id': 'library', 'off': ['canning.zim']}, reason: 'the engine is not offered it');
+    expect(r.calls('share_add').last['id'], isNotNull);
+    expect(r.sync.calls.lastIndexOf('set_off'), lessThan(r.sync.calls.lastIndexOf('share_add')), reason: 'off list given before the share is re-added');
+    s.dispose();
+    final again = r.make();
+    await again.init();
+    expect((r.configs.last['off'] as Map)['library'], ['canning.zim']);
+    again.dispose();
     await r.dir.delete(recursive: true);
   });
 

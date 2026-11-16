@@ -374,7 +374,6 @@ class SharingHost {
           }
           return;
         }
-        if (_off.remove(k.id) != null) _save();
         await _addKind(k);
       });
 
