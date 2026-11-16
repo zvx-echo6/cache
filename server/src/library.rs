@@ -30,6 +30,7 @@
 use crate::fetch::{self, FetchError};
 use crate::fetch_scope::{address_ok, guarded_agent, Policy, Scope};
 use crate::helper::Helper;
+use crate::metalink;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
 use ring::digest;
@@ -138,10 +139,22 @@ impl Job {
 struct JobErr {
     code: &'static str,
     message: String,
+    /// The HTTP status the download server answered, when that is what stopped the job.
+    status: Option<u16>,
 }
 
+impl JobErr {
+    fn with_status(mut self, status: u16) -> JobErr {
+        self.status = Some(status);
+        self
+    }
+}
+
+/// What a job says when every mirror answered 404 or 410.
+const NOT_MIRRORED: &str = "This file isn't on the download servers yet. Try again later.";
+
 fn job_err(code: &'static str, message: impl Into<String>) -> JobErr {
-    JobErr { code, message: message.into() }
+    JobErr { code, message: message.into(), status: None }
 }
 
 fn io_job_err(e: std::io::Error) -> JobErr {
@@ -553,9 +566,73 @@ impl Library {
         std::fs::create_dir_all(self.tmp_dir()).map_err(io_job_err)?;
         // The address came from a tab: connect only to public addresses, on every redirect too (the catalog hosts excepted).
         let (agent, refused) = guarded_agent(&self.fetch_hosts, self.fetch_allow_private);
+
+        // 1-3. The file into the part file. For a ZIM, Kiwix's metalink lists the mirrors in order of preference (and the file's
+        // sha-256): each is tried in turn. Without a metalink (or without a sha-256 in it) the address is followed as it is.
+        let meta = if job.kind == "zim" { fetch_metalink(&agent, &job.url) } else { None }
+            .filter(|m| !m.mirrors.is_empty() && (m.sha256.is_some() || job.sha256.is_some()));
+        match &meta {
+            Some(m) => self.fetch_from_mirrors(job, part, cancel, &agent, &refused, m)?,
+            None => self.fetch_to_part(job, part, cancel, &agent, &refused, &job.url, None)?,
+        }
+        check_cancel()?;
+
+        // 4. The checksum: the one given, else the metalink's, else (for a ZIM) the one Kiwix publishes beside the file.
+        let expected = match &job.sha256 {
+            Some(h) => Some(h.to_ascii_lowercase()),
+            None if meta.is_some() => meta.as_ref().and_then(|m| m.sha256.clone()),
+            None if job.kind == "zim" => published_sha256(&agent, &job.url),
+            None => None,
+        };
+        if let Some(want) = expected {
+            let got = sha256_file(part, cancel)?;
+            if got != want {
+                return Err(job_err("checksum", "The file did not match its published checksum, so it was thrown away. Try again."));
+            }
+        }
+        check_cancel()?;
+
+        // 5. Install. A library package is only put in the docs root: the browser installs it.
+        if job.kind == "library" {
+            return self.install_incoming(part, &job.name).map_err(io_job_err);
+        }
+        let icon = job.icon_url.as_deref().and_then(|u| fetch_icon(&agent, u));
+        self.install_zim(part, &job.name, job.origin.as_ref(), icon.as_deref()).map_err(io_job_err)
+    }
+
+    /// Mirrors in the metalink's order: one that answers 404, 410 or 5xx, cannot be reached, or stalls or drops the connection
+    /// mid-body hands over to the next, which continues the part file with a Range request. When every mirror says 404 or 410 the
+    /// file is not on the download servers yet.
+    fn fetch_from_mirrors(&self, job: &Job, part: &Path, cancel: &AtomicBool, agent: &ureq::Agent, refused: &AtomicBool, meta: &metalink::Metalink) -> Result<(), JobErr> {
+        let mut last: Option<JobErr> = None;
+        let mut all_missing = true;
+        for mirror in &meta.mirrors {
+            match self.fetch_to_part(job, part, cancel, agent, refused, mirror, meta.size) {
+                Ok(()) => return Ok(()),
+                Err(e) => match (e.code, e.status) {
+                    (_, Some(404 | 410)) => last = Some(e),
+                    (_, Some(500..=599)) | ("network", _) => {
+                        all_missing = false;
+                        last = Some(e);
+                    }
+                    _ => return Err(e),
+                },
+            }
+        }
+        match (all_missing, last) {
+            (false, Some(e)) => Err(e),
+            _ => Err(job_err("not_mirrored", NOT_MIRRORED)),
+        }
+    }
+
+    /// Steps 1 to 3 of a download from `start`: the answer (where to start, how big the file is), room for the rest, and the body
+    /// appended to the part file. `want_size` is the size the metalink gives: a mirror with another size is passed over.
+    #[allow(clippy::too_many_arguments)]
+    fn fetch_to_part(&self, job: &Job, part: &Path, cancel: &AtomicBool, agent: &ureq::Agent, refused: &AtomicBool, start_url: &str, want_size: Option<u64>) -> Result<(), JobErr> {
+        let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         let mut restarted = false;
-        let mut cur = job.url.clone();
+        let mut cur = start_url.to_string();
         let mut hops = 0;
 
         // 1. The answer: where to start, how big the whole file is, and the body (None when the part is already whole).
@@ -581,8 +658,8 @@ impl Library {
                     restarted = true;
                     continue;
                 }
-                Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.")),
-                Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}."))),
+                Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.").with_status(404)),
+                Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}.")).with_status(code)),
                 Err(_) if refused.load(Ordering::Relaxed) => {
                     return Err(job_err("failed", "That address is not on the public internet, so the server will not download from it."))
                 }
@@ -616,6 +693,12 @@ impl Library {
                 other => return Err(job_err("failed", format!("The download server answered {other}."))),
             }
         };
+
+        if let Some(w) = want_size {
+            if total > 0 && total != w {
+                return Err(job_err("network", "The download server sent a file of the wrong size. Try again."));
+            }
+        }
 
         // 2. Room for the rest of the file and a margin (5%, at least 64 MB), as the phone's downloader asks.
         if total > 0 {
@@ -660,28 +743,7 @@ impl Library {
         if total > 0 && size != total {
             return Err(job_err("network", format!("The download stopped early ({} of {} MB). Add it again to continue.", size >> 20, total >> 20)));
         }
-        check_cancel()?;
-
-        // 4. The checksum: the one given, else (for a ZIM) the one Kiwix publishes beside the file.
-        let expected = match &job.sha256 {
-            Some(h) => Some(h.to_ascii_lowercase()),
-            None if job.kind == "zim" => published_sha256(&agent, &job.url),
-            None => None,
-        };
-        if let Some(want) = expected {
-            let got = sha256_file(part, cancel)?;
-            if got != want {
-                return Err(job_err("checksum", "The file did not match its published checksum, so it was thrown away. Try again."));
-            }
-        }
-        check_cancel()?;
-
-        // 5. Install. A library package is only put in the docs root: the browser installs it.
-        if job.kind == "library" {
-            return self.install_incoming(part, &job.name).map_err(io_job_err);
-        }
-        let icon = job.icon_url.as_deref().and_then(|u| fetch_icon(&agent, u));
-        self.install_zim(part, &job.name, job.origin.as_ref(), icon.as_deref()).map_err(io_job_err)
+        Ok(())
     }
 
     /// Put a finished ZIM where the app would: `<data>/app/docs/zims/<name>`, first under a hidden name and then renamed over any
@@ -1162,6 +1224,30 @@ fn scan_items(data: &Path, zims: &Path, libs: &Path) -> Vec<Value> {
         out.push(json!({"id": item_id("library", &n), "kind": "library", "name": n, "title": n, "bytes": dir_bytes(&p), "path": rel(&p)}));
     }
     out
+}
+
+/// Kiwix's metalink for a ZIM (`<address>.meta4`, beside the file), or None when there is none or it cannot be read.
+fn fetch_metalink(agent: &ureq::Agent, url: &str) -> Option<metalink::Metalink> {
+    let path = url.split(['?', '#']).next()?;
+    if !path.to_ascii_lowercase().ends_with(".zim") {
+        return None;
+    }
+    let mut cur = format!("{path}.meta4");
+    for _ in 0..6 {
+        fetch::parse_url(&cur).filter(fetch::scheme_ok)?;
+        let resp = agent.get(&cur).timeout(Duration::from_secs(30)).call().ok()?;
+        if matches!(resp.status(), 301 | 302 | 303 | 307 | 308) {
+            cur = fetch::resolve(&cur, resp.header("location")?)?;
+            continue;
+        }
+        if resp.status() != 200 {
+            return None;
+        }
+        let mut text = String::new();
+        resp.into_reader().take(1 << 20).read_to_string(&mut text).ok()?;
+        return metalink::parse(&text);
+    }
+    None
 }
 
 /// The SHA-256 Kiwix publishes next to a ZIM (`<address>.sha256`), when there is one.
