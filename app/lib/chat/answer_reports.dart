@@ -97,7 +97,7 @@ class AnswerReport {
 }
 
 /// Reported answers, kept on this phone only (one JSON file). Nothing is sent anywhere; the person can share reports
-/// themselves from Settings > Assistant > Reported answers.
+/// themselves from Settings > Cache model and web search > Reported answers.
 class AnswerReports extends ChangeNotifier {
   AnswerReports({this.dirOverride});
 
