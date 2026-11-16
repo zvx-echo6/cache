@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../desktop/desktop.dart';
 import '../layout/adaptive.dart';
+import '../layout/modal_watch.dart';
 import '../theme.dart';
 import 'cds.dart' show kCdsMono;
 
@@ -219,7 +220,7 @@ class LibraryPanesState extends State<LibraryPanes> {
 
   /// A pane's own Navigator, so what a page pushes (Credits from Credits and licences, a reader's next page) stays in its pane.
   Widget _paneNavigator(String key, Widget page) => HeroControllerScope.none(
-    child: Navigator(key: ValueKey('library-nav:$key'), onGenerateRoute: (_) => MaterialPageRoute<void>(builder: (_) => page)),
+    child: ModalWatchedNavigator(key: ValueKey('library-nav:$key'), onGenerateRoute: (_) => MaterialPageRoute<void>(builder: (_) => page)),
   );
 }
 

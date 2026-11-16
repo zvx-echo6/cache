@@ -36,6 +36,9 @@ class ModalWatch extends ChangeNotifier {
 /// The app's watch.
 final ModalWatch modalWatch = ModalWatch();
 
+/// The app's root Navigator's observer (it is never taken out of the tree).
+final ModalWatchObserver rootModalObserver = ModalWatchObserver();
+
 /// Reports one Navigator's sheets, dialogs and menus to [watch]. A NavigatorObserver belongs to one Navigator.
 class ModalWatchObserver extends NavigatorObserver {
   ModalWatchObserver([ModalWatch? watch]) : watch = watch ?? modalWatch;

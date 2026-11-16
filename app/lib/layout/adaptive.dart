@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_fs.dart';
 import '../desktop/desktop.dart';
 import '../theme.dart';
+import 'modal_watch.dart';
 
 /// One adaptive system, three width classes, measured on the window (not the device), so iPad Split View and Android multi-window
 /// behave: under [kRegularWidth] the phone layout (bottom bar, one pane); from it on, a left rail and two panes where a list has a
@@ -247,7 +248,7 @@ class TwoPaneState extends State<TwoPane> {
                             body: Center(child: Text(widget.placeholder, style: TextStyle(fontSize: 15, color: k.secondary))),
                           )
                         : HeroControllerScope.none(
-                            child: Navigator(
+                            child: ModalWatchedNavigator(
                               key: ValueKey(navKey),
                               onGenerateRoute: (_) => MaterialPageRoute<void>(builder: b),
                             ),

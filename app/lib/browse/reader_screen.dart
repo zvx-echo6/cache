@@ -10,6 +10,7 @@ import '../net/web_link.dart';
 import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton, ContentWidth;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
+import '../layout/modal_watch.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
@@ -248,6 +249,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   void initState() {
     super.initState();
     unawaited(zimStorageScript());
+    if (_isWeb) modalWatch.addListener(_letPointerThrough);
     _resolveStart();
     _learnMain();
   }
@@ -306,8 +308,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     }
   }
 
+  /// A sheet, dialog or menu opened or closed: the browser's frame takes every pointer event in its area, so while one is open over
+  /// it the frame lets them through (the sheet's items and scrim get their clicks), and takes them back after.
+  void _letPointerThrough() => _frame?.ignorePointer(modalWatch.isOpen);
+
   @override
   void dispose() {
+    if (_isWeb) modalWatch.removeListener(_letPointerThrough);
     _debounce?.cancel();
     _settle?.cancel();
     _query.dispose();
@@ -727,7 +734,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       return (widget.frameBuilder ?? buildZimFrame)(
         key: ValueKey('reader-frame-$_webGeneration'),
         initialUrl: start.toString(),
-        onCreated: (h) => _frame = h,
+        onCreated: (h) {
+          _frame = h;
+          h.ignorePointer(modalWatch.isOpen);
+        },
         onPage: _onFramePage,
         onExternal: openInNewTab,
       );
