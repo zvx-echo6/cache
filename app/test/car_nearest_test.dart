@@ -56,6 +56,17 @@ void main() {
     expect(_names(carResults(r, _here)), ['Near Fuel', 'Far Fuel']);
   });
 
+  test('a kind of place near a town the query names keeps the engine order (it ranks from that town)', () {
+    final r = MapSearchResponse.fromJson({
+      'query': 'q',
+      'interpreted': {'kind': 'text', 'categories': ['fuel'], 'anchor': {'name': 'Made-up Town'}},
+      'meaning': 'off',
+      'results': [_category(), _place('Town Fuel', 43.29, -116.0), _place('Home Fuel', 43.01, -116.0)],
+    });
+    expect(r.anchorName, 'Made-up Town');
+    expect(_names(carResults(r, _here)), ['Town Fuel', 'Home Fuel']);
+  });
+
   test('a name search keeps the engine order', () {
     final r = _response([_place('Roadside Fuel on Main', 43.29, -116.0, m: 32000), _place('Roadside Fuel', 43.01, -116.0, m: 1100)]);
     expect(isCategorySearch(r), isFalse);

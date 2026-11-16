@@ -8,11 +8,12 @@ import '../nav/elevation/route_sampler.dart' show haversineM;
 bool isCategorySearch(MapSearchResponse r) => r.categories.isNotEmpty || r.results.any((p) => p.isCategory);
 
 /// The car's results for [r]: for a kind of place, the nearest first from [point] (the phone's position, else the map centre);
-/// for a name, [MapSearchResponse.results] as the engine ordered them. Category rows are left out, as the car never lists them.
+/// for a name, or a kind of place near a town the query names, [MapSearchResponse.results] as the engine ordered them. Category rows are left out, as the car never lists them.
 /// With no [point] the engine's own distances are used, and with neither the engine's order stays.
 List<MapPlace> carResults(MapSearchResponse r, GeoPoint? point) {
   final places = [for (final p in r.results) if (!p.isCategory) p];
-  if (!isCategorySearch(r)) return places;
+  // A kind of place near a named town ("pharmacy near <town>"): the engine already ranks from that town, so its order stays.
+  if (!isCategorySearch(r) || r.anchorName != null) return places;
   double? metres(MapPlace p) => point == null ? p.distanceM : haversineM(point.lat, point.lon, p.lat, p.lon);
   final keyed = [for (var i = 0; i < places.length; i++) (i, metres(places[i]), places[i])];
   keyed.sort((a, b) {
