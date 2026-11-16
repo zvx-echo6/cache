@@ -263,7 +263,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _label(k, 'Name'),
-              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'Temperature')),
+              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'For example: Temperature')),
               const SizedBox(height: 14),
               _label(k, 'Web address'),
               TextField(

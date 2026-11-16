@@ -364,6 +364,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('add-own-source')));
       await tester.pumpAndSettle();
       final hint = tester.widget<TextField>(find.byKey(const ValueKey('own-address'))).decoration!.hintText!;
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).decoration!.hintText, 'For example: Temperature');
       expect(hint, 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
     });
 
