@@ -6,9 +6,72 @@ release notes).
 
 ## Unreleased
 
-- Maps: with Maps synced, a region you download on one device no longer replaces the other device's maps: each device keeps its own map database and shares a copy of it, and each lists and draws its own regions and the other's (a region downloaded on one device shows on the other)
-- Maps: deleting a region asks "Delete this region?" and, when Maps is synced with a linked device, says that it will delete it from all synced devices; the region goes from every linked device that shares Maps (a region downloaded again later stays)
-- Maps: map and places databases that an earlier build's sync left as "(conflict ...)" copies are taken back in: a device keeps the regions it had downloaded
+## 1.1.0 (build 52, test) - 2026-11-16
+
+### Maps and navigation
+- Tap a place, a label or a trail line on the map to open its card; search-result pins open their result
+- Guidance names the street first and the route number after it, as "Main Street (US 30)", and speaks the name alone
+- Guidance starts straight in the driving view; the position arrow is drawn solid and points the way you drive whenever the heading is known; Find me returns to it after you move the map
+- Preview a route and step through its turns before you start
+- One time-left figure on the phone and both car screens, from the pace you have measured; a long stop near the end no longer counts as slow driving
+- After an early turn, the new route starts forward instead of with a U-turn
+- After you arrive, your position keeps updating until End, and guidance ends by itself 5 minutes after arrival
+- Map pins are the needle pin everywhere, with nothing cut off; a notebook place shows its own icon
+- A route's elevation chart keeps a flat route flat, with even steps around its real heights
+- Directions from a notebook place opens the route preview
+- Back after Show on map returns to the page you came from (a region, an area, a notebook place, Ask)
+- A page for each downloaded map area: its map, size, date, what it holds, Show on map, Update and Delete
+- Region downloads plan once and read in parallel, so they start and finish sooner
+- Saved places come first in search results; a "near" place is used only when it is a good match
+- Maps: a region on one linked device no longer replaces the same region on another
+
+### Car
+- Spoken commands: on Android Auto, "end the route", "mute", "unmute", the arrival time, the distance left, the next turn, the destination and the route overview, answered in Cache's voice; on CarPlay, Siri: "Navigate to <place> with Cache", "Add a stop at <place> in Cache", "End route in Cache", "Mute Cache", "Unmute Cache", "When will I get there with Cache", "What's my next turn in Cache"
+- Voice search in the car: "find gas near me" on Android Auto; on CarPlay, a microphone button on the map (allow it once on the phone: a card the first time after CarPlay, or Settings > Search by voice from the car)
+- "Add a stop" from the assistant adds the next stop and keeps the destination
+- A search for a kind of place (gas, food, a hospital) lists the nearest first
+- Spoken prompts play with Cache open on the phone and the car
+- The car screens follow the phone's theme; CarPlay's turn panel takes the theme's card colour
+- The car's route overview: tap a stop or the destination to see it on the car map
+- The car's search no longer waits behind library work; the iPhone and car maps load again after iOS takes the map server
+
+### Library and search
+- Read the whole document: a library passage opens its document page by page, at the passage
+- A placed book can be moved back to Unsorted
+- Adding PDFs keeps full speed after you leave Cache on Android, with a notification you can pause or cancel
+- A PDF added from a watched folder while Cache is in the background is searchable as soon as you come back, with no restart
+- Search: better top results; a ZIM page whose title is the query comes first; Enter in Home's search searches the library; Home shows each part's results as they arrive
+- A device finds the books it added itself straight away
+- Old-style digits in PDFs become normal text, so numbers can be found
+- Links in pages, Ask answers and citations open what they name, offline where Cache has it; web links in books, the guide and Credits open the browser online, and offline show "You're offline" with Copy link
+- Web-app ZIMs (such as a home canning guide) load in every reader
+- Videos a site serves as HLS are saved as a plain MP4: full length and seekable on phones; earlier ones are repaired once
+- Ask: an answer that searched your sources but cites none of them says so; the chat model loads only for Ask and is let go 5 minutes after
+- Faster start: ZIMs open in parallel, and the start no longer waits 8 s on the map layers
+- Street addresses: about 43 million more house numbers across the US, Canada and Mexico, from OpenAddresses, so address search finds far more (with the region's places update)
+
+### Weather
+- Weather works with no setup: the forecast, weather alerts, wildfires and emergency alerts are on for where you are; if your location isn't watched, "Watch my location" turns it back on
+- Weather updates while a car screen is connected, when Weather or Home opens, and soon after a failed try
+- Add your own source: a working example address in the form and the guide; the Latitude and Longitude buttons keep you typing in the address; "Couldn't find <site>" when the site doesn't exist; Pick what to show ticks what the address asks for and lists each value once
+- Home shows the forecast while driving, and the weather place reads your town or 'Current location'
+
+### Sharing and sync
+- Android syncs about hourly with Cache closed; iPhone syncs when iOS allows
+- Deleting a PDF removes it on every linked device; sync is fully shared both ways (the "Don't replace my copies" switch is gone)
+- A notebook rename reaches your other devices; a notebook with more than 1,000 entries keeps them all; Activity shows notebook sync
+- Repeater lists become notebooks: shareable, editable and on the map
+- A video that arrives by sync shows on the Videos page
+- A link code from a newer Cache says so; a refused code no longer locks out a device that is already linked
+- My books syncs only its packs and settings, and each device builds its own search; books lost to an earlier bug come back
+- A photo in a notebook you don't share stays on this device; turning a kind off and on keeps your items and switches as they were
+- Holding a notebook photo asks "Remove this photo?" before removing it
+
+### Linux (Cache Server)
+- Link a Cache Server to your devices and share with it; Bookshelves and search indexes over the link
+- In the browser: weather and alerts, the route mini map, the elevation chart, chat history and keys
+- Settings and API keys sync both ways between your phones and a Cache Server, even with no browser tab open
+- Linked folders pick up new files; the starter map layers install as on phones; captions of saved videos are searchable
 
 ## 1.1.0 (build 51, test) - 2026-11-12
 
