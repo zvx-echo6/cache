@@ -61,7 +61,7 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
       SnackBar(
         key: const ValueKey('placed-snack'),
         content: Text(text),
-        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => placer.undo(p)),
+        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => placer.undo(p))),
       ),
     );
   return p;
@@ -188,7 +188,7 @@ class _PlacePanelState extends State<PlacePanel> {
         SnackBar(
           key: const ValueKey('unsorted-snack'),
           content: const Text('Moved to Unsorted.'),
-          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => placer?.undo(was)),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => placer.undo(was))),
         ),
       );
     widget.onDone(true);
