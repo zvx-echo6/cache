@@ -116,7 +116,7 @@ void main() {
     expect(browse.checkingUpdates, isTrue, reason: 'the automatic check is under way');
     await choose(tester);
     await tester.runAsync(() async {
-      gate.complete(await fixture('kiwix_entries_wikivoyage.xml'));
+      gate.complete(fixture('kiwix_entries_wikivoyage.xml'));
       await Future<void>.delayed(const Duration(milliseconds: 200));
     });
     await tester.pump();
