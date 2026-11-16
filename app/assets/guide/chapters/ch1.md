@@ -320,32 +320,30 @@ A library searched by meaning uses the search model. Without it, Cache searches 
 
 ## Turn on weather and alerts
 
-This switches on a forecast, weather alerts and wildfires for where you are, in one tap.
+Weather comes on by itself. Cache switches on "Weather forecast", "Weather alerts" and "Wildfires" for where you are. "Emergency alerts" goes with the weather alerts. You don't have to turn anything on.
 
 ![The Weather screen](shot:weather)
 
 1. On "Home", find the "Weather and alerts" card. You can also open "Weather" from "Modules".
-2. Tap "Turn on weather".
-3. If Cache asks "Use your location?", tap "Continue" and allow it.
-4. Wait for the short message that says how the update went.
-
-This switches on "Weather forecast", "Weather alerts", "Wildfires" and "Emergency alerts". The first time, Cache asks to send notifications.
+2. Read the forecast, the warnings in force and the fires near you.
 
 - If you're offline, Cache shows the last data and its age.
-- If location can't be found, see Pick a place for weather.
+- If the card says "Not set up yet", tap "Turn on weather".
+- If your location isn't watched and no other place is, the card and the "Weather" screen say "Weather is off: your location isn't watched". Tap "Watch my location" to turn it back on.
 
 ## Pick a place for weather
 
-Use this if you'd rather not share your location, or it can't be found.
+Use this if you'd rather not share your location, or you want the weather somewhere else.
 
 ![Choose a place for weather](shot:weather-choose-place)
 
-1. On the "Weather" screen, tap "Choose a place instead".
-2. In "Find a town or place", type a town and tap it.
+1. On the "Weather" screen, tap the place's name at the top.
+2. In "Places", tap "Add a place".
+3. In "Find a town or place", type a town and tap it.
 
-Cache watches that place and switches on the same three sources.
+Cache watches that place and leaves your sources as they are.
 
-If weather is already on, tap the place's name at the top of "Weather", then tap "Add a place" in "Places". It opens the same sheet. Cache watches the place and leaves your sources as they are.
+If no place is watched, the "Weather" screen shows "Choose a place instead". It opens the same sheet. Cache watches the place and switches on the same three sources.
 
 To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch. The same switch is under "Saved places" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 

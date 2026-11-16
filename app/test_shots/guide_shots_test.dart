@@ -14,6 +14,7 @@ import 'dart:typed_data';
 
 import 'package:cache/location/position_source.dart' show LocationPermissionState;
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
+import 'package:cache/settings/app_settings.dart' show kWatchHere;
 import 'package:cache/settings/location_access.dart' show LocationAccess;
 import 'package:cache/theme.dart' show CacheThemeId;
 import 'package:cache/browse/zim_download.dart';
@@ -837,9 +838,10 @@ void main() {
     _ignoreDebugAsserts(tester);
     await shot(tester, 'weather');
 
-    // The Choose a place sheet, from the empty state.
+    // The Choose a place sheet, from the Weather screen with no place watched (Your location switched off, no other place): the
+    // page then offers Choose a place instead.
     final off = await _rig(tester);
-    off.here = null;
+    off.settings.setWatched(kWatchHere, false);
     await show(tester, WeatherScreen(weather: off.weather, turnOn: WeatherTurnOn(
       weather: off.weather,
       location: off.location,
