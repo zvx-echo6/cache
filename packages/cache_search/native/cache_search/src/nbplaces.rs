@@ -358,7 +358,7 @@ impl Ext {
         // A name twice in the file is one place, the later one's. An update moves the pin to the file's position and fills the
         // entry's notes when it has none; its title, date, photos, files and what the person wrote stay.
         let mut by_name: HashMap<String, String> = HashMap::new();
-        let mut existing = self.entries_of(&nb_id)?;
+        let mut existing = if nb_id.is_empty() { Vec::new() } else { self.entries_of(&nb_id)? };
         existing.retain(|e| e["draft"] != true);
         existing.sort_by_key(|e| e["created"].as_i64().unwrap_or(0));
         for e in &existing {
