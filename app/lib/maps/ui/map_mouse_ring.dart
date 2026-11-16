@@ -26,6 +26,22 @@ class MapMouseRing extends StatefulWidget {
 }
 
 class _MapMouseRingState extends State<MapMouseRing> {
+  void Function()? _stop;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.web) {
+      _stop = widget.listen((cx, cy, lx, ly) => widget.onRing(Offset(cx, cy), math.Point<double>(lx, ly)));
+    }
+  }
+
+  @override
+  void dispose() {
+    _stop?.call();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) => widget.child;
 }
