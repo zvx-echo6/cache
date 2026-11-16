@@ -1056,6 +1056,20 @@ class CarSessionTest {
         assertNull(bare[0].onClickDelegate)
     }
 
+    @Test
+    fun routeOverviewDestinationRowShowsTheDestinationOnTheMap() {
+        start()
+        push("trip", trip("guiding", guiding + mapOf("destination" to mapOf("name" to "Made Up Clinic", "address" to "", "lat" to 11.5, "lon" to 21.5))))
+        val guidance = screens.top as NavigationScreen
+        guidance.openOverview()
+        val overview = screens.top as RouteOverviewScreen
+        val rows = ((templateOf(overview) as MapWithContentTemplate).contentTemplate as ListTemplate).singleList!!.items.map { it as Row }
+        val dest = rows.first { it.title.toString() == "Made Up Clinic" }
+        assertNotNull(dest.onClickDelegate)
+        overview.showDestination()
+        assertEquals(listOf(11.5, 21.5), overview.mapRenderer.shownPoint!!.toList())
+    }
+
     // Custom actions from the assistant (geo.action:?act=...), both ways in: the session's first intent and a later one.
     private fun action(code: String) = Intent(Intent.ACTION_VIEW, Uri.parse("geo.action:?act=$code"))
 
