@@ -2829,10 +2829,17 @@ impl SyncEngine {
                 Ok(json!({"ok": true}))
             }
             "share_remove" => {
-                // Stops sharing; the files stay where they are.
+                // Stops sharing; the files stay where they are. `keep_history` (bool, default false) keeps the share's index, its
+                // seen file and its store tags, so adding the same id again later picks its history up: a kind switched off and
+                // on again then tells an edit or a delete made meanwhile from a file it never had. Without it (a share retired
+                // for good) all of that is deleted.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let keep = args.get("keep_history").and_then(|v| v.as_bool()).unwrap_or(false);
                 inner.saved.lock().unwrap().shares.retain(|x| x.id != id);
                 inner.save()?;
+                if keep {
+                    return Ok(json!({"ok": true}));
+                }
                 let _ = std::fs::remove_file(inner.index_path(&id));
                 let _ = std::fs::remove_file(inner.seen_path(&id));
                 let store = inner.store.clone();

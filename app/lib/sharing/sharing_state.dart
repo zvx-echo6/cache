@@ -897,7 +897,7 @@ class _PhoneDriver implements SharingDriver {
     final folders = k.shared();
     if (!on) {
       for (final id in folders.keys) {
-        if (s.shareOf(id) != null) await call('share_remove', {'id': id});
+        if (s.shareOf(id) != null) await call('share_remove', {'id': id, 'keep_history': true});
       }
       s._changed();
       return;
