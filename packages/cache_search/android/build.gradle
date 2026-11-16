@@ -69,7 +69,10 @@ def libzimVersion = "9.8.2-1"
 def libzimBuildDir = file((System.getenv("CACHE_LIBZIM_BUILD_DIR") ?: project.findProperty("cacheLibzimBuildDir") ?:
     (System.getProperty("user.home") + File.separator + ".cache" + File.separator + "cache-libzim")).toString())
 def libzimEnv = System.getenv("LIBZIM_DIR")
-def libzimDir = libzimEnv ? file(libzimEnv) : new File(libzimBuildDir, "libzim/android-arm64-" + libzimVersion)
+// The xapian core is built for ONE ABI per build: arm64-v8a (the default) or, for the emulator test build, x86_64 (-PcacheSearchAbis=x86_64).
+def libzimArch = coreAbis == ["x86_64"] ? "x86_64" : "arm64"
+def libzimTriple = libzimArch == "x86_64" ? "x86_64-linux-android" : "aarch64-linux-android"
+def libzimDir = libzimEnv ? file(libzimEnv) : new File(libzimBuildDir, "libzim/android-" + libzimArch + "-" + libzimVersion)
 def isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
 
 def fwd = { File f -> f.absolutePath.replace(File.separator, "/") }
@@ -82,7 +85,7 @@ tasks.register("fetchLibzim", Exec) {
     def gitRoots = isWindows ? [System.getenv("ProgramFiles") + "\\Git", System.getenv("ProgramW6432") + "\\Git"].findAll { it != null && !it.startsWith("null") } : []
     def gitRoot = gitRoots.find { new File(it, "bin/sh.exe").exists() }
     def shell = gitRoot != null ? new File(gitRoot, "bin/sh.exe").absolutePath : "sh"
-    commandLine shell, fwd(file("../native/zimx/fetch-libzim.sh")), fwd(libzimBuildDir)
+    commandLine shell, fwd(file("../native/zimx/fetch-libzim.sh")), fwd(libzimBuildDir), libzimArch
     doFirst {
         libzimBuildDir.mkdirs()
         if (gitRoot != null) {
@@ -91,7 +94,7 @@ tasks.register("fetchLibzim", Exec) {
         }
     }
     doLast {
-        if (!new File(libzimDir, "lib/aarch64-linux-android/libzim.so").exists()) throw new GradleException("libzim.so not found in " + libzimDir)
+        if (!new File(libzimDir, "lib/" + libzimTriple + "/libzim.so").exists()) throw new GradleException("libzim.so not found in " + libzimDir)
     }
 }
 
@@ -116,7 +119,7 @@ tasks.register("cargoNdkBuild", Exec) {
         def ndk = android.ndkDirectory
         if (ndk != null) environment("ANDROID_NDK_HOME", ndk.absolutePath)
         if (useXapian) {
-            if (coreAbis != ["arm64-v8a"]) throw new GradleException("The xapian core is built for arm64-v8a only (the libzim prebuilt is arm64); use -PcacheSearchXapian=false for other ABIs")
+            if (coreAbis != ["arm64-v8a"] && coreAbis != ["x86_64"]) throw new GradleException("The xapian core is built for arm64-v8a or x86_64 alone (one libzim prebuilt per build); use -PcacheSearchXapian=false for other ABIs")
             environment("LIBZIM_DIR", libzimDir.absolutePath)
         }
     }
@@ -128,12 +131,12 @@ tasks.register("copyCoreLibs", Copy) {
     description = "Copies libzim, libc++_shared and the ICU data next to libcache_search.so"
     dependsOn "cargoNdkBuild"
     onlyIf { useXapian }
-    into new File(jniExtra, "arm64-v8a")
-    from(new File(libzimDir, "lib/aarch64-linux-android/libzim.so"))
+    into new File(jniExtra, coreAbis[0])
+    from(new File(libzimDir, "lib/" + libzimTriple + "/libzim.so"))
     from({
         def prebuilt = new File(android.ndkDirectory, "toolchains/llvm/prebuilt")
         def host = prebuilt.listFiles().find { it.isDirectory() }
-        new File(host, "sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+        new File(host, "sysroot/usr/lib/" + libzimTriple + "/libc++_shared.so")
     })
     from(new File(libzimDir, "share/icu/73.2/icudt73l.dat")) { rename { "libcache_icu_data.so" } }
 }
