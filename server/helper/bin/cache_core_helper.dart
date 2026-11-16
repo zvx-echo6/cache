@@ -11,6 +11,7 @@ import 'guide_install.dart';
 import 'history_ops.dart';
 import 'host_load.dart';
 import 'index_driver.dart';
+import 'indexes_sync.dart';
 import 'keystore.dart';
 import 'pdf_zim_indexer.dart';
 import 'starter_layers.dart';
@@ -65,9 +66,21 @@ Future<void> main() async {
   // The saved videos (the browser's downloads, kept in <docs>/videos): their captions are indexed by the driver, and a finished
   // download kicks it.
   late final VideoOps videoOps;
+  // What the sharing host fetches of the indexes share, kept in step with the core (set below, once the host exists).
+  IndexesSync? indexesSync;
+  void updateIndexes() {
+    final s = indexesSync;
+    if (s != null) unawaited(s.update());
+  }
+
+  // The source list the server last gave, so the helper can give the core its sources again after a sync changed the indexes share.
+  final givenSources = GivenSources();
   final indexer = IndexDriver(dispatcher,
       log: log, extra: extras, load: HostLoad(), pdf: pdf, savedVideos: () => videoOps.savedVideos(), videoDir: '${dirs.docs.path}/videos');
-  videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: indexer.kick);
+  videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: () {
+    indexer.kick();
+    updateIndexes();
+  }, onRemoved: updateIndexes);
   // saved HLS videos from before are rewritten as plain MP4 in the background, a while after start (not in its way)
   Timer(const Duration(seconds: 30), () => unawaited(videoOps.repairSaved()));
   // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
@@ -76,7 +89,11 @@ Future<void> main() async {
       ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
       : null;
   // The person's own libraries (My books) that sync here: made to match their packs on this server (their shard is each device's).
-  final own = OwnLibrarySync(dispatcher, dirs, log: log, onChanged: indexer.useSources, onDone: indexer.kick);
+  final own = OwnLibrarySync(dispatcher, dirs, log: log, onChanged: indexer.useSources, onDone: () {
+    indexer.kick();
+    updateIndexes();
+  });
+  final rescanOp = RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own, given: givenSources, onRescanned: updateIndexes);
   // Weather, alerts and fires stay fresh with no tab open (what a phone's background run does).
   final liveTimer = LiveTimer(dispatcher, support: dirs.support, log: log)..start();
   // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
@@ -93,9 +110,17 @@ Future<void> main() async {
       : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
   if (sharing != null) {
+    indexesSync = IndexesSync(host: sharing, dispatcher: dispatcher, savedVideos: () => videoOps.savedVideos(), log: log);
+    // a snapshot of the search indexes that arrived is attached when the core is given its sources again, and the driver is kicked
+    final indexesArrived = IndexesShareReaction(
+      refreshSources: () => rescanOp.handle('sources.rescan', {'sources': givenSources.value}),
+      kick: indexer.kick,
+      log: log,
+    );
     // a pack of My books that another device added arrives in the libraries share: made searchable here
     sharing.onShareChanged = (ids) {
       if (ids.contains('libraries')) unawaited(own.run());
+      indexesArrived(ids);
     };
     unawaited(sharing.init());
   }
@@ -108,11 +133,12 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, onOpened: () {
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, given: givenSources, onOpened: () {
+        updateIndexes();
         regionsOps.afterOpen();
         keys.replay(dispatcher);
       }),
-      RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own),
+      rescanOp,
       IndexStateOp(indexer),
       IndexPauseOp(indexer),
       FeaturesOp(dirs),

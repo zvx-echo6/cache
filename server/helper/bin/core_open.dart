@@ -40,7 +40,7 @@ class OpenOp implements OpHandler {
   /// Makes the person's own libraries (My books) match their packs after the core is open (null in tests that do not).
   final OwnLibrarySync? own;
 
-  /// STUB (tests first).
+  /// Remembers the source list given here, for [IndexesShareReaction] (null in tests that do not).
   final GivenSources? given;
 
   @override
@@ -49,6 +49,7 @@ class OpenOp implements OpHandler {
   @override
   Object? handle(String op, Map<String, dynamic> a) {
     final given = a['sources'];
+    this.given?.value = given;
     final List<Map<String, dynamic>> sources;
     if (given is List) {
       sources = [for (final s in given) (s as Map).cast<String, dynamic>()];
@@ -75,7 +76,7 @@ class OpenOp implements OpHandler {
   }
 }
 
-/// STUB (tests first): the source list the server last gave (`open` or `sources.rescan`), kept so the helper can give the core its
+/// The source list the server last gave (`open` or `sources.rescan`), kept so the helper can give the core its
 /// sources again by itself.
 class GivenSources {
   Object? value;
@@ -99,8 +100,10 @@ class RescanOp implements OpHandler {
   /// Makes the person's own libraries match their packs after a rescan (null in tests that do not).
   final OwnLibrarySync? own;
 
-  /// STUB (tests first).
+  /// Remembers the source list given here, so the helper can give the core its sources again by itself (null in tests that do not).
   final GivenSources? given;
+
+  /// Called after the core has its new list: the helper tells the sharing host what the indexes share fetches (null in tests).
   final void Function()? onRescanned;
 
   @override
@@ -109,6 +112,7 @@ class RescanOp implements OpHandler {
   @override
   Object? handle(String op, Map<String, dynamic> a) {
     final given = a['sources'];
+    this.given?.value = given;
     final List<Map<String, dynamic>> sources;
     if (given is List) {
       sources = [for (final s in given) (s as Map).cast<String, dynamic>()];
@@ -120,6 +124,7 @@ class RescanOp implements OpHandler {
     final o = own;
     if (o != null && given is! List) unawaited(o.run());
     log?.call('sources rescanned (${sources.length})');
+    onRescanned?.call();
     return {'sources': sources.length};
   }
 }
