@@ -438,6 +438,7 @@ In ["Settings" > "Weather and alerts" > "More sources" > "Add your own source"](
 - "[site] answered with an error (HTTP [code]).": check the address, or try later.
 - "[site] answered, but not with JSON. This version of Cache only reads JSON.": this kind of service can't be added yet.
 - "[site] answered, but there are no values in it.", "[site] didn't answer in time.", "Couldn't reach [site]. Check the address and your connection.": check the address and tap "Try again".
+- "Couldn't find [site]. Check the web address.": check the address and tap "Try again".
 - "Tick at least one value to show."
 - "Cache can't use this source: [reason]": the source was not saved.
 
