@@ -25,6 +25,8 @@ class DataKind {
     this.remoteItem,
     this.alongside,
     this.setPrivate,
+    this.gated = const {},
+    this.allowed,
   });
 
   final String id;
@@ -73,6 +75,15 @@ class DataKind {
 
   /// Switches a private item on or off (a private notebook's "Include in sync and sharing"); its state is [ShareItem.on].
   final Future<void> Function(ShareItem item, bool on)? setPrivate;
+
+  /// Folders of a shared folder that are sent only when something shared refers to them, by share id: the notebooks' `photos`
+  /// (every notebook keeps its photos in that one folder). The engine offers a file under it only if it is in the list
+  /// [allowed] gives; what arrives from the other devices is never held back.
+  final Map<String, String> gated;
+
+  /// The files of [gated]'s folder that may be sent, as paths in the shared folder ("photos/cache-ID.jpg"), given the items
+  /// switched off now in share [share] ([off], as the engine gets them).
+  final Future<List<String>> Function(String share, List<String> off)? allowed;
 
   /// Every folder of this kind.
   List<Directory?> get folders => [...shared().values, ...local()];
