@@ -336,7 +336,7 @@ class _ChoosePlaceSheetState extends State<_ChoosePlaceSheet> {
                   child: Text(_error!, style: TextStyle(fontSize: 15, color: k.emergency)),
                 ),
               if (found != null) ...[
-                if (found.isEmpty)
+                if (found.isEmpty && !_searching)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Text('No places match.', style: TextStyle(fontSize: 15, color: k.secondary)),
