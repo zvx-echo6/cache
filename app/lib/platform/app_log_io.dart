@@ -14,6 +14,7 @@ import '../version.dart';
 import 'app_log.dart';
 import 'exit_reasons.dart';
 import 'memory.dart';
+import 'run_mark.dart';
 
 /// Opens the app's log in the app's own folder and writes what happened since the last start: Cache stopped while it was
 /// open (it crashed or was killed: the "running" mark is still there), and on Android the system's own reasons the last
@@ -23,42 +24,41 @@ Future<void> openAppLog() async {
   try {
     final dir = Directory('${await appSupportPath()}/logs');
     await appLog.open(dir);
-    final running = _running = File('${dir.path}/running');
+    final running = _running = RunMark(File('${dir.path}/running'));
     final exits = await _readExits();
-    if (running.existsSync()) {
-      DateTime? marked;
-      try {
-        marked = DateTime.tryParse(running.readAsStringSync().trim());
-      } catch (_) {}
-      if (stoppedUnexpectedly(marked, exits)) {
-        logError('Cache stopped unexpectedly the last time it was open');
-      } else {
-        logInfo('Cache was ended by the system or the user the last time it was open (an update, or stopped from Settings or Recents)');
+    if (running.left) {
+      switch (lastRunEnd(running.leftAt, exits)) {
+        case LastRun.unexpected:
+          logError('Cache stopped unexpectedly the last time it was open');
+        case LastRun.ended:
+          logInfo('Cache was ended by the system or the user the last time it was open (an update, or stopped from Settings or Recents)');
+        case LastRun.reasonUnknown:
+          logInfo('Cache ended the last time it was open; the system\'s reason could not be read, so it is not taken for a crash');
       }
+      running.clear();
     }
-    _mark(running, true);
-    AppLifecycleListener(
-      onResume: () => _mark(running, true),
-      onPause: () => _mark(running, false),
-      onDetach: () => _mark(running, false),
-    );
+    // The mark is set only while a phone screen is in front (RunMark.follow), not at every start.
+    _lifecycle = running.follow();
     logInfo('Cache $kAppVersion ($kAppBuild) starts; log level ${logLevelTitle(appLog.level)}; ${memoryNow()}');
-    await _exitReasons(dir, exits);
+    await _exitReasons(dir, exits ?? const []);
   } catch (e) {
     debugPrint('The log could not be opened: $e');
   }
 }
 
 /// The "running" mark of this run, once the log is open.
-File? _running;
+RunMark? _running;
+
+// Kept so the listener lives as long as the process.
+// ignore: unused_element
+AppLifecycleListener? _lifecycle;
 
 /// Cache is not open any more though no phone screen said so: Android Auto started it with the phone app closed, and the car has
 /// left (main.dart). The "running" mark is taken away as it is when the phone's screen goes to the back, so Android ending the
 /// idle process later is not written down as Cache having stopped unexpectedly. The phone's screen coming to the front sets it
 /// again.
 void markAppNotOpen() {
-  final running = _running;
-  if (running != null) _mark(running, false);
+  _running?.clear();
 }
 
 /// Dart errors (framework and asynchronous) go to the log; the framework's own report stays.
@@ -74,26 +74,17 @@ void logDartErrors() {
   };
 }
 
-void _mark(File running, bool on) {
-  try {
-    if (on) {
-      running.writeAsStringSync(DateTime.now().toIso8601String());
-    } else if (running.existsSync()) {
-      running.deleteSync();
-    }
-  } catch (_) {}
-}
-
 const MethodChannel _memory = kMemoryChannel;
 
 /// Android 11 and later: the system's records of why the app's process ended.
-Future<List<Map<Object?, Object?>>> _readExits() async {
+/// Null when the system's records could not be read at all (the native side did not answer).
+Future<List<Map<Object?, Object?>>?> _readExits() async {
   if (!Platform.isAndroid) return const [];
   try {
     final list = await _memory.invokeListMethod<Object?>('exits');
     return [for (final e in list ?? const []) if (e is Map) e.cast<Object?, Object?>()];
   } catch (_) {
-    return const [];
+    return null;
   }
 }
 
