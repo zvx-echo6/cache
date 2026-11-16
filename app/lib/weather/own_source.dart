@@ -185,7 +185,8 @@ void _attachUnits(List<OwnValue> out, String objectPath, Map<String, String> uni
     if (!o.path.startsWith('$objectPath.')) continue;
     final key = o.path.substring(objectPath.length + 1);
     final unit = units[key];
-    if (unit != null && unit.isNotEmpty && !key.contains('.')) {
+    // A unit only for a number (a units object may also name a time's format, "iso8601", which is no unit to show).
+    if (unit != null && unit.isNotEmpty && !key.contains('.') && num.tryParse(o.value) != null) {
       out[i] = OwnValue(path: o.path, label: o.label, value: o.value, unit: unit);
     }
   }

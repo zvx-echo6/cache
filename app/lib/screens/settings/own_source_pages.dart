@@ -336,7 +336,8 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   }
 }
 
-/// How a source of your own will look in Weather and alerts: its name over the first ticked value, then every other ticked value.
+/// How a source of your own will look in Weather and alerts: its name over the line the Weather screen shows (the first ticked
+/// value, then the next two), as the values come (no units: the card shows none).
 class OwnPreview extends StatelessWidget {
   const OwnPreview({super.key, required this.name, required this.lines});
 
@@ -360,12 +361,7 @@ class OwnPreview extends StatelessWidget {
           Text(name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
           const SizedBox(height: 2),
           Text(lines.isEmpty ? 'Tick a value to show it' : lines.first, style: TextStyle(fontSize: 16, color: lines.isEmpty ? k.secondary : k.text)),
-          // every ticked value is on the card; a long run scrolls inside it instead of leaving values out
-          if (lines.length > 1)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 72),
-              child: SingleChildScrollView(child: Text(lines.skip(1).join(' · '), style: TextStyle(fontSize: 14, color: k.secondary))),
-            ),
+          if (lines.length > 1) Text(lines.skip(1).take(2).join(' · '), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
         ],
       ),
     );
@@ -480,7 +476,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     final k = context.t;
     final picks = tidyPicks(_picks);
     final lines = [
-      for (final p in picks) '${p.label} ${_t.values.firstWhere((v) => v.path == p.path).shown}',
+      for (final p in picks) '${p.label} ${_t.values.firstWhere((v) => v.path == p.path).value}',
     ];
     return SettingsPage(
       title: 'Pick what to show',

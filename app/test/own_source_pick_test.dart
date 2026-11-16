@@ -13,7 +13,7 @@ const _meteo =
 
 void main() {
   group('Pick what to show', () {
-    testWidgets('every ticked value shows on the preview card, however many are ticked', (tester) async {
+    testWidgets('the preview is the real card: the value asked for, then the next two, no units; the list shows the unit', (tester) async {
       tester.view.physicalSize = const Size(800, 2400);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -24,16 +24,21 @@ void main() {
       await tester.pump();
 
       Finder onCard(String text) => find.descendant(of: find.byKey(const ValueKey('own-preview')), matching: find.textContaining(text));
-      expect(onCard('Temperature 2m 5.2 \u00b0C'), findsOneWidget, reason: 'the value asked for is ticked and shown with its unit');
+      expect(onCard('Temperature 2m 5.2'), findsOneWidget, reason: 'the value asked for is ticked and on the card');
+      expect(onCard('\u00b0C'), findsNothing, reason: 'the card shows no units, so the preview shows none');
       expect(find.text('Temperature 2m'), findsOneWidget, reason: 'listed once, not as a units row too');
+      expect(find.textContaining('5.2 \u00b0C'), findsOneWidget, reason: 'the pick list row shows the unit, to help choosing');
+      expect(find.textContaining('iso8601'), findsNothing, reason: 'a unit only beside a number');
 
-      for (final path in ['elevation', 'timezone', 'utc_offset_seconds', 'generationtime_ms']) {
+      // As on the real card: the first value, then the next two.
+      for (final path in ['elevation', 'timezone', 'utc_offset_seconds']) {
         await tester.tap(find.descendant(of: find.byKey(ValueKey('own-value-$path')), matching: find.byType(Checkbox)));
         await tester.pump();
       }
-      for (final shown in ['Elevation 2371', 'Timezone GMT', 'Utc offset seconds 0', 'Generationtime ms 0.1', 'Temperature 2m 5.2 \u00b0C']) {
-        expect(onCard(shown), findsOneWidget, reason: '$shown is on the card');
-      }
+      expect(onCard('Temperature 2m 5.2'), findsOneWidget);
+      expect(onCard('Elevation 2371'), findsOneWidget);
+      expect(onCard('Timezone GMT'), findsOneWidget);
+      expect(onCard('Utc offset seconds'), findsNothing, reason: 'the fourth is not on the card, as in Weather and alerts');
       await r.dispose(tester);
     });
   });
