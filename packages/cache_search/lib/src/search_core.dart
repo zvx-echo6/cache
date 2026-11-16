@@ -366,9 +366,6 @@ class CoreConversation {
   final int _id;
   bool _freed = false;
 
-  /// The core's number for the job (kept by an app that must find it again, see [SearchCore.attachJob]).
-  int get id => _id;
-
   /// Numbers [results] (search hits as [SearchHit.toFormatJson], or any {address,title,snippet}) and
   /// returns the exact tool message and the id map so far.
   Future<FormattedResults> format(List<Map<String, dynamic>> results) async =>
@@ -410,6 +407,9 @@ class CoreJobHandle {
   final SearchCore _core;
   final int _id;
   bool _freed = false;
+
+  /// The core's number for the job (kept by an app that must find it again, see [SearchCore.attachJob]).
+  int get id => _id;
 
   Future<JobProgress> progress() async =>
       JobProgress.fromJson(((await _core._call('jobProgress', {'job': _id})) as Map).cast<String, dynamic>());

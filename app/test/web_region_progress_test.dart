@@ -8,7 +8,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/regions_fake.dart';
 import 'support/settings_rig.dart';
-import 'support/weather_fakes.dart';
 
 void main() {
   group('a download never shows more done than the total (web-region-progress)', () {
