@@ -13,6 +13,10 @@ class FakeShelfServer implements ShelfServer {
   int views = 0;
   final List<List<Map<String, dynamic>>> sent = [];
 
+  /// The events call (1 = the first) that fails, as a request the server refused (413); the ones before it are kept in [sent].
+  int? failOnCall;
+  int eventCalls = 0;
+
   /// `<library>/<doc>` -> the book's PDF; a book not here is a 404, as on the server.
   final Map<String, Uint8List> pdfs = {};
   final List<String> pdfAsked = [];
@@ -43,6 +47,8 @@ class FakeShelfServer implements ShelfServer {
   @override
   Future<void> events(List<Map<String, dynamic>> events) async {
     if (down) throw StateError('down');
+    eventCalls++;
+    if (failOnCall == eventCalls) throw const DeviceException('too_large', 'request body too large', status: 413);
     sent.add(events);
   }
 }
