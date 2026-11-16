@@ -307,7 +307,7 @@ impl Ext {
     /// becomes an entry (its name the title, its notes the text; a point with the name of an entry already there updates that entry
 /// instead, see below), lines and areas stay with the notebook's map layer.
     /// `now` is the entries' "When" (local ISO 8601 with offset; default now in UTC). Returns
-    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas a notebook without a layer cannot keep).
+    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas that could not be kept).
     fn import(&self, args: &Value) -> Result<Value> {
         for k in args.as_object().into_iter().flat_map(|o| o.keys()) {
             if !["path", "notebook_id", "name", "now"].contains(&k.as_str()) {
@@ -334,6 +334,8 @@ impl Ext {
                 }
                 id.to_string()
             }
+            // A file with no points makes no empty notebook: its lines and areas become a map layer of their own (below).
+            None if !parsed.features.iter().any(|f| matches!(f.geom, Geom::Point(..))) => String::new(),
             None => {
                 let stem = std::path::Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                 let given = args.get("name").and_then(Value::as_str).map(mapdata::collapse).filter(|n| !n.is_empty());
@@ -356,7 +358,7 @@ impl Ext {
         // A name twice in the file is one place, the later one's. An update moves the pin to the file's position and fills the
         // entry's notes when it has none; its title, date, photos, files and what the person wrote stay.
         let mut by_name: HashMap<String, String> = HashMap::new();
-        let mut existing = self.entries_of(&nb_id)?;
+        let mut existing = if nb_id.is_empty() { Vec::new() } else { self.entries_of(&nb_id)? };
         existing.retain(|e| e["draft"] != true);
         existing.sort_by_key(|e| e["created"].as_i64().unwrap_or(0));
         for e in &existing {
@@ -367,6 +369,7 @@ impl Ext {
                 }
             }
         }
+        let (layer_name, layer_private) = (parsed.name.as_deref().map(mapdata::collapse), parsed.private);
         let (mut places, mut updated) = (0, 0);
         let mut shapes: Vec<Feature> = Vec::new();
         for f in parsed.features {
@@ -422,10 +425,19 @@ impl Ext {
             shapes.iter().filter(|f| matches!(f.geom, Geom::Area(..))).count(),
         );
         let kept = match self.map_data.as_deref() {
-            Some(m) => m.add_notebook_shapes(&nb_id, &shapes).map_err(user_err)?,
+            Some(m) => match m.add_notebook_shapes(&nb_id, &shapes).map_err(user_err)? {
+                // A notebook with no layer of its own (the saved places) keeps them as a map layer named after the file.
+                0 if !shapes.is_empty() => {
+                    let stem = std::path::Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = layer_name.filter(|n| !n.is_empty()).unwrap_or_else(|| mapdata::collapse(&stem));
+                    let name = if name.is_empty() { "Imported lines".to_string() } else { name };
+                    m.add_shape_layer(&name, &file, layer_private.unwrap_or(false), &shapes).map_err(user_err)?
+                }
+                n => n,
+            },
             None => 0,
         };
-        let notebook = self.nb_call("notebook", &json!({"id": nb_id}))?;
+        let notebook = if nb_id.is_empty() { Value::Null } else { self.nb_call("notebook", &json!({"id": nb_id}))? };
         Ok(json!({"notebook": notebook, "places": places, "updated": updated, "lines": lines, "areas": areas, "skipped": shapes.len() - kept}))
     }
 }

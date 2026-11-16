@@ -612,6 +612,32 @@ impl MapStore {
         Ok(n)
     }
 
+    /// Keeps lines and areas that a Places notebook has no layer for (the saved places are not a map layer) as a layer of their
+    /// own, named `name`, from the file `file`: listed under My layers, drawn, switched and deleted like any imported layer.
+    /// Returns how many were kept (points are not: they are the notebook's entries).
+    pub fn add_shape_layer(&self, name: &str, file: &str, private: bool, shapes: &[Feature]) -> Result<usize> {
+        let shapes: Vec<&Feature> = shapes.iter().filter(|f| !matches!(f.geom, Geom::Point(..))).collect();
+        if shapes.is_empty() {
+            return Ok(0);
+        }
+        let mut c = self.db()?;
+        let tx = c.transaction()?;
+        let used = Self::next_used(&tx)?;
+        tx.execute(
+            "INSERT INTO map_lists(kind,name,files,private,visible,used_at,created_at) VALUES('layer',?1,?2,?3,1,?4,?4)",
+            params![collapse(name), serde_json::to_string(&[file]).expect("files"), private as i64, used],
+        )?;
+        let id = tx.last_insert_rowid();
+        for (i, f) in shapes.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO map_items(list_id,ord,name,notes,geom,lat,lon,data) VALUES(?1,?2,?3,?4,?5,NULL,NULL,NULL)",
+                params![id, i as i64 + 1, f.name, f.notes, serde_json::to_string(&f.geom).expect("geom")],
+            )?;
+        }
+        tx.commit()?;
+        Ok(shapes.len())
+    }
+
     /// `cs_userlayer_export`: `{"id","format":"kml"|"gpx","path"}` writes the file (GPX for a layer only).
     /// Returns `{"id","format","path","bytes"}`.
     pub fn export(&self, json: &str) -> Result<String> {
