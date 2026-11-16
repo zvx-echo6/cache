@@ -338,6 +338,7 @@ impl Inner {
     /// - the live file is dropped first only when it holds none of this device's areas and a copy does (it is the other device's file);
     ///   otherwise it is kept.
     /// - with no such list, nothing is dropped or told apart: every copy is merged into the live store and deleted.
+    ///
     /// A copy that fails the integrity check is left (and nothing is dropped for it), and a lone conflict -wal is deleted. An area
     /// that says it is complete but lacks tiles afterwards (they were in the log the sync replaced) is made an unfinished download.
     /// Returns how many conflict files were dealt with.
@@ -365,10 +366,7 @@ impl Inner {
         for (layer, mut copies) in mains {
             copies.sort();
             // the ones that are whole databases, with the areas each holds
-            let good: Vec<(PathBuf, HashSet<String>)> = copies.into_iter().filter(|p| integrity_ok(p)).map(|p| {
-                let ids = area_ids(&p);
-                (p, ids)
-            }).collect();
+            let good: Vec<(PathBuf, HashSet<String>)> = copies.into_iter().filter(|p| integrity_ok(p)).filter_map(|p| area_ids(&p).map(|ids| (p, ids))).collect();
             if good.is_empty() {
                 continue;
             }
@@ -384,7 +382,7 @@ impl Inner {
                 continue;
             }
             let live = self.store_path(&layer);
-            let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && area_ids(&live).is_disjoint(o));
+            let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && area_ids(&live).is_some_and(|ids| ids.is_disjoint(o)));
             if live_is_theirs {
                 // the live file is the other device's: drop it (and the handle on it); the copies become the live store
                 if let Ok(mut g) = self.stores.lock() {
@@ -440,14 +438,14 @@ impl Inner {
     }
 }
 
-/// The area ids a store file holds (empty when it cannot be read).
-fn area_ids(p: &Path) -> HashSet<String> {
-    let Ok(c) = rusqlite::Connection::open(p) else { return HashSet::new() };
-    let Ok(mut q) = c.prepare("SELECT id FROM areas") else { return HashSet::new() };
-    let rows = q.query_map([], |r| r.get::<_, String>(0));
-    let ids = rows.map(|r| r.flatten().collect()).unwrap_or_default();
+/// The area ids a store file holds; `None` when it cannot be read (then nothing is concluded from it).
+fn area_ids(p: &Path) -> Option<HashSet<String>> {
+    let c = rusqlite::Connection::open(p).ok()?;
+    c.busy_timeout(Duration::from_secs(5)).ok()?;
+    let mut q = c.prepare("SELECT id FROM areas").ok()?;
+    let ids: HashSet<String> = q.query_map([], |r| r.get::<_, String>(0)).ok()?.collect::<std::result::Result<_, _>>().ok()?;
     drop(q);
-    ids
+    Some(ids)
 }
 
 fn integrity_ok(p: &Path) -> bool {

@@ -69,13 +69,13 @@ fn own_region_ids(dir: &Path) -> Option<HashSet<String>> {
     (!out.is_empty()).then_some(out)
 }
 
-fn region_ids(p: &Path) -> HashSet<String> {
-    let Ok(c) = Connection::open(p) else { return HashSet::new() };
-    let Ok(mut q) = c.prepare("SELECT id FROM regions") else { return HashSet::new() };
-    let rows = q.query_map([], |r| r.get::<_, String>(0));
-    let ids = rows.map(|r| r.flatten().collect()).unwrap_or_default();
+fn region_ids(p: &Path) -> Option<HashSet<String>> {
+    let c = Connection::open(p).ok()?;
+    c.busy_timeout(Duration::from_secs(5)).ok()?;
+    let mut q = c.prepare("SELECT id FROM regions").ok()?;
+    let ids: HashSet<String> = q.query_map([], |r| r.get::<_, String>(0)).ok()?.collect::<std::result::Result<_, _>>().ok()?;
     drop(q);
-    ids
+    Some(ids)
 }
 
 /// Takes in what a sync conflict left in the regions folder. Before this version the live databases synced, and a device whose
@@ -95,7 +95,7 @@ pub fn rescue_conflicts(dir: &Path) -> usize {
     // regions.sqlite
     let (mains, logs) = conflict_copies(dir, "regions.sqlite");
     let own = own_region_ids(dir);
-    let good: Vec<(PathBuf, HashSet<String>)> = mains.iter().filter(|p| is_database(p, "regions")).map(|p| (p.clone(), region_ids(p))).collect();
+    let good: Vec<(PathBuf, HashSet<String>)> = mains.iter().filter(|p| is_database(p, "regions")).filter_map(|p| region_ids(p).map(|ids| (p.clone(), ids))).collect();
     let (mine, others): (Vec<_>, Vec<_>) = match &own {
         Some(o) => good.into_iter().partition(|(_, ids)| !ids.is_disjoint(o)),
         None => (good, Vec::new()),
@@ -106,7 +106,7 @@ pub fn rescue_conflicts(dir: &Path) -> usize {
     }
     if !mine.is_empty() {
         let live = dir.join("regions.sqlite");
-        let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && region_ids(&live).is_disjoint(o));
+        let live_is_theirs = own.as_ref().is_some_and(|o| live.is_file() && region_ids(&live).is_some_and(|ids| ids.is_disjoint(o)));
         let mut rest: Vec<&(PathBuf, HashSet<String>)> = mine.iter().collect();
         if live_is_theirs || !live.is_file() {
             // the first copy becomes the live file
