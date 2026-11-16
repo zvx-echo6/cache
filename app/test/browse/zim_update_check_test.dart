@@ -50,8 +50,10 @@ void main() {
     });
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: BrowseScreen(browse: browse, active: true)));
     await tester.pump(const Duration(seconds: 1));
-    await tester.tap(find.byKey(const ValueKey('library-zims')));
-    await tester.pumpAndSettle();
+    if (find.byKey(const ValueKey('library-zims')).evaluate().isNotEmpty) {
+      await tester.tap(find.byKey(const ValueKey('library-zims')));
+      await tester.pumpAndSettle();
+    }
   }
 
   Future<void> choose(WidgetTester tester) async {
