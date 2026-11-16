@@ -7,6 +7,7 @@ import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/regions/problem_words.dart';
 import 'package:cache/regions/ui/region_actions.dart';
 import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
@@ -330,6 +331,61 @@ void main() {
     expect((p.offroad, p.offroadProblem), (null, null));
     none.dispose();
 
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('Add off-road never ends in silence: a size estimate that fails says why, and starts nothing (web-offroad-stuck)', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final packs = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: packs,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      // The elevation layer's size cannot be worked out (the estimate says it cannot be downloaded).
+      final def = (jsonDecode(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync()) as Map<String, dynamic>)..['fake_unavailable'] = true;
+      await s.engine.saveDefinition(jsonEncode(def));
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    Object? error;
+    await tester.runAsync(() async {
+      try {
+        await regions.addParts(county, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<StateError>(), reason: 'before: download() returned as if it had worked, no message, no job');
+    expect(downloadProblemWords(error!, what: 'add off-road to County'), contains('terrain'));
+    expect(packs.fetched, isEmpty);
+    expect(regions.regionOf(_county)?.hasOffroad ?? false, isFalse);
+
+    // Paused: the same request says so, and no pack is asked for.
+    await tester.runAsync(() async {
+      await regions.pauseAll();
+      error = null;
+      try {
+        await regions.addParts(county, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<StateError>());
+    expect(downloadProblemWords(error!, what: 'add off-road to County'), contains('paused'));
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
     await s.dispose(tester);
