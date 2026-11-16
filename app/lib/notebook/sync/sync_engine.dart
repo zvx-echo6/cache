@@ -439,6 +439,9 @@ class NotebookSync {
 
   static String folderNameOf(Notebook n) => folderName(n.name);
 
+  /// Where notebook sync's folder (the share) keeps photo [id]: every notebook's photos live in this one folder.
+  static String photoPath(String id) => 'photos/cache-$id.jpg';
+
   Future<String> _newPath(EntryDoc d, Notebook n) async {
     final dir = folderNameOf(n);
     final base = noteFileName(d);

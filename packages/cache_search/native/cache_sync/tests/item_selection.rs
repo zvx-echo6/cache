@@ -188,3 +188,38 @@ fn sync_now_for_one_item_one_folder_or_one_device_takes_just_that() {
     a.close();
     b.close();
 }
+
+#[test]
+fn a_gated_folder_offers_only_its_allowed_files_and_still_receives_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (fa, fb) = (tmp.path().join("nb-a"), tmp.path().join("nb-b"));
+    write(&fa.join("Journal/e.md"), "entry");
+    write(&fa.join("photos/shared.jpg"), "shared photo");
+    write(&fa.join("photos/off.jpg"), "off photo");
+    write(&fb.join("photos/theirs.jpg"), "gated device's own incoming photo");
+
+    // A's photos folder offers only shared.jpg from its start; B is not gated.
+    let cfg_a = json!({
+        "dir": da, "name": "Desk", "relay": false, "dht": false, "mdns": false, "lookup": false,
+        "interval_secs": 5, "reserve_bytes": 0,
+        "gate": {"nb": {"dir": "photos", "allow": ["photos/shared.jpg"]}},
+    });
+    let a = SyncEngine::open(serde_json::from_value::<Config>(cfg_a).unwrap()).unwrap();
+    let b = engine(&db, "Phone", 5, None);
+    link(&a, &b);
+    call(&a, "share_add", json!({"id": "nb", "name": "Notebooks", "path": fa}));
+    call(&b, "share_add", json!({"id": "nb", "name": "Notebooks", "path": fb}));
+    until("the allowed photo and the entry on B, and B's photo on A", 60, &a, &b, || {
+        fb.join("photos/shared.jpg").exists() && fb.join("Journal/e.md").exists() && fa.join("photos/theirs.jpg").exists()
+    });
+    rounds(&a, &b);
+    assert!(!fb.join("photos/off.jpg").exists(), "a photo not in the allow list is not offered");
+    assert!(fa.join("photos/theirs.jpg").exists(), "receiving into a gated folder is unchanged");
+
+    // Allowed later: it goes.
+    call(&a, "set_gate", json!({"id": "nb", "dir": "photos", "allow": ["photos/shared.jpg", "photos/off.jpg"]}));
+    until("the photo allowed later, on B", 60, &a, &b, || fb.join("photos/off.jpg").exists());
+    a.close();
+    b.close();
+}

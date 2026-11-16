@@ -108,6 +108,25 @@ impl OpenSteps {
     }
 }
 
+/// A send-only allow list for one folder of a share ([`Config::send_gate`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SendGate {
+    /// The folder, relative to the share's root ("photos").
+    #[serde(default)]
+    pub dir: String,
+    /// The files under it that may be offered, as paths relative to the share's root.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl SendGate {
+    /// `rel` is held back: it is under the folder and not in the allow list.
+    fn holds_back(&self, rel: &str) -> bool {
+        let dir = self.dir.trim_matches('/');
+        !dir.is_empty() && rel.strip_prefix(dir).is_some_and(|r| r.starts_with('/')) && !self.allow.iter().any(|a| a == rel)
+    }
+}
+
 /// The `cs_sync_open` config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -186,6 +205,13 @@ pub struct Config {
     /// list later.
     #[serde(default)]
     pub off: BTreeMap<String, Vec<String>>,
+    /// Folders of a share whose files are OFFERED only when listed, by share id: `{"dir": "photos", "allow": ["photos/a.jpg"]}`
+    /// offers a file under `photos/` only if it is in `allow` (every other path of the share is unaffected). Unlike `off` it
+    /// governs sending only: a file under `dir` is still fetched from the other devices, so what arrives is never held back.
+    /// Nothing already sent is recalled. `set_gate` replaces a share's gate later.
+    #[serde(default)]
+    #[serde(rename = "gate")]
+    pub send_gate: BTreeMap<String, SendGate>,
     /// Shares kept only with some linked devices, by share id: the link kinds ([`Link`]'s `mode`) a device must have for the share
     /// to be offered to it and taken from it. A link starts `"off"` until the person answers ([`new_link`]); links made before
     /// that were given `"match"` once ([`migrate_links`]). A link with no mode at all counts as `"match"`. A share not listed goes to every linked device. The person's
@@ -628,6 +654,8 @@ struct Inner {
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::off`], as `set_off` last left it.
     off: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::send_gate`], as `set_gate` last left it.
+    send_gate: Mutex<BTreeMap<String, SendGate>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
@@ -1036,13 +1064,14 @@ impl Inner {
     fn offered(&self, share: &str) -> Index {
         let skip = self.skip(share);
         let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
+        let gate = self.send_gate.lock().unwrap().get(share).cloned();
         let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
         let idx = self.load_index(share);
         Index {
             files: idx
                 .files
                 .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
+                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !gate.as_ref().is_some_and(|g| g.holds_back(p)) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
         }
@@ -2549,6 +2578,7 @@ impl SyncEngine {
             hidden: cfg.hidden.clone(),
             quiet: cfg.quiet.iter().cloned().collect(),
             off: Mutex::new(cfg.off.clone()),
+            send_gate: Mutex::new(cfg.send_gate.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
@@ -2882,6 +2912,27 @@ impl SyncEngine {
                 }
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "set_gate" => {
+                // What a share offers from one folder, from now on: only the files in `allow` (see [`Config::send_gate`]); no `dir`
+                // (or null) removes the gate. Receiving is never affected.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let dir = s("dir").unwrap_or_default();
+                let allow: Vec<String> = match args.get("allow") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("allow must be a list of paths or null"),
+                };
+                {
+                    let mut g = inner.send_gate.lock().unwrap();
+                    if dir.is_empty() {
+                        g.remove(&id);
+                    } else {
+                        g.insert(id, SendGate { dir, allow });
+                    }
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
             }
             "share_items" => {
                 // A share's items: its paths grouped by their first `depth` segments (a library's folder, a ZIM, a map layer's

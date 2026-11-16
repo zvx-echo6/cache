@@ -421,6 +421,9 @@ class _CacheAppState extends State<CacheApp> {
       list: () => NotebooksScreen(deps: notebookDeps),
       items: () => notebookItems(notebooks),
       remoteItem: notebookRemoteItem,
+      // Every notebook's photos share one folder; a photo goes only when an entry of a shared notebook refers to it.
+      gated: const {'notebooks': 'photos'},
+      allowed: (share, off) => notebookPhotosToSend(notebooks, off),
       setPrivate: (it, on) => setNotebookShared(notebooks, it, on),
     ),
     // The Shared folder of 1.0 is gone: SharingState stops sharing it at start (retiredShares), and its files stay where they are.
@@ -916,6 +919,8 @@ class _CacheAppState extends State<CacheApp> {
     shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
     shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
     onActivity: (line) => sharing.addActivity(line),
+    // Before notebook sync writes photos out, the engine is told which may go (nothing leaves for an entry not shared).
+    prepareShare: () => sharing.refreshGate(),
     storePhoto: (id, bytes) async {
       await storePhoto(notebooks, bytes, id: id);
     },
