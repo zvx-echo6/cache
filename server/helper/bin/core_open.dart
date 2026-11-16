@@ -20,7 +20,7 @@ import 'own_libraries.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide, this.own});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.onOpened, this.guide, this.own, this.given});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -39,6 +39,9 @@ class OpenOp implements OpHandler {
 
   /// Makes the person's own libraries (My books) match their packs after the core is open (null in tests that do not).
   final OwnLibrarySync? own;
+
+  /// STUB (tests first).
+  final GivenSources? given;
 
   @override
   bool handles(String op) => op == 'open';
@@ -72,13 +75,19 @@ class OpenOp implements OpHandler {
   }
 }
 
+/// STUB (tests first): the source list the server last gave (`open` or `sources.rescan`), kept so the helper can give the core its
+/// sources again by itself.
+class GivenSources {
+  Object? value;
+}
+
 /// The helper's `sources.rescan`, which only cache may call (the server's `/api/core` refuses it from browsers, as it does
 /// `open`, `close` and `setSources`). The server sends it after it has put a ZIM or a library on disk, or removed one:
 /// `sources.rescan {"sources": <array or null>}`. As with [OpenOp], the array is the server's `sources.json` and `null` means
 /// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.
 /// Replies `{"sources": N}` and logs "sources rescanned (N)".
 class RescanOp implements OpHandler {
-  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.own});
+  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer, this.own, this.given, this.onRescanned});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
@@ -89,6 +98,10 @@ class RescanOp implements OpHandler {
 
   /// Makes the person's own libraries match their packs after a rescan (null in tests that do not).
   final OwnLibrarySync? own;
+
+  /// STUB (tests first).
+  final GivenSources? given;
+  final void Function()? onRescanned;
 
   @override
   bool handles(String op) => op == 'sources.rescan';

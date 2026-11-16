@@ -25,7 +25,7 @@ import '../../../app/lib/search/indexes_dir.dart' show kIndexesDirName;
 ///                                              every job the helper holds, so a tab opened later sees them
 /// Errors are the core's own ({code, message}).
 class VideoOps implements OpHandler {
-  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.watchEvery = const Duration(seconds: 5)});
+  VideoOps(this.dirs, this.factory, {this.log, this.resolve, this.onSaved, this.onRemoved, this.watchEvery = const Duration(seconds: 5)});
 
   final AppDirs dirs;
   final CsNative Function() factory;
@@ -38,6 +38,8 @@ class VideoOps implements OpHandler {
   /// A download finished: a saved video is new on disk (the index driver is kicked, so its captions are made searchable even
   /// with no tab open). Told once per job, by [checkFinished], which a timer runs while a download runs.
   final void Function()? onSaved;
+  /// STUB (tests first).
+  final void Function()? onRemoved;
   final Duration watchEvery;
   Timer? _watch;
   final Set<int> _told = {};
