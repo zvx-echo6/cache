@@ -194,7 +194,7 @@ enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, insecure, 
 
 /// What one try of the address gave: the values found, or why there are none.
 class OwnTry {
-  const OwnTry.ok(this.host, this.values) : failure = null, status = null;
+  const OwnTry.ok(this.host, this.values) : failure = null, status = null, detail = null;
   const OwnTry.failed(this.host, OwnTryFailure this.failure, {this.status, this.detail}) : values = const [];
 
   final String host;
