@@ -214,14 +214,24 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
     _addressFocus.requestFocus();
   }
 
+  // Counts the tries; Cancel moves it on, so the answer of a cancelled try finds it changed and does nothing.
+  int _tryTurn = 0;
+
+  void _cancelTry() => setState(() {
+    _tryTurn++;
+    _busy = false;
+  });
+
   Future<void> _try() async {
     final d = _draft;
     final p = d.problem();
     setState(() => _error = p);
     if (p != null) return;
+    final turn = ++_tryTurn;
     setState(() => _busy = true);
     final t = await w.tryOwnSource(d);
-    if (!mounted) return;
+    // Cancelled while waiting: the form is already back, and a late answer is ignored.
+    if (!mounted || turn != _tryTurn) return;
     setState(() => _busy = false);
     final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => OwnSourcePickPage(deps: widget.deps, draft: d, first: t, earlier: _picks)));
     if (saved == true && mounted) {
@@ -322,6 +332,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _bigButton(key: const ValueKey('own-try'), label: 'Try it', onPressed: _try, busy: _busy),
+            if (_busy) TextButton(key: const ValueKey('own-try-cancel'), onPressed: _cancelTry, child: const Text('Cancel')),
             const SizedBox(height: 8),
             Text('Cache calls it once and shows what came back. Nothing is saved yet.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: k.secondary)),
           ],
