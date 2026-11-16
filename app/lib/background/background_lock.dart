@@ -130,6 +130,21 @@ class BackgroundLock {
     }
   }
 
+  /// The app is back at the front and had last seen generation [seen]: when a background run has happened since, each of [reads]
+  /// (what the app keeps: Add PDF's jobs, the watched folders, the libraries and the search index work) runs, in order, so the app
+  /// shows and searches what the run did. A read that throws is skipped (the next one still runs). Returns the generation now,
+  /// for the caller to keep as the next [seen].
+  Future<int> catchUp(int seen, List<Future<void> Function()> reads) async {
+    final g = generation;
+    if (g == seen) return seen;
+    for (final r in reads) {
+      try {
+        await r();
+      } catch (_) {}
+    }
+    return g;
+  }
+
   // ---- a background run
 
   /// A background run may do [work]: the app is not open, its own engine for [work] does not run and no other run does it.

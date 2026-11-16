@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:cache/browse/browse_screen.dart' show BrowseScreen, LibraryItemScreen;
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/zim_download.dart';
+import 'package:cache/background/background_lock.dart';
+import 'package:cache/search/core_index_calls.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart';
@@ -106,9 +108,14 @@ class _LibNative implements CsNative {
     // the index is the old one in the library's own folder (no words pending), then the older snapshot, which lacks the new book.
     final snapReads = (fake['snapshot_opening_reads'] as int?) ?? 0;
     if (snapReads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'snapshot_opening_reads': snapReads - 1}));
+    // "words_covered": N: the keyword snapshot covers N points; the words are pending while the shard holds another number (what a
+    // book added after the snapshot was made looks like; the core says so from the counts alone)
+    final covered = fake['words_covered'] as int?;
     return {
       if (fake.containsKey('snapshot_opening_reads')) 'keyword_pending': snapReads == 0,
-      if (fake.containsKey('snapshot_opening_reads'))
+      if (covered != null) 'keyword_pending': (fake['docs'] ?? 0) != covered,
+      if (covered != null) 'source_id': r['library_id'],
+      if (fake.containsKey('snapshot_opening_reads') || covered != null)
         'index': snapReads > 0 ? {'kind': 'library', 'location': 'legacy', 'opening': true} : {'kind': 'library', 'location': 'snapshot', 'snapshot': 'b1'},
       'id': r['library_id'],
       'kind': 'library',
@@ -374,6 +381,53 @@ void main() {
       await libs.rescan();
       expect(ownSyncCalls(), ['my-books', 'my-books']);
       expect(libs.ownSyncResults[mine.path]?['rebuilt'], isFalse);
+    });
+
+    test('a book a background run added while the app held its libraries: on coming back to the front the library is read again, its words are pending and the scheduler lists the index job', () async {
+      List<String> ownSyncCalls() {
+        final f = File('${tmp.path}/own-sync-calls.txt');
+        return f.existsSync() ? f.readAsLinesSync().where((l) => l.isNotEmpty).toList() : const [];
+      }
+
+      final d = Directory('${tmp.path}/libraries/my-books')..createSync(recursive: true);
+      File('${d.path}/cache-library.json').writeAsStringSync(jsonEncode({'format': 1, 'library_id': 'my-books-abc', 'title': 'My books', 'own': true, 'own_default': true, 'fields': {'text': 'text'}}));
+      File('${d.path}/packs/b0@1.cdoc').createSync(recursive: true);
+      // the library as the app holds it: one book, its words all in the keyword snapshot
+      File('${d.path}/shard/fake.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(jsonEncode({'docs': 1, 'words_covered': 1}));
+      await setUpLibs(indexesDir: '${tmp.path}/indexes');
+      await libs.whenIdle();
+      final mine = libs.libraries.firstWhere((l) => l.folderName == 'my-books');
+      expect(libs.docsOf(mine), 1);
+      expect(libs.wordsPendingAt(mine.path), isFalse);
+      final calls = AppIndexCoreCalls(statuses: () => sources.statuses, videos: () => const [], startJob: (k, p) async => null, indexesDir: () => '${tmp.path}/indexes');
+      expect([for (final n in await calls.needs()) n.kind], isNot(contains('library-words')));
+      final syncs = ownSyncCalls().length;
+
+      // the app is at the back; a background run (its own core) adds a book to the same library and counts one run
+      final lock = BackgroundLock(Directory('${tmp.path}/background'));
+      var seen = lock.generation;
+      expect(lock.hold(kAddPdfWork), isTrue);
+      File('${d.path}/packs/b1@1.cdoc').createSync(recursive: true);
+      File('${d.path}/shard/fake.json').writeAsStringSync(jsonEncode({'docs': 2, 'words_covered': 1}));
+      lock.release(kAddPdfWork);
+      // what the app still holds: nothing has told it
+      expect(libs.docsOf(mine), 1);
+      expect(libs.wordsPendingAt(mine.path), isFalse);
+
+      // back at the front (main.dart's _backToFront): the run's change is seen and the libraries are read again
+      seen = await lock.catchUp(seen, [libs.rescan]);
+      expect(seen, lock.generation);
+      expect(ownSyncCalls().length, syncs + 1, reason: 'the own library is looked at again');
+      expect(libs.docsOf(libs.libraries.firstWhere((l) => l.folderName == 'my-books')), 2);
+      expect(libs.wordsPendingAt(mine.path), isTrue, reason: 'the status says the new book\'s words are behind');
+      final needs = await calls.needs();
+      expect([for (final n in needs) n.kind], contains('library-words'), reason: 'the scheduler lists the index job of that library');
+      // nothing changed since: no second read
+      final again = await lock.catchUp(seen, [libs.rescan]);
+      expect(again, seen);
+      expect(ownSyncCalls().length, syncs + 1);
     });
 
     test('two own libraries that both say own_default: defaultOwnLibrary is the folder named exactly my-books', () async {

@@ -618,12 +618,10 @@ class _CacheAppState extends State<CacheApp> {
     if (l != null) {
       _bgAppOpen();
       await l.takeOver(kAddPdfWork);
-      final g = l.generation;
-      if (g != _bgSeen) {
-        _bgSeen = g;
-        await addPdf.reload();
-        await watchFolders.reload();
-      }
+      // a background run wrote to the libraries (a watched folder's PDF became a book in My books) while this app's core held them:
+      // they are read again (the list, the core's view of the shard, the own libraries' packs), and the scheduler, started below,
+      // then lists the words the new book still needs (W2, W3: Pixel and emulator, 2026-11-15)
+      _bgSeen = await l.catchUp(_bgSeen, [addPdf.reload, watchFolders.reload, libraries.rescan]);
     }
     if (!mounted) return;
     // a background add that failed or ended before it was done is said in the app (the service's own notifications are silent)
