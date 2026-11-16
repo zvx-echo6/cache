@@ -64,12 +64,14 @@ class DlState {
 
   bool get active => phase != DlPhase.idle && phase != DlPhase.done;
   bool get hasBytes => done > 0;
-  double? get fraction => total > 0 ? (done / total).clamp(0.0, 1.0) : null;
+  /// Null with no total, and when more is done than the total says (the estimate was short: no bar that is full while it runs).
+  double? get fraction => total > 0 && done <= total ? done / total : null;
 }
 
 /// "1.7 of 4.6 GB" (one unit when both read in it), "650 MB of 4.6 GB", or "1.7 GB so far" with no total.
 String dlBytes(int done, int total) {
-  if (total <= 0) return '${formatBytes(done)} so far';
+  // No total, or the estimate was short (more is done than it said): never "12 of 5.8 MB".
+  if (total <= 0 || done > total) return '${formatBytes(done)} so far';
   final d = formatBytes(done), t = formatBytes(total);
   final du = d.split(' ').last, tu = t.split(' ').last;
   return du == tu ? '${d.substring(0, d.length - du.length - 1)} of $t' : '$d of $t';

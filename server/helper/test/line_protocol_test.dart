@@ -143,4 +143,39 @@ class _SlowHandler implements OpHandler {
     order.add('fail');
     throw const CacheSearchException('busy', 'try later');
   }
+
+  test('a Pause (set_policy) and a job cancel are answered while an earlier request is still waiting', () async {
+    final gate = Completer<Object?>();
+    final out = <String>[];
+    final input = StreamController<List<int>>();
+    final done = serveLines(input.stream, out.add, CoreDispatcher(() => _fake()), handlers: [_Slow(gate), _Stop()]);
+    void send(Map<String, dynamic> r) => input.add(utf8.encode('${jsonEncode(r)}\n'));
+    send(_req(1, 'slow'));
+    send(_req(2, 'regions.call', {'method': 'set_policy', 'args': {'hold': true}}));
+    send(_req(3, 'jobCancel', {'job': 4}));
+    send(_req(4, 'other'));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final ids = [for (final l in out.skip(1)) (jsonDecode(l) as Map)['id']];
+    expect(ids, unorderedEquals([2, 3]), reason: 'the stops are answered; the slow call and the one behind it still wait');
+    gate.complete('late');
+    await input.close();
+    await done;
+    expect([for (final l in out.skip(1)) (jsonDecode(l) as Map)['id']], [2, 3, 1, 4]);
+  });
+}
+
+class _Slow implements OpHandler {
+  _Slow(this.gate);
+  final Completer<Object?> gate;
+  @override
+  bool handles(String op) => op == 'slow' || op == 'other';
+  @override
+  FutureOr<Object?> handle(String op, Map<String, dynamic> args) => op == 'slow' ? gate.future : 'ok';
+}
+
+class _Stop implements OpHandler {
+  @override
+  bool handles(String op) => op == 'regions.call' || op == 'jobCancel';
+  @override
+  Object? handle(String op, Map<String, dynamic> args) => {'stopped': true};
 }
