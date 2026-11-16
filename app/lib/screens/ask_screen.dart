@@ -213,7 +213,11 @@ class _AskScreenState extends State<AskScreen> {
           final k = ctx.t;
           final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
           final serviceOff = location.problem == LocationProblem.serviceOff;
-          final why = blocked
+          // In the browser the words are Settings' own for a blocked browser, and the way out is the how-to-allow dialog.
+          final webBlocked = blocked && linuxUi;
+          final why = webBlocked
+              ? 'Blocked in this browser'
+              : blocked
               ? "Blocked in the device's settings"
               : serviceOff
               ? "The device's location is switched off"
@@ -243,8 +247,12 @@ class _AskScreenState extends State<AskScreen> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton(
-                        onPressed: blocked ? location.openAppSettings : location.openLocationSettings,
-                        child: const Text("Open the device's settings"),
+                        onPressed: webBlocked
+                            ? () => showHowToAllow(ctx)
+                            : blocked
+                            ? location.openAppSettings
+                            : location.openLocationSettings,
+                        child: Text(webBlocked ? 'How to allow' : "Open the device's settings"),
                       ),
                     ),
                 ],

@@ -46,4 +46,30 @@ void main() {
     }
     await snap(tester, 'web_location', Platform.environment['SHOT_NAME'] ?? 'after');
   });
+
+  testWidgets('Ask + sheet, location blocked in the browser', (tester) async {
+    await loadShotFonts();
+    debugLinuxUi = true;
+    addTearDown(() => debugLinuxUi = null);
+    phone(tester, size: const Size(1440, 900), ratio: 1);
+    final dir = Directory.systemTemp.createTempSync('web-loc-shot-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final location = LocationService(source: FakeSource()..state = LocationPermissionState.deniedForever, settingsDirOverride: dir);
+    await tester.runAsync(location.init);
+    addTearDown(location.dispose);
+    final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir)..active = ModelEntry(path: '${dir.path}/m.gguf', size: 1);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
+    addTearDown(() {
+      chat.dispose();
+      app.dispose();
+    });
+    await tester.pumpWidget(shotApp(AskScreen(app: app, chat: chat, location: location), theme: CacheThemeId.dark, insets: EdgeInsets.zero, desktop: true));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('ask-plus')));
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await snap(tester, 'web_location', 'sheet-${Platform.environment['SHOT_NAME'] ?? 'after'}');
+  });
 }
