@@ -170,6 +170,14 @@ class LayoutState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reads layout.json again (a change from a linked device was applied to the file on the server) and tells listeners, without
+  /// saving: the change came from the file.
+  Future<void> reload() async {
+    if (_fs == null) return;
+    await _read();
+    notifyListeners();
+  }
+
   static const String _name = 'layout.json';
 
   Future<void> _read() async {

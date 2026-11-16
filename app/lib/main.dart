@@ -1224,6 +1224,9 @@ class _CacheAppState extends State<CacheApp> {
           await Future.wait([_appRead, _layoutRead, _mapsRead]);
           await settingsSync.start();
         });
+      } else {
+        // A browser: the server runs the settings log and holds the keys; this reads which keys can be ticked and which are.
+        settingsSync.watchServerKeys();
       }
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
@@ -1271,6 +1274,16 @@ class _CacheAppState extends State<CacheApp> {
       // A linked device's settings changes arrived: applied at once.
       if (ids.contains(kSettingsShareId) && settingsSync.started) unawaited(settingsSync.pull());
     };
+    // A browser tab: the server applied settings from a linked device to its files, so the tab reads them again (no saving).
+    if (plat.isWeb) {
+      sharing.onSettingsApplied = () {
+        unawaited(app.reload());
+        unawaited(layout.reload());
+        unawaited(settings.reload());
+        unawaited(maps.reload());
+        unawaited(weather.reloadOwn());
+      };
+    }
     sources.addListener(_syncIndexesOnly);
     // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
     sources.addListener(_kickIndexing);

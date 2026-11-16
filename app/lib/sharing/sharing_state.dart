@@ -160,6 +160,19 @@ class SharingState extends ChangeNotifier {
   /// own encrypted connection, when it asks. Empty: none.
   Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
 
+  /// Cache Server only: the names of the keys the server keeps that can go to a linked device, each with the devices it is ticked
+  /// for. Names and ticks only: a key itself never reaches a browser.
+  Future<List<({String name, Set<String> on})>> serverKeys() async => _serverKeys(await _call('key_names'));
+
+  /// Cache Server only: ticks or unticks the key [name] for [peer]; answers like [serverKeys].
+  Future<List<({String name, Set<String> on})>> setServerKeyOn(String peer, String name, bool on) async =>
+      _serverKeys(await _call('set_key_on', {'peer': peer, 'name': name, 'on': on}));
+
+  List<({String name, Set<String> on})> _serverKeys(Map<String, dynamic> r) => [
+    for (final k in (r['keys'] as List? ?? const []))
+      if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
+  ];
+
   /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
   Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
 
@@ -248,6 +261,18 @@ class SharingState extends ChangeNotifier {
   /// fetch (a library is never read half-way through). The app reads those folders again (Library's list, for one), so what a
   /// sync brought shows at once instead of after a restart.
   void Function(Set<String> shareIds)? onShareChanged;
+
+  /// A browser tab only: called when the server's host says it applied settings from a linked device (its `settings_applied`
+  /// counter moved), so the tab reads its settings files again. Not called for the first reading, which only notes the count.
+  void Function()? onSettingsApplied;
+  int? _settingsApplied;
+
+  void _noteSettingsApplied(Object? count) {
+    if (count is! int) return;
+    final before = _settingsApplied;
+    _settingsApplied = count;
+    if (before != null && before != count) onSettingsApplied?.call();
+  }
 
   /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
   final Map<String, (int, int)> _settled = {};
@@ -984,6 +1009,7 @@ class _WebDriver implements SharingDriver {
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
     s._noteShareChanges();
+    s._noteSettingsApplied(snap['settings_applied']);
     s._changed();
   }
 

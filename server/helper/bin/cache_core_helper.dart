@@ -18,6 +18,7 @@ import 'starter_layers.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'regions_ops.dart';
+import 'server_settings_sync.dart';
 import 'sharing_host.dart';
 import 'video_ops.dart';
 
@@ -108,6 +109,20 @@ Future<void> main() async {
   final SharingHost? sharing = data == null
       ? null
       : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
+  // The settings log, run here with no tab open: a browser's write of a settings file (FsOps) and a linked device's change
+  // (the settings share) both end in it.
+  ServerSettingsSync? settingsSync;
+  if (sharing != null) {
+    final host = sharing;
+    settingsSync = ServerSettingsSync(support: dirs.support, running: () => host.running, myId: () => host.myId, peers: () => host.peers, askSince: () => host.askSince,
+        log: log, keys: keys, setSecrets: host.setSecrets, takeSecrets: host.takeSecrets,
+        onWebKeyKept: () => keys.replay(dispatcher));
+    host.settingsApplied = () => settingsSync!.applied;
+    host.keyNames = settingsSync.keyNames;
+    host.onLinkSet = settingsSync.linkSetByBrowser;
+    host.setKeyOn = settingsSync.setKeyOnFromBrowser;
+    unawaited(settingsSync.start());
+  }
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
   if (sharing != null) {
     indexesSync = IndexesSync(host: sharing, dispatcher: dispatcher, savedVideos: () => videoOps.savedVideos(), log: log);
@@ -121,6 +136,8 @@ Future<void> main() async {
     sharing.onShareChanged = (ids) {
       if (ids.contains('libraries')) unawaited(own.run());
       indexesArrived(ids);
+      final s = settingsSync;
+      if (s != null) unawaited(s.shareChanged(ids));
     };
     unawaited(sharing.init());
   }
@@ -142,7 +159,7 @@ Future<void> main() async {
       IndexStateOp(indexer),
       IndexPauseOp(indexer),
       FeaturesOp(dirs),
-      FsOps(support: dirs.support, docs: dirs.docs),
+      FsOps(support: dirs.support, docs: dirs.docs, onWritten: (p) => unawaited(settingsSync?.fileChanged(p) ?? Future<void>.value())),
       regionsOps,
       videoOps,
       HistoryOps(Directory('${dirs.support.path}/history'), log: log),
@@ -150,7 +167,10 @@ Future<void> main() async {
       if (sharing != null) SharingOps(sharing),
     ],
     hook: keys,
-    onEnd: () => sharing?.stop(),
+    onEnd: () {
+      settingsSync?.stop();
+      return sharing?.stop();
+    },
   );
   indexer.stop();
   liveTimer.stop();

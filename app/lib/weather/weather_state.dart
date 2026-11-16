@@ -826,6 +826,18 @@ class WeatherState extends ChangeNotifier {
     ];
   }
 
+  /// Reads the own sources from the files again (a change from a linked device was applied to them on the server), takes them into
+  /// the core's view and tells listeners. Nothing is written. The other catalogues stay as they are in memory.
+  Future<void> reloadOwn() async {
+    final store = _store;
+    if (store == null) return;
+    final fresh = store.loadAll().where((c) => c.url == ownListUrl).firstOrNull;
+    _catalogues = [for (final c in _catalogues) if (c.url != ownListUrl) c, ?fresh];
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
   /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
   /// any other, and one that fails is left out. Applied at once.
   Future<void> replaceOwnSources(Object? list) async {

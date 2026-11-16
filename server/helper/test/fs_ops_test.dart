@@ -51,6 +51,22 @@ void main() {
     expect((top.single as Map)['name'], 'bin.dat');
   });
 
+  test('onWritten gets the support-relative path after a successful write or rename on support, and nothing for docs or a refused path', () {
+    final told = <String>[];
+    final f = FsOps(support: support, docs: docs, onWritten: told.add);
+    f.handle('fs.write', {'root': 'support', 'path': 'sub/a.json', 'string': '{}'});
+    expect(told, ['sub/a.json']);
+    f.handle('fs.rename', {'root': 'support', 'from': 'sub/a.json', 'to': 'sub/b.json'});
+    expect(told, ['sub/a.json', 'sub/b.json']);
+    f.handle('fs.write', {'root': 'docs', 'path': 'd.json', 'string': '{}'});
+    f.handle('fs.rename', {'root': 'docs', 'from': 'd.json', 'to': 'e.json'});
+    expect(told.length, 2, reason: 'the docs root is never told');
+    expect(codeOf(() => f.handle('fs.write', {'root': 'support', 'path': '../x.json', 'string': '{}'})), 'bad_path');
+    expect(codeOf(() => f.handle('fs.rename', {'root': 'support', 'from': 'nope.json', 'to': 'z.json'})), 'not_found');
+    expect(codeOf(() => f.handle('fs.rename', {'root': 'support', 'from': 'sub/b.json', 'to': '../z.json'})), 'bad_path');
+    expect(told.length, 2, reason: 'a refused or failed call tells nothing');
+  });
+
   test('missing things are not_found', () {
     expect(codeOf(() => fs.handle('fs.read', {'root': 'docs', 'path': 'x'})), 'not_found');
     expect(codeOf(() => fs.handle('fs.list', {'root': 'docs', 'path': 'x'})), 'not_found');

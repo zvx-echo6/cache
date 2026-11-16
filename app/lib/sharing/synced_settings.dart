@@ -282,7 +282,7 @@ List<SyncedKey> appSyncedKeys({required WeatherState weather, required WebSearch
   }
 
   return [
-    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: 'Kagi (web search)', read: () => real(WebSearchSetup.keyName)),
+    if (webSearch.hasKey) SyncedKey(name: WebSearchSetup.keyName, label: kKagiKeyLabel, read: () => real(WebSearchSetup.keyName)),
     for (final alias in weather.savedKeyAliases)
       SyncedKey(name: WeatherState.secretName(alias), label: _keyLabel(weather, alias), read: () => real(WeatherState.secretName(alias))),
   ];
