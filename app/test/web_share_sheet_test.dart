@@ -1,7 +1,6 @@
 // In a browser with no share sheet (navigator.share absent), every Share button offers Copy and Download.
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:cache/chat/answer_reports.dart';
 import 'package:cache/chat/chat_controller.dart';
