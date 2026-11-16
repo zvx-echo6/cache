@@ -86,7 +86,7 @@ class FakeSharingHost implements CoreTransport {
           await _addKind(kind);
         } else {
           for (final id in table[kind]!.keys) {
-            if (_shared(id)) await sync.call('share_remove', {'id': id});
+            if (_shared(id)) await sync.call('share_remove', {'id': id, 'keep_history': true});
           }
         }
         return _snapshot();

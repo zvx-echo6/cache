@@ -1347,7 +1347,8 @@ cs_sync *cs_sync_open(const char *config_json);
 char *cs_sync_take_log(void);
 
 /* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
- * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
+ * sync_now, set_policy, network_changed. share_remove takes an optional "keep_history" (bool, default false): true keeps the
+ * share's index, seen file and stored tags, so adding the same id again reuses them. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
 char *cs_sync_call(cs_sync *s, const char *method, const char *args_json);
 
 /* Stops the engine and frees it. */
