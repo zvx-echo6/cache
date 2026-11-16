@@ -12,7 +12,7 @@ Map<String, dynamic> _place(String name, double lat, double lon, {double? m}) =>
       'kind': 'Shop',
       'lat': lat,
       'lon': lon,
-      if (m != null) 'distance_m': m,
+      'distance_m': ?m,
       'matched': 'name',
       'score': 0.5,
     };
