@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import '../../../packages/cache_search/lib/src/sync_core_io.dart';
+import '../../../app/lib/sharing/settings_log.dart';
+import '../bin/server_settings_sync.dart';
 import '../bin/sharing_host.dart';
 
 /// Two real sync engines on this machine, linked through the sharing host: no relay, no Mainline DHT, no mDNS and no lookup
@@ -186,6 +188,88 @@ void main() {
       expect(serverLog.readAsStringSync(), whole, reason: 'the server\'s own log was replaced by the other device\'s older copy');
       expect(Directory('${data.path}/bookshelves/log').listSync().map((e) => e.uri.pathSegments.last).toSet(), {'$serverId.jsonl', '$phoneId.jsonl'});
     } finally {
+      for (final h in hosts) {
+        await h.stop();
+      }
+      await b?.close();
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+  }, timeout: const Timeout(Duration(minutes: 6)), skip: skip);
+
+  test('settings: a phone-like device\'s event lands in the server\'s file, and a browser-style write of a server file arrives as a line on the other side', () async {
+    expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
+    final tmp = Directory.systemTemp.createTempSync('sharing_loopback_settings');
+    final hosts = <SharingHost>[];
+    ServerSettingsSync? sync;
+    SyncCore? b;
+    try {
+      final data = Directory('${tmp.path}/data')..createSync();
+      final support = Directory('${data.path}/app/support')..createSync(recursive: true);
+      final docs = Directory('${data.path}/app/docs')..createSync(recursive: true);
+      final host = SharingHost(dataDir: data, supportDir: support, docsDir: docs, deviceName: 'Server', libraryPath: lib, engineConfig: _noNetwork);
+      hosts.add(host);
+      await host.setUp();
+      expect(host.snapshot()['running'], true, reason: '${host.snapshot()['error']}');
+      final serverId = (host.snapshot()['status'] as Map)['id'] as String;
+      sync = ServerSettingsSync(
+        support: support,
+        running: () => host.running,
+        myId: () => host.myId,
+        peers: () => host.peers,
+        askSince: () => host.askSince,
+        every: const Duration(seconds: 2),
+      );
+      host.onShareChanged = (ids) => sync!.shareChanged(ids);
+      await sync.start();
+
+      final bSettings = Directory('${tmp.path}/b/settings-sync')..createSync(recursive: true);
+      b = await SyncCore.open({'dir': '${tmp.path}/b/sync', 'name': 'Phone', ..._noNetwork}, libraryPath: lib);
+      final phoneId = (await b.call('status'))['id'] as String;
+      await b.call('share_add', {'id': 'settings', 'name': 'Settings', 'path': bSettings.path});
+      final code = (await b.call('link_code'))['code'] as String;
+      await host.invoke('sharing.link_start', {'code': code});
+      await until(() => (host.snapshot()['link'] as Map)['state'] != 'linking', 'the link');
+      await until(() => ((host.snapshot()['status'] as Map)['peers'] as List).isNotEmpty, 'the peer in the status');
+      final peerOnServer = ((host.snapshot()['status'] as Map)['peers'] as List).map((p) => (p as Map)['id'] as String).single;
+      await host.invoke('sharing.call', {'method': 'set_link', 'args': {'peer': peerOnServer, 'link': {'mode': 'match'}}});
+      final peerOnPhone = (((await b.call('status'))['peers']) as List).map((p) => (p as Map)['id'] as String).single;
+      await b.call('set_link', {'peer': peerOnPhone, 'link': {'mode': 'match'}});
+
+      Future<void> syncBoth() async {
+        await host.invoke('sharing.call', {'method': 'sync_now', 'args': <String, Object?>{}});
+        await b!.call('sync_now');
+      }
+
+      // The phone-like side appends a settings event to its own log; it syncs; the server's file shows the value.
+      await SettingsLog(dir: bSettings.path, device: phoneId)
+          .append(SettingsEvent(at: DateTime.now().millisecondsSinceEpoch, dev: phoneId, key: 'appearance.theme', value: 'light'));
+      final settingsFile = File('${support.path}/settings.json');
+      final end = DateTime.now().add(const Duration(seconds: 120));
+      while (!(settingsFile.existsSync() && settingsFile.readAsStringSync().contains('"light"'))) {
+        if (DateTime.now().isAfter(end)) fail('timed out waiting for the setting in the server\'s file');
+        await syncBoth();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      expect(sync.applied, 1);
+
+      // A browser writes a server file (fs.write), the host is told: a line in the server's own log arrives on the other side.
+      File('${support.path}/layout.json').writeAsStringSync('{"pinned":["ask","library"]}');
+      await sync.fileChanged('layout.json');
+      final serverLogOnPhone = File('${bSettings.path}/log/$serverId.jsonl');
+      final end2 = DateTime.now().add(const Duration(seconds: 120));
+      while (!(serverLogOnPhone.existsSync() && serverLogOnPhone.readAsStringSync().contains('home.bar'))) {
+        if (DateTime.now().isAfter(end2)) fail('timed out waiting for the server\'s line on the other side');
+        await syncBoth();
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+      final evs = [for (final l in serverLogOnPhone.readAsLinesSync()) SettingsEvent.fromLine(l)!];
+      expect(evs.where((e) => e.key == 'home.bar').single.value, ['ask', 'library']);
+      expect(evs.every((e) => e.dev == serverId), isTrue);
+      expect(evs.where((e) => e.key == 'appearance.theme'), isEmpty, reason: 'what the host applied did not echo back');
+    } finally {
+      sync?.stop();
       for (final h in hosts) {
         await h.stop();
       }
