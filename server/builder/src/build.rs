@@ -4,7 +4,8 @@ use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted, EXTRACTOR_NAME, EXTRACTOR_VERSION};
 use crate::layout::{layout, Element, Layout, LAYOUT_VERSION};
-use crate::pack::{valid_doc_id, Pack, Tool};
+use crate::ocr::{OCR_ENGINE, OCR_VERSION};
+use crate::pack::{valid_doc_id, OcrInfo, Pack, Tool};
 pub use cache_pack::build_types::{first_big_heading, tidy_file_title, usable_metadata_title, BuildOptions, Progress, Report, EMBED_BATCH};
 use crate::pagewriter::{build_pack_from_pages, BlockKind, PageBlock, PageIn, PagesSource, TextSource};
 
@@ -36,6 +37,15 @@ pub fn build_pack_with_extractor(
     let ext = extract(pdf)?;
     let lay = layout(&ext);
     let (src, pages) = pages_of(&ext, &lay, pdf, &opts.file_name);
+    // Pages read by OCR are recorded in the book facts (`book.ocr`) and marked `text_source: ocr` in `pages_of`. The file stays as it was.
+    let mut with_ocr;
+    let opts = if !ext.ocr_pages.is_empty() && opts.ocr.is_none() {
+        with_ocr = opts.clone();
+        with_ocr.ocr = Some(OcrInfo { engine: OCR_ENGINE.to_string(), version: OCR_VERSION.to_string(), pages_ocrd: ext.ocr_pages.len() as u32, confidence: None });
+        &with_ocr
+    } else {
+        opts
+    };
     build_pack_from_pages(&src, &pages, opts, embedder, on)
 }
 
@@ -64,7 +74,7 @@ pub fn pages_of(ext: &Extracted, lay: &Layout, pdf: &[u8], file_name: &str) -> (
         .iter()
         .zip(blocks)
         .enumerate()
-        .map(|(i, (rp, blocks))| PageIn { pdf_page: i + 1, label: rp.label.clone(), text_source: TextSource::Layer, blocks })
+        .map(|(i, (rp, blocks))| PageIn { pdf_page: i + 1, label: rp.label.clone(), text_source: if ext.ocr_pages.contains(&i) { TextSource::Ocr } else { TextSource::Layer }, blocks })
         .collect();
     let src = PagesSource {
         blake3: blake3::hash(pdf).to_hex().to_string(),

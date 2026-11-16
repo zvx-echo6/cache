@@ -95,7 +95,10 @@ pub struct Inner {
     invalid: Mutex<Vec<Value>>,
     online: AtomicBool,
     pm_remote: Mutex<HashMap<String, Arc<Reader>>>,
-    stores: Mutex<HashMap<String, Arc<Store>>>,
+    pub(crate) stores: Mutex<HashMap<String, Arc<Store>>>,
+    /// This device's name in the share (`share.rs`), and the peers' shared stores it has open.
+    pub(crate) share_id: String,
+    pub(crate) peers: Mutex<crate::share::PeerCache>,
     no_store: Mutex<HashMap<String, std::time::Instant>>,
     health: Mutex<HashMap<String, Health>>,
     tj: Mutex<HashMap<String, (i64, Value)>>,
@@ -130,7 +133,10 @@ impl Inner {
         std::fs::create_dir_all(&dir).map_err(|e| io_at("creating", &dir, e))?;
         let cache = TileCache::open(&dir.join("tiles.sqlite"), cfg.cache_max_bytes)?;
         let online = AtomicBool::new(cfg.online);
+        let share_id = crate::share::share_id(&dir);
         let i = Inner {
+            share_id,
+            peers: Default::default(),
             cfg,
             dir,
             cache,
@@ -417,6 +423,9 @@ impl Inner {
                 v.push(AreaInfo { id, state, bbox, minzoom: meta["minzoom"].as_u64().unwrap_or(0) as u8, maxzoom: meta["maxzoom"].as_u64().unwrap_or(22) as u8, meta });
             }
         }
+        // then what linked devices share and this one does not hold (read-only; see share.rs)
+        let own: std::collections::HashSet<String> = v.iter().map(|a| a.id.clone()).collect();
+        v.extend(self.peer_areas(layer, &own));
         Arc::new(v)
     }
 
@@ -427,19 +436,27 @@ impl Inner {
     /// A tile from the layer's merged store of downloads (as the source sent it: MVT may be gzipped). `None` when no download
     /// fetched it, and when one did and the source has no tile there ([`Inner::downloaded`] tells the two apart).
     pub fn downloaded_tile(&self, base: &LayerDef, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
-        match self.store_read(&base.id) {
-            Some(st) => st.get(z, x, y),
-            None => Ok(None),
-        }
+        Ok(match self.downloaded(base, z, x, y)? {
+            Some(Stored::Tile(d)) => Some(d),
+            Some(Stored::Empty) | None => None,
+        })
     }
 
     /// What the layer's downloads hold for a tile: its bytes, "the source has no tile here", or `None` when no download
     /// fetched it.
     pub fn downloaded(&self, base: &LayerDef, z: u8, x: u32, y: u32) -> Result<Option<Stored>> {
-        match self.store_read(&base.id) {
-            Some(st) => st.find(z, x, y),
-            None => Ok(None),
+        if let Some(st) = self.store_read(&base.id) {
+            if let Some(s) = st.find(z, x, y)? {
+                return Ok(Some(s));
+            }
         }
+        // not in this device's own store: a linked device's shared copy, read-only
+        for p in self.peer_stores(&base.id) {
+            if let Some(s) = p.store.find(z, x, y).unwrap_or(None) {
+                return Ok(Some(s));
+            }
+        }
+        Ok(None)
     }
 
     // ---- sources ----

@@ -24,6 +24,7 @@
 //!                                              if the name or a redirect leads to one (checked at connect time; `fetch_scope::guarded_agent`).
 //!                                              The catalog hosts are the only exception.
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
+//!   POST /api/library/jobs/<id>/pause|resume -> a waiting or running download stops and keeps its part file (state "paused"); Resume continues it
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
@@ -183,12 +184,58 @@ fn library_reply(r: Result<Value, ApiErr>) -> Reply {
     }
 }
 
+/// The helper op that swaps the keystore references in an address for the stored keys. Only `/api/fetch` calls it (never a tab).
+const KEYS_EXPAND_OP: &str = "keys.expandUrl";
+
+/// `query` of `/api/fetch`, with a keystore reference (`keystore://<name>`) in its `url` swapped for the stored key by the helper,
+/// so a browser can try an own data source with its saved key without ever holding the key. A query without one is returned as is.
+async fn expand_fetch_keys(app: &App, query: &str) -> Result<String, Reply> {
+    let Some(url) = crate::fetch::query_param(query, "url") else { return Ok(query.to_string()) };
+    if !url.to_ascii_lowercase().contains("keystore") {
+        return Ok(query.to_string());
+    }
+    let Some(helper) = app.helper.clone() else { return Ok(query.to_string()) };
+    let mut reply = helper.call(KEYS_EXPAND_OP, json!({"url": url})).await.map_err(|m| Reply::error(503, "core_unavailable", m))?;
+    if reply["ok"] != json!(true) {
+        let m = reply["error"]["message"].as_str().unwrap_or("That key is not saved on the server").to_string();
+        return Err(Reply::error(404, "key_missing", m));
+    }
+    let Some(expanded) = reply["result"].take().as_str().map(str::to_string) else { return Ok(query.to_string()) };
+    let mut encoded = String::with_capacity(expanded.len() * 3);
+    for b in expanded.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|kv| if kv.split_once('=').is_some_and(|(k, _)| k == "url") { format!("url={encoded}") } else { kv.to_string() })
+        .collect();
+    Ok(parts.join("&"))
+}
+
+/// The job id in `/api/library/jobs/{id}{suffix}`; `None` when the path has none (`/api/library/jobs/pause`, where the one slash
+/// is both the prefix's and the suffix's).
+fn job_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix("/api/library/jobs/")?.strip_suffix(suffix).filter(|id| !id.is_empty())
+}
+
 /// `/api/library/...` and `/api/fetch` (the caller has checked the session). `None` when the path is not one of these.
 async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
     let lib = &app.library;
     Some(match (method, path) {
         ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
         ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/pause") => match job_id(p, "/pause") {
+            Some(id) => library_reply(lib.pause_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/resume") => match job_id(p, "/resume") {
+            Some(id) => library_reply(lib.resume_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
@@ -199,7 +246,12 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             let b = Full::new(Bytes::copy_from_slice(body));
             library_reply(lib.upload(query, Some(body.len() as u64), b).await)
         }
-        ("GET", "/api/fetch") => match lib.fetch(query).await {
+        ("GET", "/api/fetch") => match lib.fetch(&match expand_fetch_keys(app, query).await {
+            Ok(q) => q,
+            Err(r) => return Some(r),
+        })
+        .await
+        {
             Ok(s) => Reply {
                 status: 200,
                 headers: vec![
@@ -492,6 +544,10 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
         let bytes = body.to_vec();
         return Some(blocking(move || crate::libbuild::linked_api::preview(&service, &bytes)).await);
     }
+    if method == "GET" && rest == "storage" {
+        let service = app.build.clone();
+        return Some(blocking(move || Ok(crate::libbuild::linked_api::storage(&service))).await);
+    }
     if method == "GET" && rest == "libraries" {
         let targets: Vec<Value> = app.library.items().await.into_iter()
             .filter(|item| item["kind"].as_str() == Some("library"))
@@ -550,6 +606,10 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
             if op == "sources.rescan" {
                 return Reply::error(403, "forbidden", "only the server may do that");
             }
+            // `keys.expandUrl` gives a stored key back inside an address, for `/api/fetch` only: a tab may never ask for it.
+            if op == KEYS_EXPAND_OP {
+                return Reply::error(403, "forbidden", "only the server may do that");
+            }
             core_call(app, op, args).await
         }
         _ => Reply::error(404, "not_found", format!("no such endpoint: {method} {path}")),
@@ -572,14 +632,37 @@ if(u.origin===location.origin&&(u.protocol==='https:'||u.protocol==='http:'))ret
 e.preventDefault();if(u.protocol==='https:'||u.protocol==='http:'||u.protocol==='mailto:')post({cacheZim:'external',url:u.href})},true);
 })();</script>"#;
 
-/// `html` with [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
+/// The tag that loads the storage stand-in (`app/assets/reader/zim_storage.js`, one copy for the server and the phones). The sandboxed
+/// frame has no origin, so the browser denies the page IndexedDB and Web Storage; the script gives it in-memory ones, always.
+const ZIM_STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+/// The index just past the end of the first `<name ...>` tag in `text` (`lower` is its lower-cased copy), if there is one.
+fn after_open_tag(lower: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&format!("<{name}")) {
+        let start = from + i;
+        let next = lower.as_bytes().get(start + name.len() + 1).copied();
+        if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n' | 0x0c)) {
+            return lower[start..].find('>').map(|e| start + e + 1);
+        }
+        from = start + 1;
+    }
+    None
+}
+
+/// `html` with [ZIM_STORAGE_TAG] first in its `<head>` (after `<html>` with no head, at the very start with neither), so it runs
+/// before the page's own scripts, and [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
 fn with_frame_script(html: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(html);
-    let at = text.to_ascii_lowercase().rfind("</body").unwrap_or(text.len());
-    let mut out = String::with_capacity(text.len() + ZIM_FRAME_SCRIPT.len());
-    out.push_str(&text[..at]);
+    let lower = text.to_ascii_lowercase();
+    let first = after_open_tag(&lower, "head").or_else(|| after_open_tag(&lower, "html")).unwrap_or(0);
+    let end = lower.rfind("</body").unwrap_or(text.len()).max(first);
+    let mut out = String::with_capacity(text.len() + ZIM_STORAGE_TAG.len() + ZIM_FRAME_SCRIPT.len());
+    out.push_str(&text[..first]);
+    out.push_str(ZIM_STORAGE_TAG);
+    out.push_str(&text[first..end]);
     out.push_str(ZIM_FRAME_SCRIPT);
-    out.push_str(&text[at..]);
+    out.push_str(&text[end..]);
     out.into_bytes()
 }
 
@@ -868,6 +951,18 @@ pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, 
             Reply::empty(204).with("Set-Cookie", app.auth.cookie("", 0))
         }
         ("GET", "/auth/check") => Reply::empty(if signed_in { 204 } else { 401 }),
+        // The storage stand-in for ZIM pages: public, because the sandboxed frame that loads it has no cookies. Same for every caller.
+        ("GET" | "HEAD", "/zim-storage.js") => Reply {
+            status: 200,
+            headers: vec![
+                ("Content-Type", "text/javascript; charset=utf-8".into()),
+                ("Access-Control-Allow-Origin", "*".into()),
+                ("Cache-Control", "public, max-age=86400".into()),
+                ("X-Content-Type-Options", "nosniff".into()),
+            ],
+            body: if method == "HEAD" { vec![] } else { include_str!("../../app/assets/reader/zim_storage.js").as_bytes().to_vec() },
+            stream: None,
+        },
         // ZIM pages: the token in the path is the credential; the session cookie plays no part.
         _ if path.starts_with("/zim/") => zim(app, method, path, query).await,
         _ if path == "/api" || path.starts_with("/api/") => {
@@ -1020,7 +1115,7 @@ mod tests {
     async fn api_needs_a_session() {
         let d = TempDir::new("http");
         let a = app(&d);
-        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example")] {
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example"), ("GET", "/api/linked-folders/storage"), ("GET", "/api/linked-folders/example/books/doc"), ("POST", "/api/linked-folders/example/books/doc/forget")] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
             let v: Value = serde_json::from_slice(&r.body).unwrap();
@@ -1678,6 +1773,52 @@ mod tests {
         // a session cleared by `set-password --sign-out-all` takes its tokens along
         crate::auth::Sessions::clear_file(&d.0.join("sessions.json")).unwrap();
         assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 401);
+    }
+
+    const STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+    #[test]
+    fn zim_html_gets_the_storage_script_first_in_head() {
+        let page = br#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1"><script>var a=1</script></HEAD><body>hi</body></html>"#;
+        let out = String::from_utf8(with_frame_script(page)).unwrap();
+        let want = format!(r#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1">{STORAGE_TAG}<script>var a=1</script>"#);
+        assert!(out.starts_with(&want), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+        // the frame script still sits before the last </body>
+        assert!(out.find(ZIM_FRAME_SCRIPT).unwrap() < out.rfind("</body>").unwrap());
+    }
+
+    #[test]
+    fn zim_html_without_head_gets_the_storage_script_after_html() {
+        let out = String::from_utf8(with_frame_script(b"<html lang=\"en\"><body><script>x()</script></body></html>")).unwrap();
+        assert!(out.starts_with(&format!("<html lang=\"en\">{STORAGE_TAG}<body>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[test]
+    fn zim_html_fragment_gets_the_storage_script_at_the_start() {
+        let out = String::from_utf8(with_frame_script(b"<p>hello</p><script>x()</script>")).unwrap();
+        assert!(out.starts_with(&format!("{STORAGE_TAG}<p>hello</p>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_zim_storage_script_is_public() {
+        let d = TempDir::new("zimstorage");
+        let a = file_app(&d);
+        for method in ["GET", "HEAD"] {
+            let r = route(&a, method, "/zim-storage.js", None, b"").await;
+            assert_eq!(r.status, 200, "{method} with no cookie");
+            let h = |k: &str| r.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+            assert_eq!(h("Content-Type"), Some("text/javascript; charset=utf-8"));
+            assert_eq!(h("Access-Control-Allow-Origin"), Some("*"));
+            assert_eq!(h("Cache-Control"), Some("public, max-age=86400"));
+            assert_eq!(h("X-Content-Type-Options"), Some("nosniff"));
+            assert_eq!(r.body.is_empty(), method == "HEAD");
+            if method == "GET" {
+                assert_eq!(r.body, include_str!("../../app/assets/reader/zim_storage.js").as_bytes());
+            }
+        }
     }
 
     #[test]

@@ -514,6 +514,19 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('guidance banner: a street with a name and a route number shows the name first, the number after it', (tester) async {
+        final route = namedRoadsRouteJson();
+        await _startGuiding(nav, backend, route);
+        nav.progress = MapProgress.fromJson(fakeProgressJson(route, 0.3));
+        nav.poke();
+        await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt))));
+        final spans = (tester.widget<Text>(find.byKey(const ValueKey('banner-distance'))).textSpan! as TextSpan).children!.cast<TextSpan>();
+        expect(spans.last.text, ' · Turn left onto Lakeside Boulevard (US 99 Bus)');
+        // A highway with only a number keeps the number.
+        expect(tester.widget<Text>(find.byKey(const ValueKey('banner-then'))).data, 'Then turn right onto SH 99');
+        expect(tester.takeException(), isNull);
+      });
+
       for (final scale in [1.0, 1.5, 2.0]) {
         testWidgets('guidance banner at text size ${scale}x: the turn, how far and the street on one line, then the next turn', (tester) async {
           final route = fakeRouteJson();
@@ -621,6 +634,45 @@ void main() {
       });
     });
   }
+
+  // Link audit, batch 2: a route error that names missing data has the button that gets it.
+  testWidgets('outside the downloaded maps: Download this area; no off-road data: Add off-road data, with Walk and Drive', (tester) async {
+    const theme = CacheThemeId.dark;
+    var area = 0, offroad = 0;
+    Widget panel({bool buttons = true}) => host(
+        theme,
+        live(nav, () => RoutePanel(nav: nav, fmt: fmt, onDownloadArea: buttons ? () => area++ : null, onAddOffroad: buttons ? () => offroad++ : null)));
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'out_of_coverage', 'message': 'outside'}]});
+    await nav.openDirections(hospital);
+    expect(nav.outsideMaps, isTrue);
+    expect(nav.offroadDataMissing, isFalse);
+    expect(nav.routeEnds.first, hospital.point, reason: 'where to is looked at first');
+    await tester.pumpWidget(panel());
+    expect(find.text('One of these places is outside the downloaded maps'), findsOneWidget);
+    expect(find.text('Download this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-add-offroad')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('route-download-area')));
+    await tester.tap(find.byKey(const ValueKey('route-download-area')));
+    expect(area, 1);
+    // With nowhere to download from (no regions), no button.
+    await tester.pumpWidget(panel(buttons: false));
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    // Off-road with no off-road data for the area.
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'not_set_up', 'message': 'no data'}]});
+    await nav.setMode('offroad_foot');
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    expect(nav.outsideMaps, isFalse);
+    expect(find.text('Off-road needs off-road data for this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    expect(find.text('Add off-road data'), findsOneWidget);
+    expect(find.byKey(const ValueKey('offroad-instead-walk')), findsOneWidget, reason: 'the road modes are still offered');
+    await tester.ensureVisible(find.byKey(const ValueKey('route-add-offroad')));
+    await tester.tap(find.byKey(const ValueKey('route-add-offroad')));
+    expect(offroad, 1);
+    expect(area, 1);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _startGuiding(TestNav nav, FakeBackend backend, Map<String, dynamic> route) async {

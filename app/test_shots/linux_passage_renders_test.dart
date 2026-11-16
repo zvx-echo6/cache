@@ -10,6 +10,8 @@ class PassageSource implements SearchAccess {
   @override
   Future<List<SourceResult>> search(String query, {int k = 5}) async => const [];
   @override
+  Future<ReadDocument> readDocument(String address) async => throw UnimplementedError();
+  @override
   Future<ReadPage> read(String address, {int maxChars = 6000}) async => const ReadPage(
     title: 'Keeping field notes',
     page: 47,

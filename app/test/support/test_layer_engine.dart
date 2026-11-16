@@ -14,6 +14,9 @@ import 'layer_fixtures.dart';
 class TestLayerEngine extends LayerEngine {
   TestLayerEngine({this.published = const [], this.canBind, this.policy, Set<String> held = const {}}) : _held = {...held};
 
+  /// The time a finished download is stamped with (a fixed clock for the guide's pictures).
+  DateTime Function() clock = DateTime.now;
+
   /// Ids of the test catalogue that are not there until [release] (the published catalogue arriving after start).
   final Set<String> _held;
 
@@ -136,10 +139,14 @@ class TestLayerEngine extends LayerEngine {
   /// Where each download (by label) was asked to start from.
   final Map<String, ({double lat, double lon})?> nearOf = {};
 
+  /// The outline each download (by label, then layer) was asked for; null for a box.
+  final Map<String, Map<String, List<List<List<double>>>?>> outlineOf = {};
+
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline}) async {
     await policy?.checkDownload(anyway: anyway);
     nearOf[label] = near;
+    (outlineOf[label] ??= {})[layerId] = outline;
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
@@ -158,14 +165,32 @@ class TestLayerEngine extends LayerEngine {
     return a;
   }
 
+  /// Whether a download finishes by itself, 20 ms after it starts (in real time). A test that checks a download while it runs
+  /// turns this off and calls [finishAll] when it wants them done: under load the 20 ms ran out before the check.
+  bool autoFinish = true;
+
+  /// Finishes every running download now (with [autoFinish] off).
+  void finishAll() {
+    for (final a in _areas) {
+      if (a.phase != AreaPhase.running) continue;
+      a
+        ..doneTiles = a.totalTiles
+        ..bytes = a.totalTiles * 1000
+        ..phase = AreaPhase.done
+        ..fetchedAt = clock();
+    }
+    notifyListeners();
+  }
+
   void _finish(DownloadedArea a) {
+    if (!autoFinish) return;
     Timer(const Duration(milliseconds: 20), () {
       if (!_areas.contains(a) || a.phase != AreaPhase.running) return;
       a
         ..doneTiles = a.totalTiles
         ..bytes = a.totalTiles * 1000
         ..phase = AreaPhase.done
-        ..fetchedAt = DateTime.now();
+        ..fetchedAt = clock();
       notifyListeners();
     });
   }

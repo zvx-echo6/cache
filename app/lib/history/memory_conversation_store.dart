@@ -16,6 +16,25 @@ class MemoryConversationStore implements ConversationStore {
   @override
   void close() {}
 
+  /// Puts a conversation in as another keeper (the server's history) has it, replacing one with the same id. Not part of
+  /// [ConversationStore]; [ServerConversationStore] uses it.
+  void restore(Conversation c, {required bool deleted, Uint8List? numbering, required List<StoredMessage> messages}) {
+    final r = _Row(c.id, c.title, c.created, c.model, c.voice)
+      ..titleSource = c.titleSource
+      ..updated = c.updated
+      ..pinned = c.pinned
+      ..deleted = deleted
+      ..numbering = numbering
+      ..messages.addAll(messages);
+    _rows[c.id] = r;
+  }
+
+  /// Whether a conversation is kept, deleted or not.
+  bool has(int id) => _rows.containsKey(id);
+
+  /// Drops a conversation without the delete and purge steps (the server says it is gone).
+  void forget(int id) => _rows.remove(id);
+
   @override
   void atomic(void Function() write) => write();
 
@@ -31,9 +50,9 @@ class MemoryConversationStore implements ConversationStore {
       );
 
   @override
-  Conversation create({required String title, String model = '', bool voice = false}) {
+  Conversation create({required String title, String model = '', bool voice = false, int? id}) {
     final t = _now();
-    final r = _Row(_nextConversation++, title, t, model, voice);
+    final r = _Row(id ?? _nextConversation++, title, t, model, voice);
     _rows[r.id] = r;
     return _view(r);
   }
@@ -86,9 +105,10 @@ class MemoryConversationStore implements ConversationStore {
     GenerationStats stats = const GenerationStats(),
     bool inTranscript = true,
     String? model,
+    int? id,
   }) {
     final r = _rows[conversationId];
-    final id = _nextMessage++;
+    id ??= _nextMessage++;
     final t = _now();
     r?.messages.add(StoredMessage(
       id: id,

@@ -155,6 +155,7 @@ You can plug in any web service that answers with data in JSON, such as a sensor
 2. At the bottom, tap "Add your own source".
 3. Type a "Name" and the "Web address" of the service.
 4. If the service answers for a location, put the place in the address: tap "Latitude" and "Longitude" where the address needs them. It then works for every place weather watches.
+   For example, this address gives the temperature for each place weather watches: `https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}`
 5. If the service needs a key, type it under "Key (if the service needs one)", and put it in the address where the service asks for it.
 6. Choose "Check every": 15 minutes, 30 minutes, 1 hour or 6 hours.
 7. Tap "Try it". Cache calls the address once. Nothing is saved yet.

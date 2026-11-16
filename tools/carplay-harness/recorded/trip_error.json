@@ -1,0 +1,16 @@
+{
+  "phase": "previewing",
+  "available": true,
+  "units": "imperial",
+  "routing": false,
+  "error": "Waiting for your position",
+  "destination": {"name": "Cabin", "address": null, "lat": 10.7, "lon": 20.1},
+  "routes": [],
+  "stops": [],
+  "routeIndex": 0,
+  "routeId": null,
+  "voiceOn": true,
+  "arrived": false,
+  "rerouting": false,
+  "position": {"lat": 10.5, "lon": 20.2, "heading": 90.0}
+}

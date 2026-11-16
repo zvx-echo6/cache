@@ -111,6 +111,28 @@ pub fn expand(street: &str) -> Option<String> {
     changed.then(|| words.join(" "))
 }
 
+/// The street without its Publication 28 directionals, and the directionals it had as their primary names in order
+/// ("W Example Dr" is ("Example Dr", ["WEST"]); "300 S" is ("300", ["SOUTH"]); "N" alone has none). The same positions as
+/// `expand`, from the same table, so "N" and "North" are one directional.
+pub fn split_directionals(street: &str) -> (String, Vec<String>) {
+    let t = table();
+    let words: Vec<&str> = street.split_whitespace().collect();
+    let (pre, _, post) = positions(&words);
+    let n = words.len();
+    let mut dirs = Vec::new();
+    let mut core = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        if (pre && i == 0) || (post && i == n - 1) {
+            if let Some(p) = lookup(&t.directional, w) {
+                dirs.push(p.clone());
+                continue;
+            }
+        }
+        core.push(*w);
+    }
+    (core.join(" "), dirs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +177,20 @@ mod tests {
         assert_eq!(suffix_in_title_case("ST Johns"), "ST Johns", "a leading ST is not a suffix");
         assert_eq!(suffix_in_title_case("Broadway"), "Broadway");
         assert_eq!(suffix_in_title_case("Main  ST"), "Main  ST", "other white space: left as it is");
+    }
+
+    #[test]
+    fn directionals_are_split_off() {
+        let sp = |s: &str| split_directionals(s);
+        assert_eq!(sp("W Example Dr"), ("Example Dr".to_string(), vec!["WEST".to_string()]));
+        assert_eq!(sp("Example Dr"), ("Example Dr".to_string(), vec![]));
+        assert_eq!(sp("Main St NE"), ("Main St".to_string(), vec!["NORTHEAST".to_string()]));
+        assert_eq!(sp("West Example Drive").1, vec!["WEST".to_string()], "written out is the same directional");
+        assert_eq!(sp("W 300 S"), ("300".to_string(), vec!["WEST".to_string(), "SOUTH".to_string()]));
+        // A street called N, and a directional that is part of the name, keep their words.
+        assert_eq!(sp("N St"), ("N St".to_string(), vec![]));
+        assert_eq!(sp("N"), ("N".to_string(), vec![]));
+        assert_eq!(sp("S West Temple"), ("West Temple".to_string(), vec!["SOUTH".to_string()]));
     }
 
     #[test]

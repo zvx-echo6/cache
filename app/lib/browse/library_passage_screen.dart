@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../layout/adaptive.dart' show ReadingWidth, paneClose;
 import '../search/search_access.dart';
+import 'library_document_screen.dart';
 import '../theme.dart';
 
 /// Reads the saved text of a built-library result through the same core as search.
@@ -87,6 +88,16 @@ class _LibraryPassageScreenState extends State<LibraryPassageScreen> {
                           padding: const EdgeInsets.only(top: 16),
                           child: Text('Showing part of this text.', style: TextStyle(fontSize: 13, color: colors.secondary)),
                         ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          key: const ValueKey('read-whole-document'),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(builder: (_) => LibraryDocumentScreen(sources: widget.sources, address: widget.address)),
+                          ),
+                          child: const Text('Read the whole document'),
+                        ),
+                      ),
                     ],
                   ),
                 ),

@@ -70,6 +70,8 @@ String queueStateWords(QueueItem i) {
     case 'queued':
       return 'Waiting';
     case 'reading':
+      // The scanned pages are being read by OCR (the same words the phones use).
+      if (i.progress.ocrPages > 0) return 'Reading scanned pages (OCR) · ${thousands(i.progress.ocrDone)} of ${thousands(i.progress.ocrPages)}';
       return 'Reading the PDF';
     case 'building':
       final total = i.progress.piecesTotal;
@@ -84,8 +86,9 @@ String queueStateWords(QueueItem i) {
   }
 }
 
-/// 0..1 for the book being built; null while it is only being read.
+/// 0..1 for the book being built, or its scanned pages being read; null while it is only being read.
 double? queueFraction(QueueItem i) {
+  if (i.state == 'reading' && i.progress.ocrPages > 0) return (i.progress.ocrDone / i.progress.ocrPages).clamp(0.0, 1.0);
   final total = i.progress.piecesTotal;
   if (i.state != 'building' || total == null || total <= 0) return null;
   return (i.progress.pieces / total).clamp(0.0, 1.0);

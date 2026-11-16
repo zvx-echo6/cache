@@ -2,7 +2,7 @@
 //!
 //! - Running heads, footers and page numbers are filtered (text repeated at the same height on many pages, bare numbers
 //!   and roman numerals in the page margins).
-//! - Pages with almost no text but with pictures are recorded as needing OCR and skipped (OCR comes later).
+//! - Pages with almost no text but with pictures are recorded as needing OCR and skipped here (`ocr` reads them with Tesseract before layout; the pages it read have text by then).
 //! - Headings: a line at least 12% above the document's body size (character-weighted median), or a short bold line at
 //!   body size. Levels follow size rank (H1 to H3); a bold body-size line is H4.
 //! - Reading order: a page with columns (one vertical gap or several, as in three narrow columns or a two-page spread) is

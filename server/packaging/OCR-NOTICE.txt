@@ -1,0 +1,19 @@
+OCR in Cache for Linux (the library builder reads scanned PDF pages)
+
+Cache is AGPL-3.0-or-later. The OCR it uses is made of these parts, all of which allow that:
+
+- Tesseract (the 5.0.0-alpha snapshot that MuPDF 1.27.2 carries), built into the cache program and linked statically.
+  License: Apache License 2.0. Copyright Hewlett-Packard Company, Google Inc. and the Tesseract contributors.
+  https://github.com/tesseract-ocr/tesseract
+- Leptonica 1.85.0 (image library inside Tesseract), built into the cache program and linked statically.
+  License: BSD 2-Clause. Copyright (C) 2001 Leptonica, Dan Bloomberg.
+  http://www.leptonica.org
+- eng.traineddata (this folder): the "fast" English model of tessdata_fast, tag 4.1.0 (4,113,088 bytes,
+  sha256 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2).
+  License: Apache License 2.0. Copyright the Tesseract contributors.
+  https://github.com/tesseract-ocr/tessdata_fast
+
+The Apache License 2.0 is at https://www.apache.org/licenses/LICENSE-2.0 and the BSD 2-Clause license at
+https://opensource.org/license/bsd-2-clause. MuPDF itself (AGPL-3.0-or-later, Artifex Software, Inc.) is covered in CREDITS.md.
+
+The text OCR reads goes into the book's search index only. The PDF you added is never changed.

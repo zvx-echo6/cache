@@ -10,10 +10,8 @@ import '../theme.dart';
 /// The two Cache-drawn pieces on the car's map (the climb-ahead card and the route mini map), as plain data for the car side to
 /// paint (app/android/.../car/CarOverlayPainter.kt). Nothing here is drawn; the car works nothing out, it paints what it is sent.
 ///
-/// The defaults of the two switches are these constants, so turning a piece off for everyone is a one-line change. They reach the
-/// car in the trip as `overlay: {climb: .., miniMap: ..}`. (There is no car section in Settings yet, so no per-person switch.)
-const bool kCarClimbAheadDefault = true;
-const bool kCarRouteMiniMapDefault = true;
+/// Whether the car draws them is the car's own rule (by the size of its screen), told one fact by the phone: `overlay:
+/// {phoneDrive: bool}` ([carOverlaySwitches]).
 
 /// The owner's number (2026-11-11): the least grade (rise over run, 0.03 is 3%) a climb ahead must have for the car to show it.
 /// With no such climb ahead there is no climb card, no grade badge on the car's map and no grade pill on its mini map. The
@@ -23,8 +21,8 @@ const double kCarClimbMinGrade = 0.03;
 
 /// The steepest climb still ahead of [posM] metres along the profile, when it is at least [kCarClimbMinGrade] steep; else null.
 /// (The steepest is the one with the highest grade, so when it is under the floor no climb ahead reaches it.)
-Climb? carClimbAhead(ElevationProfile profile, double posM) {
-  final c = profile.steepestClimbAhead(posM);
+Climb? carClimbAhead(ElevationProfile profile, double posM, {Climb? Function(double posM)? source}) {
+  final c = source != null ? source(posM) : profile.steepestClimbAhead(posM);
   return c == null || c.grade < kCarClimbMinGrade ? null : c;
 }
 
@@ -34,27 +32,22 @@ const int kClimbSamples = 56;
 /// The most points the mini map's route line is simplified to.
 const int kOverviewMaxPoints = 150;
 
-/// The day theme the car uses by day (the phone has no day/night pair setting): the chosen theme if it is Light or Parchment,
-/// else Light.
-CacheThemeId carDayTheme(CacheThemeId chosen) => chosen == CacheThemeId.light || chosen == CacheThemeId.parchment ? chosen : CacheThemeId.light;
-
-/// The night theme: the chosen theme if it is Dark or Tactical, else Dark.
-CacheThemeId carNightTheme(CacheThemeId chosen) => chosen == CacheThemeId.dark || chosen == CacheThemeId.tactical ? chosen : CacheThemeId.dark;
-
-/// The theme whose map style the car map draws: by day Light's, by night Dark's, except that a chosen Tactical gets the full
-/// Tactical map style at night, the same palette the phone's map uses for Tactical (mapPaletteFor).
-CacheThemeId carMapTheme({required bool dark, required CacheThemeId chosen}) =>
-    !dark ? CacheThemeId.light : (chosen == CacheThemeId.tactical ? CacheThemeId.tactical : CacheThemeId.dark);
+/// The theme the car screens show: the car map's style (CarBridge.style), the route line, the grade badge, the route mini map,
+/// the climb card and the pins' pictures all take it. Once the person has picked a theme on the phone ([themeChosen], set by
+/// Settings > Appearance), always that theme ([chosen]), day and night (the owner's decision of 2026-11-13). Until then the
+/// car's own setting decides, as Android for Cars' quality rule MR-1 asks by default: Light by day, Dark by night ([carDark]).
+CacheThemeId carTheme({required CacheThemeId chosen, required bool themeChosen, required bool carDark}) =>
+    themeChosen ? chosen : (carDark ? CacheThemeId.dark : CacheThemeId.light);
 
 /// The `climb` block, or null (the card is then not drawn): with no elevation data, and with no climb ahead that is at least
 /// [kCarClimbMinGrade] steep ([carClimbAhead]). A flat road, a gentle rise and a route whose climbs are all behind get no card.
 ///
 /// [distanceAlongM] is the core's metres along the route; [routeM] the route's length (the profile measures the same line a
 /// little differently, so the position is scaled to the profile, as [RouteElevation.positionOnProfile] does).
-Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? distanceAlongM, required double routeM}) {
+Map<String, dynamic>? carClimb(ElevationProfile? profile, {required double? distanceAlongM, required double routeM, Climb? Function(double posM)? climbAhead}) {
   if (profile == null || !profile.hasData || profile.distM.isEmpty) return null;
   final posM = _positionOnProfile(profile, distanceAlongM, routeM);
-  final steep = carClimbAhead(profile, posM);
+  final steep = carClimbAhead(profile, posM, source: climbAhead);
   if (steep == null) return null;
 
   // The climb still to come: the dead-band climb over the heights from the position on.
@@ -105,7 +98,7 @@ double _positionOnProfile(ElevationProfile p, double? alongM, double routeM) {
 /// The `overview` block: the whole route simplified, how much of it is driven, the steepest point's place and grade, and the
 /// destination. Null with no route. The steepest point follows the climb card's rule ([carClimbAhead]): it is there only for a
 /// climb ahead of at least [kCarClimbMinGrade], so the car's badge and pill never mark a gentle rise.
-Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlongM, ElevationProfile? profile, GeoPoint? destination}) {
+Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlongM, ElevationProfile? profile, Climb? Function(double posM)? climbAhead, GeoPoint? destination}) {
   if (route == null || route.points.length < 2) return null;
   final pts = simplifyRoute(route.points, kOverviewMaxPoints);
   final routeM = route.distanceM > 0 ? route.distanceM : 1.0;
@@ -114,7 +107,7 @@ Map<String, dynamic>? carOverview(MapRoute? route, {required double? distanceAlo
   Map<String, dynamic>? steepPoint;
   if (profile != null && profile.hasData) {
     final posM = _positionOnProfile(profile, distanceAlongM, route.distanceM);
-    final c = carClimbAhead(profile, posM);
+    final c = carClimbAhead(profile, posM, source: climbAhead);
     if (c != null && profile.totalM > 0) {
       final at = pointAtFraction(route.points, ((c.startM + c.endM) / 2 / profile.totalM).clamp(0.0, 1.0));
       steepPoint = {'lat': at.lat, 'lon': at.lon, 'gradePct': c.grade * 100};
@@ -213,13 +206,12 @@ String _hex(Color c) {
 Color _mix(Color a, Color b, double t) => Color.lerp(a, b, t)!;
 
 /// The overlay's colors for one theme, as `#rrggbb`. They come from the Dart tokens and the map palette, so the car side holds no
-/// palette. The route is the palette's own route color (never a traffic green, yellow, orange or red); Tactical is all on its red
-/// ramp, no white anywhere.
+/// palette. The route is the theme's own map route color, as on the phone's map (never a traffic green, yellow, orange or red);
+/// Tactical is all on its red ramp, no white anywhere.
 Map<String, String> carOverlayColors(CacheThemeId id) {
   final k = cacheTokens[id]!;
-  // Parchment's route is brown on the phone; on the car screen it uses Light's blue (route, mini map, climb shape and badge edge
-  // all come from this one color). The phone's Parchment is unchanged.
-  final route = mapPaletteFor(id == CacheThemeId.parchment ? CacheThemeId.light : id).css('route');
+  // The route, the mini map's line, the climb's shape and the badge edge all come from this one color.
+  final route = mapPaletteFor(id).css('route');
   final r = Color(int.parse('FF${route.substring(1)}', radix: 16));
   Map<String, Color> c;
   switch (id) {
@@ -286,14 +278,11 @@ Map<String, String> carOverlayColors(CacheThemeId id) {
   return {for (final e in c.entries) e.key: _hex(e.value)};
 }
 
-/// The `palette` block: the colors for the car's day (carDayTheme) and night (carNightTheme), each with the theme it came from.
-Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) {
-  final day = carDayTheme(chosen), night = carNightTheme(chosen);
-  return {
-    'day': {'theme': day.name, ...carOverlayColors(day)},
-    'night': {'theme': night.name, ...carOverlayColors(night)},
-  };
-}
+/// The `palette` block: the colors of the theme the car shows ([carTheme]), with the theme's name. One theme.
+Map<String, dynamic> carOverlayPalette(CacheThemeId chosen) => {'theme': chosen.name, ...carOverlayColors(chosen)};
 
-/// The `overlay` switches.
-Map<String, bool> carOverlaySwitches({bool climb = kCarClimbAheadDefault, bool miniMap = kCarRouteMiniMapDefault}) => {'climb': climb, 'miniMap': miniMap};
+/// The `overlay` part of the trip: the one fact the phone tells the car, `phoneDrive`. It is true only while the phone's drive
+/// screen is actually showing to a person (a car screen is guiding, the phone is unlocked with Cache in front, the Maps tab is
+/// selected and the drive screen is the thing on it), and false in every other case. The pause and the fade are the car's; the
+/// phone sends the plain truth at once. The old keys `climb` and `miniMap` are no longer sent.
+Map<String, bool> carOverlaySwitches({bool phoneDrive = false}) => {'phoneDrive': phoneDrive};

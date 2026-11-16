@@ -120,6 +120,9 @@ pub struct DirectionsRequest {
     /// so it snaps to its own nearest road and is never moved to a public road (`snap`).
     pub from_arrival: bool,
     pub to_arrival: bool,
+    /// The way the vehicle is heading at `from`, degrees clockwise from north (a re-route from a moving vehicle): the route
+    /// then starts forward, not with a U-turn.
+    pub from_heading_deg: Option<f64>,
 }
 
 impl DirectionsRequest {
@@ -127,7 +130,7 @@ impl DirectionsRequest {
         DirectionsRequest {
             from, to, mode, offroad: OffroadChoice::Auto, offroad_snap_m: DEFAULT_OFFROAD_SNAP_M,
             merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M, boundary: Boundary::Pragmatic,
-            from_category: None, to_category: None, from_arrival: false, to_arrival: false,
+            from_category: None, to_category: None, from_arrival: false, to_arrival: false, from_heading_deg: None,
         }
     }
 }
@@ -293,6 +296,8 @@ fn build_steps(maneuvers: &[Maneuver], shape: &[(f64, f64)]) -> Vec<Step> {
             type_: maneuver_type_name(m.kind),
             mode: None,
             street_names: m.street_names.clone(),
+            streets: m.streets.clone(),
+            begin_streets: m.begin_streets.clone(),
             distance_m: None,
             distance_km: round_py(km, 2),
             distance_mi: round_py(km * KM_TO_MI, 2),
@@ -513,7 +518,11 @@ impl Env<'_> {
     /// How the two ends snap to the roads (`snap`: past service roads to a public road).
     fn plan_ends(&self, req: &DirectionsRequest) -> (EndPlan, EndPlan) {
         let c = req.mode.costing();
-        (plan_end(self.valhalla, req.from, c, !req.from_arrival), plan_end(self.valhalla, req.to, c, !req.to_arrival))
+        let mut from = plan_end(self.valhalla, req.from, c, !req.from_arrival);
+        if c == "auto" {
+            from.end.opts.heading_deg = req.from_heading_deg;
+        }
+        (from, plan_end(self.valhalla, req.to, c, !req.to_arrival))
     }
 
     /// Alternative road routes between the same two points (Valhalla's `alternates`), best first, each as full directions

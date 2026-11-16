@@ -16,7 +16,7 @@ void main() {
     addTearDown(w.dispose);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: CatalogPage(deps: testDeps(browse: w.browse, shelves: w.shelves))));
     await tester.pump();
-    expect(find.text('Ready · 7 books'), findsOneWidget, reason: 'Recon: 7 books, none shelved');
+    expect(find.text('Ready · 7 books'), findsOneWidget, reason: 'Trail: 7 books, none shelved');
     expect(find.text('Ready · 3 books'), findsOneWidget, reason: 'Field: 3 books, 2 shelved');
     expect(find.text('Ready · 2 books'), findsNothing, reason: 'not the count of shelved books');
   });

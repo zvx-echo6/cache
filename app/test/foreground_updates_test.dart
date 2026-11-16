@@ -12,23 +12,23 @@ void main() {
     expect(foregroundUpdatesWanted(android: false), isTrue);
   });
 
-  testWidgets('it updates at the interval of the background schedule while in front, and not in the background', (tester) async {
+  testWidgets('it ticks every five minutes while in front, and not in the background', (tester) async {
     var runs = 0;
-    final f = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async => runs++);
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async => runs++);
     addTearDown(f.dispose);
     await tester.pump(const Duration(hours: 2));
     expect(runs, 0, reason: 'not before the app is in front');
     f.front();
     expect(f.ticking, isTrue);
-    await tester.pump(kBackgroundEvery - const Duration(seconds: 1));
+    await tester.pump(kForegroundTick - const Duration(seconds: 1));
     expect(runs, 0, reason: 'not before the interval');
     await tester.pump(const Duration(seconds: 1));
     expect(runs, 1);
-    await tester.pump(kBackgroundEvery);
+    await tester.pump(kForegroundTick);
     expect(runs, 2);
     // in front again while it already runs: still one timer
     f.front();
-    await tester.pump(kBackgroundEvery);
+    await tester.pump(kForegroundTick);
     expect(runs, 3);
     // the app leaves the front
     f.back();
@@ -37,7 +37,7 @@ void main() {
     expect(runs, 3, reason: 'nothing in the background');
     // and comes back: the interval starts again
     f.front();
-    await tester.pump(kBackgroundEvery - const Duration(seconds: 1));
+    await tester.pump(kForegroundTick - const Duration(seconds: 1));
     expect(runs, 3);
     await tester.pump(const Duration(seconds: 1));
     expect(runs, 4);
@@ -48,17 +48,46 @@ void main() {
     expect(f.ticking, isFalse);
   });
 
+  // main.dart's update is weather.updateIfDue(kBackgroundEvery): the due check. A start 29 minutes after the last run skips (not
+  // due), and the next tick, five minutes on, finds it due; before, the first tick was a whole interval away.
+  testWidgets('a tick that is not due does nothing; the first tick after it falls due updates, within five minutes', (tester) async {
+    var updates = 0;
+    var lastGood = tester.binding.clock.now().subtract(const Duration(minutes: 29));
+    var checks = 0;
+    Future<void> updateIfDue() async {
+      checks++;
+      if (tester.binding.clock.now().difference(lastGood) < kBackgroundEvery) return;
+      updates++;
+      lastGood = tester.binding.clock.now();
+    }
+
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => true, update: updateIfDue);
+    addTearDown(f.dispose);
+    f.front();
+    expect(kForegroundTick, const Duration(minutes: 5));
+    await tester.pump(kForegroundTick - const Duration(seconds: 1));
+    expect((checks, updates), (0, 0));
+    await tester.pump(const Duration(seconds: 1));
+    expect((checks, updates), (1, 1), reason: 'due since a minute ago: updated at the first tick');
+    await tester.pump(kForegroundTick * 3);
+    expect((checks, updates), (4, 1), reason: 'ticks that are not due do nothing');
+    await tester.pump(kBackgroundEvery);
+    expect(updates, greaterThanOrEqualTo(2));
+    expect(updates, lessThanOrEqualTo(3), reason: 'one per interval, not one per tick');
+    f.dispose();
+  });
+
   testWidgets('it does nothing while nothing is switched on, and nothing at all where a scheduled job does it', (tester) async {
     var runs = 0, anythingOn = false;
-    final f = ForegroundUpdates(every: kBackgroundEvery, on: () => anythingOn, update: () async => runs++);
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => anythingOn, update: () async => runs++);
     addTearDown(f.dispose);
     f.front();
     await tester.pump(const Duration(hours: 3));
     expect(runs, 0, reason: 'updates are off');
     anythingOn = true;
-    await tester.pump(kBackgroundEvery);
+    await tester.pump(kForegroundTick);
     expect(runs, 1, reason: 'a source switched on is updated at the next tick');
-    final android = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async => runs++, wanted: foregroundUpdatesWanted(android: true));
+    final android = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async => runs++, wanted: foregroundUpdatesWanted(android: true));
     addTearDown(android.dispose);
     android.front();
     expect(android.ticking, isFalse);
@@ -71,7 +100,7 @@ void main() {
     var started = 0, open = 0, most = 0;
     var gate = Completer<void>();
     final f = ForegroundUpdates(
-      every: kBackgroundEvery,
+      every: kForegroundTick,
       on: () => true,
       update: () async {
         started++;
@@ -83,22 +112,68 @@ void main() {
     );
     addTearDown(f.dispose);
     f.front();
-    await tester.pump(kBackgroundEvery);
+    await tester.pump(kForegroundTick);
     expect((started, open), (1, 1));
     // the update takes longer than three more ticks
-    await tester.pump(kBackgroundEvery * 3);
+    await tester.pump(kForegroundTick * 3);
     expect((started, most), (1, 1), reason: 'none started beside it');
     gate.complete();
     gate = Completer<void>()..complete();
-    await tester.pump(kBackgroundEvery);
+    await tester.pump(kForegroundTick);
     expect((started, most, open), (2, 1, 0), reason: 'the next tick after it finished runs');
     // an update that throws does not stop the ones after it
-    final g = ForegroundUpdates(every: kBackgroundEvery, on: () => true, update: () async => throw StateError('no'));
+    final g = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async => throw StateError('no'));
     addTearDown(g.dispose);
     g.front();
-    await tester.pump(kBackgroundEvery * 2);
+    await tester.pump(kForegroundTick * 2);
     expect(g.ticking, isTrue);
     f.dispose();
     g.dispose();
+  });
+
+  // A car on CarPlay or Android Auto leaves the phone's screen in the back: the car counts as the app shown.
+  testWidgets('a car attached with the phone in the back starts the timer; leaving stops it', (tester) async {
+    var runs = 0;
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async => runs++);
+    addTearDown(f.dispose);
+    f.car(true);
+    expect(f.ticking, isTrue);
+    await tester.pump(kForegroundTick);
+    expect(runs, 1);
+    f.car(false);
+    expect(f.ticking, isFalse);
+    await tester.pump(const Duration(hours: 3));
+    expect(runs, 1);
+  });
+
+  testWidgets('a car leaving with the phone in front keeps the timer; the phone leaving with a car attached keeps it', (tester) async {
+    var runs = 0;
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async => runs++);
+    addTearDown(f.dispose);
+    f.front();
+    f.car(true);
+    f.car(false);
+    expect(f.ticking, isTrue, reason: 'the phone is still in front');
+    await tester.pump(kForegroundTick);
+    expect(runs, 1, reason: 'one timer, not two');
+    f.car(true);
+    f.back();
+    expect(f.ticking, isTrue, reason: 'the car is still attached');
+    await tester.pump(kForegroundTick);
+    expect(runs, 2);
+    f.car(false);
+    expect(f.ticking, isFalse);
+    // the car's release and the phone's back() together (the car leaving with no phone screen) stop it once and nothing restarts it
+    f.car(true);
+    f.car(false);
+    f.back();
+    expect(f.ticking, isFalse);
+  });
+
+  testWidgets('where a scheduled job updates (Android), a car does not start the timer either', (tester) async {
+    final f = ForegroundUpdates(every: kForegroundTick, on: () => true, update: () async {}, wanted: false);
+    addTearDown(f.dispose);
+    f.car(true);
+    expect(f.ticking, isFalse);
   });
 }

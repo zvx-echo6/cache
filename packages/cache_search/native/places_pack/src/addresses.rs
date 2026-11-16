@@ -43,7 +43,9 @@ CREATE TABLE addr_streets (
   min_lon REAL NOT NULL,
   max_lon REAL NOT NULL,
   n INTEGER NOT NULL,
-  numbers BLOB NOT NULL
+  numbers BLOB NOT NULL,
+  -- NULL for Overture rows; "oa:us/id/canyon" (comma-joined when several) for rows holding OpenAddresses numbers.
+  source TEXT
 );
 "#;
 
@@ -130,6 +132,8 @@ struct Point {
     lon: f64,
     state: Option<String>,
     country: Option<String>,
+    /// The CSV's `source` column: empty for Overture, "oa:<source>" for OpenAddresses.
+    source: String,
 }
 
 /// One street and postcode of one tile, as read (one sort run of the CSV): its points are split by town and written.
@@ -167,6 +171,7 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
     for (town, points) in groups {
         let mut seen: HashSet<(u32, String)> = HashSet::new();
         let mut nums: Vec<(&str, f64, f64)> = Vec::with_capacity(points.len());
+        let mut srcs: BTreeSet<&str> = BTreeSet::new();
         for p in &points {
             let (num, suffix) = split_number(&p.number);
             if suffix.len() > u8::MAX as usize {
@@ -175,6 +180,9 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
             }
             if seen.insert((num, suffix.to_string())) {
                 nums.push((p.number.as_str(), p.lat, p.lon));
+                if !p.source.is_empty() {
+                    srcs.insert(p.source.as_str());
+                }
             } else {
                 rep.repeats += 1;
             }
@@ -193,7 +201,7 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
         let first = &points[0];
         c.execute(
             "INSERT INTO addr_streets(tile, uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, \
-             min_lat, max_lat, min_lon, max_lon, n, numbers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             min_lat, max_lat, min_lon, max_lon, n, numbers, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 run.tile,
                 street_uid(&run.street, &run.postcode, &locality, run.tile),
@@ -211,7 +219,8 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
                 b[2],
                 b[3],
                 nums.len() as i64,
-                blob
+                blob,
+                (!srcs.is_empty()).then(|| srcs.iter().copied().collect::<Vec<_>>().join(","))
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -238,6 +247,8 @@ pub fn addresses(cfg: &AddressesCfg) -> Result<AddressesReport, String> {
     let col = |n: &str| head.iter().position(|h| h == n).ok_or_else(|| format!("addresses csv: column {n:?} is missing"));
     let (c_num, c_street, c_pc, c_city, c_state, c_country) = (col("number")?, col("street")?, col("postcode")?, col("postal_city")?, col("state")?, col("country")?);
     let (c_lat, c_lon, c_tile) = (col("lat")?, col("lon")?, col("tile")?);
+    // Optional: written by `oa-merge`.
+    let c_source = head.iter().position(|h| h == "source");
     let mut rep = AddressesReport::default();
     let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut run: Option<Run> = None;
@@ -272,7 +283,7 @@ pub fn addresses(cfg: &AddressesCfg) -> Result<AddressesReport, String> {
         }
         let opt = |s: &str| (!s.is_empty()).then(|| s.to_string());
         if let Some(r) = run.as_mut() {
-            r.points.push(Point { number: number.to_string(), postal_city: title_case_capitals(get(c_city)), lat, lon, state: opt(get(c_state)), country: opt(get(c_country)) });
+            r.points.push(Point { number: number.to_string(), postal_city: title_case_capitals(get(c_city)), lat, lon, state: opt(get(c_state)), country: opt(get(c_country)), source: c_source.map(get).unwrap_or("").to_string() });
         }
     }
     if let Some(r) = run.take() {

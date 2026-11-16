@@ -22,6 +22,7 @@ pub mod nearby;
 pub mod pack;
 pub mod source;
 pub mod schema;
+pub mod share;
 
 pub use feed::{FeedSlot, PlacesFeed, PrepareAnswer};
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};
@@ -110,9 +111,17 @@ pub(crate) fn resolve_center(ctx: &ToolCtx, packs: &PackSet, geo: &dyn Geocoder,
                 return Err(ToolError::new(ToolError::NOT_SET_UP, "no places data is installed, so a place name cannot be looked up"));
             }
             let bias = ctx.location.map(|l| (l.lat, l.lon));
-            match geo.forward(name, bias, 1).into_iter().next() {
+            // Only a hit the geocoder itself rates as the place the query named; an any-word match is not one.
+            match geo.forward(name, bias, 1).into_iter().next().filter(|h| h.name_match >= geocoder::GOOD_NAME_MATCH) {
                 Some(h) => Ok(Center { lat: h.lat, lon: h.lon, label: h.label }),
-                None => Err(ToolError::new("geocode_empty", format!("no place matches {:?}", name.trim())).with("query", name.trim())),
+                None => match ctx.location {
+                    Some(l) => Ok(Center {
+                        lat: l.lat,
+                        lon: l.lon,
+                        label: format!("current location (nothing found named \"{}\")", name.trim()),
+                    }),
+                    None => Err(ToolError::new("geocode_empty", format!("no place matches {:?}", name.trim())).with("query", name.trim())),
+                },
             }
         }
         None => match ctx.location {

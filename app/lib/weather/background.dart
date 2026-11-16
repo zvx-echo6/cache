@@ -93,7 +93,10 @@ Future<String> weatherBackgroundJob(Map<String, dynamic>? input) async {
 
 /// One background run: the same update as Update now, for the sources that are on and the watched places, then the alert check.
 /// It opens its own search core with only the saved places and live data (no library, maps or routing), so it is light.
-Future<void> runBackgroundUpdate() async {
+///
+/// [onlyIfDue]: the update runs only when the last good one is older than [kBackgroundEvery] (the iPhone's sync round asks it
+/// this way, since it comes at iOS's own times; Android's own weather task has its schedule and always updates).
+Future<void> runBackgroundUpdate({bool onlyIfDue = false}) async {
   final support = Directory(await appSupportPath());
   final files = Directory(await appFilesPath());
   final settings = AppSettings();
@@ -118,7 +121,11 @@ Future<void> runBackgroundUpdate() async {
       told: ToldStore(File('${support.path}/alerts_told.json')),
     )..placeAlerts = PlaceAlerts(() async => File('${support.path}/$kPlaceAlertsFile'));
     await weather.start();
-    await weather.updateNow();
+    if (onlyIfDue) {
+      await weather.updateIfDue(kBackgroundEvery);
+    } else {
+      await weather.updateNow();
+    }
   } finally {
     await core.close();
   }

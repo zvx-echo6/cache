@@ -8,6 +8,9 @@ import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/settings/space.dart';
 import 'package:cache_search/cache_search.dart';
 
+// pumpUntil and turns live in support/event_loop.dart (shared by every test that waits on a condition); re-exported here.
+export '../support/event_loop.dart' show pumpUntil, turns;
+
 /// The core's ingest calls, answered by the test: each call is recorded, and [on] gives the answer for an op (an exception
 /// thrown there is the core's error).
 class FakeIngestCalls implements IngestCalls {
@@ -87,13 +90,16 @@ class FakeScheduler extends IndexScheduler {
 }
 
 /// A state over [dir] with [calls], no throttle and no scheduler (the test drives runs itself).
-AddPdfState testAddPdfState(Directory dir, {IngestCalls? calls, Future<void> Function(AddPdfJob)? onDone}) => AddPdfState(
+/// [frozenClock]: the state's clock never moves (the tests of the waits for an earlier run: a start's wait for it is then its whole
+/// time, however slow the machine, and "said once" is not a matter of when).
+AddPdfState testAddPdfState(Directory dir, {IngestCalls? calls, Future<void> Function(AddPdfJob)? onDone, bool frozenClock = false}) => AddPdfState(
   calls: calls ?? FakeIngestCalls(),
   dir: () async => dir,
   engines: () async => {'pdfium_version': 'chromium/7811'},
   permit: (_) async {},
   busyWait: const Duration(milliseconds: 1),
   onDone: onDone,
+  clock: frozenClock ? () => DateTime(2026, 11, 15, 12) : null,
 );
 
 /// A job as the progress page shows it, in whatever state the test sets.

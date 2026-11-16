@@ -8,12 +8,19 @@
 use crate::error::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Queries asked of the tile tables (see [`Store::queries`]).
+    queries: AtomicU64,
 }
+
+/// What the store holds in one box of tiles at one zoom: (x, y) -> (size in bytes, stored at the version asked about).
+pub type Held = HashMap<(u32, u32), (u64, bool)>;
 
 /// What the store holds for one tile.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,7 +59,19 @@ impl Store {
                data BLOB NOT NULL, ver TEXT NOT NULL, PRIMARY KEY(z,x,y)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS areas(id TEXT PRIMARY KEY, state TEXT NOT NULL, meta TEXT NOT NULL);",
         )?;
-        Ok(Store { conn: Mutex::new(c) })
+        Ok(Store { conn: Mutex::new(c), queries: AtomicU64::new(0) })
+    }
+
+    /// A peer device's shared copy of its store (`store-share/<layer>/<device>.sqlite`), opened read-only: nothing here ever
+    /// writes it, and it is never merged into this device's own store. `Err` when it is not a store (a file still arriving,
+    /// something else with the name).
+    pub fn open_peer(path: &Path) -> Result<Store> {
+        let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        c.busy_timeout(std::time::Duration::from_secs(5))?;
+        // the two tables a reader needs, else it is not one of ours
+        c.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))?;
+        c.query_row("SELECT COUNT(*) FROM areas", [], |r| r.get::<_, i64>(0))?;
+        Ok(Store { conn: Mutex::new(c), queries: AtomicU64::new(0) })
     }
 
     /// The tile's bytes; `None` if not stored or stored as "the source has no tile here" ([`Store::find`] tells the two apart).
@@ -67,6 +86,7 @@ impl Store {
     /// the tile is not asked for again), or `None` when no download fetched it.
     pub fn find(&self, z: u8, x: u32, y: u32) -> Result<Option<Stored>> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         let d: Option<Vec<u8>> = c.query_row("SELECT data FROM tiles WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| r.get(0)).optional()?;
         Ok(d.map(|d| if d.is_empty() { Stored::Empty } else { Stored::Tile(d) }))
     }
@@ -74,7 +94,29 @@ impl Store {
     /// (size in bytes, version) of a stored tile (size 0 = known to be empty at the source).
     pub fn info(&self, z: u8, x: u32, y: u32) -> Result<Option<(u64, String)>> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         Ok(c.query_row("SELECT length(data), ver FROM tiles WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))).optional()?)
+    }
+
+    /// Every tile stored at zoom `z` with x in `x0..=x1` and y in `y0..=y1`, in one range query: its size, and whether it is
+    /// at version `ver`. From the staging table of an update with [`Table::Staging`]. A download plans with one of these per
+    /// zoom where it asked about every tile on its own (about two million queries for a state).
+    pub fn held(&self, table: Table, z: u8, (x0, x1): (u32, u32), (y0, y1): (u32, u32), ver: &str) -> Result<Held> {
+        let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
+        let mut st = c.prepare_cached(&format!("SELECT x, y, length(data), ver=?6 FROM {} WHERE z=?1 AND x BETWEEN ?2 AND ?3 AND y BETWEEN ?4 AND ?5", table.name()))?;
+        let rows = st.query_map(params![z, x0, x1, y0, y1, ver], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?), (r.get::<_, i64>(2)? as u64, r.get::<_, bool>(3)?))))?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (k, v) = r?;
+            out.insert(k, v);
+        }
+        Ok(out)
+    }
+
+    /// How many queries the tile tables were asked since the store was opened (lookups of one tile and range queries).
+    pub fn queries(&self) -> u64 {
+        self.queries.load(Ordering::Relaxed)
     }
 
     pub fn put_batch(&self, table: Table, tiles: &[(u8, u32, u32, Vec<u8>)], ver: &str) -> Result<()> {
@@ -92,6 +134,7 @@ impl Store {
 
     pub fn staging_has(&self, z: u8, x: u32, y: u32, ver: &str) -> Result<bool> {
         let c = lock(&self.conn)?;
+        self.queries.fetch_add(1, Ordering::Relaxed);
         let v: Option<String> = c.query_row("SELECT ver FROM staging WHERE z=?1 AND x=?2 AND y=?3", params![z, x, y], |r| r.get(0)).optional()?;
         Ok(v.as_deref() == Some(ver))
     }
@@ -144,6 +187,13 @@ impl Store {
         }
     }
 
+    /// Folds the write-ahead log into the database file (without waiting for readers), so the file alone holds what is committed.
+    pub fn checkpoint(&self) {
+        if let Ok(c) = self.conn.lock() {
+            let _ = c.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+        }
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.conn.lock().ok().and_then(|c| c.query_row("SELECT COALESCE(SUM(length(data)),0) FROM tiles", [], |r| r.get::<_, i64>(0)).ok()).unwrap_or(0) as u64
     }
@@ -182,6 +232,44 @@ impl Store {
     pub fn remove_area(&self, id: &str) -> Result<()> {
         lock(&self.conn)?.execute("DELETE FROM areas WHERE id=?1", [id])?;
         Ok(())
+    }
+
+    /// Writes a consistent copy of this store (tiles and areas, never the staging table) to a new SQLite file at `to`, which must
+    /// not exist: the device's shared export. `source` is this store's file, read through a connection of its own so tile reads
+    /// are not held up; `stamp` is written into the copy (`share.src`) so a later run can tell whether the store changed since.
+    pub fn export_to(source: &Path, to: &Path, stamp: &str) -> Result<()> {
+        let c = Connection::open(to)?;
+        c.execute_batch(
+            "PRAGMA journal_mode = DELETE;
+             CREATE TABLE tiles(z INTEGER NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, data BLOB NOT NULL, ver TEXT NOT NULL, PRIMARY KEY(z,x,y)) WITHOUT ROWID;
+             CREATE TABLE areas(id TEXT PRIMARY KEY, state TEXT NOT NULL, meta TEXT NOT NULL);
+             CREATE TABLE share(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
+        c.execute("ATTACH DATABASE ?1 AS s", [source.to_string_lossy().as_ref()])?;
+        c.execute_batch("BEGIN; INSERT INTO main.tiles SELECT z,x,y,data,ver FROM s.tiles; INSERT INTO main.areas SELECT id,state,meta FROM s.areas;")?;
+        c.execute("INSERT INTO main.share(key,value) VALUES('src', ?1)", [stamp])?;
+        c.execute_batch("COMMIT; DETACH DATABASE s;")?;
+        Ok(())
+    }
+
+    /// Merges another store file into this one, as the device's own data: tiles it lacks (insert or ignore), areas by id (a
+    /// complete one beats a partial one). The other file is only read. One transaction: a kill leaves this store as it was.
+    pub fn merge_from(&self, other: &Path) -> Result<(u64, u64)> {
+        let c = lock(&self.conn)?;
+        c.execute("ATTACH DATABASE ?1 AS o", [other.to_string_lossy().as_ref()])?;
+        let r = (|| -> Result<(u64, u64)> {
+            c.execute_batch("BEGIN")?;
+            let t = c.execute("INSERT OR IGNORE INTO main.tiles(z,x,y,data,ver) SELECT z,x,y,data,ver FROM o.tiles", [])? as u64;
+            let a = c.execute("INSERT OR IGNORE INTO main.areas(id,state,meta) SELECT id,state,meta FROM o.areas", [])? as u64;
+            c.execute("UPDATE main.areas SET state='complete', meta=(SELECT meta FROM o.areas WHERE o.areas.id=main.areas.id) WHERE state<>'complete' AND id IN (SELECT id FROM o.areas WHERE state='complete')", [])?;
+            c.execute_batch("COMMIT")?;
+            Ok((t, a))
+        })();
+        if r.is_err() {
+            let _ = c.execute_batch("ROLLBACK");
+        }
+        let _ = c.execute_batch("DETACH DATABASE o");
+        r
     }
 
     pub fn clear_all(&self) -> Result<u64> {

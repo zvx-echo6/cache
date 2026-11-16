@@ -5,7 +5,9 @@
 //! and reading a point.
 
 use crate::conv::Cite;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use crate::html;
 use crate::idxsnap::{self, SnapSlot};
 use crate::index::{self, IndexState};
@@ -13,21 +15,58 @@ use crate::libindex::{self, LibOpenIndex};
 use crate::libreg::{self, LibEntry, ShardCell};
 use common::universal_io::{MmapFile, MmapFs};
 use edge::{
-    CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
+    Condition, CountRequest, EdgeShard, EdgeShardRead, FieldCondition, Filter, JsonPath, LoadProfile, Match, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
     QueryRequest, QueryRequestBuilder, ReadOnlyEdgeShard, ReadOnlyEdgeShardPools, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams,
     TextIndexParams, TextQueryBuilder, VectorInternal, WithPayloadInterface, WithVector,
 };
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
 pub type Shard = ReadOnlyEdgeShard<MmapFile>;
 
-/// `hnsw_ef` for every dense search. Set here, not exposed to the app.
-pub const HNSW_EF: usize = 64;
+/// `hnsw_ef` for every dense search. Set here, not exposed to the app. It matters only for a library whose vectors are in an
+/// HNSW graph (past Edge's indexing threshold; a small library is searched exactly). Measured on the 1.7 million-point Field
+/// library (2026-11-14, 238 real queries, top 10 against exact search): 64 found 0.72 of the exact results in 2 ms, 512 found
+/// 0.92 in 9 ms (exact search takes 1.7 s). A graph built with larger m / ef_construct would reach more; logged for after 1.1.
+pub const HNSW_EF: usize = 512;
 /// How many payloads are sampled to guess settings.
 const GUESS_SAMPLE: usize = 20;
+/// The size past which Qdrant Edge gives a segment's vectors an HNSW graph when the shard is optimized, in KB (Edge's default
+/// `indexing_threshold`, which the library builders use). A segment below it is searched by reading its vectors, which is fast.
+pub const INDEXING_THRESHOLD_KB: u64 = 10_000;
+
+/// How many KB of the library shard's vectors at `dir` are in no HNSW graph: (points - indexed vectors) x the vector's size (its
+/// dimensions times the bytes of its datatype, from the segments' config), from the read-only shard's own counts. Past
+/// [`INDEXING_THRESHOLD_KB`] a meaning search reads all of them: a shard built without `EdgeShard::optimize()` has every vector
+/// there. 0 for a shard with no vectors.
+pub fn unindexed_vectors_kb(dir: &Path) -> Result<u64> {
+    let shard = open_shard_for_scroll(dir)?;
+    let info = EdgeShardRead::info(&shard).map_err(|e| op_internal("reading the shard's counts", e))?;
+    let unindexed = info.points_count.saturating_sub(info.indexed_vectors_count) as u64;
+    if unindexed == 0 {
+        return Ok(0);
+    }
+    // the vector's size from any segment's config (every segment of a library shard has the same vector)
+    let mut bytes_per_vector = 0u64;
+    if let Ok(rd) = std::fs::read_dir(dir.join("segments")) {
+        for e in rd.flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path().join("segment.json")) else { continue };
+            let Ok(j) = serde_json::from_str::<Value>(&text) else { continue };
+            let Some(v) = j["config"]["vector_data"].as_object().and_then(|m| m.values().next()) else { continue };
+            let dims = v["size"].as_u64().unwrap_or(0);
+            let width = match v["datatype"].as_str() {
+                Some("float16") => 2,
+                Some("uint8") => 1,
+                _ => 4,
+            };
+            bytes_per_vector = dims * width;
+            break;
+        }
+    }
+    Ok(unindexed * bytes_per_vector / 1024)
+}
+
 /// The segment manifest file Qdrant Edge's read-only open requires, at the shard root.
 pub const MANIFEST_FILE: &str = "segments_manifest.json";
 
@@ -40,6 +79,28 @@ pub fn ensure_init() {
 
 fn op_io(what: &str, e: impl std::fmt::Display) -> Error {
     Error::io(format!("{what}: {e}"))
+}
+
+/// Runs `f` with a stop flag that is set once `limit` has passed (never with `None`; at once with a zero limit). A timer thread
+/// waits on a channel and is told to end as soon as `f` returns, so a search that finishes in time costs no wait.
+pub fn with_time_limit<T>(limit: Option<Duration>, f: impl FnOnce(&Arc<AtomicBool>) -> T) -> T {
+    let stop = Arc::new(AtomicBool::new(false));
+    let Some(limit) = limit else { return f(&stop) };
+    if limit.is_zero() {
+        stop.store(true, Ordering::Relaxed);
+        return f(&stop);
+    }
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    let flag = stop.clone();
+    let timer = std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = wait.recv_timeout(limit) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
+    let out = f(&stop);
+    let _ = done.send(());
+    let _ = timer.join();
+    out
 }
 
 fn op_internal(what: &str, e: impl std::fmt::Display) -> Error {
@@ -174,6 +235,7 @@ impl LibrarySettings {
         for r in &self.leave_out {
             v.push(r.field().to_string());
         }
+        v.push(PIECE_FIELD.to_string());
         v.sort();
         v.dedup();
         v
@@ -532,6 +594,11 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
 /// The payload field every point of a Cache library carries: the stable id of its source document (a non-empty
 /// string, the same across versions of the document). See docs/LIBRARY-FORMAT.md.
 pub const DOC_ID_FIELD: &str = "doc_id";
+/// The optional payload field with the passage's position in its document: a whole number from 0 (the `index` in the
+/// point id formula). Read by `read_document` to put a document's passages in order. See docs/LIBRARY-FORMAT.md.
+pub const PIECE_FIELD: &str = "piece";
+/// Most points `read_document` collects for one document.
+pub const DOC_MAX_POINTS: usize = 5000;
 /// The payload field with the document's version: a whole number, 1 for the first.
 pub const DOC_VERSION_FIELD: &str = "doc_version";
 
@@ -813,6 +880,24 @@ pub struct LibKwHit {
     pub hit: Option<LibHit>,
 }
 
+/// One page of a whole-document read.
+pub struct DocPage {
+    pub page: Value,
+    pub text: String,
+    pub addresses: Vec<String>,
+}
+
+/// A window of a library document: its pages in order, the page holding the opened passage, and whether the document goes on
+/// before and after the window.
+pub struct DocumentOut {
+    pub title: String,
+    pub pages: Vec<DocPage>,
+    pub at_page: usize,
+    /// Whether the document has passages before / after the window that is shown (too long to show whole).
+    pub more_before: bool,
+    pub more_after: bool,
+}
+
 pub struct ReadOut {
     pub title: String,
     pub text: String,
@@ -927,6 +1012,8 @@ impl LibSlot {
     /// Run a query at widths `base`, 2x, 4x (stopping early), drop left-out points, and return the survivors in
     /// rank order (score descending, ties by address). Stops widening once `need` distinct hits survive or the
     /// shard returned fewer than asked.
+    /// `stop`: set by the caller's time limit ([`with_time_limit`]); once the engine sees it, the query ends with an error of code
+    /// `cancelled` and no partial list.
     fn ranked(
         &self,
         make: &dyn Fn(usize) -> QueryRequest,
@@ -934,11 +1021,20 @@ impl LibSlot {
         need: usize,
         base: usize,
         snippet_chars: usize,
+        stop: &Arc<AtomicBool>,
     ) -> Result<Vec<LibHit>> {
         let base = base.max(need).max(1);
         let mut hits: Vec<LibHit> = Vec::new();
         for width in [base, base * 2, base * 4] {
-            let mut res = EdgeShardRead::query(&*self.shard.get()?, make(width)).map_err(|e| op_internal(what, e))?;
+            let res = <Shard as edge::EdgeShardReadWithCancellation>::query(&*self.shard.get()?, make(width), stop.clone());
+            // an error once the flag is set is the engine seeing it (it ends a stopped query with an error, never a partial list)
+            let mut res = res.map_err(|e| {
+                if stop.load(Ordering::Relaxed) {
+                    Error::new(ErrorCode::Cancelled, format!("{what}: stopped at its time limit"))
+                } else {
+                    op_internal(what, e)
+                }
+            })?;
             let returned = res.len();
             // equal scores: the smaller address (string compare) first
             res.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.to_string().cmp(&b.id.to_string())));
@@ -966,6 +1062,20 @@ impl LibSlot {
     /// Dense search with `vector`. Fetches `base` candidates, drops left-out points, and if fewer than `need`
     /// distinct hits survive, widens to 2x then 4x `base` and stops. Hits are in rank order.
     pub fn dense_search(&self, vector: &[f32], need: usize, base: usize, snippet_chars: usize) -> Result<Vec<LibHit>> {
+        self.dense_search_within(vector, need, base, snippet_chars, None)
+    }
+
+    /// [`Library::dense_search`] that stops at `limit` (no limit with `None`) with an error of code `cancelled`: on a library
+    /// whose vectors are one unindexed segment of gigabytes, a search reads all of them, which on a phone or a small box means
+    /// seconds from disk. A zero limit stops it before it starts.
+    pub fn dense_search_within(
+        &self,
+        vector: &[f32],
+        need: usize,
+        base: usize,
+        snippet_chars: usize,
+        limit: Option<Duration>,
+    ) -> Result<Vec<LibHit>> {
         let name = &self.settings.embedding.vector;
         let selector = self.payload_selector();
         let make = |width: usize| {
@@ -981,7 +1091,7 @@ impl LibSlot {
                 .with_payload(selector.clone())
                 .build()
         };
-        self.ranked(&make, "dense search", need, base, snippet_chars)
+        with_time_limit(limit, |stop| self.ranked(&make, "dense search", need, base, snippet_chars, stop))
     }
 
     /// BM25 over the library's own scored text index on the mapped text field (Edge's text scoring query).
@@ -996,7 +1106,7 @@ impl LibSlot {
                 .with_payload(selector.clone())
                 .build()
         };
-        self.ranked(&make, "text search", need, base, snippet_chars)
+        self.ranked(&make, "text search", need, base, snippet_chars, &Arc::new(AtomicBool::new(false)))
     }
 
     /// Replace the settings (a later `set_sources` with other settings for the same folder).
@@ -1041,8 +1151,11 @@ impl LibSlot {
         self.legacy_state()
     }
 
-    /// For a library that grows (one Add PDF writes to): whether its newest points are not yet in its keyword index, so their words
-    /// are not searchable yet. `None` when it does not grow or has no keyword index to be behind. Cheap: counts only.
+    /// For a library that grows (one Add PDF writes to): whether its keyword index is behind the shard, so an extension is due. That
+    /// is when the counts differ either way: more points than the index covers (new books whose words are not searchable yet), or
+    /// fewer (a removed book whose ids the index still has; the extension deletes them). `None` when it does not grow or has no
+    /// keyword index to be behind. Cheap: counts only, so a removal and an addition of the same number of points between two looks
+    /// is not seen until the next change.
     pub fn keyword_pending(&self) -> Option<bool> {
         if !idxsnap::appendable_library(&self.path) {
             return None;
@@ -1050,10 +1163,10 @@ impl LibSlot {
         let points = self.docs as u64;
         if let Some(s) = self.snap.ready() {
             let covered = s.manifest.extra.get("points").and_then(|p| p.as_u64()).unwrap_or(s.index.docs);
-            return Some(points > covered);
+            return Some(points != covered);
         }
         match self.legacy_state() {
-            IndexState::Done(meta) => Some(points > meta.total),
+            IndexState::Done(meta) => Some(points != meta.total),
             _ => None,
         }
     }
@@ -1115,6 +1228,13 @@ impl LibSlot {
                 Ok(Some((out, n)))
             }
             "device" => {
+                // A person's own library whose snapshot is behind its shard (a book was just added or arrived, the extension has not
+                // run yet) has no complete keyword list: the one it has knows only the older books, and fused with the meaning list
+                // it ranks them above a new book's own lines (found on a phone: a book added there was not found by its own text).
+                // Until the extension has run, the library is searched by meaning alone, which already holds every point.
+                if self.keyword_pending() == Some(true) {
+                    return Ok(None);
+                }
                 let Some(oi) = self.device_index()? else { return Ok(None) };
                 let (hits, count) = libindex::keyword_hits(oi, query, candidates)?;
                 let out = hits
@@ -1155,6 +1275,154 @@ impl LibSlot {
             truncated,
         ))
     }
+
+    /// Read the whole document the point `point_id` belongs to: its passages in order, grouped into pages, cut after
+    /// `max_chars` of text. A library without a document field, or a point without a document value, gives one page
+    /// holding just that passage.
+    pub fn read_document(&self, point_id: &str, max_chars: usize) -> Result<DocumentOut> {
+        let id: PointId = point_id.parse().map_err(|_| Error::bad_json(format!("bad point id {point_id:?} in library address")))?;
+        let mut req = RetrieveRequest::new(vec![id]);
+        req.with_payload = Some(self.payload_selector());
+        req.with_vector = Some(WithVector::Bool(false));
+        let shard = self.shard.get()?;
+        let recs = EdgeShardRead::retrieve(&*shard, req).map_err(|e| op_internal("reading point", e))?;
+        let rec = recs
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_found(format!("point {point_id} is not in library {}", self.settings.library_id)))?;
+        let empty = Map::new();
+        let p0 = rec.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
+        let f = &self.settings.fields;
+        let title = self.base_title(p0);
+        let main_text = |p: &Map<String, Value>| get_path(p, &f.text).and_then(scalar_text).unwrap_or_default();
+        let single = |p: &Map<String, Value>| {
+            let (text, truncated) = html::cut_at_paragraph(main_text(p).trim(), max_chars);
+            DocumentOut {
+                title: title.clone(),
+                pages: vec![DocPage { page: self.page_value(p), text, addresses: vec![self.address(&id)] }],
+                at_page: 0,
+                more_before: false,
+                more_after: truncated,
+            }
+        };
+        let Some(doc_field) = f.document.as_ref() else { return Ok(single(p0)) };
+        let Some(key) = self.text_field(p0, &f.document) else { return Ok(single(p0)) };
+        let value = match get_path(p0, doc_field) {
+            Some(Value::Number(n)) if n.is_i64() => Match::from(n.as_i64().unwrap_or_default()),
+            _ => Match::from(key),
+        };
+        let jp: JsonPath = doc_field.parse().map_err(|_| Error::bad_json(format!("bad document field {doc_field:?}")))?;
+        let filter = Filter::new_must(Condition::Field(FieldCondition::new_match(jp, value)));
+
+        // every kept point of the document, up to the cap
+        let capped;
+        let mut points: Vec<(PointId, Map<String, Value>)> = Vec::new();
+        let mut offset: Option<PointId> = None;
+        loop {
+            let mut sr = ScrollRequest::new();
+            sr.limit = Some(500.min(DOC_MAX_POINTS - points.len()));
+            sr.offset = offset;
+            sr.filter = Some(filter.clone());
+            sr.with_payload = Some(self.payload_selector());
+            sr.with_vector = WithVector::Bool(false);
+            let (recs, next) = EdgeShardRead::scroll(&*shard, sr).map_err(|e| op_internal("reading document", e))?;
+            for r in recs {
+                let p = r.payload.map(|p| p.0).unwrap_or_default();
+                if !self.left_out(&p) {
+                    points.push((r.id, p));
+                }
+            }
+            offset = next;
+            if offset.is_none() || points.len() >= DOC_MAX_POINTS {
+                capped = offset.is_some();
+                break;
+            }
+        }
+        // the opened passage is always in, even when the capped scroll did not reach it
+        if !points.iter().any(|(i, _)| *i == id) {
+            points.push((id, p0.clone()));
+        }
+
+        let piece_of = |p: &Map<String, Value>| p.get(PIECE_FIELD).and_then(|v| v.as_u64());
+        let by_piece = points.iter().all(|(_, p)| piece_of(p).is_some());
+        let page_num = |p: &Map<String, Value>| match self.page_value(p) {
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        };
+        let numeric_pages = points.iter().all(|(_, p)| matches!(self.page_value(p), Value::Number(_) | Value::Null));
+        let mut keyed: Vec<(String, PointId, Map<String, Value>)> = points.into_iter().map(|(i, p)| (i.to_string(), i, p)).collect();
+        keyed.sort_by(|(sa, _, a), (sb, _, b)| {
+            use std::cmp::Ordering;
+            if by_piece {
+                return piece_of(a).cmp(&piece_of(b)).then_with(|| sa.cmp(sb));
+            }
+            let o = if numeric_pages {
+                // a point with no page sorts first
+                match (page_num(a), page_num(b)) {
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                }
+            } else {
+                self.page_text(a).unwrap_or_default().cmp(&self.page_text(b).unwrap_or_default())
+            };
+            o.then_with(|| sa.cmp(sb))
+        });
+
+        // A window of whole passages around the opened one, grown one at a time, after then before, while it fits.
+        let k = keyed.iter().position(|(_, pid, _)| *pid == id).unwrap_or(0);
+        let texts: Vec<String> = keyed.iter().map(|(_, _, p)| main_text(p).trim().to_string()).collect();
+        let len = |i: usize| texts[i].chars().count();
+        let (mut lo, mut hi) = (k, k);
+        let mut cut_first: Option<String> = None;
+        if len(k) > max_chars {
+            cut_first = Some(html::cut_at_paragraph(&texts[k], max_chars).0);
+        } else {
+            let mut used = len(k);
+            loop {
+                let mut grew = false;
+                if hi + 1 < keyed.len() && used + len(hi + 1) + 2 <= max_chars {
+                    hi += 1;
+                    used += len(hi) + 2;
+                    grew = true;
+                }
+                if lo > 0 && used + len(lo - 1) + 2 <= max_chars {
+                    lo -= 1;
+                    used += len(lo) + 2;
+                    grew = true;
+                }
+                if !grew {
+                    break;
+                }
+            }
+        }
+        let mut pages: Vec<DocPage> = Vec::new();
+        let mut at_page = 0;
+        for i in lo..=hi {
+            let (_, pid, p) = &keyed[i];
+            let text = if i == k { cut_first.clone().unwrap_or_else(|| texts[i].clone()) } else { texts[i].clone() };
+            let pv = self.page_value(p);
+            if pages.last().map(|l| l.page != pv).unwrap_or(true) {
+                pages.push(DocPage { page: pv, text: String::new(), addresses: vec![] });
+            }
+            let last = pages.last_mut().unwrap();
+            if !text.is_empty() {
+                if !last.text.is_empty() {
+                    last.text.push_str("\n\n");
+                }
+                last.text.push_str(&text);
+            }
+            last.addresses.push(self.address(pid));
+            if i == k {
+                at_page = pages.len() - 1;
+            }
+        }
+        // a scroll that stopped at the cap left points unseen, anywhere in the order
+        let more_before = lo > 0 || (capped && lo == 0);
+        let more_after = hi + 1 < keyed.len() || (capped && hi + 1 == keyed.len());
+        Ok(DocumentOut { title, pages, at_page, more_before, more_after })
+    }
 }
 
 /// Split `lib:<library-id>/<point-id>` at the last slash (a point id never contains one).
@@ -1172,7 +1440,7 @@ mod tests {
 
     #[test]
     fn address_split() {
-        assert_eq!(parse_lib_address("lib:recon/42").unwrap(), ("recon", "42"));
+        assert_eq!(parse_lib_address("lib:field/42").unwrap(), ("field", "42"));
         assert_eq!(parse_lib_address("lib:a/b/9f1c").unwrap(), ("a/b", "9f1c"));
         for bad in ["lib:", "lib:x", "lib:/1", "lib:x/", "zim:x/1"] {
             assert!(parse_lib_address(bad).is_err(), "{bad}");

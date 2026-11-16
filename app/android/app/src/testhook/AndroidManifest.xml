@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A device round presses the foreground service's notification actions without the shade: this receiver turns a broadcast into the
+     same Pause and Resume the notification's buttons send (fgs/FgsAddTestHook.kt). Merged into the manifest ONLY by the test APK
+     (-PcacheTestApk=true, build.gradle.kts); the release and Play builds have no such receiver, and a Robolectric test asserts it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".fgs.FgsAddTestHook"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="co.cache.fgs.test.PAUSE"/>
+                <action android:name="co.cache.fgs.test.RESUME"/>
+                <action android:name="co.cache.fgs.test.RESUME_ANYWAY"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -9,6 +9,7 @@ import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../theme.dart';
 import '../layout/adaptive.dart' show showFittedSheet;
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 /// The docked chat list's width (a drawer's).
 const double kDockedChatListWidth = 304;
@@ -113,7 +114,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
         addToHome(context, widget.layout!, Shortcut.chat(id: c.id, title: c.title));
       case 'share':
         final md = widget.chat.exportMarkdown(c.id);
-        if (md != null) await widget.share(c.title, md);
+        if (md != null && mounted) await shareTextOrCopy(context, c.title, md, widget.share);
       case 'delete':
         final messenger = ScaffoldMessenger.of(context);
         widget.chat.deleteConversation(c.id);

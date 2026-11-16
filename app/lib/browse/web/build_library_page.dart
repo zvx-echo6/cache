@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart' show isLinuxDesktop;
 import '../../screens/download_confirm.dart' show confirmDelete;
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
@@ -118,11 +119,11 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
             if (v == 'rename') unawaited(_renameLibrary(lib));
             if (v == 'delete') unawaited(_deleteLibrary(lib));
             if (v == 'linked-folders' && widget.build.linkedFolders != null) {
-              Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId)));
+              Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LinkedFolderManagementPage(controller: widget.build.linkedFolders!, libraryId: widget.libraryId, build: widget.build)));
             }
           },
           itemBuilder: (_) => [if (widget.build.linkedFolders != null) const PopupMenuItem(value: 'linked-folders', child: Text('Linked folders')), const PopupMenuItem(value: 'rename', child: Text('Rename library')),
-            if (c.canDeleteLibrary) PopupMenuItem(value: 'delete', child: Text('Delete · frees ${formatBytes(c.sizeOf?.call(lib.id) ?? 0)}', style: TextStyle(color: context.t.emergency))),
+            if (c.canDeleteLibrary) PopupMenuItem(value: 'delete', child: Text('Delete · frees ${formatBytes(c.freesOf(lib.id) ?? 0)}', style: TextStyle(color: context.t.emergency))),
           ],
         ),
       ]),
@@ -140,6 +141,10 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     final counts = n == 0 && !building ? 'No books yet' : '${bookCount(n)} · ${thousands(passages)} passages · built from your PDFs';
     final up = c.upload;
     final mine = up != null && up.libraryId == id;
+    final needsLook = c.itemsOf(id).any((i) => i.needsAttention || i.skipped);
+    // On the Linux desktop "Needs a look" is not put above the shelves: it can turn up while the page is open, and what is under the
+    // pointer must not move. It sits after them. (While a build runs the panel is the build's own and stays on top.)
+    final lateQueue = isLinuxDesktop(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -151,7 +156,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         const SizedBox(height: 10),
         if (c.notice != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(c.notice!, style: TextStyle(fontSize: 13, color: context.t.warning))),
         if (mine && up.running) _uploadCard(context, up),
-        if (building || c.itemsOf(id).any((i) => i.needsAttention || i.skipped)) _queue(context, lib) else if (n > 0) _facts(context, lib),
+        if (building || (!lateQueue && needsLook)) _queue(context, lib) else if (n > 0) _facts(context, lib),
         if (_classes != null) ...[
           const SizedBox(height: 16),
           BuildShelves(
@@ -168,6 +173,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
           TextButton(onPressed: _loadClasses, child: const Text('Try again')),
         ],
         if (lib.publishError != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(lib.publishError!, style: TextStyle(fontSize: 12, color: context.t.warning))),
+        if (lateQueue && !building && needsLook) Padding(padding: const EdgeInsets.only(top: 16), child: _queue(context, lib)),
       ],
     );
   }
@@ -199,7 +205,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
 
   Widget _facts(BuildContext context, BuildLibrary lib) {
     final k = context.t;
-    final bytes = c.sizeOf?.call(lib.id);
+    final bytes = c.freesOf(lib.id);
     final rows = <(String, String)>[
       ('Books', thousands(lib.books)),
       ('Passages', thousands(lib.passages)),
@@ -363,9 +369,9 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
         child: Column(children: [
           Icon(Icons.library_books, size: 40, color: k.secondary),
           const SizedBox(height: 12),
-          Text(_division == null ? 'No books in this library yet.' : 'No books in this division.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'No books in this library yet.' : 'No books in this category.', style: TextStyle(fontSize: 13, color: k.secondary)),
           const SizedBox(height: 2),
-          Text(_division == null ? 'Add PDFs and Cache builds them one at a time.' : 'Choose another division or add books to this one.', style: TextStyle(fontSize: 13, color: k.secondary)),
+          Text(_division == null ? 'Add PDFs and Cache builds them one at a time.' : 'Choose another category or add books to this one.', style: TextStyle(fontSize: 13, color: k.secondary)),
           Text('It keeps going if you close this tab.', style: TextStyle(fontSize: 13, color: k.secondary)),
         ]),
       );
@@ -530,7 +536,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
       }
       setState(() { _division = division; _bookNumber = target; });
     } else {
-      say(context, 'There is no division with that number.');
+      say(context, 'There is no category with that number.');
     }
   }
 
@@ -629,15 +635,15 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
               children: [
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   Text('Frees', style: TextStyle(fontSize: 14, color: k.text)),
-                  Flexible(child: Text('${b.size > 0 ? '${formatBytes(b.size)} · ' : ''}${thousands(b.passages)} passages', textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.text))),
+                  Flexible(child: Text('${b.freesBytes > 0 ? '${formatBytes(b.freesBytes)} · ' : ''}${thousands(b.passages)} passages', textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.text))),
                 ]),
-                if (free != null && b.size > 0)
+                if (free != null && b.freesBytes > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       const Small('Device storage'),
                       const SizedBox(width: 12),
-                      Flexible(child: Text('${formatBytes(free)} free now, ${formatBytes(free + b.size)} after', textAlign: TextAlign.end, style: TextStyle(fontSize: 12, color: k.secondary))),
+                      Flexible(child: Text('${formatBytes(free)} free now, ${formatBytes(free + b.freesBytes)} after', textAlign: TextAlign.end, style: TextStyle(fontSize: 12, color: k.secondary))),
                     ]),
                   ),
                 const SizedBox(height: 8),
@@ -684,7 +690,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
     final ok = await confirmDelete(
       context,
       name: lib.title,
-      bytes: c.sizeOf?.call(lib.id) ?? 0,
+      bytes: c.freesOf(lib.id) ?? 0,
       free: c.freeSpace?.call(),
       again: 'Your PDF on this computer is not deleted. To get it back, add the PDF again.',
     );

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/notebook/notebook_map.dart';
@@ -73,10 +74,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('New notebook'));
     await tester.pumpAndSettle();
-    for (final t in ['Journal', 'Log', 'Notes', 'Places']) {
+    for (final t in ['Journal', 'Log', 'Notes', 'Places', 'Repeaters']) {
+      await tester.ensureVisible(find.byKey(ValueKey('template-${t.toLowerCase()}')));
       expect(find.byKey(ValueKey('template-${t.toLowerCase()}')), findsOneWidget);
     }
     expect(find.textContaining('Quick add, last done, due again.'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Starter logs'), 300, scrollable: find.byType(Scrollable).last);
     expect(find.text('Starter logs'), findsOneWidget);
     await tester.tap(find.text('Starter logs'));
     await tester.pumpAndSettle();
@@ -215,7 +218,7 @@ void main() {
     expect(find.textContaining('Place:'), findsOneWidget);
   });
 
-  testWidgets('the notebook editor: Create needs a name, names are unique, a field\'s type is fixed once entries exist', (tester) async {
+  testWidgets('the notebook editor: Create needs a name, names are unique, the fields are shown and cannot be changed', (tester) async {
     final r = _Rig();
     final g = await r.generator();
     final t = _templates().byId('log')!;
@@ -230,11 +233,29 @@ void main() {
     expect(find.text('You already have a notebook with this name.'), findsOneWidget);
     expect(tester.widget<TextButton>(find.byKey(const ValueKey('notebook-save'))).onPressed, isNull);
 
+    expect(find.byKey(const ValueKey('add-field')), findsNothing, reason: '1.1: a notebook keeps the fields it is made with');
+
     await r.pump(tester, NotebookEditor(notebook: r.nb, existing: g));
+    // The fields, read only: no Add field, nothing to drag, nothing opens.
+    expect(find.text('FIELDS'), findsOneWidget);
+    expect(find.text('Run time'), findsOneWidget);
+    expect(find.text('Number · min'), findsOneWidget);
+    expect(find.text('Under load'), findsOneWidget);
+    expect(find.text('Fuel level'), findsOneWidget);
+    expect(find.byKey(const ValueKey('add-field')), findsNothing);
+    expect(find.byIcon(Icons.drag_handle), findsNothing);
     await tester.tap(find.text('Run time'));
     await tester.pumpAndSettle();
-    expect(find.text("Can't change once entries exist. Add a new field instead."), findsOneWidget);
-    expect(find.text('Hide field'), findsOneWidget);
+    expect(find.byKey(const ValueKey('field-label')), findsNothing, reason: 'no field sheet');
+    expect(find.text('Hide field'), findsNothing);
+    // A rename saves, and the fields stay as they were, byte for byte.
+    final before = jsonEncode(g.def.toJson()['fields']);
+    await tester.enterText(find.byKey(const ValueKey('notebook-name')), 'Generator check');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('notebook-save')));
+    await tester.pumpAndSettle();
+    expect(r.nb.notebook(g.id)!.name, 'Generator check');
+    expect(jsonEncode(r.nb.notebook(g.id)!.def.toJson()['fields']), before);
 
     final notes = _templates().byId('notes')!;
     await r.pump(tester, NotebookEditor(notebook: r.nb, template: notes));

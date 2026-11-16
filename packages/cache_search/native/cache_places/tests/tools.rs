@@ -517,3 +517,55 @@ fn open_status_examples_and_no_note_without_hours() {
     assert!(v.get("hours_note").is_none());
     assert!(v["places"].as_array().unwrap().iter().all(|p| p["open_status"] == "Hours not known" && p.get("hours").is_none()));
 }
+
+// A `near` that names nothing: the geocoder's any-word fallback must not become the centre.
+const WEAK_LABEL: &str = "current location (nothing found named \"Regional location\")";
+
+#[test]
+fn nearby_weak_near_falls_back_to_the_phone_when_the_location_is_known() {
+    let (_d, ts, _) = setup("w1");
+    let l = loc(42.5400, -113.7900);
+    let v = run(tool(&ts, "nearby"), Some(&l), json!({"category": "fuel", "near": " Regional location "}));
+    assert_eq!(v["center"], WEAK_LABEL);
+    assert_eq!(v["places"][0]["name"], "Chevron");
+}
+
+#[test]
+fn nearby_weak_near_without_a_location_is_geocode_empty() {
+    let (_d, ts, _) = setup("w2");
+    let e = run(tool(&ts, "nearby"), None, json!({"category": "fuel", "near": "Regional location"}));
+    assert_eq!(e["error"]["type"], "geocode_empty");
+    assert_eq!(e["error"]["query"], "Regional location");
+}
+
+#[test]
+fn nearby_exact_near_still_centres_there() {
+    let (_d, ts, _) = setup("w3");
+    // the phone is far away; the exact town wins
+    let l = loc(43.615, -116.202);
+    let v = run(tool(&ts, "nearby"), Some(&l), json!({"category": "pharmacy", "near": "Burley, Idaho"}));
+    assert_eq!(v["center"], "Burley, ID");
+    assert_eq!(v["places"][0]["name"], "Walgreens");
+}
+
+#[test]
+fn nearby_a_name_that_starts_a_places_name_is_still_accepted() {
+    let (_d, ts, _) = setup("w4");
+    let l = loc(43.615, -116.202);
+    let v = run(tool(&ts, "nearby"), Some(&l), json!({"category": "pharmacy", "near": "Cassia Reg"}));
+    assert!(v["center"].as_str().unwrap().starts_with("Cassia Regional Hospital"), "{v}");
+    assert_eq!(v["places"][0]["name"], "Walgreens");
+}
+
+#[test]
+fn locate_weak_near_is_not_used_as_the_bias() {
+    let (_d, ts, _) = setup("w5");
+    let l = tool(&ts, "locate");
+    // Two St. Luke's: Boise and Twin Falls. The phone is at Twin Falls; a `near` that only shares a word with a Boise
+    // hospital must not pull the answer to Boise.
+    let twin = loc(42.56, -114.46);
+    let plain = run(l, Some(&twin), json!({"place": "St. Luke's"}));
+    assert!(plain["place_name"].as_str().unwrap().contains("Magic Valley"), "{plain}");
+    let weak = run(l, Some(&twin), json!({"place": "St. Luke's", "near": "Alphonsus location"}));
+    assert_eq!(weak["place_name"], plain["place_name"]);
+}

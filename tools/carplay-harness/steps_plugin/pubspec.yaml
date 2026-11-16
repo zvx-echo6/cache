@@ -1,0 +1,19 @@
+# CarPlay harness only (tools/carplay-harness): never a part of the app. See ios/Classes/HarnessStepsPlugin.swift.
+name: harness_steps
+description: Lets the CarPlay harness job on the Mac steer the harness app in the Simulator.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: HarnessStepsPlugin

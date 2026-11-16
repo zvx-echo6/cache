@@ -126,3 +126,30 @@ fn only_an_old_unconfirmed_link_is_removed_whatever_else_is_saved() {
     assert_eq!(peers(&a)[1]["unconfirmed"], true);
     a.close();
 }
+
+#[test]
+fn a_refused_link_does_not_lock_out_a_device_that_is_already_linked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let a = engine(&da, "Desk");
+    let b = engine(&db, "Phone");
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    wait("the link confirmed on A", 60, || {
+        call(&b, "sync_now", json!({}));
+        peers(&a).first().map(|p| p["unconfirmed"] == false).unwrap_or(false)
+    });
+    // The same code again: it was used once, so A refuses. B is still linked to A, and A may still connect to B.
+    let err = b.call("link", &json!({"code": code})).expect_err("a used code is refused");
+    assert!(format!("{err:#}").contains("not being shown any more"), "{err:#}");
+    assert_eq!(peers(&b).len(), 1, "B still lists A");
+    let rounds = |e: &SyncEngine| call(e, "status", json!({}))["rounds"].as_u64().unwrap_or(0);
+    let before = rounds(&a);
+    wait("two more rounds on A", 60, || {
+        call(&a, "sync_now", json!({}));
+        rounds(&a) >= before + 2
+    });
+    assert!(peers(&a)[0]["error"].is_null(), "A could not reach B after the refused link: {}", peers(&a)[0]["error"]);
+    a.close();
+    b.close();
+}

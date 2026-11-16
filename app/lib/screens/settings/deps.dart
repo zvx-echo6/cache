@@ -1,5 +1,6 @@
 import '../../app_state.dart';
 import '../../browse/browse_state.dart';
+import '../../car/car_voice_access.dart';
 import '../../chat/chat_controller.dart';
 import '../../location/location_service.dart';
 import '../../maps/maps_state.dart';
@@ -19,6 +20,7 @@ class SettingsDeps {
     required this.location,
     required this.hub,
     this.onOpenAsk,
+    this.carVoice,
   });
 
   final AppState app;
@@ -32,4 +34,7 @@ class SettingsDeps {
 
   /// Called after a saved conversation is chosen, to bring the Ask screen forward.
   final void Function()? onOpenAsk;
+
+  /// Voice search from the car, the iPhone's permissions; null leaves its row out (Settings > the row "Search by voice from the car").
+  final CarVoiceAccess? carVoice;
 }

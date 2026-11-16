@@ -4,15 +4,19 @@ import 'dart:math' as math;
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../car/car_overlay.dart' show pointAtFraction;
 import '../location/coords.dart';
 import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
+import '../maps/geo.dart';
 import '../maps/maps_state.dart';
 import '../platform/app_log.dart';
+import 'eta_blend.dart';
 import 'guidance.dart';
 import 'nav_backend.dart';
 import 'nav_position.dart';
+import 'saved_first.dart';
 import 'speaker.dart';
 import 'units.dart';
 
@@ -70,6 +74,16 @@ class MapRequested extends NavEvent {
   const MapRequested();
 }
 
+/// What the Maps tab is asked to show ([NavState.mapShow]): a spot, the whole route, or an area fitted in view ([area]: a region,
+/// a layer's downloaded area, asked through [MapsState.showAreaOnMap]).
+class MapShow {
+  const MapShow({this.at, this.route = false, this.area});
+
+  final GeoPoint? at;
+  final bool route;
+  final GeoBounds? area;
+}
+
 class NavNotice extends NavEvent {
   const NavNotice(this.text);
   final String text;
@@ -90,6 +104,9 @@ class NavState extends ChangeNotifier {
     this.searchDebounce = const Duration(milliseconds: 220),
     this.meaningDebounce = const Duration(milliseconds: 700),
     this.rerouteCooldown = const Duration(seconds: 8),
+    this.guidanceLogEvery,
+    this.rerouteTimeout = const Duration(seconds: 25),
+    this.arrivalEndAfter = const Duration(minutes: 5),
   }) : _clock = clock ?? DateTime.now;
 
   final MapBackend backend;
@@ -100,6 +117,17 @@ class NavState extends ChangeNotifier {
   final Duration searchDebounce;
   final Duration meaningDebounce;
   final Duration rerouteCooldown;
+
+  /// How often guidance writes its one line to the app log (fixes, the last progress answer, failures) while it runs; the
+  /// app gives one minute. Null: no timer, only the line written when guidance lets go of the position service.
+  final Duration? guidanceLogEvery;
+
+  /// How long a re-route waits for the core before it is given up (see [_reroute]).
+  final Duration rerouteTimeout;
+
+  /// How long after arrival guidance ends by itself if End is not tapped ([_armArrivalEnd]); the app keeps five minutes.
+  /// Settable so a test can make it short.
+  Duration arrivalEndAfter;
   final DateTime Function() _clock;
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
@@ -161,6 +189,9 @@ class NavState extends ChangeNotifier {
 
   /// True when the off-road route failed because the area has no off-road data (the panel offers Walk and Drive).
   bool offroadDataMissing = false;
+
+  /// True when the route failed because a place of it is outside the downloaded maps (the panel offers Download this area).
+  bool outsideMaps = false;
 
   /// The best route and its alternatives; [routeIndex] is the one chosen.
   List<MapRoute> routes = const [];
@@ -243,6 +274,14 @@ class NavState extends ChangeNotifier {
     return out;
   }
 
+  /// The stops the route being followed goes through, in its order, each with the number [numberedStopsAhead] gives it (its place
+  /// among that route's stops, the number the turn banner says), passed ones included: the n-th stop maneuver of the route is
+  /// the n-th of these. The drive screen's list reads its stop rows from here.
+  List<(int, MapPlace)> get routeStopsInOrder => [
+        for (final (k, i) in _routeStops.indexed)
+          if (i < stops.length) (k + 1, stops[i]),
+      ];
+
   /// The places in [stops] that are not passed, in order: what a route from here goes through.
   List<int> _aheadIndexes() => [
         for (var i = 0; i < stops.length; i++)
@@ -273,7 +312,9 @@ class NavState extends ChangeNotifier {
     _passedStops
       ..clear()
       ..addAll([for (var i = 0; i < passed.length; i++) i]);
+    _rerouteGen++;
     rerouting = true;
+    _reroutingSince = _clock();
     _lastReroute = _clock();
     notifyListeners();
     var added = false;
@@ -306,6 +347,7 @@ class NavState extends ChangeNotifier {
           ..addAll(beforePassed);
       }
       rerouting = false;
+      _reroutingSince = null;
       notifyListeners();
     }
     return added;
@@ -326,6 +368,19 @@ class NavState extends ChangeNotifier {
   // ---- guidance ----------------------------------------------------------------------------------------------
 
   MapProgress? progress;
+
+  /// The time left that the phone and the car show, in seconds: the plan's time left ([MapProgress.remainingS]) with the pace
+  /// the drive has kept blended in (eta_blend.dart). The plan's own while there is no blended value for this [progress].
+  int? get leftS {
+    final p = progress;
+    if (p == null) return null;
+    return identical(p, _blendFor) ? (_blendLeft ?? p.remainingS) : p.remainingS;
+  }
+
+  final EtaBlend _blend = EtaBlend();
+  MapProgress? _blendFor;
+  int? _blendLeft;
+
   bool voiceOn = true;
   bool rerouting = false;
   bool arrived = false;
@@ -416,10 +471,17 @@ class NavState extends ChangeNotifier {
     if (text.trim().isEmpty) return;
     final seq = ++_searchSeq;
     searching = true;
+    // The saved places that match come first (saved_first.dart), and stay when the place search fails.
+    var saved = const <MapPlace>[];
+    try {
+      saved = [for (final s in await backend.savedPlaces()) savedAsPlace(s)];
+    } catch (_) {
+      // An old core without saved places: the place search alone.
+    }
     try {
       final r = await backend.search(text, near: mapCentre ?? here, limit: 10, meaning: meaning);
       if (seq != _searchSeq) return;
-      results = r.results;
+      results = savedFirst(text, saved, r.results);
       searchError = null;
       final words = meaning && r.kind == 'text';
       searchNote = words && (r.meaning == 'no_vectors' || r.meaning == 'model_mismatch')
@@ -436,7 +498,7 @@ class NavState extends ChangeNotifier {
     } catch (e) {
       if (seq != _searchSeq) return;
       searchError = e is CacheSearchException ? e.message : 'Search failed';
-      results = const [];
+      results = savedFirst(text, saved, const []);
       placesState = PlacesState.ok;
     } finally {
       if (seq == _searchSeq) searching = false;
@@ -551,6 +613,54 @@ class NavState extends ChangeNotifier {
 
   void requestMap() => _events.add(const MapRequested());
 
+  // ---- showing a spot on the map -----------------------------------------------------------------------------
+
+  /// What something off the map (a stop's row, a turn of the drive screen, a point of the elevation chart, a saved place's page)
+  /// asked the Maps tab to show, and has not been shown yet: a spot ([MapShow.at]) or the whole route ([MapShow.route]). The
+  /// Maps screen takes it ([takeMapShow]) when its map is ready, brings it into view and marks a spot.
+  MapShow? get mapShow => _mapShow;
+  MapShow? _mapShow;
+
+  /// Takes what is to be shown (the Maps screen, once it has shown it).
+  MapShow? takeMapShow() {
+    final s = _mapShow;
+    _mapShow = null;
+    return s;
+  }
+
+  /// The Maps tab, brought to [at] with the spot marked.
+  void showOnMap(GeoPoint at) {
+    _mapShow = MapShow(at: at);
+    notifyListeners();
+    requestMap();
+  }
+
+  /// The Maps tab, brought to the point [fraction] of the way along the route shown (a point of its elevation chart).
+  void showAlongRoute(double fraction) {
+    final r = route;
+    if (r == null || r.points.isEmpty || fraction.isNaN) return;
+    showOnMap(pointAtFraction(r.points, fraction.clamp(0.0, 1.0).toDouble()));
+  }
+
+  /// The Maps tab with the whole route shown in it (the drive screen's route mini map).
+  void showRouteOnMap() {
+    if (route == null) return;
+    _mapShow = const MapShow(route: true);
+    notifyListeners();
+    requestMap();
+  }
+
+  /// A place from elsewhere in the app (a saved place's page) on the Maps tab: its card while looking at the map; while a route
+  /// is shown or followed (which a card would replace) the spot only.
+  void showPlace(MapPlace p) {
+    if (phase != NavPhase.browsing) {
+      showOnMap(p.point);
+      return;
+    }
+    select(p);
+    requestMap();
+  }
+
   // ---- directions --------------------------------------------------------------------------------------------
 
   /// Load the assistant's retained route exactly. Guidance needs a separate Start tap.
@@ -623,6 +733,7 @@ class NavState extends ChangeNotifier {
     routeIndex = 0;
     routeError = null;
     offroadDataMissing = false;
+    outsideMaps = false;
     if (from == null) {
       routeError = 'Your position is not known yet. Turn on location to get directions from where you are.';
       notifyListeners();
@@ -643,6 +754,7 @@ class NavState extends ChangeNotifier {
       if (!r.ok) {
         routeError = routeErrorText(r);
         offroadDataMissing = offroad && r.errors.isNotEmpty && r.errors.first.code == 'not_set_up';
+        outsideMaps = r.errors.isNotEmpty && r.errors.first.code == 'out_of_coverage';
       } else {
         routes = [r, ...r.alternatives];
         if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
@@ -691,9 +803,12 @@ class NavState extends ChangeNotifier {
   Future<void> start() async {
     final r = route;
     if (r == null || phase != NavPhase.previewing) return;
+    _cancelArrivalEnd();
     phase = NavPhase.guiding;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     progress = null;
     _sendRoute = true;
     _routeStarted = false;
@@ -711,25 +826,115 @@ class NavState extends ChangeNotifier {
       location.holdStream(false);
       return;
     }
-    _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
+    _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix, onError: _onFixError);
     _simulated = simulatedDrive?.call() ?? false;
+    _startGuidanceLog();
+    // The route's own time at the start, and at arrival the time the drive took (numbers only): a drive in the log then says
+    // how far the router's estimate was from the drive.
+    _startedAt = _clock();
+    _plannedS = r.durationS;
+    logInfo('Guidance: the route\'s time is ${r.durationS} s for ${r.distanceM.round()} m');
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
     if (f != null && !(simulatedDrive?.call() ?? false)) unawaited(_handleFix(f));
   }
 
+  /// When this guidance started, and the time the route said then (see [start]).
+  DateTime? _startedAt;
+  int? _plannedS;
+
   /// True while the guidance that is running is a simulated drive (asked once, when it starts).
   bool _simulated = false;
 
   void _onFix(Fix f) {
+    _diag.fixes++;
+    _diag.lastFix = f;
     location.publish(f);
     unawaited(_handleFix(f));
   }
 
+  /// The position stream reported an error. Before, nothing listened for it; it is counted and logged, and the stream goes on.
+  void _onFixError(Object e) {
+    _diag.streamErrors++;
+    _diag.streamFailures.failed('Guidance: the position stream reported an error', e, _clock());
+  }
+
+  // ---- the guidance log ----------------------------------------------------------------------------------
+  // One line a minute while guidance runs, so a drive in the log says whether fixes came, what the core answered and what
+  // failed. These are log lines only; nothing here changes what guidance does.
+
+  final _GuidanceDiag _diag = _GuidanceDiag();
+  Timer? _guidanceLogTimer;
+
+  void _startGuidanceLog() {
+    _guidanceLogTimer?.cancel();
+    _diag.reset(_clock());
+    logInfo('Guidance: started, waiting for fixes from the position service${_simulated ? ' (a simulated drive)' : ''}');
+    final every = guidanceLogEvery;
+    if (every != null) _guidanceLogTimer = Timer.periodic(every, (_) => logGuidanceMinute());
+    _guidanceLogOn = true;
+  }
+
+  bool _guidanceLogOn = false;
+
+  void _stopGuidanceLog() {
+    _guidanceLogTimer?.cancel();
+    _guidanceLogTimer = null;
+    if (!_guidanceLogOn) return;
+    _guidanceLogOn = false;
+    logGuidanceMinute();
+  }
+
+  /// Writes the guidance line for the time since the last one and starts counting again. The timer calls it once every
+  /// [guidanceLogEvery] while guidance runs, and once more when guidance lets go of the position service.
+  @visibleForTesting
+  void logGuidanceMinute() {
+    final now = _clock();
+    final d = _diag;
+    final secs = now.difference(d.since).inSeconds;
+    final f = d.lastFix ?? lastFix;
+    final fixPart = f == null
+        ? 'no fix yet'
+        : 'last fix ${_age(now, f.time)} old, accuracy ${f.accuracyM.round()} m';
+    final p = d.lastProgress;
+    final progressPart = p == null
+        ? 'no progress answer'
+        : 'last progress ${_age(now, d.lastProgressAt!)} old: on route ${p.onRoute}, off route ${p.offRoute} '
+            '(${p.offRouteCount} fixes off), ${p.offsetM.round()} m from the route, ${p.distanceAlongM.round()} of ${p.totalM.round()} m along';
+    final parts = <String>[
+      '${d.fixes} fixes in ${secs}s',
+      fixPart,
+      '${d.progressCalls} progress calls',
+      progressPart,
+      '${d.progressErrors} progress errors${d.firstProgressError == null ? '' : ' (first: ${d.firstProgressError})'}',
+      if (d.streamErrors > 0) '${d.streamErrors} position stream errors',
+      if (d.offRouteAnswers > 0) '${d.offRouteAnswers} off-route answers',
+      if (d.reroutesSkipped > 0) '${d.reroutesSkipped} re-routes skipped (one already running or within the cooldown)',
+      if (d.rerouteFailures > 0) '${d.rerouteFailures} re-routes failed',
+      if (rerouting && _reroutingSince != null) 'a new route has been worked out for ${now.difference(_reroutingSince!).inSeconds}s',
+    ];
+    logInfo('Guidance: ${parts.join(', ')}');
+    d.next(now);
+  }
+
+  static String _age(DateTime now, DateTime t) {
+    final s = now.difference(t).inMilliseconds / 1000;
+    return '${s.toStringAsFixed(s.abs() < 10 ? 1 : 0)} s';
+  }
+
+  DateTime? _reroutingSince;
+
   /// Feeds a fix to guidance. Updates are one at a time: a fix that arrives while the core is busy replaces the one waiting.
+  ///
+  /// After arrival a fix is only the vehicle's position: it is kept as [lastFix] and told (the phone map, the car's marker),
+  /// and nothing else is done with it (no progress, prompt or re-route).
   Future<void> _handleFix(Fix f) async {
-    if (!guiding || arrived) return;
+    if (!guiding) return;
     lastFix = f;
+    if (arrived) {
+      notifyListeners();
+      return;
+    }
     // The next stop, once the phone came within 100 m of it, is passed: a new route after going off the route leaves it out.
     // Only the next one: stops are visited in order, and being near a later stop does not pass it or the ones before it.
     final nextStop = _aheadIndexes().firstOrNull;
@@ -756,10 +961,19 @@ class NavState extends ChangeNotifier {
   Future<void> _progressFor(Fix f) async {
     final r = route;
     if (r == null || !guiding) return;
+    _diag.progressCalls++;
     try {
       final p = await backend.progress(r, lat: f.lat, lon: f.lon, accuracyM: f.accuracyM, now: _clock(), sendRoute: _sendRoute);
       _sendRoute = false;
+      _diag.lastProgress = p;
+      _diag.lastProgressAt = _clock();
+      if (p.offRoute) _diag.offRouteAnswers++;
       if (!guiding || arrived || route?.routeId != r.routeId) return;
+      // A new plan (the first answer after Start, a re-route, an added stop: each clears the progress first) starts the
+      // measured pace again.
+      if (progress == null || progress!.routeId != p.routeId) _blend.reset();
+      _blendLeft = _blend.update(at: _clock(), distanceAlongM: p.distanceAlongM, planLeftS: p.remainingS);
+      _blendFor = p;
       progress = p;
       // The stops the core has seen reached along this route are passed, so the list of stops ahead (the route panel, the
       // car's overview) and the route being followed are one list.
@@ -776,12 +990,19 @@ class NavState extends ChangeNotifier {
         _say(line);
       }
       if (p.arrived) {
-        // Arrival is final for this trip: no later fix is followed, so nothing reroutes or speaks again, and the position
-        // service is let go now. The phase stays guiding, so the arrived banner (and the car's) shows until it is dismissed.
+        // Arrival is final for this trip: no later fix goes to guidance, so nothing reroutes or speaks again. The position
+        // service keeps running until End: its fixes still move the phone map's marker and camera and the car's marker
+        // ([_handleFix]); before, it was let go here and every map froze on the arrival point until End. The phase stays
+        // guiding, so the arrived banner (and the car's) shows until it is dismissed.
         arrived = true;
+        _blend.reset();
+        _pendingFix = null;
+        _stopGuidanceLog();
+        _armArrivalEnd();
         notifyListeners();
-        await _stopTracking();
-        logInfo('Guidance: arrived, the position service is let go');
+        logInfo('Guidance: arrived, the position keeps coming until End');
+        final began = _startedAt;
+        if (began != null) logInfo('Guidance: arrived after ${_clock().difference(began).inSeconds} s; the route\'s time at the start was $_plannedS s');
         return;
       }
       if (p.offRoute) await _reroute(f);
@@ -789,23 +1010,63 @@ class NavState extends ChangeNotifier {
     } catch (e) {
       // A bad update is skipped; the next fix tries again. A core that lost the route is sent it again.
       if (e is CacheSearchException && e.code == 'not_found') _sendRoute = true;
+      // It is counted for the guidance line and logged (the first, then at most once a minute): before, a drive whose every
+      // update failed left nothing in the log.
+      _diag.progressErrors++;
+      _diag.firstProgressError ??= _GuidanceDiag.describe(e);
+      _diag.progressFailures.failed('Guidance: a progress update failed', e, _clock());
     }
   }
 
+  /// Counts re-route requests: an answer is applied only by the request that is still the newest ([_reroute]). Start, End and
+  /// Add stop while guiding move it on too, so an answer from before them is never applied after them.
+  int _rerouteGen = 0;
+
   Future<void> _reroute(Fix f) async {
     final now = _clock();
-    if (rerouting || (_lastReroute != null && now.difference(_lastReroute!) < rerouteCooldown)) return;
+    if (rerouting) {
+      _diag.reroutesSkipped++;
+      final since = _reroutingSince;
+      logInfo('Guidance: off the route, re-route skipped: one is already being worked out'
+          '${since == null ? '' : ' (for ${now.difference(since).inSeconds}s)'}');
+      return;
+    }
+    final last = _lastReroute;
+    if (last != null && now.difference(last) < rerouteCooldown) {
+      _diag.reroutesSkipped++;
+      logInfo('Guidance: off the route, re-route skipped: ${now.difference(last).inSeconds}s since the last one '
+          '(it waits ${rerouteCooldown.inSeconds}s)');
+      return;
+    }
     final old = route;
     final to = selected;
-    if (old == null || to == null) return;
+    if (old == null || to == null) {
+      _diag.rerouteFailures++;
+      logError('Guidance: off the route, but there is ${old == null ? 'no route' : 'no destination'} to work out a new one for');
+      return;
+    }
+    final gen = ++_rerouteGen;
     rerouting = true;
+    _reroutingSince = now;
     _lastReroute = now;
     notifyListeners();
     _say('Rerouting.');
     try {
-      final r = await backend.route(
-          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
-      if (!guiding) return;
+      // The core is one queue: a route can wait behind a slow call (opening the core, a model loading). The limit is long enough
+      // for that; past it this request is given up, the next off-route fix asks again, and its answer, if it still comes, is
+      // never used.
+      final r = await backend
+          .route(
+              // The way the vehicle is going rides with the start (heading_deg, only when it is moving): the router then starts the
+              // new route forward. Without it a start on a road mid-block was snapped either way, and a driver who turned early
+              // got a route that began with a U-turn, which he was off again after a few more seconds (a re-route every cooldown).
+              from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location', if (f.heading != null) 'heading_deg': f.heading},
+              to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
+          .timeout(rerouteTimeout);
+      if (gen != _rerouteGen || !guiding || !identical(selected, to)) {
+        logInfo('Guidance: a new route came after guidance had moved on, it is not used');
+        return;
+      }
       if (r.ok) {
         routes = [r];
         routeIndex = 0;
@@ -817,13 +1078,29 @@ class NavState extends ChangeNotifier {
         _routeStops = _aheadIndexes();
         logInfo('Guidance: off the route, the new route goes through ${stopsAhead.length} of ${stops.length} stops');
       } else {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, no new route (${r.errors.isEmpty ? 'no error code' : r.errors.first.code})');
         _events.add(NavNotice(routeErrorText(r)));
       }
-    } catch (_) {
-      _events.add(const NavNotice('Could not work out a new route'));
+    } on TimeoutException {
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, no new route within ${rerouteTimeout.inSeconds}s; the next fix off the route asks again');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
+    } catch (e) {
+      if (gen == _rerouteGen && guiding) {
+        _diag.rerouteFailures++;
+        logError('Guidance: off the route, working out a new route failed: ${_GuidanceDiag.describe(e)}');
+        _events.add(const NavNotice('Could not work out a new route'));
+      }
     } finally {
-      rerouting = false;
-      notifyListeners();
+      // Only the newest request lets go of the flag: one that was overtaken (a new drive, Add stop) leaves the newer one's.
+      if (gen == _rerouteGen) {
+        rerouting = false;
+        _reroutingSince = null;
+        notifyListeners();
+      }
     }
   }
 
@@ -841,6 +1118,7 @@ class NavState extends ChangeNotifier {
   /// lock) and the hold on the map's own position stream. The guidance fix is forgotten with them, so [here] is the phone's
   /// own position again. Calling it again is harmless.
   Future<void> _stopTracking() async {
+    _stopGuidanceLog();
     final sub = _fixSub;
     _fixSub = null;
     _pendingFix = null;
@@ -853,8 +1131,30 @@ class NavState extends ChangeNotifier {
     }
   }
 
+  /// Ends guidance by itself [arrivalEndAfter] after arrival if End was not tapped, the same way End does ([end]), so the
+  /// position service (its notification and wake lock on Android) is not left running for a trip that is over. End, a new
+  /// route or a new destination (each goes through [end] or [start]) cancels it; the generation check is a second guard.
+  void _armArrivalEnd() {
+    _arrivalEndTimer?.cancel();
+    final gen = _rerouteGen;
+    _arrivalEndTimer = Timer(arrivalEndAfter, () {
+      _arrivalEndTimer = null;
+      if (_disposed || !guiding || !arrived || gen != _rerouteGen) return;
+      logInfo('Guidance: ended by itself 5 minutes after arrival');
+      unawaited(end());
+    });
+  }
+
+  Timer? _arrivalEndTimer;
+
+  void _cancelArrivalEnd() {
+    _arrivalEndTimer?.cancel();
+    _arrivalEndTimer = null;
+  }
+
   /// End guidance: stop the position service and the voice, back to the map with the place still selected.
   Future<void> end() async {
+    _cancelArrivalEnd();
     if (!guiding) return;
     await _stopTracking();
     logInfo('Guidance: ended, the position service is let go');
@@ -877,7 +1177,9 @@ class NavState extends ChangeNotifier {
     stops = const [];
     progress = null;
     arrived = false;
+    _rerouteGen++;
     rerouting = false;
+    _reroutingSince = null;
     lastFix = null;
     onFollow?.call(FollowMode.follow);
     notifyListeners();
@@ -892,6 +1194,10 @@ class NavState extends ChangeNotifier {
 
   GeoPoint? get routeStart => _routeFrom;
 
+  /// The places of the route asked for, in the order a missing download is looked for ([outsideMaps], [offroadDataMissing]):
+  /// where to, the stops, then the start.
+  List<GeoPoint> get routeEnds => [if (selected case final to?) to.point, for (final s in stops) s.point, ?_routeFrom];
+
   bool _disposed = false;
 
   @override
@@ -899,12 +1205,90 @@ class NavState extends ChangeNotifier {
     _disposed = true;
     _searchTimer?.cancel();
     _meaningTimer?.cancel();
+    _guidanceLogTimer?.cancel();
+    _guidanceLogTimer = null;
+    _cancelArrivalEnd();
     _fixSub?.cancel();
     positionSource.stop();
     location.holdStream(false);
     lastFix = null;
     _events.close();
     super.dispose();
+  }
+}
+
+/// What guidance counts between two of its log lines ([NavState.logGuidanceMinute]).
+class _GuidanceDiag {
+  DateTime since = DateTime.fromMillisecondsSinceEpoch(0);
+  int fixes = 0;
+  int progressCalls = 0;
+  int progressErrors = 0;
+  String? firstProgressError;
+  int streamErrors = 0;
+  int offRouteAnswers = 0;
+  int reroutesSkipped = 0;
+  int rerouteFailures = 0;
+
+  /// Kept from one line to the next: their age says how long ago the last one came.
+  Fix? lastFix;
+  MapProgress? lastProgress;
+  DateTime? lastProgressAt;
+
+  final _FailureLog progressFailures = _FailureLog();
+  final _FailureLog streamFailures = _FailureLog();
+
+  /// A new drive.
+  void reset(DateTime now) {
+    next(now);
+    lastFix = null;
+    lastProgress = null;
+    lastProgressAt = null;
+    progressFailures.reset();
+    streamFailures.reset();
+  }
+
+  /// The counts start again after a line.
+  void next(DateTime now) {
+    since = now;
+    fixes = 0;
+    progressCalls = 0;
+    progressErrors = 0;
+    firstProgressError = null;
+    streamErrors = 0;
+    offRouteAnswers = 0;
+    reroutesSkipped = 0;
+    rerouteFailures = 0;
+  }
+
+  /// An error in one line of the log: the core's code and message, or the error's own text, at most 200 characters.
+  static String describe(Object e) {
+    final s = (e is CacheSearchException ? '${e.code}: ${e.message}' : '$e').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s.length <= 200 ? s : '${s.substring(0, 200)}...';
+  }
+}
+
+/// Logs a failure that can repeat with every fix: the first one, then at most one line a minute, saying how many were not
+/// logged in between.
+class _FailureLog {
+  static const Duration every = Duration(minutes: 1);
+  DateTime? _lastAt;
+  int _notLogged = 0;
+
+  void reset() {
+    _lastAt = null;
+    _notLogged = 0;
+  }
+
+  void failed(String what, Object? error, DateTime now) {
+    final last = _lastAt;
+    if (last != null && now.difference(last) < every) {
+      _notLogged++;
+      return;
+    }
+    final more = _notLogged > 0 ? ' ($_notLogged more since the last such line)' : '';
+    logError('$what$more${error == null ? '' : ': ${_GuidanceDiag.describe(error)}'}');
+    _lastAt = now;
+    _notLogged = 0;
   }
 }
 

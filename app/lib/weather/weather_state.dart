@@ -7,7 +7,6 @@ import 'package:flutter/foundation.dart';
 
 import '../actions/setup_status.dart' show setupAge;
 import '../chat/system_prompt.dart' show isoWithOffset;
-import '../files.dart';
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
 import '../settings/web_search_setup.dart' show KeyCheck;
@@ -25,6 +24,8 @@ import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import '../notebook/places.dart' show distanceM;
+import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
 
@@ -44,6 +45,9 @@ enum StatusTone { ok, warn, quiet }
 
 /// Home's Weather and alerts card while the weather part is starting and sources are on (the same placeholder Home shows while it
 /// reads the card).
+/// What Home and the Weather screen say in the one state where weather does not work ([WeatherState.nothingWatched]).
+const String kWeatherHereOff = "Weather is off: your location isn't watched";
+
 const String kWeatherStarting = '…';
 
 /// What the Weather and alerts card on Home shows (see [WeatherState.homeCard]).
@@ -51,6 +55,7 @@ class HomeWeather {
   const HomeWeather({
     this.message,
     this.off = false,
+    this.hereOff = false,
     this.place = '',
     this.temperature,
     this.conditions,
@@ -71,11 +76,15 @@ class HomeWeather {
   /// ([WeatherState.homeCardAsOfNow]); null for words in place of a card.
   final HomeAnswer? answer;
 
-  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
+  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Weather is off: your location isn't watched".
   final String? message;
 
   /// Weather was on and every source is off now: the card says "Weather is off" with Turn on (Settings > Weather and alerts).
   final bool off;
+
+  /// Weather is off because nothing is watched: "Your location" was switched off and no other place is watched. The card offers to
+  /// watch the location again with one tap.
+  final bool hereOff;
   final String place;
 
   /// "45 °F" and "clear sky", as the forecast source writes them.
@@ -178,8 +187,11 @@ class WeatherState extends ChangeNotifier {
     required this.policy,
     required this.core,
     required this.secrets,
-    required this.catalogueDir,
-    required this.liveDir,
+    this.catalogueDir,
+    this.liveDir,
+    this.catalogueFiles,
+    this.liveFiles,
+    this.onPlan,
     required this.builtIns,
     this.position,
     this.regions,
@@ -192,7 +204,11 @@ class WeatherState extends ChangeNotifier {
     DateTime Function()? clock,
     this.hereSettle = const Duration(seconds: 45),
     this.hereGap = const Duration(minutes: 15),
+    this.hereMaxWait = const Duration(minutes: 5),
+    this.townOf,
+    Timer Function(Duration, void Function())? timer,
   }) : _fetch = fetch ?? fetchBytes,
+       _makeTimer = timer ?? Timer.new,
        _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
 
@@ -205,16 +221,34 @@ class WeatherState extends ChangeNotifier {
 
   /// The least time between two fetches for "Where I am" that [positionChanged] starts.
   final Duration hereGap;
+
+  /// The longest a fetch for "Where I am" is put off by it moving: each move restarts the [hereSettle] wait, and in a moving car the
+  /// key never settles, so this long after the first unsettled move its sources are fetched wherever it is ([positionChanged]).
+  final Duration hereMaxWait;
+
+  /// The nearest town to a position, as the places tools name it ("Burley, ID"), from the offline places data; null when there is
+  /// none or the places data is not there. "Where I am" is named after it ([hereName]).
+  final Future<String?> Function(double lat, double lon)? townOf;
+  final Timer Function(Duration, void Function()) _makeTimer;
   final TokenStore secrets;
 
   /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
   final void Function()? onPlacesChanged;
 
-  /// Where downloaded catalogues are kept.
-  final Future<Directory> Function() catalogueDir;
+  /// Where downloaded catalogues are kept (a phone: a folder; give [catalogueFiles] instead in a browser).
+  final Future<Directory> Function()? catalogueDir;
 
-  /// The core's source folder, or null when there is no core.
-  final Future<Directory?> Function() liveDir;
+  /// The core's source folder, or null when there is no core (a phone; give [liveFiles] instead in a browser).
+  final Future<Directory?> Function()? liveDir;
+
+  /// The same two folders in a browser, where they are on Cache Server (the catalogues in the support folder, the core's source
+  /// folder in the documents folder). They are used when given.
+  final Future<WeatherFiles> Function()? catalogueFiles;
+  final Future<WeatherFiles?> Function()? liveFiles;
+
+  /// Told what the server's own timer should keep fetching when no tab is open (see [watchPlan]); null on a phone, whose
+  /// background run reads the settings and the last place itself.
+  final Future<void> Function(Map<String, dynamic> plan)? onPlan;
 
   /// The text of each built-in definition.
   final Future<List<String>> Function() builtIns;
@@ -321,6 +355,12 @@ class WeatherState extends ChangeNotifier {
 
   bool isOn(String id) => _same(id).any(settings.liveSourcesOn.contains);
 
+  /// For the log: how many sources the settings have on, how many of them the app recognises as on (catalogue loaded), how many the
+  /// catalogues offer, and how many places are watched. Settings on with none recognised means the catalogue, not the switches.
+  String sourcesLine() =>
+      'weather sources: ${settings.liveSourcesOn.length} on in settings, ${enabledSources.length} recognised as on, '
+      '${sources.length} in the catalogues, started $_started; ${settings.watchedPlaces.length} places watched';
+
   /// The sources that are on and can be used.
   List<Connector> get enabledSources => [for (final c in sources) if (isOn(c.id)) c];
 
@@ -338,6 +378,38 @@ class WeatherState extends ChangeNotifier {
 
   bool rowIsOn(CuratedRow r) => rowSources(r).any((c) => isOn(c.id));
 
+  /// The one time weather does not work (owner, 2026-11-15): the person switched off watching "Your location" and watches no
+  /// other place.
+  bool get nothingWatched => !settings.watchedPlaces.contains(kWatchHere) && watchedPlacesNow().isEmpty;
+
+  /// Watching "Your location" again, from the one tap Home and the Weather screen offer when [nothingWatched].
+  Future<void> watchHereAgain() async {
+    logInfo('Weather: Watch my location tapped');
+    settings.setWatched(kWatchHere, true);
+    positionChanged();
+    await updateNow();
+  }
+
+  /// The default switches: what "Turn on weather" turns on, and what comes back by itself whenever no source would be on.
+  static List<CuratedRow> get defaultRows => [
+    for (final title in const ['Weather forecast', 'Weather alerts', 'Wildfires']) kCurated.firstWhere((r) => r.title == title),
+  ];
+
+  /// Weather always works (owner, 2026-11-15): whenever no source would be on (at start, after a settings sync from a linked
+  /// device, after a switch), the default sources come back on by themselves, with no message. Only once the catalogues are there
+  /// (before, no source can be recognised as on). Writes the setting directly, not through [setSourcesOn], so it never loops.
+  Future<bool> _keepDefaultsOn() async {
+    // The catalogues must be there, not only the built-in sources: the built-ins stand in for forecast and alerts but not for Wildfires,
+    // so switching on before the catalogue came left Wildfires off for good. A first start waits for the catalogue.
+    if (!_started || _catalogues.isEmpty || sources.isEmpty || enabledSources.isNotEmpty) return false;
+    final ids = <String>{for (final r in defaultRows) for (final c in rowSources(r)) ..._same(c.id)};
+    if (ids.isEmpty) return false;
+    settings.setLiveSourcesOn(ids, true);
+    logInfo('Weather: no source was on; the default sources are on again; ${sourcesLine()}');
+    await applyAlertDefaults(force: true);
+    return true;
+  }
+
   /// A switch: all of the sources behind it.
   Future<void> setRowOn(CuratedRow r, bool on) => setSourcesOn(rowSources(r), on);
 
@@ -345,6 +417,7 @@ class WeatherState extends ChangeNotifier {
     final ids = <String>{for (final c in list) ..._same(c.id)};
     if (ids.isEmpty) return;
     settings.setLiveSourcesOn(ids, on);
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -453,7 +526,7 @@ class WeatherState extends ChangeNotifier {
   /// Called once the core has opened.
   Future<void> start() async {
     if (_started) return;
-    _store = CatalogueStore(await catalogueDir());
+    _store = catalogueFiles != null ? CatalogueStore.files(await catalogueFiles!()) : CatalogueStore((await catalogueDir!()));
     try {
       _builtIn = [for (final t in await builtIns()) Connector.parse(t)];
     } catch (e) {
@@ -463,6 +536,7 @@ class WeatherState extends ChangeNotifier {
     _moveLinkedLists();
     _readStatus();
     _readShown();
+    _readHereData();
     _readSaved();
     await _readKeys();
     _kind = await policy.probe.current();
@@ -475,6 +549,7 @@ class WeatherState extends ChangeNotifier {
     // What is kept on the phone (the sources that are on, the last data shown, the saved places) shows from here, before the core
     // has answered anything: the rest of start waits for the core.
     notifyListeners();
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
     if (_catalogueDue) {
@@ -518,6 +593,7 @@ class WeatherState extends ChangeNotifier {
 
   void _onSettings() {
     unawaited(pushPolicy());
+    unawaited(publishPlan());
     notifyListeners();
   }
 
@@ -559,15 +635,26 @@ class WeatherState extends ChangeNotifier {
 
   Future<void> _syncFolder() async {
     try {
-      final dir = await liveDir();
-      if (dir == null) return;
-      _folder ??= LiveFolder(dir);
+      if (_folder == null) {
+        if (liveFiles != null) {
+          final files = await liveFiles!();
+          if (files == null) return;
+          _folder = LiveFolder.files(files);
+        } else {
+          final dir = await liveDir!();
+          if (dir == null) return;
+          _folder = LiveFolder(dir);
+        }
+      }
       _folder!.apply(
         {for (final c in enabledSources) c.id: c.defText},
         formerly: [for (final c in _builtIn) c.id],
       );
+      // A browser's writes are queued: the core reads the folder itself, so they are waited for. A phone's are done already.
+      if (liveFiles != null) await _folder!.files.flush();
       final listed = await core.sources();
       _registered = {for (final s in (listed['sources'] as List? ?? const [])) (s as Map)['id'] as String};
+      unawaited(publishPlan());
     } catch (e) {
       logError('Live sources folder', error: e);
     }
@@ -597,6 +684,50 @@ class WeatherState extends ChangeNotifier {
         return;
       }
     }
+  }
+
+  String _lastPlan = '';
+
+  /// What the server's own timer keeps fetching with no tab open (a browser; see [onPlan]): the sources that are on and ready, and the
+  /// watched places with the request the core takes for each. Sent only when it changed.
+  Future<void> publishPlan() async {
+    final send = onPlan;
+    if (send == null || !_started) return;
+    try {
+      final places = await watchedPlaces();
+      final plan = <String, dynamic>{
+        'sources': [
+          for (final c in enabledSources)
+            if (keyReady(c)) {'id': c.id, 'title': c.title, 'alerts': c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts'},
+        ],
+        'places': [for (final p in places) {'id': p.id, 'name': p.name, 'request': placeRequest(p)}],
+      };
+      final text = jsonEncode(plan);
+      if (text == _lastPlan) return;
+      await send(plan);
+      _lastPlan = text;
+    } catch (e) {
+      logError('Live plan for the server', error: e);
+    }
+  }
+
+  Timer? _openWatch;
+
+  /// While a tab is open (a browser): now, then every [every], an update that is [due] runs, or else the alerts are checked, so what
+  /// the server's timer fetched while no tab was open pops up as a notification, once, by the told list.
+  void watchWhileOpen({required Duration every, required Duration due}) {
+    _openWatch?.cancel();
+    Future<void> pass() async {
+      if (!_started || _updating || enabledSources.isEmpty) return;
+      try {
+        if (await updateIfDue(due) == null) await checkAlerts();
+      } catch (e) {
+        logError('Weather check', error: e);
+      }
+    }
+
+    unawaited(pass());
+    _openWatch = Timer.periodic(every, (_) => unawaited(pass()));
   }
 
   /// cs_live_set_fetch_policy: online, metered, mobile data allowed (updates always use any connection), and the sources that are on.
@@ -646,6 +777,7 @@ class WeatherState extends ChangeNotifier {
     }
     _moveLinkedLists();
     await _readKeys();
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -694,6 +826,18 @@ class WeatherState extends ChangeNotifier {
     ];
   }
 
+  /// Reads the own sources from the files again (a change from a linked device was applied to them on the server), takes them into
+  /// the core's view and tells listeners. Nothing is written. The other catalogues stay as they are in memory.
+  Future<void> reloadOwn() async {
+    final store = _store;
+    if (store == null) return;
+    final fresh = store.loadAll().where((c) => c.url == ownListUrl).firstOrNull;
+    _catalogues = [for (final c in _catalogues) if (c.url != ownListUrl) c, ?fresh];
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
   /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
   /// any other, and one that fails is left out. Applied at once.
   Future<void> replaceOwnSources(Object? list) async {
@@ -718,6 +862,7 @@ class WeatherState extends ChangeNotifier {
 
   /// The live sources switched on changed from outside this page (a linked device's settings): the core is told at once.
   Future<void> sourcesChanged() async {
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
   }
@@ -851,7 +996,9 @@ class WeatherState extends ChangeNotifier {
     }
     final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
     if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
-    return tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+    final t = await tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout, place: at);
+    logInfo(ownTryLogLine(ownAddressForLog(d.keptAddress, lat: at.lat, lon: at.lon, key: key), at.lat, at.lon, t));
+    return t;
   }
 
   /// Saves the source [d] makes with the values [picks] (a new one, or the one being edited, [OwnDraft.id]): its definition is
@@ -1030,7 +1177,7 @@ class WeatherState extends ChangeNotifier {
       WatchPlace(
         id: kWatchHere,
         kind: PlaceKind.here,
-        name: 'Where I am',
+        name: hereName,
         subtitle: p == null ? 'Follows this device · position not known yet' : 'Follows this device',
         lat: p?.lat,
         lon: p?.lon,
@@ -1073,9 +1220,60 @@ class WeatherState extends ChangeNotifier {
     final key = p == null ? null : _hereKey(p.lat, p.lon);
     if (key == _hereSeen) return;
     _hereSeen = key;
+    unawaited(publishPlan());
     notifyListeners();
-    if (key != null) _scheduleHereFetch(hereSettle);
+    if (key != null) {
+      unawaited(_lookUpHereName());
+      // Each move restarts the settle wait; in a moving car that never ends, so the wait is cut short once [hereMaxWait] has passed
+      // since the first move that did not settle.
+      final now = _now();
+      final since = _hereMovingSince ??= now;
+      final left = hereMaxWait - now.difference(since);
+      final wait = left < hereSettle ? (left.isNegative ? Duration.zero : left) : hereSettle;
+      _scheduleHereFetch(wait);
+    }
   }
+
+  /// When "Where I am" first moved without settling since the last fetch for it; null while it is still or after a fetch.
+  DateTime? _hereMovingSince;
+
+  /// The town "Where I am" is in, by its key, as [townOf] gave it (kept so it is not looked up at every build).
+  final Map<String, String> _hereTowns = {};
+  bool _townLooking = false;
+
+  /// The name of "Where I am": the nearest town when it is known, else "Current location".
+  String get hereName {
+    final p = position?.call();
+    final t = p == null ? null : _hereTowns[_hereKey(p.lat, p.lon)];
+    return t ?? kCurrentLocation;
+  }
+
+  /// Looks up the town for the key "Where I am" is at, once per key and one lookup at a time (a moving car changes its key every
+  /// kilometre; a lookup that finishes after it moved on is kept for its own key and the next one is started).
+  Future<void> _lookUpHereName() async {
+    final lookup = townOf;
+    if (lookup == null || _townLooking || _disposed) return;
+    final p = position?.call();
+    if (p == null) return;
+    final key = _hereKey(p.lat, p.lon);
+    if (_hereTowns.containsKey(key)) return;
+    _townLooking = true;
+    String? town;
+    try {
+      town = await lookup(p.lat, p.lon);
+    } catch (_) {}
+    _townLooking = false;
+    if (_disposed) return;
+    if (town != null && town.isNotEmpty) {
+      if (_hereTowns.length > 20) _hereTowns.clear();
+      _hereTowns[key] = town;
+      notifyListeners();
+    }
+    final now = position?.call();
+    if (now != null && _hereTown(now) == null && _hereKey(now.lat, now.lon) != key) unawaited(_lookUpHereName());
+  }
+
+  String? _hereTown(Position p) => _hereTowns[_hereKey(p.lat, p.lon)];
 
   Timer? _hereTimer;
   DateTime? _hereFetchedAt;
@@ -1091,12 +1289,13 @@ class WeatherState extends ChangeNotifier {
   void _scheduleHereFetch(Duration after) {
     _hereTimer?.cancel();
     if (_disposed || !_started) return;
-    _hereTimer = Timer(after, () async {
+    _hereTimer = _makeTimer(after, () async {
       final last = _hereFetchedAt;
       if (last != null && _now().difference(last) < hereGap) {
         _scheduleHereFetch(hereGap - _now().difference(last));
         return;
       }
+      _hereMovingSince = null;
       await _fetchHere();
     });
   }
@@ -1105,6 +1304,7 @@ class WeatherState extends ChangeNotifier {
     if (_disposed || _updating || _updateRunning) return;
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
+    unawaited(_lookUpHereName());
     if (srcs.isEmpty || here.isEmpty) return;
     if (await policy.probe.current() == ConnectionKind.none) return;
     _hereFetchedAt = _now();
@@ -1115,6 +1315,7 @@ class WeatherState extends ChangeNotifier {
         () async {
           try {
             await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+            _noteHere(c, here.first);
           } catch (e) {
             logInfo('Live update for where I am, ${c.id}: failed');
           }
@@ -1169,18 +1370,15 @@ class WeatherState extends ChangeNotifier {
   /// The saved places the core last gave, also kept in a file (read at start, before the core opens).
   List<SavedPlaceRecord>? _savedKept;
 
-  File? get _savedFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/saved-places.json');
-  }
+  static const String _savedFile = 'saved-places.json';
 
   static Map<String, dynamic> _savedJson(SavedPlaceRecord s) => {'key': s.key, 'name': s.name, 'lat': s.lat, 'lon': s.lon, 'label': ?s.label};
 
   void _readSaved() {
     try {
-      final f = _savedFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_savedFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! List) return;
       _savedKept ??= [for (final e in j) if (e is Map) SavedPlaceRecord.fromJson(e.cast<String, dynamic>())];
     } catch (_) {}
@@ -1192,10 +1390,7 @@ class WeatherState extends ChangeNotifier {
     _savedKept = saved;
     if (text == before) return;
     try {
-      final f = _savedFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, text);
+      _store?.files.write(_savedFile, text);
     } catch (_) {}
   }
 
@@ -1263,6 +1458,7 @@ class WeatherState extends ChangeNotifier {
       try {
         final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
         final got = r['fetched'] == true;
+        _noteHere(c, p);
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
         return (got, null);
       } on CacheSearchException catch (e) {
@@ -1311,9 +1507,12 @@ class WeatherState extends ChangeNotifier {
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
   Future<UpdateReport?> updateIfDue(Duration every) async {
     if (!_started || _updating || _updateRunning || enabledSources.isEmpty) return null;
+    // The server's own timer writes this file too (a browser); a phone has nothing to read again.
+    if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
-    final last = _lastRunAt;
+    // Only a run that got something counts as recent: a run where every fetch failed must not hold the next one back.
+    final last = _lastOkAt;
     if (last != null && _now().difference(last) < every) return null;
     return updateNow();
   }
@@ -1358,6 +1557,7 @@ class WeatherState extends ChangeNotifier {
   /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour,
   /// and the screen shows old data in its own ways (no reading after [kReadingLasts], "Last checked").
   WeatherStatus freshness() {
+    if (nothingWatched) return const WeatherStatus(headline: kWeatherHereOff, tone: StatusTone.warn);
     if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
     final now = _now();
     final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
@@ -1420,7 +1620,7 @@ class WeatherState extends ChangeNotifier {
     var kept = false;
     Future<(SourceView, Map<String, dynamic>?)> one(Connector c) async {
       try {
-        final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+        final g = await _getFor(c, p);
         // A forecast's answer with no items must not wipe the last good one kept for Home at start. For everything that is
         // happening (warnings, fires and the rest) no items is the answer: the core leaves out what has ended and gives an
         // empty list when nothing is active (the "none active" entry is the assistant's tool's, not this call's), so it
@@ -1447,6 +1647,83 @@ class WeatherState extends ChangeNotifier {
     final out = await Future.wait([for (final c in enabledSources) one(c)]);
     if (kept) _saveShown();
     return out;
+  }
+
+  /// The farthest "Where I am" borrows another key's data from, when its own key has none (metres).
+  static const double kHereBorrowM = 25000;
+
+  /// Keys "Where I am" has had data for, by source: [_noteHere] adds one when a fetch or a read finds data under it.
+  final Map<String, Set<String>> _hereData = {};
+  static const String _hereDataFile = 'here-keys.json';
+
+  void _noteHere(Connector c, WatchPlace p) {
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return;
+    final keys = _hereData.putIfAbsent(c.id, () => <String>{});
+    if (!keys.add(key)) return;
+    // only the nearest few are worth keeping
+    if (keys.length > 200) keys.remove(keys.first);
+    _saveHereData();
+  }
+
+  void _readHereData() {
+    try {
+      final text = _store?.files.read(_hereDataFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
+      if (j is! Map) return;
+      for (final e in j.entries) {
+        if (e.value is List) _hereData.putIfAbsent(e.key as String, () => {for (final k in e.value as List) '$k'});
+      }
+    } catch (_) {}
+  }
+
+  void _saveHereData() {
+    try {
+      _store?.files.write(_hereDataFile, jsonEncode({for (final e in _hereData.entries) e.key: e.value.toList()}));
+    } catch (_) {}
+  }
+
+  /// The position in a "Where I am" key (`at:42.55,-113.79`), or null.
+  static ({double lat, double lon})? _keyPosition(String key) {
+    final m = RegExp(r'^at:(-?[\d.]+),(-?[\d.]+)$').firstMatch(key);
+    final lat = double.tryParse(m?.group(1) ?? ''), lon = double.tryParse(m?.group(2) ?? '');
+    return lat == null || lon == null ? null : (lat: lat, lon: lon);
+  }
+
+  static double _metresBetweenKeys(String a, String b) {
+    final x = _keyPosition(a), y = _keyPosition(b);
+    return x == null || y == null ? double.infinity : distanceM(x.lat, x.lon, y.lat, y.lon);
+  }
+
+  /// [c]'s stored data for [p]; for "Where I am", whose own key has none, the nearest key within [kHereBorrowM] that has some. A
+  /// car moves a kilometre in a minute and its key never settles long enough to be fetched, but the weather is the same a few
+  /// kilometres on. The answer's own age says how old it is. The answer carries `_at`, the key it is from.
+  Future<Map<String, dynamic>> _getFor(Connector c, WatchPlace p) async {
+    Map<String, dynamic> ask(WatchPlace q) => {'source': c.id, 'place': placeRequest(q), 'now': isoWithOffset(_now())};
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return core.get(ask(p));
+    try {
+      final g = await core.get(ask(p));
+      _noteHere(c, p);
+      return {...g, '_at': key};
+    } on CacheSearchException catch (e) {
+      if (e.code != 'not_found') rethrow;
+      final near = [
+        for (final k in _hereData[c.id] ?? const <String>{})
+          if (k != key && _metresBetweenKeys(k, key) <= kHereBorrowM) k,
+      ]..sort((a, b) => _metresBetweenKeys(a, key).compareTo(_metresBetweenKeys(b, key)));
+      for (final k in near) {
+        final at = _keyPosition(k)!;
+        try {
+          final g = await core.get(ask(WatchPlace(id: p.id, kind: p.kind, name: p.name, subtitle: p.subtitle, lat: at.lat, lon: at.lon, key: k)));
+          return {...g, '_at': k};
+        } on CacheSearchException catch (e2) {
+          if (e2.code == 'not_found') _hereData[c.id]?.remove(k);
+        }
+      }
+      rethrow;
+    }
   }
 
   SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
@@ -1488,21 +1765,25 @@ class WeatherState extends ChangeNotifier {
   List<SourceView>? keptViewFor(WatchPlace p) {
     final out = [
       for (final c in enabledSources)
-        if (_shown['${c.id} ${p.id}'] case final g?) _viewOf(c, p, g, kept: true),
+        if (_shown['${c.id} ${p.id}'] case final g? when _keptFits(g, p)) _viewOf(c, p, g, kept: true),
     ];
     return out.isEmpty ? null : out;
   }
 
-  File? get _shownFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/last-shown.json');
+  /// A kept answer for "Where I am" is from the key it was read at: it stands for the place now only within [kHereBorrowM] of it.
+  static bool _keptFits(Map<String, dynamic> g, WatchPlace p) {
+    final at = g['_at'], key = p.key;
+    if (p.kind != PlaceKind.here || at is! String || key == null) return true;
+    return _metresBetweenKeys(at, key) <= kHereBorrowM;
   }
+
+  static const String _shownFile = 'last-shown.json';
 
   void _readShown() {
     try {
-      final f = _shownFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_shownFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! Map) return;
       for (final e in j.entries) {
         if (e.value is Map) _shown.putIfAbsent(e.key as String, () => (e.value as Map).cast<String, dynamic>());
@@ -1512,10 +1793,7 @@ class WeatherState extends ChangeNotifier {
 
   void _saveShown() {
     try {
-      final f = _shownFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode(_shown));
+      _store?.files.write(_shownFile, jsonEncode(_shown));
     } catch (_) {}
   }
 
@@ -1635,6 +1913,7 @@ class WeatherState extends ChangeNotifier {
     // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
     // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
+    if (nothingWatched) return const HomeWeather(message: kWeatherHereOff, off: true, hereOff: true);
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".
@@ -1817,16 +2096,13 @@ class WeatherState extends ChangeNotifier {
 
   // ---------------------------------------------------------------- what is remembered between starts
 
-  File? get _statusFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/status.json');
-  }
+  static const String _statusFile = 'status.json';
 
   void _readStatus() {
     try {
-      final f = _statusFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = _store?.files.read(_statusFile);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       DateTime? t(Object? v) => v is int ? DateTime.fromMillisecondsSinceEpoch(v) : null;
       _lastOkAt = t(j['ok']);
       _lastRunAt = t(j['run']);
@@ -1837,10 +2113,7 @@ class WeatherState extends ChangeNotifier {
 
   void _saveStatus() {
     try {
-      final f = _statusFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode({
+      _store?.files.write(_statusFile, jsonEncode({
         'ok': _lastOkAt?.millisecondsSinceEpoch,
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,
@@ -1859,6 +2132,7 @@ class WeatherState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _openWatch?.cancel();
     _hereTimer?.cancel();
     settings.removeListener(_onSettings);
     _sub?.cancel();

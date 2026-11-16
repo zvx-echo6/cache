@@ -36,11 +36,11 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 
 | Call | Body | Result |
 |---|---|---|
-| `GET /api/build/libraries` | | `[{id,title,books,passages,pages,created_at,published,dirty,waiting,building,publish_error}]` |
+| `GET /api/build/libraries` | | `[{id,title,books,passages,pages,created_at,published,dirty,waiting,building,publish_error,bytes}]`; `bytes` is what deleting the library frees (its folder, work copy, stored PDFs, record and waiting uploads), never 0 for a library that takes space |
 | `POST /api/build/libraries` | `{"title"}` | the new library; 409 `name_taken` ("You already have a library called "X". Choose another name, or add to it.") |
 | `PATCH /api/build/libraries/{id}` | `{"title"}` | the library; 404, 409 `name_taken` |
 | `DELETE /api/build/libraries/{id}` | | `{removed:true,id}`; deletes books, packs, PDF copies and search data. 409 `busy` while a book of it is being built. Confirm in the UI. |
-| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in,compression}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
+| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,bytes,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in,on_device,compression}]` (`bytes` is what removing the book frees: its stored PDF and its pack on disk; its share of the search index is not measurable and is not counted), by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
 | `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number does not change; the filed PDF takes the new title in its name. |
 | `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
 | `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to this device's Bookshelves log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
@@ -62,7 +62,7 @@ waits (item stays `queued`, the queue says `blocked`) while it is not, so PDFs m
 
 Optional, per book, chosen before the book is stored. The app keeps its own default (a device setting, not synced) and sends the choice
 with each upload; a drop-folder file has nobody to ask, so the drop folder has its own setting (`PUT /api/build/drop`, `compression`).
-A file with no choice is stored as it arrived (`off`).
+A file with no choice is stored as it arrived (`off`). A book built from a linked folder is always `off`, whatever the queue item or the shared default says: no copy is kept and the person's file is never touched.
 
 | level | what it does |
 |---|---|
@@ -102,7 +102,7 @@ does the same from the command line and prints the result.
   "eta": {"low_seconds": 32400, "high_seconds": 46800},   // both null when unknown or paused
   "pieces_per_second": 1.4 | null,
   "items": [ {id, library_id, file_name, title, state, size,
-              progress: {pages, pieces, pieces_total, ocr_pages},
+              progress: {pages, pieces, pieces_total, ocr_pages, ocr_done},
               error, note, replace, compression, doc_id, duplicate_of, drop, position, created_at, started_at, finished_at,
               result, division, call_number, decision} ] }
 ```
@@ -111,9 +111,9 @@ does the same from the command line and prints the result.
 "Exact copy of X", "Already have a better copy", "Replaced: the new copy has 312 text pages vs 298" (or the other deciding reason).
 `division` and `call_number` say where a built book was filed.
 
-`state`: `queued` (Waiting), `reading` (Reading the PDF), `building` (Building passages · `pieces` of `pieces_total`),
+`state`: `queued` (Waiting), `reading` (Reading the PDF; while scanned pages are being read by OCR, `progress.ocr_pages` is how many there are and `ocr_done` how many are done: "Reading scanned pages (OCR) · 3 of 8"), `building` (Building passages · `pieces` of `pieces_total`),
 `done`, `skipped_duplicate` (same content already in this library; `duplicate_of` is that book's title), `failed` (`error` is the
-sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all; `error` says so; Retry works once OCR exists). `note` on a done book is
+sentence to show), `needs_decision` (possibly a new edition of a book already in the library; see below), `ocr_needed` (no text layer at all and OCR could not read it, or this install has no OCR data (lib/tessdata); `error` says so; Retry works once OCR exists). `note` on a done book is
 `"partial: N pages need OCR"`. `position` is the place among the waiting books. `drop` is true for files from the drop folder.
 The ETA is a range from the pieces per second seen since the service started; show it as an estimate. Items are in queue order;
 finished ones stay (up to 1000) so "x of 214 books done" can be counted: `counts.done + skipped + failed + ocr_needed` over
@@ -221,7 +221,7 @@ These calls cover every library in `<data>/app/docs/libraries`, the ones built h
 |---|---|---|
 | `GET /api/build/bookshelves` | | `{device, stamp, view}`: `device` is this server's id in the log; `view` is the view of LIBRARY-LOG.md, format 1 (what `cs_shelves_resolve` gives a phone) |
 | `GET /api/build/bookshelves/stamp` | | `{stamp}`: a short text that differs whenever a log file, a library's `documents.tsv` or `copies.jsonl`, or its packs folder changes. A page polls this and asks for the rest only when it changes. |
-| `GET /api/build/bookshelves/facts` | | `{libraries: {<library_id>: {<doc_id>: <the first line of the book's newest pack>}}}`, without the bulky `samebook` block. What a phone reads from its packs itself (suggested divisions, compression, source size, page count, author, edition, year). A library with no packs has none. |
+| `GET /api/build/bookshelves/facts` | | `{libraries: {<library_id>: {<doc_id>: <the first line of the book's newest pack>}}}`, without the bulky `samebook` block. What a phone reads from its packs itself (suggested divisions, compression, source size, page count, author, edition, year). For a library this server builds each book's entry also has `on_device` (this device's own fact, not in the pack). A library with no packs has none. |
 | `POST /api/build/bookshelves/events` | `{"events": [event]}` | `{written, moved, titled, stamp}` |
 
 An event is a log line's object (`ev`, `copy`, and the fields of that event; `at` is now when left out; `v` and `dev` are the server's). The
@@ -283,7 +283,7 @@ These authenticated /api/linked-folders/ endpoints are separate from builder upl
 - GET /api/linked-folders/libraries: installed targets, including imported libraries.
 - GET /api/linked-folders/<library>: local configuration, locations and capability flags. Contains local absolute paths; do not sync or publish this response.
 - POST /api/linked-folders/preview with {root, exclusions}: validate an absolute readable directory and relative exclusions. This is read-only, does not register the root, and returns {readable, root, exclusions, counts:null, warnings:[]}.
-- POST /api/linked-folders/<library> with {id,label,mode,root,exclusions}: register a readable server folder. Mode is keep (default), cds, or both. Exclusions are relative subfolder paths.
+- POST /api/linked-folders/<library> with {id,label,root,exclusions}: register a readable server folder. Exclusions are relative subfolder paths. There are no modes: a `mode` field is still accepted (the app sends one) and ignored, and an older registry file that holds one still loads. The folder may not overlap Cache's data, nor the drop folder while that is on (400); the drop folder in turn cannot be set to, or around or inside, a linked folder (400), because it moves and makes files in its own folder.
 - POST /api/linked-folders/<library>/checks with {} or {root_id}: start a background check of all unpaused roots or one root; it returns a job id immediately. Starting the same active scope attaches to that job; a different active scope returns 409.
 - GET /api/linked-folders/<library>/checks: compact {active,latest} status. Corrupt or unreadable outer state returns HTTP 500. Job fields include job_id, state (queued/running/done/failed/interrupted), stage, scope, epoch-millisecond timestamps, paused_for_future, nullable counts, structured per-root reports and a structured error. Progress counts are measurements, not percentages. `files_hashed` and `bytes_hashed` count work attempted in this check. A settling file has no book record yet; it is counted separately. Unknown hashes remain pending with reason `not found in existing catalog`; ambiguous identities have their own pending reason.
 - POST /api/linked-folders/<library>/check: legacy synchronous form. It uses the same coordinator and returns the original report shape; it returns 409 if a check is already active. Each synchronous worker delivers its own report through a private channel, after releasing the library operation lock.
@@ -292,4 +292,19 @@ These authenticated /api/linked-folders/ endpoints are separate from builder upl
 
 Check state and scan checkpoints are device-local under the library's `.local/`. A restart changes an active job to interrupted; the next manual check reuses completed per-file hashes. A progress checkpoint merges only visited file states and never marks unvisited files missing. Completed root walks reconcile locations and are saved individually. Registry-changing operations return 409 while a check owns that library. Job status does not contain full books or file path lists; root issue paths are relative to their linked root and carry stable machine codes. `local_config` still contains canonical absolute paths and remains authenticated/device-local.
 
-This is a backend foundation, not the complete feature. Capability flags explicitly report that indexing unmatched PDFs, automatic checks, synced locations, and original-PDF opening are not enabled. Browse mode is retained as configuration; the folder/subject browsing interface is not supplied yet. Unknown or ambiguous hashes are not counted as reused books. Unavailable roots retain records and search data; availability is local and must be rechecked before source opening.
+A book found in a linked folder is filed like any other (Bookshelves by the CDS, or Unsorted with three suggestions) and is read and embedded the same way; the only difference is that its original stays where it is, read in place and never changed, moved, copied or compressed. Linked folders appear in no structure of their own. Unknown or ambiguous hashes are not counted as reused books. Unavailable roots retain records and search data; availability is local and is the result of the last check.
+
+Each place (`local_config.books[].locations[]`, and the check report's books) carries, besides `root_id`, `relative_path`, `blake3` and `available`:
+
+- `reason`: why the file is not present, a code, or null while it is present. `missing` (a complete walk of the folder did not find it), `unreadable` (the folder or file could not be read), `changing` (it is there but still being written or not yet settled), `folder_offline` (the linked folder itself cannot be read), `unlinked` (the folder was unlinked). It is kept across checks and cleared when the file is back.
+- `last_seen_ms`: the last time (milliseconds since 1970) a check found the file present; null for a place saved before this field existed. Never changed while the file is missing.
+
+Reads and operations on books (authenticated, like the rest):
+
+- GET /api/linked-folders/<library>/books/<doc_id>: where the book's original is. `{library, id, places:[{folder_id, folder, path, present, reason, last_seen_ms}]}`: `folder` is the folder's label and `path` the path inside it (plain names only). Read from the saved registry, so `present` is the last check's answer; nothing is read from the folder. Only folders still registered are listed, only paths inside them, and never the folder's own location. 404 for a book that is not in the library; a book with no linked file has an empty list.
+- GET /api/linked-folders/storage: what each linked folder holds, across all libraries. `{folders:[{library, library_title, folder_id, label, books, bytes}]}`. `books` is the number of the folder's places that are present and hold a book of the library; `bytes` is the total size of those files, from the sizes the last check recorded. No folder is scanned. These are the person's own files, read in place: not part of Cache's storage, and never touched by clean-up.
+- POST /api/linked-folders/<library>/books/<doc_id>/forget: "Forget this book", for a book whose linked file is missing. The book leaves the library (as DELETE of the book does) and its hash is recorded in `build/removed/forgotten.json`, so automatic checks never add it back; the registry forgets it too. 409 while a linked file is present, for a book that has no linked file or has a copy kept on this device, and while a check is running; 404 for an unknown book. `{forgotten:true, id}`. Nothing in a linked folder is touched.
+
+A linked book is on this device while its linked file was present at the last check (it has no filed copy, so its `source_rel` stays empty). `GET /api/build/libraries/{id}/books` carries `on_device` for every book (a filed copy exists, or a linked file was present), and so does each book's entry of `GET /api/build/bookshelves/facts` for a library this server builds. These are this device's own facts: they are not in `documents.tsv`, `copies.jsonl` or any pack, which are the same on every device. The Bookshelves stamp changes when a check changes a linked folder's registry.
+
+Clean-up: nothing in the server's clean-up (Removed purge and delete, dismissing queue items, deleting a book or a library, the drop folder) can reach a linked folder's files. Every removal of a queue item's file is limited to uploads, a linked book keeps no filed copy to move or delete, and the drop folder cannot overlap a linked folder.

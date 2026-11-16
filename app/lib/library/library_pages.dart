@@ -15,7 +15,10 @@ import '../theme.dart';
 import '../update/update_ui.dart' show currentWhatsNew, showWhatsNew;
 import '../version.dart';
 import '../video/format.dart' show formatBytes;
+import '../background/fgs_add.dart' show fgsNoticeShared;
+import 'add_pdf/add_pdf_pages.dart' show openAddPdfProgress;
 import 'add_pdf/add_pdf_state.dart' show addPdfShared;
+import 'add_pdf/fgs_notice_card.dart';
 import 'book_pages.dart';
 import 'catalog_page.dart';
 import 'library_panes.dart';
@@ -42,6 +45,7 @@ class LibraryDeps {
     this.sharing,
     this.rootTop,
     this.rootBottom,
+    this.rootEnd,
     this.whatsNew = currentWhatsNew,
   });
 
@@ -74,6 +78,9 @@ class LibraryDeps {
 
   /// What shows under the four rows, above Add to Library (in a browser, the libraries built from PDFs).
   final List<Widget> Function(BuildContext context)? rootBottom;
+
+  /// What shows last, under Add to Library: a notice that turns up while the page is open goes here, so no row above it moves.
+  final List<Widget> Function(BuildContext context)? rootEnd;
   final Future<List<String>> Function() whatsNew;
 
   /// Everything a Library page listens to.
@@ -146,14 +153,17 @@ class IconTile extends StatelessWidget {
 
 /// The two short lines under a Library row's name: what it holds, and a fix in the accent ("Update ready for 1", "9 unsorted"),
 /// never an alarm.
-Widget libraryLines(BuildContext context, String line, String? fix) {
+Widget libraryLines(BuildContext context, String line, String? fix, {Widget? fixWidget}) {
   final k = context.t;
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
     children: [
       Text(line, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary)),
-      if (fix != null) Text(fix, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: k.accent)),
+      if (fixWidget != null)
+        fixWidget
+      else if (fix != null)
+        Text(fix, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: k.accent)),
     ],
   );
 }
@@ -193,6 +203,7 @@ class LibraryRootPage extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
+              if (fgsNoticeShared case final n?) FgsAddNoticeCard(state: n),
               if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
               ...?d.rootTop?.call(context),
               SettingsGroup(
@@ -219,6 +230,26 @@ class LibraryRootPage extends StatelessWidget {
                       context,
                       books == 0 ? 'No books yet' : '${booksWord(books)}, shelved by the ${shelves.shortName ?? 'shelves'}',
                       [if (unsorted > 0) '$unsorted unsorted', if ((addPdfShared?.adding ?? 0) > 0) '${addPdfShared!.adding} being added'].join(' · ').emptyToNullWords,
+                      // "N being added" opens the progress page; the rest of the row opens Bookshelves
+                      fixWidget: (addPdfShared?.adding ?? 0) > 0
+                          ? Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                if (unsorted > 0) Text('$unsorted unsorted · ', style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: context.t.accent)),
+                                Semantics(
+                                  button: true,
+                                  child: InkWell(
+                                    key: const ValueKey('library-being-added'),
+                                    onTap: () => openAddPdfProgress(context),
+                                    child: Text(
+                                      '${addPdfShared!.adding} being added',
+                                      style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: context.t.accent, decoration: TextDecoration.underline, decorationColor: context.t.accent),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
                     selected: nav.isOpen('bookshelves'),
                     onTap: () => nav.open(context, bookshelvesSpec(d)),
@@ -261,6 +292,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                 ),
               ],
+              ...?d.rootEnd?.call(context),
             ],
           );
           });

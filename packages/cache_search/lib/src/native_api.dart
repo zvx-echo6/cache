@@ -128,6 +128,14 @@ abstract class CsLiveJobNative {
   int liveFetchStart(int handle, String requestJson);
 }
 
+/// cs_layers_refresh_start: cs_layers_refresh as a job on a thread of the core's own, so the catalogue's network wait never holds
+/// the worker. Kept apart from [CsNative] so the fakes do not change.
+abstract class CsLayersJobNative {
+  /// The job (for [CsNative.jobProgress] and the rest), 0 on error ([CsNative.lastError] with [handle]), -1 when the loaded core
+  /// is older than the call.
+  int layersRefreshStart(int handle);
+}
+
 /// cs_places_refresh: the core reads the places again (the merged database of the downloaded regions and the single-region
 /// packs). Kept apart from [CsNative] so the fakes of the older seam do not change. [FfiCsNative] implements it;
 /// [hasPlacesRefresh] is false when the loaded core is older than the call (the symbol is looked up when first used, never at
@@ -224,6 +232,15 @@ abstract class CsZimIconNative {
 
   /// cs_zim_illustration: {"png_base64"}, or null on error (ask [CsNative.lastError]; `not_found` when the ZIM has no icon).
   String? zimIllustration(int handle, String zimId);
+}
+
+/// A library document read whole (cs_read_document; cache_search.h). Kept apart from [CsNative] like the PDF indexes;
+/// [hasReadDocument] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsDocumentNative {
+  bool get hasReadDocument;
+
+  /// cs_read_document: {"address","title","pages":[...],"at_page","truncated"}, or null on error (ask [CsNative.lastError]).
+  String? readDocument(int handle, String address, int maxChars);
 }
 
 /// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like

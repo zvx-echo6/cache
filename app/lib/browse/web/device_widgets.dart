@@ -82,9 +82,13 @@ String _left(int seconds) {
 /// What sits above the Library list in a browser: the card for what happened while the tab was closed, the upload, the transfers the
 /// device is running, and library packages that wait to be added.
 class DeviceLibraryTop extends StatelessWidget {
-  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage, this.onOpenBuilt});
+  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage, this.onOpenBuilt, this.whileClosed = true});
 
   final DeviceLibrary device;
+
+  /// Whether the "While this tab was closed" card is drawn here, above the list. The Linux desktop draws it after the list instead
+  /// ([DeviceWhileClosedBelow]): it turns up once the page is open, and the rows under the pointer must not move.
+  final bool whileClosed;
 
   /// The person tapped a building library's card.
   final void Function(String libraryId)? onOpenBuilt;
@@ -99,7 +103,7 @@ class DeviceLibraryTop extends StatelessWidget {
       listenable: device,
       builder: (context, _) {
         final up = device.upload;
-        final shown = [for (final j in device.jobs) if (j.active || j.failed) j];
+        final shown = [for (final j in device.jobs) if (j.active || j.paused || j.failed) j];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -108,7 +112,12 @@ class DeviceLibraryTop extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                 child: Text(device.problem!, key: const ValueKey('device-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
               ),
-            if (device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false)) WhileClosedCard(device: device),
+            if (device.jobProblem != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                child: Text(device.jobProblem!, key: const ValueKey('job-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
+              ),
+            if (whileClosed && hasWhileClosed(device)) WhileClosedCard(device: device),
             if (up != null) _uploadCard(up),
             if (device.build != null) BuildListCards(ctl: device.build!, onOpen: onOpenBuilt),
             for (final j in shown) _jobCard(j),
@@ -174,6 +183,20 @@ class DeviceLibraryTop extends StatelessWidget {
         ],
       );
     }
+    if (j.paused) {
+      // Paused keeps its part file on the device: it stays on screen with a way on (Resume) and a way out (Remove, which cancels it
+      // on the device, where the part file is then deleted).
+      return TransferCard(
+        cardKey: ValueKey('job-${j.id}'),
+        title: title,
+        line: j.total > 0 ? 'Paused · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}' : 'Paused · ${formatBytes(j.bytes)}',
+        fraction: j.fraction,
+        actions: [
+          TextButton(key: ValueKey('resume-${j.id}'), onPressed: () => device.resumeJob(j), child: const Text('Resume')),
+          TextButton(key: ValueKey('remove-${j.id}'), onPressed: () => device.cancelJob(j), child: const Text('Remove')),
+        ],
+      );
+    }
     final waiting = j.state == 'queued';
     final since = j.createdAt == null ? '' : ' · started ${startedWords(j.createdAt!)}';
     return TransferCard(
@@ -202,6 +225,22 @@ String startedWords(DateTime t, {DateTime? now}) {
   if (days == 1) return 'yesterday ${clockTime(l)}';
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return '${l.day} ${months[l.month - 1]} ${clockTime(l)}';
+}
+
+/// Whether there is anything to say under "While this tab was closed".
+bool hasWhileClosed(DeviceLibrary device) => device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false);
+
+/// The "While this tab was closed" card after the Library list (the Linux desktop), so it never pushes the rows above it down.
+class DeviceWhileClosedBelow extends StatelessWidget {
+  const DeviceWhileClosedBelow({super.key, required this.device});
+
+  final DeviceLibrary device;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: device,
+        builder: (context, _) => hasWhileClosed(device) ? Padding(padding: const EdgeInsets.only(top: 16), child: WhileClosedCard(device: device)) : const SizedBox.shrink(),
+      );
 }
 
 /// "While this tab was closed": what finished, still runs or stopped since the tab was last open, with Dismiss.

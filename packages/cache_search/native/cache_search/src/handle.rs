@@ -235,15 +235,24 @@ pub fn index_info_json(
     if let Some((name, dir)) = snapshot {
         return json!({"kind": kind, "location": "snapshot", "snapshot": name, "format": format, "dir": path(dir)});
     }
-    if matches!(legacy, IndexState::Done(_)) {
+    // `opening` (only present, true): the snapshot of this source is still being picked on a background thread, so this is not yet
+    // what the source's index is: the app reads the status again until it is gone (a status read right after the sources were set
+    // showed the old index in the library's own folder, kept up to date by Add PDF, and nothing read it again once the older
+    // snapshot became the index in use).
+    let mut v = if matches!(legacy, IndexState::Done(_)) {
         let mut v = json!({"kind": kind, "location": "legacy", "snapshot": Value::Null, "format": format,
             "dir": legacy_dir.map(path).unwrap_or(Value::Null)});
         if has_indexes_dir && !opening && !legacy_dir.is_some_and(idxsnap::seal_blocked) {
             v["needs_seal"] = json!(true);
         }
-        return v;
+        v
+    } else {
+        json!({"kind": kind, "location": "none", "snapshot": Value::Null, "format": format, "dir": Value::Null})
+    };
+    if opening {
+        v["opening"] = json!(true);
     }
-    json!({"kind": kind, "location": "none", "snapshot": Value::Null, "format": format, "dir": Value::Null})
+    v
 }
 
 /// The PDF index of one loaded ZIM (`<zim name>.pdfindex/`, see pdfindex.rs): its newest usable snapshot, verified and opened
@@ -439,6 +448,9 @@ pub struct Handle {
     pub last_cites: Vec<(String, crate::conv::Cite)>,
     /// `indexes_dir` of the sources config (see `Config`).
     pub indexes_dir: Option<PathBuf>,
+    /// Timing lines of the last `set_sources` (how long the ZIM opens and each later step took), for the app's log; they
+    /// travel in `cs_status` as `open_timings`.
+    pub open_timings: Vec<String>,
 }
 
 impl Drop for Handle {
@@ -471,6 +483,7 @@ impl Handle {
             act: Arc::new(cache_act::ActState::new()),
             last_cites: Vec::new(),
             indexes_dir: None,
+            open_timings: Vec::new(),
         };
         h.register_tool(Box::new(cache_calc::CalculateTool));
         h.register_tool(Box::new(cache_act::ActTool(h.act.clone())));
@@ -504,8 +517,28 @@ impl Handle {
             OpenLib { path: PathBuf, index_dir: Option<PathBuf>, given: Option<Value>, id: String, title: String, settings: Option<LibrarySettings> },
             New(Source),
         }
+        let t_all = std::time::Instant::now();
         self.poll_opening();
         let cfg: Config = serde_json::from_str(config_json)?;
+        // The ZIMs not open yet are opened side by side on a few threads (each open is an independent file read); the
+        // results come back in config order and are used below exactly as the serial opens were. Nothing shared is
+        // touched until they have all finished.
+        let t_zims = std::time::Instant::now();
+        let to_open: Vec<PathBuf> = cfg
+            .sources
+            .iter()
+            .filter(|sc| sc.kind == "zim")
+            .map(|sc| PathBuf::from(&sc.path))
+            .filter(|p| !self.sources.iter().any(|s| matches!(s, Source::Zim(z) if z.src.path == *p)))
+            .collect();
+        let threads = crate::openpool::default_threads();
+        let mut opened = crate::openpool::run_pool(&to_open, threads, |p| {
+            let t = std::time::Instant::now();
+            let r = ZimSource::open(p);
+            (r, t.elapsed().as_millis() as u64)
+        })
+        .into_iter();
+        let mut zim_ms: Vec<(String, u64)> = Vec::new();
         let mut plan: Vec<Plan> = Vec::new();
         let mut ids: Vec<String> = Vec::new();
         for sc in &cfg.sources {
@@ -523,16 +556,21 @@ impl Handle {
                             Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir, builtin)),
                             _ => unreachable!(),
                         },
-                        None => match ZimSource::open(&path) {
-                            Ok(z) => {
-                                let id = z.id.clone();
-                                (Some(id), Plan::New(Source::Zim(ZimSlot::new(z, index_dir, builtin))))
+                        None => {
+                            let (result, ms) = opened.next().expect("one open per new ZIM");
+                            match result {
+                                Ok(z) => {
+                                    zim_ms.push((z.title.clone(), ms));
+                                    let id = z.id.clone();
+                                    (Some(id), Plan::New(Source::Zim(ZimSlot::new(z, index_dir, builtin))))
+                                }
+                                Err(error) => {
+                                    let title = stem_title(&path);
+                                    zim_ms.push((title.clone(), ms));
+                                    (None, Plan::New(Source::Failed { kind: "zim", path, title, error }))
+                                }
                             }
-                            Err(error) => {
-                                let title = stem_title(&path);
-                                (None, Plan::New(Source::Failed { kind: "zim", path, title, error }))
-                            }
-                        },
+                        }
                     };
                     if let Some(id) = id {
                         if ids.contains(&id) {
@@ -592,6 +630,7 @@ impl Handle {
                 other => return Err(Error::bad_json(format!("unknown source kind {other:?}"))),
             }
         }
+        let zims_ms = t_zims.elapsed().as_millis() as u64;
         // Success: commit. Move reused sources out of the old list.
         let mut old: Vec<Option<Source>> = std::mem::take(&mut self.sources).into_iter().map(Some).collect();
         self.sources = plan
@@ -640,8 +679,10 @@ impl Handle {
                 _ => {}
             }
         }
+        let t_snap = std::time::Instant::now();
         self.attach_pdf_indexes(old_pdfs);
         self.sync_indexes();
+        let snap_ms = t_snap.elapsed().as_millis() as u64;
         // where jobs find the saved videos and the ZIM files (kwbuild.rs)
         let zim_places: Vec<(String, PathBuf)> = self
             .sources
@@ -670,13 +711,38 @@ impl Handle {
         if cfg.prewarm {
             self.start_prewarm();
         }
+        let t = std::time::Instant::now();
         self.ext.configure_regions(cfg.regions)?;
+        let regions_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.attach_kw_indexes(old_kw);
         self.ext.plug_regions();
+        let ext_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.ext.configure_layers(cfg.layers)?;
+        let layers_ms = t.elapsed().as_millis() as u64;
+        let t = std::time::Instant::now();
         self.ext.configure_notebook(cfg.notebook);
+        let notebook_ms = t.elapsed().as_millis() as u64;
         self.ext.plug_elevation();
+        let total_ms = t_all.elapsed().as_millis() as u64;
+        let other_ms = total_ms.saturating_sub(zims_ms + snap_ms + regions_ms + ext_ms + layers_ms + notebook_ms);
+        // slowest three ZIM opens (one line, not one per ZIM: a phone holds dozens)
+        zim_ms.sort_by_key(|z| std::cmp::Reverse(z.1));
+        let slowest: Vec<String> = zim_ms.iter().take(3).map(|(t, ms)| format!("{t} {ms} ms")).collect();
+        self.open_timings = vec![
+            format!(
+                "core open: {} ZIMs opened on {} threads in {} ms (slowest: {})",
+                zim_ms.len(),
+                threads.min(zim_ms.len()).max(1),
+                zims_ms,
+                if slowest.is_empty() { "none".to_string() } else { slowest.join(", ") }
+            ),
+            format!(
+                "core open steps (ms): zims {zims_ms}, snapshots {snap_ms}, regions {regions_ms}, places-live-keywords {ext_ms}, layers {layers_ms}, notebook {notebook_ms}, other {other_ms}, total {total_ms}"
+            ),
+        ];
         Ok(())
     }
 
@@ -1038,6 +1104,8 @@ impl Handle {
         if let Some(root) = &self.indexes_dir {
             out["rejected_snapshots"] = Value::Array(crate::snapshot::read_rejected(root));
         }
+        // how long the last set_sources took, step by step (the app writes these lines to its log)
+        out["open_timings"] = json!(self.open_timings);
         out.to_string()
     }
 
@@ -1102,18 +1170,27 @@ mod tests {
 
     #[test]
     fn missing_library_does_not_fail_the_handle() {
-        let mut h = Handle::open(r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","index_dir":"/x/i"}]}"#).unwrap();
+        let mut h = Handle::open(r#"{"sources":[{"kind":"library","path":"/nonexistent/field","index_dir":"/x/i"}]}"#).unwrap();
         let v: Value = serde_json::from_str(&h.status_json()).unwrap();
         let s = &v["sources"][0];
         assert_eq!(s["kind"], "library");
         assert_eq!(s["indexed"], false);
-        assert_eq!(s["title"], "recon");
+        assert_eq!(s["title"], "field");
         assert!(s["id"].is_null());
         assert_eq!(s["error"]["code"], "not_found");
         // bad settings are a whole-call failure
-        let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","settings":{"library_id":"r"}}]}"#;
+        let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/field","settings":{"library_id":"r"}}]}"#;
         assert_eq!(h.set_sources(bad).unwrap_err().code, ErrorCode::BadJson);
         assert_eq!(h.sources.len(), 1);
+    }
+
+    #[test]
+    fn the_index_info_says_when_the_snapshot_is_still_being_picked() {
+        let none = IndexState::Missing;
+        let v = index_info_json("library", 2, None, true, &none, None, true);
+        assert_eq!(v["opening"], true, "{v}");
+        let v = index_info_json("library", 2, None, false, &none, None, true);
+        assert!(v.get("opening").is_none(), "{v}");
     }
 
     #[test]

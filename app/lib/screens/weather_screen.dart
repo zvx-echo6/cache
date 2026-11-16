@@ -17,11 +17,13 @@ import '../weather/place_alerts.dart' show PlaceAlertRule;
 import '../weather/place_summary.dart';
 import '../weather/places.dart';
 import '../weather/source_icon.dart';
+import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/weather_state.dart';
 import '../weather/words.dart';
 import 'home_screen.dart' show weatherIcon;
 import 'settings/notifications_page.dart' show AlertGlyph;
 import 'weather_turn_on.dart';
+import '../platform/app_log.dart';
 
 /// The Weather module, as a weather app shows a place, for every kind of event: the weather now and today at one watched place
 /// (its name opens the list of all of them), what is happening near it with the most serious first, and the forecast day by
@@ -72,6 +74,10 @@ class _WeatherScreenState extends State<WeatherScreen> {
     super.initState();
     w.addListener(_changed);
     w.focus.addListener(_onFocus);
+    logInfo('Weather: screen opened; ${w.sourcesLine()}');
+    // The screen is shown: an update that is due runs (due-checked); the screen's own updated / updating lines show it.
+    // (after this build: it tells its listeners, which must not happen while a frame is built)
+    unawaited(Future.microtask(() => w.updateIfDue(kBackgroundEvery)));
     unawaited(_loadRules());
     _load().then((_) => _onFocus());
   }
@@ -178,6 +184,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
   }
 
   Future<void> _update() async {
+    logInfo('Weather: Update now tapped; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -221,6 +228,13 @@ class _WeatherScreenState extends State<WeatherScreen> {
           List<Widget> whole(Widget words) => [
             if (!card) ...[
               _statusBox(context, w.status()),
+              const SizedBox(height: 12),
+            ],
+            if (w.nothingWatched) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton(key: const ValueKey('weather-screen-watch-here'), onPressed: () => unawaited(w.watchHereAgain()), child: const Text('Watch my location')),
+              ),
               const SizedBox(height: 12),
             ],
             words,

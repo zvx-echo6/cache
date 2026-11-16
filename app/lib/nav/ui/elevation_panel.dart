@@ -54,9 +54,61 @@ double niceStep(double raw, {bool quarter = true}) {
 (double, double) chartWindow(double lo, double hi, {required double floor}) {
   final span = math.max(hi - lo, floor);
   final mid = (hi + lo) / 2;
+  // A profile that spans less than the floor sits in the middle of it; room for the labels is added only to a taller one.
+  if (hi - lo < floor) {
+    var yMin = mid - span * 0.73, yMax = mid + span * 0.73;
+    if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
+    return (yMin, yMax);
+  }
   var yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
   if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
   return (yMin, yMax);
+}
+
+/// The least room between two height labels, in points: the label's text is 11 points tall.
+const double kChartLabelGap = 18.0;
+
+/// The heights of the chart's grid lines, each labelled with its own height, in the chart's unit, for a profile from [lo] to [hi]
+/// drawn in a plot [plotHeight] points tall ([full]: the guidance panel's chart, else the preview's, which draws every other line of
+/// the big one's). [floor] is the window's least span ([chartWindow]).
+///
+/// A profile that spans [floor] or more has lines [niceStep] of its span apart, as ever (every other one in the preview). A flatter
+/// route sits in the middle of a window several times as tall as it is ([chartWindow]); its lines are the least nice step that keeps
+/// [kChartLabelGap] points between labels, all within the window (3,700 and 3,800 around a route at 3,765 ft on the full chart),
+/// and only when that gives fewer than two, one more at the profile's own middle.
+@visibleForTesting
+List<double> chartGridLines(double lo, double hi, {required double floor, required double plotHeight, required bool full}) {
+  final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
+  final span = math.max(hi - lo, floor);
+  if (hi - lo >= floor) {
+    // The lines of a profile as ever: a nice step of its span apart, every other one in the preview.
+    final gStep = niceStep(span / 2.2);
+    final usual = <double>[];
+    var line = 0;
+    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
+      if (!full && line.isOdd) continue;
+      usual.add(g);
+    }
+    return usual;
+  }
+  if (plotHeight <= 0) return const [];
+  final pointsPer = (yMax - yMin) / plotHeight;
+  // A flat route: even lines, the least nice step that keeps the labels apart ([kChartLabelGap]).
+  final want = kChartLabelGap * pointsPer;
+  final decade = math.pow(10, (math.log(want) / math.ln10).floor()).toDouble();
+  final step = [for (final m in const [1.0, 2.0, 5.0, 10.0]) m * decade].firstWhere((v) => v >= want - 1e-9);
+  final even = <double>[for (var g = (yMin / step).ceil() * step; g <= yMax + 1e-9; g += step) g];
+  if (even.length >= 2) return even;
+  final unit = step / 10;
+  final mid = ((hi + lo) / 2 / unit).round() * unit;
+  final out = <double>[];
+  for (var g = (yMin / step).ceil() * step; g <= yMax + 1e-9; g += step) {
+    if ((g - mid).abs() < kChartLabelGap * pointsPer) continue;
+    out.add(g);
+  }
+  if (mid >= yMin && mid <= yMax) out.add(mid);
+  out.sort();
+  return out;
 }
 
 /// The distance labels along the chart's foot (in the chart's own unit), as (distance, text). Enough decimals that no two read the
@@ -153,7 +205,6 @@ class ElevationChartPainter extends CustomPainter {
       lo = math.min(lo, _h(e));
       hi = math.max(hi, _h(e));
     }
-    final span = math.max(hi - lo, _h(kChartMinSpanM));
     final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM));
     final total = _d(profile.totalM);
     double x(double m) => l + (total <= 0 ? 0 : _d(m) / total * pw);
@@ -163,11 +214,8 @@ class ElevationChartPainter extends CustomPainter {
     final grid = Paint()
       ..color = colors.secondary.withValues(alpha: 0.28)
       ..strokeWidth = 1;
-    // The small chart labels every other line of the big one's.
-    final gStep = niceStep(span / 2.2);
-    var line = 0;
-    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
-      if (!full && line.isOdd) continue;
+    // The small chart labels every other line of the big one's (chartGridLines).
+    for (final g in chartGridLines(lo, hi, floor: _h(kChartMinSpanM), plotHeight: ph, full: full)) {
       final gy = t + (yMax - g) / (yMax - yMin) * ph;
       for (var gx = l; gx < size.width - r; gx += 7) {
         canvas.drawLine(Offset(gx, gy), Offset(math.min(gx + 3, size.width - r), gy), grid);
@@ -230,7 +278,7 @@ class ElevationChartPainter extends CustomPainter {
 
     // The steepest climb ahead.
     final s = steep;
-    if (full && s != null) {
+    if (s != null) {
       final ps = <Offset>[];
       for (var m = s.startM; m <= s.endM + 0.1; m += math.max(10, (s.endM - s.startM) / 40)) {
         final e = profile.elevationAt(math.min(m, s.endM));
@@ -323,9 +371,18 @@ class ElevationChartPainter extends CustomPainter {
       old.profile != profile || old.positionM != positionM || old.steep?.startM != steep?.startM || old.units != units || old.full != full || old.colors.route != colors.route || old.colors.text != colors.text;
 }
 
-/// The chart as a widget, as wide as it is given.
+/// The share of the route (0 at its start, 1 at its end) at [dx] points from the left of a chart [width] wide: the inverse of
+/// where [ElevationChartPainter] draws a distance (its plot starts 44 points in on the full chart, 40 on the small one, and ends
+/// 10 before the right edge).
+double chartFractionAt(double dx, double width, {required bool full}) {
+  final l = full ? 44.0 : 40.0, pw = width - l - 10.0;
+  if (pw <= 0) return 0;
+  return ((dx - l) / pw).clamp(0.0, 1.0).toDouble();
+}
+
+/// The chart as a widget, as wide as it is given. With [onSpot], a touch on it gives the share of the route there (0 to 1).
 class ElevationChart extends StatelessWidget {
-  const ElevationChart({super.key, required this.profile, required this.fmt, required this.palette, required this.height, this.positionM, this.steep, this.full = true});
+  const ElevationChart({super.key, required this.profile, required this.fmt, required this.palette, required this.height, this.positionM, this.steep, this.full = true, this.onSpot});
 
   final ElevationProfile profile;
   final Fmt fmt;
@@ -334,26 +391,43 @@ class ElevationChart extends StatelessWidget {
   final double? positionM;
   final Climb? steep;
   final bool full;
+  final ValueChanged<double>? onSpot;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-        label: 'Elevation along the route',
-        child: SizedBox(
-          height: height,
-          width: double.infinity,
-          child: CustomPaint(
-            painter: ElevationChartPainter(
-              profile: profile,
-              units: fmt.units,
-              colors: ElevationChartColors.of(context, palette),
-              positionM: positionM,
-              steep: steep,
-              full: full,
-            ),
-          ),
+  Widget build(BuildContext context) {
+    final chart = SizedBox(
+      height: height,
+      width: double.infinity,
+      child: CustomPaint(
+        painter: ElevationChartPainter(
+          profile: profile,
+          units: fmt.units,
+          colors: ElevationChartColors.of(context, palette),
+          positionM: positionM,
+          steep: steep,
+          full: full,
         ),
-      );
+      ),
+    );
+    final spot = onSpot;
+    return Semantics(
+      label: 'Elevation along the route',
+      child: spot == null
+          ? chart
+          : LayoutBuilder(
+              builder: (context, box) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (d) => spot(chartFractionAt(d.localPosition.dx, box.maxWidth, full: full)),
+                child: chart,
+              ),
+            ),
+    );
+  }
 }
+
+/// A row that shows a spot of the route when tapped ([onSpot] given the share of the route there), else just the row.
+Widget _spotRow(Widget row, ValueChanged<double>? onSpot, double distM, double totalM) =>
+    onSpot == null || totalM <= 0 ? row : InkWell(onTap: () => onSpot((distM / totalM).clamp(0.0, 1.0).toDouble()), child: row);
 
 /// "No elevation data for 2.1 mi of this route": the line under a chart that has gaps.
 String missingText(Fmt fmt, ElevationProfile p) => 'No elevation data for ${fmt.distance(p.missingM)} of this route';
@@ -361,7 +435,7 @@ String missingText(Fmt fmt, ElevationProfile p) => 'No elevation data for ${fmt.
 /// The panel pulled up from the guidance card: climb and descent, the chart with the position, the highest and lowest points,
 /// and the steepest climb ahead. With no data, one plain line.
 class ElevationPanel extends StatelessWidget {
-  const ElevationPanel({super.key, required this.elevation, required this.fmt, required this.palette, this.distanceAlongM, this.routeM = 0});
+  const ElevationPanel({super.key, required this.elevation, required this.fmt, required this.palette, this.distanceAlongM, this.routeM = 0, this.onSpot});
 
   final RouteElevation elevation;
   final Fmt fmt;
@@ -370,6 +444,10 @@ class ElevationPanel extends StatelessWidget {
   /// The core's metres along the route, and the route's length (to place the position on the profile).
   final double? distanceAlongM;
   final double routeM;
+
+  /// A touch on the chart, or a tap on Highest, Lowest or Steepest climb ahead: that spot of the route on the map, given as the
+  /// share of the route there (0 to 1). Null: they are not tappable.
+  final ValueChanged<double>? onSpot;
 
   @override
   Widget build(BuildContext context) {
@@ -382,23 +460,15 @@ class ElevationPanel extends StatelessWidget {
         textBaseline: TextBaseline.alphabetic,
         children: [
           Expanded(child: Text('Elevation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: k.text))),
-          if (p != null && p.hasData) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+          if (p != null && p.chartable) Text('Whole route, ${routeLengthText(fmt, p.totalM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
         ],
       ),
     );
     final Widget body;
-    if (p == null) {
-      body = Padding(
-        padding: const EdgeInsets.only(top: 6, bottom: 4),
-        child: Row(
-          children: [
-            SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: k.secondary)),
-            const SizedBox(width: 10),
-            Text('Reading the elevation', style: TextStyle(fontSize: 16, color: k.secondary)),
-          ],
-        ),
-      );
-    } else if (!p.hasData) {
+    if (p == null || (!p.hasData && elevation.loading)) {
+      // Nothing read yet: the frame of the chart (the room it will take), no message and no spinner.
+      body = const SizedBox(key: ValueKey('elevation-frame'), height: 142);
+    } else if (!p.chartable) {
       body = Padding(
         padding: const EdgeInsets.only(top: 10, bottom: 4),
         child: Row(
@@ -412,7 +482,7 @@ class ElevationPanel extends StatelessWidget {
       );
     } else {
       final pos = elevation.positionOnProfile(distanceAlongM, routeM);
-      final steep = p.steepestClimbAhead(pos ?? 0);
+      final steep = elevation.climbAhead(pos ?? 0);
       Widget stat(IconData icon, String big, String small) => Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -482,16 +552,21 @@ class ElevationPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              stat(Icons.arrow_upward, elevationText(fmt, p.climbM), 'Climb'),
-              const SizedBox(width: 12),
-              stat(Icons.arrow_downward, elevationText(fmt, p.descentM), 'Descent'),
-            ],
+          // The totals are of the whole route: not drawn (the room is kept) while the chunks are still coming, so no number is
+          // ever seen growing.
+          Opacity(
+            opacity: elevation.loading ? 0 : 1,
+            child: Row(
+              children: [
+                stat(Icons.arrow_upward, elevationText(fmt, p.climbM), 'Climb'),
+                const SizedBox(width: 12),
+                stat(Icons.arrow_downward, elevationText(fmt, p.descentM), 'Descent'),
+              ],
+            ),
           ),
           const SizedBox(height: 6),
-          ElevationChart(key: const ValueKey('elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 142, positionM: pos, steep: steep),
-          if (p.partial)
+          ElevationChart(key: const ValueKey('elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 142, positionM: pos, steep: steep, onSpot: onSpot),
+          if (p.partial && !elevation.loading)
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(missingText(fmt, p), key: const ValueKey('elevation-missing'), style: TextStyle(fontSize: 13, color: k.secondary)),
@@ -500,12 +575,14 @@ class ElevationPanel extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2, bottom: 6),
             child: Column(
               children: [
-                if (p.highest case final h?) fact(dotKey, 9, 'Highest', elevationText(fmt, h.elevM), ' at ${markerText(fmt, h.distM)}'),
-                if (p.lowest case final lw?) fact(dotKey, 9, 'Lowest', elevationText(fmt, lw.elevM), ' at ${markerText(fmt, lw.distM)}'),
+                if (!elevation.loading && p.highest != null)
+                  _spotRow(fact(dotKey, 9, 'Highest', elevationText(fmt, p.highest!.elevM), ' at ${markerText(fmt, p.highest!.distM)}', rowKey: const ValueKey('elevation-highest')), onSpot, p.highest!.distM, p.totalM),
+                if (!elevation.loading && p.lowest != null)
+                  _spotRow(fact(dotKey, 9, 'Lowest', elevationText(fmt, p.lowest!.elevM), ' at ${markerText(fmt, p.lowest!.distM)}', rowKey: const ValueKey('elevation-lowest')), onSpot, p.lowest!.distM, p.totalM),
                 if (steep != null)
-                  fact(steepKey, 16, 'Steepest climb ahead', '${(steep.grade * 100).round()}%', ' for ${fmt.distance(steep.lengthM)}$where', rowKey: const ValueKey('elevation-steep'))
+                  _spotRow(fact(steepKey, 16, 'Steepest climb ahead', '${(steep.grade * 100).round()}%', ' for ${fmt.distance(steep.lengthM)}$where', rowKey: const ValueKey('elevation-steep')), onSpot, steep.startM, p.totalM)
                 else
-                  fact(steepKey, 16, 'Steepest climb ahead', '', 'None', rowKey: const ValueKey('elevation-steep')),
+                  fact(steepKey, 16, 'Steepest climb ahead', '', elevation.loading ? '' : 'None', rowKey: const ValueKey('elevation-steep')),
               ],
             ),
           ),
@@ -564,11 +641,15 @@ class ElevationHandle extends StatelessWidget {
 
 /// The preview's elevation: climb and descent, the small chart, and the highest and lowest points.
 class RouteElevationSummary extends StatelessWidget {
-  const RouteElevationSummary({super.key, required this.elevation, required this.fmt, required this.palette});
+  const RouteElevationSummary({super.key, required this.elevation, required this.fmt, required this.palette, this.onSpot});
 
   final RouteElevation elevation;
   final Fmt fmt;
   final MapPalette palette;
+
+  /// A touch on the small chart, or a tap on Highest or Lowest: that spot of the route on the map (the share of the route there,
+  /// 0 to 1). Null: not tappable.
+  final ValueChanged<double>? onSpot;
 
   @override
   Widget build(BuildContext context) {
@@ -576,12 +657,12 @@ class RouteElevationSummary extends StatelessWidget {
     final p = elevation.profile;
     final head = <Widget>[Expanded(child: Text('Elevation', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.secondary)))];
     final children = <Widget>[];
-    if (p == null) {
+    if (p == null || elevation.loading) {
       children.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('Reading the elevation', style: TextStyle(fontSize: 14, color: k.secondary)),
       ));
-    } else if (!p.hasData) {
+    } else if (!p.chartable) {
       children.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text('No elevation data for this route.', key: const ValueKey('preview-elevation-none'), style: TextStyle(fontSize: 14, color: k.secondary)),
@@ -608,7 +689,7 @@ class RouteElevationSummary extends StatelessWidget {
         ),
       ));
       children
-        ..add(ElevationChart(key: const ValueKey('preview-elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 92, full: false))
+        ..add(ElevationChart(key: const ValueKey('preview-elevation-chart'), profile: p, fmt: fmt, palette: palette, height: 92, full: false, onSpot: onSpot))
         ..add(Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           // Both labels in full: apart when the row has room, one under the other when it has not (large text on a narrow phone).
@@ -616,8 +697,10 @@ class RouteElevationSummary extends StatelessWidget {
             alignment: WrapAlignment.spaceBetween,
             runSpacing: 2,
             children: [
-              if (p.highest case final h?) Text('Highest ${elevationText(fmt, h.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
-              if (p.lowest case final lw?) Text('Lowest ${elevationText(fmt, lw.elevM)}', style: TextStyle(fontSize: 13, color: k.secondary)),
+              if (p.highest case final h?)
+                _spotRow(Text('Highest ${elevationText(fmt, h.elevM)}', key: const ValueKey('preview-elevation-highest'), style: TextStyle(fontSize: 13, color: k.secondary)), onSpot, h.distM, p.totalM),
+              if (p.lowest case final lw?)
+                _spotRow(Text('Lowest ${elevationText(fmt, lw.elevM)}', key: const ValueKey('preview-elevation-lowest'), style: TextStyle(fontSize: 13, color: k.secondary)), onSpot, lw.distM, p.totalM),
             ],
           ),
         ));

@@ -1,0 +1,4 @@
+{
+  "geojson": "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[20.2,10.5],[20.233,10.5],[20.233,10.52],[20.28,10.52],[20.28,10.55],[20.28,10.56]]},\"properties\":{\"alt\":true,\"kind\":\"road\",\"route\":0}},{\"type\":\"Feature\",\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[20.2,10.5],[20.28,10.5],[20.28,10.56]]},\"properties\":{\"alt\":false,\"kind\":\"road\",\"route\":1}}]}",
+  "bounds": [10.5, 20.2, 10.56, 20.28]
+}

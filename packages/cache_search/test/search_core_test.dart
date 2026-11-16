@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,6 +52,7 @@ CsNative _kinds() => FakeNative()
     'total_estimate': 3,
     'vector_sources': ['field-library'],
     'keyword_only_sources': ['u'],
+    'meaning_timed_out': ['big-library'],
   });
 
 // Runs inside the worker isolate, so it builds its own fake.
@@ -72,6 +75,55 @@ class _PagesNative extends FakeNative {
 }
 
 CsNative _pagesNative() => _PagesNative();
+
+/// A core whose catalogue refresh holds the caller's thread for 2 s (the network at an app start), and is a job that is done
+/// after 600 ms when asked as one (cs_layers_refresh_start).
+class _SlowRefreshNative extends FakeNative implements CsLayersJobNative {
+  DateTime? _started;
+
+  @override
+  String? layers(int handle, String op, String? arg) {
+    calls.add('layers:$op:$arg');
+    if (op == 'refresh') {
+      sleep(const Duration(seconds: 2));
+      return '{"catalogues":[],"updates":{}}';
+    }
+    return '{"layers":[]}';
+  }
+
+  @override
+  int layersRefreshStart(int handle) {
+    _started = DateTime.now();
+    return 9;
+  }
+
+  @override
+  String? jobProgress(int job) => DateTime.now().difference(_started!) < const Duration(milliseconds: 600)
+      ? '{"state":"running","done":0,"total":1,"error":null}'
+      : '{"state":"done","done":1,"total":1,"error":null,"result":{"catalogues":[{"url":"u","layers":1,"invalid":[]}],"updates":{}}}';
+}
+
+CsNative _slowRefresh() => _SlowRefreshNative();
+
+/// Answers cs_read_document with two pages, the address and size limit it got in the title.
+class _DocumentNative extends FakeNative {
+  @override
+  bool get hasReadDocument => true;
+  @override
+  String? readDocument(int handle, String address, int maxChars) => jsonEncode({
+        'address': address,
+        'title': '$address:$maxChars',
+        'at_page': 1,
+        'more_before': true,
+        'more_after': false,
+        'pages': [
+          {'page': 1, 'text': 'A', 'addresses': ['lib:field/1']},
+          {'page': 'iv', 'text': 'B', 'addresses': ['lib:field/2']},
+        ],
+      });
+}
+
+CsNative _documentNative() => _DocumentNative();
 
 CsNative _failing() => FakeNative()
   ..openResult = 0
@@ -114,6 +166,7 @@ void main() {
     expect(r.totalEstimate, 3);
     expect(r.vectorSources, ['field-library']);
     expect(r.keywordOnlySources, ['u']);
+    expect(r.meaningTimedOut, ['big-library'], reason: 'through the worker');
     await core.close();
   });
 
@@ -139,7 +192,32 @@ void main() {
     expect((ReadResult.fromJson(read(' ')).page, ReadResult.fromJson(read(' ')).pageLabel), (null, null));
   });
 
-  test('a failing open raises the core error', () async {
+  test('a whole document is read through the worker, with the size limit', () async {
+    final core = await SearchCore.open(const [], native: _documentNative);
+    final d = await core.readDocument('lib:field/2', maxChars: 1234);
+    // the fake puts the address and the limit it was called with in the title
+    expect((d.title, d.atPage, d.moreBefore, d.moreAfter, d.pages.length), ('lib:field/2:1234', 1, true, false, 2));
+    expect([for (final p in d.pages) (p.page, p.pageLabel, p.text)], [(1, '1', 'A'), (null, 'iv', 'B')]);
+    expect([for (final p in d.pages) p.addresses], [['lib:field/1'], ['lib:field/2']]);
+    expect((await core.readDocument('lib:field/2')).title, 'lib:field/2:200000');
+    await core.close();
+  });
+
+  test('a layer catalogue refresh runs as a job: a call asked after it is answered at once, and the refresh answers when done', () async {
+    final core = await SearchCore.open(const [], native: _slowRefresh);
+    final refresh = core.layers('refresh');
+    var refreshed = false;
+    unawaited(refresh.then((_) => refreshed = true));
+    final clock = Stopwatch()..start();
+    await core.layers('list');
+    expect(clock.elapsed, lessThan(const Duration(seconds: 1)), reason: 'the worker is not held by the refresh');
+    expect(refreshed, isFalse);
+    final r = await refresh;
+    expect(((r['catalogues'] as List).single as Map)['layers'], 1);
+    await core.close();
+  });
+
+    test('a failing open raises the core error', () async {
     await expectLater(
       SearchCore.open(const [], native: _failing),
       throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'io')),

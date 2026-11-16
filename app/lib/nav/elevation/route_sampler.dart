@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 
 import 'elevation_profile.dart';
@@ -12,6 +13,29 @@ typedef RouteSample = ({double lat, double lon, double distM});
 /// Where the elevation tiles come from: the bytes of tile z/x/y (PNG or WebP, Terrarium-encoded), or null when there is none.
 abstract class DemTiles {
   Future<Uint8List?> tile(int z, int x, int y);
+}
+
+/// A browser's elevation tiles: read from Cache Server's own tile route through the page's connection (the session goes with
+/// it), as the map's tiles are. A tile that cannot be read is none.
+class HttpDemTiles implements DemTiles {
+  HttpDemTiles(this.urlTemplate, {http.Client? client}) : _client = client ?? http.Client();
+
+  /// The elevation layer's tile address with `{z}`, `{x}` and `{y}` in it.
+  final String urlTemplate;
+  final http.Client _client;
+
+  @override
+  Future<Uint8List?> tile(int z, int x, int y) async {
+    final url = urlTemplate.replaceAll('{z}', '$z').replaceAll('{x}', '$x').replaceAll('{y}', '$y');
+    try {
+      final r = await _client.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+      return r.statusCode == 200 ? r.bodyBytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void close() => _client.close();
 }
 
 /// The map's own tile server on this device (127.0.0.1): the elevation layer's downloaded tiles, and the ones viewed before.
@@ -165,10 +189,10 @@ class DemGridWindow {
 /// Reads heights at points from [tiles] at [zoom]: bilinear between the centres of the four nearest pixels, across tile edges.
 /// At most [keep] decoded tiles are held at a time ([DemGridWindow]). A point with any of its four pixels missing has no height
 /// (NaN).
-Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {int zoom = 12, int keep = kDemGridsKept}) async {
-  final window = DemGridWindow(tiles, zoom, keep: keep);
+Future<List<double>> sampleHeights(List<RouteSample> points, DemTiles tiles, {int zoom = 12, int keep = kDemGridsKept, DemGridWindow? window}) async {
+  final win = window ?? DemGridWindow(tiles, zoom, keep: keep);
   final n = 1 << zoom;
-  Future<DemGrid?> grid(int x, int y) => window.grid(x, y);
+  Future<DemGrid?> grid(int x, int y) => win.grid(x, y);
 
   final out = <double>[];
   for (final p in points) {
@@ -207,5 +231,55 @@ Future<ElevationProfile> buildRouteProfile(List<(double, double)> points, DemTil
   final samples = resampleRoute(points, stepM: stepM);
   if (samples.length < 2) return ElevationProfile.none(samples.isEmpty ? 0 : samples.last.distM);
   final heights = await sampleHeights(samples, tiles, zoom: zoom, keep: keep);
+  return ElevationProfile.fromSamples([for (final s in samples) s.distM], heights, totalM: samples.last.distM);
+}
+
+/// How many samples one chunk of the stream covers: 100, so 4 km at the 40 m step. A tile of the map's elevation layer (zoom 12)
+/// covers about 7 km, so a chunk reads at most about two tiles and usually one; the first chunk is the cost of fetching and
+/// decoding the first tile (about one tile's decode, a fraction of a second on a phone), every later one is mostly bilinear reads
+/// from tiles already held. Small enough that the chart grows steadily, big enough that the isolate's messages and the profile
+/// rebuilds stay few (a 600 km route is 150 chunks).
+const int kElevationChunkSamples = 100;
+
+/// The order the chunks of a route of [n] samples are read in: from the sample at [fromM] metres to the end, then the part behind
+/// it (nearest the driver first), as (first, end) sample ranges of at most [chunk] samples.
+List<(int, int)> chunkRanges(List<RouteSample> samples, {double fromM = 0, int chunk = kElevationChunkSamples}) {
+  final n = samples.length;
+  var start = 0;
+  while (start < n && samples[start].distM < fromM) {
+    start++;
+  }
+  if (start >= n) start = n - 1 < 0 ? 0 : n - 1;
+  final out = <(int, int)>[];
+  for (var a = start; a < n; a += chunk) {
+    out.add((a, math.min(a + chunk, n)));
+  }
+  for (var a = 0; a < start; a += chunk) {
+    out.add((a, math.min(a + chunk, start)));
+  }
+  return out;
+}
+
+/// The same profile as [buildRouteProfile], read in chunks: the part from [fromM] metres on first, then the part behind it, each
+/// chunk handed to [onChunk] (the first sample it covers, its heights) as soon as it is read.
+Future<ElevationProfile> buildRouteProfileInChunks(
+  List<(double, double)> points,
+  DemTiles tiles, {
+  int zoom = 12,
+  double stepM = kProfileStepM,
+  int keep = kDemGridsKept,
+  double fromM = 0,
+  int chunk = kElevationChunkSamples,
+  void Function(int first, List<double> heights)? onChunk,
+}) async {
+  final samples = resampleRoute(points, stepM: stepM);
+  if (samples.length < 2) return ElevationProfile.none(samples.isEmpty ? 0 : samples.last.distM);
+  final window = DemGridWindow(tiles, zoom, keep: keep);
+  final heights = List<double>.filled(samples.length, double.nan);
+  for (final (a, b) in chunkRanges(samples, fromM: fromM, chunk: chunk)) {
+    final h = await sampleHeights(samples.sublist(a, b), tiles, zoom: zoom, keep: keep, window: window);
+    heights.setRange(a, b, h);
+    onChunk?.call(a, h);
+  }
   return ElevationProfile.fromSamples([for (final s in samples) s.distM], heights, totalM: samples.last.distM);
 }

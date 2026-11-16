@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent, KeyDownEvent, LogicalKeyboardKey;
 
 import '../app_state.dart';
 import '../chat/answer_progress.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../actions/setup_status.dart' show setupGuideTitle;
+import '../chat/ask_target.dart';
+import '../chat/progress_steps.dart' show ToolStep, nearbyQuery, stepQuery;
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
 import '../desktop/ask_column.dart';
@@ -23,6 +27,7 @@ import 'confirm_card.dart';
 import 'history_drawer.dart';
 import 'model_search_screen.dart' show downloadModel;
 import 'models_screen.dart';
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 class AskScreen extends StatefulWidget {
   const AskScreen({
@@ -33,6 +38,7 @@ class AskScreen extends StatefulWidget {
     this.onOpenPassage,
     this.onOpenVideo,
     this.onOpenNavigation,
+    this.onOpenTarget,
     this.share = shareMarkdown,
     this.layout,
     this.location,
@@ -73,6 +79,10 @@ class AskScreen extends StatefulWidget {
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
+  /// Opens what a citation, a step of the steps list, or a card points at when it is not a page, passage or video: a place, a
+  /// layer's point, a notebook entry, live data, a search. The shell routes it to Maps, Notebooks, Weather or Home's search.
+  final void Function(AskTarget target)? onOpenTarget;
+
   @override
   State<AskScreen> createState() => _AskScreenState();
 }
@@ -109,6 +119,7 @@ class _AskScreenState extends State<AskScreen> {
       reason: r.reason,
       note: r.note,
       sources: [for (final s in m.sources) s.result.title],
+      chatId: widget.chat.activeId,
     ));
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -269,7 +280,7 @@ class _AskScreenState extends State<AskScreen> {
     final id = widget.chat.activeId;
     final md = id == null ? null : widget.chat.exportMarkdown(id);
     final title = id == null ? null : widget.chat.store?.get(id)?.title;
-    if (md != null) await widget.share(title ?? 'Chat', md);
+    if (md != null && mounted) await shareTextOrCopy(context, title ?? 'Chat', md, widget.share);
   }
 
   @override
@@ -420,6 +431,7 @@ class _AskScreenState extends State<AskScreen> {
                             onOpenPassage: widget.onOpenPassage,
                             onOpenVideo: widget.onOpenVideo,
                             onOpenNavigation: widget.onOpenNavigation,
+                            onOpenTarget: widget.onOpenTarget,
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
@@ -567,6 +579,19 @@ class _AskScreenState extends State<AskScreen> {
     );
   }
 
+  /// Enter without Shift sends the question (the desktop composer). Shift+Enter falls through, so the field adds the new line. An
+  /// input method still composing a word keeps its Enter.
+  KeyEventResult _enterSends(FocusNode node, KeyEvent event) {
+    final enter = event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
+    if (_input.value.composing.isValid && !_input.value.composing.isCollapsed) return KeyEventResult.ignored;
+    if (event is KeyDownEvent) {
+      if (widget.app.active != null) _send();
+    }
+    // The key-up and repeats of a handled Enter are swallowed too, so a held Enter never adds a line.
+    return KeyEventResult.handled;
+  }
+
   Widget _composer(BuildContext context) {
     final k = context.t;
     if (widget.readOnly) return _offLine(context);
@@ -599,15 +624,21 @@ class _AskScreenState extends State<AskScreen> {
                 const SizedBox(width: 4),
               ],
               Expanded(
-                child: TextField(
-                  controller: _input,
-                  enabled: ready,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.newline,
-                  style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
-                  decoration: InputDecoration(
-                    hintText: ready ? 'Ask anything' : 'No model',
+                child: Focus(
+                  // On the Linux desktop (a hardware keyboard) Enter sends and Shift+Enter starts a new line. A phone is untouched.
+                  canRequestFocus: false,
+                  skipTraversal: true,
+                  onKeyEvent: isLinuxDesktop(context) ? _enterSends : null,
+                  child: TextField(
+                    controller: _input,
+                    enabled: ready,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
+                    decoration: InputDecoration(
+                      hintText: ready ? 'Ask anything' : 'No model',
+                    ),
                   ),
                 ),
               ),
@@ -666,7 +697,7 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onOpenTarget, this.onReport, this.chat});
 
   final ChatMessage msg;
 
@@ -677,6 +708,7 @@ class _AssistantBlock extends StatefulWidget {
   final void Function(String address, String quote)? onOpenPassage;
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
+  final void Function(AskTarget target)? onOpenTarget;
 
   @override
   State<_AssistantBlock> createState() => _AssistantBlockState();
@@ -685,19 +717,82 @@ class _AssistantBlock extends StatefulWidget {
 class _AssistantBlockState extends State<_AssistantBlock> {
   /// What tapping a citation does: a video moment opens the player there (a saved video's or a ZIM's caption); a citation the
   /// reader can show opens it ([SourceResult.readerAddress]: a ZIM page, a PDF page, an EPUB chapter), with its passage
-  /// marked when it has one; anything else does nothing.
+  /// marked when it has one; the phone's setup opens its guide section; a route opens in Maps; a place, a layer's point, a repeater
+  /// or notebook entry and live data go to the shell ([AskScreen.onOpenTarget]). A web page does nothing (an owner decision is
+  /// pending).
   VoidCallback? _tapOf(SourceResult r) {
     final video = widget.onOpenVideo;
     if (r.isVideoMoment && video != null) return () => video(r.link!, r.time!, r.lang);
+    // A passage of a library (a book, or the guide) opens through the shell at its own address: the passage screen, or the
+    // guide at its section. It is not the reader's (no "Open the article"), and a #page form of it is not an address the
+    // library reads.
+    final lib = widget.onOpenSource;
+    if (r.address.startsWith('lib:') && lib != null) return () => lib(r.address);
+    // The phone's setup (app.setup_status) opens the guide section that part names.
+    if (lib != null && setupGuideTitle(r.address) != null) return () => lib(r.address);
+    // A route opens in Maps as the "Open navigation" button does (a route whose snapshot is gone says so).
+    final navigate = widget.onOpenNavigation;
+    if (navigate != null && r.address.startsWith('nav:') && r.address.length > 4) {
+      final action = widget.msg.navigationActions.where((x) => x.address == r.address).firstOrNull ?? NavigationAction(address: r.address);
+      return () => navigate(action);
+    }
     final a = r.readerAddress;
-    if (a == null) return null;
-    final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
-    if (passage != null && quote != null) return () => passage(a, quote);
-    if (source != null) return () => source(a);
+    if (a != null) {
+      final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
+      if (passage != null && quote != null) return () => passage(a, quote);
+      if (source != null) return () => source(a);
+    }
+    // A place, a layer's point, a repeater or notebook entry, live data: the shell opens it.
+    return _targetTap(r.target);
+  }
+
+  VoidCallback? _targetTap(AskTarget? t) {
+    final open = widget.onOpenTarget;
+    return t == null || open == null ? null : () => open(t);
+  }
+
+  /// What tapping the mark of source [n] in the answer does: what tapping that source's row does.
+  VoidCallback? _citeTap(int n) {
+    final r = widget.msg.sources.where((s) => s.id == n).firstOrNull;
+    return r == null ? null : _tapOf(r.result);
+  }
+
+  /// What tapping a finished step's line does: open what it read or made, run its search again, or show its route; null when it
+  /// points at nothing.
+  VoidCallback? _stepTap(ToolStep s) {
+    switch (s.tool) {
+      case 'read' || 'act':
+        final r = s.source;
+        return r == null ? null : _tapOf(r);
+      case 'search':
+        final q = stepQuery(s);
+        return q == null ? null : _targetTap(AskHomeSearch(query: q));
+      case 'nearby':
+        final q = nearbyQuery(s);
+        return q == null ? null : _targetTap(AskMapSearch(query: q));
+      case 'navigate':
+        final navigate = widget.onOpenNavigation;
+        final action = s.routes.firstOrNull;
+        return navigate == null || action == null ? null : () => navigate(action);
+    }
     return null;
   }
 
   bool _open = false;
+
+  /// The opened list of sources (key for the scroll, on the Linux desktop).
+  final _listKey = GlobalKey();
+
+  /// Opening the sources scrolls the conversation so every one is in reach: they open below the answer, behind the composer's edge.
+  void _toggleSources() {
+    setState(() => _open = !_open);
+    if (!_open || !isLinuxDesktop(context)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (!mounted || c == null) return;
+      Scrollable.ensureVisible(c, duration: Duration.zero, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -718,11 +813,16 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
             dropCitations: m.isDone && m.sources.isEmpty,
+            onCite: (n) => _citeTap(n)?.call(),
+            canCite: (n) => _citeTap(n) != null,
+            stepTap: _stepTap,
           ),
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
               lines: widget.chat?.actions?.cardLines(card.action, card.fields, card.summary),
+              targets: widget.chat?.actions?.cardTargets(card.action, card.fields, card.result),
+              onOpen: widget.onOpenTarget,
               enabled: widget.chat?.canSend ?? false,
               onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
             ),
@@ -807,10 +907,12 @@ class _AssistantBlockState extends State<_AssistantBlock> {
   Widget _sourcesRow(BuildContext context, ChatMessage m) {
     final k = context.t;
     if (m.sources.isEmpty) {
+      // A turn that searched or read the sources but cites none of them says so (owner, 2026-11-14); "Not from your sources" is
+      // only for an answer that used none.
       return Padding(
         padding: const EdgeInsets.only(top: 6),
         child: Text(
-          'Not from your sources',
+          m.searchedSources ? 'Searched your sources, but cites none of them' : 'Not from your sources',
           style: TextStyle(fontSize: 14, color: k.secondary),
         ),
       );
@@ -821,7 +923,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: () => setState(() => _open = !_open),
+          onTap: _toggleSources,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),
             child: Align(
@@ -861,6 +963,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           ),
         ),
         if (_open)
+          Column(
+            key: _listKey,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           for (final s in m.sources)
             Container(
               margin: const EdgeInsets.only(top: 6),
@@ -910,6 +1016,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ),
               ),
             ),
+            ],
+          ),
       ],
     );
   }

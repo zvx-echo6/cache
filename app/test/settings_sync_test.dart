@@ -14,6 +14,7 @@ import 'package:cache/sharing/settings_sync.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sharing/synced_settings.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/weather/curated.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -421,6 +422,25 @@ void main() {
     s.dispose();
   });
 
+  // Weather always works (owner, 2026-11-15): a linked device whose list of sources on is empty does not switch weather off here.
+  testWidgets('a synced list of sources on that is empty leaves the default sources on', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final layout = LayoutState(settingsDirOverride: r.dir);
+    await tester.runAsync(layout.init);
+    final list = appSyncedSettings(app: r.app, layout: layout, settings: r.settings, maps: r.maps, weather: r.weather);
+    final sources = list.firstWhere((s) => s.key == 'weather.sources_on');
+    await tester.runAsync(() async {
+      await r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Earthquakes'), true);
+      await sources.write(<String>[]);
+    });
+    final on = {for (final c in r.weather.enabledSources) c.id};
+    expect(on, containsAll(['openmeteo-forecast', 'nws-alerts-point', 'wfigs-incidents-near', 'wfigs-perimeters-near']));
+    expect(on, isNot(contains('usgs-quakes-near')), reason: 'what the other device had off stays off');
+    expect(r.settings.liveSourcesOn, containsAll(['openmeteo-forecast', 'nws-alerts-point']), reason: 'and the setting says so too');
+    layout.dispose();
+    await r.dispose(tester);
+  });
+
   testWidgets('what never syncs never travels: the app settings that are not in a group are not sent or taken', (tester) async {
     final r = await SettingsRig.create(tester);
     final layout = LayoutState(settingsDirOverride: r.dir);
@@ -791,6 +811,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(a.sync.linkWith('peer1'), SettingsLink.receiving);
     expect(a.core.argsOf['set_link'], isNull, reason: 'OK writes nothing');
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
+  });
+
+  testWidgets('the notice\'s "Change this any time on …\'s page" goes to that device\'s page', (tester) async {
+    tall(tester);
+    late Dev a;
+    await tester.runAsync(() async {
+      a = Dev('me', 'peer1', otherName: 'Pixel');
+      a.core.peers.single['link'] = {'mode': 'send', 'from': 'peer1', 'by': 'peer1', 'at': 900};
+      await a.start();
+    });
+    var opened = 0;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(CacheThemeId.dark),
+      home: Builder(builder: (c) => TextButton(onPressed: () => askSettingsLink(c, a.sync, 'peer1', 'Pixel', openDevice: () => opened++), child: const Text('go'))),
+    ));
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("Change this any time on Pixel's page in Sharing and sync."));
+    await tester.pumpAndSettle();
+    expect(opened, 1);
+    expect(find.byKey(const ValueKey('settings-link-notice')), findsNothing, reason: 'the notice closes first');
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async => a.dispose());
   });

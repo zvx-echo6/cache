@@ -28,6 +28,7 @@ impl Valhalla for Fake {
                 bearing_after: Some(90.0),
                 bearing_before: None,
                 lanes: vec![],
+                ..Default::default()
             })
             .collect();
         Ok(Trip { shape_encoded: cache_offroad::valhalla::encode_polyline6(&shape), shape, maneuvers, length_km: 3.0, time_s: 180.0 })

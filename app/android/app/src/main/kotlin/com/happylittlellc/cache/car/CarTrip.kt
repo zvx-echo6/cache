@@ -13,8 +13,9 @@ data class CarStep(
 )
 
 /** A stop still ahead on the route (the phone's Add stop, or the car's). [number] is the one the turn card says when the stop
- * is reached: its place in the route as it was made, kept when the stops before it are passed. */
-data class CarStop(val name: String, val address: String?, val number: Int)
+ * is reached: its place in the route as it was made, kept when the stops before it are passed. [lat] and [lon]: where it is
+ * (its row shows it on the map); null from a phone that does not send them. */
+data class CarStop(val name: String, val address: String?, val number: Int, val lat: Double? = null, val lon: Double? = null)
 
 data class CarRoute(val index: Int, val distanceM: Double, val durationS: Long, val via: String?)
 
@@ -46,7 +47,7 @@ data class CarTrip(
     val overlay: CarOverlaySwitches = CarOverlaySwitches.DEFAULT,
     val climb: CarClimb? = null,
     val overview: CarOverview? = null,
-    val palette: CarOverlayPalette? = null,
+    val palette: CarOverlayColors? = null,
     val stops: List<CarStop> = emptyList(),
 ) {
     val guiding: Boolean get() = phase == "guiding"
@@ -110,13 +111,15 @@ data class CarTrip(
                 overlay = CarOverlaySwitches.from(m["overlay"]),
                 climb = CarClimb.from(m["climb"]),
                 overview = CarOverview.from(m["overview"]),
-                palette = CarOverlayPalette.from(m["palette"]),
+                palette = CarOverlayColors.from(m["palette"]),
                 stops = (m["stops"] as? List<*>).orEmpty().mapIndexedNotNull { i, s ->
                     val x = s.asMap() ?: return@mapIndexedNotNull null
                     CarStop(
                         name = x["name"] as? String ?: return@mapIndexedNotNull null,
                         address = (x["address"] as? String)?.takeIf { it.isNotBlank() },
                         number = (x["number"] as? Number)?.toInt() ?: (i + 1),
+                        lat = (x["lat"] as? Number)?.toDouble(),
+                        lon = (x["lon"] as? Number)?.toDouble(),
                     )
                 },
             )

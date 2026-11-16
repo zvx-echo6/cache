@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../browse/web/device_api.dart' show DeviceException, kDeviceCallTimeout;
+import '../net/signed_out.dart' show reportSignedOut;
 
 class LinkedLibraryTarget {
   const LinkedLibraryTarget(this.id, this.title);
@@ -54,11 +55,15 @@ class LinkedBook {
     this.locations, {
     this.pendingIndexing = false,
     this.pendingReason,
+    this.blake3,
   });
   final String id, title;
   final List<LinkedLocation> locations;
   final bool pendingIndexing;
   final String? pendingReason;
+
+  /// The hash of the file, as the folder check recorded it.
+  final String? blake3;
   factory LinkedBook.fromJson(Map<String, dynamic> j) {
     final locations = [
       for (final x in _maps(j['locations'])) LinkedLocation.fromJson(x),
@@ -83,6 +88,7 @@ class LinkedBook {
       locations,
       pendingIndexing: j['pending_indexing'] == true,
       pendingReason: j['pending_reason']?.toString(),
+      blake3: hash is String && hash.isNotEmpty ? hash : null,
     );
   }
 }
@@ -246,6 +252,7 @@ class LinkedFolderApi {
       );
     }
     if (response.statusCode == 401) {
+      reportSignedOut();
       throw const DeviceException(
         'unauthorized',
         'Sign in again.',

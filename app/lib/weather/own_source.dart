@@ -112,11 +112,18 @@ String fillAddress(String address, {required double lat, required double lon, St
 /// One value found in the answer: where it is (a path the definition format reads: `water.level`, `[0].flux`), a name for people
 /// made from its key, and the value as text.
 class OwnValue {
-  const OwnValue({required this.path, required this.label, required this.value});
+  const OwnValue({required this.path, required this.label, required this.value, this.unit = ''});
 
   final String path;
   final String label;
   final String value;
+
+  /// The unit the answer gives for this value (from its units object, see [flattenJson]); shown beside it, never part of the
+  /// definition.
+  final String unit;
+
+  /// The value as shown to people: "5.2 °C".
+  String get shown => unit.isEmpty ? value : '$value $unit';
 }
 
 /// Every value in [json], in the order of the answer: objects are walked into, a list gives its first element (`[0]`), empty values
@@ -124,25 +131,65 @@ class OwnValue {
 /// out with what is under it. At most [max] values.
 List<OwnValue> flattenJson(Object? json, {int max = 200}) {
   final out = <OwnValue>[];
-  void walk(Object? v, String at, String? name) {
+  void walk(Object? v, String at, String? name, String unit) {
     if (out.length >= max) return;
     if (v is Map) {
+      final units = _unitsObjects(v);
       for (final e in v.entries) {
         final k = '${e.key}';
-        if (!_addressable(k)) continue;
-        walk(e.value, at.isEmpty ? k : '$at.$k', k);
+        if (!_addressable(k) || units.containsKey(k)) continue;
+        final u = units.values.where((x) => x.target == k).map((x) => x.units);
+        walk(e.value, at.isEmpty ? k : '$at.$k', k, '');
+        if (u.isNotEmpty) _attachUnits(out, at.isEmpty ? k : '$at.$k', u.first);
       }
     } else if (v is List) {
-      if (v.isNotEmpty) walk(v.first, '$at[0]', name);
+      if (v.isNotEmpty) walk(v.first, '$at[0]', name, unit);
     } else if (v != null) {
       final text = valueText(v);
       if (text.isEmpty) return;
-      out.add(OwnValue(path: at.isEmpty ? '^' : at, label: labelFromKey(name ?? ''), value: text));
+      out.add(OwnValue(path: at.isEmpty ? '^' : at, label: labelFromKey(name ?? ''), value: text, unit: unit));
     }
   }
 
-  walk(json, '', null);
+  walk(json, '', null, '');
   return out;
+}
+
+/// The sibling objects of [m] that are the units of another sibling: an object whose values are all strings and whose keys are all
+/// keys of another sibling object (one that holds more than strings), as `current_units` is beside `current`. Keyed by the units
+/// object's key.
+Map<String, ({String target, Map<String, String> units})> _unitsObjects(Map m) {
+  final found = <String, ({String target, Map<String, String> units})>{};
+  bool allStrings(Map o) => o.isNotEmpty && o.values.every((x) => x is String);
+  for (final a in m.entries) {
+    final ka = '${a.key}';
+    final u = a.value;
+    if (u is! Map || !allStrings(u)) continue;
+    for (final b in m.entries) {
+      final kb = '${b.key}';
+      final t = b.value;
+      if (kb == ka || t is! Map || allStrings(t) || found.containsKey(kb)) continue;
+      if (u.keys.every((k) => t.containsKey(k))) {
+        found[ka] = (target: kb, units: {for (final e in u.entries) '${e.key}': '${e.value}'.trim()});
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/// Gives the values directly under [objectPath] (already in [out]) the unit their key has in [units].
+void _attachUnits(List<OwnValue> out, String objectPath, Map<String, String> units) {
+  for (var i = 0; i < out.length; i++) {
+    final o = out[i];
+    if (!o.path.startsWith('$objectPath.')) continue;
+    final key = o.path.substring(objectPath.length + 1);
+    final unit = units[key];
+    // A unit only for a number (a units object may also name a time's format, "iso8601", which is no unit to show).
+    if (unit != null && unit.isNotEmpty && !key.contains('.') && num.tryParse(o.value) != null) {
+      out[i] = OwnValue(path: o.path, label: o.label, value: o.value, unit: unit);
+    }
+  }
 }
 
 bool _addressable(String k) => k.isNotEmpty && !k.contains('.') && !k.contains('[') && !k.contains(']') && !k.startsWith('^') && !k.startsWith('@');
@@ -168,6 +215,53 @@ String labelFromKey(String key) {
   return words.join(' ');
 }
 
+/// What is ticked at first, as paths in the answer's order (machine format against machine format, no words):
+/// - the values the address asked for: a value whose key is one of the words in the address's query values
+///   (`current=temperature_2m` names `temperature_2m`);
+/// - else, when a query word names an object of the answer, the first [count] values under it (so the answer's top-level
+///   metadata beside it is left alone);
+/// - else the first [count] values.
+/// A value that only echoes the place (a number equal to [place]'s latitude or longitude, to the digits it is written with, 2 to
+/// 4) is never ticked at first.
+List<String> ownPreticks(List<OwnValue> values, {List<String> asked = const [], ({double lat, double lon})? place, int count = 3}) {
+  List<String> segs(String path) => [for (final s in path.split('.')) s.replaceAll(RegExp(r'\[\d+\]'), '')];
+  bool echo(OwnValue v) {
+    if (place == null) return false;
+    final n = double.tryParse(v.value);
+    final dot = v.value.indexOf('.');
+    if (n == null || dot < 0) return false;
+    final digits = v.value.length - dot - 1;
+    if (digits < 2 || digits > 4) return false;
+    final tol = 0.5 * _pow10neg(digits) + 1e-9;
+    return (n - place.lat).abs() <= tol || (n - place.lon).abs() <= tol;
+  }
+
+  final words = asked.toSet();
+  final named = [for (final v in values) if (words.contains(segs(v.path).last)) v.path];
+  if (named.isNotEmpty) return named;
+  final inObject = [
+    for (final v in values)
+      if (segs(v.path).length > 1 && segs(v.path).take(segs(v.path).length - 1).any(words.contains) && !echo(v)) v.path,
+  ];
+  if (inObject.isNotEmpty) return inObject.take(count).toList();
+  return [for (final v in values) if (!echo(v)) v.path].take(count).toList();
+}
+
+double _pow10neg(int n) => n == 2 ? 0.01 : (n == 3 ? 0.001 : 0.0001);
+
+/// The words of the query values of [url] (`current=temperature_2m,wind` gives `temperature_2m` and `wind`).
+List<String> queryWords(Uri url) {
+  try {
+    return [
+      for (final vs in url.queryParametersAll.values)
+        for (final v in vs)
+          for (final w in v.split(RegExp(r'[,;|\s]+'))) if (w.isNotEmpty) w,
+    ];
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// Where the answer says where it is: a latitude and a longitude next to each other (`lat`/`latitude` and `lon`/`lng`/`long`/
 /// `longitude` under the same parent), as numbers in range. The definition then gives its item that point.
 ({String lat, String lon})? findPoint(List<OwnValue> values) {
@@ -190,19 +284,29 @@ String labelFromKey(String key) {
 // ------------------------------------------------------------------------------------------------ trying the address
 
 /// Why trying the address did not give values.
-enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, insecure, tooLarge, notAllowed, empty, unreadable }
+enum OwnTryFailure { offline, status, notJson, timedOut, unreachable, notFound, insecure, tooLarge, notAllowed, empty, unreadable }
 
 /// What one try of the address gave: the values found, or why there are none.
 class OwnTry {
-  const OwnTry.ok(this.host, this.values) : failure = null, status = null;
-  const OwnTry.failed(this.host, OwnTryFailure this.failure, {this.status}) : values = const [];
+  const OwnTry.ok(this.host, this.values, {this.asked = const [], this.place}) : failure = null, status = null, detail = null;
+  const OwnTry.failed(this.host, OwnTryFailure this.failure, {this.status, this.detail}) : values = const [], asked = const [], place = null;
 
   final String host;
   final List<OwnValue> values;
+
+  /// The words in the query values of the address that was tried, and the place it was tried for: what [preticked] goes by.
+  final List<String> asked;
+  final ({double lat, double lon})? place;
+
+  /// The paths ticked at first (see [ownPreticks]).
+  List<String> get preticked => ownPreticks(values, asked: asked, place: place);
   final OwnTryFailure? failure;
 
   /// The HTTP status of [OwnTryFailure.status].
   final int? status;
+
+  /// The network exception's own text, for the log only.
+  final String? detail;
 
   bool get ok => failure == null;
 
@@ -214,12 +318,37 @@ class OwnTry {
     OwnTryFailure.notJson => '$host answered, but not with JSON. This version of Cache only reads JSON.',
     OwnTryFailure.timedOut => "$host didn't answer in time.",
     OwnTryFailure.unreachable => "Couldn't reach $host. Check the address and your connection.",
+    OwnTryFailure.notFound => "Couldn't find $host. Check the web address.",
     OwnTryFailure.insecure => "Couldn't make a secure connection to $host.",
     OwnTryFailure.tooLarge => 'The answer is too large for Cache to read.',
     OwnTryFailure.notAllowed => 'Enter an address that starts with https://',
     OwnTryFailure.empty => '$host answered, but there are no values in it.',
     OwnTryFailure.unreadable => "Couldn't read the answer from $host.",
   };
+}
+
+/// [address] (the form's text) filled with the place as the try fills it, but with the key left as `{api_key}`: what the log may
+/// show. A key typed straight into the address is also replaced, raw or percent-encoded.
+String ownAddressForLog(String address, {required double lat, required double lon, String? key}) {
+  var out = address.replaceAllMapped(_hole, (m) => m.group(1) == 'api_key' ? '{api_key}' : fillAddress(m.group(0)!, lat: lat, lon: lon));
+  final k = (key ?? '').trim();
+  if (k.isNotEmpty) out = out.replaceAll(k, '{api_key}').replaceAll(Uri.encodeComponent(k), '{api_key}');
+  return out;
+}
+
+/// The one log line of a try: `Own source try: <address> -> <outcome>`. Anything outside printable ASCII in the address is listed
+/// as `U+200B at 57` (a code unit and its place in the address as shown).
+String ownTryLogLine(String shownAddress, double lat, double lon, OwnTry t) {
+  final odd = <String>[];
+  for (var i = 0; i < shownAddress.length; i++) {
+    final c = shownAddress.codeUnitAt(i);
+    if (c < 0x20 || c > 0x7e) odd.add('U+${c.toRadixString(16).toUpperCase().padLeft(4, '0')} at $i');
+  }
+  final place = 'place ${lat.toStringAsFixed(4)},${lon.toStringAsFixed(4)}';
+  final outcome = t.ok
+      ? 'ok, ${t.values.length} values, $place'
+      : '${t.failure!.name}${t.status == null ? '' : ' (HTTP ${t.status})'}${t.detail == null ? '' : ' [${t.detail}]'}, $place';
+  return 'Own source try: $shownAddress -> $outcome${odd.isEmpty ? '' : ' (non-ASCII in address: ${odd.join(', ')})'}';
 }
 
 /// Reads an address for a try: the body, or a [net.FetchException].
@@ -229,7 +358,7 @@ typedef OwnFetch = Future<List<int>> Function(Uri url, Duration timeout);
 Future<List<int>> fetchOwnAddress(Uri url, Duration timeout) => net.fetchBytes(url, timeout: timeout, scope: net.FetchScope.user);
 
 /// Fetches [url] once and finds the values in its JSON answer. Nothing is kept.
-Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duration timeout = const Duration(seconds: 20)}) async {
+Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duration timeout = const Duration(seconds: 20), ({double lat, double lon})? place}) async {
   final host = url.host;
   final List<int> bytes;
   try {
@@ -238,12 +367,13 @@ Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duratio
     return OwnTry.failed(host, switch (e.failure) {
       net.FetchFailure.notAllowed => OwnTryFailure.notAllowed,
       net.FetchFailure.unreachable => OwnTryFailure.unreachable,
+      net.FetchFailure.notFound => OwnTryFailure.notFound,
       net.FetchFailure.timedOut => OwnTryFailure.timedOut,
       net.FetchFailure.insecure => OwnTryFailure.insecure,
       net.FetchFailure.status => OwnTryFailure.status,
       net.FetchFailure.tooLarge => OwnTryFailure.tooLarge,
       net.FetchFailure.unreadable => OwnTryFailure.unreadable,
-    }, status: e.status);
+    }, status: e.status, detail: e.detail);
   } on TimeoutException {
     return OwnTry.failed(host, OwnTryFailure.timedOut);
   }
@@ -255,7 +385,7 @@ Future<OwnTry> tryOwnAddress(Uri url, {OwnFetch fetch = fetchOwnAddress, Duratio
   }
   final values = flattenJson(json);
   if (values.isEmpty) return OwnTry.failed(host, OwnTryFailure.empty);
-  return OwnTry.ok(host, values);
+  return OwnTry.ok(host, values, asked: queryWords(url), place: place);
 }
 
 // ------------------------------------------------------------------------------------------------ the definition

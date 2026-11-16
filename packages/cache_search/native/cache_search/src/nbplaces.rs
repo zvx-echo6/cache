@@ -15,6 +15,7 @@ use crate::error::{Error, ErrorCode, Result};
 use crate::ext::Ext;
 use cache_user::mapdata::{self, Feature, Geom, NotebookLayer, NotebookPoint};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 /// The ops that change notebooks or entries (after them the map layers are brought in step).
@@ -49,7 +50,7 @@ fn iso_utc(secs: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     iso_utc(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
 }
 
@@ -74,7 +75,7 @@ fn resave_args(entry: &Value) -> Value {
 impl Ext {
     fn nb(&self) -> Result<&cache_notebook::Notebook> {
         self.notebook
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "Notebooks need \"notebook\": {\"db_path\", \"media_dir\"} in the cs_open config"))
     }
 
@@ -91,8 +92,9 @@ impl Ext {
                 eprintln!("cache_search: saved places and notebooks not in step yet: {}", e.message);
             }
         }
+        self.migrate_repeaters_once();
         let out = match op {
-            "entry_save" | "entry_delete" | "import" => {
+            "entry_save" | "entry_delete" | "import" | "repeaters_import" | "repeaters_add_back" => {
                 let args: Value = match args_json.map(str::trim).filter(|a| !a.is_empty()) {
                     Some(a) => serde_json::from_str(a).map_err(|e| Error::bad_json(format!("args: {e}")))?,
                     None => json!({}),
@@ -103,6 +105,7 @@ impl Ext {
                 match op {
                     "entry_save" => self.entry_save(&args)?.to_string(),
                     "entry_delete" => self.entry_delete(&args)?.to_string(),
+                    "repeaters_import" | "repeaters_add_back" => self.repeaters_op(op, &args)?.to_string(),
                     _ => self.import(&args)?.to_string(),
                 }
             }
@@ -301,9 +304,10 @@ impl Ext {
 
     /// `import`: `{"path", "notebook_id"?, "name"?, "now"?}`. Reads a map layer file into a Places notebook (`notebook_id`, else a
     /// new one named `name`, else the file's own name for the layer, else the file name; " 2", " 3" when taken): each point
-    /// becomes an entry (its name the title, its notes the text), lines and areas stay with the notebook's map layer.
+    /// becomes an entry (its name the title, its notes the text; a point with the name of an entry already there updates that entry
+/// instead, see below), lines and areas stay with the notebook's map layer.
     /// `now` is the entries' "When" (local ISO 8601 with offset; default now in UTC). Returns
-    /// `{"notebook", "places", "lines", "areas", "skipped"}` (skipped: lines and areas a notebook without a layer cannot keep).
+    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas a notebook without a layer cannot keep).
     fn import(&self, args: &Value) -> Result<Value> {
         for k in args.as_object().into_iter().flat_map(|o| o.keys()) {
             if !["path", "notebook_id", "name", "now"].contains(&k.as_str()) {
@@ -347,13 +351,55 @@ impl Ext {
                 n["id"].as_str().unwrap_or_default().to_string()
             }
         };
-        let mut places = 0;
+        // The one rule of every import: a point whose NAME is the name of an entry of the notebook (trimmed, case-folded, spaces
+        // collapsed) updates it, any other point is added. Of several entries with the name the oldest is updated: never a second.
+        // A name twice in the file is one place, the later one's. An update moves the pin to the file's position and fills the
+        // entry's notes when it has none; its title, date, photos, files and what the person wrote stay.
+        let mut by_name: HashMap<String, String> = HashMap::new();
+        let mut existing = self.entries_of(&nb_id)?;
+        existing.retain(|e| e["draft"] != true);
+        existing.sort_by_key(|e| e["created"].as_i64().unwrap_or(0));
+        for e in &existing {
+            if let (Some(id), Some(t)) = (e["id"].as_str(), e["title"].as_str()) {
+                let k = name_of(t);
+                if !k.is_empty() {
+                    by_name.entry(k).or_insert_with(|| id.to_string());
+                }
+            }
+        }
+        let (mut places, mut updated) = (0, 0);
         let mut shapes: Vec<Feature> = Vec::new();
         for f in parsed.features {
             match f.geom {
                 Geom::Point(lat, lon) => {
                     let title: String = mapdata::collapse(&f.name).chars().take(200).collect();
                     let notes: String = f.notes.chars().take(100_000).collect();
+                    let key = name_of(&title);
+                    let target = if key.is_empty() { None } else { by_name.get(&key).cloned() };
+                    if let Some(id) = target {
+                        let cur = self.nb_call("entry", &json!({"id": id}))?;
+                        let mut e = Map::new();
+                        for k in ["id", "notebook_id", "occurred_at", "title", "body", "photos", "files", "draft", "private", "props", "values"] {
+                            if let Some(v) = cur.get(k) {
+                                e.insert(k.into(), v.clone());
+                            }
+                        }
+                        let moved = cur["place"]["lat"].as_f64() != Some(lat) || cur["place"]["lon"].as_f64() != Some(lon);
+                        let mut place = cur.get("place").cloned().filter(|p| p.is_object()).unwrap_or_else(|| json!({}));
+                        place["lat"] = json!(lat);
+                        place["lon"] = json!(lon);
+                        e.insert("place".into(), place);
+                        let blank = cur["body"].as_str().map(|b| b.trim().is_empty()).unwrap_or(true);
+                        let fill = blank && !notes.trim().is_empty();
+                        if fill {
+                            e.insert("body".into(), json!(notes));
+                        }
+                        if moved || fill {
+                            self.entry_save(&Value::Object(e))?;
+                        }
+                        updated += 1;
+                        continue;
+                    }
                     let mut e = json!({"notebook_id": nb_id, "occurred_at": when, "place": {"lat": lat, "lon": lon}});
                     if !title.is_empty() {
                         e["title"] = json!(title);
@@ -361,7 +407,10 @@ impl Ext {
                     if !notes.trim().is_empty() {
                         e["body"] = json!(notes);
                     }
-                    self.entry_save(&e)?;
+                    let saved = self.entry_save(&e)?;
+                    if let (false, Some(id)) = (key.is_empty(), saved["id"].as_str()) {
+                        by_name.insert(key, id.to_string());
+                    }
                     places += 1;
                 }
                 _ => shapes.push(f),
@@ -377,8 +426,13 @@ impl Ext {
             None => 0,
         };
         let notebook = self.nb_call("notebook", &json!({"id": nb_id}))?;
-        Ok(json!({"notebook": notebook, "places": places, "lines": lines, "areas": areas, "skipped": shapes.len() - kept}))
+        Ok(json!({"notebook": notebook, "places": places, "updated": updated, "lines": lines, "areas": areas, "skipped": shapes.len() - kept}))
     }
+}
+
+/// A name as an import compares it: trimmed, spaces collapsed, case-insensitive.
+fn name_of(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 #[cfg(test)]

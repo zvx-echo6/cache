@@ -8,7 +8,8 @@ name: Valhalla
 
 on:
   push:
-    branches: [server, 'server-*', rel-1.1, 'ask-linux-*']
+    branches: [rel-1.1, main]
+    tags: ['**']
     paths:
       - 'packages/valhalla/**'
       - '.github/workflows/valhalla.yml'

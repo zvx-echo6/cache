@@ -20,6 +20,9 @@ import 'sources_state.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
+export '../sharing/share_rules.dart' show kLibraryNotShared;
+import '../sharing/share_rules.dart' show isOwnLibraryFolderName, kOwnLibraryPrefix;
+
 /// The settings file of a library (docs/LIBRARY-FORMAT.md): inside a .cache-library archive, and beside the library here.
 const String kLibrarySettingsFile = 'cache-library.json';
 
@@ -31,14 +34,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-11-11';
-
-/// What a library folder holds that never syncs with the libraries folder (see DataKind.notShared): its old keyword index
-/// ([LibraryItem.indexPath]). Library indexes now build into the indexes folder and sync from there as snapshots
-/// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
-/// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
-/// delete and remove an older device's own index).
-const List<String> kLibraryNotShared = ['*/index', '*/index-snapshots'];
+const String kGuideVersion = '2026-11-16';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
@@ -132,6 +128,7 @@ class LibrariesState extends ChangeNotifier {
     PickPath? pickFile,
     SaveBytes? saveBytes,
     this.pollInterval = const Duration(milliseconds: 250),
+    this.ownBusyRetry = const Duration(seconds: 30),
     this.bundledGuide,
     this.device,
     AppFs? appFs,
@@ -165,6 +162,12 @@ class LibrariesState extends ChangeNotifier {
   final PickPath _pickFile;
   final SaveBytes _saveBytes;
   final Duration pollInterval;
+
+  /// How long after an own library answered `busy` [syncOwnLibraries] looks at it once more ([rescan]). The core refuses the rebuild
+  /// while a keyword index job of that library runs (one a pack's arrival started, or the one the last rebuild started), or an
+  /// update or Add PDF writes it; nothing else would look again until the next sync change or start. One delayed look, not a loop.
+  final Duration ownBusyRetry;
+  Timer? _ownRetry;
 
   /// The guide library shipped in the app, as a file to add (copied out of the assets); null leaves it out (tests).
   final Future<File?> Function()? bundledGuide;
@@ -243,9 +246,13 @@ class LibrariesState extends ChangeNotifier {
   Future<void> rescan() async {
     if (dir == null || _disposed) return;
     _recoverLeftovers();
+    await syncOwnLibraries();
+    if (_disposed) return;
     await _scan();
+    if (_disposed) return;
     notifyListeners();
     await sources.refresh();
+    if (_disposed) return;
     _resumeIndexes();
     notifyListeners();
     // a library the sync brought is opened by the core on its own thread: follow it until it is open
@@ -253,10 +260,16 @@ class LibrariesState extends ChangeNotifier {
   }
 
   Future<void> _afterCore() async {
+    // the person's own libraries first: one that arrived by sync has no shard until this device builds it (so it is not listed
+    // before), and the first start of this version rebuilds each once (books an earlier sync lost come back)
+    if (await syncOwnLibraries() && !_disposed) await _scan();
+    if (_disposed) return;
     await sources.refresh();
+    if (_disposed) return;
     _resumeIndexes();
     await ensureGuide();
     await _whileOpening();
+    if (_disposed) return;
     _resumeIndexes();
   }
 
@@ -265,7 +278,7 @@ class LibrariesState extends ChangeNotifier {
   /// status is read again until no library is opening (for at most ten minutes, like an add).
   Future<void> _whileOpening() async {
     for (var i = 0; i < 2400 && !_disposed; i++) {
-      if (!libraries.any((l) => statusOf(l)?.opening ?? false)) return;
+      if (!libraries.any((l) => (statusOf(l)?.opening ?? false) || (statusOf(l)?.index?.opening ?? false))) return;
       await Future<void>.delayed(pollInterval);
       if (_disposed) return;
       await sources.reloadStatus();
@@ -634,6 +647,89 @@ class LibrariesState extends ChangeNotifier {
     }
   }
 
+  // ---- the person's own libraries
+
+  /// Own libraries being made to match their packs now, by folder path (one job at a time for each).
+  final Set<String> _owning = {};
+
+  /// The last look at each own library, by folder path (for tests and the log): the core job's detail, or `{"error"}`.
+  final Map<String, Map<String, dynamic>> ownSyncResults = {};
+
+  /// Makes each of the person's own libraries (My books) match its packs on this device: the core's `own_library_sync` job
+  /// (ownlib.rs). Their shard and lists are this device's own ([kLibraryNotShared]); only the packs, the PDFs and the settings
+  /// sync, so a book another device added arrives as a pack and is made searchable here, a library that arrived without a shard
+  /// gets one, and on the first start of this version each own library is rebuilt once from its packs (which brings back the
+  /// books the earlier sync lost) and the sync's conflict copies in it are removed. Nothing is written when a library already
+  /// matches its packs. A library being written by Add PDF answers `busy`: the add's own end reads the libraries again
+  /// (AddPdfState.onDone, [rescan]). True when a library was rebuilt.
+  Future<bool> syncOwnLibraries() async {
+    final core = sources.core;
+    final base = dir;
+    if (core == null || base == null || _dev != null || _disposed) return false;
+    var rebuilt = false;
+    var busy = false;
+    final List<Directory> folders;
+    try {
+      folders = base.listSync().whereType<Directory>().toList();
+    } catch (_) {
+      return false;
+    }
+    for (final d in folders) {
+      final name = d.path.split(RegExp(r'[\\/]')).last;
+      if (!isOwnLibraryFolderName(name) || _owning.contains(d.path)) continue;
+      Map<String, dynamic>? settings;
+      try {
+        settings = (jsonDecode(File('${d.path}${Platform.pathSeparator}$kLibrarySettingsFile').readAsStringSync()) as Map).cast<String, dynamic>();
+      } catch (_) {}
+      if (settings?['own'] != true) continue;
+      _owning.add(d.path);
+      try {
+        final p = await _wait(await core.startJob('own_library_sync', {'library_dir': d.path}), (_) {});
+        if (_disposed) return rebuilt;
+        if (p.state == JobState.done) {
+          final detail = p.detail ?? const <String, dynamic>{};
+          ownSyncResults[d.path] = detail;
+          if (detail['rebuilt'] == true) {
+            rebuilt = true;
+            logInfo('My books: made from its packs on this device (${detail['reason']}): ${detail['books']} books, ${detail['points']} pieces', detail: name);
+          }
+          final removed = (detail['conflicts_removed'] as List?) ?? const [];
+          if (removed.isNotEmpty) logInfo('My books: removed ${removed.length} sync conflict copies', detail: removed.join(', '));
+          final bad = (detail['unreadable'] as List?) ?? const [];
+          if (bad.isNotEmpty) logError('My books: packs that could not be read', detail: bad.join('; '));
+        } else {
+          ownSyncResults[d.path] = {'error': p.errorCode ?? p.state.name, 'message': p.errorMessage};
+          if (p.errorCode == 'busy') {
+            busy = true;
+          } else {
+            logError('My books could not be made from its packs', error: p.errorMessage, detail: name);
+          }
+        }
+      } on CacheSearchException catch (e) {
+        ownSyncResults[d.path] = {'error': e.code, 'message': e.message};
+        if (e.code == 'busy') {
+          busy = true;
+        } else {
+          logError('My books could not be made from its packs', error: e, detail: name);
+        }
+      } finally {
+        _owning.remove(d.path);
+      }
+    }
+    if (busy && _ownRetry == null && !_disposed) {
+      logInfo('My books: busy; looking again in ${ownBusyRetry.inSeconds} s');
+      _ownRetry = Timer(ownBusyRetry, () {
+        _ownRetry = null;
+        if (_disposed) return;
+        // tracked, so whenIdle (a test's teardown, a hand-off) waits for the delayed look to end
+        final f = rescan();
+        _pending.add(f);
+        unawaited(f.whenComplete(() => _pending.remove(f)));
+      });
+    }
+    return rebuilt;
+  }
+
   // ---- adding
 
   /// Lets the person pick a file and adds it: a .cache-library archive or a plain Qdrant snapshot as a library, a .zim as a ZIM
@@ -1000,7 +1096,7 @@ class LibrariesState extends ChangeNotifier {
         ..fraction = null;
       notifyListeners();
       if (existing == null) {
-        await _renameRetry(stagePath, _child(await _freeFolderName(id.isEmpty ? title : id)), once: true);
+        await _renameRetry(stagePath, _child(await _freeFolderName(id.isEmpty ? title : id, own: settings?['own'] == true)), once: true);
       } else {
         final err = await _swap(existing, stagePath);
         if (err != null) {
@@ -1048,9 +1144,13 @@ class LibrariesState extends ChangeNotifier {
   }
 
   /// A folder name for a new library from its id: letters, digits, '-' and '_', unique in the folder.
-  Future<String> _freeFolderName(String id) async {
+  Future<String> _freeFolderName(String id, {bool own = false}) async {
     var base = id.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_-]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
     if (base.isEmpty) base = 'library';
+    // only the person's own libraries are named my-books..., and every one of them is: the share keeps their shard and lists to
+    // each device by that name (kLibraryNotShared), and the core rebuilds only those (ownlib.rs)
+    if (!own && isOwnLibraryFolderName(base)) base = 'library-$base';
+    if (own && !isOwnLibraryFolderName(base)) base = '$kOwnLibraryPrefix-$base';
     var name = base;
     for (var i = 2; await _dirExists(_child(name)); i++) {
       name = '$base-$i';
@@ -1179,8 +1279,14 @@ class LibrariesState extends ChangeNotifier {
   /// settings say `"own": true`. Ready-made libraries are never theirs to write to.
   List<LibraryItem> get ownLibraries => [for (final l in libraries) if (l.settings?['own'] == true) l];
 
-  /// The default personal library, "My books" (`"own_default": true`), when it exists.
-  LibraryItem? get defaultOwnLibrary => ownLibraries.where((l) => l.settings?['own_default'] == true).firstOrNull;
+  /// The default personal library, "My books" (`"own_default": true`), when it exists. When more than one says so (an old
+  /// device that was given My books without its shard made another, and its flag synced in), every device picks the same one
+  /// ([pickDefaultOwn]).
+  LibraryItem? get defaultOwnLibrary {
+    final candidates = [for (final l in ownLibraries) if (l.settings?['own_default'] == true) l];
+    final pick = pickDefaultOwn([for (final l in candidates) (folder: l.folderName, id: l.settings?['library_id'] as String?)]);
+    return pick == null ? null : candidates.firstWhere((l) => l.folderName == pick);
+  }
 
   Future<LibraryItem>? _makingOwn;
 
@@ -1200,7 +1306,7 @@ class LibrariesState extends ChangeNotifier {
       final settings = ownLibrarySettings(title: title, id: 'my-books-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}', isDefault: true);
       // its keyword index in its own index/ folder: the Add PDF job extends that one as it adds each book
       await makeBlankLibrary(core, stagePath, settings, tmp, poll: pollInterval);
-      final folder = _child(await _freeFolderName('my-books'));
+      final folder = _child(await _freeFolderName(kOwnLibraryPrefix, own: true));
       await _renameRetry(stagePath, folder, once: true);
       installed = true;
       await _afterChange();
@@ -1270,6 +1376,8 @@ class LibrariesState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _ownRetry?.cancel();
+    _ownRetry = null;
     device?.removeListener(_onDeviceChanged);
     sources.removeListener(_onSources);
     super.dispose();
@@ -1412,6 +1520,41 @@ Map<String, dynamic> settingsForImport(Map<String, dynamic> settings, {required 
   final s = {...settings};
   if (deviceHasOtherOwn) s.remove('own_default');
   return s;
+}
+
+/// Of the own libraries whose settings say `own_default` ([folder] name and [id], the settings' `library_id`), the one that is My
+/// books on every device alike, by folder name: the folder named exactly `my-books` (the first My books the app makes), else the
+/// lowest library id, else the lowest folder name. Null when there is none. The same rule wherever the default is read
+/// (LibrariesState.defaultOwnLibrary, and the background engine's [defaultOwnFolderOnDisk]).
+String? pickDefaultOwn(List<({String folder, String? id})> candidates) {
+  if (candidates.isEmpty) return null;
+  final exact = candidates.where((c) => c.folder == kOwnLibraryPrefix).firstOrNull;
+  if (exact != null) return exact.folder;
+  final sorted = [...candidates]..sort((a, b) {
+      final ia = a.id, ib = b.id;
+      if (ia != null && ib != null && ia != ib) return ia.compareTo(ib);
+      if (ia != null && ib == null) return -1;
+      if (ia == null && ib != null) return 1;
+      return a.folder.compareTo(b.folder);
+    });
+  return sorted.first.folder;
+}
+
+/// [pickDefaultOwn] over the library folders in [librariesDir] as they are on disk (for the background engine, which has no
+/// libraries state): the folder name of the default own library, or null.
+String? defaultOwnFolderOnDisk(Directory librariesDir) {
+  final candidates = <({String folder, String? id})>[];
+  try {
+    for (final d in librariesDir.listSync().whereType<Directory>()) {
+      final name = d.path.split(RegExp(r'[\\/]')).last;
+      if (name.startsWith('.')) continue;
+      try {
+        final j = jsonDecode(File('${d.path}${Platform.pathSeparator}$kLibrarySettingsFile').readAsStringSync());
+        if (j is Map && j['own'] == true && j['own_default'] == true) candidates.add((folder: name, id: j['library_id'] as String?));
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return pickDefaultOwn(candidates);
 }
 
 /// The settings of a library the person makes on the device (Add PDF's My books): the blank template's (bge-m3, the usual

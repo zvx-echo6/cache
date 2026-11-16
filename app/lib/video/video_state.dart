@@ -13,6 +13,7 @@ import 'token_store.dart';
 import '../platform.dart' as plat;
 import 'video_media.dart';
 import 'video_prefs.dart';
+import '../platform/app_log.dart' show logError;
 
 /// What a person is told when a video call fails.
 String videoErrorText(Object e) {
@@ -188,7 +189,37 @@ class VideoState extends ChangeNotifier {
       return;
     }
     await refresh();
+    unawaited(_repairSaved());
   }
+
+  /// Saved HLS videos from before saved videos were rewritten as plain MP4 (Android's player read them as their first few
+  /// seconds) are rewritten once, in the background after start: on the video engine's own thread, one at a time, after a pause
+  /// so the start itself is not slowed. The list is read again when it ends.
+  Future<void> _repairSaved() async {
+    if (!saved.any((v) => v.source.startsWith('hls') && !v.remuxed)) return;
+    await Future<void>.delayed(repairAfter);
+    final core = _core;
+    if (core == null) return;
+    try {
+      final job = await core.startRepair();
+      if (job == null) return;
+      try {
+        while (true) {
+          final p = await job.progress();
+          if (p.isFinished) break;
+          await Future<void>.delayed(const Duration(seconds: 2));
+        }
+      } finally {
+        await job.free();
+      }
+      await refresh();
+    } catch (e) {
+      logError('Saved videos could not be rewritten as plain MP4', error: e);
+    }
+  }
+
+  /// How long after start the saved videos are looked at (shorter in tests).
+  Duration repairAfter = const Duration(seconds: 30);
 
   /// A browser: the engine is on the server (its helper's video core), the videos are saved into `<docs>/videos` there, and the
   /// downloads run on the server, so they go on with no tab open.
@@ -260,6 +291,12 @@ class VideoState extends ChangeNotifier {
     } catch (_) {}
     await _adoptServerJobs();
     if (!_disposed) notifyListeners();
+  }
+
+  /// A device-to-device sync added, changed or removed files in these shared folders: the saved videos are read again when
+  /// the videos folder is one, so the Videos page shows what arrived without a restart (a download does the same by [refresh]).
+  Future<void> shareChanged(Set<String> shareIds) async {
+    if (shareIds.contains('videos')) await refresh();
   }
 
   static String _k(String instance, String what) => 'video.$instance.$what';

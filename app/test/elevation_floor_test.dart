@@ -83,9 +83,9 @@ void main() {
       expect(yMin, lessThan(-50));
     });
 
-    test('well above 0 nothing changes: the window is centered on the profile', () {
+    test('well above 0 the window is centred on a profile under the floor', () {
       final (yMin, yMax) = chartWindow(4300, 4310, floor: floor);
-      expect((yMin + yMax) / 2, closeTo(4305 - floor * 0.05, 0.5));
+      expect((yMin + yMax) / 2, closeTo(4305, 0.5), reason: 'a profile under the floor is in the middle of its window');
     });
   });
 

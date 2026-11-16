@@ -1,4 +1,5 @@
 # Internal diagnostic IPA for registered test phones. USB only; large ZIMs use bounded mapping windows.
+# The car screen (CarPlay) is off unless `carplay` is ticked, exactly as in ios-testflight.yml (check-app.sh holds the signed app to it).
 name: iOS USB Diagnostic
 
 on:
@@ -16,6 +17,10 @@ on:
         type: choice
         options: [all, core, llama]
         default: all
+      carplay:
+        description: Build with the car screen (CarPlay) on, as ios-testflight.yml does (CACHE_CARPLAY=YES)
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-usb-${{ github.run_id }}
@@ -62,6 +67,28 @@ jobs:
             if [[ -z "${!key}" ]]; then echo "::error::Missing required signing secret: $key"; exit 1; fi
           done
           echo "Required configuration is present (secret values are not logged)."
+      # The car screen (CarPlay), input `carplay`, as in ios-testflight.yml: the build then claims the CarPlay entitlement, and an
+      # app that claims one its profile lacks does not sign. Settled here, before any Mac minutes.
+      - name: The USB profile carries the CarPlay entitlement
+        if: inputs.carplay && (inputs.stage || 'all') == 'all'
+        env:
+          IOS_PROFILE_B64: ${{ secrets.IOS_DIAG_PROFILE_B64 }}
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          echo "$IOS_PROFILE_B64" | base64 -d > "$work/profile.mobileprovision"
+          if ! openssl smime -inform der -verify -noverify -in "$work/profile.mobileprovision" -out "$work/profile.plist" 2> /dev/null; then
+            echo "::warning::The profile could not be read here; the Mac job checks it again before it archives."
+            exit 0
+          fi
+          python3 -I - "$work/profile.plist" <<'PY'
+          import plistlib, sys
+          entitlements = plistlib.load(open(sys.argv[1], "rb")).get("Entitlements", {})
+          if entitlements.get("com.apple.developer.carplay-maps") is not True:
+              print("::error::The USB provisioning profile does not carry com.apple.developer.carplay-maps: a build with the car screen on cannot be signed with it.")
+              sys.exit(1)
+          print("The profile carries the CarPlay entitlement (its contents are not logged).")
+          PY
       # The installed diagnostic version and build number come from pubspec.yaml.
       - name: Version and build number from pubspec.yaml
         id: v
@@ -294,6 +321,10 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
           cp "$RUNNER_TEMP/cache.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "profile: $(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist") $UUID"
+          if [[ "${{ inputs.carplay }}" == true ]]; then
+            [[ $(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.carplay-maps' "$RUNNER_TEMP/profile.plist" 2>/dev/null) == true ]] \
+              || { rm -f "$RUNNER_TEMP/profile.plist"; echo "::error::The profile does not carry the CarPlay entitlement: the car screen build cannot be signed."; exit 1; }
+          fi
           rm -f "$RUNNER_TEMP/profile.plist"
       - name: Archive
         working-directory: app/ios
@@ -305,10 +336,11 @@ jobs:
             -workspace Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            CACHE_CARPLAY=${{ inputs.carplay && 'YES' || 'NO' }} \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
       - name: Verify the signed archive
         run: |
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
       - name: Export the .ipa
         run: |
@@ -338,7 +370,7 @@ jobs:
           shasum -a 256 out/*.ipa
           mkdir "$RUNNER_TEMP/ipa-check"
           unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
-          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECT_CARPLAY=${{ inputs.carplay }} EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
           rm -rf "$RUNNER_TEMP/ipa-check"
       - uses: actions/upload-artifact@v4

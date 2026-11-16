@@ -401,6 +401,45 @@ void main() {
   });
 
   // The real job: a background isolate that reads the tiles from the phone's own tile server, here a server of the test's.
+  group('the job in the page (a browser has no isolates)', () {
+    const zoom = 12, size = 256;
+    const n = 1 << zoom;
+    double lonOf(int x) => x / n * 360 - 180;
+    final pts = [(42.55, lonOf(750) + 0.001), (42.56, lonOf(753) - 0.001)];
+
+    test('its profile is the same as the one worked out with every tile held, and its chunks cover it', () async {
+      final tiles = _PlaneTiles(size: size, heightAtColumn: (gx) => 1500 + 300 * math.sin(gx / 700), missingX: {751});
+      final job = profileJobHere(tiles, zoom, pts);
+      final seen = <int, double>{};
+      final done = job.chunks!.listen((c) {
+        for (var i = 0; i < c.heights.length; i++) {
+          seen[c.first + i] = c.heights[i];
+        }
+      }).asFuture<void>();
+      final p = await job.result;
+      await done;
+      _expectSameProfile(p, await _profileHoldingEveryTile(pts, tiles, zoom: zoom), 'in the page');
+      expect(p.hasData, isTrue);
+      expect(p.partial, isTrue);
+      expect(seen, isNotEmpty);
+    });
+
+    test('stopped while it waits for a tile, it ends there', () async {
+      final asked = Completer<void>();
+      final job = profileJobHere(_NeverTiles(asked), zoom, pts);
+      await asked.future;
+      job.stop();
+      await expectLater(job.result, throwsA(isA<ElevationStopped>()));
+      job.stop();
+    });
+
+    test('with no tiles at all, the profile has no elevation and the job still ends well', () async {
+      final p = await profileJobHere(_PlaneTiles(size: size, heightAtColumn: (_) => 0, missingX: {750, 751, 752, 753}), zoom, pts).result;
+      expect(p.hasData, isFalse);
+      expect(p.totalM, greaterThan(20000));
+    });
+  });
+
   group('the job in its isolate', () {
     const zoom = 12, size = 256;
     const n = 1 << zoom;
@@ -633,5 +672,18 @@ class _PlaneTiles implements DemTiles {
       }
       return img.encodePng(im);
     }();
+  }
+}
+
+/// Tiles that are asked for and never come.
+class _NeverTiles implements DemTiles {
+  _NeverTiles(this.asked);
+
+  final Completer<void> asked;
+
+  @override
+  Future<Uint8List?> tile(int z, int x, int y) {
+    if (!asked.isCompleted) asked.complete();
+    return Completer<Uint8List?>().future;
   }
 }

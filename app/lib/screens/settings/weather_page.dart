@@ -14,6 +14,10 @@ import 'key_sheet.dart';
 import 'source_page.dart';
 import '../../sharing/settings_sync.dart' show kWatchPlacesKey;
 import 'widgets.dart';
+import '../../guide/place_link.dart' show LinkText;
+import '../../platform/app_log.dart';
+import '../../update/update_ui.dart' show updateCacheAction;
+import '../../weather/catalogue.dart' show kNewerCatalogueFormat;
 
 /// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
 Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool replace = false, String? title}) async {
@@ -63,13 +67,16 @@ class _WeatherPageState extends State<WeatherPage> {
   void initState() {
     super.initState();
     // Nothing downloaded yet (a first start with no connection until now): try once on opening.
+    logInfo('Weather: Settings page opened; ${w.sourcesLine()}, ${w.catalogues.length} catalogues');
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
   }
 
   /// The refresh button: the source list first (the connector catalogues, as "Check for updates" does, so a newly published
   /// source shows here), then the data.
   Future<void> _refresh() async {
+    logInfo('Weather: Update now tapped (Settings); ${w.sourcesLine()}');
     await w.refreshCatalogues();
+    logInfo('Weather: catalogues refreshed; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
     if (mounted) say(context, r.words);
   }
@@ -88,9 +95,9 @@ class _WeatherPageState extends State<WeatherPage> {
             StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh),
             WatchGroups(deps: d),
             if (all.isEmpty)
-              NoteText(w.refreshingCatalogues
-                  ? 'Loading sources…'
-                  : (w.catalogueErrors.values.firstOrNull ?? 'No sources downloaded yet. Connect to the internet and they load by themselves.'))
+              w.refreshingCatalogues
+                  ? const NoteText('Loading sources…')
+                  : CatalogueErrorNote(w.catalogueErrors.values.firstOrNull ?? 'No sources downloaded yet. Connect to the internet and they load by themselves.')
             else ...[
               const NoteText('What Cache watches for your places. All free; some need a free key you get from the provider.'),
               SettingsGroup(
@@ -375,7 +382,7 @@ class _MoreSourcesPageState extends State<MoreSourcesPage> {
             ),
             if (more.isNotEmpty && shown.isEmpty) const NoteText('No source matches your search.'),
             if (shown.isNotEmpty) SettingsGroup(rows: [for (final c in shown) SourceRow(deps: d, source: c)]),
-            if (errors.isNotEmpty) NoteText(errors.first),
+            if (errors.isNotEmpty) CatalogueErrorNote(errors.first),
             if (own.isNotEmpty) SettingsGroup(label: 'Your own', rows: [for (final c in own) SourceRow(deps: d, source: c)]),
             AddOwnSourceRow(deps: d),
           ],
@@ -427,6 +434,27 @@ class StatusLine extends StatelessWidget {
                   ),
                 ),
         ),
+      ],
+    );
+  }
+}
+
+/// A note about the list of sources. "Update Cache to use it" (a list in a newer format) goes to the update: the words point
+/// there and link to it, when this build knows where its update is.
+class CatalogueErrorNote extends StatelessWidget {
+  const CatalogueErrorNote(this.text, {super.key});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final go = text == kNewerCatalogueFormat ? updateCacheAction(context) : null;
+    if (go == null) return NoteText(text);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        NoteText(text),
+        Padding(padding: const EdgeInsets.fromLTRB(4, 0, 4, 8), child: LinkText('Update Cache', key: const ValueKey('update-cache-link'), onTap: go)),
       ],
     );
   }
