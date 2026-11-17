@@ -119,11 +119,11 @@ void main() {
     test('a model that is not recommended keeps general.name and the quant, with the size alone under', () async {
       (app.session as _Session).info = _smol;
       final f = File('${app.modelsDir!.path}/$_smolFile')..writeAsBytesSync(ggufBytes([kvString('general.name', 'SmolLM2 135M Instruct')]));
-      final e = ModelEntry(path: f.path, size: 90 << 20);
+      final e = ModelEntry(path: f.path, size: 120 << 20);
       app.models = [e];
       await app.activate(e);
       expect(app.displayName(e), 'SmolLM2 135M Instruct · Q4_0');
-      expect(app.sizeLine(e), '90 MB');
+      expect(app.sizeLine(e), '120 MB');
     });
   });
 
@@ -169,7 +169,7 @@ void main() {
 
     testWidgets('Ask > Switch model: a model that is not recommended shows as before', (tester) async {
       final stock = _entry(app.modelsDir!, _stockFile, _stockSize);
-      final smol = ModelEntry(path: '${app.modelsDir!.path}/$_smolFile', size: 90 << 20);
+      final smol = ModelEntry(path: '${app.modelsDir!.path}/$_smolFile', size: 120 << 20);
       File(smol.path).writeAsBytesSync(ggufBytes([kvString('general.name', 'SmolLM2 135M Instruct')]));
       (app.session as _Session).info = _smol;
       await tester.runAsync(() => app.activate(smol));
@@ -181,7 +181,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('model-menu-switch')));
       await tester.pumpAndSettle();
       expect(find.text('SmolLM2 135M Instruct · Q4_0'), findsOneWidget);
-      expect(find.text('90 MB'), findsOneWidget);
+      expect(find.text('120 MB'), findsOneWidget);
     });
 
     testWidgets('Models (on this device): the list name, with the size and quant', (tester) async {
