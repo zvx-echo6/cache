@@ -147,7 +147,7 @@ void main() {
     expect(engine.storageOf('hillshade'), 0);
   });
 
-  test('a finished job is shown done at once even when the core\'s list is slow to answer, and the list is read again later (web-region-progress)', () async {
+  test('a finished job is shown done at once even when the core\'s list is slow to answer, and the slow list is waited for, not asked again at every look (web-region-progress)', () async {
     // The browser: every call goes through the server one at a time, so the list read after a job ends can queue behind a long call.
     final slow = await SearchCore.open(const [], extra: {'test_port': server.port, 'test_list_block_ms': 3000}, native: makeLayersNative);
     final e = CoreLayerEngine(
@@ -171,13 +171,11 @@ void main() {
     expect(a.phase, AreaPhase.done, reason: 'done within 2 s although the list takes 3 s');
     expect(a.doneTiles, 20);
     expect(a.bytes, 20000);
-    // The look is not stuck: the list is read again at a later look, and every look still runs.
-    var lists = 0;
-    for (var i = 0; i < 600 && lists < 3; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      lists = ((await slow.layers('test_calls'))['calls'] as List).where((c) => (c as String).startsWith('list')).length;
-    }
-    expect(lists, greaterThanOrEqualTo(3), reason: 'start, the one that timed out, and the retry');
+    // The look is not stuck, and does not pile calls on a call that is already slow: the list was asked for once more after the
+    // start (the one that took 3 s), and not once per look in the meantime.
+    final lists = ((await slow.layers('test_calls'))['calls'] as List).where((c) => (c as String).startsWith('list')).length;
+    expect(lists, inInclusiveRange(2, 3), reason: 'start, and the read that was waited for');
+    expect(a.phase, AreaPhase.done);
   });
 
   test('cancel stops a first download and leaves nothing', () async {
@@ -221,7 +219,8 @@ void main() {
 
   test('update fetches the area again and keeps the old copy in use until it is done', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
-    await until(() => a.phase == AreaPhase.done);
+    // done is shown when the job ends; the date comes with the list the core is read for next
+    await until(() => a.phase == AreaPhase.done && a.fetchedAt != null);
     final first = a.fetchedAt!;
     await engine.update(a.id);
     expect(a.phase, AreaPhase.running);

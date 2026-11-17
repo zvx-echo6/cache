@@ -785,6 +785,7 @@ class CoreLayerEngine extends LayerEngine {
 
   /// The list could not be read in time after a download ended: the next look reads it again.
   bool _reloadPending = false;
+  Future<void>? _reloadInFlight;
 
   Future<void> _look() async {
     var changed = false;
@@ -824,7 +825,7 @@ class CoreLayerEngine extends LayerEngine {
       logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
-      if (p.state == JobState.done) {
+      if (p.state == JobState.done && !r.update) {
         // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
         // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
         for (final x in _areas.values.where((x) => x.id == a.id)) {
@@ -882,7 +883,17 @@ class CoreLayerEngine extends LayerEngine {
       // Tiles were added or removed: the second core reads the stores afresh.
       _dropPlanner();
       try {
-        await _reload().timeout(reloadTimeout);
+        // A read that did not answer in time is still on its way: it is waited for again, not asked a second time (that would
+        // queue one more call behind a call that is already holding the others up).
+        final inFlight = _reloadInFlight ??= _reload().whenComplete(() {
+          _reloadInFlight = null;
+        }).then((_) {
+          if (_reloadPending) {
+            _reloadPending = false;
+            notifyListeners();
+          }
+        });
+        await inFlight.timeout(reloadTimeout);
         _reloadPending = false;
       } on TimeoutException {
         _reloadPending = true;
