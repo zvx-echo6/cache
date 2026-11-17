@@ -2391,6 +2391,9 @@ void main() {
       final ran = old.clock.subtract(const Duration(minutes: 3));
       File('${old.dir.path}/live-catalogues/status.json').writeAsStringSync(jsonEncode({'ok': ran.millisecondsSinceEpoch, 'run': ran.millisecondsSinceEpoch, 'online': ran.millisecondsSinceEpoch, 'failure': null}));
       await old.weather.start();
+      while (old.weather.refreshingCatalogues) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
       expect(old.weather.lastOkAt, ran);
       expect(old.weather.healthOf(old.weather.sourceById(forecast)!), isNull);
       expect(old.weather.statusOf(old.weather.sourceById(forecast)!), isNot(SourceRowState.notAnswering));
