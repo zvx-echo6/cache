@@ -17,6 +17,8 @@ class _StateNative extends FakeNative implements CsActNative {
   final List<String> finishReplies = [];
 
   @override
+  bool get hasAct => true;
+  @override
   int conversationNew() => 5;
   @override
   int setLocation(int handle, double lat, double lon, double accuracyM, String fixedAt) {
