@@ -390,4 +390,68 @@ void main() {
     regions.dispose();
     await s.dispose(tester);
   });
+
+  Future<(RegionsState, RegionRecord, _Packs)> boot(WidgetTester tester, SettingsRig s, List<Map<String, dynamic>> packs) async {
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue(packs));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final pk = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: pk,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+      await regions.download(county, routing: true, map: false, anyway: true);
+    });
+    return (regions, county, pk);
+  }
+
+  testWidgets('region page: no pack over the region greys the Off-road row with the owner\'s line, and a tap does nothing', (tester) async {
+    final s = await SettingsRig.create(tester);
+    // Utah's and Nevada's packs do not reach Twin Falls County's box (Idaho's would).
+    final (regions, _, packs) = await boot(tester, s, [_utah, _nevada]);
+    await s.show(tester, RegionPage(regions: regions, id: _county));
+    await _settleUntil(tester, () => find.text('No off-road data is published for this area.').evaluate().isNotEmpty);
+    expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add and did nothing');
+    final button = tester.widget<OutlinedButton>(find.descendant(of: find.byKey(const ValueKey('add-offroad-disabled')), matching: find.byType(OutlinedButton)));
+    expect(button.onPressed, isNull, reason: 'greyed, not tappable');
+    await tester.tap(find.byKey(const ValueKey('add-offroad-disabled')), warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(packs.fetched, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('region page: a pack over the region keeps the normal Add off-road offer', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final (regions, _, _) = await boot(tester, s, [_idaho]);
+    await s.show(tester, RegionPage(regions: regions, id: _county));
+    await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(regions.offroadCovered(_county), isTrue);
+    expect(find.text('No off-road data is published for this area.'), findsNothing);
+    final add = find.byKey(const ValueKey('add-offroad'));
+    expect(add, findsOneWidget);
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty);
+    expect(find.byType(AlertDialog), findsOneWidget, reason: 'the offer opens as before');
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
 }

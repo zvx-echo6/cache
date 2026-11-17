@@ -1069,6 +1069,36 @@ class RegionsState extends ChangeNotifier {
     return (OffroadPlan(out), null);
   }
 
+  final Map<String, bool> _offroadCover = {};
+  final Set<String> _offroadCoverAsked = {};
+
+  /// Whether the loaded off-road catalogue has a pack over region [id] (the check the plan makes): null until it has been read,
+  /// which this starts (listeners hear when it is known). The region page greys Add off-road where it is false.
+  bool? offroadCovered(String id) {
+    final known = _offroadCover[id];
+    if (known != null) return known;
+    if (_offroadCoverAsked.add(id)) unawaited(_readOffroadCover(id));
+    return null;
+  }
+
+  Future<void> _readOffroadCover(String id) async {
+    try {
+      final rec = await recordOf(id);
+      final cat = offroadCatalogue;
+      final bounds = rec?.bounds;
+      if (rec == null || cat == null || bounds == null) {
+        _offroadCoverAsked.remove(id);
+        return;
+      }
+      final all = await cat.packs();
+      _offroadCover[id] = packsCovering(all, bounds, states: await statesOf(rec)).isNotEmpty;
+      notifyListeners();
+    } catch (_) {
+      // No catalogue to read now (offline): the offer stays as it was, and is asked again next time.
+      _offroadCoverAsked.remove(id);
+    }
+  }
+
   /// The states or provinces the region list says [r] is in ([statesIn]): a county's or a city's state. Its off-road data is
   /// theirs. Empty when the list does not say: an area drawn on the map, a region larger than a state, or the region's country
   /// file is not on the phone and cannot be read now (the packs are then chosen by their boxes).
