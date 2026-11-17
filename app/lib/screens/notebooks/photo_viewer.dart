@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../notebook/notebook_state.dart';
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 
 /// Opens the viewer on photo [index] of [ids] (an entry's photos, a place's, or a photo field's).
@@ -16,7 +17,7 @@ Future<void> openPhotoViewer(BuildContext context, NotebookState nb, List<String
       PageRouteBuilder<void>(
         opaque: true,
         transitionDuration: const Duration(milliseconds: 180),
-        pageBuilder: (_, _, _) => PhotoViewer(ids: ids, initialIndex: index, fileFor: nb.photoFile, previewFor: nb.previewFile),
+        pageBuilder: (_, _, _) => PhotoViewer(ids: ids, initialIndex: index, fileFor: nb.photoFile, previewFor: nb.previewFile, bytesFor: plat.isWeb ? nb.photoBytes : null),
         transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
       ),
     );
@@ -25,7 +26,7 @@ Future<void> openPhotoViewer(BuildContext context, NotebookState nb, List<String
 /// entry's other photos, tap to hide or show the bar, a menu to share or save the photo, and a close button. [fileFor] gives a
 /// photo's file (the Notebook's media folder).
 class PhotoViewer extends StatefulWidget {
-  const PhotoViewer({super.key, required this.ids, required this.fileFor, this.previewFor, this.initialIndex = 0});
+  const PhotoViewer({super.key, required this.ids, required this.fileFor, this.previewFor, this.bytesFor, this.initialIndex = 0});
 
   final List<String> ids;
   final int initialIndex;
@@ -33,6 +34,9 @@ class PhotoViewer extends StatefulWidget {
 
   /// The smaller local preview of a photo, when it has one: shown first, and the full file is loaded when the photo is zoomed.
   final Future<File> Function(String id)? previewFor;
+
+  /// A photo's bytes, for a browser (it has no local file to open): the viewer shows these instead of [fileFor]'s file.
+  final Future<Uint8List?> Function(String id)? bytesFor;
 
   @override
   State<PhotoViewer> createState() => _PhotoViewerState();
@@ -64,8 +68,17 @@ class _PhotoViewerState extends State<PhotoViewer> {
   Future<void> _act(_Act a) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final f = await widget.fileFor(widget.ids[_page]);
       final name = 'photo-${_page + 1}.jpg';
+      final bf = widget.bytesFor;
+      if (bf != null) {
+        // A browser: the bytes are the photo; both menu items save it.
+        final bytes = await bf(widget.ids[_page]);
+        if (bytes == null) throw StateError('the photo is not there');
+        final saved = await FilePicker.saveFile(fileName: name, bytes: bytes, mimeType: 'image/jpeg');
+        if (saved != null) messenger.showSnackBar(const SnackBar(content: Text('Photo saved')));
+        return;
+      }
+      final f = await widget.fileFor(widget.ids[_page]);
       if (a == _Act.share) {
         await SharePlus.instance.share(ShareParams(files: [XFile(f.path, name: name, mimeType: 'image/jpeg')], fileNameOverrides: [name]));
       } else {
@@ -99,6 +112,7 @@ class _PhotoViewerState extends State<PhotoViewer> {
               key: ValueKey(widget.ids[i]),
               fileFor: widget.fileFor,
               previewFor: widget.previewFor,
+              bytesFor: widget.bytesFor,
               id: widget.ids[i],
               onZoomed: (z) {
                 if (z != _zoomed) setState(() => _zoomed = z);
@@ -219,10 +233,11 @@ Size? imageFileSize(Uint8List b) {
 /// One photo that zooms and pans freely (no edges to get stuck on); double-tap goes to a zoomed view centred on the tap and back
 /// to fit. Pinch reaches the photo's own pixels. A photo with a preview shows it first and loads the full file when zoomed.
 class _ZoomPage extends StatefulWidget {
-  const _ZoomPage({super.key, required this.fileFor, required this.id, required this.onZoomed, required this.onTap, this.previewFor});
+  const _ZoomPage({super.key, required this.fileFor, required this.id, required this.onZoomed, required this.onTap, this.previewFor, this.bytesFor});
 
   final Future<File> Function(String id) fileFor;
   final Future<File> Function(String id)? previewFor;
+  final Future<Uint8List?> Function(String id)? bytesFor;
   final String id;
   final ValueChanged<bool> onZoomed;
   final VoidCallback onTap;
@@ -253,6 +268,19 @@ class _ZoomPageState extends State<_ZoomPage> with SingleTickerProviderStateMixi
   }
 
   Future<void> _start() async {
+    final bf = widget.bytesFor;
+    if (bf != null) {
+      // A browser has no file to open: the photo is its bytes.
+      Uint8List? bytes;
+      try {
+        bytes = await bf(widget.id);
+      } catch (_) {}
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) return setState(() => _missing = true);
+      _fullSize = imageFileSize(bytes);
+      _load(MemoryImage(bytes), isFull: true);
+      return;
+    }
     final full = await widget.fileFor(widget.id);
     if (!mounted) return;
     if (!full.existsSync()) return setState(() => _missing = true);
@@ -270,11 +298,11 @@ class _ZoomPageState extends State<_ZoomPage> with SingleTickerProviderStateMixi
       if (f.existsSync()) preview = f;
     }
     if (!mounted) return;
-    _load(preview ?? full, isFull: preview == null);
+    _load(FileImage(preview ?? full), isFull: preview == null);
   }
 
-  void _load(File f, {required bool isFull}) {
-    final stream = FileImage(f).resolve(ImageConfiguration.empty);
+  void _load(ImageProvider provider, {required bool isFull}) {
+    final stream = provider.resolve(ImageConfiguration.empty);
     late final ImageStreamListener l;
     l = ImageStreamListener((info, _) {
       if (!mounted) return;
@@ -307,7 +335,7 @@ class _ZoomPageState extends State<_ZoomPage> with SingleTickerProviderStateMixi
     final z = _t.value.getMaxScaleOnAxis() > 1.02;
     if (z != _zoomed) setState(() => _zoomed = z);
     // Zoomed on a preview: the full file now.
-    if (z && !_showingFull && _full != null && _image != null) _load(_full!, isFull: true);
+    if (z && !_showingFull && _full != null && _image != null) _load(FileImage(_full!), isFull: true);
     widget.onZoomed(z);
   }
 

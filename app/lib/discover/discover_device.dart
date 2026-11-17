@@ -98,6 +98,10 @@ class AppDiscoverDevice implements DiscoverDevice {
     for (final t in browse.transfers.values) {
       if (_libKey(t.entry.name, t.entry.flavour) == i.key) return t;
     }
+    // A browser holds no transfer of its own: the server downloads, and its running job is the transfer (so the card is past Get).
+    final e = _entries[i.key];
+    final j = e == null ? null : browse.device?.jobForUrl(e.downloadUrl.toString());
+    if (e != null && j != null && j.active) return browse.deviceTransfer(e);
     return null;
   }
 

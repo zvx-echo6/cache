@@ -345,6 +345,13 @@ class NotebookState extends ChangeNotifier {
     return f.existsSync() ? f.readAsBytes() : null;
   }
 
+  /// A photo's full-size bytes, null when it is not there. Phone: the file; browser: the server's media folder.
+  Future<Uint8List?> photoBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, photoRel(id));
+    final f = await photoFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
+
   /// An attached file's bytes, null when it is not there.
   Future<Uint8List?> attachedBytes(String id) async {
     if (plat.isWeb) return webFs.readBytes(AppRoot.support, attachedRel(id));
