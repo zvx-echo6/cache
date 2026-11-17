@@ -55,6 +55,7 @@ void main() {
     core.sizes[_county] = 120 << 20; // on the device
     core.alreadyBytes = 70 << 20; // so 50 MB is fetched
     await _openDialog(tester, s, regions);
+    await _settleUntil(tester, () => find.textContaining('on this device (', findRichText: true).evaluate().isNotEmpty);
     final text = find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('on this device (', findRichText: true));
     expect(text, findsOneWidget, reason: 'before: only the catalogue\'s transfer size, as if it were what the region takes');
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('to download)', findRichText: true)), findsOneWidget);

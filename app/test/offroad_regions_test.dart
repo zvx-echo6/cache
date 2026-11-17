@@ -237,6 +237,7 @@ void main() {
     final offer = regions.offer(county);
     expect(offer.offroad, isTrue);
     expect(offer.bytes, isNotNull);
+    await _settleUntil(tester, () => find.textContaining('on this device (', findRichText: true).evaluate().isNotEmpty);
     expect(find.textContaining('on this device (', findRichText: true), findsOneWidget, reason: 'the core\'s plan: on the device, and what is fetched');
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();
