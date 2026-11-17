@@ -82,16 +82,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ]);
   }
 
-  /// "4 sources · 2 places".
+  /// "All 6 working" or "2 need attention" (a source that is off is not either).
   List<Part> _weather() {
-    final w = d.hub.weather;
-    final on = w.enabledSources.length;
-    if (on == 0) return const [Part('Nothing on')];
-    final places = d.hub.settings.watchedPlaces.length;
-    return joinParts([
-      [Part(on == 1 ? '1 source' : '$on sources')],
-      [Part(places == 1 ? '1 place' : '$places places')],
-    ]);
+    final n = d.hub.weather.sourceCounts;
+    if (n.attention > 0) return [Part('${n.attention} need${n.attention == 1 ? 's' : ''} attention', Tone.warn)];
+    if (n.working == 0) return const [Part('Nothing on')];
+    return [Part('All ${n.working} working')];
   }
 
   /// "Serious alerts · quiet 10 PM–7 AM".
@@ -152,7 +148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions, ?ModelDownloads.shared, ?d.carVoice]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, d.hub.weather, ?d.hub.regions, ?ModelDownloads.shared, ?d.carVoice]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [

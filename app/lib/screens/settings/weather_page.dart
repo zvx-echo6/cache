@@ -47,9 +47,9 @@ String _sentence(String s) {
   return '${t[0].toUpperCase()}${t.substring(1)}.';
 }
 
-/// Settings > Weather and alerts: one line saying how old the data is (with a small refresh button), what weather watches (your
-/// location, the downloaded regions and the saved places, each with its switch), and the sources from the catalogue (featured ones
-/// first, the rest under More sources).
+/// Settings > Weather and alerts: how many sources work and when Cache last checked (with a small refresh button), what weather
+/// watches (your location, the downloaded regions and the saved places, each with its switch), and the sources from the catalogue:
+/// those that need attention, the working ones, the ones that are off, then More sources.
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key, required this.deps});
 
@@ -77,7 +77,8 @@ class _WeatherPageState extends State<WeatherPage> {
     await w.refreshCatalogues();
     logInfo('Weather: catalogues refreshed; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
-    if (mounted) say(context, r.words);
+    // A source that failed says so on its own row (in words, never an HTTP status); the message only speaks when nothing failed.
+    if (mounted && r.failures.isEmpty) say(context, r.words);
   }
 
   @override
@@ -86,12 +87,24 @@ class _WeatherPageState extends State<WeatherPage> {
       listenable: Listenable.merge([w, d.hub.settings]),
       builder: (context, _) {
         final all = w.sources;
-        final featured = [for (final c in all) if (c.featured) c];
-        final more = [for (final c in all) if (!c.featured) c];
+        // The featured sources, then any other source that is on (it needs watching like the rest); off and not featured: More sources.
+        final listed = [
+          for (final c in all) if (c.featured) c,
+          for (final c in all) if (!c.featured && !w.isOwn(c) && w.isOn(c.id)) c,
+        ];
+        final more = [for (final c in all) if (!listed.contains(c)) c];
+        // Your own sources keep their old row until their step; they are not counted and sit with the working ones.
+        SourceRowState state(Connector c) => w.isOwn(c) ? SourceRowState.working : w.rowStateOf(c);
+        final attention = [for (final c in listed) if (WeatherState.needsAttention(state(c))) c];
+        final off = [for (final c in listed) if (state(c) == SourceRowState.off) c];
+        final rest = [for (final c in listed) if (!attention.contains(c) && !off.contains(c)) c];
+        SettingsGroup group(List<Connector> l, [String? label]) => SettingsGroup(label: label, rows: [for (final c in l) SourceRow(deps: d, source: c)]);
         return SettingsPage(
           title: 'Weather and alerts',
           children: [
-            StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh),
+            listed.isEmpty
+                ? StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh)
+                : SourcesStatusLine(weather: w, onRefresh: _refresh),
             WatchGroups(deps: d),
             if (all.isEmpty)
               w.refreshingCatalogues
@@ -99,18 +112,20 @@ class _WeatherPageState extends State<WeatherPage> {
                   : CatalogueErrorNote(w.catalogueErrors.values.firstOrNull ?? 'No sources downloaded yet. Connect to the internet and they load by themselves.')
             else ...[
               const NoteText('What Cache watches for your places. All free; some need a free key you get from the provider.'),
+              if (attention.isNotEmpty) group(attention, 'Needs attention'),
+              if (rest.isNotEmpty) group(rest, attention.isNotEmpty || off.isNotEmpty ? 'Working' : null),
+              if (off.isNotEmpty) group(off, 'Off'),
               SettingsGroup(
                 rows: [
-                  for (final c in featured) SourceRow(deps: d, source: c),
                   SettingsRow(
-                      key: const ValueKey('more-sources'),
-                      icon: Icons.add,
-                      title: 'More sources',
-                      status: [Part(more.isEmpty ? 'Add your own source' : more.map((c) => c.title).join(', '))],
-                      trailing: more.isEmpty ? null : Text('${more.length} more', style: TextStyle(fontSize: 13, color: context.t.secondary)),
-                      chevron: true,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MoreSourcesPage(deps: d))),
-                    ),
+                    key: const ValueKey('more-sources'),
+                    icon: Icons.add,
+                    title: 'More sources',
+                    status: [Part(more.isEmpty ? 'Add your own source' : more.map((c) => c.title).join(', '))],
+                    trailing: more.isEmpty ? null : Text('${more.length} more', style: TextStyle(fontSize: 13, color: context.t.secondary)),
+                    chevron: true,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MoreSourcesPage(deps: d))),
+                  ),
                 ],
               ),
             ],
@@ -264,8 +279,43 @@ class _WatchGroupsState extends State<WatchGroups> {
   }
 }
 
-/// One source: what it gives and who provides it, and its switch, or "Get key" on the row while it needs a key. Tapping it opens the
-/// source's details (its key can be replaced or removed there).
+/// How long ago, for "updated 12 min ago" and "saved 3 hours ago".
+String _ago(WeatherState w, DateTime? at) => at == null ? '' : agoWords(w.clockNow.difference(at));
+
+/// The state in a word, as the row's second line names it.
+String stateWord(SourceRowState s) => switch (s) {
+  SourceRowState.working => 'Working',
+  SourceRowState.updating => 'Updating',
+  SourceRowState.off => 'Off',
+  SourceRowState.needsKey => 'Needs a key',
+  SourceRowState.keyRejected => 'Key not accepted',
+  SourceRowState.notAnswering => 'Not answering',
+  SourceRowState.limitReached => 'Limit reached',
+  SourceRowState.nothingHere => 'Nothing for this place',
+};
+
+/// The one sentence a problem state gets (null for a state with none), in the owner's approved words.
+String? stateSentence(WeatherState w, Connector c, SourceRowState s) {
+  final who = c.provider.isEmpty ? c.title : c.provider;
+  switch (s) {
+    case SourceRowState.needsKey:
+      return '$who needs a free key.';
+    case SourceRowState.keyRejected:
+      return '$who no longer accepts the saved key.';
+    case SourceRowState.notAnswering:
+      final ago = _ago(w, w.healthOf(c)?.lastOkAt);
+      return ago.isEmpty ? "$who didn't answer." : "$who didn't answer. Showing what Cache saved $ago.";
+    case SourceRowState.limitReached:
+      return '$who says it has reached its limit. Cache tries again later.';
+    case SourceRowState.nothingHere:
+      return c.coverage.isEmpty ? 'Your place is outside what this covers.' : 'Covers ${c.coverage}. Your place is outside it.';
+    case SourceRowState.working || SourceRowState.updating || SourceRowState.off:
+      return null;
+  }
+}
+
+/// One source: its name, its state (and how old its data is), and its switch, or the one button its problem needs. A problem adds a
+/// sentence. Tapping it opens the source's details (its key can be replaced or removed there).
 class SourceRow extends StatelessWidget {
   const SourceRow({super.key, required this.deps, required this.source});
 
@@ -277,28 +327,65 @@ class SourceRow extends StatelessWidget {
     final w = deps.hub.weather;
     final c = source;
     final k = context.t;
+    void open() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcePage(deps: deps, sourceId: c.id)));
+    final leading = Icon(sourceIcon(c), size: 22, color: k.secondary);
+    if (w.isOwn(c)) {
+      return SettingsRow(
+        key: ValueKey('source-${c.id}'),
+        leading: leading,
+        title: c.title,
+        titleLines: 2,
+        statusLines: 2,
+        status: joinParts([
+          [const Part('Your source')],
+          [Part('checked ${everyWords(c.refreshMinutes)}')],
+        ]),
+        trailing: w.keyReady(c)
+            ? Switch(value: w.isOn(c.id), onChanged: (v) => w.setSourceOn(c, v))
+            : RowButton(key: ValueKey('get-key-${c.id}'), label: 'Get key', onPressed: () => addKeyFor(context, deps, c)),
+        onTap: open,
+      );
+    }
+    final s = w.rowStateOf(c);
     final gives = c.description.isEmpty ? '' : '${c.description[0].toUpperCase()}${c.description.substring(1)}';
-    final status = w.isOwn(c)
-        ? joinParts([
-            [const Part('Your source')],
-            [Part('checked ${everyWords(c.refreshMinutes)}')],
-          ])
-        : joinParts([
-            if (gives.isNotEmpty) [Part(gives)],
-            if (c.provider.isNotEmpty) [Part(c.provider)],
-          ]);
+    final problem = WeatherState.needsAttention(s) || s == SourceRowState.limitReached;
+    final ago = _ago(w, w.healthOf(c)?.lastOkAt);
+    // A problem row names its state only: its sentence says how old the saved data is, and the age does not fit beside the button.
+    final line2 = switch (s) {
+      SourceRowState.off => [Part(gives.isEmpty ? 'Off' : gives)],
+      SourceRowState.working || SourceRowState.updating => [Part(stateWord(s)), if (ago.isNotEmpty) Part(' · updated $ago')],
+      _ => [Part(stateWord(s), problem ? Tone.warn : Tone.quiet)],
+    };
+    final sentence = stateSentence(w, c, s);
+    final Widget? trailing = switch (s) {
+      SourceRowState.working => Switch(value: true, onChanged: (v) => w.setSourceOn(c, v)),
+      // a source that needs a key is switched on by giving the key
+      SourceRowState.off => Switch(value: false, onChanged: (v) => w.keyReady(c) ? w.setSourceOn(c, v) : addKeyFor(context, deps, c)),
+      SourceRowState.updating => const SizedBox(width: 48, height: 48, child: Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2.5))),
+      SourceRowState.needsKey => RowButton(key: ValueKey('add-key-${c.id}'), label: 'Add key', onPressed: () => addKeyFor(context, deps, c)),
+      SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-${c.id}'), label: 'Replace key', onPressed: () => addKeyFor(context, deps, c, replace: true)),
+      // for now the whole update; a source of its own later
+      SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-${c.id}'), label: 'Try again', onPressed: () => w.updateNow(force: true)),
+      SourceRowState.limitReached || SourceRowState.nothingHere => null,
+    };
     return SettingsRow(
       key: ValueKey('source-${c.id}'),
-      leading: Icon(sourceIcon(c), size: 22, color: k.secondary),
+      leading: leading,
       title: c.title,
-      // A source's name and what it gives take two lines each, so a phone shows them whole beside the switch.
+      // A source's name takes two lines, so a phone shows it whole beside the switch.
       titleLines: 2,
-      statusLines: 2,
-      status: status,
-      trailing: w.keyReady(c)
-          ? Switch(value: w.isOn(c.id), onChanged: (v) => w.setSourceOn(c, v))
-          : RowButton(key: ValueKey('get-key-${c.id}'), label: 'Get key', onPressed: () => addKeyFor(context, deps, c)),
-      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcePage(deps: deps, sourceId: c.id))),
+      statusWidget: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          statusText(context, line2, maxLines: s == SourceRowState.off ? 2 : 1),
+          if (sentence != null) ...[
+            const SizedBox(height: 2),
+            statusText(context, [Part(sentence, problem ? Tone.warn : Tone.quiet)], maxLines: 2),
+          ],
+        ],
+      ),
+      trailing: trailing,
+      onTap: open,
     );
   }
 }
@@ -402,6 +489,81 @@ class StatusLine extends StatelessWidget {
           width: 48,
           height: 48,
           child: updating
+              ? const Padding(padding: EdgeInsets.all(14), child: CircularProgressIndicator(strokeWidth: 2.5))
+              : IconButton(
+                  key: const ValueKey('weather-refresh'),
+                  tooltip: 'Refresh',
+                  onPressed: onRefresh,
+                  icon: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: k.surface),
+                    child: Icon(Icons.refresh, size: 18, color: k.text),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The top of the page: line 1 says how many sources need attention (a warning) or that all work, with how many are off; line 2 says
+/// when Cache last checked; the refresh button. With no connection line 1 is the one notice for the whole list.
+class SourcesStatusLine extends StatelessWidget {
+  const SourcesStatusLine({super.key, required this.weather, required this.onRefresh});
+
+  final WeatherState weather;
+  final VoidCallback onRefresh;
+
+  /// "2 need attention · 1 off", "All 6 sources working", "1 off" with the ones that are on none of them.
+  static String summary(({int working, int attention, int off}) n) {
+    final head = n.attention > 0
+        ? '${n.attention} need${n.attention == 1 ? 's' : ''} attention'
+        : n.working == 0
+        ? 'Nothing is on'
+        : 'All ${n.working} ${n.working == 1 ? 'source' : 'sources'} working';
+    return n.off > 0 && n.working + n.attention > 0 ? '$head · ${n.off} off' : head;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final w = weather;
+    final n = w.sourceCounts;
+    final offline = w.noNetwork;
+    final warn = offline || n.attention > 0;
+    final line1 = offline ? 'No connection. Showing what was saved.' : summary(n);
+    final at = w.lastCheckedAt;
+    final line2 = at == null ? 'Not checked yet' : 'Last checked ${agoWords(w.clockNow.difference(at))}';
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (warn) ...[Icon(Icons.warning_amber_rounded, size: 18, color: k.warning), const SizedBox(width: 6)],
+                  Expanded(
+                    child: Text(
+                      line1,
+                      key: const ValueKey('status-headline'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 14, fontWeight: warn ? FontWeight.w500 : FontWeight.w400, color: warn ? k.warning : k.secondary),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(line2, key: const ValueKey('status-checked'), style: TextStyle(fontSize: 13, color: k.secondary)),
+            ],
+          ),
+        ),
+        SizedBox(
+          width: 48,
+          height: 48,
+          child: w.updating
               ? const Padding(padding: EdgeInsets.all(14), child: CircularProgressIndicator(strokeWidth: 2.5))
               : IconButton(
                   key: const ValueKey('weather-refresh'),
