@@ -189,6 +189,22 @@ class _WatchGroupsState extends State<WatchGroups> {
     return n is String && n.isNotEmpty ? n : 'A saved place';
   }
 
+  /// Stops watching a place that is waiting for its saved place, after a confirm. The saved place itself is not touched.
+  Future<void> _stopWatching(String id) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Stop watching this place?'),
+        content: const Text("Weather and alerts stop for it on all your linked devices. The saved place itself isn't deleted."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          TextButton(key: const ValueKey('confirm-remove-place'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok == true) w.settings.setWatched(id, false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = w.settings;
@@ -266,12 +282,18 @@ class _WatchGroupsState extends State<WatchGroups> {
                   for (final p in shown) place(p),
                   // Watched on a linked device whose settings come here, and not on this device yet (it comes with the notebooks).
                   for (final id in waiting)
-                    SwitchRow(
+                    SettingsRow(
                       key: ValueKey('watch-$id'),
                       title: _waitingName(id),
                       status: const [Part('waiting for this place', Tone.warn)],
-                      value: true,
-                      onChanged: (on) => settings.setWatched(id, on),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RowButton(key: ValueKey('watch-remove-$id'), label: 'Remove', onPressed: () => _stopWatching(id)),
+                          const SizedBox(width: 8),
+                          Switch(value: true, onChanged: (on) => settings.setWatched(id, on)),
+                        ],
+                      ),
                     ),
                 ],
               ),
