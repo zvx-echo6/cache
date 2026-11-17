@@ -137,6 +137,9 @@ class RegionPlan {
 
 const String _needsConnection = 'Needs a connection to work out the size.';
 
+/// The words an off-road add gives when the person's Pause is on.
+const String _heldOffroad = 'downloads are paused. Tap Resume, then add the off-road data.';
+
 /// Which part of a region a problem is about, for [regionPartWords].
 enum RegionPart { routing, places }
 
@@ -1292,7 +1295,11 @@ class RegionsState extends ChangeNotifier {
     await refresh();
     notifyListeners();
     // WORDING (for cache-pm): the sentences below reach the person as "Couldn't add off-road to <region>: <sentence>".
-    if (offroadProblem != null) throw StateError(offroadProblem);
+    if (offroadProblem != null) {
+      // A region download asked for while paused (not the Add off-road request, which keeps its own words): Resume starts it.
+      if (offroadProblem == _heldOffroad && (routing || map || places)) throw DownloadsPaused(r);
+      throw StateError(offroadProblem);
+    }
   }
 
   /// The outline [r]'s map part is downloaded for ([mapOutline]); null (the box) for an area drawn on the map, one kept from before
@@ -1313,7 +1320,7 @@ class RegionsState extends ChangeNotifier {
   /// for (Add off-road), so a region with no pack over it is said, not passed over.
   Future<String?> _addOffroad(_Kept k, RegionRecord r, {required bool anyway, bool only = false}) async {
     // WORDING (cache-pm): these four sentences.
-    if (held) return 'downloads are paused. Tap Resume, then add the off-road data.';
+    if (held) return _heldOffroad;
     final (plan, problem) = await _offroadPlan(r);
     if (plan == null) {
       if (problem != null) {
@@ -1504,6 +1511,13 @@ class RegionsState extends ChangeNotifier {
       pausing = false;
       notifyListeners();
     }
+  }
+
+  /// Resume on a download that was asked for while paused: carries on everything paused, then starts the off-road part that waited.
+  Future<void> resumeAndStart(RegionRecord r) async {
+    await resumeAll(anyway: true);
+    final here = regionOf(r.id);
+    if (here != null && !here.hasOffroad) await download(r, routing: false, map: false, offroad: true, anyway: true);
   }
 
   /// Carries on every paused region download, in the order they were added.
