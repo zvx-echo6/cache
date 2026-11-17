@@ -121,6 +121,7 @@ class _MockSourceRow extends StatelessWidget {
         ],
       ),
       trailing: trailing,
+      chevron: false,
       onTap: () {},
     );
   }
@@ -241,7 +242,7 @@ Future<SettingsRig> _rig(WidgetTester tester) async {
     e('alerts', 'emergency', 'Emergency alerts', 'Alerts from emergency services', 'NWS'),
     e('wfigs-incidents-near', 'fire', 'Wildfires', 'Wildfires near your place', 'NIFC WFIGS'),
     e('firms-viirs-near', 'fire', 'Fire hotspots (satellite)', 'Satellite fire detections near your place', 'NASA FIRMS'),
-    e('idaho511-events', 'roads', 'Road events', 'Closures and crashes on Idaho roads', 'Idaho 511', key: 'idaho511'),
+    e('idaho511-events', 'roads', 'Road events', 'Closures and crashes on Idaho roads', 'Idaho 511', key: 'idaho511', featured: true),
     e('usgs-quakes-near', 'earthquakes', 'Earthquakes', 'Recent earthquakes near your place', 'USGS'),
     e('traffic-flow', 'traffic', 'Traffic flow', 'Speeds and slowdowns on main roads', 'TomTom'),
     e('swpc-kp', 'space-weather', 'Space weather', 'Kp index', 'NOAA SWPC', featured: false),
