@@ -498,6 +498,7 @@ void main() {
     final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: maps, opener: (_) async => core2);
     const id = 'us-id-twin-falls-county';
     await tester.runAsync(() async {
+      await maps.init();
       await regions.init();
       final county = (await catalogue.shard('us'))[id]!;
       await catalogue.geometry(county);
