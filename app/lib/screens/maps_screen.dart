@@ -2204,9 +2204,14 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_step == null && !_peek && widget.onBackToJump == null) || !widget.active,
+      canPop: (_ring == null && _step == null && !_peek && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        // With the long-press ring open, Back closes the ring and nothing else.
+        if (_ring != null) {
+          setState(() => _ring = null);
+          return;
+        }
         if (_peek) {
           _endPeek();
         } else if (_step != null) {
