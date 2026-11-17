@@ -225,6 +225,19 @@ class RecommendedModels extends ChangeNotifier {
     return _builtInRead.future;
   }
 
+  /// Reads the built-in copy only (no network), when nothing has been read yet: for a name to show before any screen asks for the list.
+  /// A later [load] still reads the published list.
+  Future<void> loadBuiltIn() async {
+    if (models.isNotEmpty || _loading != null) return;
+    try {
+      final b = parseRecommendations(await _builtIn());
+      if (b != null && models.isEmpty) {
+        models = b;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
   /// Reads the built-in copy, then the published list. Later calls wait for the first one.
   Future<void> load() => _loading ??= _load();
 
@@ -255,6 +268,15 @@ class RecommendedModels extends ChangeNotifier {
   bool? isRecommendedFile(String fileName) {
     if (models.isEmpty) return null;
     return models.any((m) => m.file == fileName);
+  }
+
+  /// The name the list gives the file [fileName] ("Gemma 4 E2B · tuned for Cache"); null when the list does not name it, or while the
+  /// list is not known.
+  String? nameOfFile(String fileName) {
+    for (final m in models) {
+      if (m.file == fileName) return m.name;
+    }
+    return null;
   }
 
   /// No model tuned for Cache is in the list yet.
