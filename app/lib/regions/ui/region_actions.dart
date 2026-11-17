@@ -25,6 +25,49 @@ String partsSentence({bool map = false, bool routing = false, bool places = fals
 /// The size words of a download: "1.0 GB", or "Size unknown" when the catalogue has none for it.
 String sizeWords(int? bytes) => bytes == null ? 'Size unknown' : formatBytes(bytes);
 
+/// WORDING (cache-pm, approved): with the core's plan, the size on the device and what is fetched; without one (offline), only
+/// the catalogue's download figure.
+String regionSizeLine({int? onDevice, int? download}) {
+  if (onDevice != null && download != null) return '${formatBytes(onDevice)} on this device (${formatBytes(download)} to download)';
+  if (download != null) return '${formatBytes(download)} to download';
+  return 'Size unknown';
+}
+
+/// What downloading [list] would put on the device and fetch, from the core's plan (routing and places as the core counts them, the
+/// map layers' estimates, the off-road packs); null when any plan cannot be made now (offline, the index out of reach): the dialog
+/// then shows the catalogue's download figure alone.
+Future<({int onDevice, int download})?> planSizeOf(RegionsState regions, List<(RegionRecord, RegionOffer)> list) async {
+  var onDevice = 0, download = 0;
+  for (final (rec, o) in list) {
+    try {
+      final p = await regions.plan(rec).timeout(const Duration(seconds: 12));
+      if (o.routing) {
+        final r = p.routing;
+        if (r == null || p.routingProblem != null) return null;
+        onDevice += r.bytes;
+        download += r.downloadBytes;
+      }
+      if (o.places) {
+        final pl = p.places;
+        if (pl == null || p.placesProblem != null) return null;
+        onDevice += pl.bytes;
+        download += pl.downloadBytes;
+      }
+      if (o.map) {
+        onDevice += p.mapBytes + p.mapBytesAlready;
+        download += p.mapBytes;
+      }
+      if (o.offroad && p.offroadAllowed) {
+        onDevice += p.offroad!.downloadBytes + p.offroad!.bytesAlready;
+        download += p.offroad!.downloadBytes;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+  return (onDevice: onDevice, download: download);
+}
+
 /// Says [text] at the bottom of the screen, with [action] when given: a button's result is always shown at once.
 /// A screen that has closed meanwhile (the answer came after it went) is told nothing.
 void tell(ScaffoldMessengerState m, String text, {SnackBarAction? action}) {
@@ -76,6 +119,9 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
   if (todo.isEmpty) return;
   var bytes = todo.every((t) => t.$2.bytes != null) ? todo.fold<int>(0, (s, t) => s + t.$2.bytes!) : null;
   if (bytes == null && drawnSize != null && todo.length == 1) bytes = await drawnSize();
+  // The core's plan says what the region takes on the device (its tiles unpacked) and what is fetched (gzip, minus what is here);
+  // the catalogue only knows the fetch. Offline there is no plan, and the catalogue's figure is said to be the download.
+  final planned = await planSizeOf(regions, todo);
   final dir = await regions.supportDir();
   if (!context.mounted) return;
   final one = todo.length == 1 ? todo.single : null;
@@ -86,14 +132,15 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
     else
       [for (final t in todo) t.$1.name].join(', '),
     if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
-    sizeWords(bytes),
+    if (planned != null) regionSizeLine(onDevice: planned.onDevice, download: planned.download) else if (bytes != null) regionSizeLine(download: bytes) else sizeWords(bytes),
   ].where((l) => l.isNotEmpty).toList();
   final m = ScaffoldMessenger.of(context);
   final choice = await askToDownload(
     context,
     title: one != null ? 'Download ${one.$1.name}?' : 'Download ${todo.length} regions?',
     summary: summary,
-    bytes: bytes,
+    // the space it needs is what it takes on the device
+    bytes: planned?.onDevice ?? bytes,
     name: one?.$1.name ?? '${todo.length} regions',
     dir: dir.path,
     policy: regions.policy,

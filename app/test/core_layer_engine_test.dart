@@ -455,6 +455,28 @@ void main() {
     expect(back.paused, isTrue, reason: 'Pause reached the server job and the area reads as paused');
   });
 
+  test('two downloads running together: when both jobs end every listing of both areas reads done at once, with the final size (web-region-progress)', () async {
+    const other = GeoBounds(south: 42.70, west: -113.80, north: 42.80, east: -113.66);
+    final a = await engine.download('hillshade', home, label: 'first');
+    final b = await engine.download('elevation', other, label: 'second');
+    expect(a.phase, AreaPhase.running);
+    expect(b.phase, AreaPhase.running);
+    // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
+    for (var i = 0; i < 6000 && !(engine.allAreas.every((x) => x.phase == AreaPhase.done) && engine.allAreas.length == 2); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(engine.allAreas.length, 2);
+    for (final x in engine.allAreas) {
+      expect(x.phase, AreaPhase.done, reason: x.id);
+      expect(x.bytes, 20000, reason: 'the final size from the core, not the last progress read');
+      expect(x.doneTiles, 20);
+    }
+    // every listing of an area (hillshade, contours and elevation share the store) is done too
+    for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
+    }
+  });
+
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
     final outline = [
       [

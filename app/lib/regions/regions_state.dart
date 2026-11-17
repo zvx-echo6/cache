@@ -1630,8 +1630,10 @@ class RegionsState extends ChangeNotifier {
     for (final p in l.parts) {
       final b = switch (p.kind) {
         RegionPartKind.map => c.map ?? (p.ready ? p.bytes : null),
-        RegionPartKind.directions => sz.routing ?? p.totalBytes,
-        RegionPartKind.places => sz.places ?? p.totalBytes,
+        // The core's own total is what the part takes on the device, in the unit the bytes done are counted in; the catalogue's
+        // figure is the gzip transfer (about half), so it is only the answer before the core knows the part.
+        RegionPartKind.directions => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.routing,
+        RegionPartKind.places => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.places,
         RegionPartKind.offroad => (sz.offroadTerrain ?? 0) + sz.offroadPacks.values.fold<int>(0, (a, b) => a + b),
       };
       sum = b == null || sum == null ? null : sum + b;
