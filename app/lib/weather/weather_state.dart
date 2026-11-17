@@ -24,10 +24,13 @@ import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import 'source_health.dart';
 import '../notebook/places.dart' show distanceM;
 import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
+
+export 'source_health.dart';
 
 /// Where the phone is, as far as weather is concerned.
 typedef Position = ({double lat, double lon});
@@ -287,6 +290,7 @@ class WeatherState extends ChangeNotifier {
   bool _refreshing = false;
   final Map<String, String> _catalogueErrors = {};
   final Map<String, String> _sourceErrors = {};
+  final Map<String, SourceHealth> _health = {};
   DateTime? _lastOkAt;
   DateTime? _lastRunAt;
   DateTime? _lastOnlineAt;
@@ -306,6 +310,80 @@ class WeatherState extends ChangeNotifier {
 
   /// The last failure of each source in the last update, by source id.
   Map<String, String> get sourceErrors => Map.unmodifiable(_sourceErrors);
+
+  /// What is known about [c]'s downloads; null before any try (and for a file written before this record existed).
+  SourceHealth? healthOf(Connector c) => _health[c.id];
+
+  /// There is no connection: one notice for the whole list, not a state of any row.
+  bool get noNetwork => _kind == ConnectionKind.none;
+
+  /// What Settings says about [c]. A failed update alone changes nothing the person sees while the saved copy is still current
+  /// (the core's `expired` flag, as of the last try); only an out-of-date copy turns the failure into the row's state.
+  SourceStatus statusOf(Connector c) {
+    if (!isOn(c.id)) return SourceStatus.off;
+    if (!keyReady(c)) return SourceStatus.needsKey;
+    if (_updating) return SourceStatus.updating;
+    final h = _health[c.id];
+    if (h == null || h.failure == SourceFailure.none || h.copyCurrent) return SourceStatus.working;
+    return switch (h.failure) {
+      SourceFailure.keyRejected => SourceStatus.keyRejected,
+      SourceFailure.limit => SourceStatus.limitReached,
+      SourceFailure.outOfArea => SourceStatus.nothingHere,
+      SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceStatus.notAnswering,
+      // a key is saved now: the old "no key" failure is stale
+      SourceFailure.keyMissing || SourceFailure.none => SourceStatus.working,
+    };
+  }
+
+  /// The kind of a failed download, from the core's error code and the HTTP status in its message.
+  static SourceFailure failureKind(CacheSearchException e, {required bool needsKey, required bool hasKey}) {
+    switch (e.code) {
+      case 'quota':
+        return SourceFailure.limit;
+      case 'key_missing':
+        return SourceFailure.keyMissing;
+      case 'bad_response' || 'bad_json':
+        return SourceFailure.unreadable;
+      case 'fetch_failed':
+        final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
+        if (m == null) return SourceFailure.unreachable;
+        final code = int.parse(m.group(1)!);
+        if (code == 401 || code == 403) {
+          if (!needsKey) return SourceFailure.providerError;
+          return hasKey ? SourceFailure.keyRejected : SourceFailure.keyMissing;
+        }
+        return code == 429 ? SourceFailure.limit : SourceFailure.providerError;
+      default:
+        return SourceFailure.unreachable;
+    }
+  }
+
+  SourceFailure _failureOf(Connector c, Object e) => e is CacheSearchException
+      ? failureKind(e, needsKey: c.needsKey, hasKey: !c.needsKey || hasKey(c.keyAlias!))
+      : SourceFailure.unreachable;
+
+  /// Notes the outcome of a try for [c]: a success clears the failure; a failure keeps the time it began, and whether the core
+  /// still holds a current copy (read now, so [statusOf] needs no read).
+  Future<void> _noteOutcome(Connector c, SourceFailure failure) async {
+    final now = _now();
+    final before = _health[c.id];
+    if (failure == SourceFailure.none) {
+      _health[c.id] = SourceHealth(lastOkAt: now, lastAttemptAt: now);
+      return;
+    }
+    var current = false;
+    try {
+      final i = await infoFor(c);
+      current = i.age != null && !i.expired;
+    } catch (_) {}
+    _health[c.id] = SourceHealth(
+      lastOkAt: before?.lastOkAt,
+      lastAttemptAt: now,
+      failure: failure,
+      failureSince: before != null && before.failure != SourceFailure.none ? (before.failureSince ?? now) : now,
+      copyCurrent: current,
+    );
+  }
 
   /// The address of the main source list (Settings > Storage > Advanced > Source list address can change it).
   String get catalogueUrl => settings.catalogueUrl ?? kDefaultCatalogueUrl;
@@ -453,6 +531,10 @@ class WeatherState extends ChangeNotifier {
       return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _keys.add(alias);
+    for (final u in sourcesUsingKey(alias)) {
+      final h = _health[u.id];
+      if (h != null && (h.failure == SourceFailure.keyRejected || h.failure == SourceFailure.keyMissing)) _health.remove(u.id);
+    }
     if (switchOn) settings.setLiveSourcesOn({..._same(forSource.id)}, true);
     notifyListeners();
     await _applyAll();
@@ -1331,8 +1413,10 @@ class WeatherState extends ChangeNotifier {
           try {
             await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
             _noteHere(c, here.first);
+            await _noteOutcome(c, SourceFailure.none);
           } catch (e) {
             logInfo('Live update for where I am, ${c.id}: failed');
+            await _noteOutcome(c, _failureOf(c, e));
           }
         }(),
     ]);
@@ -1457,6 +1541,7 @@ class WeatherState extends ChangeNotifier {
     _lastOnlineAt = _now();
     _updating = true;
     _sourceErrors.clear();
+    final kinds = <String, SourceFailure>{};
     notifyListeners();
     // The core reads its definitions from the folder: write it from what is on now, whichever way a source was switched on (a
     // switch, Turn on weather, a catalogue's default), so no source that is on is missing there ("no live source").
@@ -1481,11 +1566,13 @@ class WeatherState extends ChangeNotifier {
         logError('Live update failed (${e.code})', error: e.message, detail: c.id);
         final who = c.provider.isEmpty ? c.title : c.provider;
         _sourceErrors[c.id] = _fetchFailureWords(e);
+        kinds.putIfAbsent(c.id, () => _failureOf(c, e));
         return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
       } catch (e) {
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
         logError('Live update failed', error: e, detail: c.id);
         _sourceErrors[c.id] = "Couldn't update.";
+        kinds.putIfAbsent(c.id, () => _failureOf(c, e));
         return (false, '${c.title} for ${p.name} failed');
       }
     }
@@ -1495,6 +1582,10 @@ class WeatherState extends ChangeNotifier {
       outcomes = await Future.wait([for (final c in srcs) for (final p in places) one(c, p)]);
     } finally {
       _updating = false;
+    }
+    // One note per source for the whole update: a place that failed counts, whatever order the places answered in.
+    for (final c in srcs) {
+      await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
     }
     final failures = <String>[];
     for (final (got, failure) in outcomes) {
@@ -2123,6 +2214,14 @@ class WeatherState extends ChangeNotifier {
       _lastRunAt = t(j['run']);
       _lastOnlineAt = t(j['online']);
       _lastFailure = j['failure'] as String?;
+      final src = j['sources'];
+      if (src is Map) {
+        _health.clear();
+        for (final e in src.entries) {
+          final h = SourceHealth.fromJson(e.value);
+          if (h != null) _health['${e.key}'] = h;
+        }
+      }
     } catch (_) {}
   }
 
@@ -2133,6 +2232,7 @@ class WeatherState extends ChangeNotifier {
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,
         'failure': _lastFailure,
+        'sources': {for (final e in _health.entries) e.key: e.value.toJson()},
       }));
     } catch (_) {}
   }
