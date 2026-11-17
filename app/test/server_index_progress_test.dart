@@ -1,10 +1,14 @@
 // The Library's index line and queue sheet in a browser: fed by the server's `index.state` `_queue`, with the same words as on a
 // phone, and Pause all, Resume and Retry going to the server (index.pause, index.retry).
+import 'package:cache/browse/web/build_api.dart';
+import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/search/index_overview.dart';
 import 'package:cache/search/server_index_progress.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'browse/build_fakes.dart';
 
 /// The server's ops, recorded.
 class _Server {
@@ -107,5 +111,46 @@ void main() {
     expect(find.text('Search ready · 3 of 3'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
     expect(find.byKey(const ValueKey('index-overview')), findsNothing);
+  });
+
+  group('a library the server is building from PDFs (read from the Library\'s own build poll)', () {
+    QueueItem book(String id, String state, {int pieces = 0, int? total}) => QueueItem(id: id, libraryId: 'proof', fileName: '$id.pdf', state: state, progress: QueueProgress(pieces: pieces, piecesTotal: total));
+
+    Future<(FakeBuildApi, BuildController, ServerIndexProgress)> setup(WidgetTester tester) async {
+      final api = FakeBuildApi()..libs = [const BuildLibrary(id: 'proof', title: 'Proof-Library', building: true)];
+      final ctl = BuildController(api: api, poll: false);
+      final p = _Server().progress..attachBuilds(ctl);
+      await tester.runAsync(ctl.refresh);
+      return (api, ctl, p);
+    }
+
+    testWidgets('a build in progress gives the line and a row in the sheet; finished gives the done state', (tester) async {
+      final (api, ctl, p) = await setup(tester);
+      api.q = BuildQueue(items: [for (var n = 1; n <= 11; n++) book('b$n', 'done'), book('b12', 'building', pieces: 16, total: 308)]);
+      await tester.runAsync(ctl.refresh);
+      await tester.pumpWidget(_app(IndexOverviewLine(scheduler: p, doneFor: const Duration(seconds: 1))));
+      expect(find.text('Getting search ready · 0 of 1 done'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('index-overview')));
+      await tester.pumpAndSettle();
+      expect(find.text('RUNNING NOW'), findsOneWidget);
+      expect(find.text('Proof-Library · the search index'), findsOneWidget);
+      expect(find.text('Building passages · 16 of 308'), findsOneWidget);
+      // finished
+      api.q = BuildQueue(items: [for (var n = 1; n <= 12; n++) book('b$n', 'done')]);
+      await tester.runAsync(ctl.refresh);
+      await tester.pump();
+      expect(find.text('DONE'), findsOneWidget);
+      expect(p.busy, isFalse);
+      expect(p.doneCount, 1);
+    });
+
+    testWidgets('a build and the server queue count together', (tester) async {
+      final (api, ctl, p) = await setup(tester);
+      api.q = BuildQueue(items: [book('b1', 'queued')]);
+      await tester.runAsync(ctl.refresh);
+      p.update(threeOfWork);
+      await tester.pumpWidget(_app(IndexOverviewLine(scheduler: p)));
+      expect(find.text('Getting search ready · 1 of 4 done'), findsOneWidget);
+    });
   });
 }
