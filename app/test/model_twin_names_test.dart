@@ -240,4 +240,49 @@ void main() {
       await r.dispose(tester);
     });
   });
+
+  // On a cold start the chosen model is only resting: nothing has asked for the recommended list yet (it was read only when a model
+  // loaded or Models opened), so the row showed the stored name. The app now follows the list from the start.
+  group('a resting recommended model, the list not read yet', () {
+    late RecommendedModels cold;
+    late int fetched;
+    setUp(() {
+      fetched = 0;
+      cold = RecommendedModels(
+        builtIn: () async => File('assets/models/recommended.json').readAsStringSync(),
+        fetch: () async {
+          fetched++;
+          throw const SocketException('offline');
+        },
+      );
+    });
+
+    testWidgets('Settings > Cache model and web search: the list name and "3.2 GB · Q4_K_M · Loads when you open Ask"', (tester) async {
+      final r = await SettingsRig.create(tester);
+      r.app.followRecommended(cold);
+      final e = _entry(r.modelsDir, _stockFile, _stockSize);
+      r.app.models = [e];
+      r.app.resting = e;
+      await r.show(tester, AssistantPage(deps: r.deps));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pump();
+      expect(find.text('Gemma 4 E2B · tuned for Cache'), findsOneWidget);
+      expect(find.text('On this device · 3.2 GB · Q4_K_M · Loads when you open Ask'), findsOneWidget);
+      expect(fetched, 0, reason: 'starting up reads the built-in copy only, never the network');
+      await r.dispose(tester);
+    });
+
+    testWidgets('a model that is not recommended is as before (no quant, its stored name)', (tester) async {
+      final r = await SettingsRig.create(tester);
+      r.app.followRecommended(cold);
+      final e = _entry(r.modelsDir, _smolFile, 120 << 20);
+      r.app.models = [e];
+      r.app.resting = e;
+      await r.show(tester, AssistantPage(deps: r.deps));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pump();
+      expect(find.text('On this device · 120 MB · Loads when you open Ask'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
 }
