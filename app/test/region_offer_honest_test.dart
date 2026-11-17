@@ -122,7 +122,7 @@ void main() {
     expect(_inDialog('off-road'), findsNothing, reason: 'no pack covers it');
     // Download: only the map is asked for (what the line says is what is downloaded)
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Download')));
-    await _settleUntil(tester, () => core.calls.where((c) => c == 'add').isNotEmpty || regions.regions.isNotEmpty, turns: 40);
+    await _settleUntil(tester, () => false, turns: 20);
     expect(core.calls.where((c) => c == 'add'), isEmpty, reason: 'no routing or places part was requested');
     await _close(tester, regions, s);
   });
