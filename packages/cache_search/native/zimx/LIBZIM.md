@@ -11,6 +11,7 @@ The binaries are downloaded into the build directory by the fetch scripts and ar
 | Source | https://download.openzim.org/release/libzim/ |
 | Windows x86_64 | `libzim_win-x86_64-9.8.2-1.zip`, md5 `6fec1bb98a7a628a2c38270414c521c1`, 15,626,882 bytes |
 | Android arm64 | `libzim_android-arm64-9.8.2-1.tar.gz`, md5 `59a6b769847b77dc0ace69c3b9727445` |
+| Android x86_64 (emulator test build only) | `libzim_android-x86_64-9.8.2-1.tar.gz`, md5 `deabcd642324cf4dfd9f380b76f1ae5a`, sha256 `60f31097ca478b8b5864c55859afb297e6cd24f083c305302890dc81e6ea9a5e`, 10,090,319 bytes; `fetch-libzim.sh <build-dir> x86_64` |
 | Linux x86_64 | `libzim_linux-x86_64-9.8.2-1.tar.gz`, md5 `32099d4f377645ba8723e69359a4aa14`, sha256 `6dc2d70cbe0e8d584ab70b489f82429dd9a6e9d509ea96b5a0c8da0fea0d7bbe`, 8,817,670 bytes |
 | Linux aarch64 | `libzim_linux-aarch64-9.8.2-1.tar.gz`, md5 `50cdc6d48c6cb95d613a39728d2248d3`, sha256 `a5bb8ffbb92e93302f49fcfeb2f01545234eee08127b4daff9e504d8abe1be7d`, 8,614,820 bytes |
 | Published checksum | the `.md5` file next to each archive (no signature is published) |
