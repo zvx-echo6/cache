@@ -158,6 +158,7 @@ Future<void> main() async {
       rescanOp,
       IndexStateOp(indexer),
       IndexPauseOp(indexer),
+      IndexRetryOp(indexer),
       FeaturesOp(dirs),
       FsOps(support: dirs.support, docs: dirs.docs, onWritten: (p) => unawaited(settingsSync?.fileChanged(p) ?? Future<void>.value())),
       regionsOps,
