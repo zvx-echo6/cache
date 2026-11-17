@@ -1093,3 +1093,43 @@ async fn items_list_what_is_installed_and_remove_takes_files_sidecars_and_index(
     assert_eq!(v["result"], json!([]));
     stop(&rig).await;
 }
+
+// ---- Clean up
+
+#[tokio::test]
+async fn clean_up_removes_orphan_download_parts_and_keeps_a_paused_downloads_part_and_fresh_uploads() {
+    let _g = LOCK.lock().await;
+    let rig = rig("cleanup", Setup::new()).await;
+    assert_eq!(route(&rig.app, "GET", "/api/library/cleanup", None, b"").await.status, 401);
+    assert_eq!(route(&rig.app, "POST", "/api/library/cleanup", None, b"").await.status, 401);
+    // a paused download keeps its part file
+    let a = rig.download(json!({"url": rig.origin.url("/slow.zim"), "kind": "zim", "name": "p.zim"})).await;
+    let aid = a["id"].as_str().unwrap();
+    for _ in 0..200 {
+        if rig.job(aid).await.is_some_and(|j| j["state"] == json!("running") && j["bytes"].as_u64().unwrap() > 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // running: Clean up waits
+    assert_eq!(rig.call("POST", "/api/library/cleanup", "").await.0, 409);
+    let (s, _) = rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await;
+    assert_eq!(s, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kept = part_path(rig.data(), &rig.origin.url("/slow.zim"));
+    assert!(kept.exists());
+    // an orphan download part, a fresh upload part and an installed file
+    let orphan = rig.data().join("tmp/dl-0123456789abcdef.part");
+    std::fs::write(&orphan, vec![7u8; 700]).unwrap();
+    let upload = rig.data().join("tmp/up-fresh.part");
+    std::fs::write(&upload, vec![7u8; 50]).unwrap();
+    std::fs::write(rig.zims().join("keep.zim"), vec![1u8; 100]).unwrap();
+    let (s, v) = rig.call("GET", "/api/library/cleanup", "").await;
+    assert_eq!((s, v["result"].clone()), (200, json!({"bytes": 700})), "{v}");
+    let (s, v) = rig.call("POST", "/api/library/cleanup", "").await;
+    assert_eq!((s, v["result"].clone()), (200, json!({"freed": 700})), "{v}");
+    assert!(!orphan.exists() && kept.exists() && upload.exists() && rig.zims().join("keep.zim").exists());
+    assert_eq!(rig.call("GET", "/api/library/cleanup", "").await.1["result"], json!({"bytes": 0}));
+    rig.call("DELETE", &format!("/api/library/jobs/{aid}"), "").await;
+    stop(&rig).await;
+}
