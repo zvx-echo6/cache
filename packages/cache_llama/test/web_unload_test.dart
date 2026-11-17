@@ -5,12 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('the web session asks the server to unload: POST /api/llm/unload with {"v":1}', () async {
-    final seen = <(String, Map<String, dynamic>)>[];
+    final seen = <String>[];
     await unloadOnServer((path, body) async {
-      seen.add((path, body));
+      seen.add('$path ${jsonEncode(body)}');
       return LlmHttpReply(200, jsonEncode({'v': 1, 'ok': true, 'result': {'unloaded': true}}));
     });
-    expect(seen, [('/api/llm/unload', {'v': 1})]);
+    expect(seen, ['/api/llm/unload {"v":1}']);
   });
 
   test('a refusal surfaces with the server\'s own message', () async {
