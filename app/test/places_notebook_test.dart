@@ -580,6 +580,40 @@ void main() {
     expect(calls, contains('import:{"kind":"repeaters","paths":["/a.kml","/a.csv"]}'));
   });
 
+  test('imported lines and areas that belong to no notebook are listed (with their count), drawn and deleted', () async {
+    final calls = <String>[];
+    var gone = false;
+    final u = UserLayersState((call, [arg]) async {
+      calls.add('$call:${arg ?? ''}');
+      return switch (call) {
+        'list' => {
+            'layers': [
+              if (!gone) {'id': 'y3', 'kind': 'layer', 'name': 'trail', 'visible': true, 'points': 0, 'lines': 1, 'areas': 1},
+              {'id': 'y1', 'kind': 'layer', 'name': 'Rally Points', 'visible': true, 'points': 2, 'lines': 1, 'areas': 0, 'notebook_id': 'nb1'},
+            ],
+            'repeater_lists': [],
+          },
+        'get' => {
+            'features': [
+              {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [[-113.79, 42.55], [-113.81, 42.53]]}, 'properties': {'name': 'Walk'}},
+            ],
+          },
+        'delete' => () {
+            gone = true;
+            return {'deleted': arg};
+          }(),
+        _ => <String, dynamic>{},
+      };
+    });
+    await u.reload();
+    expect(u.shapeLayers.map((l) => (l.id, l.shapes)), [('y3', 2)], reason: 'a notebook\'s own layer is listed by the notebook');
+    final g = await u.mapGeoJson();
+    expect((g['features'] as List).where((f) => ((f as Map)['geometry'] as Map)['type'] == 'LineString'), isNotEmpty);
+    await u.delete(u.shapeLayers.single);
+    expect(calls, contains('delete:y3'));
+    expect(u.shapeLayers, isEmpty);
+  });
+
   test('a repeater tapped on the map is selected with its details; each repeater list is a notebook source', () async {
     final u = UserLayersState((call, [arg]) async => switch (call) {
           'list' => {
