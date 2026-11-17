@@ -35,6 +35,10 @@ void main() {
       expect(rings, [(const Offset(300, 200), const math.Point<double>(280, 150))]);
     });
 
+    test('the ring is centred on the spot in the map box, not the page (a side rail shifts the page point)', () {
+      expect(mouseRingCentre(const Offset(1282, 380), const math.Point<double>(1050, 380)), const Offset(1050, 380));
+    });
+
     testWidgets('it stops listening when the map goes away', (tester) async {
       await tester.pumpWidget(app());
       await tester.pumpWidget(const SizedBox());

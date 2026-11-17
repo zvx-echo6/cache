@@ -1743,7 +1743,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (c == null) return;
     final at = await c.toLatLng(inMap);
     if (!mounted) return;
-    _downAt = page;
+    _downAt = mouseRingCentre(page, inMap);
     _onMapLongPress(inMap, at);
   }
 
