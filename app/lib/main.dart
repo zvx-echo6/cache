@@ -60,6 +60,7 @@ import 'car/car_support.dart';
 import 'car/car_voice_access.dart';
 import 'car/phone_drive.dart';
 import 'car/route_pushes.dart';
+import 'car/siri_place_names.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
@@ -248,6 +249,7 @@ class _CacheAppState extends State<CacheApp> {
   late final AppSettings settings = AppSettings();
 
   /// Voice search from the car: the iPhone's microphone and speech permissions (car/car_voice_access.dart). Only started on an iPhone.
+  SiriPlaceNames? _siriNames;
   late final CarVoiceAccess carVoice = CarVoiceAccess(settings: settings, openSettings: () => location.openAppSettings());
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
@@ -1341,6 +1343,12 @@ class _CacheAppState extends State<CacheApp> {
         // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
         _car!.connected.addListener(_onCarScreen);
         unawaited(_car!.start());
+        // Siri knows the saved places' names from the phone too, not only after the car listed them.
+        _siriNames = SiriPlaceNames(
+          read: () async => [for (final s in await (await sources.whenCoreReady())?.savedPlaces() ?? (throw StateError('The search core is not available'))) s.name],
+          changes: [notebooks],
+          events: nav.events,
+        )..start();
       }));
       // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
       unawaited(phoneWindow.start());
@@ -1530,6 +1538,7 @@ class _CacheAppState extends State<CacheApp> {
     _car?.dispose();
     if (identical(carVoiceShared, carVoice)) carVoiceShared = null;
     carVoice.dispose();
+    _siriNames?.dispose();
     _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();

@@ -266,6 +266,13 @@ extension CarLink {
         result(CarListenPermissions.status())
         return
       }
+      // The saved places' names from the phone, for what Siri knows to navigate to (CarVoiceRun.savedNamesListed).
+      if call.method == "siriPlaces" {
+        let names = ((call.arguments as? [String: Any])?["names"] as? [Any])?.compactMap { $0 as? String } ?? []
+        CarVoiceRun.savedNamesListed(names)
+        result(nil)
+        return
+      }
       if call.method == "voiceRequest" {
         CarListenPermissions.request { result($0) }
         return

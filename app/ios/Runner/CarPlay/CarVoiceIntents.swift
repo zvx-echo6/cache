@@ -223,10 +223,13 @@ struct CacheShortcuts: AppShortcutsProvider {
     AppShortcut(
       intent: CarNavigateIntent(),
       phrases: [
+        // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way. The first phrase is
+        // Apple's primary one (the shortcut's tile and Siri's help).
+        "Navigate with \(.applicationName)",
+        "Start a \(.applicationName) route",
+        "Get \(.applicationName) directions",
         "Navigate to \(\.$place) with \(.applicationName)",
         "Take me to \(\.$place) with \(.applicationName)",
-        // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way.
-        "Navigate with \(.applicationName)",
       ]
     )
     // Seven App Shortcuts in all (Apple allows ten).
@@ -338,7 +341,13 @@ enum CarVoiceRun {
 
   /// The saved places the car just listed: their names are kept for Siri, and Siri is given them again when they changed.
   static func savedPlacesListed(_ places: [CarPlace]) {
-    guard CarVoiceSaved.remember(places) else { return }
+    savedNamesListed(places.map { $0.name })
+  }
+
+  /// The saved places' names, from the car's list or from the phone (lib/car/siri_place_names.dart): kept for Siri, which is given
+  /// them again when they changed (at most CarVoiceSaved.most).
+  static func savedNamesListed(_ names: [String]) {
+    guard CarVoiceSaved.remember(names: names) else { return }
     CacheShortcuts.updateAppShortcutParameters()
     log.info("car voice: Siri was given \(CarVoiceSaved.names().count) saved place names")
   }

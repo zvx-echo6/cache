@@ -328,10 +328,16 @@ enum CarVoiceSaved {
   /// Keeps the names of these places; true when they differ from the ones kept (Siri is then given them again).
   @discardableResult
   static func remember(_ places: [CarPlace], _ defaults: UserDefaults = .standard) -> Bool {
+    remember(names: places.map { $0.name }, defaults)
+  }
+
+  /// The same, from the names alone (the phone sends them: lib/car/siri_place_names.dart).
+  @discardableResult
+  static func remember(names all: [String], _ defaults: UserDefaults = .standard) -> Bool {
     var seen = Set<String>()
     var kept: [String] = []
-    for place in places {
-      let name = place.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    for raw in all {
+      let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty || !seen.insert(name.lowercased()).inserted { continue }
       kept.append(name)
       if kept.count == most { break }
