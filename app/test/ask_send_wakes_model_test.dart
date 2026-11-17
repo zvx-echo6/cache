@@ -236,6 +236,62 @@ void main() {
     app.dispose();
   });
 
+  group('the empty chat hint', () {
+    const choose = 'Choose a model at the top to start.';
+    const ask = 'Ask a question. Cache looks in your sources before it answers.';
+
+    Future<void> show(WidgetTester tester, void Function(AppState app) set) async {
+      final app = AppState();
+      final c = ChatController(actCore: const ActCoreStandIn(), tools: const []);
+      set(app);
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: AskScreen(app: app, chat: c)));
+      await tester.pump();
+      addTearDown(() {
+        c.dispose();
+        app.dispose();
+      });
+    }
+
+    ModelEntry entry() => ModelEntry(path: '/models/$_file', size: 16);
+
+    testWidgets('a model resting: Ask a question, not Choose a model', (tester) async {
+      await show(tester, (app) {
+        app.models = [entry()];
+        app.started = true;
+        app.resting = app.models.first;
+      });
+      expect(find.text(ask), findsOneWidget);
+      expect(find.text(choose), findsNothing);
+    });
+
+    testWidgets('a model held for memory: Ask a question', (tester) async {
+      await show(tester, (app) {
+        app.models = [entry()];
+        app.started = true;
+        app.resting = app.models.first;
+        app.heldForMemory = true;
+      });
+      expect(find.text(ask), findsOneWidget);
+      expect(find.text(choose), findsNothing);
+    });
+
+    testWidgets('a model loading: Ask a question', (tester) async {
+      await show(tester, (app) {
+        app.models = [entry()];
+        app.started = true;
+        app.loading = app.models.first;
+      });
+      expect(find.text(ask), findsOneWidget);
+      expect(find.text(choose), findsNothing);
+    });
+
+    testWidgets('no model chosen: Choose a model at the top to start', (tester) async {
+      await show(tester, (app) {});
+      expect(find.text(choose), findsOneWidget);
+      expect(find.text(ask), findsNothing);
+    });
+  });
+
   testWidgets('(f) a model loaded: a question is sent at once, and there is no bar', (tester) async {
     await setUpShell(tester, loaded: true);
     await openAsk(tester);
