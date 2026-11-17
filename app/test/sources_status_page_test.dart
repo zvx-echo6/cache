@@ -277,6 +277,62 @@ void main() {
     });
   });
 
+  group('While refreshing, and with no connection', () {
+    testWidgets('a refresh keeps each updating row in its last known state for the counts and the groups', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await r.show(tester, SettingsScreen(deps: r.deps));
+      await tester.pump();
+      expect(find.text('2 need attention'), findsOneWidget);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      r.liveCore.fetchGate = Completer<void>();
+      late Future<void> running;
+      await tester.runAsync(() async {
+        running = r.weather.updateNow(force: true);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      });
+      await tester.pump();
+      expect(find.text('Updating'), findsWidgets, reason: 'the rows say Updating');
+      expect(find.text('2 need attention · 1 off'), findsOneWidget, reason: 'the summary does not turn all-good because a refresh started');
+      expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+      expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget, reason: 'a key is still needed');
+      await r.show(tester, SettingsScreen(deps: r.deps));
+      await tester.pump();
+      expect(find.text('2 need attention'), findsOneWidget);
+      r.liveCore.fetchGate!.complete();
+      await tester.runAsync(() => running);
+      await r.dispose(tester);
+    });
+
+    testWidgets('no connection: a row whose saved copy is out of date says Waiting for a connection, quietly; one with a current copy says Working', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await tester.runAsync(() async {
+        r.liveCore.stored['nws-alerts-point'] = {'age': '5 min old', 'age_seconds': 300, 'fetched_at': '2026-10-26T14:55:00-06:00', 'expired': false};
+        r.liveCore.fetchErrors['nws-alerts-point'] = const CacheSearchException('fetch_failed', 'Io: timed out reading response');
+        await r.weather.updateNow(force: true);
+        r.probe.change(ConnectionKind.none);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('No connection. Showing what was saved.'), findsOneWidget);
+      final wfigs = find.byKey(const ValueKey('source-$_wfigs'));
+      expect(find.descendant(of: wfigs, matching: find.text('Waiting for a connection')), findsOneWidget);
+      expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsNothing);
+      expect(_colourOf(tester, 'Waiting for a connection'), isNot(tester.element(wfigs).t.warning));
+      expect(find.descendant(of: find.byKey(const ValueKey('source-nws-alerts-point')), matching: find.textContaining('Working')), findsOneWidget, reason: 'a current copy');
+      expect(find.text('Not answering'), findsNothing);
+      await r.show(tester, SettingsScreen(deps: r.deps));
+      await tester.pump();
+      expect(find.text('1 need attention'), findsOneWidget, reason: 'only Firms; the one waiting for a connection is not counted');
+      await r.dispose(tester);
+    });
+  });
+
   group('Limit reached is quiet', () {
     testWidgets('a source at its limit: not counted, listed under Working, no button, not in the warning colour', (tester) async {
       tall(tester);
