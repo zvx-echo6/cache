@@ -339,6 +339,55 @@ void main() {
     await s.dispose(tester);
   });
 
+  testWidgets('a new region download while paused says so with the region\'s name, and Resume unpauses and starts it (web-region-progress)', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final packs = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: packs,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    Object? error;
+    await tester.runAsync(() async {
+      await regions.pauseAll();
+      try {
+        await regions.download(county, routing: true, map: false, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<DownloadsPaused>(), reason: 'before: a StateError with the off-road words');
+    expect(downloadProblemWords(error!, what: 'download ${county.name}'), 'Downloads are paused. Tap Resume to start ${county.name}.');
+    expect(packs.fetched, isEmpty, reason: 'nothing of the off-road data runs while paused');
+    expect(regions.held, isTrue);
+    // Resume on that message: the pause is cleared and the download starts
+    await tester.runAsync(() async {
+      await regions.resumeAndStart(county);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    expect(regions.held, isFalse);
+    expect(packs.fetched, hasLength(1), reason: 'the off-road pack that waited has started');
+    expect(regions.regionOf(_county)?.hasOffroad, isTrue);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
   testWidgets('Add off-road never ends in silence: a size estimate that fails says why, and starts nothing (web-offroad-stuck)', (tester) async {
     final s = await SettingsRig.create(tester);
     final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');

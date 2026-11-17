@@ -220,6 +220,24 @@ fn run(inner: &cache_layers::Inner, req: &str, stop_after: Option<usize>) -> (ca
 const BOX: &str = r#""bbox":[-115,41,-112,44],"minzoom":0,"maxzoom":10"#;
 
 #[test]
+fn a_plan_over_the_tile_limit_fetches_no_sample() {
+    let sc = Scratch::new("over-limit");
+    let host = tile_host(0);
+    let inner = engine(&sc);
+    inner.save_user_def(&xyz_def("tiny", host.port, json!({"offline": {"allowed": true, "max_tiles_per_download": 5}}))).unwrap();
+    let req = format!(r#"{{"layer":"tiny","name":"Test","area":"t1",{BOX}}}"#);
+    let p = inner.plan(&AreaReq::parse(&req).unwrap()).unwrap();
+    assert_eq!(p["ok_to_start"], false);
+    assert_eq!(p["problems"][0]["code"], "limit_exceeded");
+    assert_eq!(host.stats.hits.load(Ordering::SeqCst), 0, "before: 16 sample tiles were fetched to size a download that cannot start");
+    // under the limit it still samples
+    inner.save_user_def(&xyz_def("roomy", host.port, json!({"offline": {"allowed": true, "max_tiles_per_download": 100000}}))).unwrap();
+    let ok = inner.plan(&AreaReq::parse(&req.replace("\"tiny\"", "\"roomy\"")).unwrap()).unwrap();
+    assert_eq!(ok["ok_to_start"], true, "{ok}");
+    assert!(host.stats.hits.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
 fn plan_limits_download_serve_delete() {
     let sc = Scratch::new("dl");
     let host = tile_host(0);

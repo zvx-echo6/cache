@@ -228,7 +228,7 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
       } else {
         await regions.downloadOnWifi(rec, routing: o.routing, map: o.map, places: o.places, offroad: o.offroad);
       }
-    }, retry: () => askDownloadRegions(context, regions, [rec])));
+    }, retry: () => askDownloadRegions(context, regions, [rec]), resume: (e) => regions.resumeAndStart(e.region)));
   }
 }
 
@@ -377,11 +377,14 @@ bool showRegionOnMap(RegionsState regions, String id) {
 }
 
 /// Runs a region action, and when it fails says what happened and the next step in plain words, with "Try again".
-Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function() f, {Future<void> Function()? retry}) async {
+Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function() f, {Future<void> Function()? retry, Future<void> Function(DownloadsPaused)? resume}) async {
   try {
     await f();
   } on MobileDataBlocked catch (e) {
     tell(m, e.message);
+  } on DownloadsPaused catch (e) {
+    // Paused: one tap on Resume clears the pause and starts the download.
+    tell(m, e.message, action: resume == null ? null : SnackBarAction(label: 'Resume', onPressed: () => unawaited(_run(m, 'start ${e.region.name}', () => resume(e)))));
   } catch (e) {
     tell(m, downloadProblemWords(e, what: what), action: retry == null ? null : SnackBarAction(label: 'Try again', onPressed: () => unawaited(retry())));
   }
