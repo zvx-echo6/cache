@@ -170,7 +170,19 @@ class RegionPage extends StatelessWidget {
                         status: const [Part('Now available')],
                         trailing: RowButton(key: const ValueKey('add-places'), label: 'Add', onPressed: () => askAddPlaces(context, regions, l.id)),
                       ),
-                    if (canAddOffroad)
+                    // No pack covers the region (the plan's own check): the row stays, greyed, and says why (owner's choice).
+                    if (canAddOffroad && regions.offroadCovered(l.id) == false)
+                      Opacity(
+                        opacity: 0.55,
+                        child: SettingsRow(
+                          key: const ValueKey('part-offroad-none'),
+                          title: 'Off-road',
+                          // WORDING (owner, exact): the line under the row.
+                          status: const [Part(kNoOffroadLine, Tone.quiet)],
+                          trailing: const RowButton(key: ValueKey('add-offroad-disabled'), label: 'Add', onPressed: null),
+                        ),
+                      )
+                    else if (canAddOffroad)
                       SettingsRow(
                         key: const ValueKey('part-offroad-add'),
                         title: 'Off-road',
