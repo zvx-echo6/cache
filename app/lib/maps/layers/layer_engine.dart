@@ -61,8 +61,9 @@ abstract class LayerEngine extends ChangeNotifier {
   Future<bool> hasTiles(String layerId, GeoBounds view, int zoom);
 
   /// The cost of downloading [area], before anything is downloaded. [zoom]: that zoom only (the off-road router's z12 elevation),
-  /// never a lower one when the area is large; otherwise the layer's zooms, as deep as one download allows.
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom});
+  /// never a lower one when the area is large; otherwise the layer's zooms, as deep as one download allows. [outline]: the area's outline
+  /// inside [area] (as for [download]): the cost is of the tiles the outline touches, not of the whole box.
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline});
 
   /// Starts the download; progress shows in [areasOf]. [zoom] as for [estimate]. [near]: the tiles come from there outwards
   /// (each zoom from the coarsest), so what is near is on the phone first. [outline]: the area's outline inside [area], as rings

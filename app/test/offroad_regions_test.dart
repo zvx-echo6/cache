@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/maps/geo.dart';
-import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
@@ -232,13 +231,14 @@ void main() {
     await _settleUntil(tester, () => find.byKey(const ValueKey('hit-$_county')).evaluate().isNotEmpty);
     await tester.tap(find.byKey(const ValueKey('hit-$_county')));
     await _settleUntil(tester, () => find.text('Download Twin Falls County?').evaluate().isNotEmpty && find.textContaining('off-road').evaluate().isNotEmpty);
-    // One pop-up: the parts, with off-road among them, and the size from the catalogue (nothing worked out on the phone).
+    // One pop-up: the parts, with off-road among them, and the size from the core's plan.
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     expect(find.textContaining('off-road'), findsOneWidget);
     final offer = regions.offer(county);
     expect(offer.offroad, isTrue);
     expect(offer.bytes, isNotNull);
-    expect(find.text(formatBytes(offer.bytes!)), findsOneWidget);
+    await _settleUntil(tester, () => find.textContaining('Takes ', findRichText: true).evaluate().isNotEmpty);
+    expect(find.textContaining('Takes ', findRichText: true), findsOneWidget, reason: 'the core\'s plan: on the device, and what is fetched');
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();
 
