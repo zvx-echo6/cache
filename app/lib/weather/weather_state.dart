@@ -333,7 +333,6 @@ class WeatherState extends ChangeNotifier {
     return switch (h.failure) {
       SourceFailure.keyRejected => SourceRowState.keyRejected,
       SourceFailure.limit => SourceRowState.limitReached,
-      SourceFailure.outOfArea => SourceRowState.nothingHere,
       SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
       SourceFailure.keyMissing => SourceRowState.needsKey,
       SourceFailure.none => SourceRowState.working,
@@ -347,7 +346,7 @@ class WeatherState extends ChangeNotifier {
     return noNetwork && s == SourceRowState.notAnswering ? SourceRowState.working : s;
   }
 
-  /// A state that needs the person to do something (counted in "N need attention"). Limit reached and Nothing for this place do not.
+  /// A state that needs the person to do something (counted in "N need attention"). Limit reached does not.
   static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
 
   /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on, your own
@@ -1735,7 +1734,6 @@ class WeatherState extends ChangeNotifier {
     SourceFailure.keyRejected => 'no longer accepts the saved key',
     SourceFailure.unreadable => 'sent something Cache could not read',
     SourceFailure.providerError => 'the service had a problem',
-    SourceFailure.outOfArea => 'has nothing for this place',
     SourceFailure.unreachable => "couldn't be reached",
     SourceFailure.none => "couldn't update",
   };

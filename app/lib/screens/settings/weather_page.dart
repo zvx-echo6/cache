@@ -295,7 +295,6 @@ String stateWord(SourceRowState s) => switch (s) {
   SourceRowState.keyRejected => 'Key not accepted',
   SourceRowState.notAnswering => 'Not answering',
   SourceRowState.limitReached => 'Limit reached',
-  SourceRowState.nothingHere => 'Nothing for this place',
 };
 
 /// The one sentence a problem state gets (null for a state with none), in the owner's approved words.
@@ -311,8 +310,6 @@ String? stateSentence(WeatherState w, Connector c, SourceRowState s) {
       return ago.isEmpty ? "$who didn't answer." : "$who didn't answer. Showing what Cache saved $ago.";
     case SourceRowState.limitReached:
       return '$who says it has reached its limit. Cache tries again later.';
-    case SourceRowState.nothingHere:
-      return c.coverage.isEmpty ? 'Your place is outside what this covers.' : 'Covers ${c.coverage}. Your place is outside it.';
     case SourceRowState.working || SourceRowState.updating || SourceRowState.off:
       return null;
   }
@@ -428,12 +425,11 @@ class StateRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final s = state;
-    final problem = WeatherState.needsAttention(s) || s == SourceRowState.limitReached;
     // A problem row names its state only: its sentence says how old the saved data is, and the age does not fit beside the button.
     final line2 = switch (s) {
       SourceRowState.off => [Part(gives.isEmpty ? 'Off' : gives)],
       SourceRowState.working || SourceRowState.updating => [Part(stateWord(s)), if (ago.isNotEmpty) Part(' · updated $ago')],
-      _ => [Part(stateWord(s), problem ? Tone.warn : Tone.quiet)],
+      _ => [Part(stateWord(s), Tone.warn)],
     };
     final Widget? trailing = switch (s) {
       SourceRowState.working => Switch(value: true, onChanged: onSwitch),
@@ -442,7 +438,7 @@ class StateRow extends StatelessWidget {
       SourceRowState.needsKey => RowButton(key: ValueKey('add-key-$id'), label: 'Add key', onPressed: onAddKey),
       SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-$id'), label: 'Replace key', onPressed: onReplaceKey),
       SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-$id'), label: 'Try again', onPressed: onTryAgain),
-      SourceRowState.limitReached || SourceRowState.nothingHere => null,
+      SourceRowState.limitReached => null,
     };
     return SettingsRow(
       key: ValueKey('source-$id'),
@@ -456,7 +452,7 @@ class StateRow extends StatelessWidget {
           statusText(context, line2, maxLines: s == SourceRowState.off ? 2 : 1),
           if (sentence != null) ...[
             const SizedBox(height: 2),
-            statusText(context, [Part(sentence!, problem ? Tone.warn : Tone.quiet)], maxLines: 2),
+            statusText(context, [Part(sentence!, Tone.warn)], maxLines: 2),
           ],
         ],
       ),
