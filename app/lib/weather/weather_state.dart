@@ -315,7 +315,10 @@ class WeatherState extends ChangeNotifier {
   SourceHealth? healthOf(Connector c) => _health[c.id];
 
   /// There is no connection: one notice for the whole list, not a state of any row.
-  bool get noNetwork => _kind == ConnectionKind.none;
+  bool get noNetwork => _kind == ConnectionKind.none || _coreOffline;
+
+  /// The core answered a download with "offline" (its own policy says so) in the last update.
+  bool _coreOffline = false;
 
   /// What Settings says about [c]. A failed update alone changes nothing the person sees while the saved copy is still current
   /// (the core's `expired` flag, as of the last try); only an out-of-date copy turns the failure into the row's state.
@@ -324,14 +327,16 @@ class WeatherState extends ChangeNotifier {
     if (!keyReady(c)) return SourceRowState.needsKey;
     if (_updating) return SourceRowState.updating;
     final h = _health[c.id];
-    if (h == null || h.failure == SourceFailure.none || h.copyCurrent) return SourceRowState.working;
+    if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
+    // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
+    if (h.failure != SourceFailure.keyRejected && h.failure != SourceFailure.keyMissing && h.copyCurrent) return SourceRowState.working;
     return switch (h.failure) {
       SourceFailure.keyRejected => SourceRowState.keyRejected,
       SourceFailure.limit => SourceRowState.limitReached,
       SourceFailure.outOfArea => SourceRowState.nothingHere,
       SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
-      // a key is saved now: the old "no key" failure is stale
-      SourceFailure.keyMissing || SourceFailure.none => SourceRowState.working,
+      SourceFailure.keyMissing => SourceRowState.needsKey,
+      SourceFailure.none => SourceRowState.working,
     };
   }
 
@@ -344,6 +349,10 @@ class WeatherState extends ChangeNotifier {
         return SourceFailure.keyMissing;
       case 'bad_response' || 'bad_json':
         return SourceFailure.unreadable;
+      case 'busy' || 'internal':
+        return SourceFailure.providerError;
+      case 'not_configured':
+        return needsKey && !hasKey ? SourceFailure.keyMissing : SourceFailure.providerError;
       case 'fetch_failed':
         final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
         if (m == null) return SourceFailure.unreachable;
@@ -1413,9 +1422,11 @@ class WeatherState extends ChangeNotifier {
           try {
             await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
             _noteHere(c, here.first);
+            _coreOffline = false;
             await _noteOutcome(c, SourceFailure.none);
           } catch (e) {
             logInfo('Live update for where I am, ${c.id}: failed');
+            if (e is CacheSearchException && e.code == 'offline') _coreOffline = true;
             await _noteOutcome(c, _failureOf(c, e));
           }
         }(),
@@ -1542,6 +1553,7 @@ class WeatherState extends ChangeNotifier {
     _updating = true;
     _sourceErrors.clear();
     final kinds = <String, SourceFailure>{};
+    _coreOffline = false;
     notifyListeners();
     // The core reads its definitions from the folder: write it from what is on now, whichever way a source was switched on (a
     // switch, Turn on weather, a catalogue's default), so no source that is on is missing there ("no live source").
@@ -1567,6 +1579,7 @@ class WeatherState extends ChangeNotifier {
         final who = c.provider.isEmpty ? c.title : c.provider;
         _sourceErrors[c.id] = _fetchFailureWords(e);
         kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+        if (e.code == 'offline') _coreOffline = true;
         return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
       } catch (e) {
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
