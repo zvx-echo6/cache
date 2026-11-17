@@ -1081,6 +1081,23 @@ class RegionsState extends ChangeNotifier {
     return null;
   }
 
+  /// [offroadCovered], waiting for the answer when it is not known yet (null: it cannot be read now).
+  Future<bool?> offroadCoveredNow(String id) async {
+    if (!_offroadCover.containsKey(id)) {
+      _offroadCoverAsked.add(id);
+      await _readOffroadCover(id);
+    }
+    return _offroadCover[id];
+  }
+
+  /// A region on the phone whose only missing part is off-road, with no pack over it: its Add off-road is greyed everywhere (the
+  /// region page, the Regions sheet, the menu, the Downloads tab's rows) and opens nothing.
+  bool offroadMissingNoPack(String id) {
+    final l = regionOf(id);
+    if (l == null || l.hasOffroad || l.isArea || offroadCatalogue == null || placesNowAvailable(l)) return false;
+    return offroadCovered(id) == false;
+  }
+
   Future<void> _readOffroadCover(String id) async {
     try {
       final rec = await recordOf(id);

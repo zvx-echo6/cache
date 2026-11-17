@@ -40,7 +40,10 @@ void tell(ScaffoldMessengerState m, String text, {SnackBarAction? action}) {
 Future<void> openRegionOffer(BuildContext context, RegionsState regions, RegionRecord rec, {Future<int?> Function()? drawnSize}) async {
   // The search field it was opened from would take the focus (and the keyboard) back when the pop-up closes.
   FocusManager.instance.primaryFocus?.unfocus();
-  final offer = regions.offer(rec);
+  var offer = regions.offer(rec);
+  // Add off-road where no pack covers the region opens nothing, whichever row or button asked (the same check as the greyed rows).
+  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places && await regions.offroadCoveredNow(rec.id) == false) return;
+  offer = regions.offer(rec);
   switch (offer.kind) {
     case RegionOfferKind.busy || RegionOfferKind.onPhone:
       await openRegionPage(context, regions, rec.id);

@@ -508,4 +508,32 @@ void main() {
       await s.dispose(tester);
     }
   });
+
+  testWidgets('Regions > Downloads tab: a region on the phone that only lacks off-road, with no pack over it, is greyed with the line and its row opens nothing', (tester) async {
+    for (final covered in [false, true]) {
+      final s = await SettingsRig.create(tester);
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
+      await s.show(tester, RegionsScreen(regions: regions));
+      await tester.runAsync(() async {
+        await tester.enterText(find.byKey(const ValueKey('region-search')), 'twin falls county');
+      });
+      await _settleUntil(tester, () => find.byKey(const ValueKey('hit-$_county')).evaluate().isNotEmpty);
+      await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const ValueKey('hit-$_county')), warnIfMissed: false);
+      await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty, turns: 12);
+      if (!covered) {
+        expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add off-road');
+        expect(find.byType(AlertDialog), findsNothing, reason: 'the tap opens nothing');
+      } else {
+        expect(find.text('No off-road data is published for this area.'), findsNothing);
+        expect(find.byType(AlertDialog), findsOneWidget, reason: 'a pack covers it: the normal offer');
+        await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+        await tester.pump();
+      }
+      await tester.pumpWidget(const SizedBox());
+      regions.dispose();
+      await s.dispose(tester);
+    }
+  });
 }
