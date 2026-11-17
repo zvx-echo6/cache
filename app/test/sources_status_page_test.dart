@@ -4,6 +4,8 @@ import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache_search/cache_search.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -197,6 +199,68 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('NEEDS ATTENTION'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Try again on one source', () {
+    /// Lets the (fake) core and the files answer: real time, then a frame.
+    Future<void> settleReal(WidgetTester tester) async {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pump();
+    }
+
+    testWidgets('fetches just that source, not every source', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      r.liveCore.fetches.clear();
+      r.liveCore.fetchErrors.remove(_wfigs);
+      await tester.tap(find.byKey(const ValueKey('try-again-$_wfigs')));
+      await settleReal(tester);
+      await tester.pumpAndSettle();
+      expect(r.liveCore.fetches, isNotEmpty);
+      expect({for (final f in r.liveCore.fetches) f['source']}, {_wfigs});
+      await r.dispose(tester);
+    });
+
+    testWidgets('that row says Updating (a spinner) while it runs and the others stay as they are; then it shows its result', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      r.liveCore.fetchErrors.remove(_wfigs);
+      r.liveCore.fetchGate = Completer<void>();
+      await tester.tap(find.byKey(const ValueKey('try-again-$_wfigs')));
+      await settleReal(tester);
+      final row = find.byKey(const ValueKey('source-$_wfigs'));
+      expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsOneWidget);
+      expect(find.descendant(of: row, matching: find.text('Updating')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('source-openmeteo-forecast')), matching: find.byType(Switch)), findsOneWidget, reason: 'the others are not updating');
+      expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsNothing);
+      r.liveCore.fetchGate!.complete();
+      await settleReal(tester);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsNothing);
+      expect(find.descendant(of: row, matching: find.textContaining('Working')), findsOneWidget);
+      expect(find.text('1 need attention · 1 off'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a source that fails again goes back to Not answering', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('try-again-$_wfigs')));
+      await settleReal(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsOneWidget);
+      expect(find.text('2 need attention · 1 off'), findsOneWidget);
       await r.dispose(tester);
     });
   });
