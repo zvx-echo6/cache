@@ -5,7 +5,6 @@ import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../weather/connector.dart';
 import '../../weather/places.dart';
-import '../../weather/source_health.dart';
 import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
@@ -350,7 +349,6 @@ class SourceRow extends StatelessWidget {
     final s = w.rowStateOf(c);
     final gives = c.description.isEmpty ? '' : '${c.description[0].toUpperCase()}${c.description.substring(1)}';
     final problem = WeatherState.needsAttention(s) || s == SourceRowState.limitReached;
-    final quiet = s == SourceRowState.nothingHere;
     final ago = _ago(w, w.healthOf(c)?.lastOkAt);
     // A problem row names its state only: its sentence says how old the saved data is, and the age does not fit beside the button.
     final line2 = switch (s) {
