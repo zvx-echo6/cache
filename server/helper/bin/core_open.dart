@@ -146,7 +146,26 @@ class IndexStateOp implements OpHandler {
         for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
         // Only while the host holds index work: why ("heat" or "memory"), under a key no source path can be.
         if (indexer.hold != null) 'hold': {'fraction': null, 'error': null, 'hold': indexer.hold},
+        // The queue sheet's list (the old keys above are unchanged): see [IndexDriver.queue].
+        '_queue': indexer.queue(),
       };
+}
+
+/// The helper's `index.retry`, which a browser may call through `/api/core`: `{"key": "<queue item key>"}` clears that item's stuck or
+/// failed mark and puts it back in the queue. Replies `{"retried": bool}` (false when the key was neither stuck nor failed).
+class IndexRetryOp implements OpHandler {
+  IndexRetryOp(this.indexer);
+
+  final IndexDriver indexer;
+
+  @override
+  bool handles(String op) => op == 'index.retry';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) {
+    final key = a['key'];
+    return {'retried': key is String && indexer.retry(key)};
+  }
 }
 
 /// The helper's `index.pause`, which a browser may call through `/api/core`: the Catalog's Pause and Resume for the server's index
