@@ -119,32 +119,40 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
   if (todo.isEmpty) return;
   var bytes = todo.every((t) => t.$2.bytes != null) ? todo.fold<int>(0, (s, t) => s + t.$2.bytes!) : null;
   if (bytes == null && drawnSize != null && todo.length == 1) bytes = await drawnSize();
-  // The core's plan says what the region takes on the device (its tiles unpacked) and what is fetched (gzip, minus what is here);
-  // the catalogue only knows the fetch. Offline there is no plan, and the catalogue's figure is said to be the download.
-  final planned = await planSizeOf(regions, todo);
   final dir = await regions.supportDir();
   if (!context.mounted) return;
   final one = todo.length == 1 ? todo.single : null;
   final shared = todo.any((t) => t.$2.offroad && t.$2.offroadShared);
-  final summary = [
+  List<String> summaryWith(String size) => [
     if (one != null)
       partsSentence(map: one.$2.map, routing: one.$2.routing, places: one.$2.places, offroad: one.$2.offroad)
     else
       [for (final t in todo) t.$1.name].join(', '),
     if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
-    if (planned != null) regionSizeLine(onDevice: planned.onDevice, download: planned.download) else if (bytes != null) regionSizeLine(download: bytes) else sizeWords(bytes),
+    size,
   ].where((l) => l.isNotEmpty).toList();
+  // The pop-up opens at once with the catalogue's figure, said to be the download (never room on the device). The core's plan is
+  // asked meanwhile, not waited for (1.0.27 worked the size out for up to a minute before it opened, and said "Can't be downloaded
+  // here" when that failed); when it arrives the pop-up changes in place to what the region takes on the device and what is
+  // fetched. Offline there is no plan and the line stays as it was.
+  final live = ValueNotifier<DownloadUpdate?>(null);
+  var closed = false;
+  unawaited(planSizeOf(regions, todo).then((planned) {
+    if (planned == null || closed) return;
+    live.value = (summary: summaryWith(regionSizeLine(onDevice: planned.onDevice, download: planned.download)), bytes: planned.onDevice);
+  }));
   final m = ScaffoldMessenger.of(context);
   final choice = await askToDownload(
     context,
     title: one != null ? 'Download ${one.$1.name}?' : 'Download ${todo.length} regions?',
-    summary: summary,
-    // the space it needs is what it takes on the device
-    bytes: planned?.onDevice ?? bytes,
+    summary: summaryWith(bytes != null ? regionSizeLine(download: bytes) : sizeWords(null)),
+    bytes: bytes,
     name: one?.$1.name ?? '${todo.length} regions',
     dir: dir.path,
     policy: regions.policy,
+    updates: live,
   );
+  closed = true;
   if (choice == DownloadChoice.cancel) return;
   final names = one?.$1.name ?? '${todo.length} regions';
   tell(m, choice == DownloadChoice.now ? 'Downloading $names' : '$names will download on Wi-Fi');

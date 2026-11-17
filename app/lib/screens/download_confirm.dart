@@ -37,6 +37,10 @@ void Function(BuildContext context)? openStorageForSpace;
 /// [summary] is said in place of the list of items ("Map, directions, places and off-road."), with [bytes] the size in all (null:
 /// not known, "Size unknown"); [action] is the button's word ("Download", "Carry on"); [name] is what is downloaded, for "Idaho needs
 /// 1.8 GB" when it does not fit.
+/// A later answer for an open pop-up: its lines and size in all, changed in place when it arrives (a region's size from the core's
+/// plan, which the pop-up does not wait for).
+typedef DownloadUpdate = ({List<String> summary, int? bytes});
+
 Future<DownloadChoice> confirmDownload(
   BuildContext context, {
   required String title,
@@ -48,20 +52,24 @@ Future<DownloadChoice> confirmDownload(
   String action = 'Download',
   String? name,
   String? footnote,
+  ValueListenable<DownloadUpdate?>? updates,
 }) async {
+  Widget dialog(List<String>? said, int? size) => _DownloadDialog(
+    title: title,
+    lines: lines,
+    space: space,
+    mobileBlocked: mobileBlocked,
+    summary: said,
+    bytes: said == null ? null : size,
+    action: action,
+    name: name,
+    footnote: footnote,
+  );
   final choice = await showDialog<DownloadChoice>(
     context: context,
-    builder: (ctx) => _DownloadDialog(
-      title: title,
-      lines: lines,
-      space: space,
-      mobileBlocked: mobileBlocked,
-      summary: summary,
-      bytes: summary == null ? null : bytes,
-      action: action,
-      name: name,
-      footnote: footnote,
-    ),
+    builder: (ctx) => updates == null
+        ? dialog(summary, bytes)
+        : ValueListenableBuilder<DownloadUpdate?>(valueListenable: updates, builder: (_, u, _) => u == null ? dialog(summary, bytes) : dialog(u.summary, u.bytes)),
   );
   return choice ?? DownloadChoice.cancel;
 }
@@ -89,11 +97,12 @@ Future<DownloadChoice> askToDownload(
   String action = 'Download',
   String? name,
   String? footnote,
+  ValueListenable<DownloadUpdate?>? updates,
 }) async {
   final blocked = policy != null && await policy.blocksDownload();
   if (!context.mounted) return DownloadChoice.cancel;
   return confirmDownload(context,
-      title: title, lines: lines, space: (spaceOf ?? downloadSpaceOf)(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name, footnote: footnote);
+      title: title, lines: lines, space: (spaceOf ?? downloadSpaceOf)(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name, footnote: footnote, updates: updates);
 }
 
 /// Delete always asks first, in the same shape: what it frees, the storage after, that it can come back, and a red Delete.

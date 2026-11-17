@@ -1,5 +1,6 @@
 // The region download pop-up and the progress total say what a region takes on the device, not only the gzip the catalogue counts
 // (web-region-progress, approved by cache-pm: "30 MB on this device (15 MB to download)"; offline "15 MB to download").
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/regions/region_catalogue.dart';
@@ -101,5 +102,25 @@ void main() {
     expect(offerLine(rec, download), 'County · ${formatBytes(15 << 20)} to download', reason: 'before: "County · 15 MB"');
     expect(offerLine(rec, const RegionOffer(RegionOfferKind.download)), 'County · Size unknown');
     expect(offerLine(rec, const RegionOffer(RegionOfferKind.carryOn, bytes: 5 << 20)), 'County · ${formatBytes(5 << 20)} to download');
+  });
+
+  testWidgets('the pop-up is on screen at once with the catalogue\'s download figure, and changes in place when the plan arrives', (tester) async {
+    final (regions, core, s) = await _boot(tester);
+    core.sizes[_county] = 120 << 20;
+    core.alreadyBytes = 70 << 20;
+    core.planGate = Completer<void>();
+    await _openDialog(tester, s, regions);
+    Finder inDialog(String t) => find.descendant(of: find.byType(AlertDialog), matching: find.textContaining(t, findRichText: true));
+    expect(find.byType(AlertDialog), findsOneWidget, reason: 'before: the pop-up waited for the plan (up to 12 s)');
+    expect(inDialog('to download'), findsOneWidget, reason: 'the catalogue\'s figure, said to be the download');
+    expect(inDialog('on this device'), findsNothing, reason: 'the plan has not arrived');
+    core.planGate!.complete();
+    await _settleUntil(tester, () => inDialog('on this device (').evaluate().isNotEmpty);
+    expect(inDialog('on this device ('), findsOneWidget, reason: 'updated in place, the same pop-up');
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
   });
 }
