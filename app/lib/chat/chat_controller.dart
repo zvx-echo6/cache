@@ -193,6 +193,9 @@ class ChatController extends ChangeNotifier {
 
   bool get canSend => _backend != null && !busy;
 
+  /// Counts the chats started ([newChat]); a request held for a chat is meant for the one it was held in.
+  int get chatEpoch => _epoch;
+
   StreamSubscription<int?>? _queueSub;
 
   void _onQueuePosition(int? position) {
