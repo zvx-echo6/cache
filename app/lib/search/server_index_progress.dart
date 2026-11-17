@@ -39,6 +39,9 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
   /// The libraries seen being built since the last time all was done (key, title); the ones no longer building are done.
   final Map<String, String> _seenBuilds = {};
   String _bSig = '';
+
+  /// The server's library build queue is paused and has work (the Library's banner Pause, or this sheet's Pause all).
+  bool _buildPaused = false;
   IndexWait _hold = IndexWait.none;
   bool _paused = false;
   String _sig = '';
@@ -105,6 +108,7 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
     for (final e in now.entries) {
       _seenBuilds[e.key] = e.value.$1;
     }
+    _buildPaused = b.queue.paused && now.isNotEmpty;
     final out = <IndexItem>[];
     for (final e in _seenBuilds.entries) {
       final cur = now[e.key];
@@ -115,16 +119,19 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
       final items = cur.$2;
       final active = items.where((i) => i.active).firstOrNull;
       final finished = items.where((i) => i.finished).length;
+      // the build queue paused (from here or the Library's banner): the same paused words as any work the person paused
       out.add(IndexItem(
         key: e.key,
-        state: active != null ? IndexState.running : IndexState.queued,
+        state: _buildPaused ? IndexState.held : (active != null ? IndexState.running : IndexState.queued),
         title: e.value,
+        why: _buildPaused ? IndexWait.person : IndexWait.none,
+        position: _buildPaused ? 1 : 0,
         progress: (finished, items.length),
-        step: active == null ? null : queueStateWords(active),
+        step: active == null || _buildPaused ? null : queueStateWords(active),
         kindOverride: 'library',
       ));
     }
-    final sig = out.map((i) => '${i.key}|${i.state}|${i.progress}|${i.step}').join(';');
+    final sig = out.map((i) => '${i.key}|${i.state}|${i.progress}|${i.step}').join(';') + '|$_buildPaused';
     if (sig == _bSig) return;
     _bSig = sig;
     _bItems = out;
@@ -186,7 +193,7 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
   bool get busy => _total > 0 && _done < _total;
 
   @override
-  bool get pausedAll => _paused;
+  bool get pausedAll => _paused || _buildPaused;
 
   @override
   int get doneCount => _done;
@@ -199,7 +206,7 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
 
   @override
   IndexWait get reason {
-    if (_paused) return IndexWait.person;
+    if (_paused || _buildPaused) return IndexWait.person;
     if (_hold != IndexWait.none) return _hold;
     for (final i in _items) {
       if (i.why != IndexWait.none) return i.why;
@@ -236,16 +243,21 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
 
   @override
   Future<void> pauseAll() async {
-    if (_paused) return;
-    setPausedState(true);
-    await setPaused(true);
+    final b = _build;
+    // both: the index queue (index.pause) and the library build queue (the Library banner's Pause)
+    await Future.wait([
+      if (!_paused) () async { setPausedState(true); await setPaused(true); }(),
+      if (b != null && !_buildPaused && _bItems.any((i) => i.state != IndexState.done)) b.pause(),
+    ]);
   }
 
   @override
   Future<void> resumeAll() async {
-    if (!_paused) return;
-    setPausedState(false);
-    await setPaused(false);
+    final b = _build;
+    await Future.wait([
+      if (_paused) () async { setPausedState(false); await setPaused(false); }(),
+      if (b != null && _buildPaused) b.resume(),
+    ]);
   }
 
   @override
