@@ -67,6 +67,7 @@ Future<(RegionsState, FakeRegions, SettingsRig)> _open(
   required bool sized,
   required List<Map<String, dynamic>> packs,
   int routingBytes = 120 << 20,
+  bool places = false,
   Completer<void>? gate,
 }) async {
   final s = await SettingsRig.create(tester);
@@ -74,6 +75,7 @@ Future<(RegionsState, FakeRegions, SettingsRig)> _open(
   Directory(core.tileDir).createSync(recursive: true);
   core.sizes[_county] = routingBytes;
   core.alreadyBytes = 0;
+  core.placesEnabled = places;
   if (gate != null) core.planGate = gate;
   final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_packs(packs));
   final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: _web(sized: sized).fetch);
@@ -128,7 +130,7 @@ void main() {
   });
 
   testWidgets('Idaho-shaped: sized, routing, places and a pack over it: "Map, directions, places and off-road."', (tester) async {
-    final (regions, _, s) = await _open(tester, sized: true, packs: [idaho]);
+    final (regions, _, s) = await _open(tester, sized: true, packs: [idaho], places: true);
     await _settleUntil(tester, () => _inDialog('Takes ').evaluate().isNotEmpty);
     expect(_inDialog('Map, directions, places and off-road.'), findsOneWidget);
     await _close(tester, regions, s);

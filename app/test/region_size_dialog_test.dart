@@ -129,7 +129,7 @@ void main() {
     await s.dispose(tester);
   });
 
-  testWidgets('a plan that finds nothing (roads not published, map too big) never reads "0 B": the catalogue\'s figure stays as the download', (tester) async {
+  testWidgets('a plan that finds nothing (roads not published, no map) never reads "0 B": no part is offered, so no size is claimed', (tester) async {
     final (regions, core, s) = await _boot(tester);
     core.sizes[_county] = 0; // no road tiles published for the area
     core.alreadyBytes = 0;
@@ -144,7 +144,9 @@ void main() {
     Finder inDialog(String t) => find.descendant(of: find.byType(AlertDialog), matching: find.textContaining(t, findRichText: true));
     expect(inDialog('0 B'), findsNothing, reason: 'before: "0 B on this device (0 B to download)"');
     expect(inDialog('on this device'), findsNothing);
-    expect(inDialog('to download'), findsOneWidget);
+    // the roads have no data, so directions are not offered (honest parts): the catalogue's road figure is not what would download
+    expect(inDialog('directions'), findsNothing);
+    expect(inDialog('Size unknown'), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
