@@ -20,7 +20,7 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
   /// `index.retry` for the work [key] (the server's own key).
   final Future<void> Function(String key) retryKey;
 
-  /// The work's name from the server's key ("seal:zim/<id>", "zim-epub/<id>", or a ZIM's path): the ZIM's title; null when not known.
+  /// The work's name from the server's key ("seal:zim/ID", "zim-epub/ID", or a ZIM's path): the ZIM's title; null when not known.
   final String? Function(String key)? titleOf;
 
   List<IndexItem> _items = const [];

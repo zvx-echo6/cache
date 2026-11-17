@@ -277,6 +277,7 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
   }
 
   /// Tries work skipped as stuck again (the queue sheet's Retry).
+  @override
   Future<void> retry(String key) {
     _stuck.remove(key);
     _stuckAt.remove(key);
@@ -318,25 +319,32 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
 
   /// The person's Pause all: nothing runs until Resume.
   bool _pausedAll = false;
+  @override
   bool get pausedAll => _pausedAll;
 
   /// The battery at the last look (null when the device cannot say: then nothing waits for the battery).
+  @override
   BatteryReading? reading;
 
   IndexWait wait = IndexWait.none;
 
   /// The key of the work running now.
+  @override
   String? get running => _current?.key;
+  @override
   int get doneCount => _done.length;
+  @override
   int get totalCount => _seen.length;
 
   /// The quiet line Settings and the Library's overview show while there is work; null when there is none.
+  @override
   String? get line => indexStatusLine(this);
 
   /// How much of all the work seen is done, 0 to 1, for the overview's bar. Each source counts as one equal share (the
   /// headline says "3 of 9 done" in sources); inside its share a source fills by the items it reports (PDFs read of all its
   /// PDFs, caption files or EPUBs read), so the bar moves while a big library runs instead of sitting still for an hour. Work
   /// that cannot say its progress fills its share when it is done.
+  @override
   double get fraction {
     if (_seen.isEmpty) return 1;
     var sum = 0.0;
@@ -352,12 +360,15 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
   }
 
   /// The system's thermal status says the device is warm (see [IndexThrottle.thermalWarm]).
+  @override
   bool get deviceWarm => throttle?.thermalWarm ?? false;
 
   /// Whether there is work not done yet (the Settings line and the Library's overview show while there is).
+  @override
   bool get busy => _seen.isNotEmpty && _done.length < _seen.length;
 
   /// Where [key]'s work stands now; null when the scheduler has not seen it (nothing to do, or not listed yet).
+  @override
   IndexItem? statusOf(String key) {
     final title = _titles[key] ?? '';
     final t = _tasks[key];
@@ -394,6 +405,7 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
   }
 
   /// Everything seen since the last time all was done: the running work, then the rest in the order it runs, then what is done.
+  @override
   List<IndexItem> get items => [
     if (_current case final c?) statusOf(c.key)!,
     for (final k in _order)
@@ -404,6 +416,7 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
 
   /// Why the work does not go on as usual, for the Settings line and the overview: the running work's slowing down, else the
   /// reason the first held work waits; none when work runs as usual or is only queued.
+  @override
   IndexWait get reason {
     if (_current case final c?) return statusOf(c.key)!.why;
     for (final k in _order) {
@@ -415,6 +428,7 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
 
   /// The person's Pause all (the Library's queue sheet): what runs pauses and keeps its work, and nothing starts until
   /// [resumeAll].
+  @override
   Future<void> pauseAll() async {
     if (_pausedAll) return;
     _pausedAll = true;
@@ -426,6 +440,7 @@ class IndexScheduler extends ChangeNotifier implements IndexProgress {
   }
 
   /// Resume after [pauseAll]: the rules decide again at once.
+  @override
   Future<void> resumeAll() async {
     if (!_pausedAll) return;
     _pausedAll = false;
