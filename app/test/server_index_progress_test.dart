@@ -1,7 +1,6 @@
 // The Library's index line and queue sheet in a browser: fed by the server's `index.state` `_queue`, with the same words as on a
 // phone, and Pause all, Resume and Retry going to the server (index.pause, index.retry).
 import 'package:cache/search/index_overview.dart';
-import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/search/server_index_progress.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
@@ -9,10 +8,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The server's ops, recorded.
 class _Server {
-  final List<(String, Map<String, dynamic>)> calls = [];
+  final List<String> calls = [];
   late final ServerIndexProgress progress = ServerIndexProgress(
-    setPaused: (p) async => calls.add(('index.pause', {'paused': p})),
-    retryKey: (k) async => calls.add(('index.retry', {'key': k})),
+    setPaused: (p) async => calls.add('index.pause {paused: $p}'),
+    retryKey: (k) async => calls.add('index.retry {key: $k}'),
     titleOf: (key) => key.endsWith('/army') || key == '/docs/army.zim' ? 'Army Publishing' : null,
   );
 }
@@ -62,7 +61,7 @@ void main() {
     expect(find.text('Stuck at: getting the search index ready · Retry'), findsOneWidget);
     await tester.tap(find.text('Stuck at: getting the search index ready · Retry'));
     await tester.pump();
-    expect(s.calls, [('index.retry', {'key': '/docs/c.zim'})]);
+    expect(s.calls, ['index.retry {key: /docs/c.zim}']);
   });
 
   testWidgets('Pause all and Resume go to the server as index.pause', (tester) async {
@@ -70,11 +69,11 @@ void main() {
     await _open(tester, s.progress);
     await tester.tap(find.byKey(const ValueKey('index-pause-all')));
     await tester.pumpAndSettle();
-    expect(s.calls.last, ('index.pause', {'paused': true}));
+    expect(s.calls.last, 'index.pause {paused: true}');
     expect(find.byKey(const ValueKey('index-resume-all')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('index-resume-all')));
     await tester.pumpAndSettle();
-    expect(s.calls.last, ('index.pause', {'paused': false}));
+    expect(s.calls.last, 'index.pause {paused: false}');
     expect(find.byKey(const ValueKey('index-pause-all')), findsOneWidget);
   });
 
