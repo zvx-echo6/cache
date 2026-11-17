@@ -403,7 +403,7 @@ Guidance keeps running with the screen locked. On Android a "Cache navigation" n
 - If you refuse notifications, guidance still works.
 - If it says "Getting your position", wait for the first GPS fix.
 
-CarPlay: say "Hey Siri, navigate to <place> with Cache". A saved place's name starts the route; any other name lists the places found on the car screen. Or say "Hey Siri, navigate with Cache" and Siri asks where to.
+CarPlay: say "Hey Siri, navigate with Cache", "Hey Siri, start a Cache route" or "Hey Siri, get Cache directions". Siri asks "Where to?", then say the place. A saved place's name starts the route; any other name lists the places found on the car screen. "Hey Siri, navigate to <place> with Cache" works only for saved places.
 
 ## Map layers and offline maps
 
