@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:cache/downloads/download_row.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/maps/layers/layer_def.dart' show AreaPhase;
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/regions/ui/region_download.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,6 +42,36 @@ void main() {
     expect(core.policies.last['hold'], isTrue, reason: 'the engine on the server is told, not only this tab');
     expect(regions.held, isTrue);
     expect(regions.regionOf('us-id-twin-falls-county')!.phase, RegionPhase.paused);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('a global Pause shows on every row: no part reads as running, and a download started while it is on is held too', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: s.maps, opener: (_) async => core);
+    late LocalRegion l;
+    await tester.runAsync(() async {
+      await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
+      await regions.init();
+      final county = (await catalogue.shard('us'))['us-id-twin-falls-county']!;
+      await catalogue.geometry(county);
+      await regions.pauseAll();
+      // a download asked for while the Pause is on
+      await regions.download(county, routing: true, map: true, anyway: true);
+      l = regions.regionOf('us-id-twin-falls-county')!;
+    });
+    expect(regions.held, isTrue);
+    expect(s.engine.allAreas.where((a) => a.phase == AreaPhase.running), isEmpty, reason: 'before: a map layer started while paused ran on');
+    const running = RegionPartStatus(RegionPartKind.map, PartState.downloading, fraction: 0.2, bytes: 2 << 20, totalBytes: 10 << 20);
+    final row = partDl(regions, l, running, own: true);
+    expect(row.phase, DlPhase.paused, reason: 'before: a part that is downloading read as running whatever the Pause said');
+    expect(dlLine(row), contains('all downloads paused'));
+    expect(regionDl(regions, l).phase, DlPhase.paused);
+    expect(dlLine(regionDl(regions, l)), contains('all downloads paused'));
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
     await s.dispose(tester);

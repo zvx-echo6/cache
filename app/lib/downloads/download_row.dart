@@ -103,7 +103,7 @@ String dlLine(DlState s, {String idle = '', String? done}) {
           'Waiting for the server',
       ].join(' · '),
     DlPhase.pausing => 'Pausing…',
-    DlPhase.paused => ['Paused', ?bytes].join(' · '),
+    DlPhase.paused => ['Paused', ?s.reasonText, ?bytes].join(' · '),
     DlPhase.failed => ['Stopped: ${s.reasonText ?? (s.reason ?? DlReason.cutOff).words}', ?s.part, if (s.part == null && bytes != null) bytes].join(' · '),
     DlPhase.waiting => s.waitLine ?? 'Waiting for ${s.waitingFor ?? 'the download before it'} to finish',
     DlPhase.verifying => 'Checking the file…',

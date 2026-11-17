@@ -342,7 +342,9 @@ class AppDiscoverDevice implements DiscoverDevice {
         if (l == null) return const DlState(DlPhase.waiting, waitLine: 'Waits for your place');
         return switch (l.phase) {
           RegionPhase.ready => DlState(DlPhase.done, total: l.bytes),
-          RegionPhase.downloading => DlState(DlPhase.running, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
+          RegionPhase.downloading => regions!.held
+              ? DlState(DlPhase.paused, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0, reasonText: 'all downloads paused')
+              : DlState(DlPhase.running, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
           RegionPhase.paused => DlState(DlPhase.paused, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
           RegionPhase.stopped || RegionPhase.failed => DlState(DlPhase.failed, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0, reasonText: l.error),
         };

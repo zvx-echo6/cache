@@ -1170,6 +1170,9 @@ class RegionsState extends ChangeNotifier {
           if (!est.allowed) continue;
           final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, outline: outline);
           k.areas.add(a.id);
+          // The person's Pause is on: a layer started now stops at once (the engine does not know of the hold), so no part of the
+          // region runs while the rows say "all downloads paused". Resume carries it on.
+          if (held) await maps.engine.pause(a.id);
         }
       }
     }

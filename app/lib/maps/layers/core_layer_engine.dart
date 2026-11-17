@@ -730,14 +730,29 @@ class CoreLayerEngine extends LayerEngine {
   /// one put back (as an unfinished download) the area the other had just deleted. One look at a time now: a look that finds
   /// another still running skips, and the next timer tick comes back to it.
   Future<void> _tick() async {
-    if (_disposed || _ticking) return;
+    if (_disposed) return;
+    if (_ticking) {
+      // Says why a page can show a download as running long after the server finished it: a look that never returns holds every
+      // later one off (logged once a minute).
+      final since = _tickStarted;
+      if (since != null && DateTime.now().difference(since) > const Duration(seconds: 30) && DateTime.now().difference(_stuckLogged) > const Duration(minutes: 1)) {
+        _stuckLogged = DateTime.now();
+        logInfo('Layer downloads: the last look at ${_running.length} running download(s) has not finished for ${DateTime.now().difference(since).inSeconds} s');
+      }
+      return;
+    }
     _ticking = true;
+    _tickStarted = DateTime.now();
     try {
       await _look();
     } finally {
       _ticking = false;
     }
   }
+
+  DateTime? _tickStarted;
+  DateTime _stuckLogged = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, String> _lastProgressError = {};
 
   bool _ticking = false;
 
@@ -750,9 +765,16 @@ class CoreLayerEngine extends LayerEngine {
       JobProgress p;
       try {
         p = await r.job.progress();
-      } catch (_) {
+      } catch (e) {
+        // Said when it changes, not at every look: why a running row stays as it was.
+        final msg = e.toString();
+        if (_lastProgressError[r.area.id] != msg) {
+          _lastProgressError[r.area.id] = msg;
+          logError('Layer download ${r.area.id} (${r.area.layerId}): its progress could not be read', error: e);
+        }
         continue;
       }
+      _lastProgressError.remove(r.area.id);
       if (_disposed) return;
       final a = r.area;
       if (p.total > 0) {
@@ -769,6 +791,7 @@ class CoreLayerEngine extends LayerEngine {
       if (p.bytes != null && !r.update) a.bytes = p.bytes!;
       changed = true;
       if (!p.isFinished) continue;
+      logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
       try {
@@ -814,7 +837,9 @@ class CoreLayerEngine extends LayerEngine {
       _dropPlanner();
       try {
         await _reload();
-      } catch (_) {}
+      } catch (e) {
+        logError('Layer downloads: the list could not be read after a download ended', error: e);
+      }
     }
     if (_disposed) return;
     if (_running.isEmpty) {
