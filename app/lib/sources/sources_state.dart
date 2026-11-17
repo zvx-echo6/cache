@@ -212,6 +212,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       return null;
     }
     _core = core;
+    // A browser shares one engine with every tab: each tool request carries this tab's own position and web search setting.
+    if (plat.isWeb) core.requestContext = () => (location: requestLocation, web: webForRequest?.call());
     unavailable = null;
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
@@ -293,6 +295,16 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   }
 
   (double, double, double, DateTime)? _fix;
+
+  /// This tab's web search setting for a tool request (`{provider, reference, online}`, or null when off); set by the app.
+  Map<String, dynamic>? Function()? webForRequest;
+
+  /// This tab's position as the tool requests carry it (the values [setLocation] sends the core), or null with none.
+  Map<String, dynamic>? get requestLocation {
+    final f = _fix;
+    if (f == null) return null;
+    return {'lat': f.$1, 'lon': f.$2, 'accuracyM': f.$3, 'fixedAt': isoWithOffset(f.$4)};
+  }
 
   /// Sends the latest fix to the core; also done once the core is open, for a fix that came before it.
   Future<bool> _applyFix() async {

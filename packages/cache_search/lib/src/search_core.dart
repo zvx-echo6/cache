@@ -12,6 +12,10 @@ export 'core_dispatch.dart' show CsNativeFactory;
 
 CsNative _openNative() => FfiCsNative.open();
 
+/// What one browser tab sends with each tool request (convTool, convActFinish): [location] is `{lat, lon, accuracyM, fixedAt}` or null
+/// (no position), [web] is `{provider, reference, online}` or null (web search off). Never a key.
+typedef RequestContext = ({Map<String, dynamic>? location, Map<String, dynamic>? web});
+
 /// The search core for the UI. Every call goes through a [CoreTransport] to the core's [CoreDispatcher]: on the phone a
 /// long-lived background isolate that owns the handle, in the browser HTTPS to Cache Server's helper.
 class SearchCore {
@@ -20,8 +24,8 @@ class SearchCore {
   /// Starts the transport and opens the core with [sources]. Throws a [CacheSearchException] if the native
   /// library is missing on this platform or cs_open fails. [extra] holds the other sections of the cs_open config
   /// (user, live, places, routing, ...), see cache_search.h.
-  static Future<SearchCore> open(List<SourceConfig> sources, {Map<String, dynamic>? extra, CsNativeFactory native = _openNative}) async {
-    final core = SearchCore._(await openDefaultTransport(native));
+  static Future<SearchCore> open(List<SourceConfig> sources, {Map<String, dynamic>? extra, CsNativeFactory native = _openNative, CoreTransport? transport}) async {
+    final core = SearchCore._(transport ?? await openDefaultTransport(native));
     try {
       await core._call('open', {'sources': jsonSources(sources), 'extra': extra});
     } catch (_) {
@@ -33,6 +37,18 @@ class SearchCore {
 
   final CoreTransport _transport;
   bool _closed = false;
+
+  /// The browser build only (Cache Server's one engine is shared by every tab): the values of this tab, added to each tool request
+  /// so the helper uses them for that request alone. Null on the phone and the desktop app, which have their own engine; their
+  /// requests are unchanged.
+  RequestContext Function()? requestContext;
+
+  /// [args] with this tab's `location` and `web` (both, null when none) when [requestContext] is set; an absent field means an old client.
+  Map<String, dynamic> _withContext(Map<String, dynamic> args) {
+    final c = requestContext?.call();
+    if (c == null) return args;
+    return {...args, 'location': c.location, 'web': c.web};
+  }
 
   static List<Map<String, dynamic>> jsonSources(List<SourceConfig> s) => [for (final x in s) x.toJson()];
 
@@ -378,12 +394,17 @@ class CoreConversation {
 
   /// Runs one tool call in this conversation (cs_tool); its sources are numbered here. A failure of the tool comes back
   /// as its error JSON in [ToolOutput.content], not as an exception. [now] is the local time, ISO 8601 with an offset.
-  Future<ToolOutput> tool(String name, Map<String, dynamic> args, {required String now}) async => ToolOutput.fromJson(
-      ((await _core._call('convTool', {'conv': _id, 'name': name, 'args': args, 'now': now})) as Map).cast<String, dynamic>());
+  ///
+  /// [perRequest] false leaves this tab's location and web setting off the request (a key check that lends the engine a key
+  /// for one search with setWeb, which the request's own `web` would override).
+  Future<ToolOutput> tool(String name, Map<String, dynamic> args, {required String now, bool perRequest = true}) async {
+    final a = {'conv': _id, 'name': name, 'args': args, 'now': now};
+    return ToolOutput.fromJson(((await _core._call('convTool', perRequest ? _core._withContext(a) : a)) as Map).cast<String, dynamic>());
+  }
 
   /// The host's reply to an act call's host_run (cs_act_finish): the exact tool message for the model.
   Future<String> actFinish(String runId, Map<String, dynamic> reply) async =>
-      (await _core._call('convActFinish', {'conv': _id, 'run_id': runId, 'reply': reply})) as String;
+      (await _core._call('convActFinish', _core._withContext({'conv': _id, 'run_id': runId, 'reply': reply}))) as String;
 
   /// A confirm card's outcome (cs_act_outcome): the exact content of the system message for the model.
   Future<String> actOutcome(Map<String, dynamic> outcome) async => (await _core._call('convActOutcome', {'conv': _id, 'outcome': outcome})) as String;
