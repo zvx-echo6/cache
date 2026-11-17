@@ -7,6 +7,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/event_loop.dart';
 import 'support/settings_rig.dart';
 import 'support/weather_screen_kit.dart';
 
@@ -51,14 +52,10 @@ void main() {
     expect(_fetchedFor(r, 'cabin'), isFalse);
     // Notebooks sharing is switched on: the saved place comes in
     r.liveCore.saved = [_cabin];
-    await tester.runAsync(() async {
-      await r.weather.savedPlacesChanged();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
-    await tester.pump();
-    // the page reads the places again (the settings file is written for real, so give it real time)
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
-    await tester.pumpAndSettle();
+    await tester.runAsync(() => r.weather.savedPlacesChanged());
+    // the page reads the places again (the settings file is written for real): wait for the row, never for a stretch of time
+    await pumpWidgetsUntil(tester, () => find.byKey(const ValueKey('watch-place:cabin')).evaluate().isNotEmpty, what: 'the arrived place listed');
+    await pumpWidgetsUntil(tester, () => _fetchedFor(r, 'cabin'), what: 'the arrived place fetched');
     expect(find.byKey(const ValueKey('watch-place:cabin')), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('watch-place:cabin')), matching: find.text('Cabin')), findsOneWidget);
     expect(_fetchedFor(r, 'cabin'), isTrue, reason: 'its weather is fetched by itself');
