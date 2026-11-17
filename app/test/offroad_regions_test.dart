@@ -524,7 +524,7 @@ void main() {
       await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty, turns: 12);
       if (!covered) {
         expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add off-road');
-        expect(find.byType(AlertDialog), findsNothing, reason: 'the tap opens nothing');
+        expect(find.byType(AlertDialog), findsNothing, reason: 'the greyed row has no tap');
       } else {
         expect(find.text('No off-road data is published for this area.'), findsNothing);
         expect(find.byType(AlertDialog), findsOneWidget, reason: 'a pack covers it: the normal offer');
@@ -535,5 +535,19 @@ void main() {
       regions.dispose();
       await s.dispose(tester);
     }
+  });
+
+  testWidgets('an offer that is asked for anyway where no pack covers the region says why, instead of opening nothing', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final (regions, county, packs, _) = await boot(tester, s, [_maine]);
+    await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => openRegionOffer(c, regions, county), child: const Text('offer')))));
+    await tester.tap(find.text('offer'));
+    await _settleUntil(tester, () => find.text('No off-road data is published for this area.').evaluate().isNotEmpty);
+    expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: nothing at all');
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(packs.fetched, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
   });
 }

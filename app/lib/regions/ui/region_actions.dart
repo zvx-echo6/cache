@@ -41,8 +41,12 @@ Future<void> openRegionOffer(BuildContext context, RegionsState regions, RegionR
   // The search field it was opened from would take the focus (and the keyboard) back when the pop-up closes.
   FocusManager.instance.primaryFocus?.unfocus();
   var offer = regions.offer(rec);
-  // Add off-road where no pack covers the region opens nothing, whichever row or button asked (the same check as the greyed rows).
-  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places && await regions.offroadCoveredNow(rec.id) == false) return;
+  // Add off-road where no pack covers the region: no offer to confirm, but never silent either: it says why (the same words as the
+  // greyed rows), whichever row or button asked.
+  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places && await regions.offroadCoveredNow(rec.id) == false) {
+    if (context.mounted) tell(ScaffoldMessenger.of(context), kNoOffroadLine);
+    return;
+  }
   offer = regions.offer(rec);
   switch (offer.kind) {
     case RegionOfferKind.busy || RegionOfferKind.onPhone:
