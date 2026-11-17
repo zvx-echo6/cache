@@ -313,4 +313,225 @@ void main() {
       expect(op.handle('index.pause', const {}), {'paused': false, 'busy': false});
     });
   });
+
+  group('the queue (index.state _queue), the stuck watchdog and index.retry', () {
+    var now = DateTime(2026, 11, 17, 9);
+    const cancelled = '{"state":"cancelled","done":1,"total":4}';
+
+    IndexDriver make() => IndexDriver(d, every: const Duration(hours: 1), clock: () => now);
+
+    Map<String, dynamic> queue() => ((IndexStateOp(driver).handle('index.state', const {}) as Map)['_queue'] as Map).cast<String, dynamic>();
+    List<List<Object?>> rows() => [
+          for (final i in (queue()['items'] as List)) [(i as Map)['key'], i['state']],
+        ];
+
+    setUp(() {
+      now = DateTime(2026, 11, 17, 9);
+      driver.stop();
+      driver = make();
+    });
+
+    test('_queue lists the work in run order with its state, counts items, and keeps done items; the old keys stay as they were', () {
+      status['a.zim'] = _st('a.zim');
+      status['b.zim'] = _st('b.zim');
+      status['c.zim'] = _st('c.zim');
+      driver.useSources([_src('a.zim'), _src('b.zim'), _src('c.zim')]);
+      expect(rows(), [
+        ['/docs/a.zim', 'queued'],
+        ['/docs/b.zim', 'queued'],
+        ['/docs/c.zim', 'queued'],
+      ]);
+      fake.progressScript
+        ..clear()
+        ..add(_running(1));
+      driver.tick();
+      driver.tick();
+      expect(rows(), [
+        ['/docs/a.zim', 'running'],
+        ['/docs/b.zim', 'queued'],
+        ['/docs/c.zim', 'queued'],
+      ]);
+      final q = queue();
+      expect(q['done'], 0);
+      expect(q['total'], 3);
+      final a = (q['items'] as List).first as Map;
+      expect(a, {'key': '/docs/a.zim', 'state': 'running', 'done': 1, 'total': 4, 'step': 'keywords'});
+      expect((q['items'] as List)[1], {'key': '/docs/b.zim', 'state': 'queued', 'done': null, 'total': null, 'step': 'keywords'});
+      // Every old key is exactly as it was.
+      expect((IndexStateOp(driver).handle('index.state', const {}) as Map)['/docs/a.zim'], {'fraction': 0.25, 'error': null});
+      // a ends, b starts in the same tick; a is kept as done, after the live work.
+      status['a.zim'] = _st('a.zim', indexed: true);
+      fake.progressScript
+        ..clear()
+        ..add(_done);
+      driver.tick();
+      expect(rows(), [
+        ['/docs/b.zim', 'running'],
+        ['/docs/c.zim', 'queued'],
+        ['/docs/a.zim', 'done'],
+      ]);
+      expect(queue()['done'], 1);
+      expect(queue()['total'], 3);
+      expect(((queue()['items'] as List).last as Map)['done'], 4);
+      expect(((queue()['items'] as List).last as Map)['total'], 4);
+    });
+
+    test('a failed source is in _queue as failed, and its old key is unchanged', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript
+        ..clear()
+        ..add(_failed);
+      driver.useSources([_src('a.zim')]);
+      driver.tick();
+      driver.tick();
+      expect(rows(), [
+        ['/docs/a.zim', 'failed'],
+      ]);
+      expect((IndexStateOp(driver).handle('index.state', const {}) as Map)['/docs/a.zim'], {'fraction': null, 'error': 'disk full'});
+    });
+
+    test('listing the queue starts nothing and changes nothing', () {
+      status['a.zim'] = _st('a.zim');
+      driver.useSources([_src('a.zim')]);
+      final before = fake.calls.where((c) => c.startsWith('job')).length;
+      queue();
+      queue();
+      expect(fake.calls.where((c) => c.startsWith('job')).length, before);
+      expect(driver.busy, isFalse);
+    });
+
+    void advance(Duration d_) {
+      now = now.add(d_);
+      driver.tick();
+    }
+
+    test('no progress for 5 minutes marks the item stuck, skips it and moves on; index.state still answers', () {
+      status['a.zim'] = _st('a.zim');
+      status['b.zim'] = _st('b.zim');
+      fake.progressScript
+        ..clear()
+        ..add(_running(1));
+      driver.useSources([_src('a.zim'), _src('b.zim')]);
+      driver.tick();
+      driver.tick();
+      driver.tick();
+      final start = now;
+      // Under five minutes: still running.
+      for (var i = 0; i < 9; i++) {
+        advance(const Duration(seconds: 30));
+        expect(driver.stuck, isEmpty, reason: 'after ${now.difference(start)}');
+      }
+      var guard = 0;
+      while (driver.stuck.isEmpty && guard++ < 6) {
+        advance(const Duration(seconds: 30));
+      }
+      expect(driver.stuck.keys, ['/docs/a.zim']);
+      expect(now.difference(start), greaterThanOrEqualTo(const Duration(minutes: 5)));
+      expect(now.difference(start), lessThanOrEqualTo(const Duration(minutes: 6)));
+      expect(fake.calls, contains('jobCancel:100'));
+      // index.state answers while it is stuck.
+      expect(rows().first, ['/docs/b.zim', 'queued']);
+      expect(rows().last, ['/docs/a.zim', 'stuck']);
+      // The core ends the cancelled job: the queue moves on to b, and a is not started again.
+      fake.progressScript
+        ..clear()
+        ..add(cancelled);
+      driver.tick();
+      expect(jobs(), hasLength(2));
+      expect(jobs().last, contains('/docs/b.zim'));
+      driver.useSources([_src('a.zim'), _src('b.zim')]);
+      driver.tick();
+      expect(jobs().where((j) => j.contains('/docs/a.zim')), hasLength(1));
+      expect(driver.stuck.keys, ['/docs/a.zim']);
+    });
+
+    test('progress resets the 5 minutes', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript
+        ..clear()
+        ..add(_running(1));
+      driver.useSources([_src('a.zim')]);
+      driver.tick();
+      driver.tick();
+      for (var i = 0; i < 8; i++) {
+        advance(const Duration(seconds: 30));
+      }
+      fake.progressScript
+        ..clear()
+        ..add(_running(2));
+      for (var i = 0; i < 8; i++) {
+        advance(const Duration(seconds: 30));
+      }
+      expect(driver.stuck, isEmpty);
+    });
+
+    test('work finished and listed again at once, more than twice within 15 s, is stuck; slower repeats are not', () {
+      status['a.zim'] = _st('a.zim'); // still says it needs indexing after every run
+      fake.progressScript
+        ..clear()
+        ..add(_done);
+      void round() {
+        driver.useSources([_src('a.zim')]);
+        driver.tick();
+        driver.tick();
+      }
+
+      round();
+      round();
+      round();
+      expect(jobs(), hasLength(3));
+      expect(driver.stuck, isEmpty);
+      round();
+      expect(jobs(), hasLength(3));
+      expect(driver.stuck.keys, ['/docs/a.zim']);
+      expect(rows(), [
+        ['/docs/a.zim', 'stuck'],
+      ]);
+      // index.retry clears it and puts it back; it runs again.
+      final op = IndexRetryOp(driver);
+      expect(op.handles('index.retry'), isTrue);
+      op.handle('index.retry', {'key': '/docs/a.zim'});
+      expect(driver.stuck, isEmpty);
+      expect(rows(), [
+        ['/docs/a.zim', 'queued'],
+      ]);
+      driver.tick();
+      expect(jobs(), hasLength(4));
+    });
+
+    test('repeats more than 15 s apart are not a loop', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript
+        ..clear()
+        ..add(_done);
+      for (var i = 0; i < 5; i++) {
+        driver.useSources([_src('a.zim')]);
+        driver.tick();
+        driver.tick();
+        now = now.add(const Duration(seconds: 16));
+      }
+      expect(jobs(), hasLength(5));
+      expect(driver.stuck, isEmpty);
+    });
+
+    test('index.retry re-queues a failed source too, and a key that is not stuck changes nothing', () {
+      status['a.zim'] = _st('a.zim');
+      fake.progressScript
+        ..clear()
+        ..add(_failed);
+      driver.useSources([_src('a.zim')]);
+      driver.tick();
+      driver.tick();
+      expect(driver.failures, isNotEmpty);
+      final op = IndexRetryOp(driver);
+      expect(op.handle('index.retry', {'key': '/docs/nothing'}), {'retried': false});
+      expect(op.handle('index.retry', {'key': '/docs/a.zim'}), {'retried': true});
+      expect(driver.failures, isEmpty);
+      expect(rows(), [
+        ['/docs/a.zim', 'queued'],
+      ]);
+      driver.tick();
+      expect(jobs(), hasLength(2));
+    });
+  });
 }
