@@ -24,6 +24,7 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/map_mouse_ring.dart';
 import '../maps/ui/map_pointer_gate.dart';
 import '../maps/ui/vehicle_arrow.dart';
 import '../platform.dart' as plat;
@@ -1736,6 +1737,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _nameRing(ring);
   }
 
+  /// A browser's right-click or mouse hold on the map (its long click is a double click): the same ring as a press and hold.
+  Future<void> _onMouseRing(Offset page, math.Point<double> inMap) async {
+    final c = _controller;
+    if (c == null) return;
+    final at = await c.toLatLng(inMap);
+    if (!mounted) return;
+    _downAt = mouseRingCentre(page, inMap);
+    _onMapLongPress(inMap, at);
+  }
+
   /// The ring's centre names the spot: the nearest town as the core describes coordinates, when it can.
   Future<void> _nameRing(_Ring ring) async {
     try {
@@ -2340,7 +2351,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 }
               },
               child: MapPointerGate(
-                child: MapLibreMap(
+                extraBlock: _ring != null,
+                child: MapMouseRing(
+                  onRing: _onMouseRing,
+                  child: MapLibreMap(
                 styleString: style,
                 initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
                 onMapCreated: _onMapCreated,
@@ -2358,6 +2372,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 myLocationEnabled: false,
                 rotateGesturesEnabled: true,
               ),
+                ),
               ),
             );
           }),
