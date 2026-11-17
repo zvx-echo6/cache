@@ -9,7 +9,7 @@ export 'src/map_models.dart';
 export 'src/models.dart';
 export 'src/native.dart' show CsNative, CsJobNative, CsLayersJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, FfiCsNative, ZimBytes, CsZimIconNative, CsDocumentNative, CsCaptionsNative, CsShelvesNative, CsIngestNative;
 export 'src/regions_core.dart' show RegionsCore;
-export 'src/search_core.dart' show SearchCore, CoreConversation, CoreJobHandle, CsNativeFactory;
+export 'src/search_core.dart' show SearchCore, RequestContext, CoreConversation, CoreJobHandle, CsNativeFactory;
 export 'src/sync_core.dart' show SyncCore;
 export 'src/video_core.dart' show VideoCore, VideoJob;
 export 'src/video_models.dart';

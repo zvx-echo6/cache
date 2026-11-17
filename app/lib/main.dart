@@ -290,7 +290,7 @@ class _CacheAppState extends State<CacheApp> {
       await core.setWeb(provider: WebSearchSetup.provider, key: key, online: true);
       final conv = await core.newConversation();
       try {
-        return (await conv.tool('web_search', {'query': 'Cache'}, now: isoWithOffset(DateTime.now()))).content;
+        return (await conv.tool('web_search', {'query': 'Cache'}, now: isoWithOffset(DateTime.now()), perRequest: false)).content;
       } finally {
         await conv.free();
       }
@@ -1158,6 +1158,7 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) libraryDeviceIdShared = () => libraryDeviceId(sharing: sharing);
     _appRead = app.init();
     final settingsRead = settings.init();
+    sources.webForRequest = () => webSearch.requestWeb;
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
