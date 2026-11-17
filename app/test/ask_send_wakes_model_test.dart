@@ -271,7 +271,7 @@ void main() {
       await tearDownShell(tester);
     });
 
-    testWidgets('a field that already has text is not overwritten', (tester) async {
+    testWidgets('a field that already has text keeps it: the dropped question is added after it, on a new line', (tester) async {
       await setUpShell(tester, resting: true);
       session.loadGate = Completer<void>();
       session.loadError = StateError('out of memory');
@@ -283,7 +283,7 @@ void main() {
       session.loadGate!.complete();
       await until(tester, () => r.app.loading == null && r.app.loadError != null);
       await settle(tester);
-      expect(typed(tester), 'something I am still typing');
+      expect(typed(tester), 'something I am still typing\n$_question');
       await tearDownShell(tester);
     });
 
