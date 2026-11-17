@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -74,7 +75,7 @@ class FfiRegionsEngine implements RegionsEngine {
 /// the engine the person's Pause from `<support>/regions-app.json` (the engine does not keep it) and carries on the packs the
 /// regions kept there still miss.
 class RegionsOps implements OpHandler {
-  RegionsOps(this.support, {required this.open, required this.config, OffroadPacks? packs, this.log})
+  RegionsOps(this.support, {required this.open, required this.config, OffroadPacks? packs, this.log, this.askLease = const Duration(seconds: 60)})
       : packs = packs ?? OffroadPacks(Directory('${support.path}/regions/offroad'), log: log);
 
   final Directory support;
@@ -84,6 +85,17 @@ class RegionsOps implements OpHandler {
   final RegionsEngine Function(Map<String, Object?> config) open;
   final Map<String, Object?> config;
   final void Function(String message)? log;
+
+  /// How long Ask's hold lasts unless it is renewed (the app renews it every 20 seconds while Ask is answering): a tab that is
+  /// closed or dies cannot leave the downloads held.
+  final Duration askLease;
+
+  /// The person's own Pause (`hold`): only the person lifts it.
+  bool _personHold = false;
+  Timer? _askTimer;
+
+  /// Ask's hold is on (its lease has not run out).
+  bool get askHold => _askTimer != null;
 
   RegionsEngine? _engine;
 
@@ -127,15 +139,73 @@ class RegionsOps implements OpHandler {
         return {'ok': true};
     }
     if (!_engineMethods.contains(method)) throw CacheSearchException('bad_method', 'No such regions method: $method');
-    final out = _eng().call(method, jsonEncode(args));
+    var engineArgs = args;
+    var holdChanged = false;
+    if (method == 'set_policy') {
+      // The app sends the person's Pause (`hold`) and Ask's lease (`ask`) apart; the engine gets the one hold that results.
+      if (args['hold'] is bool) _personHold = args['hold'] as bool;
+      final ask = args['ask'];
+      if (ask == true) {
+        // A lease: the hold stays while it is renewed, and ends by itself when it is not.
+        _askTimer?.cancel();
+        _askTimer = Timer(askLease, _askExpired);
+      } else if (ask == false) {
+        _askTimer?.cancel();
+        _askTimer = null;
+      }
+      holdChanged = args.containsKey('hold') || args.containsKey('ask');
+      engineArgs = {...args}..remove('ask');
+      if (holdChanged) engineArgs['hold'] = _personHold || askHold;
+    }
+    final out = _eng().call(method, jsonEncode(engineArgs));
     final Object? j = out == null ? null : jsonDecode(out);
     if (j is! Map<String, dynamic>) throw const CacheSearchException('regions', 'No answer from the regions engine');
     if (j['error'] is String) throw CacheSearchException((j['code'] as String?) ?? 'regions', j['error'] as String);
-    if (method == 'set_policy' && args['hold'] is bool) {
-      packs.held = args['hold'] as bool;
+    if (method == 'set_policy' && holdChanged) {
+      packs.held = _personHold || askHold;
       if (packs.held) packs.cancelAll();
     }
+    if (method == 'status') j['ask_hold'] = askHold;
     return j;
+  }
+
+  /// Starts the off-road packs the regions kept in `regions-app.json` still miss; how many are running.
+  int _carryOnPacks() {
+    var n = 0;
+    try {
+      final f = File('${support.path}/regions-app.json');
+      if (!f.existsSync()) return 0;
+      final j = jsonDecode(f.readAsStringSync());
+      if (j is! Map) return 0;
+      for (final r in ((j['regions'] as Map?) ?? const {}).values) {
+        for (final p in ((r as Map?)?['offroad'] as List?) ?? const []) {
+          if (p is! Map) continue;
+          try {
+            final res = packs.fetch(p.cast<String, dynamic>());
+            if (res['state'] == 'running') n++;
+          } on CacheSearchException catch (e) {
+            log?.call('regions: skipped a pack (${e.message})');
+          }
+        }
+      }
+    } catch (e) {
+      log?.call('regions: could not read regions-app.json ($e)');
+    }
+    return n;
+  }
+
+  /// Ask's lease ran out with no renewal: the engine goes back to the person's own Pause, and the packs that were stopped go on.
+  void _askExpired() {
+    _askTimer = null;
+    log?.call('regions: Ask\'s hold ran out (not renewed)');
+    try {
+      _eng().call('set_policy', jsonEncode({'hold': _personHold}));
+    } catch (e) {
+      log?.call('regions: could not lift Ask\'s hold ($e)');
+      return;
+    }
+    packs.held = _personHold;
+    if (!_personHold) _carryOnPacks();
   }
 
   /// The person's Pause and the packs left to fetch, from `<support>/regions-app.json` (written by the app, regions_state.dart):
@@ -150,6 +220,7 @@ class RegionsOps implements OpHandler {
         if (j is Map<String, dynamic>) app = j;
       }
       final held = app['held'] == true;
+      _personHold = held;
       try {
         _eng().call('set_policy', jsonEncode({'network': true, 'hold': held}));
       } on CacheSearchException catch (e) {
@@ -158,18 +229,7 @@ class RegionsOps implements OpHandler {
       }
       packs.held = held;
       if (held) return;
-      var n = 0;
-      for (final r in ((app['regions'] as Map?) ?? const {}).values) {
-        for (final p in ((r as Map?)?['offroad'] as List?) ?? const []) {
-          if (p is! Map) continue;
-          try {
-            final res = packs.fetch(p.cast<String, dynamic>());
-            if (res['state'] == 'running') n++;
-          } on CacheSearchException catch (e) {
-            log?.call('regions: skipped a pack (${e.message})');
-          }
-        }
-      }
+      final n = _carryOnPacks();
       log?.call('regions: engine ready, held=$held, $n off-road pack(s) carried on');
     } catch (e) {
       log?.call('regions: could not read regions-app.json ($e)');
