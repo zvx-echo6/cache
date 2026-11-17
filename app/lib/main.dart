@@ -795,7 +795,7 @@ class _CacheAppState extends State<CacheApp> {
     sharing: sharing,
     settingsSync: settingsSync,
     regions: regions,
-    indexing: indexing,
+    indexing: plat.isWeb ? sources.serverIndex : indexing,
     storage: StorageUsage(
       kinds: [for (final k in dataKinds) if (k.inStorage) k],
       // In a browser: the figures come from the server (its Library and its disk), not from folders.
@@ -1094,6 +1094,8 @@ class _CacheAppState extends State<CacheApp> {
       askFocus.register(name);
     }
     indexSchedulerShared = indexing;
+    // In a browser the server does the index work; the line and the sheet show what its `index.state` says.
+    if (plat.isWeb) serverIndexProgressShared = sources.serverIndex;
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
       final d = indexThrottle.duty;
