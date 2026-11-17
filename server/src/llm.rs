@@ -291,7 +291,7 @@ pub fn valid_model_id(id: &str) -> bool {
         && id.to_ascii_lowercase().ends_with(".gguf")
 }
 
-/// The body of `POST /api/llm/load` or `stop`: `{"v":1}`.
+/// The body of `POST /api/llm/unload` (and the version part of any body): `{"v":1}`.
 pub fn parse_version_only(body: &[u8]) -> Result<(), ApiErr> {
     parse_body(body).map(|_| ())
 }
@@ -546,6 +546,25 @@ impl LlmService {
         *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
         self.is_loaded.store(true, Ordering::SeqCst);
         Ok(info)
+    }
+
+    /// `POST /api/llm/unload`: blocking. Frees the loaded model; nothing loaded is fine (it returns false). A running generation is
+    /// stopped (its `done` still arrives, with the answer so far) and waited out, as a load waits for it, so the model is never
+    /// freed under a generation. Generations already waiting in the queue go first (they are served in arrival order, like a load),
+    /// and any that arrive after this one find no model and are told so (`no_model`). Afterwards `is_loaded` is false and the model's
+    /// file can be deleted. Returns whether a model was freed.
+    pub fn unload(&self) -> Result<bool, ApiErr> {
+        // Without this the unload would wait for the answer to finish by itself.
+        self.stop(None);
+        let _turn = self.queue.acquire(|_| {}, || false).map_err(|_| err(429, "busy", "too many requests are waiting for the model; try again shortly"))?;
+        let old = {
+            let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            self.is_loaded.store(false, Ordering::SeqCst);
+            slot.take()
+        };
+        let was = old.is_some();
+        drop(old); // cl_free, with the turn still held
+        Ok(was)
     }
 
     /// `POST /api/llm/stop`: ends the running generation early (its `done` still arrives). With an `id` (from the `started` event) only
@@ -872,6 +891,39 @@ mod tests {
         assert_eq!(s.delete_model("chat-b.gguf").unwrap()["deleted"], "chat-b.gguf");
         assert_eq!(s.delete_model("chat-b.gguf").unwrap_err().status, 404);
         assert_eq!(s.list_models(), vec![("chat-a.gguf".to_string(), 4)]);
+    }
+
+    #[test]
+    fn unload_frees_the_model_and_a_running_answer_is_stopped_first() {
+        let d = TempDir::new("llm-unload");
+        let fake = Fake::new(1_000_000);
+        let s = service(&d, fake.clone());
+        // nothing loaded: fine, and nothing was freed
+        assert!(!s.unload().unwrap());
+        s.load("chat-a.gguf", 512).unwrap();
+        assert!(s.is_loaded());
+        // an answer runs (it would take a million tokens): unload stops it, waits for it, then frees the model
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let reader = std::thread::spawn(move || collect(rx));
+        let s2 = s.clone();
+        let gen = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
+        while fake.made.load(Ordering::SeqCst) < 5 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.unload().unwrap());
+        gen.join().unwrap();
+        assert!(fake.stops.load(Ordering::SeqCst) >= 1);
+        assert!(!s.is_loaded());
+        assert_eq!(s.models_json()["models"][0]["loaded"], false);
+        // the generation ended with its final message, and a new one is told there is no model
+        let events = reader.join().unwrap();
+        assert_eq!(events.last().unwrap()["type"], "done", "{events:?}");
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        s.run_generation(None, json!({"messages": []}), tx);
+        assert_eq!(collect(rx)[0]["code"], "no_model");
+        // the file can go now, and a second unload is fine
+        assert!(!s.unload().unwrap());
+        assert_eq!(s.delete_model("chat-a.gguf").unwrap()["deleted"], "chat-a.gguf");
     }
 
     #[test]
