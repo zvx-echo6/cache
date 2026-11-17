@@ -108,6 +108,32 @@ class SearchCore {
           ),
       };
 
+  /// Cache Server only: all of `index.state` for the Library's index line: the per-source jobs as [indexState] has them (without the
+  /// extra keys), the queue the server adds (`_queue`: items in run order, with done and total; null from a server that has none)
+  /// and why the host holds the work (`hold`: "heat" or "memory"; null for none).
+  Future<({Map<String, ({double? fraction, String? error})> jobs, Map<String, dynamic>? queue, String? hold})> indexStateAll() async {
+    final r = (await _call('index.state')) as Map;
+    final q = r['_queue'];
+    final h = r['hold'];
+    return (
+      jobs: {
+        for (final e in r.entries)
+          if (e.key != '_queue' && e.key != 'hold')
+            e.key as String: (
+              fraction: ((e.value as Map)['fraction'] as num?)?.toDouble(),
+              error: (e.value as Map)['error'] as String?,
+            ),
+      },
+      queue: q is Map ? q.cast<String, dynamic>() : null,
+      hold: h is Map ? h['hold'] as String? : null,
+    );
+  }
+
+  /// Cache Server only: tries the work [key] again after it was skipped as stuck (the queue sheet's Retry).
+  Future<void> indexRetry(String key) async {
+    await _call('index.retry', {'key': key});
+  }
+
   /// Cache Server only: the Catalog's Pause and Resume for the server's index work. `paused` true pauses, false resumes, null only
   /// reads. `busy` is whether there is index work (running, waiting, or held by the pause).
   Future<({bool paused, bool busy})> indexPause([bool? paused]) async {

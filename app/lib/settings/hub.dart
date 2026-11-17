@@ -49,7 +49,7 @@ class SettingsHub {
   final RegionsState? regions;
 
   /// The automatic search index work (its one status line); null where the app has none (tests).
-  final IndexScheduler? indexing;
+  final IndexProgress? indexing;
   final UrlOpener openUrl;
 
   /// What a row of Sharing and sync opens (the shell sets it where it can reach the pages); null: rows only toggle.

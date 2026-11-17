@@ -13,6 +13,54 @@ import '../platform/app_log.dart';
 /// state says).
 IndexScheduler? indexSchedulerShared;
 
+/// In a browser: the server's index work, as the overview line and the queue sheet read it (set at start; null on a phone and in
+/// tests that do not need it).
+IndexProgress? serverIndexProgressShared;
+
+/// What the overview line and the queue sheet show: in a browser the server's work, else the phone's [indexSchedulerShared].
+IndexProgress? get indexProgressShared => serverIndexProgressShared ?? indexSchedulerShared;
+
+/// What the overview line and the queue sheet need of the index work: the work in order, how far it is, why it waits, and the
+/// person's Pause all and Retry. [IndexScheduler] is it on a phone; in a browser it is the server's work (ServerIndexProgress).
+abstract interface class IndexProgress implements Listenable {
+  /// Everything seen since the last time all was done: the running work, then the rest in the order it runs, then what is done.
+  List<IndexItem> get items;
+
+  /// Whether there is work not done yet.
+  bool get busy;
+
+  /// The person's Pause all is in force.
+  bool get pausedAll;
+
+  int get doneCount;
+  int get totalCount;
+
+  /// The key of the work running now.
+  String? get running;
+
+  /// Why the work does not go on as usual; none when it runs as usual or is only queued.
+  IndexWait get reason;
+
+  /// The battery at the last look (null when it cannot be said: a browser has none).
+  BatteryReading? get reading;
+
+  /// The system's thermal status says the device is warm.
+  bool get deviceWarm;
+
+  /// How much of all the work seen is done, 0 to 1.
+  double get fraction;
+
+  /// The quiet line while there is work; null when there is none.
+  String? get line;
+
+  IndexItem? statusOf(String key);
+  Future<void> pauseAll();
+  Future<void> resumeAll();
+
+  /// Tries work skipped as stuck again.
+  Future<void> retry(String key);
+}
+
 /// Work listed again this soon after it finished counts as a repeat; more than two repeats in a row and it is stuck.
 const Duration kIndexRedoWithin = Duration(seconds: 15);
 
@@ -95,7 +143,7 @@ abstract class IndexWorkSource {
 /// Why nothing runs right now, when there is work: Cache is in the background, the battery is low, long work waits for
 /// charging, not enough room, the device is warm, Ask is answering, or the person paused it all.
 /// [stuck]: it ran with no progress at all for [IndexScheduler.stuckAfter] and was skipped for now (Retry, or the next start).
-enum IndexWait { none, closed, battery, charging, storage, heat, model, person, stuck }
+enum IndexWait { none, closed, battery, charging, storage, heat, model, person, stuck, memory }
 
 /// Where one piece of work stands: running now, queued (next in turn, nothing holds it but the one running), held (with its
 /// reason), or done this session.
@@ -104,7 +152,10 @@ enum IndexState { running, queued, held, done }
 /// One piece of work as the scheduler sees it now: the one source of the Library rows, their menus, the Library's overview and
 /// the Settings line, so none of them says "Making" for work that is not running.
 class IndexItem {
-  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false, this.warm = false, this.step});
+  const IndexItem({required this.key, required this.state, this.title = '', this.why = IndexWait.none, this.position = 0, this.progress, this.bytesNeeded = 0, this.slowed = false, this.warm = false, this.step, this.kindOverride});
+
+  /// The kind of work when the key does not say it (the server's work is named by its step).
+  final String? kindOverride;
 
   /// The step it is on (running), or was on when it stopped moving (stuck): "Opening · PDF 1 of 37 · 12 MB".
   final String? step;
@@ -133,7 +184,7 @@ class IndexItem {
 
   /// The kind of work: the part of the key before its last "/" ("zim-pdf", "zim-epub", "zim-captions", "captions", "zim",
   /// "library").
-  String get kind => key.contains('/') ? key.substring(0, key.indexOf('/')) : key;
+  String get kind => kindOverride ?? (key.contains('/') ? key.substring(0, key.indexOf('/')) : key);
 }
 
 /// The one place that decides when automatic index work runs (every kind: index_source, index_seal, the PDF loop). Rules:
@@ -141,7 +192,7 @@ class IndexItem {
 /// charging or more than half a battery and pauses when the battery runs low (under 20% and not plugged in); work that needs
 /// more room than the device has beyond Cache's reserve waits. Work is looked for again on [kick] (the sources changed, a
 /// snapshot arrived) and every [every] while the app is open.
-class IndexScheduler extends ChangeNotifier {
+class IndexScheduler extends ChangeNotifier implements IndexProgress {
   IndexScheduler({
     required this.sources,
     required this.space,
@@ -226,6 +277,7 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   /// Tries work skipped as stuck again (the queue sheet's Retry).
+  @override
   Future<void> retry(String key) {
     _stuck.remove(key);
     _stuckAt.remove(key);
@@ -267,25 +319,32 @@ class IndexScheduler extends ChangeNotifier {
 
   /// The person's Pause all: nothing runs until Resume.
   bool _pausedAll = false;
+  @override
   bool get pausedAll => _pausedAll;
 
   /// The battery at the last look (null when the device cannot say: then nothing waits for the battery).
+  @override
   BatteryReading? reading;
 
   IndexWait wait = IndexWait.none;
 
   /// The key of the work running now.
+  @override
   String? get running => _current?.key;
+  @override
   int get doneCount => _done.length;
+  @override
   int get totalCount => _seen.length;
 
   /// The quiet line Settings and the Library's overview show while there is work; null when there is none.
+  @override
   String? get line => indexStatusLine(this);
 
   /// How much of all the work seen is done, 0 to 1, for the overview's bar. Each source counts as one equal share (the
   /// headline says "3 of 9 done" in sources); inside its share a source fills by the items it reports (PDFs read of all its
   /// PDFs, caption files or EPUBs read), so the bar moves while a big library runs instead of sitting still for an hour. Work
   /// that cannot say its progress fills its share when it is done.
+  @override
   double get fraction {
     if (_seen.isEmpty) return 1;
     var sum = 0.0;
@@ -301,12 +360,15 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   /// The system's thermal status says the device is warm (see [IndexThrottle.thermalWarm]).
+  @override
   bool get deviceWarm => throttle?.thermalWarm ?? false;
 
   /// Whether there is work not done yet (the Settings line and the Library's overview show while there is).
+  @override
   bool get busy => _seen.isNotEmpty && _done.length < _seen.length;
 
   /// Where [key]'s work stands now; null when the scheduler has not seen it (nothing to do, or not listed yet).
+  @override
   IndexItem? statusOf(String key) {
     final title = _titles[key] ?? '';
     final t = _tasks[key];
@@ -343,6 +405,7 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   /// Everything seen since the last time all was done: the running work, then the rest in the order it runs, then what is done.
+  @override
   List<IndexItem> get items => [
     if (_current case final c?) statusOf(c.key)!,
     for (final k in _order)
@@ -353,6 +416,7 @@ class IndexScheduler extends ChangeNotifier {
 
   /// Why the work does not go on as usual, for the Settings line and the overview: the running work's slowing down, else the
   /// reason the first held work waits; none when work runs as usual or is only queued.
+  @override
   IndexWait get reason {
     if (_current case final c?) return statusOf(c.key)!.why;
     for (final k in _order) {
@@ -364,6 +428,7 @@ class IndexScheduler extends ChangeNotifier {
 
   /// The person's Pause all (the Library's queue sheet): what runs pauses and keeps its work, and nothing starts until
   /// [resumeAll].
+  @override
   Future<void> pauseAll() async {
     if (_pausedAll) return;
     _pausedAll = true;
@@ -375,6 +440,7 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   /// Resume after [pauseAll]: the rules decide again at once.
+  @override
   Future<void> resumeAll() async {
     if (!_pausedAll) return;
     _pausedAll = false;
