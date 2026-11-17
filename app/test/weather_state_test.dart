@@ -2276,6 +2276,127 @@ void main() {
       expect(h.weather.lastOkAt, ran);
     });
   });
+
+  group('each source\'s health record and state', () {
+    const forecast = 'openmeteo-forecast';
+    Future<void> failWith(Harness h, String id, CacheSearchException e) async {
+      h.core.fetchErrors[id] = e;
+      await h.weather.updateNow();
+    }
+
+    test('a 401 after a key was saved is "Key not accepted"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect((await h.weather.saveKey(firms, 'k')).ok, isTrue);
+      await failWith(h, firms.id, const CacheSearchException('fetch_failed', 'HTTP 401 (the key or login was refused)'));
+      expect(h.weather.healthOf(firms)?.failure, SourceFailure.keyRejected);
+      expect(h.weather.statusOf(firms), SourceStatus.keyRejected);
+    });
+
+    test('a 401 with no key saved is "Needs a key"; a source with no key to give is a provider error', () {
+      const e = CacheSearchException('fetch_failed', 'HTTP 401');
+      expect(WeatherState.failureKind(e, needsKey: true, hasKey: false), SourceFailure.keyMissing);
+      expect(WeatherState.failureKind(e, needsKey: true, hasKey: true), SourceFailure.keyRejected);
+      expect(WeatherState.failureKind(const CacheSearchException('fetch_failed', 'HTTP 403: x'), needsKey: true, hasKey: true), SourceFailure.keyRejected);
+      expect(WeatherState.failureKind(e, needsKey: false, hasKey: false), SourceFailure.providerError);
+      expect(WeatherState.failureKind(const CacheSearchException('key_missing', 'needs the API key'), needsKey: true, hasKey: false), SourceFailure.keyMissing);
+    });
+
+    test('the core\'s codes and statuses map to the failure kinds', () {
+      SourceFailure k(String code, String m) => WeatherState.failureKind(CacheSearchException(code, m), needsKey: false, hasKey: false);
+      expect(k('fetch_failed', 'HTTP 429 (rate limited; gave up after retrying)'), SourceFailure.limit);
+      expect(k('quota', 'limit'), SourceFailure.limit);
+      expect(k('fetch_failed', 'HTTP 500'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'HTTP 503: unavailable'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'HTTP 404'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'Dns: failed'), SourceFailure.unreachable);
+      expect(k('fetch_failed', 'Io: timed out reading response'), SourceFailure.unreachable);
+      expect(k('bad_response', 'not json'), SourceFailure.unreadable);
+    });
+
+    test('a 429 is "Limit reached"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 429 (rate limited; gave up after retrying)'));
+      expect(h.weather.statusOf(c), SourceStatus.limitReached);
+    });
+
+    test('a timeout is "Not answering"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'Io: timed out reading response'));
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.unreachable);
+      expect(h.weather.statusOf(c), SourceStatus.notAnswering);
+    });
+
+    test('one failure with a current copy stays "Working"; once the copy expires it is "Not answering"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      h.core.stored[forecast] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.providerError, reason: 'the failure is kept');
+      expect(h.weather.statusOf(c), SourceStatus.working);
+      h.core.stored[forecast] = {'age': '5 hours old', 'age_seconds': 18000, 'fetched_at': '2026-10-26T07:00:00-06:00', 'expired': true};
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(c), SourceStatus.notAnswering);
+    });
+
+    test('a success clears the failure', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      expect(h.weather.statusOf(c), SourceStatus.notAnswering);
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.none);
+      expect(h.weather.healthOf(c)?.failureSince, isNull);
+      expect(h.weather.healthOf(c)?.lastOkAt, h.clock);
+      expect(h.weather.statusOf(c), SourceStatus.working);
+    });
+
+    test('off, needs a key, and no network is a notice of its own', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect(h.weather.statusOf(h.weather.sourceById('usgs-quakes-near')!), SourceStatus.off);
+      await h.weather.setSourceOn(firms, true);
+      expect(h.weather.statusOf(firms), SourceStatus.needsKey);
+      h.probe.change(ConnectionKind.none);
+      await Future<void>.delayed(Duration.zero);
+      expect(h.weather.noNetwork, isTrue);
+      expect(h.weather.statusOf(h.weather.sourceById(forecast)!), SourceStatus.working, reason: 'not a per-row state');
+    });
+
+    test('the health record survives a restart, and an old status file without it loads', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      final since = h.weather.healthOf(c)!.failureSince;
+      expect(since, isNotNull);
+      h = await h.restart();
+      final back = h.weather.healthOf(h.weather.sourceById(forecast)!);
+      expect(back?.failure, SourceFailure.providerError);
+      expect(back?.failureSince, since);
+      expect(back?.lastAttemptAt, h.clock);
+      expect(h.weather.statusOf(h.weather.sourceById(forecast)!), SourceStatus.notAnswering);
+
+      final old = await Harness.create(start: false);
+      Directory('${old.dir.path}/live-catalogues').createSync(recursive: true);
+      final ran = old.clock.subtract(const Duration(minutes: 3));
+      File('${old.dir.path}/live-catalogues/status.json').writeAsStringSync(jsonEncode({'ok': ran.millisecondsSinceEpoch, 'run': ran.millisecondsSinceEpoch, 'online': ran.millisecondsSinceEpoch, 'failure': null}));
+      await old.weather.start();
+      expect(old.weather.lastOkAt, ran);
+      expect(old.weather.healthOf(old.weather.sourceById(forecast)!), isNull);
+      expect(old.weather.statusOf(old.weather.sourceById(forecast)!), isNot(SourceStatus.notAnswering));
+      old.weather.dispose();
+    });
+  });
 }
 
 /// Timers run by hand: [make] records a timer; [fireDue] runs those due at the given time (a timer's time is the clock it was made at
