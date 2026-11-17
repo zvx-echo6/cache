@@ -24,10 +24,13 @@ import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import 'source_health.dart';
 import '../notebook/places.dart' show distanceM;
 import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
+
+export 'source_health.dart';
 
 /// Where the phone is, as far as weather is concerned.
 typedef Position = ({double lat, double lon});
@@ -287,6 +290,7 @@ class WeatherState extends ChangeNotifier {
   bool _refreshing = false;
   final Map<String, String> _catalogueErrors = {};
   final Map<String, String> _sourceErrors = {};
+  final Map<String, SourceHealth> _health = {};
   DateTime? _lastOkAt;
   DateTime? _lastRunAt;
   DateTime? _lastOnlineAt;
@@ -306,6 +310,132 @@ class WeatherState extends ChangeNotifier {
 
   /// The last failure of each source in the last update, by source id.
   Map<String, String> get sourceErrors => Map.unmodifiable(_sourceErrors);
+
+  /// What is known about [c]'s downloads; null before any try (and for a file written before this record existed).
+  SourceHealth? healthOf(Connector c) => _health[c.id];
+
+  /// There is no connection: one notice for the whole list, not a state of any row.
+  bool get noNetwork => _kind == ConnectionKind.none || _coreOffline;
+
+  /// The core answered a download with "offline" (its own policy says so) in the last update.
+  bool _coreOffline = false;
+
+  /// What Settings says about [c]: Updating while it is being updated, else [lastStatusOf].
+  SourceRowState statusOf(Connector c) {
+    final s = lastStatusOf(c);
+    final busy = _updating || _updatingIds.contains(c.id);
+    return busy && s != SourceRowState.off && s != SourceRowState.needsKey ? SourceRowState.updating : s;
+  }
+
+  /// What is known of [c] without a refresh that is running: its last state. A failed update alone changes nothing the person sees
+  /// while the saved copy is still current (the core's `expired` flag, as of the last try); only an out-of-date copy turns the
+  /// failure into the row's state.
+  SourceRowState lastStatusOf(Connector c) {
+    if (!isOn(c.id)) return SourceRowState.off;
+    if (!keyReady(c)) return SourceRowState.needsKey;
+    final h = _health[c.id];
+    if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
+    // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
+    if (h.failure != SourceFailure.keyRejected && h.failure != SourceFailure.keyMissing && h.copyCurrent) return SourceRowState.working;
+    return switch (h.failure) {
+      SourceFailure.keyRejected => SourceRowState.keyRejected,
+      SourceFailure.limit => SourceRowState.limitReached,
+      SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
+      SourceFailure.keyMissing => SourceRowState.needsKey,
+      SourceFailure.none => SourceRowState.working,
+    };
+  }
+
+  /// With no connection a failed download is not shown as a fault (the one "No connection" notice says it): a row whose saved copy
+  /// is out of date says it is waiting for a connection (quietly, no button, not counted); one with a current copy is Working anyway.
+  SourceRowState _offlineAware(SourceRowState s) => noNetwork && s == SourceRowState.notAnswering ? SourceRowState.waitingForConnection : s;
+
+  /// What Settings shows on [c]'s row: [statusOf] with the no-connection rule.
+  SourceRowState rowStateOf(Connector c) => _offlineAware(statusOf(c));
+
+  /// The state [c] counts and is grouped by: its last state, so a refresh that has started does not turn every row Updating (and the
+  /// summary all-good) before it has an answer.
+  SourceRowState lastRowStateOf(Connector c) => _offlineAware(lastStatusOf(c));
+
+  /// A state that needs the person to do something (counted in "N need attention"). Limit reached does not.
+  static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
+
+  /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on, your own
+  /// included (a source that is off and not featured is under More sources).
+  List<Connector> get listedSources => [for (final c in sources) if (c.featured || isOn(c.id)) c];
+
+  /// How many listed sources are on and fine, how many are on and need attention, and how many are off.
+  ({int working, int attention, int off}) get sourceCounts {
+    var working = 0, attention = 0, off = 0;
+    for (final c in listedSources) {
+      final s = lastRowStateOf(c);
+      if (s == SourceRowState.off) {
+        off++;
+      } else if (needsAttention(s)) {
+        attention++;
+      } else {
+        working++;
+      }
+    }
+    return (working: working, attention: attention, off: off);
+  }
+
+  /// When the last update ran (whether or not it got something); null before any.
+  DateTime? get lastCheckedAt => _lastRunAt ?? _lastOkAt;
+
+  /// The kind of a failed download, from the core's error code and the HTTP status in its message.
+  static SourceFailure failureKind(CacheSearchException e, {required bool needsKey, required bool hasKey}) {
+    switch (e.code) {
+      case 'quota':
+        return SourceFailure.limit;
+      case 'key_missing':
+        return SourceFailure.keyMissing;
+      case 'bad_response' || 'bad_json':
+        return SourceFailure.unreadable;
+      case 'busy' || 'internal':
+        return SourceFailure.providerError;
+      case 'not_configured':
+        return needsKey && !hasKey ? SourceFailure.keyMissing : SourceFailure.providerError;
+      case 'fetch_failed':
+        final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
+        if (m == null) return SourceFailure.unreachable;
+        final code = int.parse(m.group(1)!);
+        if (code == 401 || code == 403) {
+          if (!needsKey) return SourceFailure.providerError;
+          return hasKey ? SourceFailure.keyRejected : SourceFailure.keyMissing;
+        }
+        return code == 429 ? SourceFailure.limit : SourceFailure.providerError;
+      default:
+        return SourceFailure.unreachable;
+    }
+  }
+
+  SourceFailure _failureOf(Connector c, Object e) => e is CacheSearchException
+      ? failureKind(e, needsKey: c.needsKey, hasKey: !c.needsKey || hasKey(c.keyAlias!))
+      : SourceFailure.unreachable;
+
+  /// Notes the outcome of a try for [c]: a success clears the failure; a failure keeps the time it began, and whether the core
+  /// still holds a current copy (read now, so [statusOf] needs no read).
+  Future<void> _noteOutcome(Connector c, SourceFailure failure) async {
+    final now = _now();
+    final before = _health[c.id];
+    if (failure == SourceFailure.none) {
+      _health[c.id] = SourceHealth(lastOkAt: now, lastAttemptAt: now);
+      return;
+    }
+    var current = false;
+    try {
+      final i = await infoFor(c);
+      current = i.age != null && !i.expired;
+    } catch (_) {}
+    _health[c.id] = SourceHealth(
+      lastOkAt: before?.lastOkAt,
+      lastAttemptAt: now,
+      failure: failure,
+      failureSince: before != null && before.failure != SourceFailure.none ? (before.failureSince ?? now) : now,
+      copyCurrent: current,
+    );
+  }
 
   /// The address of the main source list (Settings > Storage > Advanced > Source list address can change it).
   String get catalogueUrl => settings.catalogueUrl ?? kDefaultCatalogueUrl;
@@ -453,6 +583,10 @@ class WeatherState extends ChangeNotifier {
       return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _keys.add(alias);
+    for (final u in sourcesUsingKey(alias)) {
+      final h = _health[u.id];
+      if (h != null && (h.failure == SourceFailure.keyRejected || h.failure == SourceFailure.keyMissing)) _health.remove(u.id);
+    }
     if (switchOn) settings.setLiveSourcesOn({..._same(forSource.id)}, true);
     notifyListeners();
     await _applyAll();
@@ -493,8 +627,8 @@ class WeatherState extends ChangeNotifier {
       if (m == null) return "Couldn't reach $who. Check your connection.";
       final code = int.parse(m.group(1)!);
       if (code == 401 || code == 403) return "$who didn't accept this key. Check you copied all of it.";
-      if (code >= 500) return '$who had a problem (HTTP $code). Try again in a moment.';
-      return '$who answered with an error (HTTP $code).';
+      if (code >= 500) return '$who had a problem. Try again in a moment.';
+      return '$who answered with an error.';
     }
     if (e.code == 'bad_response') return "$who answered with something Cache couldn't read. Try again later.";
     return "Couldn't check the key. Try again.";
@@ -1331,8 +1465,12 @@ class WeatherState extends ChangeNotifier {
           try {
             await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
             _noteHere(c, here.first);
+            _coreOffline = false;
+            await _noteOutcome(c, SourceFailure.none);
           } catch (e) {
             logInfo('Live update for where I am, ${c.id}: failed');
+            if (e is CacheSearchException && e.code == 'offline') _coreOffline = true;
+            await _noteOutcome(c, _failureOf(c, e));
           }
         }(),
     ]);
@@ -1457,6 +1595,8 @@ class WeatherState extends ChangeNotifier {
     _lastOnlineAt = _now();
     _updating = true;
     _sourceErrors.clear();
+    final kinds = <String, SourceFailure>{};
+    _coreOffline = false;
     notifyListeners();
     // The core reads its definitions from the folder: write it from what is on now, whichever way a source was switched on (a
     // switch, Turn on weather, a catalogue's default), so no source that is on is missing there ("no live source").
@@ -1468,33 +1608,17 @@ class WeatherState extends ChangeNotifier {
     // for another's network and the core's worker stays free for searches and the stored data meanwhile. Failures are listed in
     // the order of the sources and places, as before.
     final all = Stopwatch()..start();
-    Future<(bool, String?)> one(Connector c, WatchPlace p) async {
-      final took = Stopwatch()..start();
-      try {
-        final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
-        final got = r['fetched'] == true;
-        _noteHere(c, p);
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
-        return (got, null);
-      } on CacheSearchException catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
-        logError('Live update failed (${e.code})', error: e.message, detail: c.id);
-        final who = c.provider.isEmpty ? c.title : c.provider;
-        _sourceErrors[c.id] = _fetchFailureWords(e);
-        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
-      } catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
-        logError('Live update failed', error: e, detail: c.id);
-        _sourceErrors[c.id] = "Couldn't update.";
-        return (false, '${c.title} for ${p.name} failed');
-      }
-    }
+    Future<(bool, String?)> one(Connector c, WatchPlace p) => _fetchOne(c, p, force, kinds);
 
     final List<(bool, String?)> outcomes;
     try {
       outcomes = await Future.wait([for (final c in srcs) for (final p in places) one(c, p)]);
     } finally {
       _updating = false;
+    }
+    // One note per source for the whole update: a place that failed counts, whatever order the places answered in.
+    for (final c in srcs) {
+      await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
     }
     final failures = <String>[];
     for (final (got, failure) in outcomes) {
@@ -1517,6 +1641,82 @@ class WeatherState extends ChangeNotifier {
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
+  /// One download of [c] for [p]; the kind of a failure goes into [kinds], its words into [sourceErrors].
+  Future<(bool, String?)> _fetchOne(Connector c, WatchPlace p, bool force, Map<String, SourceFailure> kinds) async {
+    final took = Stopwatch()..start();
+    try {
+      final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+      final got = r['fetched'] == true;
+      _noteHere(c, p);
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
+      return (got, null);
+    } on CacheSearchException catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
+      logError('Live update failed (${e.code})', error: e.message, detail: c.id);
+      final who = c.provider.isEmpty ? c.title : c.provider;
+      _sourceErrors[c.id] = _fetchFailureWords(c, e);
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      if (e.code == 'offline') _coreOffline = true;
+      return (false, '$who for ${p.name} failed: ${_fetchFailureWords(c, e)}');
+    } catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
+      logError('Live update failed', error: e, detail: c.id);
+      _sourceErrors[c.id] = "Couldn't update.";
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      return (false, '${c.title} for ${p.name} failed');
+    }
+  }
+
+  /// Sources being updated one by one ([updateSource]); a row of such a source says Updating.
+  final Set<String> _updatingIds = {};
+  Set<String> get updatingIds => Set.unmodifiable(_updatingIds);
+
+  /// "Try again" on one source: downloads just [c], for the watched places, whatever its copy's age; the others are left alone. Its
+  /// row says Updating while it runs and its state afterwards.
+  Future<UpdateReport> updateSource(Connector c) async {
+    if (_updating || _updateRunning || _updatingIds.contains(c.id)) return const UpdateReport(nothingToDo: 'Already updating');
+    if (!isOn(c.id) || !keyReady(c)) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
+    final places = await watchedPlaces();
+    if (places.isEmpty) {
+      return UpdateReport(nothingToDo: waitingForPosition ? 'Waiting for your position.' : 'No place is being watched. Choose one under Places.');
+    }
+    _kind = await policy.probe.current();
+    if (_kind == ConnectionKind.none) {
+      notifyListeners();
+      return const UpdateReport(offline: true);
+    }
+    _updatingIds.add(c.id);
+    _sourceErrors.remove(c.id);
+    _coreOffline = false;
+    notifyListeners();
+    final kinds = <String, SourceFailure>{};
+    final List<(bool, String?)> outcomes;
+    try {
+      await _syncFolder();
+      await pushPolicy();
+      logInfo('Live update of ${c.id} alone for ${places.length} places');
+      outcomes = await Future.wait([for (final p in places) _fetchOne(c, p, true, kinds)]);
+    } finally {
+      _updatingIds.remove(c.id);
+    }
+    await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
+    var fetched = 0, fresh = 0;
+    final failures = <String>[];
+    for (final (got, failure) in outcomes) {
+      if (failure != null) {
+        failures.add(failure);
+      } else {
+        got ? fetched++ : fresh++;
+      }
+    }
+    _lastRunAt = _now();
+    if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
+    _saveStatus();
+    notifyListeners();
+    await checkAlerts();
+    return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
+  }
+
   /// When the app starts or comes back to the screen: the scheduled background run may not have come (iOS decides when, and
   /// may not run it for hours), so an update that is due ([every] since the last run) runs now. What a background run wrote is
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
@@ -1535,19 +1735,19 @@ class WeatherState extends ChangeNotifier {
   /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
   static const String _needsKeyWords = 'needs a key';
 
-  String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
-    'quota' => 'reached its limit for now',
-    'key_missing' => _needsKeyWords,
-    'bad_response' => 'sent something Cache could not read',
-    'fetch_failed' => _httpWords(e.message),
-    _ => "couldn't update",
-  };
+  /// A failed download as the person reads it (after "… failed:" for an update, after "Not downloaded:" on the Weather screen): from
+  /// the failure kind, never the HTTP status or the core's own words (those are in the log).
+  String _fetchFailureWords(Connector c, CacheSearchException e) => _failureWords(_failureOf(c, e));
 
-  String _httpWords(String m) {
-    final h = RegExp(r'HTTP (\d{3})').firstMatch(m);
-    if (h != null) return 'the service answered HTTP ${h.group(1)}';
-    return "couldn't be reached";
-  }
+  static String _failureWords(SourceFailure k) => switch (k) {
+    SourceFailure.limit => 'reached its limit for now',
+    SourceFailure.keyMissing => _needsKeyWords,
+    SourceFailure.keyRejected => 'no longer accepts the saved key',
+    SourceFailure.unreadable => 'sent something Cache could not read',
+    SourceFailure.providerError => 'the service had a problem',
+    SourceFailure.unreachable => "couldn't be reached",
+    SourceFailure.none => "couldn't update",
+  };
 
   // ---------------------------------------------------------------- the status line
 
@@ -1761,7 +1961,7 @@ class WeatherState extends ChangeNotifier {
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
       expired: g['expired'] == true || (kept && until != null && _now().isAfter(until)),
-      error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
+      error: le is Map ? _fetchFailureWords(c, CacheSearchException('${le['code'] ?? 'fetch_failed'}', '${le['message']}')) : _sourceErrors[c.id],
     );
   }
 
@@ -2123,6 +2323,14 @@ class WeatherState extends ChangeNotifier {
       _lastRunAt = t(j['run']);
       _lastOnlineAt = t(j['online']);
       _lastFailure = j['failure'] as String?;
+      final src = j['sources'];
+      if (src is Map) {
+        _health.clear();
+        for (final e in src.entries) {
+          final h = SourceHealth.fromJson(e.value);
+          if (h != null) _health['${e.key}'] = h;
+        }
+      }
     } catch (_) {}
   }
 
@@ -2133,6 +2341,7 @@ class WeatherState extends ChangeNotifier {
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,
         'failure': _lastFailure,
+        'sources': {for (final e in _health.entries) e.key: e.value.toJson()},
       }));
     } catch (_) {}
   }

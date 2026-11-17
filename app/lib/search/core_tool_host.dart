@@ -12,7 +12,7 @@ import 'core_numbering.dart';
 /// through the core's dispatch (cs_tool). It numbers sources in the chat's [CoreNumbering] conversation, which
 /// is the one saved and restored with the chat; that numbering is freed by the loop, not here.
 class CoreToolHost implements ToolHost {
-  CoreToolHost({required this.core, required this.numbering, this.lookupRoute, this.queryVector, this.runAction});
+  CoreToolHost({required this.core, required this.numbering, this.lookupRoute, this.queryVector, this.runAction, this.onWebSearch});
 
   final SearchCore core;
   final CoreNumbering numbering;
@@ -26,6 +26,10 @@ class CoreToolHost implements ToolHost {
   /// (ActionRegistry.run: `{"ok":true,"status":"done",...,"result"}` or `{"ok":false,"status":"failed",...,"error"}`). Null: the
   /// action fails as not installed.
   final Future<Map<String, dynamic>> Function(String action, Map<String, dynamic> fields)? runAction;
+
+  /// Told what the core answered to the assistant's web search (its results or its error), so Settings can say how the last one went.
+  /// Nothing is asked of the provider for it.
+  final void Function(String content)? onWebSearch;
 
   /// The host_run of an act call's [content], or null when the core answered it itself (a confirm card or an error).
   static Map<String, dynamic>? hostRun(String content) {
@@ -84,6 +88,7 @@ class CoreToolHost implements ToolHost {
     final embedMs = timing.elapsedMilliseconds;
     final conv = await numbering.conversation;
     final o = await conv.tool(name, sent, now: isoWithOffset(now));
+    if (name == 'web_search') onWebSearch?.call(o.content);
     if (name == 'search') logInfo('Search timing: embed $embedMs ms, core ${timing.elapsedMilliseconds - embedMs} ms');
     var content = o.content;
     var ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title, link: i.link, time: i.time, pdfPage: i.pdfPage, quote: i.quote, timeEnd: i.timeEnd, lang: i.lang)];

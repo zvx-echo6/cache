@@ -49,7 +49,7 @@ void main() {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
       expect(find.text('Weather and alerts'), findsOneWidget);
-      expect(find.text('Not updated yet'), findsOneWidget, reason: 'the defaults are on from the start');
+      expect(find.text('Not checked yet'), findsOneWidget, reason: 'the defaults are on from the start');
       expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget);
       expect(find.text('Update now'), findsNothing);
       expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);
@@ -58,11 +58,13 @@ void main() {
         // Weather always works: the forecast, alerts and wildfires are on from the start; the rest start off.
         expect(switchIn(tester, t).value, t != 'Earthquakes near the place (USGS)', reason: '$t at the start');
       }
-      // Each row says what the source gives and who provides it.
-      expect(find.text('What Weather forecast (Open-Meteo) gives · Open-Meteo'), findsOneWidget);
-      // A featured source that needs a key has "Get key" on its row.
+      // Each row says its state (Working until a download says otherwise); an off source says what it gives.
+      expect(find.descendant(of: rowWith('Weather forecast (Open-Meteo)'), matching: find.text('Working')), findsOneWidget);
+      expect(find.descendant(of: rowWith('Earthquakes near the place (USGS)'), matching: find.text('What Earthquakes near the place (USGS) gives')), findsOneWidget);
+      // A featured source that needs a key and is off is Off, with its switch; the switch asks for the key.
       expect(find.text('Satellite fire detections near the place (NASA FIRMS)'), findsOneWidget);
-      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsOneWidget);
+      expect(switchIn(tester, 'Satellite fire detections near the place (NASA FIRMS)').value, isFalse);
+      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsNothing);
       // The rest, under More sources.
       expect(find.text('Space weather: Kp index'), findsNothing);
       expect(find.text('More sources'), findsOneWidget);
@@ -86,7 +88,7 @@ void main() {
       expect(switchIn(tester, t).value, isTrue);
       expect(r.weather.registeredIds, contains('usgs-quakes-near'));
       expect(r.liveCore.policies.last!['enabled_sources'], contains('usgs-quakes-near'));
-      expect(find.text('Not updated yet'), findsOneWidget);
+      expect(find.text('Not checked yet'), findsOneWidget);
       await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pump();
       await tester.pump();
@@ -95,11 +97,11 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Get key on the row: saving checks the key, switches the source on and never shows it again', (tester) async {
+    testWidgets('the switch of a source that needs a key asks for it: saving checks the key, switches the source on and never shows it again', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
+      await tester.tap(find.descendant(of: rowWith('Satellite fire detections near the place (NASA FIRMS)'), matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('get-key')));
@@ -134,7 +136,7 @@ void main() {
       expect(n, greaterThan(0), reason: 'the defaults are on from the start');
       await _tapRefresh(tester);
       expect(find.text('Updated'), findsOneWidget, reason: 'the snack bar');
-      expect(find.text('Updated just now'), findsOneWidget, reason: 'the status line');
+      expect(find.text('Last checked just now'), findsOneWidget, reason: 'the status line');
       expect(r.liveCore.fetches.length, n, reason: 'each source that is on, once');
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
@@ -162,7 +164,7 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('old data turns the line into a warning with the age and the reason', (tester) async {
+    testWidgets('no connection: one notice at the top and when it last checked', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() async {
         await r.weather.setRowOn(kCurated.first, true);
@@ -172,7 +174,8 @@ void main() {
       r.probe.change(ConnectionKind.none);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('Updated 3 days ago · No connection since Monday'), findsOneWidget);
+      expect(find.text('No connection. Showing what was saved.'), findsOneWidget);
+      expect(find.text('Last checked 3 days ago'), findsOneWidget);
       expect(find.byIcon(Icons.warning_amber_rounded), findsWidgets);
       await r.dispose(tester);
     });
@@ -233,7 +236,7 @@ void main() {
       expect(find.text('Cache connectors'), findsOneWidget);
       expect(find.text('12 minutes old'), findsOneWidget);
       expect(find.text('Current'), findsOneWidget);
-      expect(find.text('HTTP 500: busy'), findsOneWidget);
+      expect(find.textContaining('HTTP'), findsNothing, reason: 'the core\'s own words are not shown; the row says the state in its own words');
       expect(switchIn(tester, 'Use this source').value, isTrue);
       await tester.tap(rowWith('Use this source'));
       await tester.pumpAndSettle();
@@ -465,7 +468,7 @@ void main() {
       expect(find.text('Pick what to show'), findsNothing);
       expect(find.text('YOUR OWN'), findsOneWidget);
       expect(find.text('Creek level at the bridge'), findsOneWidget);
-      expect(find.text('Your source · checked every 30 min'), findsOneWidget);
+      expect(find.descendant(of: rowWith('Creek level at the bridge'), matching: find.textContaining('Working')), findsOneWidget, reason: 'the same row and states as the others');
       expect(switchIn(tester, 'Creek level at the bridge').value, isTrue);
       final c = r.weather.ownSources.single;
       expect(c.id, 'own-creek-level-at-the-bridge');
