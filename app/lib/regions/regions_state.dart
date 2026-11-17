@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../platform/app_log.dart';
 import '../app_fs.dart';
 import '../browse/zim_download.dart';
 import '../chat/ask_focus.dart';
@@ -13,7 +14,6 @@ import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../platform.dart' as plat;
-import '../platform/app_log.dart';
 import '../screens/download_confirm.dart' show downloadSpace;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
@@ -109,7 +109,12 @@ class RegionPlan {
     this.mapProblem,
     this.offroad,
     this.offroadProblem,
+    this.sharing = const [],
   });
+
+  /// Layers whose tiles are counted with another layer's (contour lines with hillshade: both read the elevation store), with the
+  /// layer that carries the estimate.
+  final List<({LayerDef def, String ownerId})> sharing;
 
   final PartPlan? routing;
   final String? routingProblem;
@@ -131,6 +136,9 @@ class RegionPlan {
 }
 
 const String _needsConnection = 'Needs a connection to work out the size.';
+
+/// The words an off-road add gives when the person's Pause is on.
+const String _heldOffroad = 'downloads are paused. Tap Resume, then add the off-road data.';
 
 /// Which part of a region a problem is about, for [regionPartWords].
 enum RegionPart { routing, places }
@@ -1044,7 +1052,9 @@ class RegionsState extends ChangeNotifier {
       }
     }
     final (offroad, offroadProblem) = await _offroadPlan(r);
+    final sharing = <({LayerDef def, String ownerId})>[];
     RegionPlan done({List<MapLayerPlan> map = const [], String? mapProblem}) => RegionPlan(
+      sharing: sharing,
       routing: routing,
       routingProblem: routingProblem,
       places: places,
@@ -1062,12 +1072,27 @@ class RegionsState extends ChangeNotifier {
     String? mapProblem;
     // The size is of what the download fetches: the outline's tiles, not the whole box.
     final outline = await _mapOutline(r);
+    // One estimate per store the tiles are kept in: hillshade and contour lines both read the elevation layer's tiles, so with both on
+    // their tiles are counted once (as the download fetches them once, and costOf counts them).
+    final stores = <String, String>{};
     for (final card in layers) {
       final def = maps.downloadDefFor(card, bounds);
+      final store = maps.engine.downloadLayerOf(def.id);
+      final owner = stores[store];
+      if (owner != null) {
+        sharing.add((def: def, ownerId: owner));
+        logInfo('Region plan ${r.id}: layer ${def.id} shares the tiles of $store, counted once');
+        continue;
+      }
+      stores[store] = def.id;
       try {
-        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds, outline: outline)));
+        final e = await maps.engine.estimate(def.id, bounds, outline: outline);
+        map.add(MapLayerPlan(def, e));
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): ${e.allowed ? 'allowed' : 'left out'}, max zoom ${e.maxZoom} of ${def.maxZoom}, '
+            '${e.tiles} tiles, ${e.bytes} B${e.tilesAlready > 0 ? ', ${e.bytesAlready} B already here' : ''}');
       } catch (_) {
         mapProblem = 'Could not work out the size of the map.';
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): its size could not be worked out');
       }
     }
     if (mapProblem == null && map.isNotEmpty && map.every((m) => !m.estimate.allowed)) {
@@ -1270,7 +1295,11 @@ class RegionsState extends ChangeNotifier {
     await refresh();
     notifyListeners();
     // WORDING (for cache-pm): the sentences below reach the person as "Couldn't add off-road to <region>: <sentence>".
-    if (offroadProblem != null) throw StateError(offroadProblem);
+    if (offroadProblem != null) {
+      // A region download asked for while paused (not the Add off-road request, which keeps its own words): Resume starts it.
+      if (offroadProblem == _heldOffroad && (routing || map || places)) throw DownloadsPaused(r);
+      throw StateError(offroadProblem);
+    }
   }
 
   /// The outline [r]'s map part is downloaded for ([mapOutline]); null (the box) for an area drawn on the map, one kept from before
@@ -1291,7 +1320,7 @@ class RegionsState extends ChangeNotifier {
   /// for (Add off-road), so a region with no pack over it is said, not passed over.
   Future<String?> _addOffroad(_Kept k, RegionRecord r, {required bool anyway, bool only = false}) async {
     // WORDING (cache-pm): these four sentences.
-    if (held) return 'downloads are paused. Tap Resume, then add the off-road data.';
+    if (held) return _heldOffroad;
     final (plan, problem) = await _offroadPlan(r);
     if (plan == null) {
       if (problem != null) {
@@ -1482,6 +1511,13 @@ class RegionsState extends ChangeNotifier {
       pausing = false;
       notifyListeners();
     }
+  }
+
+  /// Resume on a download that was asked for while paused: carries on everything paused, then starts the off-road part that waited.
+  Future<void> resumeAndStart(RegionRecord r) async {
+    await resumeAll(anyway: true);
+    final here = regionOf(r.id);
+    if (here != null && !here.hasOffroad) await download(r, routing: false, map: false, offroad: true, anyway: true);
   }
 
   /// Carries on every paused region download, in the order they were added.
