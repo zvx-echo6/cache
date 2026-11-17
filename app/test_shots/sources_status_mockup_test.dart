@@ -95,7 +95,9 @@ class _MockSourceRow extends StatelessWidget {
     final bad = _problem(s.state);
     final List<Part> line2 = switch (s.state) {
       _State.off => [Part(s.gives!)],
-      _State.needsKey || _State.nothingHere => [Part(_word(s.state), bad ? Tone.warn : Tone.normal)],
+      // A problem row names its state only: its sentence says how old the saved data is, and "updated 3 hours ago" beside the
+      // button does not fit on a 390 phone.
+      _State.needsKey || _State.keyRejected || _State.notAnswering || _State.limit || _State.nothingHere => [Part(_word(s.state), bad ? Tone.warn : Tone.normal)],
       _ => [Part(_word(s.state), bad ? Tone.warn : Tone.normal), Part(' · updated ${s.ago}')],
     };
     final Widget? trailing = switch (s.state) {
@@ -264,7 +266,8 @@ Future<void> _show(WidgetTester tester, Widget page, Size size, {CacheThemeId th
   await _settle(tester);
 }
 
-const _phone = Size(390, 844);
+// Taller than a phone screen (844) so the whole page is in the picture, not cut off at the bottom.
+const _phone = Size(390, 1700);
 
 void main() {
   setUpAll(loadShotFonts);
@@ -322,7 +325,7 @@ void main() {
         initial: (_) => _MockWeatherPage(rig: r, srcs: _mixed),
         list: Builder(builder: list),
       ),
-      const Size(1440, 900),
+      const Size(1440, 1400),
       theme: CacheThemeId.dark,
       desktop: true,
     );
