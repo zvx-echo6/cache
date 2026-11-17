@@ -25,6 +25,7 @@
 //!   the server's folders as the phone measures its own.
 //! - **Rescan** (`POST /api/library/rescan`): tells the core to read the library folders again, for a browser that has put a
 //!   library in place itself.
+//! - **Clean up** (`GET`/`POST /api/library/cleanup`): the unfinished downloads no job continues and the upload leftovers in `<data>/tmp`.
 //! - **Fetch** (`GET /api/fetch?url=`) reads a catalog through the server, from the allow-listed hosts only (`fetch`).
 //!
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
@@ -48,6 +49,8 @@ use tokio::io::AsyncWriteExt;
 
 /// Free space kept back when an upload is accepted, beyond the file itself.
 const UPLOAD_HEADROOM: u64 = 1 << 30;
+/// An upload's part file this long untouched is a leftover, not an upload in progress.
+const UPLOAD_IDLE: Duration = Duration::from_secs(15 * 60);
 /// Finished and failed jobs kept in the list.
 const KEEP_FINISHED: usize = 50;
 /// The largest origin sidecar taken from a request.
@@ -196,6 +199,8 @@ pub struct LibraryOptions {
 
 pub struct Library {
     data: PathBuf,
+    /// The server's own app log (`GET /api/log`).
+    pub log: crate::applog::AppLog,
     helper: Option<Arc<Helper>>,
     free: FreeFn,
     total: FreeFn,
@@ -382,6 +387,7 @@ impl Library {
             }
         }
         let lib = Arc::new(Library {
+            log: crate::applog::AppLog::open(data.join("log")),
             data,
             helper,
             free: o.free_bytes.unwrap_or_else(|| Arc::new(free_bytes)),
@@ -506,6 +512,7 @@ impl Library {
             if res.is_ok() && job.kind == "zim" {
                 if let Err(e) = self.rescan().await {
                     eprintln!("cache: rescan after installing {} failed: {e}", job.name);
+                    self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a finished download: {e}"));
                     note = Some(format!("Installed, but the search core was not told: {e}"));
                 }
             }
@@ -1018,6 +1025,7 @@ impl Library {
         let rescan = self.rescan().await;
         if let Err(e) = &rescan {
             eprintln!("cache: rescan after the upload of {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about an upload: {e}"));
         }
         let mut out = json!({"name": name, "bytes": got, "id": item_id("zim", &name)});
         if let Err(e) = rescan {
@@ -1047,6 +1055,59 @@ impl Library {
             "videos": kind(&[docs.join("videos")]),
             "notebooks": kind(&[support.join("notebook-share"), support.join("notebook")]),
         }})
+    }
+
+    /// The leftovers Clean up removes: in `<data>/tmp`, the part file of a download that no job continues (a canceled or finished job
+    /// left it; a queued, running or paused job keeps its own), and an upload's part file untouched for a quarter of an hour (one
+    /// being written is never one). Never anything installed.
+    fn leftovers(&self) -> Vec<PathBuf> {
+        let keep: Vec<PathBuf> = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|j| j.state.active())
+            .map(|j| part_path(&self.data, &j.url))
+            .collect();
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(self.tmp_dir()) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if !n.ends_with(".part") || !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    continue;
+                }
+                let stale = || {
+                    e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a >= UPLOAD_IDLE)
+                };
+                if (n.starts_with("dl-") && !keep.contains(&e.path())) || (n.starts_with("up-") && stale()) {
+                    out.push(e.path());
+                }
+            }
+        }
+        out
+    }
+
+    /// `GET /api/library/cleanup`: the bytes Clean up would free. Walks the disk, so callers run it off the async threads.
+    pub fn cleanup_bytes(&self) -> Value {
+        json!({"bytes": self.leftovers().iter().map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum::<u64>()})
+    }
+
+    /// `POST /api/library/cleanup`: removes the leftovers and tells the bytes freed. Waits (409) while a download is queued or running,
+    /// as the phone's Clean up does.
+    pub fn cleanup(&self) -> Result<Value, ApiErr> {
+        let busy = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|j| matches!(j.state, State::Queued | State::Running));
+        if busy {
+            return Err(api_err(409, "busy", "Wait for the downloads to finish, then clean up."));
+        }
+        let mut freed = 0;
+        for p in self.leftovers() {
+            let n = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            if std::fs::remove_file(&p).is_ok() {
+                freed += n;
+            }
+        }
+        self.log.add(crate::applog::Level::Standard, "CLEANUP", &format!("Clean up freed {freed} bytes"));
+        Ok(json!({"freed": freed}))
     }
 
     /// `POST /api/library/rescan`: the core reads the library folders again. The number of sources it now has.
@@ -1095,6 +1156,7 @@ impl Library {
         let mut out = json!({"removed": true, "id": id});
         if let Err(e) = self.rescan().await {
             eprintln!("cache: rescan after removing {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a removal: {e}"));
             out["note"] = json!(format!("Removed, but the search core was not told: {e}"));
         }
         Ok(out)
