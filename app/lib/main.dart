@@ -1095,7 +1095,10 @@ class _CacheAppState extends State<CacheApp> {
     }
     indexSchedulerShared = indexing;
     // In a browser the server does the index work; the line and the sheet show what its `index.state` says.
-    if (plat.isWeb) serverIndexProgressShared = sources.serverIndex;
+    if (plat.isWeb) {
+      serverIndexProgressShared = sources.serverIndex;
+      if (device?.build case final b?) sources.serverIndex.attachBuilds(b);
+    }
     // A PDF step may take longer in proportion as the throttle slows the work.
     pdfStepScale = () {
       final d = indexThrottle.duty;
