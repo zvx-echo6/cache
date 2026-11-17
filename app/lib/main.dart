@@ -54,6 +54,7 @@ import 'layout/layout_state.dart';
 import 'layout/modal_watch.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
+import 'maps/layers/layer_def.dart' show AreaPhase;
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
@@ -570,6 +571,17 @@ class _CacheAppState extends State<CacheApp> {
     platform: const MethodChannelFgsPlatform(),
     android: !plat.isWeb && Platform.isAndroid,
     jobs: () => addPdf.jobs,
+    // region map downloads: the service also carries them when Cache is left (the notification's Pause pauses them)
+    layerJobs: () => [
+      for (final a in maps.engine.allAreas)
+        if (a.phase == AreaPhase.running)
+          FgsLayerJob(id: a.id, label: a.label, done: a.doneTiles, total: a.totalTiles, bytes: a.bytes),
+    ],
+    onLayerPause: () async {
+      for (final a in maps.engine.allAreas.where((a) => a.phase == AreaPhase.running).toList()) {
+        await maps.engine.pause(a.id);
+      }
+    },
     battery: readBattery,
     askedFile: () => File('${backgroundDir(_supportPath ?? '.')}${Platform.pathSeparator}fgs-notify-asked'),
     ask: _askFgsNotifications,
@@ -583,7 +595,7 @@ class _CacheAppState extends State<CacheApp> {
   int _bgSeen = 0;
   int _watchCount = -1;
 
-  /// "Show how adding is going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
+  /// "Show how adding and downloading are going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
   Future<bool> _askFgsNotifications() async {
     final c = _navKey.currentContext;
     if (c == null || !c.mounted) return false;
@@ -1175,6 +1187,7 @@ class _CacheAppState extends State<CacheApp> {
           await addPdf.load();
           _fgsNotice.load();
           addPdf.addListener(_onAddsForFgs);
+          maps.engine.addListener(_onAddsForFgs);
           kFgsAppChannel.setMethodCallHandler(_fgsArm.handleCall);
         }
         await watchFolders.load();
@@ -1555,6 +1568,7 @@ class _CacheAppState extends State<CacheApp> {
     _bgOpenTimer?.cancel();
     watchFolders.removeListener(_onWatchFolders);
     addPdf.removeListener(_onAddsForFgs);
+    maps.engine.removeListener(_onAddsForFgs);
     _fgsNotice.dispose();
     watchFolders.dispose();
     indexThrottle.dispose();
