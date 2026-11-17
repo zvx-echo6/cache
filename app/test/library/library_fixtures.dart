@@ -169,6 +169,7 @@ LibraryDeps testDeps({
   List<String>? added,
   RegionsState? regions,
   SharingState? sharing,
+  bool docs = true,
 }) =>
     LibraryDeps(
       browse: browse,
@@ -183,5 +184,6 @@ LibraryDeps testDeps({
       openOwnLibrary: (_, _) {},
       holdsBooks: (l) => shelves is CdsShelfSource && shelves.holdsBooks(l),
       booksIn: (l) => shelves is CdsShelfSource ? shelves.booksIn(l) : 0,
+      documentsIn: docs ? (l) => shelves is CdsShelfSource ? shelves.documentsIn(l) : const [] : null,
       whatsNew: () async => const ['- **A new Library:** four places in one.'],
     );
