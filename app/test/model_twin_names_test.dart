@@ -100,6 +100,17 @@ void main() {
       expect(app.sizeLine(q6), '3.6 GB · Q6_K');
     });
 
+    test('a list name that already ends with the quant does not repeat it on the second line', () {
+      final e4b = _entry(app.modelsDir!, 'gemma-4-E4B-it-Q4_K_M.gguf', 4977171584);
+      final e4bUnc = _entry(app.modelsDir!, 'gemma-4-E4B-it-uncensored-Q4_K_M.gguf', 5335285280);
+      final e2b = _entry(app.modelsDir!, _stockFile, _stockSize);
+      expect(app.displayName(e4b), 'Gemma 4 E4B · Q4_K_M');
+      expect(app.sizeLine(e4b), '4.6 GB');
+      expect(app.displayName(e4bUnc), 'Gemma 4 E4B uncensored · Q4_K_M');
+      expect(app.sizeLine(e4bUnc), '5.0 GB');
+      expect(app.sizeLine(e2b), '3.2 GB · Q4_K_M');
+    });
+
     test('after a load the same names stand (llama.cpp\'s description does not decide)', () async {
       final f = File('${app.modelsDir!.path}/$_stockFile')..writeAsBytesSync(ggufBytes([kvString('general.name', 'Cache Merge E2B Stock')]));
       final e = ModelEntry(path: f.path, size: _stockSize);
