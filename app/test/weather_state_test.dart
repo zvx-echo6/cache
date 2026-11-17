@@ -2372,6 +2372,48 @@ void main() {
       expect(h.weather.statusOf(h.weather.sourceById(forecast)!), SourceRowState.working, reason: 'not a per-row state');
     });
 
+    test('a rejected key shows at once, even with a current copy; a source that needs a key and has none likewise', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect((await h.weather.saveKey(firms, 'k')).ok, isTrue);
+      h.core.stored[firms.id] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, firms.id, const CacheSearchException('fetch_failed', 'HTTP 401 (the key or login was refused)'));
+      expect(h.weather.statusOf(firms), SourceRowState.keyRejected, reason: 'needs the person, so no waiting for the copy to expire');
+      // the same for the other kinds that wait: a current copy keeps them Working
+      h.core.fetchErrors[firms.id] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(firms), SourceRowState.working);
+    });
+
+    test('more of the core\'s codes: busy and internal are provider errors; not_configured depends on the key', () {
+      SourceFailure k(String code, {bool needsKey = false, bool hasKey = false}) =>
+          WeatherState.failureKind(CacheSearchException(code, 'x'), needsKey: needsKey, hasKey: hasKey);
+      expect(k('busy'), SourceFailure.providerError);
+      expect(k('internal'), SourceFailure.providerError);
+      expect(k('not_configured', needsKey: true, hasKey: false), SourceFailure.keyMissing);
+      expect(k('not_configured', needsKey: true, hasKey: true), SourceFailure.providerError);
+      expect(k('not_configured'), SourceFailure.providerError);
+      expect(k('offline'), SourceFailure.unreachable);
+    });
+
+    test('"offline" from the core sets the one No network notice; the row is Working with a current copy, its failure once the copy is out of date', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      expect(h.weather.noNetwork, isFalse);
+      h.core.stored[forecast] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, forecast, const CacheSearchException('offline', 'no connection'));
+      expect(h.weather.noNetwork, isTrue);
+      expect(h.weather.statusOf(c), SourceRowState.working);
+      h.core.stored[forecast] = {'age': '5 hours old', 'age_seconds': 18000, 'fetched_at': '2026-10-26T07:00:00-06:00', 'expired': true};
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(c), SourceRowState.notAnswering);
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      expect(h.weather.noNetwork, isFalse, reason: 'the next good update clears it');
+    });
+
     test('the health record survives a restart, and an old status file without it loads', () async {
       h = await Harness.create();
       await h.only([forecast]);
