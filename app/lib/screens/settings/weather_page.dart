@@ -364,8 +364,8 @@ class SourceRow extends StatelessWidget {
       SourceRowState.updating => const SizedBox(width: 48, height: 48, child: Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2.5))),
       SourceRowState.needsKey => RowButton(key: ValueKey('add-key-${c.id}'), label: 'Add key', onPressed: () => addKeyFor(context, deps, c)),
       SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-${c.id}'), label: 'Replace key', onPressed: () => addKeyFor(context, deps, c, replace: true)),
-      // for now the whole update; a source of its own later
-      SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-${c.id}'), label: 'Try again', onPressed: () => w.updateNow(force: true)),
+      // just this source
+      SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-${c.id}'), label: 'Try again', onPressed: () => w.updateSource(c)),
       SourceRowState.limitReached || SourceRowState.nothingHere => null,
     };
     return SettingsRow(

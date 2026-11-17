@@ -325,7 +325,7 @@ class WeatherState extends ChangeNotifier {
   SourceRowState statusOf(Connector c) {
     if (!isOn(c.id)) return SourceRowState.off;
     if (!keyReady(c)) return SourceRowState.needsKey;
-    if (_updating) return SourceRowState.updating;
+    if (_updating || _updatingIds.contains(c.id)) return SourceRowState.updating;
     final h = _health[c.id];
     if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
     // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
@@ -1598,30 +1598,7 @@ class WeatherState extends ChangeNotifier {
     // for another's network and the core's worker stays free for searches and the stored data meanwhile. Failures are listed in
     // the order of the sources and places, as before.
     final all = Stopwatch()..start();
-    Future<(bool, String?)> one(Connector c, WatchPlace p) async {
-      final took = Stopwatch()..start();
-      try {
-        final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
-        final got = r['fetched'] == true;
-        _noteHere(c, p);
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
-        return (got, null);
-      } on CacheSearchException catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
-        logError('Live update failed (${e.code})', error: e.message, detail: c.id);
-        final who = c.provider.isEmpty ? c.title : c.provider;
-        _sourceErrors[c.id] = _fetchFailureWords(c, e);
-        kinds.putIfAbsent(c.id, () => _failureOf(c, e));
-        if (e.code == 'offline') _coreOffline = true;
-        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(c, e)}');
-      } catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
-        logError('Live update failed', error: e, detail: c.id);
-        _sourceErrors[c.id] = "Couldn't update.";
-        kinds.putIfAbsent(c.id, () => _failureOf(c, e));
-        return (false, '${c.title} for ${p.name} failed');
-      }
-    }
+    Future<(bool, String?)> one(Connector c, WatchPlace p) => _fetchOne(c, p, force, kinds);
 
     final List<(bool, String?)> outcomes;
     try {
@@ -1650,6 +1627,82 @@ class WeatherState extends ChangeNotifier {
     notifyListeners();
     // Every update checks, fresh copies included: an alert that arrived through the assistant or before pop-ups existed is still
     // news; what was told before is never repeated.
+    await checkAlerts();
+    return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
+  }
+
+  /// One download of [c] for [p]; the kind of a failure goes into [kinds], its words into [sourceErrors].
+  Future<(bool, String?)> _fetchOne(Connector c, WatchPlace p, bool force, Map<String, SourceFailure> kinds) async {
+    final took = Stopwatch()..start();
+    try {
+      final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+      final got = r['fetched'] == true;
+      _noteHere(c, p);
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
+      return (got, null);
+    } on CacheSearchException catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
+      logError('Live update failed (${e.code})', error: e.message, detail: c.id);
+      final who = c.provider.isEmpty ? c.title : c.provider;
+      _sourceErrors[c.id] = _fetchFailureWords(c, e);
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      if (e.code == 'offline') _coreOffline = true;
+      return (false, '$who for ${p.name} failed: ${_fetchFailureWords(c, e)}');
+    } catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
+      logError('Live update failed', error: e, detail: c.id);
+      _sourceErrors[c.id] = "Couldn't update.";
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      return (false, '${c.title} for ${p.name} failed');
+    }
+  }
+
+  /// Sources being updated one by one ([updateSource]); a row of such a source says Updating.
+  final Set<String> _updatingIds = {};
+  Set<String> get updatingIds => Set.unmodifiable(_updatingIds);
+
+  /// "Try again" on one source: downloads just [c], for the watched places, whatever its copy's age; the others are left alone. Its
+  /// row says Updating while it runs and its state afterwards.
+  Future<UpdateReport> updateSource(Connector c) async {
+    if (_updating || _updateRunning || _updatingIds.contains(c.id)) return const UpdateReport(nothingToDo: 'Already updating');
+    if (!isOn(c.id) || !keyReady(c)) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
+    final places = await watchedPlaces();
+    if (places.isEmpty) {
+      return UpdateReport(nothingToDo: waitingForPosition ? 'Waiting for your position.' : 'No place is being watched. Choose one under Places.');
+    }
+    _kind = await policy.probe.current();
+    if (_kind == ConnectionKind.none) {
+      notifyListeners();
+      return const UpdateReport(offline: true);
+    }
+    _updatingIds.add(c.id);
+    _sourceErrors.remove(c.id);
+    _coreOffline = false;
+    notifyListeners();
+    final kinds = <String, SourceFailure>{};
+    final List<(bool, String?)> outcomes;
+    try {
+      await _syncFolder();
+      await pushPolicy();
+      logInfo('Live update of ${c.id} alone for ${places.length} places');
+      outcomes = await Future.wait([for (final p in places) _fetchOne(c, p, true, kinds)]);
+    } finally {
+      _updatingIds.remove(c.id);
+    }
+    await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
+    var fetched = 0, fresh = 0;
+    final failures = <String>[];
+    for (final (got, failure) in outcomes) {
+      if (failure != null) {
+        failures.add(failure);
+      } else {
+        got ? fetched++ : fresh++;
+      }
+    }
+    _lastRunAt = _now();
+    if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
+    _saveStatus();
+    notifyListeners();
     await checkAlerts();
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
