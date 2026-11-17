@@ -15,7 +15,7 @@ import 'support/settings_rig.dart';
 
 const _county = 'us-id-twin-falls-county';
 
-Future<void> _settleUntil(WidgetTester tester, bool Function() done, {int turns = 1500}) async {
+Future<void> _settleUntil(WidgetTester tester, bool Function() done, {int turns = 200}) async {
   for (var i = 0; i < turns && !done(); i++) {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
     await tester.pump(const Duration(milliseconds: 50));
@@ -30,7 +30,11 @@ Future<(RegionsState, FakeRegions, SettingsRig)> _boot(WidgetTester tester) asyn
   Directory(core.tileDir).createSync(recursive: true);
   final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
   final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: s.maps, opener: (_) async => core);
-  await tester.runAsync(() => regions.init());
+  await tester.runAsync(() async {
+    await regions.init();
+    // the country's list is read, so the search finds the county
+    await catalogue.shard('us');
+  });
   return (regions, core, s);
 }
 
