@@ -14,7 +14,6 @@ import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../platform.dart' as plat;
-import '../platform/app_log.dart';
 import '../screens/download_confirm.dart' show downloadSpace;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
