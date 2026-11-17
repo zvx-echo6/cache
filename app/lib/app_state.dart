@@ -201,9 +201,15 @@ class AppState extends ChangeNotifier {
   /// model's is its name from the list.
   String plainName(ModelEntry e) => recommendedName?.call(e) ?? _plainNames[e.key] ?? displayName(e);
 
-  /// The quantisation label to show with [e]'s size: only a recommended model has one (its name from the list has no quantisation
-  /// in it). It is the one read when the model was loaded, else the one in its file name; null when neither has it.
-  String? shownQuant(ModelEntry e) => recommendedName?.call(e) == null ? null : (_labels[e.key] ?? quantFromFileName(e.fileName));
+  /// The quantisation label to show with [e]'s size: only a recommended model has one, and only when its name from the list does not
+  /// already end with it ("Gemma 4 E4B · Q4_K_M" needs none). It is the one read when the model was loaded, else the one in its file
+  /// name; null when neither has it.
+  String? shownQuant(ModelEntry e) {
+    final name = recommendedName?.call(e);
+    if (name == null) return null;
+    final q = _labels[e.key] ?? quantFromFileName(e.fileName);
+    return q == null || name.endsWith(q) ? null : q;
+  }
 
   /// The line under a model's name: its size ("3.2 GB"), and for a recommended model the quantisation after it ("3.2 GB · Q4_K_M").
   String sizeLine(ModelEntry e) {
