@@ -136,10 +136,18 @@ class AssistantPage extends StatelessWidget {
       listenable: Listenable.merge([app, web, deps.chat.historyRevision, reports, ?ModelDownloads.shared]),
       builder: (context, _) {
         final m = app.active;
+        final resting = app.resting;
         final List<Part> modelStatus = app.loading != null
             ? const [Part('Loading…')]
             : m == null && modelDownloadLine() != null
             ? [Part(modelDownloadLine()!)]
+            : m == null && resting != null
+            // the chosen model, not in memory now (a cold start leaves it resting): it loads when Ask opens
+            ? joinParts([
+                const [Part('On this device')],
+                [Part(formatBytes(resting.size))],
+                const [Part('Loads when you open Ask')],
+              ])
             : m == null
             ? const [Part('No model chosen', Tone.warn)]
             : joinParts([
@@ -155,7 +163,7 @@ class AssistantPage extends StatelessWidget {
               label: 'Model',
               rows: [
                 SettingsRow(
-                  title: m == null ? 'Choose a model' : app.displayName(m),
+                  title: m != null ? app.displayName(m) : resting != null && app.loading == null && modelDownloadLine() == null ? app.displayName(resting) : 'Choose a model',
                   status: modelStatus,
                   onTap: () => openModels(context, app),
                 ),
