@@ -15,6 +15,7 @@ import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
 import '../search/search_access.dart';
+import '../search/server_index_progress.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
@@ -517,12 +518,34 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   bool serverIndexBusy = false;
   bool _pauseReading = false;
 
+  /// In a browser: the server's index work for the Library's overview line and queue sheet (fed by the watcher below).
+  late final ServerIndexProgress serverIndex = ServerIndexProgress(
+    setPaused: setServerIndexPaused,
+    retryKey: (key) async {
+      final core = _core;
+      if (core == null) return;
+      try {
+        await core.indexRetry(key);
+      } on CacheSearchException catch (e) {
+        error = _words(e);
+      }
+      _watchServerIndexing();
+      unawaited(_readServerIndexing());
+      notifyListeners();
+    },
+    titleOf: (id) {
+      final z = zimById(id);
+      return z == null ? null : titleOf(z);
+    },
+  );
+
   Future<void> _readServerPause() async {
     final core = _core;
     if (core == null || _pauseReading) return;
     _pauseReading = true;
     try {
       final r = await core.indexPause();
+      serverIndex.setPausedState(r.paused);
       if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
         serverIndexPaused = r.paused;
         serverIndexBusy = r.busy;
@@ -545,6 +568,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       final r = await core.indexPause(paused);
       serverIndexPaused = r.paused;
       serverIndexBusy = r.busy;
+      serverIndex.setPausedState(r.paused);
     } on CacheSearchException catch (e) {
       error = _words(e);
     }
@@ -562,7 +586,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
   /// must follow them (each round reads `index.pause` again).
   void _keepServerWatch() {
-    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused && !serverIndex.busy)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;
@@ -577,7 +601,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       await _readStatus(core);
       try {
-        final state = await core.indexState();
+        final all = await core.indexStateAll();
+        final state = all.jobs;
+        // the one watcher hands the server's queue to the Library's index line and sheet
+        serverIndex.update(all.queue, hold: all.hold);
         _serverFraction
           ..clear()
           ..addEntries([for (final e in state.entries) if (e.value.error == null) MapEntry(e.key, e.value.fraction)]);
@@ -587,6 +614,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
           ..addEntries([for (final e in state.entries) if (e.value.error != null) MapEntry(e.key, e.value.error!)]);
       } on CacheSearchException {
         // A server older than index.state: only the status is read.
+        serverIndex.update(null);
       }
       _scan();
     } catch (e) {

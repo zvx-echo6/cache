@@ -11,14 +11,14 @@ import 'index_scheduler.dart';
 import 'index_status.dart';
 
 /// The overall search index progress, at the top of the Library and in the Settings line's place (one component): a bar for
-/// all the work ([IndexScheduler.fraction]: each source an equal share, filled inside by its PDFs, caption files or EPUBs read),
+/// all the work ([IndexProgress.fraction]: each source an equal share, filled inside by its PDFs, caption files or EPUBs read),
 /// the headline "Getting search ready · 3 of 9 done" with the reason when it waits ("· Paused · battery low (12%) · plug in to
 /// continue"), and under it the work running now ("Army Publishing · PDFs 340 of 5,768"). Tapping it opens the queue
 /// ([showIndexQueueSheet]). When everything is done it says "Search ready · 9 of 9" for a moment ([doneFor]), then goes.
 class IndexOverviewLine extends StatefulWidget {
   const IndexOverviewLine({super.key, required this.scheduler, this.doneFor = const Duration(seconds: 4), this.queueOnTap = false, this.clock = DateTime.now});
 
-  final IndexScheduler scheduler;
+  final IndexProgress scheduler;
 
   /// A tap always opens the queue (on Add PDF's progress page, which a PDF's work otherwise opens).
   final bool queueOnTap;
@@ -176,7 +176,7 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
 
 /// The queue of search index work: what runs now (with progress), what is next in order (and why anything is held), what is
 /// done; Pause all or Resume.
-Future<void> showIndexQueueSheet(BuildContext context, IndexScheduler scheduler) => showModalBottomSheet<void>(
+Future<void> showIndexQueueSheet(BuildContext context, IndexProgress scheduler) => showModalBottomSheet<void>(
   context: context,
   showDragHandle: true,
   isScrollControlled: true,
@@ -186,7 +186,7 @@ Future<void> showIndexQueueSheet(BuildContext context, IndexScheduler scheduler)
 class IndexQueueSheet extends StatelessWidget {
   const IndexQueueSheet({super.key, required this.scheduler});
 
-  final IndexScheduler scheduler;
+  final IndexProgress scheduler;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(

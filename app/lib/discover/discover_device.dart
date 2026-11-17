@@ -45,7 +45,7 @@ class AppDiscoverDevice implements DiscoverDevice {
   final RegionsState? regions;
   final NotebookState? notebooks;
   final LocationService? location;
-  final IndexScheduler? indexing;
+  final IndexProgress? indexing;
 
   SourcesState get sources => browse.sources;
 
