@@ -161,7 +161,7 @@ fn a_whole_conversation_runs_headless_through_the_scripted_host() {
     // declined and failed taps
     s.act(&c, json!({"action": "places.delete", "fields": {"name": "Elk camp"}}));
     let (_, out) = s.req("POST", &format!("/conversations/{c}/act/outcome"), Some(&json!({"confirm_id": "c2"})));
-    assert_eq!(out, r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.delete"}"#);
+    assert_eq!(out, r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.delete","note":"The person tapped Cancel. Nothing was done or saved."}"#);
     s.act(&c, json!({"action": "home.source_switch", "fields": {"source": "alerts", "on": true}}));
     let (_, out) = s.req("POST", &format!("/conversations/{c}/act/outcome"), Some(&json!({"confirm_id": "c3"})));
     assert_eq!(out, r#"{"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c3","action":"home.source_switch","error":{"type":"denied","detail":"location is off"}}"#);
@@ -187,7 +187,7 @@ fn a_reply_or_an_outcome_can_be_given_instead_of_the_script() {
     assert_eq!((code, out.as_str()), (200, r#"{"ok":true,"status":"done","action":"places.list","result":{"places":[]}}"#));
     let o = json!({"ok": true, "status": "declined", "confirm_id": "c9", "action": "whatever.x"});
     let (code, out) = s.req("POST", &format!("/conversations/{c}/act/outcome"), Some(&json!({"outcome": o})));
-    assert_eq!((code, out.as_str()), (200, r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c9","action":"whatever.x"}"#));
+    assert_eq!((code, out.as_str()), (200, r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c9","action":"whatever.x","note":"The person tapped Cancel. Nothing was done or saved."}"#));
     // a card for an action with no scripted tap needs the outcome given
     s.act(&c, json!({"action": "places.save", "fields": {"name": "x", "place": "1,2"}}));
     let (code, _) = s.req("POST", &format!("/conversations/{c}/act/outcome"), Some(&json!({"confirm_id": "c1", "action": "nothing.here"})));
