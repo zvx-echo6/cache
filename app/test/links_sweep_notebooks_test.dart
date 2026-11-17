@@ -162,6 +162,43 @@ void main() {
     expect(opened, [r.nb.notebooks.firstWhere((n) => n.name == 'Imported places').id]);
   });
 
+  group('the message after a file was added', () {
+    test('a points-only file keeps its wording', () {
+      expect(placesImportMessage(places: 1, shapes: 0, notebook: 'Places'), '1 place added to Places');
+      expect(placesImportMessage(places: 4, shapes: 0, notebook: 'Places'), '4 places added to Places');
+    });
+
+    test('a lines-only file says the lines became a map layer, singular and plural', () {
+      expect(placesImportMessage(places: 0, shapes: 1, layer: 'Proof line'), 'Added 1 line or area as the map layer "Proof line".');
+      expect(placesImportMessage(places: 0, shapes: 2, layer: 'X'), 'Added 2 lines or areas as the map layer "X".');
+    });
+
+    test('a mixed file says both, singular and plural', () {
+      expect(placesImportMessage(places: 3, shapes: 2, notebook: 'Places', layer: 'X'), 'Added 3 places to Places and 2 lines or areas as the map layer "X".');
+      expect(placesImportMessage(places: 1, shapes: 1, notebook: 'Places', layer: 'X'), 'Added 1 place to Places and 1 line or area as the map layer "X".');
+    });
+  });
+
+  testWidgets('a lines-only file: "Added 2 lines or areas as the map layer", and no notebook is made', (tester) async {
+    final r = _Rig();
+    await r.nb.start();
+    r.store
+      ..importLines = 1
+      ..importAreas = 1
+      ..importLayer = 'Proof line';
+    final before = r.nb.notebooks.length;
+    await r.pump(tester, Scaffold(body: Builder(builder: (c) => TextButton(
+      onPressed: () => importPlacesInto(c, r.nb, now: () => _now, pick: (use) => use('/tmp/x.geojson', 'x.geojson')),
+      child: const Text('import'),
+    ))));
+    await tester.tap(find.text('import'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Added 2 lines or areas as the map layer "Proof line".'), findsOneWidget);
+    expect(r.nb.notebooks.length, before);
+  });
+
   testWidgets('20. "Added from Obsidian: {title}": Show opens that entry when one note came in', (tester) async {
     final r = _Rig();
     await r.nb.start();

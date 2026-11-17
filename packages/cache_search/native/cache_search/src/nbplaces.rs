@@ -307,7 +307,7 @@ impl Ext {
     /// becomes an entry (its name the title, its notes the text; a point with the name of an entry already there updates that entry
 /// instead, see below), lines and areas stay with the notebook's map layer.
     /// `now` is the entries' "When" (local ISO 8601 with offset; default now in UTC). Returns
-    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped"}` (skipped: lines and areas that could not be kept).
+    /// `{"notebook", "places" (added), "updated", "lines", "areas", "skipped", "layer" (the name of the map layer the lines and areas became when the notebook has none of its own, else null)}` (skipped: lines and areas that could not be kept).
     fn import(&self, args: &Value) -> Result<Value> {
         for k in args.as_object().into_iter().flat_map(|o| o.keys()) {
             if !["path", "notebook_id", "name", "now"].contains(&k.as_str()) {
@@ -424,6 +424,7 @@ impl Ext {
             shapes.iter().filter(|f| matches!(f.geom, Geom::Line(..))).count(),
             shapes.iter().filter(|f| matches!(f.geom, Geom::Area(..))).count(),
         );
+        let mut layer_made: Option<String> = None;
         let kept = match self.map_data.as_deref() {
             Some(m) => match m.add_notebook_shapes(&nb_id, &shapes).map_err(user_err)? {
                 // A notebook with no layer of its own (the saved places) keeps them as a map layer named after the file.
@@ -431,6 +432,7 @@ impl Ext {
                     let stem = std::path::Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                     let name = layer_name.filter(|n| !n.is_empty()).unwrap_or_else(|| mapdata::collapse(&stem));
                     let name = if name.is_empty() { "Imported lines".to_string() } else { name };
+                    layer_made = Some(name.clone());
                     m.add_shape_layer(&name, &file, layer_private.unwrap_or(false), &shapes).map_err(user_err)?
                 }
                 n => n,
@@ -438,7 +440,7 @@ impl Ext {
             None => 0,
         };
         let notebook = if nb_id.is_empty() { Value::Null } else { self.nb_call("notebook", &json!({"id": nb_id}))? };
-        Ok(json!({"notebook": notebook, "places": places, "updated": updated, "lines": lines, "areas": areas, "skipped": shapes.len() - kept}))
+        Ok(json!({"notebook": notebook, "places": places, "updated": updated, "lines": lines, "areas": areas, "skipped": shapes.len() - kept, "layer": layer_made}))
     }
 }
 

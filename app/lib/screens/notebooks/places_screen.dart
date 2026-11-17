@@ -1103,6 +1103,18 @@ NbPlace? parseLatLon(String s) {
   return NbPlace(lat: lat, lon: lon);
 }
 
+/// What the snackbar says after a file was added: a points-only file says how many places went into the notebook; a lines-only file
+/// says the lines and areas became a map layer (named [layer]); a mixed file says both. "1 place" / "N places", "1 line or area" /
+/// "N lines or areas". A notebook with a layer of its own keeps the lines there: the layer is named after the notebook.
+String placesImportMessage({required int places, required int shapes, String? notebook, String? layer}) {
+  final p = places == 1 ? '1 place' : '$places places';
+  if (shapes == 0) return '$p added to ${notebook ?? 'the notebook'}';
+  final s = shapes == 1 ? '1 line or area' : '$shapes lines or areas';
+  final name = layer ?? notebook ?? 'My layers';
+  if (places == 0) return 'Added $s as the map layer "$name".';
+  return 'Added $p to ${notebook ?? 'the notebook'} and $s as the map layer "$name".';
+}
+
 /// "Add places from a file": a KML, KMZ, GPX or GeoJSON file read into the notebook [notebookId] (or a new Places notebook);
 /// says how many places came in.
 Future<void> importPlacesInto(BuildContext context, NotebookState nb, {String? notebookId, required DateTime Function() now, void Function(String notebookId)? onOpen, Future<Map<String, dynamic>?> Function(Future<Map<String, dynamic>> Function(String path, String name) use)? pick}) async {
@@ -1113,10 +1125,10 @@ Future<void> importPlacesInto(BuildContext context, NotebookState nb, {String? n
     final n = (r['places'] as num?)?.toInt() ?? 0;
     final shapes = ((r['lines'] as num?)?.toInt() ?? 0) + ((r['areas'] as num?)?.toInt() ?? 0);
     // No notebook when the file had only lines and areas: they became a layer under Maps > Layers > My layers.
-    final into = (r['notebook'] as Map?)?['def']?['name'] ?? (r['notebook'] == null && n == 0 && shapes > 0 ? 'My layers' : 'the notebook');
+    final notebookName = (r['notebook'] as Map?)?['def']?['name'] as String?;
     final nbId = ((r['notebook'] as Map?)?['id'] ?? notebookId) as String?;
     messenger.showSnackBar(SnackBar(
-      content: Text('${n == 1 ? '1 place' : '$n places'}${shapes > 0 ? ' and $shapes lines and areas' : ''} added to $into'),
+      content: Text(placesImportMessage(places: n, shapes: shapes, notebook: notebookName, layer: r['layer'] as String?)),
       action: nbId == null || onOpen == null ? null : SnackBarAction(label: 'Open', onPressed: () => onOpen(nbId)),
     ));
   } catch (e) {
