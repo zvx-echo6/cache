@@ -367,6 +367,13 @@ class _AskScreenState extends State<AskScreen> {
         if (m != null) await app.activate(m);
       case 'unload':
         await app.unload();
+        // A browser whose server could not free the model: say why, as the Models screen does (same words, same source).
+        final failed = app.loadError;
+        if (mounted && failed != null && failed.startsWith('Could not unload the model')) {
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(SnackBar(content: Text(failed)));
+        }
       case 'manage':
         _openModels();
     }
