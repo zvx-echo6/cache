@@ -14,13 +14,18 @@ import '../version.dart';
 import 'app_log.dart';
 import 'exit_reasons.dart';
 import 'memory.dart';
+import 'server_log.dart';
 import 'run_mark.dart';
 
 /// Opens the app's log in the app's own folder and writes what happened since the last start: Cache stopped while it was
 /// open (it crashed or was killed: the "running" mark is still there), and on Android the system's own reasons the last
 /// times the app ended (a crash, a native crash, low memory). Dart errors are written as they happen.
 Future<void> openAppLog() async {
-  if (plat.isWeb) return; // a browser has no log file (the server's folder is not one dart:io can open)
+  if (plat.isWeb) {
+    // a browser has no log file (the server's folder is not one dart:io can open); its logger follows the server's level
+    unawaited(ServerLog().refresh());
+    return;
+  }
   try {
     final dir = Directory('${await appSupportPath()}/logs');
     await appLog.open(dir);
