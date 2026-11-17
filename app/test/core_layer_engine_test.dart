@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -331,11 +332,24 @@ void main() {
     final b = await engine.download('elevation', other, label: 'second');
     expect(a.phase, AreaPhase.running);
     expect(b.phase, AreaPhase.running);
-    // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
-    bool settled() => engine.allAreas.length == 2 && engine.allAreas.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
-    for (var i = 0; i < 6000 && !settled(); i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+    // The engine says when it has something new (every look at the jobs ends with a notice, after the list is read again): the test
+    // looks at the state then. It never polls and never keeps time, so a slow machine only makes it later, not wrong.
+    bool listed(String layer) {
+      final xs = engine.areasOf(layer);
+      return xs.length == 2 && xs.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
     }
+
+    // hillshade, contours and elevation share the store: each lists both areas, done, with the final size
+    bool settled() => ['elevation', 'hillshade', 'contours'].every(listed);
+    final seen = Completer<void>();
+    void look() {
+      if (settled() && !seen.isCompleted) seen.complete();
+    }
+
+    engine.addListener(look);
+    look();
+    await seen.future;
+    engine.removeListener(look);
     expect(engine.allAreas.length, 2);
     for (final x in engine.allAreas) {
       expect(x.phase, AreaPhase.done, reason: x.id);
@@ -344,9 +358,10 @@ void main() {
     }
     // every listing of an area (hillshade, contours and elevation share the store) is done too
     for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(engine.areasOf(l), hasLength(2), reason: l);
       expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
     }
-  });
+  }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
     final outline = [
