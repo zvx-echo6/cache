@@ -60,6 +60,19 @@ enum Class {
 pub struct Outline {
     /// (from, to) of every edge, ring after ring, `to` being the next point of the ring.
     edges: Vec<([f64; 2], [f64; 2])>,
+    /// The edges by latitude band (each edge in every band its latitudes span): a point is only ever crossed by edges of its own
+    /// band, so [Outline::contains] reads those and not every edge of the outline.
+    bands: Vec<Vec<u32>>,
+    /// How many edges [Outline::contains] looked at and how many times it was asked (the test of how much work a cover takes).
+    looked: std::sync::atomic::AtomicU64,
+    asked: std::sync::atomic::AtomicU64,
+}
+
+/// At most this many bands; fewer for an outline of few edges (a small outline costs no more to build than before).
+const MAX_BANDS: usize = 1 << 14;
+
+fn band_of(lat: f64, bands: usize) -> usize {
+    (((lat + 90.0) / 180.0 * bands as f64).floor().max(0.0) as usize).min(bands - 1)
 }
 
 fn seg_hits(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
@@ -81,13 +94,26 @@ impl Outline {
                 edges.push((r[i], r[(i + 1) % r.len()]));
             }
         }
-        Outline { edges }
+        let n = (edges.len() / 16).clamp(1, MAX_BANDS);
+        let mut bands: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for (i, (a, b)) in edges.iter().enumerate() {
+            let (lo, hi) = (band_of(a[1].min(b[1]), n), band_of(a[1].max(b[1]), n));
+            for band in &mut bands[lo..=hi] {
+                band.push(i as u32);
+            }
+        }
+        Outline { edges, bands, looked: Default::default(), asked: Default::default() }
     }
 
     /// Inside, even-odd over every ring (each edge is taken from its end to its start, as the test always read them).
     pub fn contains(&self, p: [f64; 2]) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
         let mut inside = false;
-        for &(b, a) in &self.edges {
+        let near = &self.bands[band_of(p[1], self.bands.len())];
+        self.asked.fetch_add(1, Relaxed);
+        self.looked.fetch_add(near.len() as u64, Relaxed);
+        for &i in near {
+            let (b, a) = self.edges[i as usize];
             if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
                 inside = !inside;
             }
@@ -283,6 +309,44 @@ mod tests {
                 assert_eq!(a.touches(11, x as u32, y as u32), listed.contains(&(11, x as u32, y as u32)));
             }
         }
+    }
+
+    #[test]
+    fn inside_is_read_from_the_edges_of_the_points_own_band_only() {
+        // a ragged ring of many edges (a coast): the answer is the plain every-edge even-odd test's, and each answer reads a
+        // small part of the edges (Germany's outline took minutes of this at z15, each corner test reading every edge)
+        let n = 100_000usize;
+        let ring: Vec<[f64; 2]> = (0..n)
+            .map(|i| {
+                let t = i as f64 / n as f64 * std::f64::consts::TAU;
+                let r = 2.5 + 0.3 * (37.0 * t).sin() + 0.05 * (997.0 * t).sin();
+                [10.0 + r * t.cos() * 1.4, 50.0 + r * t.sin()]
+            })
+            .collect();
+        let o = Outline::new(&Polygon::Ring(ring.clone()));
+        let plain = |p: [f64; 2]| {
+            let mut inside = false;
+            for i in 0..ring.len() {
+                let (b, a) = (ring[i], ring[(i + 1) % ring.len()]);
+                if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+                    inside = !inside;
+                }
+            }
+            inside
+        };
+        for i in 0..300 {
+            let p = [4.0 + (i as f64 * 0.0371) % 12.0, 46.0 + (i as f64 * 0.0173) % 8.0];
+            assert_eq!(o.contains(p), plain(p), "{p:?}");
+        }
+        use std::sync::atomic::Ordering::Relaxed;
+        let (looked, asked) = (o.looked.load(Relaxed), o.asked.load(Relaxed));
+        assert!(looked <= asked * (n as u64 / 20), "each answer read {} of {n} edges", looked / asked);
+        // and a cover through the outline asks it far fewer edges than every edge each time
+        let o2 = Outline::new(&Polygon::Ring(ring));
+        let cover = o2.tiles(0, 9, u64::MAX, |_, _, _| true).unwrap();
+        assert!(!cover.is_empty());
+        let (looked, asked) = (o2.looked.load(Relaxed), o2.asked.load(Relaxed));
+        assert!(looked <= asked * (n as u64 / 20), "each answer read {} of {n} edges", looked / asked.max(1));
     }
 
     #[test]

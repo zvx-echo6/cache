@@ -25,7 +25,7 @@ abstract class CoreHook {
 ///
 /// Prints `{"ready":true}` first. A request is `{"id":<int>,"op":<string>,"args":{...}}`; the reply is
 /// `{"id":<int>,"ok":true,"result":<json>}` or `{"id":<int>,"ok":false,"error":{"code","message"}}`. Byte arrays travel as
-/// `{"$bytes": "<base64>"}` (wire.dart). Requests are handled strictly one at a time, in order. When [input] ends, the core
+/// `{"$bytes": "<base64>"}` (wire.dart). Requests are handled one at a time, in order, except a stop (job cancel, Pause: [_isStop]), which is answered at once. When [input] ends, the core
 /// is closed and this returns; [onEnd] runs first (the sharing host stops its engine). [log] gets diagnostics (the real helper
 /// writes them to stderr).
 Future<void> serveLines(
@@ -39,10 +39,21 @@ Future<void> serveLines(
 }) async {
   await output(jsonEncode({'ready': true}));
   final lines = input.transform(utf8.decoder).transform(const LineSplitter());
+  // Requests run one at a time, in order, except a stop (see [_isStop]): it is answered at once, even while an earlier request
+  // (one that waits, like the sharing host's) has not finished, so a Pause is never queued behind a long call.
+  var chain = Future<void>.value();
+  final stops = <Future<void>>[];
   await for (final line in lines) {
     if (line.trim().isEmpty) continue;
-    await output(await handleLine(line, dispatcher, log: log, handlers: handlers, hook: hook));
+    Future<void> one() async => output(await handleLine(line, dispatcher, log: log, handlers: handlers, hook: hook));
+    if (_isStop(line)) {
+      stops.add(one());
+    } else {
+      chain = chain.then((_) => one());
+    }
   }
+  await chain;
+  await Future.wait(stops);
   try {
     await onEnd?.call();
   } catch (e) {
@@ -52,6 +63,23 @@ Future<void> serveLines(
     dispatcher.handle('close', const {});
   } catch (e) {
     log?.call('close at end of input failed: $e');
+  }
+}
+
+/// The requests that stop work and so must not wait for the one before them: a job's cancel, and the region engine's Pause or an
+/// off-road pack's cancel (`regions.call` with method `set_policy` or `offroad_cancel`).
+bool _isStop(String line) {
+  try {
+    final req = jsonDecode(line);
+    if (req is! Map) return false;
+    final op = req['op'];
+    if (op == 'jobCancel') return true;
+    if (op != 'regions.call') return false;
+    final args = req['args'];
+    final method = args is Map ? args['method'] : null;
+    return method == 'set_policy' || method == 'offroad_cancel';
+  } catch (_) {
+    return false;
   }
 }
 
