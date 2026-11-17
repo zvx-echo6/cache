@@ -155,4 +155,17 @@ void main() {
     expect(fake.calls, isEmpty, reason: 'nothing was applied or cleared');
     expect(fake.toolArgs.single, jsonEncode({'q': 'coffee'}));
   });
+
+  test('a key check: a raw key lent with setWeb is still set for a tool call that carries neither field, and a lent location too', () async {
+    await convNew();
+    await run('setWeb', {'provider': 'kagi', 'key': 'LENT', 'online': true});
+    await run('setLocation', {'lat': 7.5, 'lon': 8.5, 'accuracy': 3.0, 'fixedAt': 'g'});
+    fake.calls.clear();
+    final out = await tool({}, args: {'query': 'x'});
+    expect(out, contains('web=kagi:true'));
+    expect(out, contains('near=7.5,8.5,3.0,g'));
+    expect(fake.calls, isEmpty, reason: 'an absent field touches nothing');
+    expect(fake.toolArgs.last, jsonEncode({'query': 'x'}));
+    expect(file.readAsStringSync(), isNot(contains('LENT')));
+  });
 }
