@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache/downloads/download_row.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/maps/layers/layer_def.dart' show AreaPhase;
+import 'package:cache/chat/ask_focus.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/region_download.dart';
 import 'package:flutter/material.dart';
@@ -72,6 +73,35 @@ void main() {
     expect(dlLine(row), contains('all downloads paused'));
     expect(regionDl(regions, l).phase, DlPhase.paused);
     expect(dlLine(regionDl(regions, l)), contains('all downloads paused'));
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('Ask holds the downloads with a lease, apart from the person\'s Pause: asked, renewed while Ask answers, ended when it stops', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final focus = AskFocus();
+    final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: s.maps, opener: (_) async => core, focus: focus);
+    await tester.runAsync(() => regions.init());
+    core.policies.clear();
+    await tester.runAsync(() async {
+      focus.begin();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    expect(core.policies.any((p) => p['ask'] == true), isTrue, reason: 'Ask asks for a lease');
+    expect(core.policies.every((p) => p['hold'] != true), isTrue, reason: 'it is not the person\'s Pause: before, Ask sent hold: true');
+    expect(regions.askHolds, isTrue);
+    expect(regions.held, isFalse);
+    core.policies.clear();
+    await tester.runAsync(() async {
+      focus.end();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    expect(core.policies.any((p) => p['ask'] == false), isTrue, reason: 'the lease is ended when Ask stops');
+    expect(regions.askHolds, isFalse);
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
     await s.dispose(tester);

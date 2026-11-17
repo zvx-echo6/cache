@@ -213,4 +213,59 @@ void main() {
     OpenOp(dirs, d, onOpened: () => called = true).handle('open', {'sources': []});
     expect(called, isTrue);
   });
+
+  group('Ask\'s hold is a lease', () {
+    RegionsOps leased(Duration d) => RegionsOps(support, config: {'dir': '${support.path}/regions'}, open: (c) => engine, askLease: d);
+    Object? policy(RegionsOps o, Map<String, dynamic> a) => o.handle('regions.call', {'method': 'set_policy', 'args': a});
+    bool lastHold() => (jsonDecode(engine.calls.lastWhere((c) => c.startsWith('set_policy')).substring('set_policy:'.length)) as Map)['hold'] == true;
+
+    test('set and not renewed: the downloads go on by themselves when it runs out', () async {
+      final o = leased(const Duration(milliseconds: 120));
+      policy(o, {'ask': true});
+      expect(o.askHold, isTrue);
+      expect(lastHold(), isTrue);
+      expect(o.packs.held, isTrue);
+      await until(() => !o.askHold);
+      expect(o.askHold, isFalse, reason: 'before: nothing ended Ask\'s hold when its tab was gone');
+      expect(lastHold(), isFalse, reason: 'the engine is told to go on');
+      expect(o.packs.held, isFalse);
+    });
+
+    test('renewed while Ask is busy: it stays held; stopped: it ends', () async {
+      final o = leased(const Duration(milliseconds: 150));
+      policy(o, {'ask': true});
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        policy(o, {'ask': true});
+      }
+      expect(o.askHold, isTrue, reason: 'renewed for 400 ms, longer than one lease');
+      expect(lastHold(), isTrue);
+      await until(() => !o.askHold);
+      expect(lastHold(), isFalse);
+    });
+
+    test('the person\'s Pause is not touched by the lease: it outlasts it, and ending Ask does not lift it', () async {
+      final o = leased(const Duration(milliseconds: 100));
+      policy(o, {'hold': true});
+      policy(o, {'ask': true});
+      await until(() => !o.askHold);
+      expect(lastHold(), isTrue, reason: 'the person\'s Pause is still on');
+      expect(o.packs.held, isTrue);
+      policy(o, {'ask': true});
+      policy(o, {'ask': false});
+      expect(lastHold(), isTrue);
+      policy(o, {'hold': false});
+      expect(lastHold(), isFalse);
+      expect(o.packs.held, isFalse);
+    });
+
+    test('status says whether Ask holds the downloads', () {
+      final o = leased(const Duration(seconds: 5));
+      engine.answers['status'] = '{"regions":[]}';
+      expect(((o.handle('regions.call', {'method': 'status', 'args': {}})) as Map)['ask_hold'], isFalse);
+      policy(o, {'ask': true});
+      expect(((o.handle('regions.call', {'method': 'status', 'args': {}})) as Map)['ask_hold'], isTrue);
+      policy(o, {'ask': false});
+    });
+  });
 }
