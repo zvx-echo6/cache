@@ -56,6 +56,7 @@
 //!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
+//!   POST /api/llm/unload {v:1}              -> {unloaded}: frees the loaded model (a running generation is stopped and waited out); nothing loaded is fine
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
@@ -556,6 +557,12 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
                 Err(e) => return Some(api_error(e)),
             };
             ok(json!({"stopped": svc.stop(id.as_deref())}))
+        }
+        ("POST", "unload") => {
+            if let Err(e) = llm::parse_version_only(body) {
+                return Some(api_error(e));
+            }
+            blocking(move || svc.unload().map(|unloaded| json!({"unloaded": unloaded}))).await
         }
         _ => return None,
     })
@@ -1458,11 +1465,69 @@ mod tests {
         assert_eq!(v["result"]["models"], json!([{"id": "up.gguf", "size": 4, "loaded": false}]));
     }
 
+    /// A loaded model that does nothing, for the routes that load and unload.
+    struct Idle;
+    impl llm::ChatBackend for Idle {
+        fn start(&self, _: &str) -> Result<(), cache_embed::chat::StartFailure> {
+            Ok(())
+        }
+        fn next(&self) -> i32 {
+            -1
+        }
+        fn partial(&self) -> Option<String> {
+            None
+        }
+        fn finish(&self) -> Option<String> {
+            None
+        }
+        fn prompt_tokens(&self) -> i32 {
+            0
+        }
+        fn generated_tokens(&self) -> i32 {
+            0
+        }
+        fn stop(&self) {}
+    }
+
+    #[tokio::test]
+    async fn unload_needs_a_session_frees_the_model_and_lets_the_file_be_deleted() {
+        let d = TempDir::new("route-llm-unload");
+        let mut a = file_app(&d);
+        a.llm = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(|_, _| Ok((Arc::new(Idle) as Arc<dyn llm::ChatBackend>, r#"{"description":"d","n_ctx":8192,"chat_format":"c","supports_tools":false}"#.to_string()))),
+        );
+        assert_eq!(route(&a, "POST", "/api/llm/unload", None, br#"{"v":1}"#).await.status, 401);
+        let c = sign_in(&a).await;
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        // the body is versioned like load's
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":2}"#).await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, "{}").await.0, 400);
+        // nothing loaded: fine
+        let (s, v) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!((s, v["ok"].clone()), (200, json!(true)));
+        // loaded: the file is kept, then unload frees it and the file can go
+        assert_eq!(json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"chat.gguf"}"#).await.0, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(true));
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 409);
+        let (s, _) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!(s, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(false));
+        // twice is fine
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await.0, 200);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+    }
+
     #[tokio::test]
     async fn the_llm_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-llm");
         let a = file_app(&d);
-        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop")] {
+        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop"), ("POST", "/api/llm/unload")] {
             assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
         }
         let c = sign_in(&a).await;
@@ -1475,7 +1540,7 @@ mod tests {
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=2", &c, "").await.0, 400);
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=1", &c, "").await.0, 200);
         // every POST carries v:1
-        for p in ["load", "generate", "stop"] {
+        for p in ["load", "generate", "stop", "unload"] {
             let (s, v) = json_call(&a, "POST", &format!("/api/llm/{p}"), &c, r#"{"v":2,"model":"chat.gguf","request":{}}"#).await;
             assert_eq!((s, v["error"]["code"].clone()), (400, json!("unsupported_version")), "{p}");
             assert_eq!(json_call(&a, "POST", &format!("/api/llm/{p}"), &c, "{}").await.0, 400, "{p}");

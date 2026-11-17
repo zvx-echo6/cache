@@ -536,7 +536,8 @@ class AppState extends ChangeNotifier {
   /// Unloads the active model to free its memory. Nothing is active after it, and the next start loads no model until
   /// one is chosen again.
   Future<void> unload() async {
-    if (loading != null || active == null) return;
+    final was = active, wasInfo = activeInfo;
+    if (loading != null || was == null) return;
     resting = null;
     _clearHeld();
     active = null;
@@ -551,6 +552,14 @@ class AppState extends ChangeNotifier {
     _unloading = u; // a load that follows waits for it, as after release()
     try {
       await u;
+    } on StateError catch (e) {
+      // A browser: the server could not free its model, so it is still loaded there. The page says so rather than the opposite.
+      active = was;
+      activeInfo = wasInfo;
+      loadError = 'Could not unload the model: ${e.message}';
+      modelGeneration++;
+      notifyListeners();
+      return;
     } finally {
       if (identical(_unloading, u)) _unloading = null;
     }

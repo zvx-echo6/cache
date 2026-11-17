@@ -97,6 +97,17 @@ if one event cannot be queued for 30 seconds, the generation is stopped the same
 everyone). A client that is still waiting in the queue leaves it. This is what canceling
 the Dart stream does (`stop()` in `onCancel`).
 
+## `POST /api/llm/unload`
+
+    {"v":1}   ->   {"ok":true,"result":{"unloaded":true}}
+
+Frees the model the server has loaded (the same session rule as `load`: signed in only). The model is shared by every browser, so
+it is freed for all of them. A generation that is running is stopped (`cl_stop`; its stream still ends with `done`, carrying the
+answer so far) and waited out before the model is freed, as `load` waits for it. Generations already waiting in the queue are
+served first; one that arrives after this finds no model and gets `no_model`. Afterwards `GET /api/llm/models` reports `loaded:
+false` for every file, and `DELETE /api/models/files/<file>` no longer answers `409 in_use`. Idempotent: with nothing loaded it
+answers `{"unloaded":false}`. `429 busy` when too many requests are already waiting for the model.
+
 ## `POST /api/llm/stop`
 
     {"v":1,"id":"<id from started>"}   ->   {"ok":true,"result":{"stopped":true}}
