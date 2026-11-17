@@ -144,7 +144,7 @@ class AssistantPage extends StatelessWidget {
             // the chosen model, not in memory now (a cold start leaves it resting): it loads when Ask opens
             ? joinParts([
                 const [Part('On this device')],
-                [Part(formatBytes(resting.size))],
+                [Part(app.sizeLine(resting))],
                 const [Part('Loads when you open Ask')],
               ])
             : m == null
