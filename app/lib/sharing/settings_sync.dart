@@ -393,6 +393,7 @@ class SettingsSync extends ChangeNotifier {
       final at = _now().millisecondsSinceEpoch;
       _localAt[s.key] = at;
       _waiting.remove(s.key);
+      final stamps = _stampsOf(s.key, jsonDecode(v), before: before == null ? null : jsonDecode(before), at: at);
       if (!_sendsAny(s.key)) continue;
       _write(SettingsEvent(
         at: at,
@@ -402,9 +403,21 @@ class SettingsSync extends ChangeNotifier {
         hasPrev: before != null,
         prev: before == null ? null : jsonDecode(before),
         note: _noteOf(s),
+        removed: stamps?.removed,
+        added: stamps?.added,
       ));
     }
     if (any) unawaited(_saveState());
+  }
+
+  static List<String> _ids(Object? v) => [for (final x in (v is List ? v : const [])) if (x is String) x];
+
+  /// For a list-of-ids setting ([kIdListSettings]): notes a change made here ([before] to [value] at [at], when given) and gives what
+  /// goes with the change: the removals and the adds. Null for any other setting.
+  ({Map<String, int>? removed, Map<String, int>? added})? _stampsOf(String key, Object? value, {Object? before, int? at}) {
+    if (!kIdListSettings.contains(key)) return null;
+    if (at != null) trackIdChange(_kept, key, _ids(before), _ids(value), at);
+    return idStamps(_kept, key, _ids(value));
   }
 
   Object? _noteOf(SyncedSetting s) {
@@ -430,7 +443,8 @@ class SettingsSync extends ChangeNotifier {
       final v = _read(s);
       if (v == null) continue;
       _localAt[k] = at;
-      _write(SettingsEvent(at: at, dev: sharing.myId ?? '', key: k, value: jsonDecode(v), note: _noteOf(s)));
+      final stamps = _stampsOf(k, jsonDecode(v));
+      _write(SettingsEvent(at: at, dev: sharing.myId ?? '', key: k, value: jsonDecode(v), note: _noteOf(s), removed: stamps?.removed, added: stamps?.added));
     }
     await flush();
     await _saveState();
@@ -527,14 +541,30 @@ class SettingsSync extends ChangeNotifier {
         changed = true;
         final current = _read(s);
         if (current == null) continue;
-        if (current == canonical(ev.value)) {
-          _waiting.remove(e.key);
-          continue;
+        var evNow = ev;
+        if (kIdListSettings.contains(e.key)) {
+          // merged per id: the value to write is the sender's list less what was removed here later, and what it removed goes
+          if (current == canonical(ev.value)) {
+            _waiting.remove(e.key);
+            continue;
+          }
+          final takes = applies(link, ev, current: current, localAt: _localAt[e.key] ?? 0);
+          final next = mergeIdList(_kept, e.key, ev, _ids(jsonDecode(current)), takes: takes);
+          if (next == null) {
+            _waiting.remove(e.key);
+            continue;
+          }
+          evNow = SettingsEvent(at: takes ? ev.at : (_localAt[e.key] ?? ev.at), dev: ev.dev, key: ev.key, value: next, note: ev.note);
+        } else {
+          if (current == canonical(ev.value)) {
+            _waiting.remove(e.key);
+            continue;
+          }
+          if (!applies(link, ev, current: current, localAt: _localAt[e.key] ?? 0)) continue;
         }
-        if (!applies(link, ev, current: current, localAt: _localAt[e.key] ?? 0)) continue;
         // which setting a linked device changed here, and which device (its id's start; never the value: some hold place names)
         logInfo('Settings sync: applying ${e.key} from device ${id.length > 8 ? id.substring(0, 8) : id}');
-        await _apply(s, ev);
+        await _apply(s, evNow);
       }
     }
     if (changed) {
