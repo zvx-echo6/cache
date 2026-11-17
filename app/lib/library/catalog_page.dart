@@ -108,7 +108,7 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
                 LibraryPhase.failed => 'Stopped: it could not be read',
                 LibraryPhase.waiting => 'Waiting to make it searchable',
               },
-          onOpen: books ? null : (ctx) => d.openOwnLibrary(ctx, l),
+          onOpen: books ? (d.documentsIn == null ? null : (ctx) => LibraryNav.of(ctx).open(ctx, libraryDocsSpec(d, l))) : (ctx) => d.openOwnLibrary(ctx, l),
         ),
       );
     }
@@ -351,6 +351,7 @@ class CatalogRow extends StatelessWidget {
               Expanded(child: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text))),
               const SizedBox(width: 8),
               tag,
+              if (e.onOpen != null) ...[const SizedBox(width: 4), Icon(Icons.chevron_right, size: 20, color: k.secondary)],
             ],
           ),
           if (e.pdf != null && pdfIndexShared != null)
