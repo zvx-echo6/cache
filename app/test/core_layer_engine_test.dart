@@ -134,7 +134,8 @@ void main() {
     final a = await engine.download('hillshade', home, label: 'This region');
     expect(a.phase, AreaPhase.running);
     expect(engine.areasOf('hillshade'), [a]);
-    await until(() => a.phase == AreaPhase.done);
+    // done is shown when the job ends; the store's size comes with the list the core is read for next
+    await until(() => a.phase == AreaPhase.done && engine.storageOf('hillshade') == 20000);
     expect(a.doneTiles, 20);
     expect(a.bytes, 20000);
     expect(a.bounds, home);

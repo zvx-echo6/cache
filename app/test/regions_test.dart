@@ -761,6 +761,35 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a region plan counts the tiles two layers keep in one store once (hillshade and contours share the elevation tiles)', (tester) async {
+    final r = await _Rig.boot(tester);
+    Map<String, dynamic> shade(String id) => {
+          'format': 1,
+          'id': id,
+          'title': 'Shared $id',
+          'description': 'd',
+          'license': 'l',
+          'attribution': 'a',
+          'kind': 'hillshade',
+          'transform': 'as_is',
+          'derived_from': 'sharedsrc',
+          'encoding': 'terrarium',
+          'source': {'type': 'xyz', 'url': 'https://t.test/{z}/{x}/{y}.webp', 'minzoom': 0, 'maxzoom': 12, 'tile_size': 512},
+          'approx_tile_bytes': 40000,
+        };
+    await tester.runAsync(() async {
+      await r.s.engine.saveDefinition(jsonEncode(shade('sharedone')));
+      await r.s.engine.saveDefinition(jsonEncode(shade('sharedtwo')));
+      r.s.maps.setOn('sharedone', true);
+      r.s.maps.setOn('sharedtwo', true);
+    });
+    expect(r.s.maps.isOn('sharedone') && r.s.maps.isOn('sharedtwo'), isTrue, reason: 'both are on');
+    final plan = (await tester.runAsync(() => r.regions.plan(r.county)))!;
+    final shared = plan.map.where((m) => r.s.engine.downloadLayerOf(m.def.id) == 'sharedsrc').toList();
+    expect(shared, hasLength(1), reason: 'one estimate for the store, not one per layer that reads it');
+    await r.dispose(tester);
+  });
+
   testWidgets('directions with no road data for the area: its page says not available yet, as it does for places, not Ready', (tester) async {
     final r = await _Rig.boot(tester);
     await tester.runAsync(() async {
