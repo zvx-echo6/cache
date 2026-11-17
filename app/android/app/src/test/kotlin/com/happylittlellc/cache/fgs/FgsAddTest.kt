@@ -404,4 +404,221 @@ class FgsAddTest {
         assertFalse(FgsAddArm.onLeave(a, FgsAddArm.Leave.STOP))
         assertEquals(0, told)
     }
+
+    // ---- region map downloads (layer jobs): the service stays up while EITHER a PDF add OR a region download runs
+
+    private val region = FgsLayerWords("Downloading Austria", "42%", 0.42, 1)
+
+    private fun startLayersOnly(): FgsAddService {
+        val c = Robolectric.buildService(FgsAddService::class.java, FgsAddService.startIntent(context, pdf = false, layers = true)).create()
+        controller = c
+        c.startCommand(0, 1)
+        return c.get()
+    }
+
+    private fun pausePressed(s: FgsAddService, id: Int = 2) =
+        s.onStartCommand(android.content.Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_PAUSE), 0, id)
+
+    @Test
+    fun layersNotification_regionWordsBarAndPauseOnly_noRegionNameOnTheLockScreen() {
+        val n = FgsAddNotifications.layers(context, region)
+        assertEquals("Downloading Austria", title(n))
+        assertEquals("42%", text(n))
+        assertEquals(420, n.extras.getInt(Notification.EXTRA_PROGRESS))
+        assertTrue(n.flags and Notification.FLAG_ONGOING_EVENT != 0)
+        assertEquals(listOf("Pause"), n.actions.map { it.title.toString() })
+        val pub = n.publicVersion
+        assertFalse((title(pub) + " " + text(pub)).contains("Austria"))
+        assertEquals(FgsAddNotifications.CHANNEL_ADDING, n.channelId)
+        // nothing known yet: indeterminate, and it still says what it is
+        val none = FgsAddNotifications.layers(context, null)
+        assertTrue(none.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE))
+        assertEquals("Downloading a region", title(none))
+    }
+
+    @Test
+    fun layersOnlyStart_goesForeground_startsNoPdfRun_andShowsTheRegion() {
+        FgsAddArm.layerProgress(region)
+        val s = startLayersOnly()
+        assertEquals(0, runner.started)
+        assertTrue(FgsAddService.running)
+        assertEquals(FgsAddNotifications.ID_ADDING, shadowOf(s).lastForegroundNotificationId)
+        assertEquals("Downloading Austria", title(shadowOf(s).lastForegroundNotification))
+        assertTrue(ShadowPowerManager.getLatestWakeLock().isHeld)
+    }
+
+    @Test
+    fun layerProgress_updatesTheNotification_atMostOnceASecond() {
+        startLayersOnly()
+        FgsAddArm.layerProgress(region)
+        assertEquals("42%", text(posted(FgsAddNotifications.ID_ADDING)!!))
+        FgsAddArm.layerProgress(region.copy(text = "50%", bar = 0.5))
+        assertEquals("42%", text(posted(FgsAddNotifications.ID_ADDING)!!))
+        SystemClock.sleep(1100)
+        FgsAddArm.layerProgress(region.copy(text = "60%", bar = 0.6))
+        assertEquals("60%", text(posted(FgsAddNotifications.ID_ADDING)!!))
+    }
+
+    @Test
+    fun layersEnded_stopsTheService_releasesTheWakeLock_andRemovesTheNotification() {
+        val s = startLayersOnly()
+        FgsAddArm.layerProgress(region)
+        FgsAddArm.armLayers(false)
+        assertTrue(shadowOf(s).isStoppedBySelf)
+        assertFalse(FgsAddService.running)
+        assertFalse(ShadowPowerManager.getLatestWakeLock().isHeld)
+        assertNull(posted(FgsAddNotifications.ID_ADDING))
+    }
+
+    @Test
+    fun pause_inTheNotification_whileOnlyARegionRuns_asksTheAppToPauseTheLayerJobs() {
+        val calls = mutableListOf<String>()
+        FgsAddArm.tellLayers = { calls += it }
+        val s = startLayersOnly()
+        pausePressed(s)
+        assertEquals(listOf("layerPause"), calls)
+        assertTrue(runner.stops.isEmpty())
+        // the app says the jobs ended: the service stops (no Cancel anywhere)
+        FgsAddArm.armLayers(false)
+        assertTrue(shadowOf(s).isStoppedBySelf)
+    }
+
+    @Test
+    fun aRegionStartsDuringAPdfAdd_theNotificationShowsThePdf_thenTheRegion_andStopsOnlyWhenBothAreDone() {
+        val s = start()
+        runner.events!!.onProgress(progress)
+        FgsAddArm.layerProgress(region)
+        // the PDF add is shown while it runs
+        assertEquals("2 of 5 PDFs · Radio field manual", text(posted(FgsAddNotifications.ID_ADDING)!!))
+        // the PDF add ends: the service stays up, its result is posted, the ongoing notification is the region's
+        runner.events!!.onFinished(FgsFinish("added", null, 5, 5, 5, 0, null, false, "Bookshelves", null, null, null))
+        assertFalse(shadowOf(s).isStoppedBySelf)
+        assertTrue(FgsAddService.running)
+        assertEquals("Added 5 PDFs to Bookshelves", title(posted(FgsAddNotifications.ID_RESULT)!!))
+        assertEquals("Downloading Austria", title(posted(FgsAddNotifications.ID_ADDING)!!))
+        assertTrue(ShadowPowerManager.getLatestWakeLock().isHeld)
+        // progress of the region goes on
+        SystemClock.sleep(1100)
+        FgsAddArm.layerProgress(region.copy(text = "70%", bar = 0.7))
+        assertEquals("70%", text(posted(FgsAddNotifications.ID_ADDING)!!))
+        // Pause now is the region's
+        val calls = mutableListOf<String>()
+        FgsAddArm.tellLayers = { calls += it }
+        pausePressed(s)
+        assertEquals(listOf("layerPause"), calls)
+        FgsAddArm.armLayers(false)
+        assertTrue(shadowOf(s).isStoppedBySelf)
+        assertFalse(FgsAddService.running)
+    }
+
+    @Test
+    fun aRegionStartsDuringAPdfAdd_theRegionEndsFirst_thePdfAddKeepsTheServiceUp() {
+        val s = start()
+        FgsAddArm.layerProgress(region)
+        FgsAddArm.armLayers(false)
+        assertFalse(shadowOf(s).isStoppedBySelf)
+        assertTrue(FgsAddService.running)
+        assertEquals("Adding a PDF", title(shadowOf(s).lastForegroundNotification))
+        runner.events!!.onFinished(FgsFinish("added", null, 1, 1, 1, 0, null, false, "Bookshelves", null, null, null))
+        assertTrue(shadowOf(s).isStoppedBySelf)
+        assertNull(posted(FgsAddNotifications.ID_ADDING))
+    }
+
+    @Test
+    fun pause_whileBothRun_pausesThePdfAddFirst() {
+        val calls = mutableListOf<String>()
+        FgsAddArm.tellLayers = { calls += it }
+        val s = start()
+        FgsAddArm.layerProgress(region)
+        pausePressed(s)
+        assertEquals(listOf("person"), runner.stops)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun aPdfAddStartsDuringARegion_theServiceStartsTheRun_andShowsThePdf_thenTheRegion() {
+        val s = startLayersOnly()
+        FgsAddArm.layerProgress(region)
+        assertEquals(0, runner.started)
+        // the person came back, started an add, and left again: a start with the PDF run
+        s.onStartCommand(FgsAddService.startIntent(context), 0, 2)
+        assertEquals(1, runner.started)
+        assertEquals("Adding a PDF", title(posted(FgsAddNotifications.ID_ADDING)!!))
+        // a second start is still one run
+        s.onStartCommand(FgsAddService.startIntent(context), 0, 3)
+        assertEquals(1, runner.started)
+        // the add ends first: the region stays, and is what the notification shows
+        runner.events!!.onFinished(FgsFinish("added", null, 1, 1, 1, 0, null, false, "Bookshelves", null, null, null))
+        assertFalse(shadowOf(s).isStoppedBySelf)
+        assertEquals("Downloading Austria", title(posted(FgsAddNotifications.ID_ADDING)!!))
+        FgsAddArm.armLayers(false)
+        assertTrue(shadowOf(s).isStoppedBySelf)
+    }
+
+    @Test
+    fun aPdfAddStartsDuringARegion_theRegionEndsFirst_thePdfAddKeepsTheServiceUp() {
+        val s = startLayersOnly()
+        s.onStartCommand(FgsAddService.startIntent(context), 0, 2)
+        FgsAddArm.armLayers(false)
+        assertFalse(shadowOf(s).isStoppedBySelf)
+        assertTrue(FgsAddService.running)
+        runner.events!!.onFinished(FgsFinish("added", null, 1, 1, 1, 0, null, false, "Bookshelves", null, null, null))
+        assertTrue(shadowOf(s).isStoppedBySelf)
+    }
+
+    @Test
+    fun onTimeout_whileARegionRuns_pausesTheLayerJobs_andStops() {
+        val calls = mutableListOf<String>()
+        FgsAddArm.tellLayers = { calls += it }
+        val s = startLayersOnly()
+        s.onTimeout(1, FgsAddService.FGS_TYPE)
+        assertEquals(listOf("layerPause"), calls)
+        assertTrue(shadowOf(s).isStoppedBySelf)
+        assertFalse(ShadowPowerManager.getLatestWakeLock().isHeld)
+    }
+
+    @Test
+    fun leaving_withARegionRunning_startsAServiceWithNoPdfRun() {
+        val a = activity()
+        FgsAddArm.armLayers(true)
+        assertTrue(FgsAddArm.onLeave(a))
+        val started = shadowOf(a.application).nextStartedService
+        assertEquals(FgsAddService::class.java.name, started.component?.className)
+        assertFalse(started.getBooleanExtra(FgsAddService.EXTRA_PDF, true))
+        assertTrue(started.getBooleanExtra(FgsAddService.EXTRA_LAYERS, false))
+    }
+
+    @Test
+    fun leaving_withBoth_startsOneServiceForBoth() {
+        val a = activity()
+        FgsAddArm.armed = true
+        FgsAddArm.armLayers(true)
+        assertTrue(FgsAddArm.onLeave(a))
+        val started = shadowOf(a.application).nextStartedService
+        assertTrue(started.getBooleanExtra(FgsAddService.EXTRA_PDF, true))
+        assertTrue(started.getBooleanExtra(FgsAddService.EXTRA_LAYERS, false))
+    }
+
+    @Test
+    fun leaving_withAPdfAddArmed_whileTheServiceRunsOnlyForARegion_startsItAgainForThePdf() {
+        startLayersOnly()
+        val a = activity()
+        FgsAddArm.armLayers(true)
+        // only the region is armed, and it already runs: nothing to start
+        assertFalse(FgsAddArm.onLeave(a))
+        FgsAddArm.armed = true
+        assertTrue(FgsAddArm.onLeave(a))
+        assertTrue(shadowOf(a.application).nextStartedService.getBooleanExtra(FgsAddService.EXTRA_PDF, false))
+    }
+
+    @Test
+    fun leaving_withARegionArmed_whileTheServiceRunsOnlyForAPdf_startsItAgainForTheRegion() {
+        start()
+        val a = activity()
+        FgsAddArm.armed = true
+        assertFalse(FgsAddArm.onLeave(a))
+        FgsAddArm.armLayers(true)
+        assertTrue(FgsAddArm.onLeave(a))
+        assertTrue(shadowOf(a.application).nextStartedService.getBooleanExtra(FgsAddService.EXTRA_LAYERS, false))
+    }
 }
