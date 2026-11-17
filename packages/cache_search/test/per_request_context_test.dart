@@ -39,8 +39,7 @@ const _on = {'provider': 'kagi', 'reference': 'keystore://search.kagi.key', 'onl
 
 void main() {
   test('1. a web convTool call carries this tab\'s location, or null with no position', () async {
-    var loc = const <String, dynamic>{..._fix};
-    Map<String, dynamic>? here = loc;
+    Map<String, dynamic>? here = _fix;
     final (core, conv, web) = await _open(context: () => (location: here, web: null));
     await conv.tool('search', {'query': 'x'}, now: '2026-11-17T09:00:00-07:00');
     expect(web.last('convTool')['location'], _fix);
@@ -93,6 +92,13 @@ void main() {
     expect(web.last('convTool'), {'conv': 1, 'name': 'search', 'args': {'query': 'x'}, 'now': 'n'});
     await conv.actFinish('r', {'ok': true});
     expect(web.last('convActFinish'), {'conv': 1, 'run_id': 'r', 'reply': {'ok': true}});
+    await core.close();
+  });
+
+  test('5. a key check (perRequest false) leaves both fields off, so the engine-wide setWeb it lent still applies', () async {
+    final (core, conv, web) = await _open(context: () => (location: _fix, web: null));
+    await conv.tool('web_search', {'query': 'Cache'}, now: 'n', perRequest: false);
+    expect(web.last('convTool'), {'conv': 1, 'name': 'web_search', 'args': {'query': 'Cache'}, 'now': 'n'});
     await core.close();
   });
 }
