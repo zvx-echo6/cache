@@ -138,7 +138,7 @@ void main() {
       );
       addTearDown(app.dispose);
       app.isRecommended = (e) => list.isRecommendedFile(e.fileName);
-      if (wait) app.recommendedReady = list.load;
+      if (wait) app.recommendedReady = list.ready;
       return app;
     }
 
