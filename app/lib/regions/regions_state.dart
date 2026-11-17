@@ -13,6 +13,7 @@ import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../platform.dart' as plat;
+import '../platform/app_log.dart';
 import '../screens/download_confirm.dart' show downloadSpace;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
@@ -1078,12 +1079,60 @@ class RegionsState extends ChangeNotifier {
       AreaEstimate e;
       try {
         e = await maps.engine.estimate(kOffroadElevationLayer, terrainBox(bounds, p.bounds), zoom: kOffroadElevationZoom);
-      } catch (_) {
+      } catch (err) {
+        logError('Off-road terrain size for ${r.id}', error: err);
         e = const AreaEstimate(tiles: 0, bytes: 0, maxZoom: kOffroadElevationZoom, allowed: false, problem: 'Could not work out the size of the terrain heights.');
       }
       out.add(OffroadPackPlan(p, onPhone: _packOnPhone(p.relativePath()) || _packKept(p.relativePath()), elevation: e));
     }
     return (OffroadPlan(out), null);
+  }
+
+  final Map<String, bool> _offroadCover = {};
+  final Set<String> _offroadCoverAsked = {};
+
+  /// Whether the loaded off-road catalogue has a pack over region [id] (the check the plan makes): null until it has been read,
+  /// which this starts (listeners hear when it is known). The region page greys Add off-road where it is false.
+  bool? offroadCovered(String id) {
+    final known = _offroadCover[id];
+    if (known != null) return known;
+    if (_offroadCoverAsked.add(id)) unawaited(_readOffroadCover(id));
+    return null;
+  }
+
+  /// [offroadCovered], waiting for the answer when it is not known yet (null: it cannot be read now).
+  Future<bool?> offroadCoveredNow(String id) async {
+    if (!_offroadCover.containsKey(id)) {
+      _offroadCoverAsked.add(id);
+      await _readOffroadCover(id);
+    }
+    return _offroadCover[id];
+  }
+
+  /// A region on the phone whose only missing part is off-road, with no pack over it: its Add off-road is greyed everywhere (the
+  /// region page, the Regions sheet, the menu, the Downloads tab's rows) and opens nothing.
+  bool offroadMissingNoPack(String id) {
+    final l = regionOf(id);
+    if (l == null || l.hasOffroad || l.isArea || offroadCatalogue == null || placesNowAvailable(l)) return false;
+    return offroadCovered(id) == false;
+  }
+
+  Future<void> _readOffroadCover(String id) async {
+    try {
+      final rec = await recordOf(id);
+      final cat = offroadCatalogue;
+      final bounds = rec?.bounds;
+      if (rec == null || cat == null || bounds == null) {
+        _offroadCoverAsked.remove(id);
+        return;
+      }
+      final all = await cat.packs();
+      _offroadCover[id] = packsCovering(all, bounds, states: await statesOf(rec)).isNotEmpty;
+      notifyListeners();
+    } catch (_) {
+      // No catalogue to read now (offline): the offer stays as it was, and is asked again next time.
+      _offroadCoverAsked.remove(id);
+    }
   }
 
   /// The states or provinces the region list says [r] is in ([statesIn]): a county's or a city's state. Its off-road data is
@@ -1195,11 +1244,15 @@ class RegionsState extends ChangeNotifier {
         }
       }
     }
-    if (offroad) await _addOffroad(k, r, anyway: anyway);
+    // The off-road part never fails silently: what stopped it is kept and said after the other parts are saved (they have started).
+    String? offroadProblem;
+    if (offroad) offroadProblem = await _addOffroad(k, r, anyway: anyway, only: !routing && !map && !places);
     if (!k.routing && !k.places && k.areas.isEmpty && k.offroad.isEmpty) _kept.remove(r.id);
     await _save();
     await refresh();
     notifyListeners();
+    // WORDING (for cache-pm): the sentences below reach the person as "Couldn't add off-road to <region>: <sentence>".
+    if (offroadProblem != null) throw StateError(offroadProblem);
   }
 
   /// The outline [r]'s map part is downloaded for ([mapOutline]); null (the box) for an area drawn on the map, one kept from before
@@ -1215,9 +1268,27 @@ class RegionsState extends ChangeNotifier {
 
   /// The off-road packs that cover [r], each checked against its published SHA-256 (a pack already on the phone is not downloaded
   /// again), and the terrain heights over the region (z12 elevation over the part of the region the pack covers).
-  Future<void> _addOffroad(_Kept k, RegionRecord r, {required bool anyway}) async {
-    final (plan, _) = await _offroadPlan(r);
-    if (plan == null || !plan.allowed) return;
+  ///
+  /// Returns why nothing was started (plain words, for the person), or null when it started. [only]: off-road is all that was asked
+  /// for (Add off-road), so a region with no pack over it is said, not passed over.
+  Future<String?> _addOffroad(_Kept k, RegionRecord r, {required bool anyway, bool only = false}) async {
+    // WORDING (cache-pm): these four sentences.
+    if (held) return 'downloads are paused. Tap Resume, then add the off-road data.';
+    final (plan, problem) = await _offroadPlan(r);
+    if (plan == null) {
+      if (problem != null) {
+        logError('Off-road data: no plan for ${r.id}', detail: problem);
+        return problem[0].toLowerCase() + problem.substring(1);
+      }
+      return only ? 'no off-road data is published for this area.' : null;
+    }
+    if (!plan.allowed) {
+      final why = plan.problem;
+      logError('Off-road data: plan not allowed for ${r.id}', detail: why);
+      return why == null
+          ? "the terrain heights for this area can't be worked out."
+          : "the terrain heights for this area can't be downloaded (${why[0].toLowerCase()}${why.substring(1).replaceFirst(RegExp(r'\.$'), '')}).";
+    }
     for (final pp in plan.packs) {
       final p = pp.pack;
       final path = p.relativePath();
@@ -1232,10 +1303,19 @@ class RegionsState extends ChangeNotifier {
         for (final a in maps.engine.areasOf(kOffroadElevationLayer))
           if (k.terrain.contains(a.id) && a.phase != AreaPhase.failed) a.id,
       ].firstOrNull;
-      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom, near: nearFor(r))).id;
+      final String area;
+      try {
+        area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom, near: nearFor(r))).id;
+      } on MobileDataBlocked {
+        rethrow;
+      } catch (e, st) {
+        logError('Off-road terrain heights for ${r.id}', error: e, stack: st);
+        return "the terrain heights could not be downloaded. Try again.";
+      }
       if (!k.terrain.contains(area)) k.terrain.add(area);
       unawaited(_fetchPack(k.offroad.firstWhere((x) => x.path == path)));
     }
+    return null;
   }
 
   /// Downloads one pack into the off-road folder: under a hidden name, checked against its SHA-256 (a file that does not match is
@@ -1287,7 +1367,18 @@ class RegionsState extends ChangeNotifier {
   /// reads how far it is (the phone's pack downloader and the server's are the same steps).
   Future<void> _fetchPackOnServer(_KeptPack p) async {
     final core = _core;
-    if (core == null || held || (_packRuns[p.path]?.running ?? false)) return;
+    if (_packRuns[p.path]?.running ?? false) return;
+    if (core == null || held) {
+      // Not silent: the pack's row says why it is not coming (paused reads as Paused, a missing engine as a problem).
+      if (core == null) {
+        logError('Off-road pack ${p.path}: no region engine on the server');
+        (_packRuns[p.path] = _PackRun())
+          ..running = false
+          ..error = "Off-road data couldn't be downloaded: the server has no region engine.";
+        notifyListeners();
+      }
+      return;
+    }
     final run = _packRuns[p.path] = _PackRun();
     notifyListeners();
     try {
