@@ -14,6 +14,10 @@ import '../platform/share_or_copy.dart' show shareTextOrCopy;
 /// The docked chat list's width (a drawer's).
 const double kDockedChatListWidth = 304;
 
+// WORDING (owner-approved, build 53): the confirmation before a chat is deleted; same dialog as "Delete this book?". Chats never sync
+// to linked devices (Sharing has no chats kind), so the "synced devices" line is not shown.
+const String kDeleteChatQuestion = 'Delete this chat?';
+
 /// The list of past conversations, opened from the Ask top bar: New chat, a search box, then Pinned and
 /// the conversations grouped by date.
 class HistoryDrawer extends StatefulWidget {
@@ -116,6 +120,23 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
         final md = widget.chat.exportMarkdown(c.id);
         if (md != null && mounted) await shareTextOrCopy(context, c.title, md, widget.share);
       case 'delete':
+        final yes = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            key: const ValueKey('delete-confirm'),
+            title: const Text(kDeleteChatQuestion),
+            actions: [
+              TextButton(key: const ValueKey('delete-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+              TextButton(
+                key: const ValueKey('delete-confirm-button'),
+                style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        );
+        if (yes != true || !mounted) return;
         final messenger = ScaffoldMessenger.of(context);
         widget.chat.deleteConversation(c.id);
         if (!widget.docked) Navigator.of(context).pop();
