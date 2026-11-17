@@ -425,6 +425,59 @@ void main() {
     expect(again.areasOf('hillshade').single.error, isNull);
   });
 
+  test('a page loaded again while the server keeps downloading takes the running job back, and Pause stops it (web-region-progress)', () async {
+    // As in a browser: the engine keeps the job's number with the unfinished download.
+    engine.dispose();
+    engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await engine.start();
+    final a = await engine.download('hillshade', home, label: 'reloaded');
+    expect(a.phase, AreaPhase.running);
+    // The tab is closed or reloaded; the server's job (the same core) goes on.
+    engine.dispose();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await again.start();
+    final back = again.areasOf('hillshade').single;
+    expect(back.phase, AreaPhase.running, reason: 'before: it read as stopped part way while the server was still downloading');
+    await again.pause(back.id);
+    await until(() => back.phase == AreaPhase.failed);
+    expect(back.paused, isTrue, reason: 'Pause reached the server job and the area reads as paused');
+  });
+
+  test('two downloads running together: when both jobs end every listing of both areas reads done at once, with the final size (web-region-progress)', () async {
+    const other = GeoBounds(south: 42.70, west: -113.80, north: 42.80, east: -113.66);
+    final a = await engine.download('hillshade', home, label: 'first');
+    final b = await engine.download('elevation', other, label: 'second');
+    expect(a.phase, AreaPhase.running);
+    expect(b.phase, AreaPhase.running);
+    // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
+    bool settled() => engine.allAreas.length == 2 && engine.allAreas.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
+    for (var i = 0; i < 6000 && !settled(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(engine.allAreas.length, 2);
+    for (final x in engine.allAreas) {
+      expect(x.phase, AreaPhase.done, reason: x.id);
+      expect(x.bytes, 20000, reason: 'the final size from the core, not the last progress read');
+      expect(x.doneTiles, 20);
+    }
+    // every listing of an area (hillshade, contours and elevation share the store) is done too
+    for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
+    }
+  });
+
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
     final outline = [
       [
