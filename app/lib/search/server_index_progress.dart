@@ -20,8 +20,8 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
   /// `index.retry` for the work [key] (the server's own key).
   final Future<void> Function(String key) retryKey;
 
-  /// The work's name for a source id (the ZIM's title); null when not known.
-  final String? Function(String id)? titleOf;
+  /// The work's name from the server's key ("seal:zim/<id>", "zim-epub/<id>", or a ZIM's path): the ZIM's title; null when not known.
+  final String? Function(String key)? titleOf;
 
   List<IndexItem> _items = const [];
   int _done = 0;
@@ -83,7 +83,7 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
       final kind = kindOfStep(step, key);
       final d = raw['done'] as num?, t = raw['total'] as num?;
       final progress = d != null && t != null && t > 0 ? (d.toInt(), t.toInt()) : null;
-      final title = titleOf?.call(key.contains('/') ? key.substring(key.indexOf('/') + 1) : key) ?? '';
+      final title = titleOf?.call(key) ?? '';
       final state = raw['state'];
       if (state == 'done') {
         out.add(IndexItem(key: key, state: IndexState.done, title: title, kindOverride: kind));

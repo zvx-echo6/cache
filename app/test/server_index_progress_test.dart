@@ -13,7 +13,7 @@ class _Server {
   late final ServerIndexProgress progress = ServerIndexProgress(
     setPaused: (p) async => calls.add(('index.pause', {'paused': p})),
     retryKey: (k) async => calls.add(('index.retry', {'key': k})),
-    titleOf: (id) => {'army': 'Army Publishing'}[id],
+    titleOf: (key) => key.endsWith('/army') || key == '/docs/army.zim' ? 'Army Publishing' : null,
   );
 }
 
@@ -30,10 +30,11 @@ Future<void> _open(WidgetTester tester, ServerIndexProgress p) async {
 }
 
 void main() {
+  // the server's order: running, queued, done, stuck, failed; keys as the server writes them
   final threeOfWork = _q([
-    _item('zim-pdf/army', 'done', step: 'pdfs'),
     _item('zim-epub/army', 'running', done: 3, total: 12, step: 'epubs'),
     _item('zim-captions/army', 'queued', step: 'captions'),
+    _item('/docs/army.zim', 'done', done: 4, total: 4, step: 'keywords'),
   ], 1, 3);
 
   testWidgets('a queue with running and queued work gives the headline', (tester) async {
@@ -56,12 +57,12 @@ void main() {
   });
 
   testWidgets('a stuck item says where it stopped, and Retry goes to the server', (tester) async {
-    final s = _Server()..progress.update(_q([_item('zim-pdf/army', 'stuck', step: 'pdfs'), _item('zim-epub/army', 'queued', step: 'epubs')], 0, 2));
+    final s = _Server()..progress.update(_q([_item('zim-epub/army', 'queued', step: 'epubs'), _item('/docs/c.zim', 'stuck', done: 1, total: 4, step: 'keywords')], 0, 2));
     await _open(tester, s.progress);
-    expect(find.text('Stuck at: making PDFs searchable · Retry'), findsOneWidget);
-    await tester.tap(find.text('Stuck at: making PDFs searchable · Retry'));
+    expect(find.text('Stuck at: getting the search index ready · Retry'), findsOneWidget);
+    await tester.tap(find.text('Stuck at: getting the search index ready · Retry'));
     await tester.pump();
-    expect(s.calls, [('index.retry', {'key': 'zim-pdf/army'})]);
+    expect(s.calls, [('index.retry', {'key': '/docs/c.zim'})]);
   });
 
   testWidgets('Pause all and Resume go to the server as index.pause', (tester) async {
@@ -102,7 +103,7 @@ void main() {
   testWidgets('when all is done it says Search ready for a moment', (tester) async {
     final s = _Server()..progress.update(threeOfWork);
     await tester.pumpWidget(_app(IndexOverviewLine(scheduler: s.progress, doneFor: const Duration(seconds: 1))));
-    s.progress.update(_q([_item('zim-pdf/army', 'done'), _item('zim-epub/army', 'done'), _item('zim-captions/army', 'done')], 3, 3));
+    s.progress.update(_q([_item('seal:zim/army', 'done', step: 'seal'), _item('zim-epub/army', 'done', step: 'epubs'), _item('/docs/army.zim', 'done', step: 'keywords')], 3, 3));
     await tester.pump();
     expect(find.text('Search ready · 3 of 3'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));

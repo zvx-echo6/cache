@@ -533,8 +533,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       unawaited(_readServerIndexing());
       notifyListeners();
     },
-    titleOf: (id) {
-      final z = zimById(id);
+    // the server's keys end in the source id ("seal:zim/<id>", "zim-epub/<id>") or are the ZIM's path
+    titleOf: (key) {
+      final last = key.substring(key.lastIndexOf('/') + 1);
+      final z = zimById(last) ?? zims.where((o) => o.path == key || o.fileName == last).firstOrNull;
       return z == null ? null : titleOf(z);
     },
   );
