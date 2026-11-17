@@ -4,7 +4,7 @@
 
 import 'package:cache/layout/adaptive.dart' show TwoPane, isPaneSelected;
 import 'package:cache/linux_ui.dart' show debugLinuxUi;
-import 'package:cache/notebook/places.dart';
+import 'package:cache_search/cache_search.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/screens/settings/widgets.dart';
 import 'package:cache/theme.dart';
