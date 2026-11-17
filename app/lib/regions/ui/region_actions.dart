@@ -363,6 +363,10 @@ Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, Local
   }
 }
 
+/// WORDING (owner, exact): where no off-road pack covers a region, Add off-road is greyed with this line (the region page, the
+/// Regions sheet and the region's menu).
+const String kNoOffroadLine = 'No off-road data is published for this area.';
+
 /// What can be done with a region on the phone, in the order the menu lists it.
 enum RegionAction { open, showOnMap, carryOn, tryAgain, addOffroad, update, delete }
 
@@ -431,12 +435,29 @@ Future<void> showRegionActions(BuildContext context, RegionsState regions, Local
             child: Text(l.name, style: Theme.of(ctx).textTheme.titleMedium),
           ),
           for (final a in regionActions(regions, l, open: open))
-            ListTile(
-              key: ValueKey('region-action-${a.name}'),
-              leading: Icon(regionActionIcon(a)),
-              title: Text(regionActionLabel(a)),
-              onTap: () => Navigator.pop(ctx, a),
-            ),
+            if (a == RegionAction.addOffroad)
+              // The same check as the region page: where no pack covers the region the item is greyed and says why.
+              ListenableBuilder(
+                listenable: regions,
+                builder: (_, _) {
+                  final none = regions.offroadCovered(l.id) == false;
+                  return ListTile(
+                    key: ValueKey('region-action-${a.name}'),
+                    leading: Icon(regionActionIcon(a)),
+                    title: Text(regionActionLabel(a)),
+                    subtitle: none ? const Text(kNoOffroadLine) : null,
+                    enabled: !none,
+                    onTap: none ? null : () => Navigator.pop(ctx, a),
+                  );
+                },
+              )
+            else
+              ListTile(
+                key: ValueKey('region-action-${a.name}'),
+                leading: Icon(regionActionIcon(a)),
+                title: Text(regionActionLabel(a)),
+                onTap: () => Navigator.pop(ctx, a),
+              ),
           const SizedBox(height: 8),
         ],
       ),
