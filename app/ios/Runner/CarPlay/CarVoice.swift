@@ -63,8 +63,8 @@ struct CarVoicePlace: Equatable, Sendable {
 
 /// What a navigation request came to (Dart's answer to `navigateTo`).
 enum CarVoiceOutcome: Equatable {
-  /// Guidance began, to the place of this name.
-  case started(name: String)
+  /// Guidance began, to the place of this name; `summary` is the route's time and distance in Cache's own words, when known.
+  case started(name: String, summary: String? = nil)
   /// The routes to the place are open on the phone but guidance did not begin (no route could be found yet).
   case routes(CarPlace)
   /// The name is not a saved place: the places found for it, to pick from.
@@ -119,7 +119,11 @@ enum CarVoice {
   // The words Siri says (design section 6, approved as written). Nothing else is said by Cache.
   /// Siri's question when no place was said.
   static let whereTo = "Where to?"
-  static func starting(_ name: String) -> String { "Starting the route to \(name)." }
+  static func starting(_ name: String, _ summary: String? = nil) -> String {
+    let first = "Starting the route to \(name)."
+    guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return first }
+    return "\(first) \(summary)"
+  }
   static func showing(_ query: String) -> String { "Showing places for \(query)." }
   static func noneFound(_ query: String) -> String { "Cache found no places for \(query)." }
 
@@ -154,7 +158,7 @@ enum CarVoice {
       return places.isEmpty ? .none(query: place.name) : .places(query: place.name, places: places)
     }
     let name = CarValue.text(m["name"]) ?? place.name
-    if CarValue.isTrue(m["started"]) { return .started(name: name) }
+    if CarValue.isTrue(m["started"]) { return .started(name: name, summary: CarValue.text(m["summary"])) }
     guard let id = m["id"] as? String else { return .noAnswer }
     let lat = CarValue.double(m["lat"]) ?? place.lat ?? 0
     let lon = CarValue.double(m["lon"]) ?? place.lon ?? 0
@@ -165,7 +169,7 @@ enum CarVoice {
   /// failed and Siri says so in its own words).
   static func words(_ outcome: CarVoiceOutcome, carConnected: Bool) -> String? {
     switch outcome {
-    case .started(let name): return starting(name)
+    case .started(let name, let summary): return starting(name, summary)
     case .places(let query, _): return carConnected ? showing(query) : nil
     case .none(let query): return noneFound(query)
     case .routes, .noAnswer: return nil

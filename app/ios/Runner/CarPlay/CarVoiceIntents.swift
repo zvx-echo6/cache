@@ -329,7 +329,7 @@ enum CarVoiceRun {
   /// Which of the approved sentences Siri says, for the log (no place names in the log).
   static func template(_ outcome: CarVoiceOutcome) -> String {
     switch outcome {
-    case .started: return "'Starting the route to <name>.'"
+    case .started(_, let summary): return summary?.isEmpty == false ? "'Starting the route to <name>. <summary>'" : "'Starting the route to <name>.'"
     case .places: return "'Showing places for <query>.'"
     case .none: return "'Cache found no places for <query>.'"
     case .routes, .noAnswer: return "nothing of Cache's"

@@ -401,6 +401,12 @@ class NavState extends ChangeNotifier {
   DateTime? _lastReroute;
   bool _routeStarted = false;
 
+  /// The route's time and distance in the words the opening line uses, while guidance runs; null when there is no route.
+  String? get routeSummary {
+    final r = route, e = _engine;
+    return r == null || e == null || !guiding ? null : e.summary(r);
+  }
+
   /// The opening line of the guidance just started is not spoken (see [start]).
   bool _quietOpening = false;
 

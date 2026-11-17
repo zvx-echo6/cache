@@ -581,7 +581,9 @@ class CarBridge {
     await nav.openDirections(to);
     // Siri says "Starting the route to <name>" itself: the phone's opening line is left out for this start.
     if (start && nav.route != null) await nav.start(quietOpening: fromSiri);
-    return {'started': nav.guiding, 'id': to.id, 'name': to.name, 'lat': to.lat, 'lon': to.lon};
+    // Siri says the route's time and distance itself, in the words of the opening line that is left out for it.
+    final summary = nav.guiding ? nav.routeSummary : null;
+    return {'started': nav.guiding, 'id': to.id, 'name': to.name, 'lat': to.lat, 'lon': to.lon, 'summary': ?summary};
   }
 }
 
