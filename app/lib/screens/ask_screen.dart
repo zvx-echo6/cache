@@ -261,7 +261,7 @@ class _AskScreenState extends State<AskScreen> {
               children: [
                 for (final m in app.models)
                   if (m.path != app.active?.path && !app.isUnsupported(m))
-                    ListTile(minTileHeight: 48, title: Text(app.displayName(m)), subtitle: Text(formatBytes(m.size)), onTap: () => Navigator.pop(ctx, m)),
+                    ListTile(minTileHeight: 48, title: Text(app.displayName(m)), subtitle: Text(app.sizeLine(m)), onTap: () => Navigator.pop(ctx, m)),
               ],
             ),
           ),

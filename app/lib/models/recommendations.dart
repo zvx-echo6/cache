@@ -257,6 +257,15 @@ class RecommendedModels extends ChangeNotifier {
     return models.any((m) => m.file == fileName);
   }
 
+  /// The name the list gives the file [fileName] ("Gemma 4 E2B · tuned for Cache"); null when the list does not name it, or while the
+  /// list is not known.
+  String? nameOfFile(String fileName) {
+    for (final m in models) {
+      if (m.file == fileName) return m.name;
+    }
+    return null;
+  }
+
   /// No model tuned for Cache is in the list yet.
   bool get noneTuned => !models.any((m) => m.kind == RecommendationKind.tunedForCache);
 
