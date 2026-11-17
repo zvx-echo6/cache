@@ -568,7 +568,7 @@ void main() {
     });
   });
 
-  test('a watched place that has not come yet is named and waiting', () async {
+  test('a watched place that is not here is kept in the setting and not counted', () async {
     final (a, b) = await pair();
     final watched = ValueNotifier<List<String>>(['cabin', 'home']);
     final list = [
@@ -592,7 +592,57 @@ void main() {
       ..writeAsStringSync('${const SettingsEvent(at: 1 << 40, dev: 'A', key: kWatchPlacesKey, value: ['cabin', 'home', 'trailhead'], note: {'trailhead': 'Trailhead'}).toLine()}\n');
     await s.pull();
     expect(watched.value, ['cabin', 'home', 'trailhead']);
-    expect(s.placesNotHere({'cabin', 'home'}), ['Trailhead']);
+    expect(s.watchedPlacesHere({'cabin', 'home'}), 2, reason: 'a watch whose place is not here is kept but not counted');
+    expect(s.watchedPlacesHere(null), isNull);
+    s.dispose();
+    a.dispose();
+    b.dispose();
+  });
+
+  testWidgets('the linked device\'s Weather page counts only the watched places this device has and never says "waiting"', (tester) async {
+    tall(tester);
+    late Dev a, b;
+    late SettingsSync s;
+    final watched = ValueNotifier<List<String>>(['cabin', 'home']);
+    await tester.runAsync(() async {
+      (a, b) = await pair();
+      s = SettingsSync(
+        sharing: b.sharing,
+        settings: [
+          SyncedSetting(
+            key: kWatchPlacesKey,
+            group: SettingsGroupId.weather,
+            label: 'Saved places watched',
+            listenable: watched,
+            read: () => watched.value,
+            write: (v) async {
+              watched.value = [for (final x in v as List) '$x'];
+              return true;
+            },
+            note: () => {'cabin': 'Cabin', 'home': 'Home'},
+            shows: () => '${watched.value.length} places',
+          ),
+        ],
+        keys: () => const [],
+        storeKey: (_, _) async => false,
+        dir: () async => b.dir,
+        every: const Duration(hours: 1),
+        placesHere: () async => {'cabin', 'home'},
+      );
+      await s.start();
+      File('${b.dir.path}/log/A.jsonl')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('${const SettingsEvent(at: 1 << 40, dev: 'A', key: kWatchPlacesKey, value: ['cabin', 'home', 'trailhead'], note: {'trailhead': 'Trailhead'}).toLine()}\n');
+      await s.pull();
+    });
+    expect(watched.value, ['cabin', 'home', 'trailhead'], reason: 'kept in the setting, so it still syncs on');
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SettingsGroupPage(sync: s, peer: 'A', name: 'Desk', group: SettingsGroupId.weather)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    expect(find.text('2 places'), findsOneWidget);
+    expect(find.textContaining('waiting'), findsNothing);
+    expect(find.textContaining('Trailhead'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
     s.dispose();
     a.dispose();
     b.dispose();

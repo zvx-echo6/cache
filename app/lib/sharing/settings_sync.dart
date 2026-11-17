@@ -612,17 +612,13 @@ class SettingsSync extends ChangeNotifier {
   /// What came with the change [key] last took from a linked device (see [SyncedSetting.note]).
   Object? noteOf(String key) => _notes[key];
 
-  /// The watched saved places that are not on this device yet ([here]: the saved places here, by key), by name when the other
-  /// device named them.
-  List<String> placesNotHere(Set<String>? here) {
+  /// How many of the watched saved places are on this device ([here]: the saved places here, by key); null until that is known.
+  /// The ones that are not here stay in the setting and are not counted or shown.
+  int? watchedPlacesHere(Set<String>? here) {
     final s = _byKey[kWatchPlacesKey];
-    if (s == null || here == null) return const [];
+    if (s == null || here == null) return null;
     final watched = s.read();
-    final names = _notes[kWatchPlacesKey] is Map ? (_notes[kWatchPlacesKey] as Map) : const {};
-    return [
-      for (final k in (watched is List ? watched : const []))
-        if (k is String && !here.contains(k)) (names[k] is String ? names[k] as String : 'A place'),
-    ];
+    return [for (final k in (watched is List ? watched : const [])) if (k is String && here.contains(k)) k].length;
   }
 
   // ---------------------------------------------------------------- keys
