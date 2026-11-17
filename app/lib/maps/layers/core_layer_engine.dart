@@ -387,6 +387,7 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the done list', id, area);
       }
       for (final p in (installed['partial'] as List? ?? const [])) {
         final m = (p as Map).cast<String, dynamic>();
@@ -410,7 +411,11 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the unfinished list', id, area);
       }
+    }
+    for (final e in _areas.entries) {
+      if (!seen.contains(e.key) && !_running.containsKey(e.value.id)) _logArea('not listed by the core, dropped', e.value.layerId, e.value);
     }
     // Areas that were deleted, or belong to a layer that is gone, drop out unless a download is still running.
     _areas.removeWhere((k, a) => !seen.contains(k) && !_running.containsKey(a.id));
@@ -420,6 +425,17 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   String _key(String layer, String area) => '$layer/$area';
+
+  final Map<String, String> _areaLogged = {};
+
+  /// One line when an area's state under a layer entry changes (which list the core put it in, its phase, bytes and tiles, and whether
+  /// a job of ours is still on it): the log of why a page can keep showing a download as running after its job ended. No addresses.
+  void _logArea(String where, String layer, DownloadedArea a) {
+    final text = '$where: ${a.phase.name}, ${a.bytes} B, ${a.doneTiles}/${a.totalTiles} tiles, job ${_running.containsKey(a.id) ? 'running' : 'none'}';
+    if (_areaLogged[_key(layer, a.id)] == text) return;
+    _areaLogged[_key(layer, a.id)] = text;
+    logInfo('Layer area ${a.id} under $layer $text');
+  }
 
   /// A page loaded again while the server's downloads go on: each unfinished area whose saved job number is still a running job
   /// is a running download again, so it shows its progress and Pause reaches the job.
@@ -842,6 +858,12 @@ class CoreLayerEngine extends LayerEngine {
       }
     }
     if (_disposed) return;
+    for (final r in settled) {
+      for (final x in _areas.values.where((x) => x.id == r.area.id)) {
+        logInfo('Layer area ${x.id} after its job ended, listed under ${x.layerId}: ${x.phase.name}, ${x.bytes} B');
+      }
+      if (!_areas.values.any((x) => x.id == r.area.id)) logInfo('Layer area ${r.area.id} after its job ended: not listed under any layer');
+    }
     if (_running.isEmpty) {
       _poll?.cancel();
       _poll = null;
