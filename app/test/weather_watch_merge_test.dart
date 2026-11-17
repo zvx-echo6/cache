@@ -94,6 +94,22 @@ void main() {
     }
 
 
+    test('Remove sends a watch_places value without the id (moved from the Remove button\'s tests)', () async {
+      await setUpDevice();
+      await removeX();
+      final last = sent().last;
+      expect(last['k'], kWatchPlacesKey);
+      expect(last['val'], ['y']);
+      expect(last['at'], 2000);
+    });
+
+    test('an older incoming watch_places change that still has the id does not re-add it (moved)', () async {
+      await setUpDevice();
+      await removeX();
+      await arrives(1500, ['x', 'y']);
+      expect(settings.watchedSavedPlaces, {'y'});
+    });
+
     test('a NEWER whole list that still has a removed id does not put it back (failing first: it did)', () async {
       await setUpDevice();
       await removeX();
