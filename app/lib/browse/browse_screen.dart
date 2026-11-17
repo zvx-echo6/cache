@@ -320,10 +320,20 @@ class _BrowseScreenState extends State<BrowseScreen> {
       checkUpdate: sources.originOf(z) == null
           ? null
           : () async {
-              await b.checkUpdates();
-              if (!mounted) return;
+              // The messenger is taken now: the words must reach the person even if this screen has moved on while the check ran.
+              final messenger = ScaffoldMessenger.maybeOf(context);
+              void say(String text) => messenger
+                ?..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(text)));
+              say('Checking ${sources.titleOf(z)} for updates…');
+              try {
+                await b.checkUpdates();
+              } catch (_) {
+                say('The library could not be read.');
+                return;
+              }
               final u = b.updates[z.path];
-              _say(b.updateError ?? (u == null ? '${sources.titleOf(z)} is up to date' : 'Update ready: ${u.release}, ${formatBytes(u.size)}'));
+              say(b.updateError ?? (u == null ? '${sources.titleOf(z)} is up to date' : 'Update ready: ${u.release}, ${formatBytes(u.size)}'));
             },
       // A picture is kept beside the file on the phone; the browser has no such file to change.
       changeIcon: b.device != null ? null : () async {
