@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../platform/app_log.dart';
 import '../app_fs.dart';
 import '../browse/zim_download.dart';
 import '../chat/ask_focus.dart';
@@ -109,7 +110,12 @@ class RegionPlan {
     this.mapProblem,
     this.offroad,
     this.offroadProblem,
+    this.sharing = const [],
   });
+
+  /// Layers whose tiles are counted with another layer's (contour lines with hillshade: both read the elevation store), with the
+  /// layer that carries the estimate.
+  final List<({LayerDef def, String ownerId})> sharing;
 
   final PartPlan? routing;
   final String? routingProblem;
@@ -1044,7 +1050,9 @@ class RegionsState extends ChangeNotifier {
       }
     }
     final (offroad, offroadProblem) = await _offroadPlan(r);
+    final sharing = <({LayerDef def, String ownerId})>[];
     RegionPlan done({List<MapLayerPlan> map = const [], String? mapProblem}) => RegionPlan(
+      sharing: sharing,
       routing: routing,
       routingProblem: routingProblem,
       places: places,
@@ -1062,12 +1070,27 @@ class RegionsState extends ChangeNotifier {
     String? mapProblem;
     // The size is of what the download fetches: the outline's tiles, not the whole box.
     final outline = await _mapOutline(r);
+    // One estimate per store the tiles are kept in: hillshade and contour lines both read the elevation layer's tiles, so with both on
+    // their tiles are counted once (as the download fetches them once, and costOf counts them).
+    final stores = <String, String>{};
     for (final card in layers) {
       final def = maps.downloadDefFor(card, bounds);
+      final store = maps.engine.downloadLayerOf(def.id);
+      final owner = stores[store];
+      if (owner != null) {
+        sharing.add((def: def, ownerId: owner));
+        logInfo('Region plan ${r.id}: layer ${def.id} shares the tiles of $store, counted once');
+        continue;
+      }
+      stores[store] = def.id;
       try {
-        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds, outline: outline)));
+        final e = await maps.engine.estimate(def.id, bounds, outline: outline);
+        map.add(MapLayerPlan(def, e));
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): ${e.allowed ? 'allowed' : 'left out'}, max zoom ${e.maxZoom} of ${def.maxZoom}, '
+            '${e.tiles} tiles, ${e.bytes} B${e.tilesAlready > 0 ? ', ${e.bytesAlready} B already here' : ''}');
       } catch (_) {
         mapProblem = 'Could not work out the size of the map.';
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): its size could not be worked out');
       }
     }
     if (mapProblem == null && map.isNotEmpty && map.every((m) => !m.estimate.allowed)) {
