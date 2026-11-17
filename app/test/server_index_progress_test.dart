@@ -152,5 +152,44 @@ void main() {
       await tester.pumpWidget(_app(IndexOverviewLine(scheduler: p)));
       expect(find.text('Getting search ready · 1 of 4 done'), findsOneWidget);
     });
+
+    testWidgets('Pause all and Resume also pause and resume the server\'s library build queue', (tester) async {
+      final api = FakeBuildApi()
+        ..libs = [const BuildLibrary(id: 'proof', title: 'Proof-Library', building: true)]
+        ..q = BuildQueue(items: [book('b1', 'building', pieces: 2, total: 10), book('b2', 'queued')]);
+      final ctl = BuildController(api: api, poll: false);
+      final server = _Server();
+      final p = server.progress..attachBuilds(ctl);
+      await tester.runAsync(ctl.refresh);
+      await _open(tester, p);
+      await tester.tap(find.byKey(const ValueKey('index-pause-all')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(server.calls, contains('index.pause {paused: true}'));
+      expect(api.calls, contains('pause'));
+      expect(p.pausedAll, isTrue);
+      // the build's row says the same paused words as any paused work
+      expect(find.text('Paused by you · Resume'), findsWidgets);
+      await tester.tap(find.byKey(const ValueKey('index-resume-all')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(server.calls.last, 'index.pause {paused: false}');
+      expect(api.calls, contains('resume'));
+      expect(p.pausedAll, isFalse);
+    });
+
+    testWidgets('a build paused from the Library banner alone counts as paused, and Resume resumes it', (tester) async {
+      final api = FakeBuildApi()
+        ..libs = [const BuildLibrary(id: 'proof', title: 'Proof-Library', building: true)]
+        ..q = BuildQueue(paused: true, items: [book('b1', 'queued')]);
+      final ctl = BuildController(api: api, poll: false);
+      final server = _Server();
+      final p = server.progress..attachBuilds(ctl);
+      await tester.runAsync(ctl.refresh);
+      expect(p.pausedAll, isTrue);
+      await tester.runAsync(p.resumeAll);
+      expect(api.calls, contains('resume'));
+      expect(server.calls, isEmpty);
+    });
   });
 }
