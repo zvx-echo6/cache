@@ -202,15 +202,18 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
         SettingsGroup(
           rows: [
             for (final h in hits)
-              SettingsRow(
-                key: ValueKey('hit-${h.id}'),
-                title: h.name,
-                status: joinParts([
-                  [Part(regionKindLabel(h.kind, country: h.shardId.toUpperCase()))],
-                  if (h.inside.isNotEmpty) [Part(h.inside)],
-                  localParts(r, r.regionOf(h.id)),
-                ]),
-                onTap: () => _openHit(h),
+              _noPackDim(
+                r.offroadMissingNoPack(h.id),
+                SettingsRow(
+                  key: ValueKey('hit-${h.id}'),
+                  title: h.name,
+                  status: joinParts([
+                    [Part(regionKindLabel(h.kind, country: h.shardId.toUpperCase()))],
+                    if (h.inside.isNotEmpty) [Part(h.inside)],
+                    r.offroadMissingNoPack(h.id) ? [const Part(kNoOffroadLine, Tone.quiet)] : localParts(r, r.regionOf(h.id)),
+                  ]),
+                  onTap: r.offroadMissingNoPack(h.id) ? null : () => _openHit(h),
+                ),
               ),
           ],
         ),
@@ -240,11 +243,14 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
               label: 'Countries',
               rows: [
                 for (final c in ix.countries)
-                  SettingsRow(
-                    key: ValueKey('country-${c.record.id}'),
-                    title: c.record.name,
-                    status: localParts(r, r.regionOf(c.record.id)),
-                    onTap: () => _openCountry(c),
+                  _noPackDim(
+                    r.offroadMissingNoPack(c.record.id),
+                    SettingsRow(
+                      key: ValueKey('country-${c.record.id}'),
+                      title: c.record.name,
+                      status: r.offroadMissingNoPack(c.record.id) ? [const Part(kNoOffroadLine, Tone.quiet)] : localParts(r, r.regionOf(c.record.id)),
+                      onTap: r.offroadMissingNoPack(c.record.id) ? null : () => _openCountry(c),
+                    ),
                   ),
               ],
             ),
@@ -332,15 +338,18 @@ class _RegionNodePageState extends State<RegionNodePage> {
                 if (self != null)
                   SettingsGroup(
                     rows: [
-                      SettingsRow(
-                        key: ValueKey('self-${self.id}'),
-                        icon: Icons.download_outlined,
-                        title: 'Download ${self.name}',
-                        status: joinParts([
-                          [Part(regionKindLabel(self.kind, country: self.country))],
-                          localParts(r, r.regionOf(self.id)),
-                        ]),
-                        onTap: () => openRegionOffer(context, r, self),
+                      _noPackDim(
+                        r.offroadMissingNoPack(self.id),
+                        SettingsRow(
+                          key: ValueKey('self-${self.id}'),
+                          icon: Icons.download_outlined,
+                          title: 'Download ${self.name}',
+                          status: joinParts([
+                            [Part(regionKindLabel(self.kind, country: self.country))],
+                            r.offroadMissingNoPack(self.id) ? [const Part(kNoOffroadLine, Tone.quiet)] : localParts(r, r.regionOf(self.id)),
+                          ]),
+                          onTap: r.offroadMissingNoPack(self.id) ? null : () => openRegionOffer(context, r, self),
+                        ),
                       ),
                     ],
                   ),
@@ -349,12 +358,15 @@ class _RegionNodePageState extends State<RegionNodePage> {
                     label: regionKindHeading(g.key, country: self?.country ?? s.id.toUpperCase()),
                     rows: [
                       for (final n in g.value)
-                        SettingsRow(
-                          key: ValueKey('node-${n.id}'),
-                          title: n.name,
-                          status: localParts(r, r.regionOf(n.id)),
-                          chevron: true,
-                          onTap: () => _open(s, n),
+                        _noPackDim(
+                          r.offroadMissingNoPack(n.id),
+                          SettingsRow(
+                            key: ValueKey('node-${n.id}'),
+                            title: n.name,
+                            status: r.offroadMissingNoPack(n.id) ? [const Part(kNoOffroadLine, Tone.quiet)] : localParts(r, r.regionOf(n.id)),
+                            chevron: true,
+                            onTap: r.offroadMissingNoPack(n.id) ? null : () => _open(s, n),
+                          ),
                         ),
                     ],
                   ),
@@ -574,3 +586,6 @@ class _UpdatesTabState extends State<UpdatesTab> {
     );
   }
 }
+
+/// A row greyed where its region on the phone can only be added off-road to and no pack covers it (the owner's rule).
+Widget _noPackDim(bool none, Widget row) => none ? Opacity(opacity: 0.55, child: row) : row;
