@@ -26,6 +26,8 @@ const _usgs = 'usgs-quakes-near';
 Future<void> _calm(WidgetTester tester, SettingsRig r) async {
   await tester.runAsync(() async {
     final w = r.weather;
+    r.liveCore.fetchErrors.clear();
+    r.liveCore.stored.clear();
     await w.saveKey(w.sourceById('idaho511-events')!, 'k');
     await w.saveKey(w.sourceById(_firms)!, 'k');
     await w.setSourcesOn([for (final c in w.sources) if (c.featured && !w.isOwn(c)) c], true);
@@ -60,9 +62,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('2 need attention · 1 off'), findsOneWidget);
       expect(find.text('Last checked just now'), findsOneWidget);
-      expect(_top(tester, 'Needs attention'), lessThan(_top(tester, 'Working')));
-      expect(_top(tester, 'Working'), lessThan(_top(tester, 'Off')));
-      expect(_top(tester, 'Off'), lessThan(_top(tester, 'More sources')));
+      // a group's label is drawn in capitals
+      expect(_top(tester, 'NEEDS ATTENTION'), lessThan(_top(tester, 'WORKING')));
+      expect(_top(tester, 'WORKING'), lessThan(_top(tester, 'OFF')));
+      expect(_top(tester, 'OFF'), lessThan(_top(tester, 'More sources')));
       expect(find.text('NASA FIRMS needs a free key.'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget);
       expect(find.text('Add key'), findsOneWidget);
@@ -82,7 +85,7 @@ void main() {
       await tester.pumpAndSettle();
       final n = r.weather.enabledSources.length;
       expect(find.text('All $n sources working'), findsOneWidget);
-      for (final h in ['Needs attention', 'Working', 'Off']) {
+      for (final h in ['NEEDS ATTENTION', 'WORKING', 'OFF']) {
         expect(find.text(h), findsNothing, reason: h);
       }
       expect(find.text('Add key'), findsNothing);
@@ -133,19 +136,21 @@ void main() {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await _mixed(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('2 need attention · 1 off'), findsOneWidget);
+      expect(find.byKey(const ValueKey('source-swpc-kp')), findsNothing, reason: 'off, not featured: under More sources');
+      expect(find.text('More sources'), findsOneWidget);
       await tester.runAsync(() async {
         await r.weather.setSourceOn(r.weather.sourceById('swpc-kp')!, true);
         r.liveCore.stored['swpc-kp'] = {'age': '3 hours old', 'age_seconds': 10800, 'fetched_at': '2026-10-26T09:00:00-06:00', 'expired': true};
         r.liveCore.fetchErrors['swpc-kp'] = const CacheSearchException('fetch_failed', 'HTTP 500');
         await r.weather.updateNow(force: true);
       });
-      await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
       expect(find.text('3 need attention · 1 off'), findsOneWidget);
       expect(find.byKey(const ValueKey('source-swpc-kp')), findsOneWidget, reason: 'on, not featured: listed');
       expect(find.byKey(const ValueKey('try-again-swpc-kp')), findsOneWidget);
-      expect(find.byKey(const ValueKey('source-avalanche-forecast-zones')), findsNothing, reason: 'off, not featured: under More sources');
-      expect(find.text('More sources'), findsOneWidget);
       expect(find.textContaining('HTTP'), findsNothing);
       await r.dispose(tester);
     });
@@ -190,7 +195,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('weather-plain-line')));
       await tester.pumpAndSettle();
-      expect(find.text('Needs attention'), findsOneWidget);
+      expect(find.text('NEEDS ATTENTION'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget);
       await r.dispose(tester);
     });
