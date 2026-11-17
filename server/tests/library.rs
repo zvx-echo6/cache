@@ -1093,3 +1093,104 @@ async fn items_list_what_is_installed_and_remove_takes_files_sidecars_and_index(
     assert_eq!(v["result"], json!([]));
     stop(&rig).await;
 }
+
+// ---- Clean up
+
+#[tokio::test]
+async fn clean_up_removes_orphan_download_parts_and_keeps_a_paused_downloads_part_and_fresh_uploads() {
+    let _g = LOCK.lock().await;
+    let rig = rig("cleanup", Setup::new()).await;
+    assert_eq!(route(&rig.app, "GET", "/api/library/cleanup", None, b"").await.status, 401);
+    assert_eq!(route(&rig.app, "POST", "/api/library/cleanup", None, b"").await.status, 401);
+    // a paused download keeps its part file
+    let a = rig.download(json!({"url": rig.origin.url("/slow.zim"), "kind": "zim", "name": "p.zim"})).await;
+    let aid = a["id"].as_str().unwrap();
+    for _ in 0..200 {
+        if rig.job(aid).await.is_some_and(|j| j["state"] == json!("running") && j["bytes"].as_u64().unwrap() > 0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // running: Clean up waits
+    assert_eq!(rig.call("POST", "/api/library/cleanup", "").await.0, 409);
+    let (s, _) = rig.call("POST", &format!("/api/library/jobs/{aid}/pause"), "").await;
+    assert_eq!(s, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kept = part_path(rig.data(), &rig.origin.url("/slow.zim"));
+    assert!(kept.exists());
+    // an orphan download part, a fresh upload part and an installed file
+    let orphan = rig.data().join("tmp/dl-0123456789abcdef.part");
+    std::fs::write(&orphan, vec![7u8; 700]).unwrap();
+    let upload = rig.data().join("tmp/up-fresh.part");
+    std::fs::write(&upload, vec![7u8; 50]).unwrap();
+    std::fs::write(rig.zims().join("keep.zim"), vec![1u8; 100]).unwrap();
+    let (s, v) = rig.call("GET", "/api/library/cleanup", "").await;
+    assert_eq!((s, v["result"].clone()), (200, json!({"bytes": 700})), "{v}");
+    let (s, v) = rig.call("POST", "/api/library/cleanup", "").await;
+    assert_eq!((s, v["result"].clone()), (200, json!({"freed": 700})), "{v}");
+    assert!(!orphan.exists() && kept.exists() && upload.exists() && rig.zims().join("keep.zim").exists());
+    assert_eq!(rig.call("GET", "/api/library/cleanup", "").await.1["result"], json!({"bytes": 0}));
+    rig.call("DELETE", &format!("/api/library/jobs/{aid}"), "").await;
+    stop(&rig).await;
+}
+
+// ---- the server's own app log (Settings > Storage > Advanced in the browser)
+
+#[tokio::test]
+async fn the_app_log_is_signed_in_only_has_a_level_and_clears() {
+    let _g = LOCK.lock().await;
+    let rig = rig("applog", Setup::new()).await;
+    for (m, p) in [("GET", "/api/log"), ("DELETE", "/api/log"), ("GET", "/api/log/level"), ("PUT", "/api/log/level")] {
+        assert_eq!(route(&rig.app, m, p, None, b"{}").await.status, 401, "{m} {p}");
+    }
+    assert_eq!(rig.call("GET", "/api/log/level", "").await.1["result"]["level"], json!("standard"));
+    assert_eq!(rig.call("PUT", "/api/log/level", r#"{"level":"loud"}"#).await.0, 400);
+    let (s, v) = rig.call("PUT", "/api/log/level", r#"{"level":"minimal"}"#).await;
+    assert_eq!((s, v["result"]["level"].clone()), (200, json!("minimal")), "{v}");
+    // the level is kept in the data folder
+    assert_eq!(cache_server::applog::AppLog::open(rig.data().join("log")).level().name(), "minimal");
+    // a Standard line (Clean up) is not written at Minimal
+    rig.call("POST", "/api/library/cleanup", "").await;
+    let text = rig.call("GET", "/api/log", "").await.1["result"]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Log level: minimal") && !text.contains("Clean up freed"), "{text}");
+    rig.call("PUT", "/api/log/level", r#"{"level":"standard"}"#).await;
+    rig.call("POST", "/api/library/cleanup", "").await;
+    let text = rig.call("GET", "/api/log", "").await.1["result"]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Clean up freed 0 bytes"), "{text}");
+    // clear leaves one line saying so, and the level stays
+    let (s, _) = rig.call("DELETE", "/api/log", "").await;
+    assert_eq!(s, 200);
+    let v = rig.call("GET", "/api/log", "").await.1;
+    let text = v["result"]["text"].as_str().unwrap();
+    assert!(text.contains("Log cleared") && !text.contains("Clean up freed"), "{text}");
+    assert_eq!(rig.call("GET", "/api/log/level", "").await.1["result"]["level"], json!("standard"));
+    stop(&rig).await;
+}
+
+#[test]
+fn the_app_log_is_size_capped_and_redacts_secrets() {
+    use cache_server::applog::{redact, AppLog, Level, FILES};
+    let d = Dir::new("applog-cap");
+    let log = AppLog::with_file_bytes(d.0.join("log"), 2000);
+    for i in 0..400 {
+        log.add(Level::Standard, "T", &format!("line number {i} with some padding to take room"));
+    }
+    assert!(log.bytes() <= 2000 * FILES as u64 + 200, "{}", log.bytes());
+    let text = log.text();
+    assert!(text.contains("line number 399") && !text.contains("line number 0 "), "newest kept, oldest gone");
+    assert!(!d.0.join("log/cache.2.log").exists());
+    // Detailed lines wait for Detailed
+    log.add(Level::Detailed, "T", "detailed-only");
+    assert!(!log.text().contains("detailed-only"));
+    log.set_level(Level::Detailed);
+    log.add(Level::Detailed, "T", "detailed-only");
+    assert!(log.text().contains("detailed-only"));
+    // Everything remembers the level before it
+    log.set_level(Level::Everything);
+    assert!(log.everything_until().is_some());
+    // secrets
+    assert_eq!(redact("GET https://x.org/a/b?key=abc&t=1 ok"), "GET https://x.org/a/b?[hidden] ok");
+    assert_eq!(redact("login password=hunter2 done"), "login password=[hidden] done");
+    assert_eq!(redact("Authorization: Bearer abc.def end"), "Authorization: Bearer [hidden] end");
+    assert_eq!(redact("a plain line"), "a plain line");
+}
