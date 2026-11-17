@@ -134,7 +134,8 @@ void main() {
     final a = await engine.download('hillshade', home, label: 'This region');
     expect(a.phase, AreaPhase.running);
     expect(engine.areasOf('hillshade'), [a]);
-    await until(() => a.phase == AreaPhase.done);
+    // done is shown when the job ends; the store's size comes with the list the core is read for next
+    await until(() => a.phase == AreaPhase.done && engine.storageOf('hillshade') == 20000);
     expect(a.doneTiles, 20);
     expect(a.bytes, 20000);
     expect(a.bounds, home);
@@ -202,6 +203,8 @@ void main() {
   test('a look that fails with a raw object (a JS error in the browser) still ends with the area done and the list read; the failing step is named (web-region-progress)', () async {
     expect(CoreLayerEngine.said(Object()), 'Object');
     expect(CoreLayerEngine.said(_Named('QuotaExceededError')), '_Named (QuotaExceededError)');
+    expect(CoreLayerEngine.said(_Texted('ReferenceError: changed0 is not defined')), 'ReferenceError', reason: 'a JS error reads as its own name, not JSObject');
+    expect(CoreLayerEngine.said(_Texted('not an error text')), '_Texted');
     var thrown = 0;
     engine.stepHook = (step) {
       // a raw object, not an Exception or Error, as a JS error reaches Dart; once, at the step after the job ended
@@ -478,4 +481,12 @@ void main() {
 class _Named {
   _Named(this.name);
   final String name;
+}
+
+/// An object whose text is a JS error's (as dart2js shows a thrown JS error), with no `name` Dart can read.
+class _Texted {
+  _Texted(this.text);
+  final String text;
+  @override
+  String toString() => text;
 }

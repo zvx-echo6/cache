@@ -468,6 +468,7 @@ impl Inner {
         }
         let (already, already_bytes) = p.already;
         let n = p.need.len() as u64;
+        let o = p.base.offline.as_ref();
         let (est, method, present) = if p.need.is_empty() {
             (0, "none".to_string(), Some(0))
         } else if !self.is_online() {
@@ -484,12 +485,15 @@ impl Inner {
             }
             p.located = Some(located);
             (bytes, "directory".to_string(), Some(have))
+        } else if o.and_then(|o| o.max_tiles_per_download).is_some_and(|m| n > m) {
+            // Over the layer's tile limit: that alone refuses the download, so no tile is fetched to size it (each sample is a round
+            // trip, and a step-down plans the same layer again at every lower zoom).
+            (0, "over the tile limit".to_string(), None)
         } else {
             let (est, k) = self.sample_estimate(&p)?;
             (est, format!("sample of {k} tiles"), None)
         };
         let mut problems: Vec<Value> = Vec::new();
-        let o = p.base.offline.as_ref();
         if let Some(m) = o.and_then(|o| o.max_tiles_per_download) {
             if n > m {
                 problems.push(json!({"code": "limit_exceeded", "message": format!("{n} tiles to download is above this layer's limit of {m} per download")}));
