@@ -42,10 +42,14 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
   Placement p;
   try {
     p = await placer.place(moves);
-  } catch (_) {
+  } catch (e) {
+    // A big set goes in batches: the ones already sent stay placed, so say how far it got.
+    final text = e is PartialPlacementException
+        ? 'Only ${e.placed} of ${booksWord(e.total)} placed. The rest could not be saved. Try again.'
+        : 'That could not be saved. Try again.';
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      ..showSnackBar(SnackBar(content: Text(text)));
     return null;
   }
   final text = p.books.length == 1
@@ -57,7 +61,7 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
       SnackBar(
         key: const ValueKey('placed-snack'),
         content: Text(text),
-        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => placer.undo(p)),
+        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => placer.undo(p))),
       ),
     );
   return p;
@@ -184,7 +188,7 @@ class _PlacePanelState extends State<PlacePanel> {
         SnackBar(
           key: const ValueKey('unsorted-snack'),
           content: const Text('Moved to Unsorted.'),
-          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => placer?.undo(was)),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () async => await placer?.undo(was))),
         ),
       );
     widget.onDone(true);

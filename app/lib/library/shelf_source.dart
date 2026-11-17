@@ -291,6 +291,18 @@ abstract class ShelfUnsorter {
   Future<void> unsort(ShelfBook book);
 }
 
+/// A big placement that stopped part way: [placed] of [total] books were placed (they stay placed) before a request failed.
+class PartialPlacementException implements Exception {
+  const PartialPlacementException(this.placed, this.total, this.cause);
+
+  final int placed;
+  final int total;
+  final Object cause;
+
+  @override
+  String toString() => 'PartialPlacementException: $placed of $total placed: $cause';
+}
+
 /// What a placement did, for its Undo and its message.
 @immutable
 class Placement {

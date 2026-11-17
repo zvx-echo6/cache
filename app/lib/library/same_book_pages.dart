@@ -102,7 +102,7 @@ class _SameBookPanelState extends State<SameBookPanel> {
         SnackBar(
           key: const ValueKey('same-snack'),
           content: Text(joined?.callNumber == null ? 'Now one book.' : 'Now one book: ${joined!.callNumber}.'),
-          action: SnackBarAction(key: const ValueKey('same-undo'), label: 'Undo', onPressed: () => copies.unjoin(b, other)),
+          action: SnackBarAction(key: const ValueKey('same-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => copies.unjoin(b, other))),
         ),
       );
     if (mounted) setState(() => _saving = false);

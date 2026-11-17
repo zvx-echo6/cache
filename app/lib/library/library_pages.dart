@@ -132,6 +132,21 @@ extension on String {
 /// "1 book", "14 books".
 String booksWord(int n) => n == 1 ? '1 book' : '$n books';
 
+/// Runs an Undo and says so when it could not be saved (an Undo that failed silently left the person thinking it had worked).
+/// [messenger] is the one captured before any await. A big undo goes in batches: if some went through, it says how many.
+Future<void> undoAndSay(ScaffoldMessengerState messenger, Future<void> Function() undo) async {
+  try {
+    await undo();
+  } catch (e) {
+    final text = e is PartialPlacementException
+        ? 'Only ${e.placed} of ${booksWord(e.total)} put back. The rest could not be saved. Try again.'
+        : 'That could not be saved. Try again.';
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+}
+
 /// An icon on a tile, as the Library's rows show it.
 class IconTile extends StatelessWidget {
   const IconTile(this.icon, {super.key, this.size = 40});
