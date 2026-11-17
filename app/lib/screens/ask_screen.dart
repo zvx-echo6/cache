@@ -119,15 +119,16 @@ class _AskScreenState extends State<AskScreen> {
     _jumpToEnd();
   }
 
-  /// A dropped held question comes back into the field, unless the person has already typed something there (that is left as it is).
+  /// A dropped held question comes back into the field. If the person has already typed something there, it stays and the question is
+  /// added after it on a new line, so nothing typed is lost.
   void _takeReturned() {
     final n = widget.returned;
     final text = n?.value;
     if (n == null || text == null) return;
     n.value = null;
-    if (_input.text.isEmpty) {
-      _input.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
-    }
+    final now = _input.text;
+    final joined = now.isEmpty ? text : '$now\n$text';
+    _input.value = TextEditingValue(text: joined, selection: TextSelection.collapsed(offset: joined.length));
   }
 
   /// The chat the conversation shows, to tell when another one is opened.
