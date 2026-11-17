@@ -281,3 +281,31 @@ Future<Map<String, int>?> readServerStorage({http.Client? client}) async {
     return null;
   }
 }
+
+/// What Clean up would free on the server (its unfinished downloads and upload leftovers), from `GET /api/library/cleanup`; null
+/// when it cannot be read.
+Future<int?> readServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['bytes'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Clean up on the server (`POST /api/library/cleanup`): the bytes it freed; null when it would not (a download is running) or
+/// could not be reached.
+Future<int?> runServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).post(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['freed'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
+  }
+}

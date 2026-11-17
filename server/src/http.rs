@@ -29,6 +29,7 @@
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/library/cleanup               -> {bytes} Clean up would free; POST it -> {freed} (409 while a download runs)
 //!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
@@ -245,6 +246,20 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             match tokio::task::spawn_blocking(move || lib.storage()).await {
                 Ok(v) => ok(v),
                 Err(_) => Reply::error(500, "failed", "the sizes could not be read"),
+            }
+        }
+        ("GET", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup_bytes()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the leftovers could not be measured"),
+            }
+        }
+        ("POST", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup()).await {
+                Ok(r) => library_reply(r),
+                Err(_) => Reply::error(500, "failed", "Clean up could not run"),
             }
         }
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
