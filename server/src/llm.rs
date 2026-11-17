@@ -77,6 +77,103 @@ impl ChatBackend for ChatModel {
     }
 }
 
+/// The longest piece of a GGUF header read for one string or one key (a real one is a few hundred bytes).
+const GGUF_MAX_STRING: u64 = 1 << 20;
+/// The most metadata pairs a header may claim (real files have a few dozen to a few hundred).
+const GGUF_MAX_PAIRS: u64 = 1_000_000;
+
+/// The model's own name (`general.name`) from the header of the GGUF file at `path`; `None` when the file is not a readable GGUF
+/// version 3, has no such pair or the pair is not a string. Reads the header up to the name and no further; every length and count is
+/// bounded, so a damaged or hostile file ends in `None`, never a large allocation or a long read.
+pub fn gguf_general_name(path: &Path) -> Option<String> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let mut r = BufReader::new(std::fs::File::open(path).ok()?);
+    fn u32le(r: &mut impl Read) -> Option<u32> {
+        let mut b = [0u8; 4];
+        r.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b))
+    }
+    fn u64le(r: &mut impl Read) -> Option<u64> {
+        let mut b = [0u8; 8];
+        r.read_exact(&mut b).ok()?;
+        Some(u64::from_le_bytes(b))
+    }
+    fn string(r: &mut impl Read) -> Option<String> {
+        let n = u64le(r)?;
+        if n > GGUF_MAX_STRING {
+            return None;
+        }
+        let mut b = vec![0u8; n as usize];
+        r.read_exact(&mut b).ok()?;
+        Some(String::from_utf8_lossy(&b).into_owned())
+    }
+    fn fixed_size(t: u32) -> Option<u64> {
+        match t {
+            0 | 1 | 7 => Some(1),
+            2 | 3 => Some(2),
+            4..=6 => Some(4),
+            10..=12 => Some(8),
+            _ => None,
+        }
+    }
+    // Moves `n` bytes on; None when that is past the end of the file.
+    fn advance(r: &mut BufReader<std::fs::File>, n: u64, len: u64) -> Option<()> {
+        let pos = r.stream_position().ok()?;
+        if pos.checked_add(n)? > len {
+            return None;
+        }
+        r.seek(SeekFrom::Current(i64::try_from(n).ok()?)).ok().map(|_| ())
+    }
+    // Skips a value of metadata type `t`; None for a type this reader does not know or a value past the end of the file.
+    fn skip(r: &mut BufReader<std::fs::File>, t: u32, len: u64) -> Option<()> {
+        if let Some(n) = fixed_size(t) {
+            return advance(r, n, len);
+        }
+        match t {
+            8 => {
+                let n = u64le(r)?;
+                advance(r, n, len)
+            }
+            9 => {
+                let et = u32le(r)?;
+                let n = u64le(r)?;
+                if let Some(size) = fixed_size(et) {
+                    return advance(r, n.checked_mul(size)?, len);
+                }
+                if et != 8 {
+                    return None;
+                }
+                for _ in 0..n {
+                    let l = u64le(r)?;
+                    advance(r, l, len)?;
+                }
+                Some(())
+            }
+            _ => None,
+        }
+    }
+    let file_len = r.get_ref().metadata().ok()?.len();
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" || u32le(&mut r)? != 3 {
+        return None;
+    }
+    let _tensors = u64le(&mut r)?;
+    let pairs = u64le(&mut r)?;
+    if pairs > GGUF_MAX_PAIRS {
+        return None;
+    }
+    for _ in 0..pairs {
+        let key = string(&mut r)?;
+        let t = u32le(&mut r)?;
+        if key == "general.name" {
+            return if t == 8 { string(&mut r) } else { None };
+        }
+        skip(&mut r, t, file_len)?;
+    }
+    None
+}
+
 /// Loads a model file: the backend and the `cl_info` JSON, or the reason.
 pub type Loader = dyn Fn(&Path, i32) -> Result<(Arc<dyn ChatBackend>, String), String> + Send + Sync;
 
@@ -441,7 +538,11 @@ impl LlmService {
         };
         drop(old); // cl_free the old one before the new one takes its memory
         let (backend, info) = (self.loader)(&self.models_dir().join(id), n_ctx).map_err(|m| err(503, "load_failed", m))?;
-        let info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        let mut info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        // The file's own name (GGUF `general.name`), for the browser's model list: llama.cpp's description can be wrong about the size.
+        if let (Some(name), Some(o)) = (gguf_general_name(&self.models_dir().join(id)), info.as_object_mut()) {
+            o.insert("general_name".into(), json!(name));
+        }
         *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
         self.is_loaded.store(true, Ordering::SeqCst);
         Ok(info)
