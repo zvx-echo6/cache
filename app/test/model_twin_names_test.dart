@@ -117,8 +117,14 @@ void main() {
       app.models = [e];
       await app.activate(e);
       expect(app.displayName(e), 'Gemma 4 E2B · tuned for Cache');
-      expect(app.plainName(e), 'Gemma 4 E2B · tuned for Cache');
+      expect(app.plainName(e), 'Gemma 4 E2B', reason: 'plainName is the short name, as on rel-1.1');
+      expect(app.headerName(e), 'Gemma 4 E2B');
       expect(app.sizeLine(e), '3.2 GB · Q4_K_M');
+    });
+
+    test('plainName is the short name as on rel-1.1: the stored one, else the file name; never the list name', () {
+      final e = _entry(app.modelsDir!, _stockFile, _stockSize);
+      expect(app.plainName(e), 'e2b-stock-cache-1.0-Q4_K_M');
     });
 
     test('a name stored by an earlier build is not shown for a recommended file', () async {
@@ -149,15 +155,18 @@ void main() {
 
     Widget ask() => AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const []));
 
-    testWidgets('Ask header and its menu: the list name', (tester) async {
-      final e = _entry(app.modelsDir!, _trevorFile, _trevorSize);
+    testWidgets('Ask header and its menu: the short name, not the list name', (tester) async {
+      final f = File('${app.modelsDir!.path}/$_trevorFile')..writeAsBytesSync(ggufBytes([kvString('general.name', 'Cache Merge E2B Uncensored')]));
+      final e = ModelEntry(path: f.path, size: _trevorSize);
       app.models = [e];
-      app.active = e;
+      await tester.runAsync(() => app.activate(e));
       await show(tester, ask());
-      expect(find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Gemma 4 E2B uncensored · tuned for Cache')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Gemma 4 E2B')), findsOneWidget);
+      expect(find.textContaining('tuned for Cache'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('model-name')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Gemma 4 E2B uncensored · tuned for Cache · loaded'), findsOneWidget);
+      expect(find.textContaining('Gemma 4 E2B · loaded'), findsOneWidget);
+      expect(find.textContaining('tuned for Cache'), findsNothing);
     });
 
     testWidgets('Ask > Switch model: the two Q4 files are told apart, with the size and quant under', (tester) async {
@@ -218,7 +227,7 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Settings list: the model row names the list name', (tester) async {
+    testWidgets('Settings list (one line): the short name, not the list name', (tester) async {
       final r = await SettingsRig.create(tester);
       _wire(r.app, list);
       final e = _entry(r.modelsDir, _trevorFile, _trevorSize);
@@ -226,7 +235,8 @@ void main() {
       r.app.resting = e;
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('Gemma 4 E2B uncensored · tuned for Cache · web search off'), findsOneWidget);
+      expect(find.text('${r.app.plainName(e)} · web search off'), findsOneWidget);
+      expect(find.textContaining('tuned for Cache'), findsNothing);
       await r.dispose(tester);
     });
   });
