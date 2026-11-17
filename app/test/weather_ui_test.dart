@@ -468,7 +468,7 @@ void main() {
       expect(find.text('Pick what to show'), findsNothing);
       expect(find.text('YOUR OWN'), findsOneWidget);
       expect(find.text('Creek level at the bridge'), findsOneWidget);
-      expect(find.text('Your source · checked every 30 min'), findsOneWidget);
+      expect(find.descendant(of: rowWith('Creek level at the bridge'), matching: find.textContaining('Working')), findsOneWidget, reason: 'the same row and states as the others');
       expect(switchIn(tester, 'Creek level at the bridge').value, isTrue);
       final c = r.weather.ownSources.single;
       expect(c.id, 'own-creek-level-at-the-bridge');
