@@ -4,8 +4,16 @@ import 'dart:io';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/core_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
+import 'package:cache/maps/maps_state.dart';
+import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/regions/regions_state.dart';
+import 'package:cache/regions/ui/region_page.dart';
+import 'package:flutter/material.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/regions_fake.dart';
+import 'support/settings_rig.dart';
 
 const GeoBounds home = GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
 
@@ -49,6 +57,9 @@ class _LayersNative implements CsNative {
         ...user.values,
       ];
 
+  /// The areas kept in one layer's store (a basemap download lands in the basemap store; hillshade and contours share elevation's).
+  List<Map<String, dynamic>> _storeOf(Object? store) => [for (final a in areas) if (a['layer'] == store) a];
+
   Map<String, dynamic> _list() => {
         'layers': [
           for (final d in _defs())
@@ -57,13 +68,13 @@ class _LayersNative implements CsNative {
               'origin': user.containsKey(d['id']) ? 'user' : 'folder',
               'download_layer': d['derived_from'] ?? d['id'],
               'downloadable': d['id'] != 'esri',
-              'installed': (d['derived_from'] ?? d['id']) == 'elevation'
+              'installed': _storeOf(d['derived_from'] ?? d['id']).isNotEmpty
                   ? {
-                      'downloaded': areas.isNotEmpty,
-                      'bytes': areas.fold<int>(0, (s, a) => s + (a['bytes'] as int)),
-                      'areas': [for (final a in areas) if (a['partial'] != true) a],
+                      'downloaded': _storeOf(d['derived_from'] ?? d['id']).isNotEmpty,
+                      'bytes': _storeOf(d['derived_from'] ?? d['id']).fold<int>(0, (s, a) => s + (a['bytes'] as int)),
+                      'areas': [for (final a in _storeOf(d['derived_from'] ?? d['id'])) if (a['partial'] != true) a],
                       'partial': [
-                        for (final a in areas)
+                        for (final a in _storeOf(d['derived_from'] ?? d['id']))
                           if (a['partial'] == true) {'area': a['id'], 'name': a['name'], 'tiles_total': a['tiles_requested'], 'version': '1'}
                       ],
                     }
@@ -163,7 +174,7 @@ class _LayersNative implements CsNative {
       areas.add({
         'id': p['area'],
         'name': p['name'],
-        'layer': 'elevation',
+        'layer': p['layer'] == 'basemap' ? 'basemap' : 'elevation',
         'bbox': p['bbox'],
         'minzoom': p['minzoom'],
         'maxzoom': p['maxzoom'],
@@ -476,6 +487,38 @@ void main() {
     for (final l in ['elevation', 'hillshade', 'contours']) {
       expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
     }
+  });
+
+  testWidgets('the region page rows read Ready, with the final size, when the layer jobs end, with no reload (web-region-progress)', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final maps = MapsState(engine: engine, settingsDirOverride: s.dir);
+    final core2 = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core2.tileDir).createSync(recursive: true);
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: maps, opener: (_) async => core2);
+    const id = 'us-id-twin-falls-county';
+    await tester.runAsync(() async {
+      await regions.init();
+      final county = (await catalogue.shard('us'))[id]!;
+      await catalogue.geometry(county);
+      await regions.download(county, routing: false, map: true, anyway: true);
+    });
+    final started = regions.regionOf(id)!;
+    expect(started.areas, isNotEmpty, reason: 'the region started map downloads');
+    await s.show(tester, RegionPage(regions: regions, id: id));
+    // the jobs end (the fake finishes each after a few looks); wait on the state itself
+    for (var i = 0; i < 400 && !(regions.regionOf(id)?.parts.every((p) => p.complete) ?? false); i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+    final l = regions.regionOf(id)!;
+    expect([for (final a in l.areas) a.phase], everyElement(AreaPhase.done), reason: 'areas: ${[for (final a in l.areas) '${a.layerId}:${a.phase.name}']}');
+    expect(find.textContaining('so far'), findsNothing, reason: 'before: rows kept "so far" and Pause after their jobs ended');
+    expect(find.textContaining('Ready'), findsWidgets);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
   });
 
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
