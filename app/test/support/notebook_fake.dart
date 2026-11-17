@@ -87,6 +87,11 @@ class FakeNotebookBackend implements NotebookBackend {
   /// The points the next `import` reads (name, lat, lon, notes), standing in for the file.
   List<Map<String, dynamic>> importPoints = const [];
 
+  /// The lines and areas the next `import` reads, and the name of the map layer they become (a file with no points makes no notebook).
+  int importLines = 0;
+  int importAreas = 0;
+  String? importLayer;
+
   Map<String, dynamic> _savedPlaces() {
     final have = notebooks.where((n) => n['saved_places'] == true).firstOrNull;
     if (have != null) return have;
@@ -96,12 +101,16 @@ class FakeNotebookBackend implements NotebookBackend {
   }
 
   Map<String, dynamic> _import(Map<String, dynamic> a) {
+    final shapes = importLines + importAreas;
+    if (importPoints.isEmpty && shapes > 0 && a['notebook_id'] == null) {
+      return {'notebook': null, 'places': 0, 'lines': importLines, 'areas': importAreas, 'skipped': 0, 'layer': importLayer};
+    }
     final id = a['notebook_id'] as String? ??
         _save({'template': 'places', 'def': {'name': 'Imported places', 'due_every': null, 'shape': {'sort': 'distance'}, 'fields': []}})['id'] as String;
     for (final p in importPoints) {
       _saveEntry({'notebook_id': id, 'occurred_at': a['now'], 'title': p['name'], 'body': p['notes'], 'place': {'lat': p['lat'], 'lon': p['lon']}});
     }
-    return {'notebook': _nbJson(_nb(id)), 'places': importPoints.length, 'lines': 0, 'areas': 0, 'skipped': 0};
+    return {'notebook': _nbJson(_nb(id)), 'places': importPoints.length, 'lines': importLines, 'areas': importAreas, 'skipped': 0, 'layer': shapes > 0 ? importLayer : null};
   }
 
   Map<String, dynamic> _nb(String id) =>
