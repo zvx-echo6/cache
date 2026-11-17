@@ -423,7 +423,6 @@ class IndexDriver {
       if (_tried.contains(key) || _blocked(key) || _pdfCounts['$path|$id'] == 0) continue;
       yield (path: path, id: id, key: key);
     }
-    return null;
   }
 
   Future<void> _runPdf(PdfWork w, String path, String id, String key) async {
