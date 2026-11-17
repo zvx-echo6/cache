@@ -29,6 +29,7 @@
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/log -> {text,bytes} the server's own app log (not journalctl); DELETE clears it; GET/PUT /api/log/level {level}
 //!   GET  /api/library/cleanup               -> {bytes} Clean up would free; POST it -> {freed} (409 while a download runs)
 //!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
@@ -586,6 +587,33 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
     Some(blocking(move || crate::libbuild::linked_api::request(&service, &method, &library, &segments, &bytes)).await)
 }
 
+/// `/api/log` and `/api/log/level` (signed in only, like every `/api` route): the server's own app log for the browser's Advanced page,
+/// never the system journal. See `applog`.
+fn app_log(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
+    use crate::applog::Level;
+    let log = &app.library.log;
+    let level = |log: &crate::applog::AppLog| json!({"level": log.level().name(), "until": log.everything_until()});
+    Some(match (method, path) {
+        ("GET", "/api/log") => ok(json!({"text": log.text(), "bytes": log.bytes()})),
+        ("DELETE", "/api/log") => {
+            log.clear();
+            ok(json!({"cleared": true}))
+        }
+        ("GET", "/api/log/level") => ok(level(log)),
+        ("PUT", "/api/log/level") => {
+            let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match v["level"].as_str().and_then(Level::parse) {
+                Some(l) => {
+                    log.set_level(l);
+                    ok(level(log))
+                }
+                None => Reply::error(400, "invalid", "level must be minimal, standard, detailed or everything"),
+            }
+        }
+        _ => return None,
+    })
+}
+
 async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Reply {
     if let Some(r) = linked_folders(app, method, path, body).await {
         return r;
@@ -606,6 +634,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
         return r;
     }
     if let Some(r) = library(app, method, path, query, body).await {
+        return r;
+    }
+    if let Some(r) = app_log(app, method, path, body) {
         return r;
     }
     if let Some(rest) = path.strip_prefix("/api/tiles/") {

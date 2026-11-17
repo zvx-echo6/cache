@@ -199,6 +199,8 @@ pub struct LibraryOptions {
 
 pub struct Library {
     data: PathBuf,
+    /// The server's own app log (`GET /api/log`).
+    pub log: crate::applog::AppLog,
     helper: Option<Arc<Helper>>,
     free: FreeFn,
     total: FreeFn,
@@ -385,6 +387,7 @@ impl Library {
             }
         }
         let lib = Arc::new(Library {
+            log: crate::applog::AppLog::open(data.join("log")),
             data,
             helper,
             free: o.free_bytes.unwrap_or_else(|| Arc::new(free_bytes)),
@@ -509,6 +512,7 @@ impl Library {
             if res.is_ok() && job.kind == "zim" {
                 if let Err(e) = self.rescan().await {
                     eprintln!("cache: rescan after installing {} failed: {e}", job.name);
+                    self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a finished download: {e}"));
                     note = Some(format!("Installed, but the search core was not told: {e}"));
                 }
             }
@@ -1021,6 +1025,7 @@ impl Library {
         let rescan = self.rescan().await;
         if let Err(e) = &rescan {
             eprintln!("cache: rescan after the upload of {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about an upload: {e}"));
         }
         let mut out = json!({"name": name, "bytes": got, "id": item_id("zim", &name)});
         if let Err(e) = rescan {
@@ -1101,6 +1106,7 @@ impl Library {
                 freed += n;
             }
         }
+        self.log.add(crate::applog::Level::Standard, "CLEANUP", &format!("Clean up freed {freed} bytes"));
         Ok(json!({"freed": freed}))
     }
 
@@ -1150,6 +1156,7 @@ impl Library {
         let mut out = json!({"removed": true, "id": id});
         if let Err(e) = self.rescan().await {
             eprintln!("cache: rescan after removing {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a removal: {e}"));
             out["note"] = json!(format!("Removed, but the search core was not told: {e}"));
         }
         Ok(out)

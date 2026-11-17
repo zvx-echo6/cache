@@ -1133,3 +1133,64 @@ async fn clean_up_removes_orphan_download_parts_and_keeps_a_paused_downloads_par
     rig.call("DELETE", &format!("/api/library/jobs/{aid}"), "").await;
     stop(&rig).await;
 }
+
+// ---- the server's own app log (Settings > Storage > Advanced in the browser)
+
+#[tokio::test]
+async fn the_app_log_is_signed_in_only_has_a_level_and_clears() {
+    let _g = LOCK.lock().await;
+    let rig = rig("applog", Setup::new()).await;
+    for (m, p) in [("GET", "/api/log"), ("DELETE", "/api/log"), ("GET", "/api/log/level"), ("PUT", "/api/log/level")] {
+        assert_eq!(route(&rig.app, m, p, None, b"{}").await.status, 401, "{m} {p}");
+    }
+    assert_eq!(rig.call("GET", "/api/log/level", "").await.1["result"]["level"], json!("standard"));
+    assert_eq!(rig.call("PUT", "/api/log/level", r#"{"level":"loud"}"#).await.0, 400);
+    let (s, v) = rig.call("PUT", "/api/log/level", r#"{"level":"minimal"}"#).await;
+    assert_eq!((s, v["result"]["level"].clone()), (200, json!("minimal")), "{v}");
+    // the level is kept in the data folder
+    assert_eq!(cache_server::applog::AppLog::open(rig.data().join("log")).level().name(), "minimal");
+    // a Standard line (Clean up) is not written at Minimal
+    rig.call("POST", "/api/library/cleanup", "").await;
+    let text = rig.call("GET", "/api/log", "").await.1["result"]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Log level: minimal") && !text.contains("Clean up freed"), "{text}");
+    rig.call("PUT", "/api/log/level", r#"{"level":"standard"}"#).await;
+    rig.call("POST", "/api/library/cleanup", "").await;
+    let text = rig.call("GET", "/api/log", "").await.1["result"]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Clean up freed 0 bytes"), "{text}");
+    // clear leaves one line saying so, and the level stays
+    let (s, _) = rig.call("DELETE", "/api/log", "").await;
+    assert_eq!(s, 200);
+    let v = rig.call("GET", "/api/log", "").await.1;
+    let text = v["result"]["text"].as_str().unwrap();
+    assert!(text.contains("Log cleared") && !text.contains("Clean up freed"), "{text}");
+    assert_eq!(rig.call("GET", "/api/log/level", "").await.1["result"]["level"], json!("standard"));
+    stop(&rig).await;
+}
+
+#[test]
+fn the_app_log_is_size_capped_and_redacts_secrets() {
+    use cache_server::applog::{redact, AppLog, Level, FILES};
+    let d = Dir::new("applog-cap");
+    let log = AppLog::with_file_bytes(d.0.join("log"), 2000);
+    for i in 0..400 {
+        log.add(Level::Standard, "T", &format!("line number {i} with some padding to take room"));
+    }
+    assert!(log.bytes() <= 2000 * FILES as u64 + 200, "{}", log.bytes());
+    let text = log.text();
+    assert!(text.contains("line number 399") && !text.contains("line number 0 "), "newest kept, oldest gone");
+    assert!(!d.0.join("log/cache.2.log").exists());
+    // Detailed lines wait for Detailed
+    log.add(Level::Detailed, "T", "detailed-only");
+    assert!(!log.text().contains("detailed-only"));
+    log.set_level(Level::Detailed);
+    log.add(Level::Detailed, "T", "detailed-only");
+    assert!(log.text().contains("detailed-only"));
+    // Everything remembers the level before it
+    log.set_level(Level::Everything);
+    assert!(log.everything_until().is_some());
+    // secrets
+    assert_eq!(redact("GET https://x.org/a/b?key=abc&t=1 ok"), "GET https://x.org/a/b?[hidden] ok");
+    assert_eq!(redact("login password=hunter2 done"), "login password=[hidden] done");
+    assert_eq!(redact("Authorization: Bearer abc.def end"), "Authorization: Bearer [hidden] end");
+    assert_eq!(redact("a plain line"), "a plain line");
+}
