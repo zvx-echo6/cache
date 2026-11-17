@@ -53,7 +53,7 @@ class LibraryDocsPage extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
                   child: Text(
-                    "${none.length == 1 ? "This book is" : "These books are"} in this library, but not on your Bookshelves. Tap one to open its PDF.",
+                    "${none.length == 1 ? "This book is" : "These books are"} in this library, but not on your Bookshelves.",
                     key: const ValueKey('library-docs-none-note'),
                     style: TextStyle(fontSize: 13, color: k.secondary),
                   ),
