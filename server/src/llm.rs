@@ -805,6 +805,88 @@ mod tests {
         assert_eq!(s.models_json()["models"][0]["loaded"], true);
     }
 
+    /// A tiny GGUF header: magic, version 3, no tensors, and the given metadata pairs already encoded.
+    fn gguf(pairs: &[Vec<u8>], kv_count: Option<u64>) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend(3u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+        b.extend(kv_count.unwrap_or(pairs.len() as u64).to_le_bytes());
+        for p in pairs {
+            b.extend(p);
+        }
+        b
+    }
+    fn gstr(s: &str) -> Vec<u8> {
+        let mut b = (s.len() as u64).to_le_bytes().to_vec();
+        b.extend(s.as_bytes());
+        b
+    }
+    fn kv_str(k: &str, v: &str) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(8u32.to_le_bytes());
+        b.extend(gstr(v));
+        b
+    }
+    fn kv_u32(k: &str, v: u32) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(4u32.to_le_bytes());
+        b.extend(v.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn general_name_is_read_from_the_header_and_garbage_is_none() {
+        let d = TempDir::new("llm-gguf-name");
+        let at = |name: &str, bytes: &[u8]| {
+            let p = d.0.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let ok = gguf(&[kv_str("general.architecture", "llama"), kv_u32("general.file_type", 2), kv_str("general.name", "SmolLM2 135M Instruct")], None);
+        assert_eq!(gguf_general_name(&at("ok", &ok)).as_deref(), Some("SmolLM2 135M Instruct"));
+        assert_eq!(gguf_general_name(&at("none", &gguf(&[kv_str("general.architecture", "llama")], None))), None);
+        assert_eq!(gguf_general_name(&at("notstr", &gguf(&[kv_u32("general.name", 7)], None))), None);
+        assert_eq!(gguf_general_name(&at("empty", b"")), None);
+        assert_eq!(gguf_general_name(&at("junk", &[0x41; 64])), None);
+        assert_eq!(gguf_general_name(&d.0.join("missing")), None);
+        let mut v2 = ok.clone();
+        v2[4] = 99;
+        assert_eq!(gguf_general_name(&at("ver", &v2)), None);
+        for n in [3, 8, 20, 30, ok.len() - 3] {
+            assert_eq!(gguf_general_name(&at("cut", &ok[..n])), None, "cut at {n}");
+        }
+        assert_eq!(gguf_general_name(&at("manykv", &gguf(&[kv_str("general.name", "X")], Some(1 << 40)))), None);
+        let mut huge_key = gguf(&[], Some(1));
+        huge_key.extend(0x4000_0000_0000_0000u64.to_le_bytes());
+        assert_eq!(gguf_general_name(&at("hugekey", &huge_key)), None);
+        let mut huge_name = gguf(&[], Some(1));
+        huge_name.extend(gstr("general.name"));
+        huge_name.extend(8u32.to_le_bytes());
+        huge_name.extend(0x4000_0000u64.to_le_bytes());
+        huge_name.push(b'A');
+        assert_eq!(gguf_general_name(&at("hugename", &huge_name)), None);
+    }
+
+    #[test]
+    fn load_adds_general_name_to_the_info_when_the_file_has_one() {
+        let d = TempDir::new("llm-load-name");
+        let models = d.0.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("named.gguf"), gguf(&[kv_str("general.name", "SmolLM2 135M Instruct")], None)).unwrap();
+        std::fs::write(models.join("plain.gguf"), b"0123").unwrap();
+        let fake = Fake::new(1);
+        let s = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(move |_p, _n| Ok((fake.clone() as Arc<dyn ChatBackend>, r#"{"description":"llama 256M Q4_0","n_ctx":8192,"chat_format":"x","supports_tools":true}"#.to_string()))),
+        );
+        let info = s.load("named.gguf", 8192).unwrap();
+        assert_eq!(info["general_name"], "SmolLM2 135M Instruct");
+        assert_eq!(info["description"], "llama 256M Q4_0", "llama.cpp's own fields are untouched");
+        let info = s.load("plain.gguf", 8192).unwrap();
+        assert!(info.get("general_name").is_none());
+    }
+
     #[test]
     fn a_generation_streams_partials_then_done() {
         let d = TempDir::new("llm-gen");
