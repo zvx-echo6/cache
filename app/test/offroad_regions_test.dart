@@ -10,6 +10,7 @@ import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/problem_words.dart';
 import 'package:cache/regions/ui/region_actions.dart';
 import 'package:cache/regions/ui/region_page.dart';
+import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,6 +49,8 @@ String _catalogue(List<Map<String, dynamic>> packs) => jsonEncode({
 
 final _idaho = _pack('idaho', 'Idaho', [-118.0, 41.5, -110.3, 49.5], 300 << 20);
 final _utah = _pack('utah', 'Utah', [-114.8, 36.5, -108.3, 42.5], 200 << 20);
+/// A pack nowhere near Idaho: no pack covers (or even meets) Twin Falls County.
+final _maine = _pack('maine', 'Maine', [-71.2, 43.0, -66.9, 47.5], 150 << 20);
 final _nevada = _pack('nevada', 'Nevada', [-120.7, 34.5, -113.3, 42.5], 250 << 20);
 
 /// The download of a pack: the bytes written to the hidden file, its URL and checksum noted.
@@ -420,8 +423,8 @@ void main() {
 
   testWidgets('region page: no pack over the region greys the Off-road row with the owner\'s line, and a tap does nothing', (tester) async {
     final s = await SettingsRig.create(tester);
-    // Utah's and Nevada's packs do not reach Twin Falls County's box (Idaho's would).
-    final (regions, _, packs, _) = await boot(tester, s, [_utah, _nevada]);
+    // Maine's pack is nowhere near Twin Falls County (Utah's and Nevada's reach its south edge, so they would count as meeting it).
+    final (regions, _, packs, _) = await boot(tester, s, [_maine]);
     await s.show(tester, RegionPage(regions: regions, id: _county));
     await _settleUntil(tester, () => find.text('No off-road data is published for this area.').evaluate().isNotEmpty);
     expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add and did nothing');
@@ -460,11 +463,9 @@ void main() {
   testWidgets('Regions sheet: Add off-road where no pack covers the region is greyed with the line and the row does not open the offer; with a pack it opens', (tester) async {
     for (final covered in [false, true]) {
       final s = await SettingsRig.create(tester);
-      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_utah, _nevada]);
-      await s.show(tester, RegionsScreen(regions: regions));
-      await tester.runAsync(() async {
-        await tester.enterText(find.byKey(const ValueKey('region-search')), 'twin falls county');
-      });
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
+      await s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
+      await tester.tap(find.text('open'));
       await _settleUntil(tester, () => find.byKey(const ValueKey('region-download-$_county')).evaluate().isNotEmpty);
       await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
       await tester.pump(const Duration(milliseconds: 300));
@@ -488,7 +489,7 @@ void main() {
   testWidgets('the region menu: Add off-road is greyed with the line as its subtitle where no pack covers the region', (tester) async {
     for (final covered in [false, true]) {
       final s = await SettingsRig.create(tester);
-      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_utah, _nevada]);
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
       final l = regions.regionOf(_county)!;
       await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showRegionActions(c, regions, l), child: const Text('menu')))));
       await tester.tap(find.text('menu'));
