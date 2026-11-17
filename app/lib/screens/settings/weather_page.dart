@@ -8,6 +8,7 @@ import '../../weather/places.dart';
 import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
+import 'assistant_page.dart' show AssistantPage, setUpWebSearch;
 import 'own_source_pages.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
@@ -84,27 +85,30 @@ class _WeatherPageState extends State<WeatherPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([w, d.hub.settings]),
+      listenable: Listenable.merge([w, d.hub.settings, d.hub.webSearch]),
       builder: (context, _) {
         final all = w.sources;
         // The featured sources, then any other source that is on (it needs watching like the rest); off and not featured: More sources.
         final listed = [
           for (final c in all) if (c.featured) c,
-          for (final c in all) if (!c.featured && !w.isOwn(c) && w.isOn(c.id)) c,
+          for (final c in all) if (!c.featured && w.isOn(c.id)) c,
         ];
         final more = [for (final c in all) if (!listed.contains(c)) c];
-        // Your own sources keep their old row until their step; they are not counted and sit with the working ones.
-        SourceRowState state(Connector c) => w.isOwn(c) ? SourceRowState.working : w.rowStateOf(c);
-        final attention = [for (final c in listed) if (WeatherState.needsAttention(state(c))) c];
-        final off = [for (final c in listed) if (state(c) == SourceRowState.off) c];
-        final rest = [for (final c in listed) if (!attention.contains(c) && !off.contains(c)) c];
-        SettingsGroup group(List<Connector> l, [String? label]) => SettingsGroup(label: label, rows: [for (final c in l) SourceRow(deps: d, source: c)]);
+        // Every row with its state: the sources, then web search.
+        final entries = <(SourceRowState, Widget)>[
+          for (final c in listed) (w.rowStateOf(c), SourceRow(deps: d, source: c)),
+          (d.hub.webSearch.rowState, WebSearchRow(deps: d)),
+        ];
+        final attention = [for (final e in entries) if (WeatherState.needsAttention(e.$1)) e.$2];
+        final off = [for (final e in entries) if (e.$1 == SourceRowState.off) e.$2];
+        final rest = [for (final e in entries) if (!WeatherState.needsAttention(e.$1) && e.$1 != SourceRowState.off) e.$2];
+        SettingsGroup group(List<Widget> l, [String? label]) => SettingsGroup(label: label, rows: l);
         return SettingsPage(
           title: 'Weather and alerts',
           children: [
             listed.isEmpty
                 ? StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh)
-                : SourcesStatusLine(weather: w, onRefresh: _refresh),
+                : SourcesStatusLine(weather: w, counts: sourceCountsOf(d), onRefresh: _refresh),
             WatchGroups(deps: d),
             if (all.isEmpty)
               w.refreshingCatalogues
@@ -326,52 +330,124 @@ class SourceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final w = deps.hub.weather;
     final c = source;
-    final k = context.t;
     void open() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcePage(deps: deps, sourceId: c.id)));
-    final leading = Icon(sourceIcon(c), size: 22, color: k.secondary);
-    if (w.isOwn(c)) {
-      return SettingsRow(
-        key: ValueKey('source-${c.id}'),
-        leading: leading,
-        title: c.title,
-        titleLines: 2,
-        statusLines: 2,
-        status: joinParts([
-          [const Part('Your source')],
-          [Part('checked ${everyWords(c.refreshMinutes)}')],
-        ]),
-        trailing: w.keyReady(c)
-            ? Switch(value: w.isOn(c.id), onChanged: (v) => w.setSourceOn(c, v))
-            : RowButton(key: ValueKey('get-key-${c.id}'), label: 'Get key', onPressed: () => addKeyFor(context, deps, c)),
-        onTap: open,
-      );
-    }
     final s = w.rowStateOf(c);
     final gives = c.description.isEmpty ? '' : '${c.description[0].toUpperCase()}${c.description.substring(1)}';
+    return StateRow(
+      id: c.id,
+      icon: sourceIcon(c),
+      title: c.title,
+      gives: gives,
+      state: s,
+      ago: _ago(w, w.healthOf(c)?.lastOkAt),
+      sentence: stateSentence(w, c, s),
+      onSwitch: (v) => w.keyReady(c) ? w.setSourceOn(c, v) : addKeyFor(context, deps, c),
+      onAddKey: () => addKeyFor(context, deps, c),
+      onReplaceKey: () => addKeyFor(context, deps, c, replace: true),
+      // just this source
+      onTryAgain: () => w.updateSource(c),
+      onTap: open,
+    );
+  }
+}
+
+/// How many sources (and web search) work, need attention and are off.
+({int working, int attention, int off}) sourceCountsOf(SettingsDeps d) {
+  final n = d.hub.weather.sourceCounts;
+  return switch (d.hub.webSearch.rowState) {
+    SourceRowState.off => (working: n.working, attention: n.attention, off: n.off + 1),
+    final s when WeatherState.needsAttention(s) => (working: n.working, attention: n.attention + 1, off: n.off),
+    _ => (working: n.working + 1, attention: n.attention, off: n.off),
+  };
+}
+
+/// Web search (Kagi) in the same list: its state comes from its key, its switch and how the assistant's last search went. Tapping
+/// the row opens the web search settings.
+class WebSearchRow extends StatelessWidget {
+  const WebSearchRow({super.key, required this.deps});
+
+  final SettingsDeps deps;
+
+  @override
+  Widget build(BuildContext context) {
+    final web = deps.hub.webSearch;
+    final s = web.rowState;
+    return StateRow(
+      id: 'web-search',
+      icon: Icons.travel_explore,
+      title: 'Web search',
+      gives: 'Kagi searches the web for the assistant',
+      state: s,
+      sentence: switch (s) {
+        SourceRowState.needsKey => 'Kagi needs a key.',
+        SourceRowState.keyRejected => 'Kagi no longer accepts the saved key.',
+        SourceRowState.limitReached => 'Kagi says it has reached its limit. Cache tries again later.',
+        _ => null,
+      },
+      onSwitch: (v) => v && !web.hasKey ? setUpWebSearch(context, deps) : web.setEnabled(v),
+      onAddKey: () => setUpWebSearch(context, deps),
+      onReplaceKey: () => setUpWebSearch(context, deps),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AssistantPage(deps: deps))),
+    );
+  }
+}
+
+/// One row of the sources list for a state: the icon and name; line 2 the state (and "updated 12 min ago" while it works, or what an off
+/// source gives); a problem adds its sentence; the switch, or the one button the problem needs, at the end.
+class StateRow extends StatelessWidget {
+  const StateRow({
+    required this.id,
+    required this.icon,
+    required this.title,
+    required this.state,
+    this.gives = '',
+    this.ago = '',
+    this.sentence,
+    this.onSwitch,
+    this.onAddKey,
+    this.onReplaceKey,
+    this.onTryAgain,
+    this.onTap,
+  });
+
+  /// The source's id (web search: web-search): the keys of the row and of its button are made from it.
+  final String id;
+  final IconData icon;
+  final String title;
+  final SourceRowState state;
+  final String gives;
+  final String ago;
+  final String? sentence;
+  final void Function(bool on)? onSwitch;
+  final VoidCallback? onAddKey;
+  final VoidCallback? onReplaceKey;
+  final VoidCallback? onTryAgain;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final s = state;
     final problem = WeatherState.needsAttention(s) || s == SourceRowState.limitReached;
-    final ago = _ago(w, w.healthOf(c)?.lastOkAt);
     // A problem row names its state only: its sentence says how old the saved data is, and the age does not fit beside the button.
     final line2 = switch (s) {
       SourceRowState.off => [Part(gives.isEmpty ? 'Off' : gives)],
       SourceRowState.working || SourceRowState.updating => [Part(stateWord(s)), if (ago.isNotEmpty) Part(' · updated $ago')],
       _ => [Part(stateWord(s), problem ? Tone.warn : Tone.quiet)],
     };
-    final sentence = stateSentence(w, c, s);
     final Widget? trailing = switch (s) {
-      SourceRowState.working => Switch(value: true, onChanged: (v) => w.setSourceOn(c, v)),
-      // a source that needs a key is switched on by giving the key
-      SourceRowState.off => Switch(value: false, onChanged: (v) => w.keyReady(c) ? w.setSourceOn(c, v) : addKeyFor(context, deps, c)),
+      SourceRowState.working => Switch(value: true, onChanged: onSwitch),
+      SourceRowState.off => Switch(value: false, onChanged: onSwitch),
       SourceRowState.updating => const SizedBox(width: 48, height: 48, child: Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2.5))),
-      SourceRowState.needsKey => RowButton(key: ValueKey('add-key-${c.id}'), label: 'Add key', onPressed: () => addKeyFor(context, deps, c)),
-      SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-${c.id}'), label: 'Replace key', onPressed: () => addKeyFor(context, deps, c, replace: true)),
-      // just this source
-      SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-${c.id}'), label: 'Try again', onPressed: () => w.updateSource(c)),
+      SourceRowState.needsKey => RowButton(key: ValueKey('add-key-$id'), label: 'Add key', onPressed: onAddKey),
+      SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-$id'), label: 'Replace key', onPressed: onReplaceKey),
+      SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-$id'), label: 'Try again', onPressed: onTryAgain),
       SourceRowState.limitReached || SourceRowState.nothingHere => null,
     };
     return SettingsRow(
-      key: ValueKey('source-${c.id}'),
-      leading: leading,
-      title: c.title,
+      key: ValueKey('source-$id'),
+      leading: Icon(icon, size: 22, color: k.secondary),
+      title: title,
       // A source's name takes two lines, so a phone shows it whole beside the switch.
       titleLines: 2,
       statusWidget: Column(
@@ -380,12 +456,12 @@ class SourceRow extends StatelessWidget {
           statusText(context, line2, maxLines: s == SourceRowState.off ? 2 : 1),
           if (sentence != null) ...[
             const SizedBox(height: 2),
-            statusText(context, [Part(sentence, problem ? Tone.warn : Tone.quiet)], maxLines: 2),
+            statusText(context, [Part(sentence!, problem ? Tone.warn : Tone.quiet)], maxLines: 2),
           ],
         ],
       ),
       trailing: trailing,
-      onTap: open,
+      onTap: onTap,
     );
   }
 }
@@ -510,9 +586,10 @@ class StatusLine extends StatelessWidget {
 /// The top of the page: line 1 says how many sources need attention (a warning) or that all work, with how many are off; line 2 says
 /// when Cache last checked; the refresh button. With no connection line 1 is the one notice for the whole list.
 class SourcesStatusLine extends StatelessWidget {
-  const SourcesStatusLine({super.key, required this.weather, required this.onRefresh});
+  const SourcesStatusLine({super.key, required this.weather, required this.counts, required this.onRefresh});
 
   final WeatherState weather;
+  final ({int working, int attention, int off}) counts;
   final VoidCallback onRefresh;
 
   /// "2 need attention · 1 off", "All 6 sources working", "1 off" with the ones that are on none of them.
@@ -529,7 +606,7 @@ class SourcesStatusLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final w = weather;
-    final n = w.sourceCounts;
+    final n = counts;
     final offline = w.noNetwork;
     final warn = offline || n.attention > 0;
     final line1 = offline ? 'No connection. Showing what was saved.' : summary(n);

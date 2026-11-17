@@ -84,7 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// "All 6 working" or "2 need attention" (a source that is off is not either).
   List<Part> _weather() {
-    final n = d.hub.weather.sourceCounts;
+    final n = sourceCountsOf(d);
     if (n.attention > 0) return [Part('${n.attention} need${n.attention == 1 ? 's' : ''} attention', Tone.warn)];
     if (n.working == 0) return const [Part('Nothing on')];
     return [Part('All ${n.working} working')];

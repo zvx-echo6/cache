@@ -350,9 +350,9 @@ class WeatherState extends ChangeNotifier {
   /// A state that needs the person to do something (counted in "N need attention"). Limit reached and Nothing for this place do not.
   static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
 
-  /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on (a source that
-  /// is off and not featured is under More sources). Your own sources come later.
-  List<Connector> get listedSources => [for (final c in sources) if (!isOwn(c) && (c.featured || isOn(c.id))) c];
+  /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on, your own
+  /// included (a source that is off and not featured is under More sources).
+  List<Connector> get listedSources => [for (final c in sources) if (c.featured || isOn(c.id)) c];
 
   /// How many listed sources are on and fine, how many are on and need attention, and how many are off.
   ({int working, int attention, int off}) get sourceCounts {
