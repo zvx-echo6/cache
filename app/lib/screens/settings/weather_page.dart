@@ -12,7 +12,6 @@ import 'own_source_pages.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
 import 'source_page.dart';
-import '../../sharing/settings_sync.dart' show kWatchPlacesKey;
 import 'widgets.dart';
 import '../../guide/place_link.dart' show LinkText;
 import '../../platform/app_log.dart';
@@ -182,13 +181,6 @@ class _WatchGroupsState extends State<WatchGroups> {
     ));
   }
 
-  /// A watched place's name as the linked device it came from gave it.
-  String _waitingName(String id) {
-    final names = widget.deps.hub.settingsSync?.noteOf(kWatchPlacesKey);
-    final n = names is Map ? names[id.substring(6)] : null;
-    return n is String && n.isNotEmpty ? n : 'A saved place';
-  }
-
   @override
   Widget build(BuildContext context) {
     final settings = w.settings;
@@ -204,8 +196,6 @@ class _WatchGroupsState extends State<WatchGroups> {
           final saved = [for (final p in all) if (p.kind == PlaceKind.saved) p];
           final words = _q.toLowerCase().split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
           final shown = [for (final p in saved) if (words.every('${p.name} ${p.subtitle}'.toLowerCase().contains)) p];
-          final here = {for (final p in saved) p.id};
-          final waiting = snap.hasData ? [for (final id in settings.watchedPlaces) if (id.startsWith('place:') && !here.contains(id)) id] : const <String>[];
           final blocked = loc.permission == LocationPermissionState.deniedForever || loc.problem == LocationProblem.permissionBlocked;
           Widget place(WatchPlace p) => SwitchRow(
             key: ValueKey('watch-${p.id}'),
@@ -262,17 +252,8 @@ class _WatchGroupsState extends State<WatchGroups> {
                         ),
                       ),
                     ),
-                  if (saved.isEmpty && waiting.isEmpty) const SettingsRow(key: ValueKey('watch-no-places'), title: 'None yet'),
+                  if (saved.isEmpty) const SettingsRow(key: ValueKey('watch-no-places'), title: 'None yet'),
                   for (final p in shown) place(p),
-                  // Watched on a linked device whose settings come here, and not on this device yet (it comes with the notebooks).
-                  for (final id in waiting)
-                    SwitchRow(
-                      key: ValueKey('watch-$id'),
-                      title: _waitingName(id),
-                      status: const [Part('waiting for this place', Tone.warn)],
-                      value: true,
-                      onChanged: (on) => settings.setWatched(id, on),
-                    ),
                 ],
               ),
             ],

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -280,6 +281,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('remove-key')));
       await tester.pumpAndSettle();
       expect(find.textContaining('turns off'), findsOneWidget);
+      expect(find.text('Satellite fire detections near the place (NASA FIRMS) turns off. You can add a key again later.'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isTrue);
@@ -291,6 +293,22 @@ void main() {
       expect(r.secrets.values, isEmpty);
       expect(r.liveCore.keys['firms-viirs-near'], isNull);
       expect(find.text('Get key'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Removing a key shared by two sources', () {
+    testWidgets('says "turn off" (plural) when two sources use the key', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('idaho511-events')!, secret));
+      await r.show(tester, SourcePage(deps: r.deps, sourceId: 'idaho511-events'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.pumpAndSettle();
+      expect(find.text('Road conditions (Idaho 511) and Winter road conditions (Idaho 511) turn off. You can add a key again later.'), findsOneWidget);
+      expect(find.textContaining('turns off'), findsNothing);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
       await r.dispose(tester);
     });
   });
@@ -337,6 +355,18 @@ void main() {
       expect(f().focusNode!.hasFocus, isTrue);
       expect(f().controller!.text, '$api?site=12&lat={lat}&lon={lon}');
       expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+    });
+
+    testWidgets('the empty Web address shows an example, worded as one', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final hint = tester.widget<TextField>(find.byKey(const ValueKey('own-address'))).decoration!.hintText!;
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).decoration!.hintText, 'For example: Temperature');
+      expect(hint, 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
     });
 
     testWidgets('typing on through the keyboard after Latitude and Longitude lands right after the placeholder, and the address keeps the focus', (tester) async {
@@ -446,6 +476,48 @@ void main() {
       expect(r.liveCore.checked.last, c.defText, reason: 'the core checked it as it checks every definition');
       expect(r.liveCore.keys[c.id], secret, reason: 'the core gets the key in memory');
       expect(File('${r.liveDir.path}/${c.id}.json').readAsStringSync(), isNot(contains(secret)));
+      await r.dispose(tester);
+    });
+
+    testWidgets('Save source fetches the new source straight away, for the watched place, without Update now', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      const draft = OwnDraft(name: 'Creek', address: '$api?lat={lat}&lon={lon}');
+      final t = OwnTry.ok('sensors.example.org', flattenJson(answer), asked: const ['water.level'], place: (lat: 42.54, lon: -113.79));
+      await r.show(tester, OwnSourcePickPage(deps: r.deps, draft: draft, first: t));
+      await tester.pump();
+      expect(r.liveCore.fetches, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('own-save')));
+      await settle(tester);
+      expect(r.weather.isOn('own-creek'), isTrue);
+      expect(jsonEncode(r.liveCore.fetches), contains('own-creek'), reason: 'fetched by itself, as Update now does');
+      await r.dispose(tester);
+    });
+
+    testWidgets('Try it on a host that does not answer can be cancelled: the form stays, no error, Try it again, a late answer changes nothing', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      r.web.hold = Completer<void>();
+      r.web.files['$api/slow'] = utf8.encode(jsonEncode(answer));
+      await r.show(tester, OwnSourceFormPage(deps: r.deps));
+      await tester.enterText(find.byKey(const ValueKey('own-name')), 'Slow');
+      await tester.enterText(find.byKey(const ValueKey('own-address')), '$api/slow');
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'waiting');
+      await tester.tap(find.byKey(const ValueKey('own-try-cancel')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const ValueKey('own-try-cancel')), findsNothing);
+      expect(find.byKey(const ValueKey('own-error')), findsNothing, reason: 'no error is shown');
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).controller!.text, 'Slow', reason: 'the form stays as typed');
+      expect(tester.widget<FilledButton>(find.byKey(const ValueKey('own-try'))).onPressed, isNotNull, reason: 'Try it can be pressed again');
+      // the cancelled try answers late: nothing happens
+      r.web.hold!.complete();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(find.text('Pick what to show'), findsNothing, reason: 'a late answer is ignored');
+      expect(find.text('Add your own source'), findsWidgets);
       await r.dispose(tester);
     });
 

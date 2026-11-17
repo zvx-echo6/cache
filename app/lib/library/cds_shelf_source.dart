@@ -441,9 +441,47 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Whether [l] is a library of books (its rows go to Bookshelves).
   bool holdsBooks(LibraryItem l) => _libs.any((x) => x.item.path == l.path);
 
-  /// How many books [l] holds, shelved or not: its catalogue's documents (what the not-shelved line counts too). A book with copies in
-  /// two libraries counts in each.
-  int booksIn(LibraryItem l) => _libs.where((x) => x.item.path == l.path).firstOrNull?.docs.length ?? 0;
+  /// How many books [l] holds, shelved or not, as Bookshelves counts books: a book of several files is one, and a catalogue document
+  /// Bookshelves has no book for counts as one. A book with copies in two libraries counts in each.
+  int booksIn(LibraryItem l) => documentsIn(l).length;
+
+  /// Every book of [l], as Bookshelves resolves it: the shelf it is on, Unsorted or Hidden, one entry per BOOK (a book of several
+  /// files, in this library or others, is one entry with its copies counted), and one entry for each document of the catalogue the
+  /// view has no book for (no copy: "on no shelf"). Empty when [l] holds no books. In the catalogue's order.
+  List<LibraryDoc> documentsIn(LibraryItem l) {
+    final lb = _libs.where((x) => x.item.path == l.path).firstOrNull;
+    if (lb == null) return const [];
+    final at = <String, _ViewBook>{
+      for (final vb in _view.values)
+        for (final c in vb.copies)
+          for (final loc in (c['locs'] as List? ?? const [])) '$loc': vb,
+    };
+    final out = <LibraryDoc>[];
+    final seen = <String>{};
+    for (final d in lb.docs.entries) {
+      if (_readOnly) {
+        final b = _books['${lb.item.folderName}/${d.key}'];
+        if (b != null) out.add(LibraryDoc(docId: d.key, title: b.title, place: DocPlace.unsorted, book: b));
+        continue;
+      }
+      final vb = at['${lb.id}/${d.key}'];
+      final shown = vb == null ? null : (_books[vb.id] ?? _hidden[vb.id]);
+      if (vb == null || shown == null) {
+        final id = '${lb.id}/${d.key}';
+        out.add(LibraryDoc(docId: d.key, title: d.value.title, place: DocPlace.none, book: _shelfBook(id: id, lb: lb, doc: d.key, title: d.value.title)));
+        continue;
+      }
+      if (!seen.add(vb.id)) continue;
+      out.add(LibraryDoc(
+        docId: d.key,
+        title: shown.title,
+        place: vb.removed ? DocPlace.hidden : (shown.shelf == null ? DocPlace.unsorted : DocPlace.shelved),
+        book: shown,
+        copies: vb.copies.length,
+      ));
+    }
+    return out;
+  }
 
   static void _signFiles(StringBuffer b, Directory dir) {
     if (!dir.existsSync()) return;
@@ -1255,13 +1293,37 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     return files.length;
   }
 
+  /// The most encoded bytes of events one request to the server carries: a quarter of its 1 MiB body limit (the "at" of each event
+  /// and the brackets are not counted, and the largest realistic book, a long title in a few events, is under 1 KiB).
+  static const kEventBatchBytes = 256 * 1024;
+
   /// Writes the events of a set of moves (each book: to a division, or back to Unsorted with null) and reads the books again.
   /// Each move is against the book's numbered copy: `place`, `retire` (its old number), `assign`; Unsorted is `unsort`, `retire`.
   Future<List<PlacedBook>> _write(List<(ShelfBook, String?)> moves, {required String by}) async {
     final next = Map<String, int>.of(_next);
-    final events = <Map<String, dynamic>>[];
+    var events = <Map<String, dynamic>>[];
     final placed = <PlacedBook>[];
+    final done = <PlacedBook>[];
+    var size = 0;
+    // On the server a request body has a limit (1 MiB), so a big set goes in batches of at most [kEventBatchBytes] encoded bytes, a
+    // book's events never split. The phone writes its own log, with no such limit, and sends everything in one go.
+    final limit = _server == null ? null : kEventBatchBytes;
+    Future<void> flush() async {
+      if (events.isEmpty) return;
+      try {
+        await _append(events);
+      } catch (e) {
+        if (done.isEmpty) rethrow;
+        throw PartialPlacementException(done.length, moves.length, e);
+      }
+      done.addAll(placed);
+      placed.clear();
+      events = [];
+      size = 0;
+    }
+
     for (final (b, to) in moves) {
+      final before = events.length;
       final vb = _view[b.id] ?? _view[_byCopy[b.id]];
       if (vb == null) continue;
       final copy = vb.numbered;
@@ -1270,6 +1332,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       if (to == null) {
         events.add({'ev': 'unsort', 'copy': copy, 'by': by});
         if (retire != null) events.add(retire);
+        if (limit != null) {
+          size += utf8.encode(jsonEncode(events.sublist(before))).length + 1;
+          if (size >= limit) await flush();
+        }
         continue;
       }
       final seq = next[to] ?? 1;
@@ -1279,11 +1345,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
         ..addAll([?retire])
         ..add({'ev': 'assign', 'copy': copy, 'div': to, 'seq': seq});
       placed.add(PlacedBook(before: b, shelf: to, callNumber: cdsCallText(to, seq)));
+      if (limit != null) {
+        size += utf8.encode(jsonEncode(events.sublist(before))).length + 1;
+        if (size >= limit) await flush();
+      }
     }
-    await _append(events);
+    await flush();
     // The numbers as the logs now resolve them (a clash with another device's claim shows its suffix).
     return [
-      for (final p in placed) PlacedBook(before: p.before, shelf: p.shelf, callNumber: book(p.before.id)?.callNumber ?? p.callNumber),
+      for (final p in done) PlacedBook(before: p.before, shelf: p.shelf, callNumber: book(p.before.id)?.callNumber ?? p.callNumber),
     ];
   }
 

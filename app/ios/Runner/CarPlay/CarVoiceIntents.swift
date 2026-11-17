@@ -71,13 +71,13 @@ struct CarNavigateIntent: AppIntent {
   func perform() async throws -> some IntentResult & ProvidesDialog {
     CarVoiceRun.log.info("car voice: navigate asked")
     CarVoiceRun.startEngine()
-    var outcome = await CarVoiceRun.navigate(place.place)
+    var outcome = await CarVoiceRun.navigate(place.place, fromSiri: true)
     var connected = CarLink.shared.carConnected
     if case .places(_, let places) = outcome, !connected {
       // No car to show the list on: Siri asks which one, on the phone, and that one is navigated to.
       let choices = places.map { CarPlaceEntity(place: .found($0)) }
       let chosen = try await $place.requestDisambiguation(among: choices, dialog: IntentDialog("Where to?"))
-      outcome = await CarVoiceRun.navigate(chosen.place)
+      outcome = await CarVoiceRun.navigate(chosen.place, fromSiri: true)
       connected = CarLink.shared.carConnected
     }
     CarVoiceRun.log.info("car voice: navigate answered \(outcome.kind, privacy: .public), a car connected: \(connected)")
@@ -86,6 +86,12 @@ struct CarNavigateIntent: AppIntent {
     return .result(dialog: "\(words)")
   }
 }
+
+/// Navigate starts guidance with spoken prompts, so from iOS 17 it is declared an audio-playing intent (the system then lets
+/// the app's audio play, and the app is not suspended before it speaks). The app still runs on iOS 16.3, where there is no
+/// such protocol: the conformance is available from iOS 17 only.
+@available(iOS 17.0, *)
+extension CarNavigateIntent: AudioPlaybackIntent {}
 
 /// "Add a stop at <place> in Cache": the place becomes the next stop while guiding (the same `navigateTo` with `stop` the
 /// Android car's add-a-stop request sends). With no route it is "navigate to", as on Android. A name that is no saved place
@@ -126,7 +132,7 @@ struct CarAddStopIntent: AppIntent {
       if case .places(_, let places) = plain, !connected {
         let choices = places.map { CarPlaceEntity(place: .found($0)) }
         let chosen = try await $place.requestDisambiguation(among: choices, dialog: IntentDialog("Where to?"))
-        plain = await CarVoiceRun.navigate(chosen.place)
+        plain = await CarVoiceRun.navigate(chosen.place, fromSiri: true)
         connected = CarLink.shared.carConnected
       }
       guard let words = CarVoice.words(plain, carConnected: connected) else { throw CarVoiceFailed() }
@@ -217,10 +223,13 @@ struct CacheShortcuts: AppShortcutsProvider {
     AppShortcut(
       intent: CarNavigateIntent(),
       phrases: [
+        // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way. The first phrase is
+        // Apple's primary one (the shortcut's tile and Siri's help).
+        "Navigate with \(.applicationName)",
+        "Start a \(.applicationName) route",
+        "Get \(.applicationName) directions",
         "Navigate to \(\.$place) with \(.applicationName)",
         "Take me to \(\.$place) with \(.applicationName)",
-        // No place said: Siri asks "Where to?" (the parameter's question) and the answer comes the same way.
-        "Navigate with \(.applicationName)",
       ]
     )
     // Seven App Shortcuts in all (Apple allows ten).
@@ -276,9 +285,9 @@ enum CarVoiceRun {
   }
 
   @MainActor
-  static func navigate(_ place: CarVoicePlace) async -> CarVoiceOutcome {
+  static func navigate(_ place: CarVoicePlace, fromSiri: Bool = false) async -> CarVoiceOutcome {
     await withCheckedContinuation { (done: CheckedContinuation<CarVoiceOutcome, Never>) in
-      CarVoice.navigate(place) { done.resume(returning: $0) }
+      CarVoice.navigate(place, fromSiri: fromSiri) { done.resume(returning: $0) }
     }
   }
 
@@ -323,7 +332,7 @@ enum CarVoiceRun {
   /// Which of the approved sentences Siri says, for the log (no place names in the log).
   static func template(_ outcome: CarVoiceOutcome) -> String {
     switch outcome {
-    case .started: return "'Starting the route to <name>.'"
+    case .started(_, let summary): return summary?.isEmpty == false ? "'Starting the route to <name>. <summary>'" : "'Starting the route to <name>.'"
     case .places: return "'Showing places for <query>.'"
     case .none: return "'Cache found no places for <query>.'"
     case .routes, .noAnswer: return "nothing of Cache's"
@@ -332,7 +341,13 @@ enum CarVoiceRun {
 
   /// The saved places the car just listed: their names are kept for Siri, and Siri is given them again when they changed.
   static func savedPlacesListed(_ places: [CarPlace]) {
-    guard CarVoiceSaved.remember(places) else { return }
+    savedNamesListed(places.map { $0.name })
+  }
+
+  /// The saved places' names, from the car's list or from the phone (lib/car/siri_place_names.dart): kept for Siri, which is given
+  /// them again when they changed (at most CarVoiceSaved.most).
+  static func savedNamesListed(_ names: [String]) {
+    guard CarVoiceSaved.remember(names: names) else { return }
     CacheShortcuts.updateAppShortcutParameters()
     log.info("car voice: Siri was given \(CarVoiceSaved.names().count) saved place names")
   }

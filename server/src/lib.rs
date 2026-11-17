@@ -6,6 +6,7 @@
 //! installed) are `library`; its outbound HTTP and the catalog fetch rules are `fetch`. Building libraries from PDFs (the queue,
 //! the work shards, the swap into the core's library folder, the drop folder) is `libbuild`.
 
+pub mod applog;
 pub mod auth;
 pub mod libbuild;
 pub mod config;
@@ -17,6 +18,7 @@ pub mod http;
 pub mod keys;
 pub mod library;
 pub mod llm;
+pub mod metalink;
 pub mod models;
 pub mod pages;
 pub mod tiles;

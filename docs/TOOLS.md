@@ -881,7 +881,7 @@ Results. The model only ever sees these:
 A `change` action never runs from the call: the result is a confirm card for the app to show, and the model tells the user what
 the card will do and that nothing happens until they tap it. What the tap came to arrives later as a system message
 (`{"host_event":"act_outcome","ok":true,"status":"done"|"declined"|"failed","confirm_id":"c1","action":"places.save",...}`),
-not as a tool result. A `read` or `open` action is run by the app and its result comes straight back as `status` `done`;
+not as a tool result. A `declined` outcome ends with `"note":"The person tapped Cancel. Nothing was done or saved."`. A `read` or `open` action is run by the app and its result comes straight back as `status` `done`;
 objects in `result` with an `address` carry `n` like any other tool result.
 
 Errors: `unknown_action`; `bad_arguments` with `field` and `reason` (`missing`, `unknown_field`, `wrong_type`, `not_allowed`,

@@ -10,14 +10,16 @@ import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
 import 'browse/web/local_files.dart' show UploadCancelled, pickLocalFile, setLeaveWarning;
-import 'models/recommendations.dart' show ModelSettings;
+import 'models/recommendations.dart' show ModelSettings, RecommendedModels;
 import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/bench_options.dart';
 import 'platform/memory.dart';
+import 'models/gguf_header.dart' show readGgufGeneralName;
 import 'platform/memory_need.dart';
 import 'theme.dart';
+import 'video/format.dart' show formatBytes;
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
 import 'platform/byte_units.dart';
@@ -183,14 +185,75 @@ class AppState extends ChangeNotifier {
 
   bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
 
-  /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
-  String displayName(ModelEntry e) => _names[e.key] ?? e.name;
+  /// The quantisation label ("Q4_K_M") of each model loaded before, by [ModelEntry.key], set at the same load.
+  final Map<String, String> _labels = {};
 
-  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"); [displayName] when none was parsed.
-  String plainName(ModelEntry e) => _plainNames[e.key] ?? displayName(e);
+  /// The name the recommended list gives this file ("Gemma 4 E2B · tuned for Cache"); null for a file the list does not name, or
+  /// while the list is not known (or this is not set).
+  String? Function(ModelEntry e)? recommendedName;
+
+  RecommendedModels? _followed;
+
+  /// Follows [list]: a model it names is a recommended one and shows the list's name; a load waits for the list to be read before it
+  /// names the model; names are drawn again when the list arrives; and the built-in copy is read now (not the network), so a model
+  /// that is only resting is named from the list too.
+  void followRecommended(RecommendedModels list) {
+    _followed?.removeListener(_listArrived);
+    _followed = list;
+    isRecommended = (e) => list.isRecommendedFile(e.fileName);
+    recommendedName = (e) => list.nameOfFile(e.fileName);
+    recommendedReady = list.ready;
+    list.addListener(_listArrived);
+    unawaited(list.loadBuiltIn());
+  }
+
+  void _listArrived() => notifyListeners();
+
+  @override
+  void dispose() {
+    _followed?.removeListener(_listArrived);
+    super.dispose();
+  }
+
+  /// The model's name on screen. A recommended model shows its name from the recommended list, so two files that llama.cpp
+  /// describes alike (the stock and the uncensored E2B) are told apart; any other shows its real name, for example
+  /// "SmolLM2 135M Instruct · Q4_0" (from its own metadata once loaded); the file name if not known yet.
+  String displayName(ModelEntry e) => recommendedName?.call(e) ?? _names[e.key] ?? e.name;
+
+  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"; a non-recommended model's general.name): the stored one,
+  /// else the stored full name, else the file name. It never carries the recommended list's name.
+  String plainName(ModelEntry e) => _plainNames[e.key] ?? _names[e.key] ?? e.name;
+
+  /// The name the Ask header, its model menu and the one-line Settings row show: the short name. Change this one line to switch them.
+  String headerName(ModelEntry e) => plainName(e);
+
+  /// The quantisation label to show with [e]'s size: only a recommended model has one, and only when its name from the list does not
+  /// already end with it ("Gemma 4 E4B · Q4_K_M" needs none). It is the one read when the model was loaded, else the one in its file
+  /// name; null when neither has it.
+  String? shownQuant(ModelEntry e) {
+    final name = recommendedName?.call(e);
+    if (name == null) return null;
+    final q = _labels[e.key] ?? quantFromFileName(e.fileName);
+    return q == null || name.endsWith(q) ? null : q;
+  }
+
+  /// The line under a model's name: its size ("3.2 GB"), and for a recommended model the quantisation after it ("3.2 GB · Q4_K_M").
+  String sizeLine(ModelEntry e) {
+    final q = shownQuant(e);
+    return q == null ? formatBytes(e.size) : '${formatBytes(e.size)} · $q';
+  }
 
   /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
   ModelSettings? Function(ModelEntry e)? settingsFor;
+
+  /// Whether the recommended list names this file (by file name): true or false once the list is known, null while it is not. A
+  /// recommended model is shown by its name from the list ([recommendedName]; the description's name is only what is kept stored); any
+  /// other is named by its file's own `general.name`; while it is unknown (or this is not set) the description's name is kept, so a
+  /// wrong name is never stored.
+  bool? Function(ModelEntry e)? isRecommended;
+
+  /// Completes when the recommended list has been read; a load waits for it before it names the model.
+  Future<void> Function()? recommendedReady;
 
   /// The settings of the model loaded now (none for a model the list does not name).
   ModelSettings activeSettings = ModelSettings.none;
@@ -272,6 +335,9 @@ class AppState extends ChangeNotifier {
       _plainNames
         ..clear()
         ..addAll(((j['plainNames'] as Map?) ?? const {}).cast<String, String>());
+      _labels
+        ..clear()
+        ..addAll(((j['labels'] as Map?) ?? const {}).cast<String, String>());
     } catch (_) {
       // A damaged settings file is ignored; defaults apply.
     }
@@ -291,6 +357,7 @@ class AppState extends ChangeNotifier {
         'unsupported': _unsupported.toList(),
         'names': _names,
         'plainNames': _plainNames,
+        'labels': _labels,
       }));
     } catch (_) {}
   }
@@ -430,10 +497,19 @@ class AppState extends ChangeNotifier {
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}; ${mappedFileSummary(entry.path) ?? ''}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
-      final parts = prettyModelParts(info.description, fileName: entry.fileName);
+      try {
+        await recommendedReady?.call();
+      } catch (_) {}
+      // Only a model the list is known not to name takes its own name; unknown counts as recommended (the name as before).
+      final recommended = isRecommended?.call(entry) ?? true;
+      // A browser's model is the server's: it sends the file's name in the load answer. On a device the file is read here (only the
+      // header's pairs up to the name), and only for a model that will use it.
+      final ownName = recommended ? null : (info.generalName ?? (kIsWeb ? null : readGgufGeneralName(entry.path)));
+      final parts = modelNameParts(info.description, fileName: entry.fileName, generalName: ownName, recommended: recommended);
       if (parts != null) {
         _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
         _plainNames[entry.key] = parts.name;
+        if (parts.label != null) _labels[entry.key] = parts.label!;
       }
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
@@ -519,7 +595,8 @@ class AppState extends ChangeNotifier {
   /// Unloads the active model to free its memory. Nothing is active after it, and the next start loads no model until
   /// one is chosen again.
   Future<void> unload() async {
-    if (loading != null || active == null) return;
+    final was = active, wasInfo = activeInfo;
+    if (loading != null || was == null) return;
     resting = null;
     _clearHeld();
     active = null;
@@ -534,6 +611,14 @@ class AppState extends ChangeNotifier {
     _unloading = u; // a load that follows waits for it, as after release()
     try {
       await u;
+    } on StateError catch (e) {
+      // A browser: the server could not free its model, so it is still loaded there. The page says so rather than the opposite.
+      active = was;
+      activeInfo = wasInfo;
+      loadError = 'Could not unload the model: ${e.message}';
+      modelGeneration++;
+      notifyListeners();
+      return;
     } finally {
       if (identical(_unloading, u)) _unloading = null;
     }

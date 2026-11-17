@@ -182,6 +182,22 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
+/// A question asked while no model was loaded, waiting for it.
+class _HeldAsk {
+  _HeldAsk(this.text, this.seed, this.epoch, this.sawLoad, [this.baseCount = 0]);
+  final String text;
+  final AskAbout? seed;
+
+  /// The chat it was held in ([ChatController.chatEpoch]).
+  final int epoch;
+
+  /// How many messages the chat had when it was held; any other change means the person sent something else.
+  final int baseCount;
+
+  /// A model load has been seen since it was held.
+  bool sawLoad;
+}
+
 class _ShellState extends State<Shell> {
   /// The module on screen; null with [_onModules] false is Home.
   ModuleId? _module;
@@ -236,8 +252,47 @@ class _ShellState extends State<Shell> {
   /// Set in initState (a lazy initializer would first run after the model had already arrived).
   bool _noModelSeen = false;
 
+  _HeldAsk? _heldAsk;
+
+  /// The held question's text, for Ask to show in the chat.
+  final ValueNotifier<String?> _heldText = ValueNotifier(null);
+
+  _HeldAsk? get _held => _heldAsk;
+  set _held(_HeldAsk? h) {
+    _heldAsk = h;
+    _heldText.value = h?.text;
+  }
+
+  /// A held question that is dropped (the load failed, another chat, another module, a newer question, something else sent first) goes
+  /// back to Ask's field, unless the field already has text ([AskScreen] leaves that alone).
+  final ValueNotifier<String?> _returnedText = ValueNotifier(null);
+
+  void _dropHeld() {
+    final h = _heldAsk;
+    _held = null;
+    if (h != null) _returnedText.value = h.text;
+  }
+
+  /// A question typed in Ask while a chosen model is not loaded: held (a newer one replaces it) and the model woken, under the
+  /// memory gate (Send does not bypass it).
+  void _holdTyped(String text) {
+    final chat = widget.chat;
+    _dropHeld();
+    _held = _HeldAsk(text, null, chat.chatEpoch, widget.app.loading != null, chat.messages.length);
+    unawaited(widget.app.wake());
+  }
+
   void _onApp() {
     final app = widget.app;
+    final held = _held;
+    if (held != null) {
+      // A load began (the wake, or the person's Load): the question waits for it. One that ended with no model failed: drop it.
+      if (app.loading != null) {
+        held.sawLoad = true;
+      } else if (held.sawLoad && app.active == null) {
+        _dropHeld();
+      }
+    }
     if (app.modelGeneration != _seenGeneration) {
       _seenGeneration = app.modelGeneration;
       _openingRead = false; // another model is loaded while Ask stays open: it gets its read ahead
@@ -284,6 +339,7 @@ class _ShellState extends State<Shell> {
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     _seenGeneration = widget.app.modelGeneration;
     widget.app.addListener(_onApp);
+    widget.chat.addListener(_sendHeld);
     _lifecycle;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
@@ -495,6 +551,7 @@ class _ShellState extends State<Shell> {
     widget.nav.removeListener(_onNavForJumpBack);
     pagePushWatcher.removeListener(_onPagePushed);
     widget.app.removeListener(_onApp);
+    widget.chat.removeListener(_sendHeld);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     if (askCacheInstead == _askFromGuide) askCacheInstead = null;
@@ -503,14 +560,18 @@ class _ShellState extends State<Shell> {
     _alertTaps?.cancel();
     _lifecycle.dispose();
     _homeQuery.dispose();
+    _heldText.dispose();
+    _returnedText.dispose();
     super.dispose();
   }
 
   /// Tells the app when Ask stops or starts being the screen shown ([Shell.onAskShown]), around a change of [_module].
   void _changeModule(void Function() change) {
     final before = _module == ModuleId.ask;
+    final from = _module;
     setState(() {
       change();
+      if (_module != from) _dropHeld(); // leaving Ask: coming back must not send a stale question
       // Leaving Maps any other way (a tab, Home, Modules) forgets where a jump came from.
       if (!_jumping && _module != ModuleId.maps) _jumpBack = null;
     });
@@ -992,15 +1053,14 @@ class _ShellState extends State<Shell> {
   /// "Ask Cache instead" under a guide search that found nothing: the guide closes and Ask asks what was searched for.
   void _askFromGuide(String text) {
     Navigator.of(context).popUntil((r) => r.isFirst);
-    _askFromHome(text);
+    askFromHome(text);
   }
 
   /// Enter in Home's search: a new chat that asks exactly what was typed.
-  void _askFromHome(String text) {
+  @visibleForTesting
+  void askFromHome(String text) {
     if (!_askOn) return;
-    widget.chat.newChat();
-    _goModule(ModuleId.ask);
-    widget.chat.send(text);
+    _askInNewChat(text);
   }
 
   void _openSettings() {
@@ -1016,11 +1076,39 @@ class _ShellState extends State<Shell> {
   }
 
   /// "Ask about this" on the Weather screen: a new chat that asks the question straight away, seeded with the item's live data.
-  void _askAbout(AskAbout about) {
+  @visibleForTesting
+  void askAbout(AskAbout about) {
     if (!_askOn) return;
-    widget.chat.newChat();
+    _askInNewChat(about.question, seed: about);
+  }
+
+  /// A new chat that asks [text] (with [seed], Ask about this) straight away. With no model loaded the chat cannot take it (a model
+  /// file may be on the device while the model rests until Ask opens or Load is pressed), so it is held and sent once the model
+  /// is loaded ([_sendHeld]). Opening Ask wakes the model. One request is held at most; a newer one replaces it.
+  void _askInNewChat(String text, {AskAbout? seed}) {
+    final chat = widget.chat;
+    _dropHeld();
+    chat.newChat();
     _goModule(ModuleId.ask);
-    widget.chat.send(about.question, seed: about);
+    if (chat.canSend) {
+      unawaited(chat.send(text, seed: seed));
+      return;
+    }
+    _held = _HeldAsk(text, seed, chat.chatEpoch, widget.app.loading != null);
+  }
+
+  /// The chat changed while a question is held: sent when the model is there; dropped when the person sent something else first
+  /// or started another chat.
+  void _sendHeld() {
+    final h = _held;
+    if (h == null) return;
+    final chat = widget.chat;
+    if (chat.chatEpoch != h.epoch || chat.messages.length != h.baseCount) {
+      _dropHeld();
+    } else if (chat.canSend) {
+      _held = null;
+      unawaited(chat.send(h.text, seed: h.seed));
+    }
   }
 
   void _openWeatherSettings() {
@@ -1219,13 +1307,13 @@ class _ShellState extends State<Shell> {
             chat: widget.chat,
             onChooseModel: () => openModels(context, widget.app),
             onLeave: _goHome,
-            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack),
+            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack, held: _heldText, returned: _returnedText, onHold: _holdTyped),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
-        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
@@ -1245,7 +1333,7 @@ class _ShellState extends State<Shell> {
             state: pdfIndexShared!,
             open: (z) => unawaited(showPdfPartSheet(context, pdfIndexShared!, z)),
           ),
-    onAsk: _askFromHome,
+    onAsk: askFromHome,
     askOn: _askOn,
     onChooseModel: () => openModels(context, widget.app),
     onOpenSettings: _openSettings,

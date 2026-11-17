@@ -253,3 +253,59 @@ class HttpDeviceApi implements DeviceApi {
     return r.bodyBytes;
   }
 }
+
+/// The server's own version ("0.1.0+1c6891f"), read from `GET /api/version`; null when it cannot be read.
+Future<String?> readServerVersion({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/version')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final v = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['version'] : null;
+    return v is String && v.isNotEmpty ? v : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The bytes the server keeps for each kind of the phone's Storage page ("library", "models", "regions", ...), read from
+/// `GET /api/library/storage`; null when they cannot be read.
+Future<Map<String, int>?> readServerStorage({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/storage')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final k = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['kinds'] : null;
+    if (k is! Map) return null;
+    return {for (final e in k.entries) e.key.toString(): (e.value as num?)?.toInt() ?? 0};
+  } catch (_) {
+    return null;
+  }
+}
+
+/// What Clean up would free on the server (its unfinished downloads and upload leftovers), from `GET /api/library/cleanup`; null
+/// when it cannot be read.
+Future<int?> readServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['bytes'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Clean up on the server (`POST /api/library/cleanup`): the bytes it freed; null when it would not (a download is running) or
+/// could not be reached.
+Future<int?> runServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).post(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['freed'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
+  }
+}

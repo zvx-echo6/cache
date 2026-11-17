@@ -14,6 +14,7 @@ enum DlReason {
   noConnection('no connection'),
   full('this device is full'),
   noAnswer('server did not answer'),
+  notMirrored('not on the download servers yet'),
   cutOff('download was cut off');
 
   const DlReason(this.words);
@@ -22,6 +23,8 @@ enum DlReason {
   /// The reason for an error text or code from any download engine (the codes and messages they already use).
   static DlReason of(Object? error) {
     final s = '${error ?? ''}'.toLowerCase();
+    // Every mirror said the file is not there (yet): the downloaders' own sentence and code.
+    if (s.contains('not_mirrored') || s.contains("isn't on the download servers yet")) return DlReason.notMirrored;
     if (s.contains('no_space') || s.contains('out of space') || s.contains('free space') || s.contains('full')) return DlReason.full;
     if (s.contains('too long') || s.contains('timed out') || s.contains('answered') || s.contains('redirect') || s.contains('no longer on') ||
         s.contains('did not say') || s.contains('http ')) {

@@ -24,7 +24,7 @@ const _unplugged40 = BatteryReading(percent: 40, charging: false);
 const _low = BatteryReading(percent: 15, charging: false);
 const _quick = Duration(milliseconds: 20);
 
-class _Platform implements FgsPlatform {
+class _Platform extends FgsPlatform {
   final List<bool> armed = [];
   bool allowed = false;
   bool grants = true;
@@ -578,6 +578,27 @@ void main() {
         expect(bars[i], greaterThanOrEqualTo(bars[i - 1]));
       }
       expect(sent.last.done, 1);
+    });
+
+    test('the last progress said is the end state, however slowly the timer runs (no tick between the last step and the end)', () async {
+      final s = await pendingOne(stepping());
+      final sent = <FgsProgress>[];
+      final out = await fgsAddJob(
+        support: support,
+        control: FgsAddControl(onProgress: sent.add),
+        lock: lock,
+        battery: () async => _charging,
+        state: s,
+        queue: ({bool next = false, Duration delay = Duration.zero}) async {},
+        waitForBack: Duration.zero,
+        takeOverWait: const Duration(seconds: 5),
+        look: const Duration(milliseconds: 10),
+        lookEvery: _quick,
+        // no tick ever comes: only the first look and the last one are said
+        progressEvery: const Duration(hours: 1),
+      );
+      expect(out.words, 'added 1');
+      expect(sent.last.done, 1, reason: 'the end state is said once, at the end, not left to a timer');
     });
 
     test('a charging run that never lets go: the service gives up after its bounded wait, and says so', () async {

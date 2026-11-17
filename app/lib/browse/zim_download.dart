@@ -5,6 +5,7 @@ import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:xml/xml.dart';
 
 import '../chat/ask_focus.dart';
 import '../net/fetch.dart' show kUserAgent;
@@ -18,7 +19,7 @@ class DownloadException implements Exception {
 
   final String message;
 
-  /// "no_space", "checksum", "cancelled", "network" or "failed".
+  /// "no_space", "checksum", "cancelled", "network", "not_mirrored" or "failed".
   final String code;
 
   @override
@@ -93,6 +94,7 @@ class ZimDownloader {
     this.freeSpace = allowedBytesOnDisk,
     HttpClient Function()? clientFactory,
     @visibleForTesting this.writeChunk = _writeChunk,
+    this.stallTimeout = const Duration(seconds: 60),
   }) : _clientFactory = clientFactory ?? _defaultClient;
 
   /// The free space a download may use (the pre-check: see [usableBytesOnDisk]).
@@ -100,6 +102,9 @@ class ZimDownloader {
 
   /// Writes one chunk of the body; tests give one that fails the way a full disk does.
   final Future<void> Function(RandomAccessFile file, List<int> chunk) writeChunk;
+
+  /// How long a body may send nothing before the connection counts as stalled (and the next mirror takes over).
+  final Duration stallTimeout;
 
   static Future<void> _writeChunk(RandomAccessFile file, List<int> chunk) => file.writeFrom(chunk);
   final HttpClient Function() _clientFactory;
@@ -126,6 +131,20 @@ class ZimDownloader {
     cancel?._onCancel(() => client.close(force: true));
     try {
       _checkCancel(cancel);
+      // 0. Kiwix's own metalink lists the mirrors in order of preference, with the file's sha-256. Without one (or without a
+      // sha-256 in it) the redirect and the .sha256 beside the file are used, as before.
+      final meta = await _fetchMetalink(client, url, cancel);
+      if (meta != null && meta.mirrors.isNotEmpty && (meta.sha256 != null || expectedSha256 != null)) {
+        return await _downloadFromMirrors(
+          client,
+          meta,
+          part,
+          expectedSha256 != null ? _Checksum('sha256', expectedSha256.toLowerCase()) : _Checksum('sha256', meta.sha256!),
+          onProgress,
+          onVerifying,
+          cancel,
+        );
+      }
       // 1. The real address (the mirror) and the exact size.
       final head = await _resolve(client, url, cancel);
       final total = head.length;
@@ -221,6 +240,134 @@ class ZimDownloader {
     }
   }
 
+  /// Tries the metalink's mirrors in priority order. A mirror that answers 404, 410 or 5xx, cannot be reached, or stalls or drops the
+  /// connection mid-body hands over to the next, which continues the partial file with a Range request. When every mirror says
+  /// 404 or 410 the file is not on the download servers yet.
+  Future<DownloadResult> _downloadFromMirrors(
+    HttpClient client,
+    _Metalink meta,
+    File part,
+    _Checksum expected,
+    void Function(int, int)? onProgress,
+    void Function()? onVerifying,
+    CancelToken? cancel,
+  ) async {
+    Object? lastError;
+    var allMissing = true;
+    var spaceChecked = false;
+    for (final mirror in meta.mirrors) {
+      _checkCancel(cancel);
+      try {
+        final head = await _resolve(client, mirror, cancel, mirror: true);
+        final total = head.length;
+        if (meta.size != null && total != meta.size) {
+          allMissing = false;
+          lastError = const DownloadException('The download server sent a file of the wrong size. Try again.', code: 'network');
+          continue;
+        }
+        final have = part.existsSync() ? part.lengthSync() : 0;
+        final startAt = have <= total ? have : 0;
+        if (!spaceChecked) {
+          final avail = freeSpace(part.parent.path);
+          final needed = (total - startAt) + downloadMargin(total);
+          if (avail != null && avail < needed) throw NoSpaceException(needed, avail);
+          spaceChecked = true;
+        }
+        await _fetchBody(client, head, part, startAt, total, onProgress, cancel);
+        _checkCancel(cancel);
+        final size = part.lengthSync();
+        if (size != total) {
+          throw DownloadException(
+            'The download stopped early (${_mb(size)} of ${_mb(total)}). Try again to continue.',
+            code: 'network',
+          );
+        }
+        // Verify against the metalink's hash.
+        await askIdle(worker: 'Downloads'); // the check reads the whole file: not while Ask answers
+        onVerifying?.call();
+        final got = await _hashFile(part.path, expected.kind);
+        _checkCancel(cancel);
+        if (got != expected.hex) {
+          try {
+            part.deleteSync();
+          } catch (_) {}
+          throw const DownloadException(
+            'The file did not match its published checksum, so it was thrown away. Try again.',
+            code: 'checksum',
+          );
+        }
+        return DownloadResult(file: part, bytes: size, verified: true, checksumKind: expected.kind);
+      } on _MirrorStatus catch (e) {
+        if (e.status != 404 && e.status != 410 && e.status < 500) rethrow;
+        if (e.status != 404 && e.status != 410) allMissing = false;
+        lastError = e;
+      } on SocketException catch (e) {
+        _checkCancel(cancel);
+        allMissing = false;
+        lastError = e;
+      } on HttpException catch (e) {
+        _checkCancel(cancel);
+        allMissing = false;
+        lastError = e;
+      } on HandshakeException catch (e) {
+        allMissing = false;
+        lastError = e;
+      } on TimeoutException catch (e) {
+        _checkCancel(cancel);
+        allMissing = false;
+        lastError = e;
+      } on DownloadException catch (e) {
+        if (e.code != 'network') rethrow;
+        allMissing = false;
+        lastError = e;
+      }
+    }
+    if (allMissing) {
+      throw const DownloadException(
+        "This file isn't on the download servers yet. Try again later.",
+        code: 'not_mirrored',
+      );
+    }
+    throw lastError!;
+  }
+
+  /// Kiwix's metalink for [url] (`<url>.meta4`, on the same host), or null when there is none or it cannot be read.
+  Future<_Metalink?> _fetchMetalink(HttpClient client, Uri url, CancelToken? cancel) async {
+    if (!url.path.toLowerCase().endsWith('.zim')) return null;
+    try {
+      var at = url.replace(path: '${url.path}.meta4', query: null, fragment: null);
+      for (var hop = 0; hop < 4; hop++) {
+        _checkCancel(cancel);
+        final req = await client.getUrl(at);
+        req.followRedirects = false;
+        final res = await req.close().timeout(const Duration(seconds: 30));
+        if (res.isRedirect) {
+          await res.drain<void>();
+          at = at.resolve(res.headers.value(HttpHeaders.locationHeader) ?? '');
+          continue;
+        }
+        if (res.statusCode != 200) {
+          await res.drain<void>();
+          return null;
+        }
+        final text = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 30));
+        if (text.length > 1 << 20) return null;
+        return _Metalink.parse(text);
+      }
+    } on SocketException {
+      // The file itself decides whether the network works.
+    } on HttpException {
+      // Same.
+    } on TimeoutException {
+      // Same.
+    } on HandshakeException {
+      // Same.
+    } on FormatException {
+      // Not text: no metalink.
+    }
+    return null;
+  }
+
   DownloadException? _stopped(CancelToken? c) => c != null && c.isCancelled
       ? const DownloadException('Canceled', code: 'cancelled')
       : null;
@@ -232,11 +379,14 @@ class ZimDownloader {
   }
 
   /// Follows redirects (301, 302, 303, 307, 308) with HEAD until a 200; returns the final address and size.
+  ///
+  /// With [mirror], an answer that is not 200 throws a [_MirrorStatus] so the caller can tell a missing file from a failing server.
   Future<_Resolved> _resolve(
     HttpClient client,
     Uri url,
-    CancelToken? cancel,
-  ) async {
+    CancelToken? cancel, {
+    bool mirror = false,
+  }) async {
     var u = url;
     for (var hop = 0; hop < 8; hop++) {
       _checkCancel(cancel);
@@ -254,6 +404,7 @@ class ZimDownloader {
         u = u.resolve(loc);
         continue;
       }
+      if (mirror && res.statusCode != 200) throw _MirrorStatus(res.statusCode);
       if (res.statusCode == 404) {
         throw const DownloadException(
           'That file is no longer on the download server.',
@@ -376,15 +527,13 @@ class ZimDownloader {
       mode = FileMode.write;
     } else {
       await res.drain<void>();
-      throw DownloadException(
-        'The download server answered ${res.statusCode}.',
-      );
+      throw _MirrorStatus(res.statusCode);
     }
     final raf = await part.open(mode: mode);
     var done = from;
     var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
     try {
-      await for (final chunk in res) {
+      await for (final chunk in res.timeout(stallTimeout)) {
         _checkCancel(cancel);
         // While Ask answers the stream is held (an await in an await-for body pauses the subscription: nothing is lost). The hold
         // lasts at most [kAskHoldMax] at a time, one chunk goes by after each, so the connection never sits silent long enough for
@@ -402,6 +551,51 @@ class ZimDownloader {
       await raf.close();
     }
     onProgress?.call(done, total);
+  }
+}
+
+/// A server's answer that is not a file. Its words are the ones every such answer has always had.
+class _MirrorStatus extends DownloadException {
+  _MirrorStatus(this.status) : super('The download server answered $status.');
+
+  final int status;
+}
+
+/// What Kiwix's metalink (`<file><size/><hash type="sha-256"/><url priority="1"/>...`) says.
+class _Metalink {
+  const _Metalink(this.mirrors, this.sha256, this.size);
+
+  /// Mirror addresses, lowest priority number first; one with no priority goes last.
+  final List<Uri> mirrors;
+  final String? sha256;
+  final int? size;
+
+  /// Reads the document with a real XML parser; null when it is not well-formed or has no file.
+  static _Metalink? parse(String text) {
+    final XmlDocument doc;
+    try {
+      doc = XmlDocument.parse(text);
+    } on XmlException {
+      return null;
+    }
+    final file = doc.findAllElements('file').firstOrNull;
+    if (file == null) return null;
+    final ranked = <(int, int, Uri)>[];
+    var i = 0;
+    for (final e in file.findElements('url')) {
+      final u = Uri.tryParse(e.innerText.trim());
+      if (u == null || !(u.scheme == 'http' || u.scheme == 'https') || u.host.isEmpty) continue;
+      final pr = int.tryParse(e.getAttribute('priority') ?? '');
+      ranked.add((pr ?? 1 << 30, i++, u));
+    }
+    ranked.sort((a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2));
+    String? sha;
+    for (final h in file.findElements('hash')) {
+      final v = h.innerText.trim().toLowerCase();
+      if (h.getAttribute('type')?.toLowerCase() == 'sha-256' && RegExp(r'^[0-9a-f]{64}$').hasMatch(v)) sha = v;
+    }
+    final size = int.tryParse(file.findElements('size').firstOrNull?.innerText.trim() ?? '');
+    return _Metalink([for (final r in ranked) r.$3], sha, size != null && size > 0 ? size : null);
   }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -213,14 +214,24 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
     _addressFocus.requestFocus();
   }
 
+  // Counts the tries; Cancel moves it on, so the answer of a cancelled try finds it changed and does nothing.
+  int _tryTurn = 0;
+
+  void _cancelTry() => setState(() {
+    _tryTurn++;
+    _busy = false;
+  });
+
   Future<void> _try() async {
     final d = _draft;
     final p = d.problem();
     setState(() => _error = p);
     if (p != null) return;
+    final turn = ++_tryTurn;
     setState(() => _busy = true);
     final t = await w.tryOwnSource(d);
-    if (!mounted) return;
+    // Cancelled while waiting: the form is already back, and a late answer is ignored.
+    if (!mounted || turn != _tryTurn) return;
     setState(() => _busy = false);
     final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => OwnSourcePickPage(deps: widget.deps, draft: d, first: t, earlier: _picks)));
     if (saved == true && mounted) {
@@ -263,7 +274,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _label(k, 'Name'),
-              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'Temperature')),
+              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'For example: Temperature')),
               const SizedBox(height: 14),
               _label(k, 'Web address'),
               TextField(
@@ -276,7 +287,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
                 minLines: 1,
                 maxLines: 4,
                 style: TextStyle(fontSize: 15, color: k.text, fontFamily: 'monospace'),
-                decoration: _box(k, hint: 'https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}'),
+                decoration: _box(k, hint: 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}'),
               ),
               const SizedBox(height: 10),
               Wrap(
@@ -321,6 +332,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _bigButton(key: const ValueKey('own-try'), label: 'Try it', onPressed: _try, busy: _busy),
+            if (_busy) TextButton(key: const ValueKey('own-try-cancel'), onPressed: _cancelTry, child: const Text('Cancel')),
             const SizedBox(height: 8),
             Text('Cache calls it once and shows what came back. Nothing is saved yet.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: k.secondary)),
           ],
@@ -451,7 +463,12 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
       _busy = false;
       _error = err;
     });
-    if (err == null) Navigator.of(context).pop(true);
+    if (err == null) {
+      // The new source is fetched at once, in the background (the same fetch as Update now, for every watched place), so the Weather
+      // card has it without a tap. Save does not wait for it; offline or failing, the next update picks it up as before.
+      unawaited(w.updateNow(force: true).then((_) {}, onError: (_) {}));
+      Navigator.of(context).pop(true);
+    }
   }
 
   Widget _banner(CacheTokens k) {

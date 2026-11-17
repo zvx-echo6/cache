@@ -77,6 +77,103 @@ impl ChatBackend for ChatModel {
     }
 }
 
+/// The longest piece of a GGUF header read for one string or one key (a real one is a few hundred bytes).
+const GGUF_MAX_STRING: u64 = 1 << 20;
+/// The most metadata pairs a header may claim (real files have a few dozen to a few hundred).
+const GGUF_MAX_PAIRS: u64 = 1_000_000;
+
+/// The model's own name (`general.name`) from the header of the GGUF file at `path`; `None` when the file is not a readable GGUF
+/// version 3, has no such pair or the pair is not a string. Reads the header up to the name and no further; every length and count is
+/// bounded, so a damaged or hostile file ends in `None`, never a large allocation or a long read.
+pub fn gguf_general_name(path: &Path) -> Option<String> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let mut r = BufReader::new(std::fs::File::open(path).ok()?);
+    fn u32le(r: &mut impl Read) -> Option<u32> {
+        let mut b = [0u8; 4];
+        r.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b))
+    }
+    fn u64le(r: &mut impl Read) -> Option<u64> {
+        let mut b = [0u8; 8];
+        r.read_exact(&mut b).ok()?;
+        Some(u64::from_le_bytes(b))
+    }
+    fn string(r: &mut impl Read) -> Option<String> {
+        let n = u64le(r)?;
+        if n > GGUF_MAX_STRING {
+            return None;
+        }
+        let mut b = vec![0u8; n as usize];
+        r.read_exact(&mut b).ok()?;
+        Some(String::from_utf8_lossy(&b).into_owned())
+    }
+    fn fixed_size(t: u32) -> Option<u64> {
+        match t {
+            0 | 1 | 7 => Some(1),
+            2 | 3 => Some(2),
+            4..=6 => Some(4),
+            10..=12 => Some(8),
+            _ => None,
+        }
+    }
+    // Moves `n` bytes on; None when that is past the end of the file.
+    fn advance(r: &mut BufReader<std::fs::File>, n: u64, len: u64) -> Option<()> {
+        let pos = r.stream_position().ok()?;
+        if pos.checked_add(n)? > len {
+            return None;
+        }
+        r.seek(SeekFrom::Current(i64::try_from(n).ok()?)).ok().map(|_| ())
+    }
+    // Skips a value of metadata type `t`; None for a type this reader does not know or a value past the end of the file.
+    fn skip(r: &mut BufReader<std::fs::File>, t: u32, len: u64) -> Option<()> {
+        if let Some(n) = fixed_size(t) {
+            return advance(r, n, len);
+        }
+        match t {
+            8 => {
+                let n = u64le(r)?;
+                advance(r, n, len)
+            }
+            9 => {
+                let et = u32le(r)?;
+                let n = u64le(r)?;
+                if let Some(size) = fixed_size(et) {
+                    return advance(r, n.checked_mul(size)?, len);
+                }
+                if et != 8 {
+                    return None;
+                }
+                for _ in 0..n {
+                    let l = u64le(r)?;
+                    advance(r, l, len)?;
+                }
+                Some(())
+            }
+            _ => None,
+        }
+    }
+    let file_len = r.get_ref().metadata().ok()?.len();
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" || u32le(&mut r)? != 3 {
+        return None;
+    }
+    let _tensors = u64le(&mut r)?;
+    let pairs = u64le(&mut r)?;
+    if pairs > GGUF_MAX_PAIRS {
+        return None;
+    }
+    for _ in 0..pairs {
+        let key = string(&mut r)?;
+        let t = u32le(&mut r)?;
+        if key == "general.name" {
+            return if t == 8 { string(&mut r) } else { None };
+        }
+        skip(&mut r, t, file_len)?;
+    }
+    None
+}
+
 /// Loads a model file: the backend and the `cl_info` JSON, or the reason.
 pub type Loader = dyn Fn(&Path, i32) -> Result<(Arc<dyn ChatBackend>, String), String> + Send + Sync;
 
@@ -194,7 +291,7 @@ pub fn valid_model_id(id: &str) -> bool {
         && id.to_ascii_lowercase().ends_with(".gguf")
 }
 
-/// The body of `POST /api/llm/load` or `stop`: `{"v":1}`.
+/// The body of `POST /api/llm/unload` (and the version part of any body): `{"v":1}`.
 pub fn parse_version_only(body: &[u8]) -> Result<(), ApiErr> {
     parse_body(body).map(|_| ())
 }
@@ -441,10 +538,33 @@ impl LlmService {
         };
         drop(old); // cl_free the old one before the new one takes its memory
         let (backend, info) = (self.loader)(&self.models_dir().join(id), n_ctx).map_err(|m| err(503, "load_failed", m))?;
-        let info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        let mut info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        // The file's own name (GGUF `general.name`), for the browser's model list: llama.cpp's description can be wrong about the size.
+        if let (Some(name), Some(o)) = (gguf_general_name(&self.models_dir().join(id)), info.as_object_mut()) {
+            o.insert("general_name".into(), json!(name));
+        }
         *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
         self.is_loaded.store(true, Ordering::SeqCst);
         Ok(info)
+    }
+
+    /// `POST /api/llm/unload`: blocking. Frees the loaded model; nothing loaded is fine (it returns false). A running generation is
+    /// stopped (its `done` still arrives, with the answer so far) and waited out, as a load waits for it, so the model is never
+    /// freed under a generation. Generations already waiting in the queue go first (they are served in arrival order, like a load),
+    /// and any that arrive after this one find no model and are told so (`no_model`). Afterwards `is_loaded` is false and the model's
+    /// file can be deleted. Returns whether a model was freed.
+    pub fn unload(&self) -> Result<bool, ApiErr> {
+        // Without this the unload would wait for the answer to finish by itself.
+        self.stop(None);
+        let _turn = self.queue.acquire(|_| {}, || false).map_err(|_| err(429, "busy", "too many requests are waiting for the model; try again shortly"))?;
+        let old = {
+            let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            self.is_loaded.store(false, Ordering::SeqCst);
+            slot.take()
+        };
+        let was = old.is_some();
+        drop(old); // cl_free, with the turn still held
+        Ok(was)
     }
 
     /// `POST /api/llm/stop`: ends the running generation early (its `done` still arrives). With an `id` (from the `started` event) only
@@ -774,6 +894,39 @@ mod tests {
     }
 
     #[test]
+    fn unload_frees_the_model_and_a_running_answer_is_stopped_first() {
+        let d = TempDir::new("llm-unload");
+        let fake = Fake::new(1_000_000);
+        let s = service(&d, fake.clone());
+        // nothing loaded: fine, and nothing was freed
+        assert!(!s.unload().unwrap());
+        s.load("chat-a.gguf", 512).unwrap();
+        assert!(s.is_loaded());
+        // an answer runs (it would take a million tokens): unload stops it, waits for it, then frees the model
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let reader = std::thread::spawn(move || collect(rx));
+        let s2 = s.clone();
+        let gen = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
+        while fake.made.load(Ordering::SeqCst) < 5 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.unload().unwrap());
+        gen.join().unwrap();
+        assert!(fake.stops.load(Ordering::SeqCst) >= 1);
+        assert!(!s.is_loaded());
+        assert_eq!(s.models_json()["models"][0]["loaded"], false);
+        // the generation ended with its final message, and a new one is told there is no model
+        let events = reader.join().unwrap();
+        assert_eq!(events.last().unwrap()["type"], "done", "{events:?}");
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        s.run_generation(None, json!({"messages": []}), tx);
+        assert_eq!(collect(rx)[0]["code"], "no_model");
+        // the file can go now, and a second unload is fine
+        assert!(!s.unload().unwrap());
+        assert_eq!(s.delete_model("chat-a.gguf").unwrap()["deleted"], "chat-a.gguf");
+    }
+
+    #[test]
     fn load_takes_ids_only_and_a_second_load_is_a_no_op() {
         let d = TempDir::new("llm-load");
         let loads = Arc::new(AtomicI32::new(0));
@@ -803,6 +956,88 @@ mod tests {
         assert_eq!(s.load("chat-a.gguf", 8192).unwrap(), info);
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(s.models_json()["models"][0]["loaded"], true);
+    }
+
+    /// A tiny GGUF header: magic, version 3, no tensors, and the given metadata pairs already encoded.
+    fn gguf(pairs: &[Vec<u8>], kv_count: Option<u64>) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend(3u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+        b.extend(kv_count.unwrap_or(pairs.len() as u64).to_le_bytes());
+        for p in pairs {
+            b.extend(p);
+        }
+        b
+    }
+    fn gstr(s: &str) -> Vec<u8> {
+        let mut b = (s.len() as u64).to_le_bytes().to_vec();
+        b.extend(s.as_bytes());
+        b
+    }
+    fn kv_str(k: &str, v: &str) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(8u32.to_le_bytes());
+        b.extend(gstr(v));
+        b
+    }
+    fn kv_u32(k: &str, v: u32) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(4u32.to_le_bytes());
+        b.extend(v.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn general_name_is_read_from_the_header_and_garbage_is_none() {
+        let d = TempDir::new("llm-gguf-name");
+        let at = |name: &str, bytes: &[u8]| {
+            let p = d.0.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let ok = gguf(&[kv_str("general.architecture", "llama"), kv_u32("general.file_type", 2), kv_str("general.name", "SmolLM2 135M Instruct")], None);
+        assert_eq!(gguf_general_name(&at("ok", &ok)).as_deref(), Some("SmolLM2 135M Instruct"));
+        assert_eq!(gguf_general_name(&at("none", &gguf(&[kv_str("general.architecture", "llama")], None))), None);
+        assert_eq!(gguf_general_name(&at("notstr", &gguf(&[kv_u32("general.name", 7)], None))), None);
+        assert_eq!(gguf_general_name(&at("empty", b"")), None);
+        assert_eq!(gguf_general_name(&at("junk", &[0x41; 64])), None);
+        assert_eq!(gguf_general_name(&d.0.join("missing")), None);
+        let mut v2 = ok.clone();
+        v2[4] = 99;
+        assert_eq!(gguf_general_name(&at("ver", &v2)), None);
+        for n in [3, 8, 20, 30, ok.len() - 3] {
+            assert_eq!(gguf_general_name(&at("cut", &ok[..n])), None, "cut at {n}");
+        }
+        assert_eq!(gguf_general_name(&at("manykv", &gguf(&[kv_str("general.name", "X")], Some(1 << 40)))), None);
+        let mut huge_key = gguf(&[], Some(1));
+        huge_key.extend(0x4000_0000_0000_0000u64.to_le_bytes());
+        assert_eq!(gguf_general_name(&at("hugekey", &huge_key)), None);
+        let mut huge_name = gguf(&[], Some(1));
+        huge_name.extend(gstr("general.name"));
+        huge_name.extend(8u32.to_le_bytes());
+        huge_name.extend(0x4000_0000u64.to_le_bytes());
+        huge_name.push(b'A');
+        assert_eq!(gguf_general_name(&at("hugename", &huge_name)), None);
+    }
+
+    #[test]
+    fn load_adds_general_name_to_the_info_when_the_file_has_one() {
+        let d = TempDir::new("llm-load-name");
+        let models = d.0.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("named.gguf"), gguf(&[kv_str("general.name", "SmolLM2 135M Instruct")], None)).unwrap();
+        std::fs::write(models.join("plain.gguf"), b"0123").unwrap();
+        let fake = Fake::new(1);
+        let s = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(move |_p, _n| Ok((fake.clone() as Arc<dyn ChatBackend>, r#"{"description":"llama 256M Q4_0","n_ctx":8192,"chat_format":"x","supports_tools":true}"#.to_string()))),
+        );
+        let info = s.load("named.gguf", 8192).unwrap();
+        assert_eq!(info["general_name"], "SmolLM2 135M Instruct");
+        assert_eq!(info["description"], "llama 256M Q4_0", "llama.cpp's own fields are untouched");
+        let info = s.load("plain.gguf", 8192).unwrap();
+        assert!(info.get("general_name").is_none());
     }
 
     #[test]

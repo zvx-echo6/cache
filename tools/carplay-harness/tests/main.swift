@@ -697,6 +697,9 @@ check(CarVoice.outcome(["started": false, "id": "place:1", "name": "Place 4", "l
 check(CarVoice.outcome(nil, for: said) == .noAnswer && CarVoice.outcome(["started": false], for: said) == .noAnswer, "no answer")
 
 check(CarVoice.words(.started(name: "Place 4"), carConnected: true) == "Starting the route to Place 4.", "Siri's words: started")
+check(CarVoice.words(.started(name: "Place 4", summary: "21 minutes, 15 miles."), carConnected: true) == "Starting the route to Place 4. 21 minutes, 15 miles.", "Siri's words: started, with the time and distance")
+check(CarVoice.words(.started(name: "Place 4", summary: ""), carConnected: true) == "Starting the route to Place 4." && CarVoice.words(.started(name: "Place 4", summary: nil), carConnected: true) == "Starting the route to Place 4.", "Siri's words: started, no summary")
+check(CarVoice.outcome(["started": true, "name": "Place 4", "summary": "21 minutes, 15 miles."], for: said) == .started(name: "Place 4", summary: "21 minutes, 15 miles."), "started: the summary comes from Dart's answer")
 check(CarVoice.words(.places(query: "Place 1", places: []), carConnected: true) == "Showing places for Place 1.", "Siri's words: places shown on the car")
 check(CarVoice.words(.places(query: "Place 1", places: []), carConnected: false) == nil, "no car: Siri asks which place in its own words")
 check(CarVoice.words(.none(query: "Place 1"), carConnected: false) == "Cache found no places for Place 1.", "Siri's words: nothing found")

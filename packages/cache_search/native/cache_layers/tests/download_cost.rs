@@ -10,9 +10,8 @@ use cache_layers::store::Stored;
 use cache_layers::{AreaReq, Done, Inner};
 use common::*;
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use tiny_http::{Header as HttpHeader, Response, Server};
 
 /// The archive holds every tile of this box, z0 to [ZMAX].
 const ARCHIVE_BOX: [f64; 4] = [-120.0, 40.0, -108.0, 50.0];
@@ -104,43 +103,120 @@ enum Kind {
 struct Req {
     kind: Kind,
     start: Instant,
-    end: Instant,
+}
+
+/// How long a read waits for the others before the stub gives up and records that they never overlapped.
+const OVERLAP_WAIT: Duration = Duration::from_secs(30);
+
+/// A latch on the stub's reads of one kind: once armed, each read is held until `need` of them are in flight together, then
+/// all are let go and the latch stays open. Reads that never meet are let go after [OVERLAP_WAIT] with `never_overlapped` set,
+/// so a sequential reader fails the test with a message instead of hanging it. No wall-clock measure of the reads is
+/// involved. Unarmed (the default, and for every other test), it does nothing.
+struct Gate {
+    need: usize,
+    state: Mutex<GateState>,
+    cv: Condvar,
+}
+
+#[derive(Default)]
+struct GateState {
+    armed: bool,
+    waiting: usize,
+    open: bool,
+    never_overlapped: bool,
+}
+
+impl Gate {
+    fn new(need: usize) -> Gate {
+        Gate { need, state: Default::default(), cv: Condvar::new() }
+    }
+    fn arm(&self) {
+        self.state.lock().unwrap().armed = true;
+    }
+    fn never_overlapped(&self) -> bool {
+        self.state.lock().unwrap().never_overlapped
+    }
+    fn pass(&self) {
+        let mut g = self.state.lock().unwrap();
+        if !g.armed || g.open {
+            return;
+        }
+        g.waiting += 1;
+        if g.waiting >= self.need {
+            g.open = true;
+            self.cv.notify_all();
+            return;
+        }
+        let (mut g, res) = self.cv.wait_timeout_while(g, OVERLAP_WAIT, |s| !s.open).unwrap();
+        if res.timed_out() && !g.open {
+            g.never_overlapped = true;
+            g.open = true;
+            self.cv.notify_all();
+        }
+    }
 }
 
 struct Host {
     port: u16,
     log: Arc<Mutex<Vec<Req>>>,
+    /// held until 4 directory page reads are in flight at once (when armed)
+    leaf_gate: Arc<Gate>,
+    /// held until 2 tile reads are in flight at once (when armed)
+    data_gate: Arc<Gate>,
 }
 
-/// Serves the archive by ranges, logging what each request read and when.
+/// Serves the archive by ranges, logging what each request read and when. A thread for every connection, and every answer
+/// closes its connection. (tiny_http, used by the other tests' stubs, serves connections from a small pool of threads that a
+/// kept-alive connection holds while idle, and it can leave a new connection waiting for a thread: the reader's 16 concurrent
+/// requests then sat unanswered until the client's 60 s timeout, so a read that was only queued was taken for one that never
+/// overlapped the others.)
 fn host(a: &Archive) -> Host {
-    let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
-    let port = server.server_addr().to_ip().unwrap().port();
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let log: Arc<Mutex<Vec<Req>>> = Default::default();
+    let (leaf_gate, data_gate) = (Arc::new(Gate::new(4)), Arc::new(Gate::new(2)));
     let (leaf0, data0) = (a.header.leaf_offset, a.header.data_offset);
-    for _ in 0..48 {
-        let (s, log, bytes) = (server.clone(), log.clone(), a.bytes.clone());
-        std::thread::spawn(move || {
-            while let Ok(req) = s.recv() {
+    let (log2, bytes, lg, dg) = (log.clone(), a.bytes.clone(), leaf_gate.clone(), data_gate.clone());
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { continue };
+            let (log, bytes, leaf_gate, data_gate) = (log2.clone(), bytes.clone(), lg.clone(), dg.clone());
+            std::thread::spawn(move || {
+                // the request head (a GET carries no body)
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match conn.read(&mut buf) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
                 let start = Instant::now();
-                let range = req.headers().iter().find(|h| h.field.equiv("Range")).and_then(|h| {
-                    let v = h.value.to_string();
-                    let (a, b) = v.strip_prefix("bytes=")?.split_once('-')?;
+                let head = String::from_utf8_lossy(&head).to_string();
+                let range = head.lines().find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    let (a, b) = k.eq_ignore_ascii_case("range").then(|| v.trim())?.strip_prefix("bytes=")?.split_once('-')?;
                     let (a, b): (u64, u64) = (a.parse().ok()?, b.parse().ok()?);
                     Some((a, b - a + 1))
                 });
                 let (o, l) = range.unwrap_or((0, bytes.len() as u64));
-                std::thread::sleep(DELAY);
                 let kind = if o >= data0 { Kind::Data } else if o >= leaf0 { Kind::Leaf } else { Kind::Head };
+                match kind {
+                    Kind::Leaf => leaf_gate.pass(),
+                    Kind::Data => data_gate.pass(),
+                    Kind::Head => {}
+                }
+                std::thread::sleep(DELAY);
                 let (s0, e0) = ((o as usize).min(bytes.len()), ((o + l) as usize).min(bytes.len()));
-                let body = bytes[s0..e0].to_vec();
-                log.lock().unwrap().push(Req { kind, start, end: Instant::now() });
-                let r = Response::from_data(body).with_status_code(206).with_header(HttpHeader::from_bytes("Content-Type", "application/octet-stream").unwrap());
-                let _ = req.respond(r);
-            }
-        });
-    }
-    Host { port, log }
+                let body = &bytes[s0..e0];
+                log.lock().unwrap().push(Req { kind, start });
+                let hdr = format!("HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = conn.write_all(hdr.as_bytes()).and_then(|_| conn.write_all(body));
+            });
+        }
+    });
+    Host { port, log, leaf_gate, data_gate }
 }
 
 /// What one phase (the estimate, or the job) asked of the host.
@@ -151,23 +227,6 @@ struct Cost {
     data: usize,
     /// directory page requests before the first tile read
     leaf_before_first_tile: usize,
-    /// of those, how many ran one after another (each started after every earlier one had ended)
-    leaf_rounds_before_first_tile: usize,
-    /// tile reads that ran one after another: a batch whose reads wait for the slowest read of the batch before it adds one
-    data_rounds: usize,
-}
-
-/// How many of `reqs` (sorted by start) ran one after another: each round starts after every earlier request had ended.
-fn rounds(reqs: &[&Req]) -> usize {
-    let mut n = 0;
-    let mut ended: Option<Instant> = None;
-    for r in reqs {
-        if ended.map(|e| r.start >= e).unwrap_or(true) {
-            n += 1;
-        }
-        ended = Some(ended.map(|e| e.max(r.end)).unwrap_or(r.end));
-    }
-    n
 }
 
 fn cost(log: &[Req]) -> Cost {
@@ -175,14 +234,11 @@ fn cost(log: &[Req]) -> Cost {
     v.sort_by_key(|r| r.start);
     let first_tile = v.iter().filter(|r| r.kind == Kind::Data).map(|r| r.start).min();
     let before: Vec<&Req> = v.iter().filter(|r| r.kind == Kind::Leaf && first_tile.map(|t| r.start < t).unwrap_or(true)).collect();
-    let data: Vec<&Req> = v.iter().filter(|r| r.kind == Kind::Data).collect();
     Cost {
         requests: v.len(),
         leaf: v.iter().filter(|r| r.kind == Kind::Leaf).count(),
         data: v.iter().filter(|r| r.kind == Kind::Data).count(),
         leaf_before_first_tile: before.len(),
-        leaf_rounds_before_first_tile: rounds(&before),
-        data_rounds: rounds(&data),
     }
 }
 
@@ -231,21 +287,19 @@ fn a_region_download_plans_once_and_reads_the_directory_in_parallel() {
     let pages = leaves_needed(&a, &cover);
 
     // The size estimate, on the planner, as the Regions sheet asks for it.
-    let t = Instant::now();
+    h.leaf_gate.arm();
     let plan = planner.plan(&areq).unwrap();
-    let est_time = t.elapsed();
     let est = take(&h);
     assert_eq!(plan["tiles_to_download"], json!(cover.len()));
 
     // The download, as a job on an engine of its own.
     let job = common::engine(&sc);
-    let t = Instant::now();
+    h.data_gate.arm();
     assert!(matches!(download(&job, &req), Done::Finished));
-    let job_time = t.elapsed();
     let dl = take(&h);
 
     let report = format!(
-        "region: {} tiles in {} directory pages\nestimate: {est:?} in {est_time:?}\njob: {dl:?} in {job_time:?}\ntotal requests: {}",
+        "region: {} tiles in {} directory pages\nestimate: {est:?}\njob: {dl:?}\ntotal requests: {}",
         cover.len(),
         pages,
         est.requests + dl.requests
@@ -260,15 +314,17 @@ fn a_region_download_plans_once_and_reads_the_directory_in_parallel() {
     }
     assert_eq!(st.tile_count() as usize, cover.iter().filter(|t| a.tiles.contains(&(t.1, t.2, t.3))).count());
 
-    // The estimate reads the pages it needs in parallel, a few rounds rather than one page after another.
+    // The estimate reads each page it needs about once, and in parallel (below).
     assert!(est.leaf <= pages + 2, "each page once\n{report}");
-    assert!(est.leaf_rounds_before_first_tile <= 4, "pages in parallel\n{report}");
+    // Proved by the stub's latch, not by timing: it held the directory reads until 4 were in flight together (the readers
+    // run 16 at once, def.rs PMTILES_DOWNLOAD_PARALLEL and pmtiles.rs PREFETCH_WORKERS, whatever the machine).
+    assert!(!h.leaf_gate.never_overlapped(), "reads never overlapped: no 4 directory reads were in flight at once\n{report}");
     // The job plans with the pages the estimate read: no directory request before its first tile, and none at all.
     assert_eq!(dl.leaf_before_first_tile, 0, "{report}");
     assert_eq!(dl.leaf, 0, "{report}");
-    // The next batches' reads are in flight while a batch waits for its last one: far fewer rounds of reads than batches.
-    let batches = cover.len().div_ceil(1024);
-    assert!(dl.data_rounds * 2 <= batches, "{batches} batches\n{report}");
+    // Reads overlap while the job runs (the next batches' reads are in flight while a batch waits for its last one): the stub
+    // held the tile reads until 2 were in flight together.
+    assert!(!h.data_gate.never_overlapped(), "reads never overlapped: no 2 tile reads were in flight at once\n{report}");
 }
 
 #[test]

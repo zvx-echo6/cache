@@ -16,6 +16,7 @@
 //!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
 //!                                              one engine and its source list; "sources.rescan" is refused (only the server calls it)
 //!   GET  /api/status                        -> the same, for the "status" op
+//!   GET  /api/version                       -> {"version"}: this server's own version ("0.1.0+1c6891f"), shown in Credits and licenses
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
@@ -28,6 +29,9 @@
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/log -> {text,bytes} the server's own app log (not journalctl); DELETE clears it; GET/PUT /api/log/level {level}
+//!   GET  /api/library/cleanup               -> {bytes} Clean up would free; POST it -> {freed} (409 while a download runs)
+//!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
@@ -52,6 +56,7 @@
 //!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
+//!   POST /api/llm/unload {v:1}              -> {unloaded}: frees the loaded model (a running generation is stopped and waited out); nothing loaded is fine
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
@@ -238,6 +243,27 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
         },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
+        ("GET", "/api/library/storage") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.storage()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the sizes could not be read"),
+            }
+        }
+        ("GET", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup_bytes()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the leftovers could not be measured"),
+            }
+        }
+        ("POST", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup()).await {
+                Ok(r) => library_reply(r),
+                Err(_) => Reply::error(500, "failed", "Clean up could not run"),
+            }
+        }
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
         ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
         ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),
@@ -532,6 +558,12 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             };
             ok(json!({"stopped": svc.stop(id.as_deref())}))
         }
+        ("POST", "unload") => {
+            if let Err(e) = llm::parse_version_only(body) {
+                return Some(api_error(e));
+            }
+            blocking(move || svc.unload().map(|unloaded| json!({"unloaded": unloaded}))).await
+        }
         _ => return None,
     })
 }
@@ -562,6 +594,33 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
     Some(blocking(move || crate::libbuild::linked_api::request(&service, &method, &library, &segments, &bytes)).await)
 }
 
+/// `/api/log` and `/api/log/level` (signed in only, like every `/api` route): the server's own app log for the browser's Advanced page,
+/// never the system journal. See `applog`.
+fn app_log(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
+    use crate::applog::Level;
+    let log = &app.library.log;
+    let level = |log: &crate::applog::AppLog| json!({"level": log.level().name(), "until": log.everything_until()});
+    Some(match (method, path) {
+        ("GET", "/api/log") => ok(json!({"text": log.text(), "bytes": log.bytes()})),
+        ("DELETE", "/api/log") => {
+            log.clear();
+            ok(json!({"cleared": true}))
+        }
+        ("GET", "/api/log/level") => ok(level(log)),
+        ("PUT", "/api/log/level") => {
+            let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match v["level"].as_str().and_then(Level::parse) {
+                Some(l) => {
+                    log.set_level(l);
+                    ok(level(log))
+                }
+                None => Reply::error(400, "invalid", "level must be minimal, standard, detailed or everything"),
+            }
+        }
+        _ => return None,
+    })
+}
+
 async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Reply {
     if let Some(r) = linked_folders(app, method, path, body).await {
         return r;
@@ -584,11 +643,15 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
     if let Some(r) = library(app, method, path, query, body).await {
         return r;
     }
+    if let Some(r) = app_log(app, method, path, body) {
+        return r;
+    }
     if let Some(rest) = path.strip_prefix("/api/tiles/") {
         return crate::tiles::tiles(app.helper.clone(), method, rest).await;
     }
     match (method, path) {
         ("GET", "/api/status") => core_call(app, "status", json!({})).await,
+        ("GET", "/api/version") => ok(json!({"version": crate::VERSION})),
         ("POST", "/api/core") => {
             let parsed: Result<Value, _> = serde_json::from_slice(body);
             let Ok(req) = parsed else { return Reply::error(400, "bad_json", "the body is not JSON") };
@@ -1127,6 +1190,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_is_the_servers_own_and_needs_a_session() {
+        let d = TempDir::new("http-version");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        assert_eq!(route(&a, "GET", "/api/version", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/version", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+    }
+
+    /// Writes `n` bytes to `<data>/<rel>`, making the folders.
+    fn put(d: &TempDir, rel: &str, n: usize) {
+        let p = d.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![7u8; n]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_says_the_bytes_of_each_kind_the_phones_storage_page_shows() {
+        let d = TempDir::new("http-storage");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        put(&d, "app/docs/zims/a.zim", 1000);
+        put(&d, "app/docs/libraries/guide/shard", 200);
+        put(&d, "app/support/indexes/a.zim.idx/x", 30);
+        put(&d, "models/m.gguf", 4000);
+        put(&d, "app/support/regions/places/p.db", 500);
+        put(&d, "app/support/layers/l/tiles", 60);
+        put(&d, "app/docs/videos/site/v.mp4", 7000);
+        put(&d, "app/support/notebook-share/n.md", 80);
+        put(&d, "app/support/notebook/notebook.sqlite", 9);
+        assert_eq!(route(&a, "GET", "/api/library/storage", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/library/storage", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        let k = &v["result"]["kinds"];
+        assert_eq!(
+            (k["library"].clone(), k["models"].clone(), k["regions"].clone(), k["videos"].clone(), k["notebooks"].clone()),
+            (json!(1230), json!(4000), json!(560), json!(7000), json!(89))
+        );
+    }
+
+    #[tokio::test]
     async fn login_sets_a_cookie_and_it_works() {
         let d = TempDir::new("http2");
         let mut a = app(&d);
@@ -1352,11 +1465,69 @@ mod tests {
         assert_eq!(v["result"]["models"], json!([{"id": "up.gguf", "size": 4, "loaded": false}]));
     }
 
+    /// A loaded model that does nothing, for the routes that load and unload.
+    struct Idle;
+    impl llm::ChatBackend for Idle {
+        fn start(&self, _: &str) -> Result<(), cache_embed::chat::StartFailure> {
+            Ok(())
+        }
+        fn next(&self) -> i32 {
+            -1
+        }
+        fn partial(&self) -> Option<String> {
+            None
+        }
+        fn finish(&self) -> Option<String> {
+            None
+        }
+        fn prompt_tokens(&self) -> i32 {
+            0
+        }
+        fn generated_tokens(&self) -> i32 {
+            0
+        }
+        fn stop(&self) {}
+    }
+
+    #[tokio::test]
+    async fn unload_needs_a_session_frees_the_model_and_lets_the_file_be_deleted() {
+        let d = TempDir::new("route-llm-unload");
+        let mut a = file_app(&d);
+        a.llm = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(|_, _| Ok((Arc::new(Idle) as Arc<dyn llm::ChatBackend>, r#"{"description":"d","n_ctx":8192,"chat_format":"c","supports_tools":false}"#.to_string()))),
+        );
+        assert_eq!(route(&a, "POST", "/api/llm/unload", None, br#"{"v":1}"#).await.status, 401);
+        let c = sign_in(&a).await;
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        // the body is versioned like load's
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":2}"#).await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, "{}").await.0, 400);
+        // nothing loaded: fine
+        let (s, v) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!((s, v["ok"].clone()), (200, json!(true)));
+        // loaded: the file is kept, then unload frees it and the file can go
+        assert_eq!(json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"chat.gguf"}"#).await.0, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(true));
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 409);
+        let (s, _) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!(s, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(false));
+        // twice is fine
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await.0, 200);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+    }
+
     #[tokio::test]
     async fn the_llm_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-llm");
         let a = file_app(&d);
-        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop")] {
+        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop"), ("POST", "/api/llm/unload")] {
             assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
         }
         let c = sign_in(&a).await;
@@ -1369,7 +1540,7 @@ mod tests {
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=2", &c, "").await.0, 400);
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=1", &c, "").await.0, 200);
         // every POST carries v:1
-        for p in ["load", "generate", "stop"] {
+        for p in ["load", "generate", "stop", "unload"] {
             let (s, v) = json_call(&a, "POST", &format!("/api/llm/{p}"), &c, r#"{"v":2,"model":"chat.gguf","request":{}}"#).await;
             assert_eq!((s, v["error"]["code"].clone()), (400, json!("unsupported_version")), "{p}");
             assert_eq!(json_call(&a, "POST", &format!("/api/llm/{p}"), &c, "{}").await.0, 400, "{p}");

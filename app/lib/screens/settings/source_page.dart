@@ -45,7 +45,7 @@ class _SourcePageState extends State<SourcePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remove the key?'),
-        content: Text(users.isEmpty ? 'You can add a key again later.' : '${users.map((c) => c.title).join(' and ')} turns off. You can add a key again later.'),
+        content: Text(users.isEmpty ? 'You can add a key again later.' : '${users.map((c) => c.title).join(' and ')} ${users.length == 1 ? 'turns' : 'turn'} off. You can add a key again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(key: const ValueKey('confirm-remove-key'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),

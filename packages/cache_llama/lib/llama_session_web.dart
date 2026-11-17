@@ -9,6 +9,7 @@ import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 
 import 'llm_remote_events.dart';
+import 'llm_remote_unload.dart';
 import 'partial_message.dart';
 import 'warm_result.dart';
 
@@ -143,12 +144,17 @@ class LlamaSession {
     run.abort.abort();
   }
 
-  /// Nothing is freed here (the server keeps its model): always null.
+  /// Nothing is freed here (the server frees its own model): always null.
   String? get lastFreeReport => null;
 
-  /// Forgets the model here. The server keeps its model loaded (it is shared by every browser).
+  /// Frees the model on the server (it is shared by every browser, so for all of them), then forgets it here. Throws a [StateError]
+  /// with the reason when the server could not do it; the model is then still loaded there, and this session keeps it.
   Future<void> unload() async {
     stop();
+    await unloadOnServer((path, body) async {
+      final r = await _post(path, body);
+      return LlmHttpReply(r.status, await _text(r));
+    });
     _modelId = null;
   }
 

@@ -54,12 +54,14 @@ import 'layout/layout_state.dart';
 import 'layout/modal_watch.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
+import 'maps/layers/layer_def.dart' show AreaPhase;
 import 'maps/maps_state.dart';
 import 'car/car_overlay.dart';
 import 'car/car_support.dart';
 import 'car/car_voice_access.dart';
 import 'car/phone_drive.dart';
 import 'car/route_pushes.dart';
+import 'car/siri_place_names.dart';
 import 'nav/demo_backend.dart';
 import 'nav/elevation/route_elevation.dart';
 import 'nav/guidance_wakelock.dart';
@@ -248,6 +250,7 @@ class _CacheAppState extends State<CacheApp> {
   late final AppSettings settings = AppSettings();
 
   /// Voice search from the car: the iPhone's microphone and speech permissions (car/car_voice_access.dart). Only started on an iPhone.
+  SiriPlaceNames? _siriNames;
   late final CarVoiceAccess carVoice = CarVoiceAccess(settings: settings, openSettings: () => location.openAppSettings());
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
@@ -568,6 +571,17 @@ class _CacheAppState extends State<CacheApp> {
     platform: const MethodChannelFgsPlatform(),
     android: !plat.isWeb && Platform.isAndroid,
     jobs: () => addPdf.jobs,
+    // region map downloads: the service also carries them when Cache is left (the notification's Pause pauses them)
+    layerJobs: () => [
+      for (final a in maps.engine.allAreas)
+        if (a.phase == AreaPhase.running)
+          FgsLayerJob(id: a.id, label: a.label, done: a.doneTiles, total: a.totalTiles, bytes: a.bytes),
+    ],
+    onLayerPause: () async {
+      for (final a in maps.engine.allAreas.where((a) => a.phase == AreaPhase.running).toList()) {
+        await maps.engine.pause(a.id);
+      }
+    },
     battery: readBattery,
     askedFile: () => File('${backgroundDir(_supportPath ?? '.')}${Platform.pathSeparator}fgs-notify-asked'),
     ask: _askFgsNotifications,
@@ -581,7 +595,7 @@ class _CacheAppState extends State<CacheApp> {
   int _bgSeen = 0;
   int _watchCount = -1;
 
-  /// "Show how adding is going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
+  /// "Show how adding and downloading are going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
   Future<bool> _askFgsNotifications() async {
     final c = _navKey.currentContext;
     if (c == null || !c.mounted) return false;
@@ -796,6 +810,8 @@ class _CacheAppState extends State<CacheApp> {
     indexing: indexing,
     storage: StorageUsage(
       kinds: [for (final k in dataKinds) if (k.inStorage) k],
+      // In a browser: the figures come from the server (its Library and its disk), not from folders.
+      device: device,
       freeIn: () => app.modelsDir ?? sources.zimsDir,
       // Unfinished downloads (ZIMs, libraries, models) and the temporary folder.
       leftovers: () => [
@@ -943,6 +959,8 @@ class _CacheAppState extends State<CacheApp> {
     return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
   }
 
+  void _onNotebooksForWeather() => unawaited(weather.savedPlacesChanged());
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -1023,6 +1041,9 @@ class _CacheAppState extends State<CacheApp> {
       }
       return null;
     };
+    // A model the recommended list names shows the list's name; any other is named by its file's own metadata. The built-in list is
+    // read at start (no network), so a model that is only resting shows its list name too.
+    app.followRecommended(RecommendedModels.shared);
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     // A core call that took over two seconds is logged with its name, its wait in the core's queue and its run (no arguments).
@@ -1166,6 +1187,7 @@ class _CacheAppState extends State<CacheApp> {
           await addPdf.load();
           _fgsNotice.load();
           addPdf.addListener(_onAddsForFgs);
+          maps.engine.addListener(_onAddsForFgs);
           kFgsAppChannel.setMethodCallHandler(_fgsArm.handleCall);
         }
         await watchFolders.load();
@@ -1258,6 +1280,8 @@ class _CacheAppState extends State<CacheApp> {
         unawaited(notebooks.reload());
       }
     });
+    // A notebook that came in (Notebooks sharing switched on) may hold a saved place a linked device watches: its weather appears.
+    notebooks.addListener(_onNotebooksForWeather);
     location.addListener(_rememberPlace);
     // Home's Weather and Alerts cards and the place lists follow "Where I am" as its position arrives and moves.
     location.addListener(weather.positionChanged);
@@ -1332,6 +1356,12 @@ class _CacheAppState extends State<CacheApp> {
         // As on Android: the phone's drive screen, the wake lock and the position stream all go by whether a car is attached.
         _car!.connected.addListener(_onCarScreen);
         unawaited(_car!.start());
+        // Siri knows the saved places' names from the phone too, not only after the car listed them.
+        _siriNames = SiriPlaceNames(
+          read: () async => [for (final s in await (await sources.whenCoreReady())?.savedPlaces() ?? (throw StateError('The search core is not available'))) s.name],
+          changes: [notebooks],
+          events: nav.events,
+        )..start();
       }));
       // The phone's maps rest while the phone's window is not on its screen (platform/phone_window.dart).
       unawaited(phoneWindow.start());
@@ -1513,6 +1543,7 @@ class _CacheAppState extends State<CacheApp> {
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
     location.removeListener(weather.positionChanged);
+    notebooks.removeListener(_onNotebooksForWeather);
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
@@ -1520,6 +1551,7 @@ class _CacheAppState extends State<CacheApp> {
     _car?.dispose();
     if (identical(carVoiceShared, carVoice)) carVoiceShared = null;
     carVoice.dispose();
+    _siriNames?.dispose();
     _phoneDrive.dispose();
     _guidanceAwake.dispose();
     nav.dispose();
@@ -1536,6 +1568,7 @@ class _CacheAppState extends State<CacheApp> {
     _bgOpenTimer?.cancel();
     watchFolders.removeListener(_onWatchFolders);
     addPdf.removeListener(_onAddsForFgs);
+    maps.engine.removeListener(_onAddsForFgs);
     _fgsNotice.dispose();
     watchFolders.dispose();
     indexThrottle.dispose();

@@ -237,7 +237,7 @@ class WhatsIncludedPage extends StatelessWidget {
 }
 
 /// One group's settings, each ticked on its own. A model the other device uses that is not here says so, with Download (it
-/// never downloads on its own); a watched place that has not come yet says "waiting for this place".
+/// never downloads on its own); the watched places count only the ones this device has.
 class SettingsGroupPage extends StatefulWidget {
   const SettingsGroupPage({super.key, required this.sync, required this.peer, required this.name, required this.group});
 
@@ -271,8 +271,9 @@ class _SettingsGroupPageState extends State<SettingsGroupPage> {
       if (w != null) return [Part('Uses ${waitingModelName(w)}, not downloaded here', Tone.warn)];
     }
     if (s.key == kWatchPlacesKey) {
-      final missing = sync.placesNotHere(_placesHere);
-      if (missing.isNotEmpty) return [Part(shows), Part(' · ${missing.join(', ')}: waiting for this place', Tone.warn)];
+      // only the places this device has; one it does not have stays in the setting and is not mentioned
+      final n = sync.watchedPlacesHere(_placesHere);
+      if (n != null) return [Part(n == 1 ? '1 place' : '$n places')];
     }
     return [Part(shows)];
   }

@@ -8,6 +8,16 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The download slots are process-wide (`dl::SLOTS`, at most `MAX_TOTAL` in all), and the tests of this file run in parallel.
+/// Every test that runs a download holds this for reading (see [run_job]); the slot-limit test holds it for writing, so it
+/// sees the slot counts to itself, not those of other tests' downloads that happen to be running.
+static SLOTS_IN_USE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn run_job(params: &str, progress: &dyn Fn(u64, u64), cancel: &dyn Fn() -> bool) -> cache_video::Result<Outcome> {
+    let _shared = SLOTS_IN_USE.read().unwrap_or_else(|e| e.into_inner());
+    dl::run_job(params, progress, cancel)
+}
+
 struct Tmp(PathBuf);
 impl Tmp {
     fn new(name: &str) -> Tmp {
@@ -45,7 +55,7 @@ fn job(v: &Video, t: &Tmp, inst: &str, video: &str, choice: &str, extra: Value) 
         p[k] = x.clone();
     }
     let _ = v;
-    dl::run_job(&p.to_string(), &|_, _| {}, &|| false)
+    run_job(&p.to_string(), &|_, _| {}, &|| false)
 }
 
 #[test]
@@ -157,7 +167,7 @@ fn download_list_resolve_delete() {
     let (t, m, v, id) = setup("dl");
     let prog: std::sync::Mutex<Vec<(u64, u64)>> = Default::default();
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, t| prog.lock().unwrap().push((d, t)), &|| false).unwrap();
+    let out = run_job(&params, &|d, t| prog.lock().unwrap().push((d, t)), &|| false).unwrap();
     assert_eq!(out, Outcome::Done);
     let p = prog.lock().unwrap();
     assert_eq!(p.last().unwrap(), &(WEB_SIZE as u64, WEB_SIZE as u64));
@@ -253,7 +263,7 @@ fn cancelled_download_keeps_its_data_and_a_new_job_resumes() {
     m.knobs.lock().unwrap().slow_ms = 5;
     let seen = AtomicU64::new(0);
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
+    let out = run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
     assert_eq!(out, Outcome::Cancelled);
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
     let part = std::fs::metadata(dir.join(".video.part")).unwrap().len();
@@ -274,7 +284,7 @@ fn a_half_finished_file_from_before_the_hidden_names_is_continued() {
     m.knobs.lock().unwrap().slow_ms = 5;
     let seen = AtomicU64::new(0);
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
+    let out = run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
     assert_eq!(out, Outcome::Cancelled);
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
     // as earlier versions left it
@@ -380,6 +390,8 @@ fn private_video_needs_a_login_and_a_file_token() {
 
 #[test]
 fn at_most_two_downloads_per_instance() {
+    // Exclusive: no other test's download holds a slot, so only this test's slots count towards the total of four.
+    let _alone = SLOTS_IN_USE.write().unwrap_or_else(|e| e.into_inner());
     let a = dl::acquire("limit.test", &|| false).unwrap();
     let b = dl::acquire("limit.test", &|| false).unwrap();
     // a third waits; here it is cancelled while waiting

@@ -63,8 +63,8 @@ struct CarVoicePlace: Equatable, Sendable {
 
 /// What a navigation request came to (Dart's answer to `navigateTo`).
 enum CarVoiceOutcome: Equatable {
-  /// Guidance began, to the place of this name.
-  case started(name: String)
+  /// Guidance began, to the place of this name; `summary` is the route's time and distance in Cache's own words, when known.
+  case started(name: String, summary: String? = nil)
   /// The routes to the place are open on the phone but guidance did not begin (no route could be found yet).
   case routes(CarPlace)
   /// The name is not a saved place: the places found for it, to pick from.
@@ -119,7 +119,11 @@ enum CarVoice {
   // The words Siri says (design section 6, approved as written). Nothing else is said by Cache.
   /// Siri's question when no place was said.
   static let whereTo = "Where to?"
-  static func starting(_ name: String) -> String { "Starting the route to \(name)." }
+  static func starting(_ name: String, _ summary: String? = nil) -> String {
+    let first = "Starting the route to \(name)."
+    guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return first }
+    return "\(first) \(summary)"
+  }
   static func showing(_ query: String) -> String { "Showing places for \(query)." }
   static func noneFound(_ query: String) -> String { "Cache found no places for \(query)." }
 
@@ -134,8 +138,10 @@ enum CarVoice {
 
   /// The arguments of Dart's `navigateTo` for a place: as the Android car's navigation request sends them
   /// (CacheCarAppService.handle), always to start.
-  static func arguments(for place: CarVoicePlace) -> [String: Any] {
+  static func arguments(for place: CarVoicePlace, fromSiri: Bool = false) -> [String: Any] {
     var a: [String: Any] = ["query": place.name, "start": true]
+    // Siri's "Starting the route" covers the phone's opening line: only the Navigate intent says so.
+    if fromSiri { a["fromSiri"] = true }
     if let lat = place.lat, let lon = place.lon {
       a["lat"] = lat
       a["lon"] = lon
@@ -152,7 +158,7 @@ enum CarVoice {
       return places.isEmpty ? .none(query: place.name) : .places(query: place.name, places: places)
     }
     let name = CarValue.text(m["name"]) ?? place.name
-    if CarValue.isTrue(m["started"]) { return .started(name: name) }
+    if CarValue.isTrue(m["started"]) { return .started(name: name, summary: CarValue.text(m["summary"])) }
     guard let id = m["id"] as? String else { return .noAnswer }
     let lat = CarValue.double(m["lat"]) ?? place.lat ?? 0
     let lon = CarValue.double(m["lon"]) ?? place.lon ?? 0
@@ -163,7 +169,7 @@ enum CarVoice {
   /// failed and Siri says so in its own words).
   static func words(_ outcome: CarVoiceOutcome, carConnected: Bool) -> String? {
     switch outcome {
-    case .started(let name): return starting(name)
+    case .started(let name, let summary): return starting(name, summary)
     case .places(let query, _): return carConnected ? showing(query) : nil
     case .none(let query): return noneFound(query)
     case .routes, .noAnswer: return nil
@@ -173,7 +179,7 @@ enum CarVoice {
   /// Asks Dart to navigate to the place, once it is up (at most `wait` seconds), and has the car show what came of it while a
   /// car is connected. `done` gets the outcome, on the main thread. Main thread only.
   static func navigate(
-    _ place: CarVoicePlace, link: CarLink = .shared, wait: TimeInterval = dartWait,
+    _ place: CarVoicePlace, fromSiri: Bool = false, link: CarLink = .shared, wait: TimeInterval = dartWait,
     done: @escaping (CarVoiceOutcome) -> Void
   ) {
     whenReady(link: link, until: Date().addingTimeInterval(wait)) { ready in
@@ -181,7 +187,7 @@ enum CarVoice {
         done(.noAnswer)
         return
       }
-      link.call("navigateTo", arguments(for: place)) { answer in
+      link.call("navigateTo", arguments(for: place, fromSiri: fromSiri)) { answer in
         let result = outcome(answer, for: place)
         if link.carConnected { tell(result, link) }
         done(result)
@@ -192,7 +198,9 @@ enum CarVoice {
   /// The arguments of `navigateTo` for "Add a stop at <place>": as navigate's, with `stop` (the same request the Android car's
   /// `intent=add_a_stop` sends).
   static func stopArguments(for place: CarVoicePlace) -> [String: Any] {
-    var a = arguments(for: place)
+    // `fromSiri`: with no route this becomes a plain navigation and Siri says "Starting the route" itself, so the phone's opening
+    // line is left out; Dart ignores the flag when the place is added as a stop to a route.
+    var a = arguments(for: place, fromSiri: true)
     a["stop"] = true
     return a
   }
@@ -320,10 +328,16 @@ enum CarVoiceSaved {
   /// Keeps the names of these places; true when they differ from the ones kept (Siri is then given them again).
   @discardableResult
   static func remember(_ places: [CarPlace], _ defaults: UserDefaults = .standard) -> Bool {
+    remember(names: places.map { $0.name }, defaults)
+  }
+
+  /// The same, from the names alone (the phone sends them: lib/car/siri_place_names.dart).
+  @discardableResult
+  static func remember(names all: [String], _ defaults: UserDefaults = .standard) -> Bool {
     var seen = Set<String>()
     var kept: [String] = []
-    for place in places {
-      let name = place.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    for raw in all {
+      let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
       if name.isEmpty || !seen.insert(name.lowercased()).inserted { continue }
       kept.append(name)
       if kept.count == most { break }
