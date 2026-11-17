@@ -1103,16 +1103,17 @@ NbPlace? parseLatLon(String s) {
   return NbPlace(lat: lat, lon: lon);
 }
 
-/// What the snackbar says after a file was added: a points-only file says how many places went into the notebook; a lines-only file
-/// says the lines and areas became a map layer (named [layer]); a mixed file says both. "1 place" / "N places", "1 line or area" /
-/// "N lines or areas". A notebook with a layer of its own keeps the lines there: the layer is named after the notebook.
+/// What the snackbar says after a file was added: a points-only file says how many places went into the notebook; a file with lines
+/// and areas, when they became a map layer ([layer] is its name), says so; when the notebook keeps the lines itself ([layer] null) it
+/// says they went into the notebook. "1 place" / "N places", "1 line or area" / "N lines or areas".
 String placesImportMessage({required int places, required int shapes, String? notebook, String? layer}) {
   final p = places == 1 ? '1 place' : '$places places';
-  if (shapes == 0) return '$p added to ${notebook ?? 'the notebook'}';
+  final nb = notebook ?? 'the notebook';
+  if (shapes == 0) return '$p added to $nb';
   final s = shapes == 1 ? '1 line or area' : '$shapes lines or areas';
-  final name = layer ?? notebook ?? 'My layers';
-  if (places == 0) return 'Added $s as the map layer "$name".';
-  return 'Added $p to ${notebook ?? 'the notebook'} and $s as the map layer "$name".';
+  if (layer == null) return places == 0 ? 'Added $s to $nb.' : 'Added $p and $s to $nb.';
+  if (places == 0) return 'Added $s as the map layer "$layer".';
+  return 'Added $p to $nb and $s as the map layer "$layer".';
 }
 
 /// "Add places from a file": a KML, KMZ, GPX or GeoJSON file read into the notebook [notebookId] (or a new Places notebook);

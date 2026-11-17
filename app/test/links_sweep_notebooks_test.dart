@@ -179,6 +179,15 @@ void main() {
     });
   });
 
+  group('when the notebook keeps the lines itself (no separate layer)', () {
+    test('says they went into the notebook, singular and plural, with or without places', () {
+      expect(placesImportMessage(places: 3, shapes: 2, notebook: 'Trails'), 'Added 3 places and 2 lines or areas to Trails.');
+      expect(placesImportMessage(places: 1, shapes: 1, notebook: 'Trails'), 'Added 1 place and 1 line or area to Trails.');
+      expect(placesImportMessage(places: 0, shapes: 2, notebook: 'Trails'), 'Added 2 lines or areas to Trails.');
+      expect(placesImportMessage(places: 0, shapes: 1, notebook: 'Trails'), 'Added 1 line or area to Trails.');
+    });
+  });
+
   testWidgets('a lines-only file: "Added 2 lines or areas as the map layer", and no notebook is made', (tester) async {
     final r = _Rig();
     await r.nb.start();
