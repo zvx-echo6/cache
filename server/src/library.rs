@@ -21,6 +21,8 @@
 //! - **Uploads** (`POST /api/library/upload`) stream the request body to `<data>/tmp/up-<random>.part` without holding it in memory.
 //! - **Items** (`GET /api/library/items`, `DELETE /api/library/items/{id}`) list and remove what is on the server.
 //! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
+//! - **Storage** (`GET /api/library/storage`): the bytes the server keeps for each kind the phone's Storage page lists, measured from
+//!   the server's folders as the phone measures its own.
 //! - **Rescan** (`POST /api/library/rescan`): tells the core to read the library folders again, for a browser that has put a
 //!   library in place itself.
 //! - **Fetch** (`GET /api/fetch?url=`) reads a catalog through the server, from the allow-listed hosts only (`fetch`).
@@ -1029,6 +1031,22 @@ impl Library {
     /// `GET /api/library/space`: the free and total bytes of the disk the data folder is on (null when that cannot be told).
     pub fn space(&self) -> Value {
         json!({"free_bytes": (self.free)(&self.data), "total_bytes": (self.total)(&self.data)})
+    }
+
+    /// `GET /api/library/storage`: `{"kinds": {"library", "models", "regions", "videos", "notebooks"}}`, the bytes under the folders of
+    /// each kind (the server's side of the phone's `dataKinds`: Library = ZIMs, libraries and their search indexes; Models; Regions =
+    /// the region engine's folder and the map layers; Videos; Notebooks). Walks the disk, so callers run it off the async threads.
+    pub fn storage(&self) -> Value {
+        let app = self.data.join("app");
+        let (docs, support) = (app.join("docs"), app.join("support"));
+        let kind = |dirs: &[PathBuf]| dirs.iter().map(|d| dir_bytes(d)).sum::<u64>();
+        json!({"kinds": {
+            "library": kind(&[docs.join("zims"), docs.join("libraries"), support.join("indexes"), support.join("shared-indexes")]),
+            "models": kind(&[self.data.join("models")]),
+            "regions": kind(&[support.join("regions"), support.join("layers")]),
+            "videos": kind(&[docs.join("videos")]),
+            "notebooks": kind(&[support.join("notebook-share"), support.join("notebook")]),
+        }})
     }
 
     /// `POST /api/library/rescan`: the core reads the library folders again. The number of sources it now has.
