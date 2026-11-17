@@ -21,7 +21,9 @@ Future<void> openRegionPage(BuildContext context, RegionsState regions, String i
 
 /// The line under a region's name: "Ready · 1.8 GB" when all of it is here; otherwise only the parts that are not ready and where
 /// each stands ("Places 40% · Off-road waiting"), in the warning colour when something stopped and the danger colour when it failed.
-List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.phase) {
+List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => regions.held && (l.phase == RegionPhase.downloading || l.phase == RegionPhase.stopped)
+    ? [Part('Paused · $kHeldNote', Tone.warn), Part(' · ${l.partsLine}')]
+    : switch (l.phase) {
   // A part not published for the area (places, or directions where the published roads do not reach) counts as done; the row
   // still says so, in the neutral colour with an info mark (a search that finds no places, or a route that cannot be worked out,
   // is then understood). On a narrow row the size goes before the note does.
