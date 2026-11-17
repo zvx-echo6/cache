@@ -394,6 +394,7 @@ class WebSearchRow extends StatelessWidget {
 /// source gives); a problem adds its sentence; the switch, or the one button the problem needs, at the end.
 class StateRow extends StatelessWidget {
   const StateRow({
+    super.key,
     required this.id,
     required this.icon,
     required this.title,

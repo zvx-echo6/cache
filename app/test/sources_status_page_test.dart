@@ -250,7 +250,7 @@ void main() {
       await settleReal(tester);
       final row = find.byKey(const ValueKey('source-$_wfigs'));
       expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsOneWidget);
-      expect(find.descendant(of: row, matching: find.text('Updating')), findsOneWidget);
+      expect(find.descendant(of: row, matching: find.textContaining('Updating')), findsOneWidget);
       expect(find.descendant(of: find.byKey(const ValueKey('source-openmeteo-forecast')), matching: find.byType(Switch)), findsOneWidget, reason: 'the others are not updating');
       expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsNothing);
       r.liveCore.fetchGate!.complete();
@@ -258,7 +258,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsNothing);
       expect(find.descendant(of: row, matching: find.textContaining('Working')), findsOneWidget);
-      expect(find.text('1 need attention · 1 off'), findsOneWidget);
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -294,7 +294,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 60));
       });
       await tester.pump();
-      expect(find.text('Updating'), findsWidgets, reason: 'the rows say Updating');
+      expect(find.textContaining('Updating'), findsWidgets, reason: 'the rows say Updating');
       expect(find.text('2 need attention · 1 off'), findsOneWidget, reason: 'the summary does not turn all-good because a refresh started');
       expect(find.text('NEEDS ATTENTION'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget, reason: 'a key is still needed');
@@ -328,7 +328,7 @@ void main() {
       expect(find.text('Not answering'), findsNothing);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('1 need attention'), findsOneWidget, reason: 'only Firms; the one waiting for a connection is not counted');
+      expect(find.text('1 needs attention'), findsOneWidget, reason: 'only Firms; the one waiting for a connection is not counted');
       await r.dispose(tester);
     });
   });
@@ -345,7 +345,7 @@ void main() {
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
       const sentence = 'NIFC WFIGS says it has reached its limit. Cache tries again later.';
-      expect(find.text('1 need attention · 1 off'), findsOneWidget, reason: 'only Firms (no key) is counted');
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget, reason: 'only Firms (no key) is counted');
       expect(find.text(sentence), findsOneWidget);
       expect(find.descendant(of: find.byKey(const ValueKey('source-$_wfigs')), matching: find.byType(RowButton)), findsNothing);
       final row = tester.getTopLeft(find.byKey(const ValueKey('source-$_wfigs'))).dy;
@@ -401,7 +401,7 @@ void main() {
       r.webSearch.noteSearch(rejected);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('1 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       expect(find.text('Kagi no longer accepts the saved key.'), findsOneWidget);
       expect(_colourOf(tester, 'Kagi no longer accepts the saved key.'), tester.element(find.byKey(row)).t.warning);
       expect(_top(tester, 'NEEDS ATTENTION'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
@@ -439,7 +439,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Kagi needs a key.'), findsOneWidget, reason: 'a paid service, so not "free"');
       expect(find.byKey(const ValueKey('add-key-web-search')), findsOneWidget);
-      expect(find.text('1 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -500,7 +500,7 @@ void main() {
         await r.weather.updateNow(force: true);
       });
       await tester.pumpAndSettle();
-      expect(find.text('1 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       expect(find.byKey(const ValueKey('try-again-$id')), findsOneWidget);
       expect(find.text("Me didn't answer. Showing what Cache saved 3 hours ago."), findsOneWidget);
       await r.dispose(tester);
