@@ -60,6 +60,7 @@ void main() {
   late ScriptedBackend backend;
   late ChatController chat;
   var avail = 6 * _gb;
+  setUp(() => avail = 6 * _gb);
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 5; i++) {
@@ -294,8 +295,9 @@ void main() {
       await tapSend(tester);
       await type(tester, 'And boiling time?');
       await tapSend(tester);
-      expect(find.text('And boiling time?'), findsOneWidget);
-      expect(find.text(_question), findsNothing, reason: 'only the newer one is held, so only it shows in the chat');
+      final chatList = find.byType(ListView);
+      expect(find.descendant(of: chatList, matching: find.text('And boiling time?')), findsOneWidget);
+      expect(find.descendant(of: chatList, matching: find.text(_question)), findsNothing, reason: 'only the newer one is held, so only it shows in the chat');
       expect(typed(tester), _question);
       await tearDownShell(tester);
     });
