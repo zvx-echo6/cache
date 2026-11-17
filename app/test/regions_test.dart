@@ -746,8 +746,13 @@ void main() {
     final plan = (await tester.runAsync(() => r.regions.plan(r.county)))!;
     expect(r.s.engine.outlineAsked.values.expand((v) => v), everyElement(outline), reason: 'the plan asks for the outline, not the box');
     expect(plan.map, isNotEmpty);
-    final box = await tester.runAsync(() => r.s.engine.estimate(plan.map.first.def.id, r.county.bounds));
-    expect(plan.map.first.estimate.bytes, lessThan(box!.bytes), reason: 'the figure shown is the outline\'s');
+    // The fake steps down to the deepest zoom that fits its limits, so the outline's smaller tile count can fit a deeper zoom: the
+    // figure shown is the outline's own (what the engine says for the outline), and not the box's.
+    final id = plan.map.first.def.id;
+    final withOutline = await tester.runAsync(() => r.s.engine.estimate(id, r.county.bounds!, outline: outline));
+    final box = await tester.runAsync(() => r.s.engine.estimate(id, r.county.bounds!));
+    expect(plan.map.first.estimate.bytes, withOutline!.bytes, reason: 'the figure shown is the outline\'s');
+    expect(plan.map.first.estimate.bytes, isNot(box!.bytes), reason: 'and not the box\'s');
     // an area drawn on the map has no outline: sized as its box
     final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
     r.s.engine.outlineAsked.clear();
