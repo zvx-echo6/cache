@@ -2,7 +2,7 @@
 enum SourceFailure { none, keyMissing, keyRejected, unreachable, providerError, limit, unreadable, outOfArea }
 
 /// What Settings > Weather and alerts says about one source. A "No network" notice is not a state of a row ([WeatherState.noNetwork]).
-enum SourceStatus { working, updating, off, needsKey, keyRejected, notAnswering, limitReached, nothingHere }
+enum SourceRowState { working, updating, off, needsKey, keyRejected, notAnswering, limitReached, nothingHere }
 
 /// What is known about one source's downloads: when it last worked, when it was last tried, and why the last try failed.
 class SourceHealth {

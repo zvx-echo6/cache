@@ -319,19 +319,19 @@ class WeatherState extends ChangeNotifier {
 
   /// What Settings says about [c]. A failed update alone changes nothing the person sees while the saved copy is still current
   /// (the core's `expired` flag, as of the last try); only an out-of-date copy turns the failure into the row's state.
-  SourceStatus statusOf(Connector c) {
-    if (!isOn(c.id)) return SourceStatus.off;
-    if (!keyReady(c)) return SourceStatus.needsKey;
-    if (_updating) return SourceStatus.updating;
+  SourceRowState statusOf(Connector c) {
+    if (!isOn(c.id)) return SourceRowState.off;
+    if (!keyReady(c)) return SourceRowState.needsKey;
+    if (_updating) return SourceRowState.updating;
     final h = _health[c.id];
-    if (h == null || h.failure == SourceFailure.none || h.copyCurrent) return SourceStatus.working;
+    if (h == null || h.failure == SourceFailure.none || h.copyCurrent) return SourceRowState.working;
     return switch (h.failure) {
-      SourceFailure.keyRejected => SourceStatus.keyRejected,
-      SourceFailure.limit => SourceStatus.limitReached,
-      SourceFailure.outOfArea => SourceStatus.nothingHere,
-      SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceStatus.notAnswering,
+      SourceFailure.keyRejected => SourceRowState.keyRejected,
+      SourceFailure.limit => SourceRowState.limitReached,
+      SourceFailure.outOfArea => SourceRowState.nothingHere,
+      SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
       // a key is saved now: the old "no key" failure is stale
-      SourceFailure.keyMissing || SourceFailure.none => SourceStatus.working,
+      SourceFailure.keyMissing || SourceFailure.none => SourceRowState.working,
     };
   }
 
