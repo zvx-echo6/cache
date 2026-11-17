@@ -1,11 +1,20 @@
 import 'package:cache/settings/app_settings.dart';
+import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/web_search_setup.dart';
 import 'package:cache/sources/sources_state.dart';
 import 'package:cache/video/token_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+class _Online implements ConnectionProbe {
+  @override
+  Future<ConnectionKind> current() async => ConnectionKind.wifi;
+
+  @override
+  Stream<ConnectionKind> get changes => const Stream.empty();
+}
+
 WebSearchSetup _setup(MemoryTokenStore secrets, AppSettings s) =>
-    WebSearchSetup(settings: s, secrets: secrets, setWeb: (p, k, o) async {});
+    WebSearchSetup(settings: s, secrets: secrets, setWeb: (p, k, o) async {}, probe: _Online());
 
 void main() {
   test('this tab\'s position, in the shape setLocation sends, or null with none', () async {
@@ -37,7 +46,7 @@ void main() {
     expect(r.keys.toSet(), {'provider', 'reference', 'online'});
     expect(r['provider'], 'kagi');
     expect(r['reference'], 'keystore://search.kagi.key');
-    expect(r['online'], isA<bool>());
+    expect(r['online'], true);
     await w.setEnabled(false);
     expect(w.requestWeb, isNull);
   });
