@@ -1143,6 +1143,41 @@ mod tests {
         assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
     }
 
+    /// Writes `n` bytes to `<data>/<rel>`, making the folders.
+    fn put(d: &TempDir, rel: &str, n: usize) {
+        let p = d.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![7u8; n]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_says_the_bytes_of_each_kind_the_phones_storage_page_shows() {
+        let d = TempDir::new("http-storage");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        put(&d, "app/docs/zims/a.zim", 1000);
+        put(&d, "app/docs/libraries/guide/shard", 200);
+        put(&d, "app/support/indexes/a.zim.idx/x", 30);
+        put(&d, "models/m.gguf", 4000);
+        put(&d, "app/support/regions/places/p.db", 500);
+        put(&d, "app/support/layers/l/tiles", 60);
+        put(&d, "app/docs/videos/site/v.mp4", 7000);
+        put(&d, "app/support/notebook-share/n.md", 80);
+        put(&d, "app/support/notebook/notebook.sqlite", 9);
+        assert_eq!(route(&a, "GET", "/api/library/storage", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/library/storage", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        let k = &v["result"]["kinds"];
+        assert_eq!(
+            (k["library"].clone(), k["models"].clone(), k["regions"].clone(), k["videos"].clone(), k["notebooks"].clone()),
+            (json!(1230), json!(4000), json!(560), json!(7000), json!(89))
+        );
+    }
+
     #[tokio::test]
     async fn login_sets_a_cookie_and_it_works() {
         let d = TempDir::new("http2");
