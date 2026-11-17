@@ -10,10 +10,11 @@ import 'app_log.dart' show LogLevel;
 /// In a browser: Cache Server's own app log (`/api/log`, signed in only): its level, its text for Share log, and Clear log. A browser
 /// has no log file of its own, and this is never the server's system journal. The level is the server's, kept there.
 class ServerLog extends ChangeNotifier {
-  ServerLog({http.Client? client}) : _client = client;
+  ServerLog({this.client});
 
-  final http.Client? _client;
-  http.Client get _c => _client ?? http.Client();
+  /// The HTTP client (tests give their own).
+  final http.Client? client;
+  http.Client get _c => client ?? http.Client();
 
   LogLevel level = LogLevel.standard;
 
