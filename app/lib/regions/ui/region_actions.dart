@@ -34,13 +34,14 @@ String regionSizeLine({int? onDevice, int? download}) {
 }
 
 /// What downloading [list] would put on the device and fetch, from the core's plan (routing and places as the core counts them, the
-/// map layers' estimates, the off-road packs); null when any plan cannot be made now (offline, the index out of reach): the dialog
+/// map layers' estimates, the off-road packs); null when any plan cannot be made (offline, the index out of reach). It is asked in the
+/// background and never waited for by the pop-up: the dialog
 /// then shows the catalogue's download figure alone.
 Future<({int onDevice, int download})?> planSizeOf(RegionsState regions, List<(RegionRecord, RegionOffer)> list) async {
   var onDevice = 0, download = 0;
   for (final (rec, o) in list) {
     try {
-      final p = await regions.plan(rec).timeout(const Duration(seconds: 12));
+      final p = await regions.plan(rec);
       if (o.routing) {
         final r = p.routing;
         if (r == null || p.routingProblem != null) return null;
