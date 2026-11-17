@@ -236,7 +236,7 @@ void main() {
       expect(find.text('Cache connectors'), findsOneWidget);
       expect(find.text('12 minutes old'), findsOneWidget);
       expect(find.text('Current'), findsOneWidget);
-      expect(find.text('HTTP 500: busy'), findsOneWidget);
+      expect(find.textContaining('HTTP'), findsNothing, reason: 'the core\'s own words are not shown; the row says the state in its own words');
       expect(switchIn(tester, 'Use this source').value, isTrue);
       await tester.tap(rowWith('Use this source'));
       await tester.pumpAndSettle();
