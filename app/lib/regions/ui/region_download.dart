@@ -8,12 +8,22 @@ import 'region_actions.dart';
 
 /// A region as one download (UX-downloads-29): the sum of its parts with one bar. Pause holds every region download (the running
 /// part stops, the others wait); Resume carries on in order.
+/// WORDING (cache-pm): what a row says while the person's Pause holds every region download.
+const String kHeldNote = 'all downloads paused';
+
+/// WORDING (cache-pm, approved): the row while Ask has the downloads held.
+const String kAskHoldLine = 'Paused while Ask answers';
+
 DlState regionDl(RegionsState regions, LocalRegion l) {
   final parts = l.parts;
   final done = parts.fold<int>(0, (s, p) => s + p.bytes);
   final total = regions.totalBytesOf(l) ?? 0;
   if (regions.pausing && l.phase != RegionPhase.ready) return DlState(DlPhase.pausing, done: done, total: total);
   if (regions.resuming && l.phase != RegionPhase.ready) return DlState(DlPhase.starting, done: done, total: total);
+  // The global Pause is on: nothing of the region reads as running, whatever its parts say (a map layer started while it was on
+  // still reads as downloading in the engine's list).
+  if (regions.askHolds && !regions.held && l.phase != RegionPhase.ready && l.phase != RegionPhase.failed) return DlState(DlPhase.paused, done: done, total: total, waitLine: kAskHoldLine);
+  if (regions.held && l.phase != RegionPhase.ready && l.phase != RegionPhase.failed) return DlState(DlPhase.paused, done: done, total: total, reasonText: kHeldNote);
   switch (l.phase) {
     case RegionPhase.ready:
       return DlState(DlPhase.done, done: l.bytes, total: l.bytes);
@@ -56,6 +66,8 @@ DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool ow
   final total = p.totalBytes ?? 0;
   if (regions.pausing && !p.complete && p.state == PartState.downloading) return DlState(DlPhase.pausing, done: p.bytes, total: total);
   if (regions.resuming && !p.complete && first) return DlState(DlPhase.starting, done: p.bytes, total: total);
+  if (regions.askHolds && !regions.held && !p.complete && p.state != PartState.failed) return DlState(DlPhase.paused, done: p.bytes, total: total, waitLine: kAskHoldLine);
+  if (regions.held && !p.complete && p.state != PartState.failed) return DlState(DlPhase.paused, done: p.bytes, total: total, reasonText: kHeldNote);
   DlState waitFor(RegionPartStatus? other) => other == null || other.kind == p.kind
       ? DlState(DlPhase.starting, done: p.bytes, total: total)
       : DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: other.name);
