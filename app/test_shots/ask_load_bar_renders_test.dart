@@ -36,9 +36,12 @@ void main() {
       'names': {key: 'Gemma 4 E2B · Q4_K_M'},
       'plainNames': {key: 'Gemma 4 E2B'},
     }));
-    app.models = [ModelEntry(path: named.path, size: 16)];
+    final stand = File('${dir.path}/Gemma 4 E2B.gguf')..writeAsBytesSync(List.filled(16, 0));
+    app.models = [ModelEntry(path: stand.path, size: 16)];
+    stand.deleteSync();
     app.started = true;
     await tester.runAsync(app.init);
+    await tester.runAsync(app.wake);
     expect(app.heldForMemory, isTrue);
     if (state != _State.gate) app.heldForMemory = false;
     if (state == _State.loading) {
