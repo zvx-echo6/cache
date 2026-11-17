@@ -1737,6 +1737,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _nameRing(ring);
   }
 
+  /// A screen point in the map Stack's own coordinates.
+  Offset _localOf(Offset global) {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    return stack != null && stack.hasSize ? stack.globalToLocal(global) : global;
+  }
+
   /// A browser's right-click or mouse hold on the map (its long click is a double click): the same ring as a press and hold.
   Future<void> _onMouseRing(Offset page, math.Point<double> inMap) async {
     final c = _controller;
@@ -2341,12 +2347,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
               return Listener(
               // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
               onPointerDown: (e) {
-                _downAt = e.position;
+                // The ring is drawn inside the Stack, so its centre is kept in the Stack's own coordinates (not the screen's, which a
+                // side rail shifts, and not this Listener's, which the inset frame offsets).
+                final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+                _downAt = stack != null && stack.hasSize ? stack.globalToLocal(e.position) : e.localPosition;
                 _fitTouched = true;
               },
               onPointerMove: (e) {
                 final d = _downAt;
-                if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
+                if (d != null && (_localOf(e.position) - d).distance > 12 && maps.follow != FollowMode.free) {
                   maps.setFollow(FollowMode.free);
                 }
               },
