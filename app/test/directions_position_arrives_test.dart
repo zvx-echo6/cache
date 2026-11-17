@@ -5,7 +5,6 @@ import 'dart:io';
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
-import 'package:cache/maps/maps_state.dart';
 import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/route_panel.dart';
 import 'package:cache/nav/units.dart';
