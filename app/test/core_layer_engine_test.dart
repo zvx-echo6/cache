@@ -199,6 +199,22 @@ void main() {
     expect(b.error, isNotNull);
   });
 
+  test('a look that fails with a raw object (a JS error in the browser) still ends with the area done and the list read; the failing step is named (web-region-progress)', () async {
+    expect(CoreLayerEngine.said(Object()), 'Object');
+    expect(CoreLayerEngine.said(_Named('QuotaExceededError')), '_Named (QuotaExceededError)');
+    var thrown = 0;
+    engine.stepHook = (step) {
+      // a raw object, not an Exception or Error, as a JS error reaches Dart; once, at the step after the job ended
+      if (step == 'reload' && thrown++ == 0) throw _Named('boom');
+    };
+    final a = await engine.download('hillshade', home, label: 'raw throw');
+    await until(() => a.phase == AreaPhase.done);
+    expect(a.doneTiles, 20);
+    // the look that failed did not end the looking: the list is read at the next one
+    await until(() => engine.areasOf('hillshade').single.fetchedAt != null);
+    expect(thrown, greaterThanOrEqualTo(2), reason: 'the step was entered again by the retry');
+  });
+
   test('cancel stops a first download and leaves nothing', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
     // cancel returns when the download has ended and been cleaned up, so there is nothing to wait for afterwards.
@@ -456,4 +472,10 @@ void main() {
     expect(CoreLayerEngine.words('internal', 'HTTP 500 from https://cache.echo6.co/basemap/x.pmtiles'), 'The download stopped. Tap Update to continue.');
     expect(CoreLayerEngine.words('internal', 'disk error'), 'The download stopped: disk error');
   });
+}
+
+/// A thrown object that is neither an Exception nor an Error, with a `name` as a browser's error objects have.
+class _Named {
+  _Named(this.name);
+  final String name;
 }

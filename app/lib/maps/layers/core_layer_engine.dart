@@ -787,7 +787,7 @@ class CoreLayerEngine extends LayerEngine {
       // A look that fails must not end the looking: the job is already out of the running list, so nothing else would read the
       // list again and the page would stay as it was.
       _reloadPending = true;
-      logError('Layer downloads: a look at the running downloads failed', error: e, stack: st);
+      logError('Layer downloads: a look at the running downloads failed at "$_step": ${said(e)}', error: e, stack: st);
     } finally {
       _ticking = false;
     }
@@ -798,6 +798,30 @@ class CoreLayerEngine extends LayerEngine {
   final Map<String, String> _lastProgressError = {};
 
   bool _ticking = false;
+
+  /// Where the look is, for the line that says why one failed.
+  String _step = '';
+
+  /// Test seam: called as the look enters each step; a test throws from it to see what a look does when a step fails.
+  @visibleForTesting
+  void Function(String step)? stepHook;
+
+  void _enter(String step) {
+    _step = step;
+    stepHook?.call(step);
+  }
+
+  /// What a thrown object is, in words safe for every log level (no file names, no addresses): its type, and for an object from
+  /// the browser (a raw JS error or event, which Dart only names "JSObject") its `name` (DOMException, QuotaExceededError...).
+  @visibleForTesting
+  static String said(Object e) {
+    String? name;
+    try {
+      final n = (e as dynamic).name;
+      if (n is String && n.isNotEmpty && n.length <= 40) name = n;
+    } catch (_) {}
+    return name == null ? '${e.runtimeType}' : '${e.runtimeType} ($name)';
+  }
 
   /// The list could not be read in time after a download ended: the next look reads it again.
   bool _reloadPending = false;
@@ -811,6 +835,7 @@ class CoreLayerEngine extends LayerEngine {
       if (_disposed) return;
       JobProgress p;
       try {
+        _enter('progress');
         p = await r.job.progress().timeout(reloadTimeout);
       } catch (e) {
         // Said when it changes, not at every look: why a running row stays as it was.
@@ -841,6 +866,7 @@ class CoreLayerEngine extends LayerEngine {
       logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
+      _enter('done');
       if (p.state == JobState.done && !r.update) {
         // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
         // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
@@ -854,6 +880,7 @@ class CoreLayerEngine extends LayerEngine {
         notifyListeners();
       }
       try {
+        _enter('free');
         await r.job.free().timeout(reloadTimeout);
       } catch (_) {}
       if (_disposed) return;
@@ -876,6 +903,7 @@ class CoreLayerEngine extends LayerEngine {
         // Finished, or a first download cancelled: nothing is left to carry on.
         if (_saved.remove(a.id) != null) {
           try {
+            _enter('saved');
             await _storeSaved().timeout(reloadTimeout);
           } catch (_) {}
         }
@@ -900,6 +928,7 @@ class CoreLayerEngine extends LayerEngine {
     }
     if (reload || _reloadPending) {
       // Tiles were added or removed: the second core reads the stores afresh.
+      _enter('reload');
       _dropPlanner();
       try {
         // A read that did not answer in time is still on its way: it is waited for again, not asked a second time (that would
@@ -919,10 +948,11 @@ class CoreLayerEngine extends LayerEngine {
         logInfo('Layer downloads: the list was not answered in ${reloadTimeout.inSeconds} s; it is read again at the next look');
       } catch (e) {
         _reloadPending = true;
-        logError('Layer downloads: the list could not be read after a download ended', error: e);
+        logError('Layer downloads: the list could not be read after a download ended (${said(e)})', error: e);
       }
     }
     if (_disposed) return;
+    _enter('settled');
     for (final r in settled) {
       for (final x in _areas.values.where((x) => x.id == r.area.id)) {
         logInfo('Layer area ${x.id} after its job ended, listed under ${x.layerId}: ${x.phase.name}, ${x.bytes} B');

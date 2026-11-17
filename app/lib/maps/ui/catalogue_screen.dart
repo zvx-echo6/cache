@@ -442,7 +442,9 @@ DlState areaDl(DownloadedArea a) {
     AreaPhase.running => a.doneTiles == 0
         ? DlState(DlPhase.starting, total: total)
         : DlState(DlPhase.running, done: done, total: total, speed: DlMeter.speed('area:${a.id}', done)),
-    AreaPhase.failed when a.error == null => DlState(DlPhase.paused, done: done, total: total),
+    // Paused (a person's Pause, or the phone cutting a background app off the network) reads Paused, whatever words the core's
+    // unfinished list gave it after a reload: it is not a failure, and Resume carries it on.
+    AreaPhase.failed when a.paused || a.error == null => DlState(DlPhase.paused, done: done, total: total),
     AreaPhase.failed => DlState(DlPhase.failed, done: done, total: total, reason: DlReason.of(a.error)),
     AreaPhase.done => DlState(DlPhase.done, done: done, total: done),
   };
