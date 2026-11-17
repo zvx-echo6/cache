@@ -6,6 +6,7 @@ import 'package:cache/library/book_pages.dart';
 import 'package:cache/library/catalog_page.dart';
 import 'package:cache/library/cds_shelf_source.dart';
 import 'package:cache/library/library_docs_page.dart';
+import 'package:cache/library/shelf_source.dart' show DocPlace;
 import 'package:cache/pdf/pdf_reader_screen.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/theme.dart';
@@ -121,10 +122,10 @@ void main() {
 
   testWidgets('sections and counts: the unshelved ones first, then the books on Bookshelves, each with its place', (tester) async {
     await openField(tester);
-    expect(find.text('On no shelf · 2'), findsOneWidget);
-    expect(find.text('On Bookshelves · 6'), findsOneWidget);
+    expect(find.text('ON NO SHELF · 2'), findsOneWidget);
+    expect(find.text('ON BOOKSHELVES · 6'), findsOneWidget);
     // the unshelved section sits above the shelved one
-    expect(tester.getTopLeft(find.text('On no shelf · 2')).dy, lessThan(tester.getTopLeft(find.text('On Bookshelves · 6')).dy));
+    expect(tester.getTopLeft(find.text('ON NO SHELF · 2')).dy, lessThan(tester.getTopLeft(find.text('ON BOOKSHELVES · 6')).dy));
     expect(tester.getTopLeft(find.byKey(const ValueKey('doc-n1'))).dy, lessThan(tester.getTopLeft(find.byKey(const ValueKey('doc-a1'))).dy));
     expect(find.text('CDS 210-001 · First aid and emergency care'), findsOneWidget);
     expect(find.text('CDS 530-001 · Water treatment'), findsOneWidget);
@@ -144,8 +145,8 @@ void main() {
     // Trail library has no such document: no section, no second label
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: LibraryDocsPage(deps: testDeps(browse: w.browse, shelves: w.shelves), library: w.library('Trail library'))));
     await tester.pump();
-    expect(find.textContaining('On no shelf'), findsNothing);
-    expect(find.textContaining('On Bookshelves'), findsNothing);
+    expect(find.textContaining('ON NO SHELF'), findsNothing);
+    expect(find.textContaining('ON BOOKSHELVES'), findsNothing);
     expect(find.text('Where there is no doctor'), findsOneWidget);
   });
 
