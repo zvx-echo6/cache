@@ -1,6 +1,6 @@
 import 'dart:async' show Timer;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, ValueNotifier;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent, KeyDownEvent, LogicalKeyboardKey;
 
@@ -52,6 +52,7 @@ class AskScreen extends StatefulWidget {
     this.readOnly = false,
     this.onBack,
     this.held,
+    this.returned,
     this.onHold,
   });
 
@@ -63,6 +64,9 @@ class AskScreen extends StatefulWidget {
 
   /// The question typed while the model is not loaded, held until it is (shown in the chat, with a note); null: none.
   final ValueListenable<String?>? held;
+
+  /// A held question that was dropped, to put back in the field (not over text already there); the screen clears it once taken.
+  final ValueNotifier<String?>? returned;
 
   /// Holds a typed question and wakes the model ([Shell]); null: Send does nothing while no model is loaded.
   final void Function(String text)? onHold;
@@ -108,9 +112,22 @@ class _AskScreenState extends State<AskScreen> {
   void initState() {
     super.initState();
     widget.chat.addListener(_scrollDown);
+    _takeReturned();
+    widget.returned?.addListener(_takeReturned);
     _shownId = widget.chat.activeId;
     // A chat opens on its latest turn (the answer and any card under it), not at its first question.
     _jumpToEnd();
+  }
+
+  /// A dropped held question comes back into the field, unless the person has already typed something there (that is left as it is).
+  void _takeReturned() {
+    final n = widget.returned;
+    final text = n?.value;
+    if (n == null || text == null) return;
+    n.value = null;
+    if (_input.text.isEmpty) {
+      _input.value = TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length));
+    }
   }
 
   /// The chat the conversation shows, to tell when another one is opened.
@@ -144,6 +161,7 @@ class _AskScreenState extends State<AskScreen> {
   void dispose() {
     _stopWatchingWebBlock?.call();
     widget.chat.removeListener(_scrollDown);
+    widget.returned?.removeListener(_takeReturned);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -400,9 +418,11 @@ class _AskScreenState extends State<AskScreen> {
             final app = widget.app;
             final name = app.loading != null
                 ? 'Loading…'
-                : app.active == null
-                ? 'No model'
-                : app.displayName(app.active!);
+                : app.active != null
+                ? app.displayName(app.active!)
+                : app.resting != null && app.failed == null
+                ? app.plainName(app.resting!)
+                : 'No model';
             return InkWell(
               key: const ValueKey('model-name'),
               onTap: _modelMenu,
@@ -419,7 +439,7 @@ class _AskScreenState extends State<AskScreen> {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
-                          color: app.active == null && app.loading == null
+                          color: app.active == null && app.loading == null && !(app.resting != null && app.failed == null)
                               ? k.warning
                               : k.text,
                         ),
@@ -555,7 +575,7 @@ class _AskScreenState extends State<AskScreen> {
     final k = context.t;
     if (!widget.readOnly && app.started && app.active == null && app.failed == null) {
       final loading = app.loading;
-      if (loading != null) return _loadBar(k, 'Loading ${app.plainName(loading)}…', null, null);
+      if (loading != null) return _loadBar(k, 'Loading ${app.plainName(loading)}…', null, null, key: const ValueKey('ask-loading'));
       final resting = app.resting;
       if (resting != null && app.models.isNotEmpty) {
         final name = app.plainName(resting);
@@ -620,9 +640,9 @@ class _AskScreenState extends State<AskScreen> {
 
   /// The slim bar under the header for a chosen model that is not loaded: resting, held back for memory (nothing is broken, so the
   /// calm colors, no red), or loading (no button). One line, with a text button on the right.
-  Widget _loadBar(CacheTokens k, String text, String? button, VoidCallback? onPressed) {
+  Widget _loadBar(CacheTokens k, String text, String? button, VoidCallback? onPressed, {Key key = const ValueKey('ask-fix')}) {
     return Container(
-      key: const ValueKey('ask-fix'),
+      key: key,
       width: double.infinity,
       constraints: const BoxConstraints(minHeight: 44),
       padding: const EdgeInsets.only(left: 16, right: 4),
