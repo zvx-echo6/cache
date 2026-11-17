@@ -50,6 +50,8 @@ class AskScreen extends StatefulWidget {
     this.reports,
     this.readOnly = false,
     this.onBack,
+    this.held,
+    this.onHold,
   });
 
   /// No model on this device: the chat stays readable and copyable, and the composer is one line with "Choose a model".
@@ -57,6 +59,12 @@ class AskScreen extends StatefulWidget {
 
   /// The back arrow of a read-only chat (in place of the chats list).
   final VoidCallback? onBack;
+
+  /// The question typed while the model is not loaded, held until it is (shown in the chat, with a note); null: none.
+  final ValueListenable<String?>? held;
+
+  /// Holds a typed question and wakes the model ([Shell]); null: Send does nothing while no model is loaded.
+  final void Function(String text)? onHold;
 
   /// Where "Report this answer" keeps its reports (on this phone); the app's store when null.
   final AnswerReports? reports;
@@ -158,7 +166,18 @@ class _AskScreenState extends State<AskScreen> {
 
   void _send() {
     final text = _input.text;
-    if (text.trim().isEmpty || !widget.chat.canSend) return;
+    if (text.trim().isEmpty) return;
+    if (!widget.chat.canSend) {
+      // A model is chosen but not loaded: the question shows in the chat at once and waits ([Shell] holds it and wakes the model).
+      final hold = widget.onHold;
+      if (hold == null || widget.chat.busy || !_sendable) return;
+      _input.clear();
+      hold(text.trim());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      });
+      return;
+    }
     _input.clear();
     widget.chat.send(text);
     _explainWebBlock();
@@ -167,6 +186,13 @@ class _AskScreenState extends State<AskScreen> {
     });
   }
 
+
+  /// Send works when a model is loaded, or chosen and on its way (resting, held back for memory, loading). With none chosen, and
+  /// when a load failed, it stays off.
+  bool get _sendable {
+    final app = widget.app;
+    return app.active != null || (app.failed == null && (app.resting != null || app.loading != null));
+  }
 
   /// In the browser, with the location on but blocked there, shows the same "Allow location in your browser" dialog the map shows. The
   /// question is not held back: it has already gone. The block may only be found while the question's own location read runs, so a
@@ -436,10 +462,11 @@ class _AskScreenState extends State<AskScreen> {
             ListenableBuilder(listenable: widget.app, builder: (context, _) => _fixLine(context) ?? const SizedBox.shrink()),
             Expanded(
               child: ListenableBuilder(
-                listenable: Listenable.merge([widget.chat, widget.app]),
+                listenable: Listenable.merge([widget.chat, widget.app, ?widget.held]),
                 builder: (context, _) {
                   final msgs = widget.chat.messages;
-                  if (msgs.isEmpty) {
+                  final held = widget.held?.value;
+                  if (msgs.isEmpty && held == null) {
                     final app = widget.app;
                     // A model on this device that is not loaded: the line at the top says what to do; nothing more here.
                     if (_notLoaded) return const SizedBox.shrink();
@@ -474,8 +501,10 @@ class _AskScreenState extends State<AskScreen> {
                     builder: (context, c) => ListView.builder(
                     controller: _scroll,
                     padding: ReadingWidth.padFor(context, c.maxWidth, style: _readingStyle).copyWith(top: 8, bottom: 16),
-                    itemCount: msgs.length,
-                    itemBuilder: (_, i) => msgs[i].isUser
+                    itemCount: msgs.length + (held == null ? 0 : 1),
+                    itemBuilder: (_, i) => i == msgs.length
+                        ? _HeldBubble(held!, _heldModelName())
+                        : msgs[i].isUser
                         ? _UserBubble(msgs[i].text)
                         : _AssistantBlock(
                             msgs[i],
@@ -521,9 +550,20 @@ class _AskScreenState extends State<AskScreen> {
 
   /// The fix for a model that is on this device but not loaded: one red line at the top and one button.
   Widget? _fixLine(BuildContext context) {
-    if (!_notLoaded) return null;
     final app = widget.app;
     final k = context.t;
+    if (!widget.readOnly && app.started && app.active == null && app.failed == null) {
+      final loading = app.loading;
+      if (loading != null) return _loadBar(k, 'Loading ${app.plainName(loading)}…', null, null);
+      final resting = app.resting;
+      if (resting != null && app.models.isNotEmpty) {
+        final name = app.plainName(resting);
+        return app.heldForMemory
+            ? _loadBar(k, 'Waiting for free memory', 'Load anyway', () => app.wake(force: true))
+            : _loadBar(k, '$name is resting', 'Load', () => app.wake(force: true));
+      }
+    }
+    if (!_notLoaded) return null;
     final failed = app.failed;
     final String line;
     final String button;
@@ -560,8 +600,6 @@ class _AskScreenState extends State<AskScreen> {
         onPressed = () => app.activate(usable.first);
       }
     }
-    final held = app.heldForMemory && app.resting != null && app.failed == null;
-    if (held) return _gateCard(k, app.plainName(app.resting!), onPressed);
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,
@@ -579,26 +617,29 @@ class _AskScreenState extends State<AskScreen> {
     );
   }
 
-  /// The card for a model the memory gate held back ([AppState.heldForMemory]): calm, since nothing is broken (theme surface and
-  /// text colors, no emergency red). Its button loads the model whatever the room.
-  Widget _gateCard(CacheTokens k, String name, VoidCallback onLoad) {
+  /// The slim bar under the header for a chosen model that is not loaded: resting, held back for memory (nothing is broken, so the
+  /// calm colors, no red), or loading (no button). One line, with a text button on the right.
+  Widget _loadBar(CacheTokens k, String text, String? button, VoidCallback? onPressed) {
     return Container(
       key: const ValueKey('ask-fix'),
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: k.secondary.withValues(alpha: 0.25))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      constraints: const BoxConstraints(minHeight: 44),
+      padding: const EdgeInsets.only(left: 16, right: 4),
+      decoration: BoxDecoration(color: k.surface, border: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2)))),
+      child: Row(
         children: [
-          Text('$name is waiting for free memory.', key: const ValueKey('ask-fix-line'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
-          const SizedBox(height: 4),
-          Text('Other apps are using it right now. Loading anyway may close some of them.', key: const ValueKey('ask-fix-note'), style: TextStyle(fontSize: 13, color: k.secondary)),
-          const SizedBox(height: 8),
-          FilledButton(key: const ValueKey('ask-fix-button'), onPressed: onLoad, child: const Text('Load anyway')),
+          Expanded(child: Text(text, key: const ValueKey('ask-fix-line'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text))),
+          if (button != null) TextButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
         ],
       ),
     );
+  }
+
+  /// The model a held question waits for.
+  String? _heldModelName() {
+    final app = widget.app;
+    final m = app.resting ?? app.loading;
+    return m == null ? null : app.plainName(m);
   }
 
   /// "Delete and download again": the damaged file goes; a recommended model downloads again (its download pop-up first), any other
@@ -638,7 +679,7 @@ class _AskScreenState extends State<AskScreen> {
     if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
     if (_input.value.composing.isValid && !_input.value.composing.isCollapsed) return KeyEventResult.ignored;
     if (event is KeyDownEvent) {
-      if (widget.app.active != null) _send();
+      if (_sendable) _send();
     }
     // The key-up and repeats of a handled Enter are swallowed too, so a held Enter never adds a line.
     return KeyEventResult.handled;
@@ -651,7 +692,7 @@ class _AskScreenState extends State<AskScreen> {
       listenable: Listenable.merge([widget.chat, widget.app]),
       builder: (context, _) {
         final busy = widget.chat.busy;
-        final ready = widget.app.active != null;
+        final ready = _sendable;
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
           child: Row(
@@ -718,6 +759,33 @@ class _AskScreenState extends State<AskScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+/// A question asked before the model has loaded: shown as sent, with a quiet line that says when it will go.
+class _HeldBubble extends StatelessWidget {
+  const _HeldBubble(this.text, this.model);
+
+  final String text;
+  final String? model;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        _UserBubble(text),
+        Padding(
+          padding: const EdgeInsets.only(right: 4, top: 2),
+          child: Text(
+            key: const ValueKey('ask-held-note'),
+            model == null ? 'Sent when the model has loaded' : 'Sent when $model has loaded',
+            style: TextStyle(fontSize: 13, color: k.secondary),
+          ),
+        ),
+      ],
     );
   }
 }

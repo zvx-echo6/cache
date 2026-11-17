@@ -184,12 +184,15 @@ class Shell extends StatefulWidget {
 
 /// A question asked while no model was loaded, waiting for it.
 class _HeldAsk {
-  _HeldAsk(this.text, this.seed, this.epoch, this.sawLoad);
+  _HeldAsk(this.text, this.seed, this.epoch, this.sawLoad, [this.baseCount = 0]);
   final String text;
   final AskAbout? seed;
 
   /// The chat it was held in ([ChatController.chatEpoch]).
   final int epoch;
+
+  /// How many messages the chat had when it was held; any other change means the person sent something else.
+  final int baseCount;
 
   /// A model load has been seen since it was held.
   bool sawLoad;
@@ -249,7 +252,24 @@ class _ShellState extends State<Shell> {
   /// Set in initState (a lazy initializer would first run after the model had already arrived).
   bool _noModelSeen = false;
 
-  _HeldAsk? _held;
+  _HeldAsk? _heldAsk;
+
+  /// The held question's text, for Ask to show in the chat.
+  final ValueNotifier<String?> _heldText = ValueNotifier(null);
+
+  _HeldAsk? get _held => _heldAsk;
+  set _held(_HeldAsk? h) {
+    _heldAsk = h;
+    _heldText.value = h?.text;
+  }
+
+  /// A question typed in Ask while a chosen model is not loaded: held (a newer one replaces it) and the model woken, under the
+  /// memory gate (Send does not bypass it).
+  void _holdTyped(String text) {
+    final chat = widget.chat;
+    _held = _HeldAsk(text, null, chat.chatEpoch, widget.app.loading != null, chat.messages.length);
+    unawaited(widget.app.wake());
+  }
 
   void _onApp() {
     final app = widget.app;
@@ -529,6 +549,7 @@ class _ShellState extends State<Shell> {
     _alertTaps?.cancel();
     _lifecycle.dispose();
     _homeQuery.dispose();
+    _heldText.dispose();
     super.dispose();
   }
 
@@ -1070,7 +1091,7 @@ class _ShellState extends State<Shell> {
     final h = _held;
     if (h == null) return;
     final chat = widget.chat;
-    if (chat.chatEpoch != h.epoch || chat.messages.isNotEmpty) {
+    if (chat.chatEpoch != h.epoch || chat.messages.length != h.baseCount) {
       _held = null;
     } else if (chat.canSend) {
       _held = null;
@@ -1274,7 +1295,7 @@ class _ShellState extends State<Shell> {
             chat: widget.chat,
             onChooseModel: () => openModels(context, widget.app),
             onLeave: _goHome,
-            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack),
+            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack, held: _heldText, onHold: _holdTyped),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
