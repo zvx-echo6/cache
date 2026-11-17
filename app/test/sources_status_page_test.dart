@@ -506,4 +506,45 @@ void main() {
       await r.dispose(tester);
     });
   });
+
+  group('Refresh on the sources page', () {
+    Future<void> tapRefresh(WidgetTester tester) async {
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('weather-refresh')));
+        for (var i = 0; i < 20; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('offline: the page\'s own notice, and no snackbar saying the same', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await tester.runAsync(() async {
+        r.probe.change(ConnectionKind.none);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tapRefresh(tester);
+      expect(find.text('No connection. Showing what was saved.'), findsOneWidget);
+      expect(find.text('No connection. Update when you are online.'), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+      await r.dispose(tester);
+    });
+
+    testWidgets('online: the refresh still says what happened in a snackbar', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tapRefresh(tester);
+      expect(find.text('Updated'), findsOneWidget);
+      expect(find.text('No connection. Showing what was saved.'), findsNothing);
+      await r.dispose(tester);
+    });
+  });
 }
