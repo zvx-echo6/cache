@@ -19,6 +19,7 @@ import 'platform/memory.dart';
 import 'models/gguf_header.dart' show readGgufGeneralName;
 import 'platform/memory_need.dart';
 import 'theme.dart';
+import 'video/format.dart' show formatBytes;
 import 'platform/app_log.dart';
 import 'platform.dart' as plat;
 import 'platform/byte_units.dart';
@@ -184,18 +185,48 @@ class AppState extends ChangeNotifier {
 
   bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
 
-  /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
-  String displayName(ModelEntry e) => _names[e.key] ?? e.name;
+  /// The quantisation label ("Q4_K_M") of each model loaded before, by [ModelEntry.key], set at the same load.
+  final Map<String, String> _labels = {};
 
-  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"); [displayName] when none was parsed.
-  String plainName(ModelEntry e) => _plainNames[e.key] ?? displayName(e);
+  /// The name the recommended list gives this file ("Gemma 4 E2B · tuned for Cache"); null for a file the list does not name, or
+  /// while the list is not known (or this is not set).
+  String? Function(ModelEntry e)? recommendedName;
+
+  /// The model's name on screen. A recommended model shows its name from the recommended list, so two files that llama.cpp
+  /// describes alike (the stock and the uncensored E2B) are told apart; any other shows its real name, for example
+  /// "SmolLM2 135M Instruct · Q4_0" (from its own metadata once loaded); the file name if not known yet.
+  String displayName(ModelEntry e) => recommendedName?.call(e) ?? _names[e.key] ?? e.name;
+
+  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"; a non-recommended model's general.name): the stored one,
+  /// else the stored full name, else the file name. It never carries the recommended list's name.
+  String plainName(ModelEntry e) => _plainNames[e.key] ?? _names[e.key] ?? e.name;
+
+  /// The name the Ask header, its model menu and the one-line Settings row show: the short name. Change this one line to switch them.
+  String headerName(ModelEntry e) => plainName(e);
+
+  /// The quantisation label to show with [e]'s size: only a recommended model has one, and only when its name from the list does not
+  /// already end with it ("Gemma 4 E4B · Q4_K_M" needs none). It is the one read when the model was loaded, else the one in its file
+  /// name; null when neither has it.
+  String? shownQuant(ModelEntry e) {
+    final name = recommendedName?.call(e);
+    if (name == null) return null;
+    final q = _labels[e.key] ?? quantFromFileName(e.fileName);
+    return q == null || name.endsWith(q) ? null : q;
+  }
+
+  /// The line under a model's name: its size ("3.2 GB"), and for a recommended model the quantisation after it ("3.2 GB · Q4_K_M").
+  String sizeLine(ModelEntry e) {
+    final q = shownQuant(e);
+    return q == null ? formatBytes(e.size) : '${formatBytes(e.size)} · $q';
+  }
 
   /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
   ModelSettings? Function(ModelEntry e)? settingsFor;
 
   /// Whether the recommended list names this file (by file name): true or false once the list is known, null while it is not. A
-  /// recommended model keeps the name llama.cpp's description gives it; any other is named by its file's own `general.name`; while
-  /// it is unknown (or this is not set) the description's name is kept, so a wrong name is never stored.
+  /// recommended model is shown by its name from the list ([recommendedName]; the description's name is only what is kept stored); any
+  /// other is named by its file's own `general.name`; while it is unknown (or this is not set) the description's name is kept, so a
+  /// wrong name is never stored.
   bool? Function(ModelEntry e)? isRecommended;
 
   /// Completes when the recommended list has been read; a load waits for it before it names the model.
@@ -281,6 +312,9 @@ class AppState extends ChangeNotifier {
       _plainNames
         ..clear()
         ..addAll(((j['plainNames'] as Map?) ?? const {}).cast<String, String>());
+      _labels
+        ..clear()
+        ..addAll(((j['labels'] as Map?) ?? const {}).cast<String, String>());
     } catch (_) {
       // A damaged settings file is ignored; defaults apply.
     }
@@ -300,6 +334,7 @@ class AppState extends ChangeNotifier {
         'unsupported': _unsupported.toList(),
         'names': _names,
         'plainNames': _plainNames,
+        'labels': _labels,
       }));
     } catch (_) {}
   }
@@ -451,6 +486,7 @@ class AppState extends ChangeNotifier {
       if (parts != null) {
         _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
         _plainNames[entry.key] = parts.name;
+        if (parts.label != null) _labels[entry.key] = parts.label!;
       }
       if (!info.supportsTools) {
         _unsupported.add(entry.key);

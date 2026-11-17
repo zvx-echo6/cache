@@ -243,6 +243,12 @@ class _ModelsScreenState extends State<ModelsScreen> {
     }
   }
 
+  /// "3.2 GB", and for a recommended model "3.2 GB · Q4_K_M" (its name from the list has no quantisation in it).
+  String _sizeLine(ModelEntry m) {
+    final q = app.shownQuant(m);
+    return q == null ? _size(m.size) : '${_size(m.size)} · $q';
+  }
+
   Widget _tile(BuildContext context, ModelEntry m) {
     final k = context.t;
     final isActive = app.active?.path == m.path;
@@ -285,7 +291,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                         const SizedBox(height: 2),
                         Text(m.fileName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                         const SizedBox(height: 2),
-                        Text('${_size(m.size)} · $status', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: statusColor)),
+                        Text('${_sizeLine(m)} · $status', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: statusColor)),
                       ],
                     ),
                   ),

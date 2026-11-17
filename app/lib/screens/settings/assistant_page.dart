@@ -7,7 +7,6 @@ import '../../location/location_web_ui.dart';
 import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
-import '../../video/format.dart';
 import '../answer_reports_ui.dart';
 import '../history_drawer.dart';
 import '../models_screen.dart';
@@ -145,14 +144,14 @@ class AssistantPage extends StatelessWidget {
             // the chosen model, not in memory now (a cold start leaves it resting): it loads when Ask opens
             ? joinParts([
                 const [Part('On this device')],
-                [Part(formatBytes(resting.size))],
+                [Part(app.sizeLine(resting))],
                 const [Part('Loads when you open Ask')],
               ])
             : m == null
             ? const [Part('No model chosen', Tone.warn)]
             : joinParts([
                 const [Part('On this device')],
-                [Part(formatBytes(m.size))],
+                [Part(app.sizeLine(m))],
                 const [Part('Ready', Tone.ok)],
               ]);
         final count = deps.chat.store?.list().length ?? 0;
