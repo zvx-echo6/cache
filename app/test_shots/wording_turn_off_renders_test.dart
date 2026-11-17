@@ -2,7 +2,6 @@
 // source form says "For example:". Made-up source names, light theme, phone 390 wide.
 // flutter test test_shots/wording_turn_off_renders_test.dart --update-goldens  (pictures in test_shots/wording/)
 
-import 'package:cache/screens/settings/own_source_pages.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:flutter/material.dart';
