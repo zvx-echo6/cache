@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../browse/web/device_library.dart' show DeviceLibrary;
 import '../browse/zim_download.dart' show FreeSpace, freeBytesOnDisk;
 import 'damaged_files.dart';
 import 'data_kinds.dart';
@@ -35,12 +36,17 @@ class StorageUsage extends ChangeNotifier {
     this.keep = _noKeep,
     this.manifests = _noManifests,
     this.busy = _idle,
+    this.device,
     FreeSpace? freeSpace,
     TotalSpace? totalSpace,
     DamagedFiles? damaged,
   }) : _freeSpace = freeSpace ?? freeBytesOnDisk,
        _totalSpace = totalSpace ?? totalBytesOnDisk,
        _damaged = damaged ?? DamagedFiles();
+
+  /// In a browser: the server's Library (what is installed, and the disk it is on). Storage then reads those figures, because the
+  /// browser has no folders of its own to measure. Null on a phone.
+  final DeviceLibrary? device;
 
   /// The kinds Storage lists, in order.
   final List<DataKind> kinds;
@@ -96,12 +102,23 @@ class StorageUsage extends ChangeNotifier {
 
   /// Free space alone, which is cheap (the home page shows it).
   void readFree() {
+    if (device != null) return _readFromDevice();
     final d = freeIn();
     final f = d == null ? null : _freeSpace(d.path);
     final t = d == null ? null : _totalSpace(d.path);
     if (f != freeBytes || t != totalBytes) {
       freeBytes = f;
       totalBytes = t;
+      notifyListeners();
+    }
+  }
+
+  /// The server's own figures: free and total space of its disk, and the Library's bytes (the kind that has an id of 'library').
+  void _readFromDevice() {
+    final s = device!.space;
+    if (s.free != freeBytes || s.total != totalBytes) {
+      freeBytes = s.free;
+      totalBytes = s.total;
       notifyListeners();
     }
   }
@@ -132,6 +149,13 @@ class StorageUsage extends ChangeNotifier {
     if (_busy) return;
     _busy = true;
     try {
+      if (device != null) {
+        await device!.refresh();
+        _readFromDevice();
+        _bytes['library'] = device!.items.fold<int>(0, (a, i) => a + i.bytes);
+        measured = device!.loaded;
+        return;
+      }
       readFree();
       for (final k in kinds) {
         _bytes[k.id] = await _sum(k.folders);
