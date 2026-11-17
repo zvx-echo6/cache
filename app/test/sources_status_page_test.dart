@@ -1,12 +1,14 @@
+import 'dart:async';
+
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
 import 'package:cache/screens/settings_screen.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
+import 'package:cache/screens/settings/widgets.dart' show RowButton;
 import 'package:cache/screens/weather_screen.dart';
+import 'package:cache/theme.dart';
 import 'package:cache/weather/source_health.dart' show SourceFailure;
 import 'package:cache_search/cache_search.dart';
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,6 +56,12 @@ Future<void> _mixed(WidgetTester tester, SettingsRig r) async {
     r.liveCore.fetchErrors[_wfigs] = const CacheSearchException('fetch_failed', 'Io: timed out reading response');
     await w.updateNow(force: true);
   });
+}
+
+/// The colour a status sentence is drawn in.
+Color? _colourOf(WidgetTester tester, String sentence) {
+  final t = tester.widget<Text>(find.byWidgetPredicate((w) => w is Text && w.textSpan?.toPlainText() == sentence));
+  return (t.textSpan! as TextSpan).children!.whereType<TextSpan>().first.style?.color;
 }
 
 double _top(WidgetTester tester, String text) => tester.getTopLeft(find.text(text)).dy;
@@ -269,6 +277,31 @@ void main() {
     });
   });
 
+  group('Limit reached is quiet', () {
+    testWidgets('a source at its limit: not counted, listed under Working, no button, not in the warning colour', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await tester.runAsync(() async {
+        r.liveCore.fetchErrors[_wfigs] = const CacheSearchException('fetch_failed', 'HTTP 429 (rate limited; gave up after retrying)');
+        await r.weather.updateNow(force: true);
+      });
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      const sentence = 'NIFC WFIGS says it has reached its limit. Cache tries again later.';
+      expect(find.text('1 need attention · 1 off'), findsOneWidget, reason: 'only Firms (no key) is counted');
+      expect(find.text(sentence), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('source-$_wfigs')), matching: find.byType(RowButton)), findsNothing);
+      final row = tester.getTopLeft(find.byKey(const ValueKey('source-$_wfigs'))).dy;
+      expect(row, greaterThan(_top(tester, 'WORKING')));
+      expect(row, lessThan(_top(tester, 'OFF')));
+      final k = tester.element(find.byKey(const ValueKey('source-$_wfigs'))).t;
+      expect(_colourOf(tester, sentence), isNot(k.warning));
+      expect(_colourOf(tester, 'Limit reached'), isNot(k.warning));
+      await r.dispose(tester);
+    });
+  });
+
   group('Web search in the same list', () {
     const row = ValueKey('source-web-search');
     const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
@@ -314,6 +347,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('1 need attention'), findsOneWidget);
       expect(find.text('Kagi no longer accepts the saved key.'), findsOneWidget);
+      expect(_colourOf(tester, 'Kagi no longer accepts the saved key.'), tester.element(find.byKey(row)).t.warning);
       expect(_top(tester, 'NEEDS ATTENTION'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
       await tester.tap(find.byKey(const ValueKey('replace-key-web-search')));
       await tester.pumpAndSettle();
@@ -329,6 +363,8 @@ void main() {
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
       expect(find.text('Kagi says it has reached its limit. Cache tries again later.'), findsOneWidget);
+      final k = tester.element(find.byKey(row)).t;
+      expect(_colourOf(tester, 'Kagi says it has reached its limit. Cache tries again later.'), isNot(k.warning), reason: 'quiet, not a warning');
       expect(find.text('NEEDS ATTENTION'), findsNothing);
       expect(find.byKey(const ValueKey('replace-key-web-search')), findsNothing);
       r.webSearch.noteSearch(results);
