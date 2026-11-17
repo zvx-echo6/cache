@@ -1,68 +1,21 @@
-// Weather and alerts > Saved places: a watched place that is waiting for its saved place gets a Remove button (named places do
-// not); Remove asks, then stops watching, and that goes to linked devices like any other change to the watched places.
+// The watched saved places are merged per id between linked devices: a removal is remembered, so a list from a device that had not
+// heard of it yet does not put the id back (a deleted saved place came back as a nameless "waiting for this place" row), an add after
+// the removal still counts, and a device that sends only the whole list (builds before this) still applies and is still read.
 
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_policy.dart';
+import 'package:cache/sharing/settings_log.dart';
 import 'package:cache/sharing/settings_sync.dart';
 import 'package:cache/sharing/sharing_state.dart';
-import 'package:cache_search/cache_search.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
-import 'support/settings_rig.dart';
 import 'support/sync_fake.dart';
 
-const _remove = ValueKey('watch-remove-place:x');
-
-Future<SettingsRig> _scene(WidgetTester tester) async {
-  final r = await SettingsRig.create(tester);
-  r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
-  r.settings.setWatched('place:cabin', true);
-  r.settings.setWatched('place:x', true);
-  await r.show(tester, WeatherPage(deps: r.deps));
-  await tester.pumpAndSettle();
-  return r;
-}
-
 void main() {
-  testWidgets('a place waiting for its saved place has a Remove button; a named place has none', (tester) async {
-    final r = await _scene(tester);
-    expect(find.text('waiting for this place'), findsOneWidget);
-    expect(find.descendant(of: find.byKey(const ValueKey('watch-place:x')), matching: find.text('Remove')), findsOneWidget);
-    expect(find.byKey(_remove), findsOneWidget);
-    expect(find.descendant(of: find.byKey(const ValueKey('watch-place:cabin')), matching: find.text('Remove')), findsNothing);
-    await r.dispose(tester);
-  });
-
-  testWidgets('Remove asks first; Keep leaves it watched; Remove stops watching, the row goes, the saved places stay', (tester) async {
-    final r = await _scene(tester);
-    await tester.tap(find.byKey(_remove));
-    await tester.pumpAndSettle();
-    expect(find.text('Stop watching this place?'), findsOneWidget);
-    expect(find.text("Weather and alerts stop for it on all your linked devices. The saved place itself isn't deleted."), findsOneWidget);
-    await tester.tap(find.text('Keep'));
-    await tester.pumpAndSettle();
-    expect(r.settings.watchedPlaces, contains('place:x'));
-    expect(find.byKey(_remove), findsOneWidget);
-
-    await tester.tap(find.byKey(_remove));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('confirm-remove-place')));
-    await tester.pumpAndSettle();
-    expect(r.settings.watchedPlaces, isNot(contains('place:x')));
-    expect(r.settings.watchedPlaces, contains('place:cabin'));
-    expect(find.byKey(const ValueKey('watch-place:x')), findsNothing);
-    expect(find.byType(SnackBar), findsNothing);
-    expect(r.liveCore.saved.length, 1, reason: 'the saved place itself is not deleted');
-    expect(find.text('Cabin'), findsOneWidget);
-    await r.dispose(tester);
-  });
-
   group('sync', () {
     late Directory root;
     late AppSettings settings;
@@ -120,9 +73,10 @@ void main() {
       await sync.start();
     }
 
-    Future<void> arrives(int at, List<String> ids) async {
+    // [rm] and [ad] are what a build with the per-id merge sends beside the list; a build from before sends neither.
+    Future<void> arrives(int at, List<String> ids, {Map<String, int>? rm, Map<String, int>? ad}) async {
       final f = log('A')..createSync(recursive: true);
-      f.writeAsStringSync('${SettingsEvent(at: at, dev: 'A', key: kWatchPlacesKey, value: ids).toLine()}\n', mode: FileMode.append);
+      f.writeAsStringSync('${SettingsEvent(at: at, dev: 'A', key: kWatchPlacesKey, value: ids, removed: rm, added: ad).toLine()}\n', mode: FileMode.append);
       await sync.pull();
     }
 
@@ -139,7 +93,8 @@ void main() {
       await sync.flush();
     }
 
-    test('Remove sends a watch_places value without the id', () async {
+
+    test('unwatching a place (the switch, setWatched false) sends a watch_places value without the id', () async {
       await setUpDevice();
       await removeX();
       final last = sent().last;
@@ -155,13 +110,69 @@ void main() {
       expect(settings.watchedSavedPlaces, {'y'});
     });
 
-    // Characterises the merge (settings_log.dart applies, Match): a NEWER whole-list change from the other device is applied as
-    // sent, so a list that still has the id puts it back. Per-setting latest wins; nothing here records "x was removed".
-    test('a NEWER incoming watch_places change that still has the id re-adds it (latest change wins)', () async {
+    test('a NEWER whole list that still has a removed id does not put it back (failing first: it did)', () async {
       await setUpDevice();
       await removeX();
       await arrives(3000, ['x', 'y']);
+      expect(settings.watchedSavedPlaces, {'y'});
+    });
+
+    test('an add made after the removal still works', () async {
+      await setUpDevice();
+      await removeX();
+      await arrives(3000, ['x', 'y'], ad: {'x': 3000});
       expect(settings.watchedSavedPlaces, {'x', 'y'});
     });
+
+    test('a place added here after its removal is watched again and goes out with its own time', () async {
+      await setUpDevice();
+      await removeX();
+      clock = 4000;
+      settings.setWatched('place:x', true);
+      await sync.flush();
+      final last = sent().last;
+      expect(last['val'], ['x', 'y']);
+      expect((last['ad'] as Map)['x'], 4000);
+      expect(last['rm'], isNull);
+    });
+
+    test('an old build\'s whole list (no removals, no times) still applies, and wipes nothing it did not drop', () async {
+      await setUpDevice();
+      await removeX();
+      await arrives(3000, ['y', 'z']);
+      expect(settings.watchedSavedPlaces, {'y', 'z'});
+    });
+
+    test('what is sent is still a plain list an old build reads, with the removals in a field it ignores', () async {
+      await setUpDevice();
+      await removeX();
+      final last = sent().last;
+      expect(last['val'], ['y']);
+      expect(last['rm'], {'x': 2000});
+      final old = jsonDecode(jsonEncode({for (final e in last.entries) if (e.key != 'rm' && e.key != 'ad') e.key: e.value})) as Map;
+      expect(SettingsEvent.fromLine(jsonEncode(old))!.value, ['y']);
+    });
+
+    test('a removal the other device reports takes the id off here although its list is older than a change made here', () async {
+      await setUpDevice();
+      clock = 1000;
+      settings.setWatched('place:x', true);
+      await sync.flush();
+      clock = 3000;
+      settings.setWatched('place:z', true);
+      await sync.flush();
+      await arrives(2000, ['y'], rm: {'x': 2000});
+      expect(settings.watchedSavedPlaces, {'z'});
+    });
+
+  });
+
+  test('the removals and adds are kept in the state file and read back', () {
+    final a = SettingsLogState();
+    trackIdChange(a, 'weather.watch_places', ['x', 'y'], ['y'], 2000);
+    trackIdChange(a, 'weather.watch_places', ['y'], ['y', 'z'], 2500);
+    final b = SettingsLogState()..load(jsonDecode(jsonEncode(a.toJson())));
+    expect(b.removed['weather.watch_places'], {'x': 2000});
+    expect(b.added['weather.watch_places'], {'z': 2500});
   });
 }

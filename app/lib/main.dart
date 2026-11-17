@@ -945,6 +945,8 @@ class _CacheAppState extends State<CacheApp> {
     return placeFallbackCamera(places: await notebookPlaces.saved(), regions: [for (final a in maps.engine.allAreas) a.bounds]);
   }
 
+  void _onNotebooksForWeather() => unawaited(weather.savedPlacesChanged());
+
   late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
     watched: (id) => settings.watchedPlaces.contains(id),
     setWatched: settings.setWatched,
@@ -1263,6 +1265,8 @@ class _CacheAppState extends State<CacheApp> {
         unawaited(notebooks.reload());
       }
     });
+    // A notebook that came in (Notebooks sharing switched on) may hold a saved place a linked device watches: its weather appears.
+    notebooks.addListener(_onNotebooksForWeather);
     location.addListener(_rememberPlace);
     // Home's Weather and Alerts cards and the place lists follow "Where I am" as its position arrives and moves.
     location.addListener(weather.positionChanged);
@@ -1518,6 +1522,7 @@ class _CacheAppState extends State<CacheApp> {
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
     location.removeListener(weather.positionChanged);
+    notebooks.removeListener(_onNotebooksForWeather);
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
