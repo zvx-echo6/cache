@@ -37,6 +37,38 @@ object FgsAddArm {
     @Volatile
     var armed = false
 
+    /** A region map download runs (told by Dart as `armLayers`): leaving starts the service for it, with no PDF run. */
+    @Volatile
+    var armedLayers = false
+        private set
+
+    /** The latest words of the region download (`layerProgress`), for a service that starts after they were said. */
+    @Volatile
+    var lastLayers: FgsLayerWords? = null
+        private set
+
+    /** Calls the app on the channel (`layerPause`: the notification's Pause for region downloads); the channel's, or a stand-in in tests. */
+    @Volatile
+    var tellLayers: (String) -> Unit = {}
+
+    /** The last region download ended (or began): arms or disarms, and a disarm lets the service go when no PDF add runs. */
+    fun armLayers(on: Boolean) {
+        armedLayers = on
+        if (!on) {
+            lastLayers = null
+            FgsAddService.layersEnded()
+        }
+    }
+
+    /** The region download's words: kept, and shown by the service when it runs. */
+    fun layerProgress(w: FgsLayerWords) {
+        lastLayers = w
+        FgsAddService.layerProgress(w)
+    }
+
+    /** The notification's Pause, for the region downloads: the app pauses them. */
+    fun pauseLayers() = tellLayers("layerPause")
+
     /** Tells the Dart side the person left (`left`); the channel's, or a stand-in in tests. */
     @Volatile
     var tellApp: () -> Unit = {}
@@ -57,6 +89,9 @@ object FgsAddArm {
 
     fun reset() {
         armed = false
+        armedLayers = false
+        lastLayers = null
+        tellLayers = {}
         internalLaunch = false
         internalAt = 0L
         tellApp = {}
@@ -68,7 +103,11 @@ object FgsAddArm {
     fun onLeave(activity: Activity, source: Leave = Leave.HINT, now: Long = SystemClock.elapsedRealtime()): Boolean {
         // said every time, so a device round can see which callbacks arrive (Recents on the Pixel) and why one did not start it
         Log.i("FgsAddArm", "leave: $source armed=$armed running=${FgsAddService.running} changingConfig=${activity.isChangingConfigurations} internal=$internalLaunch")
-        if (!armed || activity.isChangingConfigurations || FgsAddService.running) return false
+        // a PDF add needs a start when armed and no PDF run goes; a region download when armed and the service is not up for it:
+        // the service stays up for either, and a second start adds the other to the one that runs
+        val wantPdf = armed && !FgsAddService.pdfRunning
+        val wantLayers = armedLayers && !FgsAddService.layersRunning
+        if (!(wantPdf || wantLayers) || activity.isChangingConfigurations) return false
         if (internalLaunch) {
             // the hint the launch itself makes, and the pause and stop while the picker is up: not leaves. A hint long after the launch is the person's.
             val own = source != Leave.HINT || now - internalAt < OWN_LAUNCH_HINT_MS
@@ -76,7 +115,7 @@ object FgsAddArm {
             internalLaunch = false
         }
         return try {
-            ContextCompat.startForegroundService(activity, FgsAddService.startIntent(activity))
+            ContextCompat.startForegroundService(activity, FgsAddService.startIntent(activity, pdf = armed, layers = armedLayers))
             tellApp()
             true
         } catch (e: Exception) {
@@ -88,10 +127,19 @@ object FgsAddArm {
     fun attach(context: Context, messenger: BinaryMessenger) {
         val channel = MethodChannel(messenger, CHANNEL)
         tellApp = { channel.invokeMethod("left", null) }
+        tellLayers = { channel.invokeMethod(it, null) }
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "arm" -> {
                     armed = call.argument<Boolean>("on") == true
+                    result.success(null)
+                }
+                "armLayers" -> {
+                    armLayers(call.argument<Boolean>("on") == true)
+                    result.success(null)
+                }
+                "layerProgress" -> {
+                    layerProgress(FgsLayerWords.from(call.arguments as Map<*, *>))
                     result.success(null)
                 }
                 // Android 13 and later: the notification is hidden without this; the service still runs
@@ -104,5 +152,6 @@ object FgsAddArm {
     fun detach(messenger: BinaryMessenger) {
         MethodChannel(messenger, CHANNEL).setMethodCallHandler(null)
         tellApp = {}
+        tellLayers = {}
     }
 }
