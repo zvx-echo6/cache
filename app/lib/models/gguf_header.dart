@@ -278,6 +278,6 @@ class _GgufReader {
       ggmlTypeSize(type); // an unknown type throws now, not at use
       tensors.add(GgufTensor(name, dims, type));
     }
-    return GgufHeader(version, meta, tensors);
+    return GgufHeader(3, meta, tensors);
   }
 }
