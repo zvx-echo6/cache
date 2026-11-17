@@ -16,6 +16,7 @@
 //!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
 //!                                              one engine and its source list; "sources.rescan" is refused (only the server calls it)
 //!   GET  /api/status                        -> the same, for the "status" op
+//!   GET  /api/version                       -> {"version"}: this server's own version ("0.1.0+1c6891f"), shown in Credits and licenses
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
@@ -28,6 +29,7 @@
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
@@ -238,6 +240,13 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
         },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
+        ("GET", "/api/library/storage") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.storage()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the sizes could not be read"),
+            }
+        }
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
         ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
         ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),
@@ -589,6 +598,7 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
     }
     match (method, path) {
         ("GET", "/api/status") => core_call(app, "status", json!({})).await,
+        ("GET", "/api/version") => ok(json!({"version": crate::VERSION})),
         ("POST", "/api/core") => {
             let parsed: Result<Value, _> = serde_json::from_slice(body);
             let Ok(req) = parsed else { return Reply::error(400, "bad_json", "the body is not JSON") };
@@ -1124,6 +1134,56 @@ mod tests {
         let r = route(&a, "POST", "/api/core", Some("cache_session=forged"), b"{}").await;
         assert_eq!(r.status, 401);
         assert_eq!(route(&a, "GET", "/auth/check", None, b"").await.status, 401);
+    }
+
+    #[tokio::test]
+    async fn version_is_the_servers_own_and_needs_a_session() {
+        let d = TempDir::new("http-version");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        assert_eq!(route(&a, "GET", "/api/version", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/version", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+    }
+
+    /// Writes `n` bytes to `<data>/<rel>`, making the folders.
+    fn put(d: &TempDir, rel: &str, n: usize) {
+        let p = d.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![7u8; n]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_says_the_bytes_of_each_kind_the_phones_storage_page_shows() {
+        let d = TempDir::new("http-storage");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        put(&d, "app/docs/zims/a.zim", 1000);
+        put(&d, "app/docs/libraries/guide/shard", 200);
+        put(&d, "app/support/indexes/a.zim.idx/x", 30);
+        put(&d, "models/m.gguf", 4000);
+        put(&d, "app/support/regions/places/p.db", 500);
+        put(&d, "app/support/layers/l/tiles", 60);
+        put(&d, "app/docs/videos/site/v.mp4", 7000);
+        put(&d, "app/support/notebook-share/n.md", 80);
+        put(&d, "app/support/notebook/notebook.sqlite", 9);
+        assert_eq!(route(&a, "GET", "/api/library/storage", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/library/storage", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        let k = &v["result"]["kinds"];
+        assert_eq!(
+            (k["library"].clone(), k["models"].clone(), k["regions"].clone(), k["videos"].clone(), k["notebooks"].clone()),
+            (json!(1230), json!(4000), json!(560), json!(7000), json!(89))
+        );
     }
 
     #[tokio::test]
