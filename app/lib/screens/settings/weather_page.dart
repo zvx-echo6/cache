@@ -78,8 +78,8 @@ class _WeatherPageState extends State<WeatherPage> {
     await w.refreshCatalogues();
     logInfo('Weather: catalogues refreshed; ${w.sourcesLine()}');
     final r = await w.updateNow(force: true);
-    // A source that failed says so on its own row (in words, never an HTTP status); the message only speaks when nothing failed.
-    if (mounted && r.failures.isEmpty) say(context, r.words);
+    // A source that failed says so on its own row (in words, never an HTTP status); the message only speaks when nothing failed and there is a connection (offline, the notice at the top says so).
+    if (mounted && r.failures.isEmpty && !r.offline) say(context, r.words);
   }
 
   @override
