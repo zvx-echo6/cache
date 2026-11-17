@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/maps/ui/format.dart';
+import 'package:cache/regions/ui/region_page.dart' show offerLine;
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -87,5 +89,13 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
     await s.dispose(tester);
+  });
+
+  test('a list row labels the catalogue\'s figure as the download, so it never reads like disk space', () {
+    const rec = RegionRecord(id: 'x', name: 'Example', kind: 'county', country: 'US');
+    final download = RegionOffer(RegionOfferKind.download, routing: true, map: true, bytes: 15 << 20);
+    expect(offerLine(rec, download), 'County · ${formatBytes(15 << 20)} to download', reason: 'before: "County · 15 MB"');
+    expect(offerLine(rec, const RegionOffer(RegionOfferKind.download)), 'County · Size unknown');
+    expect(offerLine(rec, const RegionOffer(RegionOfferKind.carryOn, bytes: 5 << 20)), 'County · ${formatBytes(5 << 20)} to download');
   });
 }

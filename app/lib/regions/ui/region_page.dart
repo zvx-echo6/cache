@@ -336,8 +336,9 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
   // counted, and the line says so.
   final shared = o.offroad && o.offroadShared ? (offroadFrom.isEmpty ? ' · off-road shared' : ' · off-road shared with ${offroadFrom.join(', ')}') : '';
   final what = switch (o.kind) {
-    RegionOfferKind.download => '${sizeWords(o.bytes)}$shared',
-    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to go',
+    // The catalogue's figure is what is fetched (gzip), never the room it takes: said so (the core's plan gives the other when asked).
+    RegionOfferKind.download => '${o.bytes == null ? sizeWords(null) : regionSizeLine(download: o.bytes)}$shared',
+    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to download',
     RegionOfferKind.tryAgain => "Couldn't finish",
     RegionOfferKind.addParts => 'On this device · off-road not added',
     RegionOfferKind.busy => 'Downloading',

@@ -179,7 +179,7 @@ Future<void> askCarryOn(BuildContext context, RegionsState regions, String id, {
     context,
     title: again ? 'Try again with $name?' : 'Carry on with $name?',
     summary: [
-      if (left != null) '${formatBytes(left)} to go.' else 'The size of what is left is not known.',
+      if (left != null) '${formatBytes(left)} to download.' else 'The size of what is left is not known.',
       if ((o?.already ?? 0) > 0) '${formatBytes(o!.already)} is already here.',
       if (addOffroad) "Off-road is not on this device yet${o!.addBytes > 0 ? ' (${formatBytes(o.addBytes)})' : ''}. Add it from $name's page.",
     ],

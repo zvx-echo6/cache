@@ -57,7 +57,7 @@ void main() {
     final offer = o.regions.offer(o.idaho);
     expect(offer.kind, RegionOfferKind.carryOn);
     expect(offer.bytes, isNotNull);
-    expect(offerLine(o.idaho, offer), 'State · ${formatBytes(offer.bytes!)} to go');
+    expect(offerLine(o.idaho, offer), 'State · ${formatBytes(offer.bytes!)} to download');
     await o.dispose(tester);
   });
 
