@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/maps/geo.dart';
-import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';

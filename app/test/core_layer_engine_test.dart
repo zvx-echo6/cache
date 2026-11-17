@@ -462,7 +462,8 @@ void main() {
     expect(a.phase, AreaPhase.running);
     expect(b.phase, AreaPhase.running);
     // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
-    for (var i = 0; i < 6000 && !(engine.allAreas.every((x) => x.phase == AreaPhase.done) && engine.allAreas.length == 2); i++) {
+    bool settled() => engine.allAreas.length == 2 && engine.allAreas.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
+    for (var i = 0; i < 6000 && !settled(); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     expect(engine.allAreas.length, 2);
