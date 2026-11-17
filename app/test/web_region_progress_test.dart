@@ -106,4 +106,30 @@ void main() {
     regions.dispose();
     await s.dispose(tester);
   });
+
+  testWidgets('until the connection is known after launch, a download the engine pauses for the network reads Paused, not "Stopped: no connection"', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final regions = RegionsState(policy: s.policy, supportDir: () async => s.dir, catalogue: catalogue, maps: s.maps, opener: (_) async => core);
+    late LocalRegion l;
+    await tester.runAsync(() async {
+      await regions.init();
+      core.network = false; // the engine reports the download paused for the network
+      final county = (await catalogue.shard('us'))['us-id-twin-falls-county']!;
+      await catalogue.geometry(county);
+      await regions.download(county, routing: true, map: false, anyway: true);
+      l = regions.regionOf('us-id-twin-falls-county')!;
+    });
+    expect(l.phase, RegionPhase.paused);
+    regions.connectionKnown = false; // just launched: the probe has not answered
+    expect(regionDl(regions, l).phase, DlPhase.paused, reason: 'before: "Stopped: no connection" on a guess');
+    expect(dlLine(regionDl(regions, l)), startsWith('Paused'));
+    regions.connectionKnown = true;
+    expect(regionDl(regions, l).phase, isNot(DlPhase.paused), reason: 'once the probe has answered the engine\'s reason is said');
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
 }

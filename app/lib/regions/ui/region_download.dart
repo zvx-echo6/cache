@@ -34,6 +34,7 @@ DlState regionDl(RegionsState regions, LocalRegion l) {
       return DlState(DlPhase.paused, done: done, total: total);
     case RegionPhase.paused:
       if (regions.held) return DlState(DlPhase.paused, done: done, total: total);
+      if (!regions.connectionKnown) return DlState(DlPhase.paused, done: done, total: total);
       if (regions.waitingForWifi) return DlState(DlPhase.waiting, done: done, total: total, waitLine: 'Waiting for Wi-Fi');
       // Paused by the engine (no connection it may use, too little space): it goes on by itself, and says why.
       return DlState(DlPhase.failed, done: done, total: total, reason: DlReason.of(regions.paused), part: l.parts.where((p) => !p.complete).firstOrNull?.name);
@@ -79,7 +80,7 @@ DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool ow
     PartState.stopped => first ? DlState(DlPhase.paused, done: p.bytes, total: total) : waitFor(firstOpen),
     PartState.paused => !first
         ? waitFor(firstOpen)
-        : regions.held
+        : regions.held || !regions.connectionKnown
             ? DlState(DlPhase.paused, done: p.bytes, total: total)
             : regions.waitingForWifi
                 ? DlState(DlPhase.waiting, done: p.bytes, total: total, waitLine: 'Waiting for Wi-Fi')

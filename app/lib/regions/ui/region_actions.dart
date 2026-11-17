@@ -28,7 +28,8 @@ String sizeWords(int? bytes) => bytes == null ? 'Size unknown' : formatBytes(byt
 /// WORDING (cache-pm, approved): with the core's plan, the size on the device and what is fetched; without one (offline), only
 /// the catalogue's download figure.
 String regionSizeLine({int? onDevice, int? download}) {
-  if (onDevice != null && download != null) return '${formatBytes(onDevice)} on this device (${formatBytes(download)} to download)';
+  // WORDING (cache-pm, approved): "Takes" says it is what it will need, not what is already there.
+  if (onDevice != null && download != null) return 'Takes ${formatBytes(onDevice)} on this device (${formatBytes(download)} to download)';
   if (download != null) return '${formatBytes(download)} to download';
   return 'Size unknown';
 }

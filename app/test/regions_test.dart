@@ -341,8 +341,8 @@ void main() {
     expect(offer.kind, RegionOfferKind.download);
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     // the core's plan says what it takes on the device and what is fetched (the catalogue's figure only offline)
-    await r.settleUntil(tester, () => find.textContaining('on this device (', findRichText: true).evaluate().isNotEmpty);
-    expect(find.textContaining('on this device (', findRichText: true), findsOneWidget);
+    await r.settleUntil(tester, () => find.textContaining('Takes ', findRichText: true).evaluate().isNotEmpty);
+    expect(find.textContaining('Takes ', findRichText: true), findsOneWidget);
     expect(find.byType(CheckboxListTile), findsNothing, reason: 'no per-part sheet');
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pump();

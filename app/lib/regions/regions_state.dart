@@ -586,6 +586,18 @@ class RegionsState extends ChangeNotifier {
   Timer? _poll;
   StreamSubscription<ConnectionKind>? _net;
   bool _networkOk = true;
+
+  /// The connection probe has answered and the engine has its network rule (the first [_applyPolicy] after launch is done). Until
+  /// then a download the engine reports as paused for the network is only "Paused": the engine's default (no network) is not the
+  /// phone's connection, and "Stopped: no connection" would be a guess.
+  bool _connectionKnown = false;
+  bool get connectionKnown => _connectionKnown;
+
+  @visibleForTesting
+  set connectionKnown(bool v) {
+    _connectionKnown = v;
+    notifyListeners();
+  }
   ConnectionKind _kind = ConnectionKind.wifi;
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
@@ -712,6 +724,10 @@ class RegionsState extends ChangeNotifier {
     // The person's Pause and Ask's lease go apart (the server joins them); `ask` is only sent while Ask answers here, so another
     // tab's lease is not ended by this one.
     await _core?.call('set_policy', {'network': ok, 'hold': held, if (focus?.focused ?? false) 'ask': true});
+    if (!_connectionKnown) {
+      _connectionKnown = true;
+      notifyListeners();
+    }
     if (ok && !held) unawaited(_resumePacks());
     if (ok && _carryOnWaiting.isNotEmpty) {
       final go = List.of(_carryOnWaiting);

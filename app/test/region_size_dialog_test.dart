@@ -55,8 +55,8 @@ void main() {
     core.sizes[_county] = 120 << 20; // on the device
     core.alreadyBytes = 70 << 20; // so 50 MB is fetched
     await _openDialog(tester, s, regions);
-    await _settleUntil(tester, () => find.textContaining('on this device (', findRichText: true).evaluate().isNotEmpty);
-    final text = find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('on this device (', findRichText: true));
+    await _settleUntil(tester, () => find.textContaining('Takes ', findRichText: true).evaluate().isNotEmpty);
+    final text = find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('Takes ', findRichText: true));
     expect(text, findsOneWidget, reason: 'before: only the catalogue\'s transfer size, as if it were what the region takes');
     expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('to download)', findRichText: true)), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
@@ -116,8 +116,8 @@ void main() {
     expect(inDialog('to download'), findsOneWidget, reason: 'the catalogue\'s figure, said to be the download');
     expect(inDialog('on this device'), findsNothing, reason: 'the plan has not arrived');
     core.planGate!.complete();
-    await _settleUntil(tester, () => inDialog('on this device (').evaluate().isNotEmpty);
-    expect(inDialog('on this device ('), findsOneWidget, reason: 'updated in place, the same pop-up');
+    await _settleUntil(tester, () => inDialog('Takes ').evaluate().isNotEmpty);
+    expect(inDialog('Takes '), findsOneWidget, reason: 'updated in place, the same pop-up');
     expect(find.byType(AlertDialog), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pumpWidget(const SizedBox());
