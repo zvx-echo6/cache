@@ -368,4 +368,65 @@ void main() {
     expect(driver.running, isFalse);
     expect(pdfCore.calls, isEmpty);
   });
+
+  test('_queue names the step of each item (seal, epubs, captions, pdfs) in run order, with the PDFs counted', () {
+    status['a.zim'] = _st(
+      'a.zim',
+      index: {'location': 'old', 'kind': 'zim', 'dir': '/idx/a.zim', 'needs_seal': true},
+      epub: {'kind': 'zim-epub', 'needs_build': true, 'source_id': 'sid-a.zim'},
+      captions: {'kind': 'zim-captions', 'needs_build': true, 'source_id': 'sid-a.zim'},
+      pdf: {'state': 'none'},
+    );
+    final driver = make(withPdf: true)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    Map<String, dynamic> q() => ((IndexStateOp(driver).handle('index.state', const {}) as Map)['_queue'] as Map).cast<String, dynamic>();
+    List<List<Object?>> rows() => [
+          for (final i in (q()['items'] as List)) [(i as Map)['key'], i['state'], i['step']],
+        ];
+    expect(rows(), [
+      ['seal:zim/sid-a.zim', 'queued', 'seal'],
+      ['zim-captions/sid-a.zim', 'queued', 'captions'],
+      ['zim-epub/sid-a.zim', 'queued', 'epubs'],
+      ['zim-pdf/id-a.zim', 'queued', 'pdfs'],
+    ]);
+    expect(q()['total'], 4);
+  });
+
+  test('time the host holds the work (heat) does not count towards a stuck item', () {
+    var now = DateTime(2026, 11, 17, 9);
+    var temp = 20.0;
+    final load = HostLoad(readTempC: () => temp, readMemory: () => null, every: Duration.zero);
+    status['a.zim'] = _st('a.zim', index: {'location': 'old', 'kind': 'zim', 'dir': '/i', 'needs_seal': true});
+    fake.progressScript
+      ..clear()
+      ..add('{"state":"running","done":1,"total":4}');
+    final driver = IndexDriver(d, every: const Duration(hours: 1), extra: {'indexes_dir': '/indexes'}, load: load, clock: () => now)..useSources([_src('a.zim')]);
+    addTearDown(driver.stop);
+    void step(Duration by) {
+      now = now.add(by);
+      driver.tick();
+    }
+
+    driver.tick();
+    driver.tick();
+    step(const Duration(seconds: 30));
+    temp = 100;
+    // Ten minutes held: not stuck.
+    for (var i = 0; i < 20; i++) {
+      step(const Duration(seconds: 30));
+    }
+    expect(driver.hold, 'heat');
+    expect(driver.stuck, isEmpty);
+    temp = 20;
+    for (var i = 0; i < 4; i++) {
+      step(const Duration(seconds: 30));
+    }
+    expect(driver.hold, isNull);
+    expect(driver.stuck, isEmpty);
+    // Five working minutes without progress after the hold: stuck.
+    for (var i = 0; i < 12 && driver.stuck.isEmpty; i++) {
+      step(const Duration(seconds: 30));
+    }
+    expect(driver.stuck.keys, ['seal:zim/sid-a.zim']);
+  });
 }
