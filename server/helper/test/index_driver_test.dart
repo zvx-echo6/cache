@@ -141,7 +141,8 @@ void main() {
     driver.tick();
     expect(driver.failures['/docs/a.zim'], 'disk full');
     final op = IndexStateOp(driver);
-    expect(op.handle('index.state', const {}), {
+    // The old keys are exactly as before; `_queue` is the one addition.
+    expect(Map.of(op.handle('index.state', const {}) as Map)..remove('_queue'), {
       '/docs/a.zim': {'fraction': null, 'error': 'disk full'},
     });
     driver.tick();
