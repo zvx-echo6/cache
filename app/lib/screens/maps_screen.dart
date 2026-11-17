@@ -24,6 +24,7 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/map_mouse_ring.dart';
 import '../maps/ui/map_pointer_gate.dart';
 import '../maps/ui/vehicle_arrow.dart';
 import '../platform.dart' as plat;
@@ -1736,6 +1737,22 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _nameRing(ring);
   }
 
+  /// A screen point in the map Stack's own coordinates.
+  Offset _localOf(Offset global) {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    return stack != null && stack.hasSize ? stack.globalToLocal(global) : global;
+  }
+
+  /// A browser's right-click or mouse hold on the map (its long click is a double click): the same ring as a press and hold.
+  Future<void> _onMouseRing(Offset page, math.Point<double> inMap) async {
+    final c = _controller;
+    if (c == null) return;
+    final at = await c.toLatLng(inMap);
+    if (!mounted) return;
+    _downAt = mouseRingCentre(page, inMap);
+    _onMapLongPress(inMap, at);
+  }
+
   /// The ring's centre names the spot: the nearest town as the core describes coordinates, when it can.
   Future<void> _nameRing(_Ring ring) async {
     try {
@@ -2330,17 +2347,23 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
               return Listener(
               // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
               onPointerDown: (e) {
-                _downAt = e.position;
+                // The ring is drawn inside the Stack, so its centre is kept in the Stack's own coordinates (not the screen's, which a
+                // side rail shifts, and not this Listener's, which the inset frame offsets).
+                final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+                _downAt = stack != null && stack.hasSize ? stack.globalToLocal(e.position) : e.localPosition;
                 _fitTouched = true;
               },
               onPointerMove: (e) {
                 final d = _downAt;
-                if (d != null && (e.position - d).distance > 12 && maps.follow != FollowMode.free) {
+                if (d != null && (_localOf(e.position) - d).distance > 12 && maps.follow != FollowMode.free) {
                   maps.setFollow(FollowMode.free);
                 }
               },
               child: MapPointerGate(
-                child: MapLibreMap(
+                extraBlock: _ring != null,
+                child: MapMouseRing(
+                  onRing: _onMouseRing,
+                  child: MapLibreMap(
                 styleString: style,
                 initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
                 onMapCreated: _onMapCreated,
@@ -2358,6 +2381,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 myLocationEnabled: false,
                 rotateGesturesEnabled: true,
               ),
+                ),
               ),
             );
           }),
