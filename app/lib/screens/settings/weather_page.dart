@@ -96,7 +96,7 @@ class _WeatherPageState extends State<WeatherPage> {
         final more = [for (final c in all) if (!listed.contains(c)) c];
         // Every row with its state: the sources, then web search.
         final entries = <(SourceRowState, Widget)>[
-          for (final c in listed) (w.rowStateOf(c), SourceRow(deps: d, source: c)),
+          for (final c in listed) (w.lastRowStateOf(c), SourceRow(deps: d, source: c)),
           (d.hub.webSearch.rowState, WebSearchRow(deps: d)),
         ];
         final attention = [for (final e in entries) if (WeatherState.needsAttention(e.$1)) e.$2];
@@ -295,6 +295,7 @@ String stateWord(SourceRowState s) => switch (s) {
   SourceRowState.keyRejected => 'Key not accepted',
   SourceRowState.notAnswering => 'Not answering',
   SourceRowState.limitReached => 'Limit reached',
+  SourceRowState.waitingForConnection => 'Waiting for a connection',
 };
 
 /// The one sentence a problem state gets (null for a state with none), in the owner's approved words.
@@ -310,7 +311,7 @@ String? stateSentence(WeatherState w, Connector c, SourceRowState s) {
       return ago.isEmpty ? "$who didn't answer." : "$who didn't answer. Showing what Cache saved $ago.";
     case SourceRowState.limitReached:
       return '$who says it has reached its limit. Cache tries again later.';
-    case SourceRowState.working || SourceRowState.updating || SourceRowState.off:
+    case SourceRowState.working || SourceRowState.updating || SourceRowState.off || SourceRowState.waitingForConnection:
       return null;
   }
 }
@@ -440,7 +441,7 @@ class StateRow extends StatelessWidget {
       SourceRowState.needsKey => RowButton(key: ValueKey('add-key-$id'), label: 'Add key', onPressed: onAddKey),
       SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-$id'), label: 'Replace key', onPressed: onReplaceKey),
       SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-$id'), label: 'Try again', onPressed: onTryAgain),
-      SourceRowState.limitReached => null,
+      SourceRowState.limitReached || SourceRowState.waitingForConnection => null,
     };
     return SettingsRow(
       key: ValueKey('source-$id'),

@@ -320,12 +320,19 @@ class WeatherState extends ChangeNotifier {
   /// The core answered a download with "offline" (its own policy says so) in the last update.
   bool _coreOffline = false;
 
-  /// What Settings says about [c]. A failed update alone changes nothing the person sees while the saved copy is still current
-  /// (the core's `expired` flag, as of the last try); only an out-of-date copy turns the failure into the row's state.
+  /// What Settings says about [c]: Updating while it is being updated, else [lastStatusOf].
   SourceRowState statusOf(Connector c) {
+    final s = lastStatusOf(c);
+    final busy = _updating || _updatingIds.contains(c.id);
+    return busy && s != SourceRowState.off && s != SourceRowState.needsKey ? SourceRowState.updating : s;
+  }
+
+  /// What is known of [c] without a refresh that is running: its last state. A failed update alone changes nothing the person sees
+  /// while the saved copy is still current (the core's `expired` flag, as of the last try); only an out-of-date copy turns the
+  /// failure into the row's state.
+  SourceRowState lastStatusOf(Connector c) {
     if (!isOn(c.id)) return SourceRowState.off;
     if (!keyReady(c)) return SourceRowState.needsKey;
-    if (_updating || _updatingIds.contains(c.id)) return SourceRowState.updating;
     final h = _health[c.id];
     if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
     // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
@@ -339,12 +346,16 @@ class WeatherState extends ChangeNotifier {
     };
   }
 
-  /// What Settings shows on [c]'s row: [statusOf], except that with no connection a failed download is not shown (the one
-  /// "No connection" notice says it; the row stays Working with what was saved).
-  SourceRowState rowStateOf(Connector c) {
-    final s = statusOf(c);
-    return noNetwork && s == SourceRowState.notAnswering ? SourceRowState.working : s;
-  }
+  /// With no connection a failed download is not shown as a fault (the one "No connection" notice says it): a row whose saved copy
+  /// is out of date says it is waiting for a connection (quietly, no button, not counted); one with a current copy is Working anyway.
+  SourceRowState _offlineAware(SourceRowState s) => noNetwork && s == SourceRowState.notAnswering ? SourceRowState.waitingForConnection : s;
+
+  /// What Settings shows on [c]'s row: [statusOf] with the no-connection rule.
+  SourceRowState rowStateOf(Connector c) => _offlineAware(statusOf(c));
+
+  /// The state [c] counts and is grouped by: its last state, so a refresh that has started does not turn every row Updating (and the
+  /// summary all-good) before it has an answer.
+  SourceRowState lastRowStateOf(Connector c) => _offlineAware(lastStatusOf(c));
 
   /// A state that needs the person to do something (counted in "N need attention"). Limit reached does not.
   static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
@@ -357,7 +368,7 @@ class WeatherState extends ChangeNotifier {
   ({int working, int attention, int off}) get sourceCounts {
     var working = 0, attention = 0, off = 0;
     for (final c in listedSources) {
-      final s = rowStateOf(c);
+      final s = lastRowStateOf(c);
       if (s == SourceRowState.off) {
         off++;
       } else if (needsAttention(s)) {
