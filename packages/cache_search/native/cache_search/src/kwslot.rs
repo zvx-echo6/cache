@@ -439,23 +439,49 @@ pub fn caption_title(p: &StoredPiece) -> String {
     format!("{}, at {}", p.title, vtt::clock(p.start_ms))
 }
 
-/// The model-facing title of an EPUB hit: the book, and the chapter's heading.
-pub fn epub_title(p: &StoredPiece) -> String {
-    match p.heading_path.last().filter(|h| !h.trim().is_empty()) {
-        Some(h) => format!("{}, {}", p.title, h),
-        None => {
-            let stem = p.chapter.rsplit('/').next().unwrap_or(&p.chapter);
-            let stem = stem.rsplit_once('.').map(|(s, _)| s).unwrap_or(stem);
-            if stem.is_empty() {
-                p.title.clone()
-            } else {
-                format!("{}, {}", p.title, stem)
-            }
-        }
+/// The title of an EPUB hit, for the person and the model alike: "<book> · <chapter title>". Without a chapter title, the book
+/// alone. Never the chapter's file name.
+pub fn epub_title(p: &StoredPiece, chapter: Option<&str>) -> String {
+    match chapter.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(c) => format!("{} \u{b7} {}", p.title, c),
+        None => p.title.clone(),
     }
 }
 
+/// Chapter titles already worked out, by `<zim uuid>/<epub path>!/<chapter path>`. A search shows many hits, often of one
+/// book; each chapter's title is looked up once (the EPUB's package, its table of contents and at most that one chapter).
+static CHAPTER_TITLES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+const CHAPTER_TITLES_MAX: usize = 4096;
+
 impl Handle {
+    /// The title of an EPUB hit (see [`epub_title`]): the chapter's table-of-contents label, else its first h1-h3, else
+    /// "Part N". The EPUB is read once per chapter and the answer kept; when it cannot be read, the heading the index stored
+    /// for the hit stands in, or the book's title alone.
+    pub(crate) fn epub_hit_title(&self, zim_id: &str, p: &StoredPiece) -> String {
+        let key = format!("{zim_id}/{}!/{}", p.item, p.chapter);
+        let cached = CHAPTER_TITLES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|m| m.get(&key).cloned());
+        let found = cached.or_else(|| {
+            let bytes = epub_bytes(self, zim_id, &p.item).ok()?;
+            let zip = epub::Zip::open(&bytes).ok()?;
+            let pkg = epub::package(&zip);
+            let toc = epub::toc_labels(&zip, &pkg);
+            let t = epub::chapter_title(&zip, &pkg, &toc, &p.chapter)?;
+            let mut g = CHAPTER_TITLES.lock().unwrap_or_else(|e| e.into_inner());
+            let m = g.get_or_insert_with(HashMap::new);
+            if m.len() >= CHAPTER_TITLES_MAX {
+                m.clear();
+            }
+            m.insert(key, t.clone());
+            Some(t)
+        });
+        let fallback = p.heading_path.last().cloned();
+        epub_title(p, found.or(fallback).as_deref())
+    }
+
     /// `read` of a caption, ZIM caption or EPUB hit.
     pub(crate) fn read_kw(&self, address: &str, max_chars: usize) -> Result<String> {
         let (kind, source_id, pid) = kwindex::parse_address(address)?;
@@ -522,7 +548,7 @@ impl Handle {
         });
         let body = if body.trim().is_empty() { hit.text.clone() } else { body };
         let (text, truncated) = html::cut_at_paragraph(format!("{head}{body}").trim(), max_chars);
-        Ok(page_json(address, &epub_title(hit), &text, truncated))
+        Ok(page_json(address, &self.epub_hit_title(zim_id, hit), &text, truncated))
     }
 }
 
@@ -600,13 +626,7 @@ mod tests {
     #[test]
     fn titles_the_model_sees() {
         assert_eq!(caption_title(&piece("Flood Safety", "", &[])), "Flood Safety, at 12:34");
-        assert_eq!(
-            epub_title(&piece("Field Guide", "OEBPS/ch1.xhtml", &["Part I", "Floods"])),
-            "Field Guide, Floods"
-        );
-        assert_eq!(
-            epub_title(&piece("Field Guide", "OEBPS/ch1.xhtml", &[])),
-            "Field Guide, ch1"
-        );
+        assert_eq!(epub_title(&piece("Field Guide", "OEBPS/ch1.xhtml", &[]), Some("Floods")), "Field Guide \u{b7} Floods");
+        assert_eq!(epub_title(&piece("Field Guide", "OEBPS/ch1.xhtml", &[]), None), "Field Guide");
     }
 }
