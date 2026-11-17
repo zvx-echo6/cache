@@ -132,6 +132,7 @@ class ModelInfo {
     required this.supportsTools,
     this.weights,
     this.weightsReason,
+    this.generalName,
   });
 
   factory ModelInfo.fromJson(Map<String, dynamic> j) => ModelInfo(
@@ -141,6 +142,7 @@ class ModelInfo {
         supportsTools: (j['supports_tools'] ?? false) as bool,
         weights: j['weights'] as String?,
         weightsReason: j['weights_reason'] as String?,
+        generalName: j['general_name'] as String?,
       );
 
   final String description;
@@ -152,4 +154,8 @@ class ModelInfo {
   /// (null from an older library or a remote model), and why.
   final String? weights;
   final String? weightsReason;
+
+  /// The file's own name (GGUF `general.name`), as the server reads it for a browser; null from the native layer (the app reads the
+  /// file itself) and when the file has none.
+  final String? generalName;
 }
