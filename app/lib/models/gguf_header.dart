@@ -116,6 +116,25 @@ GgufHeader? readGgufHeader(String path, {int chunk = 1 << 20}) {
   }
 }
 
+/// The model's own name (`general.name`) from the header of the GGUF file at [path], or null when the file is not a readable GGUF
+/// version 3, has no such pair, or the pair is not a string. Reads pairs only as far as the name and nothing after them; every length
+/// and count is bounded as in [readGgufHeader].
+String? readGgufGeneralName(String path, {int chunk = 1 << 20}) {
+  RandomAccessFile? f;
+  try {
+    f = File(path).openSync();
+    return _GgufReader(f, chunk).generalName();
+  } on FormatException {
+    return null;
+  } on FileSystemException {
+    return null;
+  } on RangeError {
+    return null;
+  } finally {
+    f?.closeSync();
+  }
+}
+
 class _GgufReader {
   _GgufReader(this._f, this._chunk) : _buf = Uint8List(0);
 
@@ -124,6 +143,7 @@ class _GgufReader {
   Uint8List _buf;
   int _bufStart = 0; // file offset of _buf[0]
   int _pos = 0; // file offset of the next byte
+  int _nTensors = 0; // from the start of the header
 
   static const _maxRead = 16 << 20;
   static const _fixed = <int, int>{0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8};
@@ -215,13 +235,33 @@ class _GgufReader {
     _pos += n;
   }
 
-  GgufHeader header() {
+  /// Magic, version and counts; returns the number of metadata pairs that follow.
+  int _start() {
     if (_u32() != 0x46554747) throw const FormatException('not a GGUF file'); // "GGUF" little endian
     final version = _u32();
     if (version != 3) throw FormatException('GGUF version $version');
     final nTensors = _u64();
     final nKv = _u64();
     if (nTensors > 1000000 || nKv > 1000000) throw const FormatException('implausible counts');
+    _nTensors = nTensors;
+    return nKv;
+  }
+
+  /// The string value of `general.name`, or null when it is absent or not a string; throws [FormatException] for a damaged header.
+  String? generalName() {
+    final nKv = _start();
+    for (var i = 0; i < nKv; i++) {
+      final key = _string();
+      final type = _u32();
+      final v = _value(type);
+      if (key == 'general.name') return v is String ? v : null;
+    }
+    return null;
+  }
+
+  GgufHeader header() {
+    final nKv = _start();
+    final nTensors = _nTensors;
     final meta = <String, Object?>{};
     for (var i = 0; i < nKv; i++) {
       final key = _string();
@@ -238,6 +278,6 @@ class _GgufReader {
       ggmlTypeSize(type); // an unknown type throws now, not at use
       tensors.add(GgufTensor(name, dims, type));
     }
-    return GgufHeader(version, meta, tensors);
+    return GgufHeader(3, meta, tensors);
   }
 }

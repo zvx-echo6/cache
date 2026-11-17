@@ -1023,6 +1023,13 @@ class _CacheAppState extends State<CacheApp> {
       }
       return null;
     };
+    // A model the recommended list names keeps the name llama.cpp's description gives it; any other is named by its file.
+    app.isRecommended = (e) {
+      for (final r in RecommendedModels.shared.models) {
+        if (r.file == e.fileName && r.size == e.size) return true;
+      }
+      return false;
+    };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     // A core call that took over two seconds is logged with its name, its wait in the core's queue and its run (no arguments).

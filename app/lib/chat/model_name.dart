@@ -46,6 +46,27 @@ String _ftypeLabel(List<String> tokens) {
   return size == null ? quant : '${quant}_$size';
 }
 
+/// What a model is called on screen: the name and label of [prettyModelParts], except that a model that is not on Cache's recommended
+/// list ([recommended] false) takes the name the file itself carries ([generalName], the GGUF's `general.name`), because llama.cpp's
+/// size guess in the description can be wrong ("llama 256M" for a 135M model). The quantisation label is unchanged. A recommended
+/// model, a missing or empty [generalName], or an empty description leave [prettyModelParts]'s answer as it is.
+({String name, String? label})? modelNameParts(String description, {String? fileName, String? generalName, bool recommended = false}) {
+  final p = prettyModelParts(description, fileName: fileName);
+  if (p == null || recommended) return p;
+  final g = _tidyName(generalName);
+  return g == null ? p : (name: g, label: p.label);
+}
+
+/// A model's own name with its white space collapsed and cut at [_maxNameLength]; null when nothing is left.
+String? _tidyName(String? s) {
+  if (s == null) return null;
+  final t = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (t.isEmpty) return null;
+  return t.length <= _maxNameLength ? t : t.substring(0, _maxNameLength).trimRight();
+}
+
+const int _maxNameLength = 120;
+
 /// The quantisation label in a model's file name, for example "UD-Q2_K_XL" in "gemma-4-E2B-it-qat-UD-Q2_K_XL.gguf",
 /// "IQ4_XS" in "gemma-4-E2B-it-IQ4_XS.gguf" or "Q4_K_M" in "llama-2-7b-chat.Q4_K_M.gguf"; null when it has none. The name
 /// is split at "-" and "."; the last part that is a quantisation type wins, with Unsloth's "UD-" (dynamic) kept in front.
