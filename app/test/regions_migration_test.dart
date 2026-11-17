@@ -57,7 +57,7 @@ void main() {
     final offer = o.regions.offer(o.idaho);
     expect(offer.kind, RegionOfferKind.carryOn);
     expect(offer.bytes, isNotNull);
-    expect(offerLine(o.idaho, offer), 'State · ${formatBytes(offer.bytes!)} to go');
+    expect(offerLine(o.idaho, offer), 'State · ${formatBytes(offer.bytes!)} to download');
     await o.dispose(tester);
   });
 
@@ -96,7 +96,7 @@ void main() {
     final lines = [for (final t in tester.widgetList<Text>(find.byType(Text))) t.data ?? ''];
     final line = tester.widgetList<Text>(find.byKey(ValueKey('region-line-${county.id}'))).firstOrNull?.data;
     expect(line, isNotNull, reason: 'the sheet shows: $lines');
-    expect(line, 'County · ${formatBytes(o.regions.offer(county).bytes!)} · off-road shared with Idaho');
+    expect(line, 'County · ${formatBytes(o.regions.offer(county).bytes!)} to download · off-road shared with Idaho');
     // Idaho stopped part way: its row is the download pattern, Paused with Resume, which carries on at once (no pop-up).
     expect(find.byKey(const ValueKey('region-us-id-resume')), findsOneWidget);
     expect(find.byType(CheckboxListTile), findsNothing, reason: 'the old per-part sheet is gone');
