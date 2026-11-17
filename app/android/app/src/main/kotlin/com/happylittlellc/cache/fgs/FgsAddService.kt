@@ -20,6 +20,10 @@ import androidx.core.app.ServiceCompat
  *
  * It runs the same Dart add as the WorkManager charging run (DartFgsAddRunner), holds a partial wake lock while it runs, and
  * ends by itself when nothing is left, on Pause, and at Android 15's time limit ([onTimeout]).
+ *
+ * It also carries region map downloads (layer jobs, which run in the app's own engine and need only the process kept alive): the
+ * service stays up while EITHER a PDF add OR a region download runs. The notification shows the PDF add while it runs, then the
+ * region; it stops only when both are done. Dart tells it the region's progress and its end (FgsAddArm.layerProgress, armLayers).
  */
 class FgsAddService : Service(), FgsAddEvents {
     private var runner: FgsAddRunner? = null
@@ -29,6 +33,16 @@ class FgsAddService : Service(), FgsAddEvents {
     private var over = false
     private var pausing = false
 
+    /** A region download runs (told by Dart), with its latest words. */
+    private var layersActive = false
+    private var lastLayers: FgsLayerWords? = null
+
+    /** The service is going down: nothing more is done. */
+    private var down = false
+    private var up = false
+
+    private fun pdfActive() = runner != null && !over
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -36,36 +50,94 @@ class FgsAddService : Service(), FgsAddEvents {
             FgsAddNotifications.ACTION_PAUSE -> {
                 // Pause in the notification: the add stops after the piece it is on and keeps what is done; the notification says
                 // Paused at once, and later progress does not put "Adding" back
-                if (runner != null && !over) {
+                if (pdfActive()) {
                     pausing = true
                     notify(FgsAddNotifications.ID_ADDING, FgsAddNotifications.pausing(this, last))
+                    runner?.stop("person")
+                } else if (layersActive) {
+                    // only a region download runs: the app pauses it (it keeps what it fetched); its end, told by Dart, stops the service
+                    FgsAddArm.pauseLayers()
                 }
-                runner?.stop("person")
                 return START_NOT_STICKY
             }
         }
-        if (runner != null) return START_NOT_STICKY
-        val resume = intent?.getBooleanExtra(FgsAddNotifications.EXTRA_RESUME, false) == true
-        val anyway = intent?.getBooleanExtra(FgsAddNotifications.EXTRA_ANYWAY, false) == true
+        val wantPdf = intent?.getBooleanExtra(EXTRA_PDF, true) != false
+        val wantLayers = intent?.getBooleanExtra(EXTRA_LAYERS, false) == true
+        if (up) {
+            // already running (for a region, or for a PDF add): a second start adds what is missing
+            if (wantLayers && !layersActive) {
+                layersActive = true
+                lastLayers = FgsAddArm.lastLayers
+            }
+            if (wantPdf && runner == null) {
+                startRun(intent)
+                notify(FgsAddNotifications.ID_ADDING, FgsAddNotifications.adding(this, null))
+            }
+            return START_NOT_STICKY
+        }
+        layersActive = wantLayers
+        lastLayers = if (wantLayers) FgsAddArm.lastLayers else null
         FgsAddNotifications.ensureChannels(this)
         try {
-            ServiceCompat.startForeground(this, FgsAddNotifications.ID_ADDING, FgsAddNotifications.adding(this, null), FGS_TYPE)
+            val first = if (wantPdf) FgsAddNotifications.adding(this, null) else FgsAddNotifications.layers(this, lastLayers)
+            ServiceCompat.startForeground(this, FgsAddNotifications.ID_ADDING, first, FGS_TYPE)
         } catch (e: Exception) {
             // not allowed now (started from the background, or the type's permission): nothing is running, the charging run carries on
             Log.w(TAG, "the foreground service could not start", e)
+            layersActive = false
             stopSelf()
             return START_NOT_STICKY
         }
         running = true
-        over = false
+        instance = this
+        up = true
+        down = false
+        over = !wantPdf
         pausing = false
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG).apply {
             setReferenceCounted(false)
             acquire(WAKE_LOCK_MAX_MS)
         }
-        runner = runnerFactory(this).also { it.start(resume, anyway, this) }
+        if (wantPdf) startRun(intent)
         return START_NOT_STICKY
+    }
+
+    /** Starts the Dart PDF add (the first, or one the person started while only a region download ran). */
+    private fun startRun(intent: Intent?) {
+        val resume = intent?.getBooleanExtra(FgsAddNotifications.EXTRA_RESUME, false) == true
+        val anyway = intent?.getBooleanExtra(FgsAddNotifications.EXTRA_ANYWAY, false) == true
+        over = false
+        pausing = false
+        last = null
+        lastNotifyAt = 0L
+        runner = runnerFactory(this).also { it.start(resume, anyway, this) }
+    }
+
+    private fun showLayers() = notify(FgsAddNotifications.ID_ADDING, FgsAddNotifications.layers(this, lastLayers))
+
+    /** The region download's progress (FgsAddArm): shown when no PDF add is; a region that starts while the service runs joins it. */
+    internal fun onLayerProgress(w: FgsLayerWords) {
+        if (down) return
+        lastLayers = w
+        layersActive = true
+        if (pdfActive()) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastNotifyAt != 0L && now - lastNotifyAt < MIN_UPDATE_MS) return
+        lastNotifyAt = now
+        showLayers()
+    }
+
+    /** The last region download ended: the service goes when no PDF add runs either. */
+    internal fun onLayersEnded() {
+        if (down) return
+        layersActive = false
+        lastLayers = null
+        if (pdfActive()) return
+        over = true
+        stopForeground()
+        runner?.release(0)
+        finish()
     }
 
     override fun onProgress(p: FgsProgress) {
@@ -82,6 +154,16 @@ class FgsAddService : Service(), FgsAddEvents {
     override fun onFinished(f: FgsFinish) {
         if (over) return
         over = true
+        if (layersActive) {
+            // a region download still runs: the service stays up, the PDF add's result is posted, and the ongoing notification is the region's
+            FgsAddNotifications.ended(this, f)?.let { notify(FgsAddNotifications.ID_RESULT, it) }
+            runner?.release(0)
+            runner = null
+            pausing = false
+            lastNotifyAt = SystemClock.elapsedRealtime()
+            showLayers()
+            return
+        }
         stopForeground()
         FgsAddNotifications.ended(this, f)?.let { notify(FgsAddNotifications.ID_RESULT, it) }
         runner?.release(0)
@@ -94,12 +176,15 @@ class FgsAddService : Service(), FgsAddEvents {
      * once (it has a few seconds), and the charging run, queued by the add, picks up what is left.
      */
     override fun onTimeout(startId: Int, fgsType: Int) {
-        if (over) return
+        if (down) return
+        val pdfWas = pdfActive()
         over = true
-        runner?.stop("timeout")
+        if (pdfWas) runner?.stop("timeout")
+        // a region download is paused the way the notification's Pause pauses it (it keeps what it fetched)
+        if (layersActive) FgsAddArm.pauseLayers()
         stopForeground()
-        notify(FgsAddNotifications.ID_RESULT, FgsAddNotifications.timedOut(this, last))
-        runner?.release(ENGINE_GRACE_MS)
+        if (pdfWas) notify(FgsAddNotifications.ID_RESULT, FgsAddNotifications.timedOut(this, last))
+        runner?.release(if (pdfWas) ENGINE_GRACE_MS else 0)
         finish()
     }
 
@@ -109,7 +194,12 @@ class FgsAddService : Service(), FgsAddEvents {
         wake?.let { if (it.isHeld) it.release() }
         wake = null
         runner = null
+        layersActive = false
+        lastLayers = null
+        down = true
+        up = false
         running = false
+        if (instance === this) instance = null
         stopSelf()
     }
 
@@ -129,7 +219,11 @@ class FgsAddService : Service(), FgsAddEvents {
         wake = null
         runner?.release(0)
         runner = null
+        layersActive = false
+        down = true
+        up = false
         running = false
+        if (instance === this) instance = null
         super.onDestroy()
     }
 
@@ -161,6 +255,29 @@ class FgsAddService : Service(), FgsAddEvents {
         var running = false
             private set
 
-        fun startIntent(context: Context): Intent = Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_START)
+        /** The service is up for a PDF add, and for a region download. */
+        val pdfRunning: Boolean get() = instance?.pdfActive() == true
+        val layersRunning: Boolean get() = instance?.layersActive == true
+
+        @Volatile
+        private var instance: FgsAddService? = null
+
+        /** Start extras: [EXTRA_PDF] (default true) starts the PDF add; [EXTRA_LAYERS] says a region download runs. */
+        const val EXTRA_PDF = "pdf"
+        const val EXTRA_LAYERS = "layers"
+
+        fun layerProgress(w: FgsLayerWords) {
+            instance?.onLayerProgress(w)
+        }
+
+        fun layersEnded() {
+            instance?.onLayersEnded()
+        }
+
+        fun startIntent(context: Context, pdf: Boolean = true, layers: Boolean = false): Intent =
+            Intent(context, FgsAddService::class.java).setAction(FgsAddNotifications.ACTION_START).apply {
+                if (!pdf) putExtra(EXTRA_PDF, false)
+                if (layers) putExtra(EXTRA_LAYERS, true)
+            }
     }
 }

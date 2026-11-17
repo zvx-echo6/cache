@@ -28,9 +28,9 @@ object FgsAddNotifications {
     const val ID_RESULT = 7411
 
     // WORDING QUESTION (owner): draft, not yet approved
-    const val CHANNEL_ADDING_NAME = "Adding PDFs"
+    const val CHANNEL_ADDING_NAME = "Adding and downloading"
     // WORDING QUESTION (owner): draft, not yet approved
-    const val CHANNEL_ADDING_DESCRIPTION = "Shown while Cache adds PDFs in the background"
+    const val CHANNEL_ADDING_DESCRIPTION = "Shown while Cache adds PDFs or downloads regions in the background"
     // WORDING QUESTION (owner): draft, not yet approved
     const val CHANNEL_RESULTS_NAME = "PDFs added"
     // WORDING QUESTION (owner): draft, not yet approved
@@ -124,6 +124,25 @@ object FgsAddNotifications {
         if (p?.left != null) b.setSubText(p.left)
         if (p?.bar != null) b.setProgress(1000, (p.bar * 1000).toInt().coerceIn(0, 1000), false) else b.setProgress(0, 0, true)
         if (p?.more != null) b.setStyle(NotificationCompat.BigTextStyle().bigText("$text\n${p.more}"))
+        return b.build()
+    }
+
+    // The lock screen's private version of a region download: no region name. WORDING QUESTION (owner): draft, not yet approved
+    const val PUBLIC_REGION_TITLE = "Downloading maps"
+
+    /**
+     * The ongoing notification while a region map download runs, with the same Pause (it pauses the download and keeps what it
+     * fetched; there is no Cancel here). [w] null: nothing is known yet. WORDING QUESTION (owner): draft, not yet approved.
+     */
+    fun layers(context: Context, w: FgsLayerWords?): Notification {
+        val b = base(context, CHANNEL_ADDING, w?.title ?: "Downloading a region", w?.text)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setPublicVersion(publicVersion(context, CHANNEL_ADDING, PUBLIC_REGION_TITLE, PUBLIC_ADDING_TEXT))
+            .addAction(0, "Pause", toService(context, 7413, ACTION_PAUSE))
+        val bar = w?.bar
+        if (bar != null) b.setProgress(1000, (bar * 1000).toInt().coerceIn(0, 1000), false) else b.setProgress(0, 0, true)
         return b.build()
     }
 
