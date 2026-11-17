@@ -24,7 +24,7 @@ enum SettingsLink {
 
 /// One change to one setting, as a line of a device's settings log.
 class SettingsEvent {
-  const SettingsEvent({required this.at, required this.dev, required this.key, required this.value, this.hasPrev = false, this.prev, this.note});
+  const SettingsEvent({required this.at, required this.dev, required this.key, required this.value, this.hasPrev = false, this.prev, this.note, this.removed, this.added});
 
   final int at;
   final String dev;
@@ -37,6 +37,17 @@ class SettingsEvent {
   final Object? prev;
   final Object? note;
 
+  /// For a setting that is a list of ids (see [kIdListSettings]): the ids the sender removed and when (`rm`), and the ids it added
+  /// itself and when (`ad`). Builds from before this ignore both and read the value alone, so they stay as they were.
+  final Map<String, int>? removed;
+  final Map<String, int>? added;
+
+  static Map<String, int>? _stamps(Object? v) {
+    if (v is! Map) return null;
+    final out = {for (final e in v.entries) if (e.value is int) '${e.key}': e.value as int};
+    return out.isEmpty ? null : out;
+  }
+
   static SettingsEvent? fromLine(String line) {
     Object? j;
     try {
@@ -47,10 +58,10 @@ class SettingsEvent {
     if (j is! Map || j['v'] != 1) return null;
     final at = j['at'], dev = j['dev'], key = j['k'];
     if (at is! int || dev is! String || dev.isEmpty || key is! String || key.isEmpty || !j.containsKey('val')) return null;
-    return SettingsEvent(at: at, dev: dev, key: key, value: j['val'], hasPrev: j.containsKey('prev'), prev: j['prev'], note: j['note']);
+    return SettingsEvent(at: at, dev: dev, key: key, value: j['val'], hasPrev: j.containsKey('prev'), prev: j['prev'], note: j['note'], removed: _stamps(j['rm']), added: _stamps(j['ad']));
   }
 
-  String toLine() => jsonEncode({'v': 1, 'at': at, 'dev': dev, 'k': key, 'val': value, if (hasPrev) 'prev': prev, if (note != null) 'note': note});
+  String toLine() => jsonEncode({'v': 1, 'at': at, 'dev': dev, 'k': key, 'val': value, if (hasPrev) 'prev': prev, if (note != null) 'note': note, if (removed != null && removed!.isNotEmpty) 'rm': removed, if (added != null && added!.isNotEmpty) 'ad': added});
 }
 
 /// A JSON value in one spelling (map keys sorted), so two equal values compare equal.
@@ -74,6 +85,84 @@ bool applies(SettingsLink link, SettingsEvent ev, {required String current, requ
   SettingsLink.match => (ev.hasPrev && canonical(ev.prev) == current) || ev.at > localAt,
   SettingsLink.sending || SettingsLink.off => false,
 };
+
+// ------------------------------------------------------------------ lists of ids
+
+/// The settings that are a list of ids, merged per id and not as one whole list: a removal is remembered, so a list from a device
+/// that had not heard of it yet does not put the id back (a saved place deleted here came back as a nameless row).
+const Set<String> kIdListSettings = {'weather.watch_places'};
+
+/// How long a removal is remembered, and how many are.
+const int _removalKeepMs = 60 * 24 * 3600 * 1000;
+const int _removalKeepMax = 500;
+
+/// A change made here to the list of ids [key], from [before] to [after] at [at]: ids that left are removed at [at]; ids that came
+/// are added at [at] (and no longer removed).
+void trackIdChange(SettingsLogState st, String key, Iterable<String> before, Iterable<String> after, int at) {
+  final b = before.toSet(), a = after.toSet();
+  final rem = st.removed.putIfAbsent(key, () => {}), add = st.added.putIfAbsent(key, () => {});
+  for (final id in b.difference(a)) {
+    rem[id] = at;
+    add.remove(id);
+  }
+  for (final id in a.difference(b)) {
+    add[id] = at;
+    rem.remove(id);
+  }
+  add.removeWhere((id, _) => !a.contains(id));
+  _prune(rem, at);
+}
+
+void _prune(Map<String, int> rem, int now) {
+  rem.removeWhere((_, t) => t < now - _removalKeepMs);
+  if (rem.length <= _removalKeepMax) return;
+  final keep = (rem.entries.toList()..sort((x, y) => y.value.compareTo(x.value))).take(_removalKeepMax);
+  final m = {for (final e in keep) e.key: e.value};
+  rem
+    ..clear()
+    ..addAll(m);
+}
+
+/// What goes with a change of the list [key]: the removals remembered, and the adds made here of ids still in [now].
+({Map<String, int>? removed, Map<String, int>? added}) idStamps(SettingsLogState st, String key, Iterable<String> now) {
+  final rem = st.removed[key], add = st.added[key];
+  final ids = now.toSet();
+  final a = add == null ? null : {for (final e in add.entries) if (ids.contains(e.key)) e.key: e.value};
+  return (removed: rem == null || rem.isEmpty ? null : {...rem}, added: a == null || a.isEmpty ? null : a);
+}
+
+/// A change [ev] to the list of ids [key] from another device, the list here being [current]: the list to write, or null when it
+/// is as it is. [takes] is whether the change applies as a whole ([applies]: the latest change wins); the removals in it count
+/// either way.
+///  - An id the sender removed (`rm`) that is here and was not added here since (an id taken from a device has no time of its own)
+///    goes.
+///  - An id in the sender's list that was removed here later than the sender's own add of it (its list's time when the sender did
+///    not say, as a build from before this does not) stays out; an add after the removal puts it back.
+List<String>? mergeIdList(SettingsLogState st, String key, SettingsEvent ev, List<String> current, {required bool takes}) {
+  final rem = st.removed.putIfAbsent(key, () => {}), add = st.added.putIfAbsent(key, () => {});
+  for (final e in (ev.removed ?? const <String, int>{}).entries) {
+    if ((rem[e.key] ?? -1) < e.value) rem[e.key] = e.value;
+  }
+  final now = current.toSet();
+  var next = {for (final id in now) if (!((rem[id] ?? -1) > (add[id] ?? 0) && (ev.removed?.containsKey(id) ?? false))) id};
+  if (takes && ev.value is List) {
+    final incoming = {for (final x in ev.value as List) if (x is String) x};
+    for (final id in now.difference(incoming)) {
+      rem[id] = ev.at;
+      add.remove(id);
+    }
+    next = {
+      for (final id in incoming)
+        if ((rem[id] ?? -1) < 0 || (ev.added?[id] ?? -1) > rem[id]!) id,
+    };
+    for (final id in next.intersection(incoming)) {
+      if ((rem[id] ?? -1) >= 0 && (ev.added?[id] ?? -1) > rem[id]!) rem.remove(id);
+    }
+  }
+  _prune(rem, ev.at);
+  if (next.length == now.length && next.containsAll(now)) return null;
+  return next.toList()..sort();
+}
 
 // ------------------------------------------------------------------ links
 
@@ -175,6 +264,11 @@ class SettingsLogState {
   /// Changes taken that cannot be used here yet (a model not on this device), by key.
   final Map<String, SettingsEvent> waiting = {};
 
+  /// For a list-of-ids setting ([kIdListSettings]), by key: when each id was last removed (here, or by a device whose change was
+  /// taken), and when each id was added here. [mergeIdList] reads them.
+  final Map<String, Map<String, int>> removed = {};
+  final Map<String, Map<String, int>> added = {};
+
   /// What was seen of [peer]'s log, by setting (made if there is none yet).
   Map<String, int> seenOf(String peer) => seen.putIfAbsent(peer, () => {});
 
@@ -191,6 +285,8 @@ class SettingsLogState {
     'keys': {for (final e in keysFor.entries) e.key: e.value.toList()..sort()},
     'notes': notes,
     'waiting': {for (final e in waiting.entries) e.key: e.value.toLine()},
+    if (removed.isNotEmpty) 'removed': removed,
+    if (added.isNotEmpty) 'added': added,
   };
 
   /// Takes what [j] (the decoded state file) holds; what is not in the expected form is left out.
@@ -210,6 +306,13 @@ class SettingsLogState {
     }
     for (final e in ((j['notes'] as Map?) ?? const {}).entries) {
       notes['${e.key}'] = e.value;
+    }
+    for (final k in const ['removed', 'added']) {
+      final into = k == 'removed' ? removed : added;
+      for (final e in ((j[k] as Map?) ?? const {}).entries) {
+        final m = SettingsEvent._stamps(e.value);
+        if (m != null) into['${e.key}'] = {...m};
+      }
     }
     for (final e in ((j['waiting'] as Map?) ?? const {}).entries) {
       final ev = e.value is String ? SettingsEvent.fromLine(e.value as String) : null;

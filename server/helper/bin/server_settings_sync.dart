@@ -342,14 +342,26 @@ class ServerSettingsSync {
         final current = await _read(key);
         if (current == null) continue;
         if (current == canonical(ev.value)) continue;
-        if (!applies(link, ev, current: current, localAt: _kept.localAt[key] ?? 0)) continue;
+        var value = ev.value;
+        var at = ev.at;
+        final takes = applies(link, ev, current: current, localAt: _kept.localAt[key] ?? 0);
+        if (kIdListSettings.contains(key)) {
+          // a list of ids is merged per id (settings_log.dart mergeIdList): what was removed stays removed
+          final cur = jsonDecode(current);
+          final next = mergeIdList(_kept, key, ev, [for (final x in (cur is List ? cur : const []) ) if (x is String) x], takes: takes);
+          if (next == null) continue;
+          value = next;
+          if (!takes) at = _kept.localAt[key] ?? ev.at;
+        } else if (!takes) {
+          continue;
+        }
         // which setting, and which device (its id's start); never the value
         log?.call('settings sync: applying $key from device ${id.length > 8 ? id.substring(0, 8) : id}');
         try {
           // _last is set first and again after, so that what was written is never read as a change made here
-          _kept.last[key] = canonical(ev.value);
-          await _files.write(key, ev.value);
-          _kept.localAt[key] = ev.at;
+          _kept.last[key] = canonical(value);
+          await _files.write(key, value);
+          _kept.localAt[key] = at;
           _applied++;
         } catch (err) {
           log?.call('settings sync: could not apply $key: $err');
