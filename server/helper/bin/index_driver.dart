@@ -6,6 +6,8 @@ import '../../../packages/cache_search/lib/src/models.dart';
 import 'host_load.dart';
 import 'pdf_zim_indexer.dart';
 
+typedef _Work = ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key});
+
 /// Starts and drives the core's index jobs on the server, one at a time. On the phone SourcesState does this (it is not used in the
 /// browser, because the device owns the sources); the browser only reads the status.
 ///
@@ -32,8 +34,9 @@ import 'pdf_zim_indexer.dart';
 ///
 /// The helper is single-threaded and answers one line at a time, so a timer tick never overlaps a request.
 class IndexDriver {
-  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}, this.load, this.pdf, this.savedVideos, this.videoDir})
-      : _pacer = IndexPacer(load);
+  IndexDriver(this.dispatcher, {this.log, this.every = const Duration(seconds: 1), this.extra = const {}, this.load, this.pdf, this.savedVideos, this.videoDir, DateTime Function()? clock})
+      : clock = clock ?? DateTime.now,
+        _pacer = IndexPacer(load);
 
   final CoreDispatcher dispatcher;
 
@@ -41,6 +44,19 @@ class IndexDriver {
   final Map<String, dynamic> extra;
   final void Function(String message)? log;
   final Duration every;
+
+  /// The time, for the stuck watchdog and the redo rule; a test gives its own.
+  final DateTime Function() clock;
+
+  /// Running work with no progress for this long (host holds not counted) is stuck (the phone's kIndexStuckAfter).
+  static const Duration stuckAfter = Duration(minutes: 5);
+
+  /// How often the watchdog looks (the phone's: every 30 s).
+  static const Duration watchEvery = Duration(seconds: 30);
+
+  /// Work listed again this soon after it finished counts as a repeat; more than two repeats in a row is stuck
+  /// (the phone's kIndexRedoWithin).
+  static const Duration redoWithin = Duration(seconds: 15);
 
   /// The host's heat and memory, which index_seal, index_source and the PDF loop yield to; null: no yield.
   final HostLoad? load;
@@ -71,6 +87,17 @@ class IndexDriver {
   List<Map<String, dynamic>> _sources = const [];
   final Set<String> _tried = {};
   final Map<String, String> failures = {};
+
+  /// Work the watchdog or the redo rule stopped, by key, with why; skipped until [retry] (a rescan does not clear it).
+  final Map<String, String> stuck = {};
+
+  /// What finished in this helper session, by key in the order it finished, with the counts it ended on (null: not known).
+  final Map<String, ({int? done, int? total})> _finished = {};
+
+  /// The last counts a key's job reported, kept for the queue while it is stuck or failed.
+  final Map<String, ({int? done, int? total})> _counts = {};
+  final Map<String, DateTime> _finishedAt = {};
+  final Map<String, int> _redo = {};
   Timer? _timer;
 
   /// Set by [_next] when a source that will want indexing is still opening, building or updating: the timer must keep running
@@ -80,6 +107,9 @@ class IndexDriver {
   /// The running job's key in the dispatcher, its source path and what it is.
   int? _job;
   String? _jobPath;
+
+  /// The running PDF run's key, while one is starting or running.
+  String? _pdfKey;
 
   /// What each source being indexed has done so far, by source path (0..1, or null when the total is not known yet).
   final Map<String, double?> progress = {};
@@ -171,6 +201,7 @@ class IndexDriver {
   /// One step: advance the running job, or start the next one. Public so a test can drive it.
   void tick() {
     try {
+      watchdog();
       if (_job != null) {
         _advance();
         if (_job != null) return;
@@ -189,7 +220,11 @@ class IndexDriver {
       final duty = load?.duty();
       _noteHold(duty);
       if (duty?.paused ?? false) return;
-      final next = _next();
+      var next = _next();
+      // Work that finished and is listed again at once, over and over, is a loop: stuck, never run again (it would hold all else up).
+      while (next != null && _redoStuck(next.key ?? next.source['path'] as String)) {
+        next = _next();
+      }
       if (next == null) {
         if (_startPdf()) return;
         // Nothing to start now. Keep ticking while a source is still settling; stop only when all are done or not wanted.
@@ -222,6 +257,7 @@ class IndexDriver {
       return;
     }
     progress[path] = p.fraction;
+    _counts[path] = (done: p.total > 0 ? p.done : null, total: p.total > 0 ? p.total : null);
     if (!p.isFinished) {
       _pace(job);
       return;
@@ -242,21 +278,33 @@ class IndexDriver {
       _tried.remove(path);
       log?.call('index of $path paused');
     } else {
+      if (p.state == JobState.done) _markFinished(path);
       log?.call('index of $path ${p.state.name}');
     }
     // A source whose index was being built is picked up again when the list is set again (SourcesState._pollJobs).
     dispatcher.handle('setSources', {'sources': _sources, 'extra': extra});
   }
 
-  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _next() {
-    final status = <String, Map<String, dynamic>>{
-      for (final s in (dispatcher.handle('status', const {}) as List)) (s as Map)['path'] as String: s.cast<String, dynamic>(),
-    };
+  Map<String, Map<String, dynamic>> _readStatus() => {
+        for (final s in (dispatcher.handle('status', const {}) as List)) (s as Map)['path'] as String: s.cast<String, dynamic>(),
+      };
+
+  _Work? _next() {
+    final status = _readStatus();
     _waiting = false;
     _status = status;
+    return _candidates(status).firstOrNull;
+  }
+
+  /// Whether a key may not be started: it failed, or it is stuck.
+  bool _blocked(String key) => failures.containsKey(key) || stuck.containsKey(key);
+
+  /// Every piece of work [_next] could take, in the order it would take it (the one place the selection rules live; [_next] takes
+  /// the first, the queue lists them all). Lazy: [_next] reads no further than the first. Starts nothing.
+  Iterable<_Work> _candidates(Map<String, Map<String, dynamic>> status) sync* {
     for (final src in _sources) {
       final path = src['path'] as String;
-      if (_tried.contains(path) || failures.containsKey(path)) continue;
+      if (_tried.contains(path) || _blocked(path)) continue;
       final s = status[path];
       if (s == null || s['error'] != null) continue;
       final settings = (src['settings'] as Map?)?.cast<String, dynamic>();
@@ -267,24 +315,25 @@ class IndexDriver {
       }
       if (src['kind'] == 'library') {
         if (s['id'] == null || s['indexed'] == true || (settings?['keyword_index'] ?? 'auto') == 'off') continue;
-        return (
+        yield (
           source: src,
           kind: 'index_library',
           params: {'library_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200, 'settings': ?settings},
           key: null,
         );
+        continue;
       }
       final searchable = s['id'] != null && s['indexed'] == true;
       if (searchable && s['stale'] != true) continue;
-      return (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200}, key: null);
+      yield (source: src, kind: 'index_zim', params: {'zim_path': path, 'index_dir': src['index_dir'], ..._indexRoot, 'heap_mb': 200}, key: null);
     }
-    return _nextCoreWork(status);
+    yield* _coreWork(status);
   }
 
   /// The core's own index work the phone's AppIndexCoreCalls.needs lists: seals first, then the EPUBs and caption files of ZIMs.
-  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _nextCoreWork(Map<String, Map<String, dynamic>> status) {
+  Iterable<_Work> _coreWork(Map<String, Map<String, dynamic>> status) sync* {
     final root = _indexRoot;
-    if (root.isEmpty) return null;
+    if (root.isEmpty) return;
     for (final src in _sources) {
       final s = status[src['path'] as String];
       if (s == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
@@ -292,8 +341,8 @@ class IndexDriver {
       final id = s['source_id'] as String?;
       final kind = index?['kind'];
       final key = 'seal:$kind/$id';
-      if (index != null && index['needs_seal'] == true && id != null && (kind == 'zim' || kind == 'library') && !_tried.contains(key) && !failures.containsKey(key)) {
-        return (source: src, kind: 'index_seal', params: {...root, 'kind': kind, 'source_id': id, 'index_dir': ?index['dir']}, key: key);
+      if (index != null && index['needs_seal'] == true && id != null && (kind == 'zim' || kind == 'library') && !_tried.contains(key) && !_blocked(key)) {
+        yield (source: src, kind: 'index_seal', params: {...root, 'kind': kind, 'source_id': id, 'index_dir': ?index['dir']}, key: key);
       }
     }
     for (final src in _sources) {
@@ -303,23 +352,23 @@ class IndexDriver {
         if (sub is! Map || sub['needs_build'] != true || sub['kind'] == null) continue;
         final id = (sub['source_id'] ?? s['source_id']) as String?;
         final key = '${sub['kind']}/$id';
-        if (id == null || _tried.contains(key) || failures.containsKey(key)) continue;
-        return (source: src, kind: 'index_source', params: {...root, 'kind': sub['kind'], 'source_id': id}, key: key);
+        if (id == null || _tried.contains(key) || _blocked(key)) continue;
+        yield (source: src, kind: 'index_source', params: {...root, 'kind': sub['kind'], 'source_id': id}, key: key);
       }
     }
-    return _nextVideoCaptions(root);
+    yield* _videoCaptions(root);
   }
 
   /// A saved video whose captions are not searchable yet (the phone's AppIndexCoreCalls.needs, its videos part).
-  ({Map<String, dynamic> source, String kind, Map<String, dynamic> params, String? key})? _nextVideoCaptions(Map<String, dynamic> root) {
+  Iterable<_Work> _videoCaptions(Map<String, dynamic> root) sync* {
     final list = savedVideos;
-    if (list == null) return null;
+    if (list == null) return;
     List<Map<String, dynamic>> videos;
     try {
       videos = list();
     } catch (e) {
       log?.call('saved videos not read: $e');
-      return null;
+      return;
     }
     for (final v in videos) {
       final c = v['captions_index'];
@@ -327,47 +376,53 @@ class IndexDriver {
       final id = c['source_id'];
       if (id is! String || id.isEmpty) continue;
       final key = 'captions/$id';
-      if (_tried.contains(key) || failures.containsKey(key)) continue;
-      return (
+      if (_tried.contains(key) || _blocked(key)) continue;
+      yield (
         source: {'path': key},
         kind: 'index_source',
         params: {...root, 'kind': 'captions', 'source_id': id, 'video_dir': ?videoDir},
         key: key,
       );
     }
-    return null;
   }
 
   /// Starts the PDF run for the next ZIM whose PDFs are not searchable yet (the phone's PdfIndexState.needsIndex); false when
   /// there is none, or the core has no PDF index calls.
   bool _startPdf() {
     final w = pdf;
-    final next = _nextPdf();
+    var next = _nextPdf();
+    while (next != null && _redoStuck(next.key)) {
+      next = _nextPdf();
+    }
     if (w == null || next == null) return false;
     _tried.add(next.key);
+    _counts.remove(next.key);
     _pdfBusy = true;
+    _pdfKey = next.key;
     unawaited(_runPdf(w, next.path, next.id, next.key));
     return true;
   }
 
   /// The next ZIM whose PDFs are still to be indexed, from the status [_next] last read; null when there is none or the core has
   /// no PDF index calls. Starts nothing.
-  ({String path, String id, String key})? _nextPdf() {
+  ({String path, String id, String key})? _nextPdf() => _pdfCandidates(_status).firstOrNull;
+
+  /// Every ZIM whose PDFs are still to be indexed, in the order [_nextPdf] takes them.
+  Iterable<({String path, String id, String key})> _pdfCandidates(Map<String, Map<String, dynamic>> status) sync* {
     final w = pdf;
-    if (w == null || !w.core.available) return null;
+    if (w == null || !w.core.available) return;
     for (final src in _sources) {
       if (src['kind'] == 'library') continue;
       final path = src['path'] as String;
-      final s = _status[path];
+      final s = status[path];
       final id = s?['id'] as String?;
       if (s == null || id == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
       final state = (s['pdfindex'] as Map?)?['state'];
       if (state == 'ready' || state == 'opening') continue;
       final key = 'zim-pdf/$id';
-      if (_tried.contains(key) || failures.containsKey(key) || _pdfCounts['$path|$id'] == 0) continue;
-      return (path: path, id: id, key: key);
+      if (_tried.contains(key) || _blocked(key) || _pdfCounts['$path|$id'] == 0) continue;
+      yield (path: path, id: id, key: key);
     }
-    return null;
   }
 
   Future<void> _runPdf(PdfWork w, String path, String id, String key) async {
@@ -388,7 +443,10 @@ class IndexDriver {
       // A Pause also ends the wait for the host before a PDF; the run then sees its cancel before that PDF.
       _pacer.cancelled = () => _paused || !_pdfBusy || _timer == null;
       // Progress for the status (index.state) while it runs.
-      final watch = Timer.periodic(const Duration(seconds: 1), (_) => progress[key] = run.fraction);
+      final watch = Timer.periodic(const Duration(seconds: 1), (_) {
+        progress[key] = run.fraction;
+        _counts[key] = (done: run.done + run.skipped, total: run.total);
+      });
       final ZimPdfEnd end;
       try {
         end = await run.run(list);
@@ -398,6 +456,8 @@ class IndexDriver {
       switch (end) {
         case ZimPdfEnd.finished:
           attach = true;
+          _counts[key] = (done: run.done + run.skipped, total: run.total);
+          _markFinished(key);
           log?.call('PDF index of $path finished (${run.done} PDFs, ${run.skipped} skipped, ${run.reused} reused)');
         case ZimPdfEnd.paused:
           // Stopped with the server (or a rescan's stop); the build stays and is picked up at the next open.
@@ -413,6 +473,7 @@ class IndexDriver {
     } finally {
       _pdfRun = null;
       _pdfBusy = false;
+      _pdfKey = null;
       progress.remove(key);
       if (attach) {
         // The core attaches the published snapshot when it is given the sources again (the phone's onIndexReady).
@@ -438,6 +499,153 @@ class IndexDriver {
     } catch (_) {}
   }
 
+  // ---- The queue, the stuck watchdog and retry (parity row 82: the browser's index queue sheet) ----
+
+  void _markFinished(String key) {
+    _finished.remove(key);
+    _finished[key] = _counts[key] ?? (done: null, total: null);
+    _finishedAt[key] = clock();
+  }
+
+  /// The redo rule (the phone's): work that finished and is listed again within [redoWithin], more than twice in a row, is stuck.
+  /// True when [key] was just marked stuck (do not start it). Work about to start again is no longer "done".
+  bool _redoStuck(String key) {
+    final at = _finishedAt.remove(key);
+    if (at != null) {
+      if (clock().difference(at) > redoWithin) {
+        _redo.remove(key);
+      } else {
+        final n = _redo[key] = (_redo[key] ?? 0) + 1;
+        if (n > 2) {
+          _redo.remove(key);
+          _finished.remove(key);
+          stuck[key] = 'Finished, but asked to run again at once';
+          log?.call('index work $key finished but was listed again at once, $n times; stopped as stuck');
+          return true;
+        }
+      }
+    }
+    _finished.remove(key);
+    return false;
+  }
+
+  String? get _runningKey => _job != null ? _jobPath : (_pdfBusy ? _pdfKey : null);
+
+  String? _watchKey;
+  DateTime _watchNext = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastLook = DateTime.fromMillisecondsSinceEpoch(0);
+  String _lastPulse = '';
+  Duration _quiet = Duration.zero;
+
+  String _pulse(String key) {
+    final c = _counts[key];
+    return '${progress[key]}|${c?.done}|${c?.total}';
+  }
+
+  /// The watchdog (the phone's IndexScheduler._watchdog): every [watchEvery], running work whose progress has not changed for
+  /// [stuckAfter] of working time (time the host holds the work, or the person's Pause, does not count) is stopped and marked
+  /// stuck; the queue moves on without it. Public so a test can drive it with its own [clock].
+  void watchdog() {
+    final key = _runningKey;
+    final now = clock();
+    if (key == null || stuck.containsKey(key)) {
+      _watchKey = null;
+      return;
+    }
+    if (_watchKey != key) {
+      _watchKey = key;
+      _lastLook = now;
+      _watchNext = now.add(watchEvery);
+      _lastPulse = _pulse(key);
+      _quiet = Duration.zero;
+      return;
+    }
+    if (now.isBefore(_watchNext)) return;
+    _watchNext = now.add(watchEvery);
+    final since = now.difference(_lastLook);
+    _lastLook = now;
+    final p = _pulse(key);
+    if (p != _lastPulse) {
+      _lastPulse = p;
+      _quiet = Duration.zero;
+      return;
+    }
+    if (_hold != null || _paused) return;
+    _quiet += since;
+    if (_quiet < stuckAfter) return;
+    stuck[key] = 'No progress for ${stuckAfter.inMinutes} min';
+    log?.call('index work $key is stuck: no progress for ${stuckAfter.inMinutes} min of working time; skipped for now');
+    _watchKey = null;
+    final job = _job;
+    if (job != null && _jobPath == key) {
+      try {
+        dispatcher.handle('jobCancel', {'job': job});
+      } catch (_) {}
+    } else {
+      _pdfRun?.cancel();
+    }
+  }
+
+  /// Tries a stuck or failed piece of work again (the queue sheet's Retry): the mark is cleared and it goes back in the queue.
+  /// False when [key] was neither stuck nor failed.
+  bool retry(String key) {
+    final was = stuck.remove(key) != null;
+    final failed = failures.remove(key) != null;
+    if (!was && !failed) return false;
+    _tried.remove(key);
+    _redo.remove(key);
+    _finishedAt.remove(key);
+    log?.call('index work $key: retry');
+    kick();
+    return true;
+  }
+
+  static String _stepOf(String key) {
+    if (key.startsWith('seal:')) return 'seal';
+    if (key.startsWith('zim-epub/')) return 'epubs';
+    if (key.startsWith('captions/') || key.startsWith('zim-captions/')) return 'captions';
+    if (key.startsWith('zim-pdf/')) return 'pdfs';
+    return 'keywords';
+  }
+
+  /// The queue for `index.state`'s `_queue`: the running item first, then what [_candidates] would take (in that order), then
+  /// what finished this session, then stuck, then failed. Starts nothing and changes nothing.
+  Map<String, dynamic> queue() {
+    Map<String, dynamic> item(String key, String state, ({int? done, int? total})? c) => {'key': key, 'state': state, 'done': c?.done, 'total': c?.total, 'step': _stepOf(key)};
+    final items = <Map<String, dynamic>>[];
+    final listed = <String>{};
+    final run = _runningKey;
+    if (run != null && !stuck.containsKey(run)) {
+      items.add(item(run, 'running', _counts[run]));
+      listed.add(run);
+    }
+    final waiting = _waiting;
+    try {
+      final status = _readStatus();
+      for (final w in _candidates(status)) {
+        final k = w.key ?? w.source['path'] as String;
+        if (listed.add(k)) items.add(item(k, 'queued', null));
+      }
+      for (final w in _pdfCandidates(status)) {
+        if (listed.add(w.key)) items.add(item(w.key, 'queued', null));
+      }
+    } catch (_) {
+      // Not open yet: nothing queued to list.
+    } finally {
+      _waiting = waiting;
+    }
+    for (final e in _finished.entries) {
+      if (listed.add(e.key)) items.add(item(e.key, 'done', e.value));
+    }
+    for (final k in stuck.keys) {
+      if (listed.add(k)) items.add(item(k, 'stuck', _counts[k]));
+    }
+    for (final k in failures.keys) {
+      if (listed.add(k)) items.add(item(k, 'failed', _counts[k]));
+    }
+    return {'items': items, 'done': items.where((i) => i['state'] == 'done').length, 'total': items.length};
+  }
+
   Map<String, dynamic> get _indexRoot {
     final root = extra['indexes_dir'];
     return root is String && root.isNotEmpty ? {'indexes_dir': root} : const {};
@@ -446,6 +654,7 @@ class IndexDriver {
   void _start(Map<String, dynamic> source, String kind, Map<String, dynamic> params, {String? key}) {
     final path = key ?? source['path'] as String;
     _tried.add(path);
+    _counts.remove(path);
     final paced = kind == 'index_seal' || kind == 'index_source';
     final duty = paced ? load?.duty() : null;
     try {
