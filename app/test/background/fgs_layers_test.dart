@@ -18,6 +18,8 @@ class _Platform extends FgsPlatform {
   final List<bool> pdfArmed = [];
   final List<bool> layersArmed = [];
   final List<Map<String, Object?>> progress = [];
+  bool allowed = true;
+  int requests = 0;
 
   @override
   Future<void> arm(bool on) async => pdfArmed.add(on);
@@ -29,10 +31,13 @@ class _Platform extends FgsPlatform {
   Future<void> layerProgress(Map<String, Object?> p) async => progress.add(p);
 
   @override
-  Future<bool> notificationsAllowed() async => true;
+  Future<bool> notificationsAllowed() async => allowed;
 
   @override
-  Future<bool> requestNotifications() async => true;
+  Future<bool> requestNotifications() async {
+    requests++;
+    return true;
+  }
 }
 
 void main() {
@@ -134,6 +139,37 @@ void main() {
       await make().update();
       expect(platform.layersArmed, isEmpty);
       expect(platform.progress, isEmpty);
+    });
+
+    test('a region download alone asks about notifications once, in the one question for adding and downloading', () async {
+      platform.allowed = false;
+      var asked = 0;
+      final c = FgsAddCoordinator(
+        platform: platform,
+        jobs: () => pdfs,
+        layerJobs: () => layers,
+        battery: () async => _charging,
+        askedFile: () => File('${tmp.path}/asked'),
+        sdk: 34,
+        ask: () async {
+          asked++;
+          return true;
+        },
+      );
+      layers = [const FgsLayerJob(id: 'a', label: 'Austria', done: 1, total: 100)];
+      await c.update();
+      await c.update();
+      expect(asked, 1);
+      expect(platform.requests, 1);
+      // a PDF add later does not ask again
+      pdfs = [sampleJob('a')];
+      await c.update();
+      expect(asked, 1);
+    });
+
+    test('the one question says adding and downloading', () {
+      expect(FgsWords.askTitle, 'Show how adding and downloading are going?');
+      expect(FgsWords.askText, contains('downloading regions'));
     });
 
     test('never off Android', () async {

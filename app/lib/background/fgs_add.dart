@@ -54,10 +54,10 @@ class FgsWords {
   const FgsWords._();
 
   // WORDING QUESTION (owner): draft, not yet approved
-  static const String askTitle = 'Show how adding is going?';
+  static const String askTitle = 'Show how adding and downloading are going?';
   // WORDING QUESTION (owner): draft, not yet approved
   static const String askText =
-      'Cache can keep adding PDFs when you leave it, and show you how it is going. Allow notifications to see it and to pause it.';
+      'Cache can keep adding PDFs and downloading regions when you leave it, and show you how it is going. Allow notifications to see it and to pause it.';
   // WORDING QUESTION (owner): draft, not yet approved
   static const String askAllow = 'Allow';
   // WORDING QUESTION (owner): draft, not yet approved
@@ -304,7 +304,7 @@ class FgsAddCoordinator {
       await platform.arm(on);
     }
     await _updateLayers();
-    if (on) await _maybeAsk();
+    if (on || _layersArmed) await _maybeAsk();
     return d;
   }
 

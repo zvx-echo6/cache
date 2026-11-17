@@ -100,14 +100,14 @@ class FgsAddTest {
     @Test
     fun bothChannelsAreSilent() {
         FgsAddNotifications.ensureChannels(context)
-        for ((id, name) in listOf(FgsAddNotifications.CHANNEL_ADDING to "Adding PDFs", FgsAddNotifications.CHANNEL_RESULTS to "PDFs added")) {
+        for ((id, name) in listOf(FgsAddNotifications.CHANNEL_ADDING to "Adding and downloading", FgsAddNotifications.CHANNEL_RESULTS to "PDFs added")) {
             val ch = nm.getNotificationChannel(id)
             assertEquals(name, ch.name.toString())
             assertEquals(NotificationManager.IMPORTANCE_LOW, ch.importance)
             assertNull(ch.sound)
             assertFalse(ch.shouldVibrate())
         }
-        assertEquals("Shown while Cache adds PDFs in the background", nm.getNotificationChannel(FgsAddNotifications.CHANNEL_ADDING).description)
+        assertEquals("Shown while Cache adds PDFs or downloads regions in the background", nm.getNotificationChannel(FgsAddNotifications.CHANNEL_ADDING).description)
         assertEquals("Where adding PDFs ended, paused or failed", nm.getNotificationChannel(FgsAddNotifications.CHANNEL_RESULTS).description)
     }
 

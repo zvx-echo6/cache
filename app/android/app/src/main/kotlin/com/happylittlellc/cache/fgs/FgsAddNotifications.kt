@@ -28,9 +28,9 @@ object FgsAddNotifications {
     const val ID_RESULT = 7411
 
     // WORDING QUESTION (owner): draft, not yet approved
-    const val CHANNEL_ADDING_NAME = "Adding PDFs"
+    const val CHANNEL_ADDING_NAME = "Adding and downloading"
     // WORDING QUESTION (owner): draft, not yet approved
-    const val CHANNEL_ADDING_DESCRIPTION = "Shown while Cache adds PDFs in the background"
+    const val CHANNEL_ADDING_DESCRIPTION = "Shown while Cache adds PDFs or downloads regions in the background"
     // WORDING QUESTION (owner): draft, not yet approved
     const val CHANNEL_RESULTS_NAME = "PDFs added"
     // WORDING QUESTION (owner): draft, not yet approved

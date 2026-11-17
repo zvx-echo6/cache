@@ -595,7 +595,7 @@ class _CacheAppState extends State<CacheApp> {
   int _bgSeen = 0;
   int _watchCount = -1;
 
-  /// "Show how adding is going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
+  /// "Show how adding and downloading are going?" with Allow and Not now, before Android's own prompt (Android 13 and later), once.
   Future<bool> _askFgsNotifications() async {
     final c = _navKey.currentContext;
     if (c == null || !c.mounted) return false;
