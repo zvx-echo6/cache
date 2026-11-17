@@ -10,12 +10,12 @@ import 'app_log.dart' show AppLog, LogLevel, appLog;
 /// In a browser: Cache Server's own app log (`/api/log`, signed in only): its level, its text for Share log, and Clear log. A browser
 /// has no log file of its own, and this is never the server's system journal. The level is the server's, kept there.
 class ServerLog extends ChangeNotifier {
-  ServerLog({this.client, AppLog? local}) : _local = local;
+  ServerLog({this.client, this.local});
 
   /// The browser app's own logger, which follows the server's level (so what the app logs in the console matches the level chosen
   /// here: Detailed prints messages and stacks, as on a phone). The app's own [appLog] by default.
-  final AppLog? _local;
-  AppLog get _log => _local ?? appLog;
+  final AppLog? local;
+  AppLog get _log => local ?? appLog;
 
   void _follow(LogLevel l) {
     if (_log.level != l) unawaited(_log.setLevel(l));
