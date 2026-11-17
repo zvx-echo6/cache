@@ -358,6 +358,34 @@ fn an_outline_downloads_fewer_tiles_than_its_box() {
 }
 
 #[test]
+fn the_size_of_an_outline_is_the_outlines_and_is_what_its_download_stores() {
+    let sc = Scratch::new("cost-outline-size");
+    let a = archive();
+    let h = host(&a);
+    let planner = common::engine(&sc);
+    planner.save_user_def(&def("costsize", h.port)).unwrap();
+    let diamond = r#""polygon":[[-114,42],[-111,45.5],[-114,49],[-117,45.5]]"#;
+    let preq = format!(r#"{{"layer":"costsize","area":"p1",{diamond},"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    let breq = format!(r#"{{"layer":"costsize","area":"b1",{REGION},"minzoom":0,"maxzoom":{ZMAX}}}"#);
+    let pplan = planner.plan(&AreaReq::parse(&preq).unwrap()).unwrap();
+    let bplan = planner.plan(&AreaReq::parse(&breq).unwrap()).unwrap();
+    let (pest, best) = (pplan["estimated_bytes"].as_u64().unwrap(), bplan["estimated_bytes"].as_u64().unwrap());
+    assert!(pest * 10 < best * 6, "the outline's size ({pest}) is well under its box's ({best})");
+    // what the download stores is exactly the estimate
+    let job = common::engine(&sc);
+    assert!(matches!(download(&job, &preq), Done::Finished));
+    let st = job.store_read("costsize").unwrap();
+    let cover = AreaReq::parse(&preq).unwrap().tiles(0, ZMAX).unwrap();
+    let mut stored = 0u64;
+    for &(_, z, x, y) in &cover {
+        if let Some(Stored::Tile(b)) = st.find(z, x, y).unwrap() {
+            stored += b.len() as u64;
+        }
+    }
+    assert_eq!(pest, stored, "the estimate is the bytes the download stores");
+}
+
+#[test]
 fn a_plan_asks_the_store_one_range_query_per_zoom() {
     let sc = Scratch::new("cost-store");
     let a = archive();

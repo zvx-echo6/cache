@@ -31,6 +31,9 @@ export '../sharing/share_rules.dart' show kRegionsNotShared, kMapLayersNotShared
 /// downloaded).
 const String kRegionsAppFile = 'regions-app.json';
 
+/// How often a tab renews Ask's hold on the downloads while Ask answers (the server lets it go after about a minute without).
+const Duration kAskLeaseRenew = Duration(seconds: 20);
+
 /// What downloading one part of a region (road routing, or places and addresses) costs, from the core's plan.
 class PartPlan {
   const PartPlan({required this.tiles, required this.bytes, required this.downloadBytes, required this.sharedTiles});
@@ -398,7 +401,8 @@ class LocalRegion {
       final done = l.fold<int>(0, (s, a) => s + a.doneTiles), total = l.fold<int>(0, (s, a) => s + a.totalTiles);
       final f = total == 0 ? null : (done / total).clamp(0.0, 1.0);
       final bytes = l.fold<int>(0, (s, a) => s + a.bytes);
-      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted).firstOrNull;
+      // A layer the person paused stopped on purpose: it is not a failure (its row offers Resume).
+      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted && !a.paused).firstOrNull;
       if (failed != null) return RegionPartStatus(kind, PartState.failed, fraction: f, bytes: bytes, problem: areaProblemWords(failed.error));
       if (l.any((a) => a.phase == AreaPhase.failed)) return RegionPartStatus(kind, PartState.stopped, fraction: f, bytes: bytes);
       if (l.any((a) => a.phase == AreaPhase.running)) return RegionPartStatus(kind, PartState.downloading, fraction: f, bytes: bytes);
@@ -583,6 +587,18 @@ class RegionsState extends ChangeNotifier {
   Timer? _poll;
   StreamSubscription<ConnectionKind>? _net;
   bool _networkOk = true;
+
+  /// The connection probe has answered and the engine has its network rule (the first [_applyPolicy] after launch is done). Until
+  /// then a download the engine reports as paused for the network is only "Paused": the engine's default (no network) is not the
+  /// phone's connection, and "Stopped: no connection" would be a guess.
+  bool _connectionKnown = false;
+  bool get connectionKnown => _connectionKnown;
+
+  @visibleForTesting
+  set connectionKnown(bool v) {
+    _connectionKnown = v;
+    notifyListeners();
+  }
   ConnectionKind _kind = ConnectionKind.wifi;
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
@@ -679,8 +695,21 @@ class RegionsState extends ChangeNotifier {
     final on = focus?.focused ?? false;
     if (_lastFocused == on) return;
     _lastFocused = on;
+    _askRenew?.cancel();
+    _askRenew = null;
+    if (on) {
+      // Ask's hold is a lease on the server, renewed while Ask answers: a closed or dead tab cannot leave the downloads held.
+      _askRenew = Timer.periodic(kAskLeaseRenew, (_) => _core?.call('set_policy', {'ask': true}).catchError((_) => <String, dynamic>{}));
+    } else {
+      unawaited(_core?.call('set_policy', {'ask': false}).catchError((_) => <String, dynamic>{}));
+    }
     _applyPolicy().catchError((_) {});
   }
+
+  Timer? _askRenew;
+
+  /// Ask is answering and has the downloads held (this tab's Ask, or one on another tab: the server says so).
+  bool get askHolds => (focus?.focused ?? false) || status['ask_hold'] == true;
 
   void _onSettings() {
     if (_lastMobile == policy.settings.mobileForDownloads) return;
@@ -693,7 +722,13 @@ class RegionsState extends ChangeNotifier {
   Future<void> _applyPolicy() async {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok, 'hold': held || (focus?.focused ?? false)});
+    // The person's Pause and Ask's lease go apart (the server joins them); `ask` is only sent while Ask answers here, so another
+    // tab's lease is not ended by this one.
+    await _core?.call('set_policy', {'network': ok, 'hold': held, if (focus?.focused ?? false) 'ask': true});
+    if (!_connectionKnown) {
+      _connectionKnown = true;
+      notifyListeners();
+    }
     if (ok && !held) unawaited(_resumePacks());
     if (ok && _carryOnWaiting.isNotEmpty) {
       final go = List.of(_carryOnWaiting);
@@ -1025,10 +1060,12 @@ class RegionsState extends ChangeNotifier {
     if (layers.isEmpty) return done(mapProblem: 'No map layer that can be kept offline is switched on.');
     final map = <MapLayerPlan>[];
     String? mapProblem;
+    // The size is of what the download fetches: the outline's tiles, not the whole box.
+    final outline = await _mapOutline(r);
     for (final card in layers) {
       final def = maps.downloadDefFor(card, bounds);
       try {
-        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds)));
+        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds, outline: outline)));
       } catch (_) {
         mapProblem = 'Could not work out the size of the map.';
       }
@@ -1215,10 +1252,13 @@ class RegionsState extends ChangeNotifier {
         for (final card in mapLayers) {
           final def = maps.downloadDefFor(card, bounds);
           if (!asked.add(maps.engine.downloadLayerOf(def.id))) continue;
-          final est = await maps.engine.estimate(def.id, bounds);
+          final est = await maps.engine.estimate(def.id, bounds, outline: outline);
           if (!est.allowed) continue;
           final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, outline: outline);
           k.areas.add(a.id);
+          // The person's Pause is on: a layer started now stops at once (the engine does not know of the hold), so no part of the
+          // region runs while the rows say "all downloads paused". Resume carries it on.
+          if (held) await maps.engine.pause(a.id);
         }
       }
     }
@@ -1699,8 +1739,10 @@ class RegionsState extends ChangeNotifier {
     for (final p in l.parts) {
       final b = switch (p.kind) {
         RegionPartKind.map => c.map ?? (p.ready ? p.bytes : null),
-        RegionPartKind.directions => sz.routing ?? p.totalBytes,
-        RegionPartKind.places => sz.places ?? p.totalBytes,
+        // The core's own total is what the part takes on the device, in the unit the bytes done are counted in; the catalogue's
+        // figure is the gzip transfer (about half), so it is only the answer before the core knows the part.
+        RegionPartKind.directions => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.routing,
+        RegionPartKind.places => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.places,
         RegionPartKind.offroad => (sz.offroadTerrain ?? 0) + sz.offroadPacks.values.fold<int>(0, (a, b) => a + b),
       };
       sum = b == null || sum == null ? null : sum + b;
@@ -2033,6 +2075,7 @@ class RegionsState extends ChangeNotifier {
   @override
   void dispose() {
     _poll?.cancel();
+    _askRenew?.cancel();
     _net?.cancel();
     maps.removeListener(_onMaps);
     if (_core != null) policy.settings.removeListener(_onSettings);

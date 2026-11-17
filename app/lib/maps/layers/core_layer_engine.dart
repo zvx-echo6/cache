@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:http/http.dart' as http;
 
 import '../../app_fs.dart';
@@ -28,8 +29,18 @@ class CoreLayerEngine extends LayerEngine {
     this.maxDownloadBytes = 800 * 1024 * 1024,
     this.policy,
     this.openPlanner,
+    bool? reattachJobs,
     this.estimateFor = const Duration(minutes: 10),
-  }) : _connected = connected ?? _platformConnected;
+    this.reloadTimeout = const Duration(seconds: 20),
+    bool Function()? inBackground,
+  })  : _connected = connected ?? _platformConnected,
+        reattachJobs = reattachJobs ?? plat.isWeb,
+        _inBackground = inBackground ?? _appInBackground;
+
+  /// In a browser the downloads are the server's and go on with no tab open: the core's job number is kept with the unfinished
+  /// download, and a page loaded again takes the running job back (so Pause and the progress reach it). A phone's jobs end with
+  /// the app, so there it is off.
+  final bool reattachJobs;
 
   /// The search core once it is open (null when it could not open).
   final Future<SearchCore?> Function() openCore;
@@ -39,6 +50,24 @@ class CoreLayerEngine extends LayerEngine {
 
   final Future<bool> Function() _connected;
   final Duration pollEvery;
+
+  /// Whether the app is out of the front now (Home, Recents, another app). A download that ends with no connection then is the
+  /// phone cutting a background app off the network, not a lost connection: it is shown Paused and Resume carries it on.
+  final bool Function() _inBackground;
+
+  static bool _appInBackground() {
+    try {
+      final s = WidgetsBinding.instance.lifecycleState;
+      return s == AppLifecycleState.hidden || s == AppLifecycleState.paused;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// How long a look waits for the core's list after a download ended. In a browser every call goes through the server's one engine
+  /// a call at a time, so the list can queue behind a long one (a size estimate); the finished download is shown done before the
+  /// list is read, and a list that does not answer in this time is read again on the next look instead of holding every look off.
+  final Duration reloadTimeout;
 
   /// The mobile data rule for downloads and catalogue updates; null: no rule.
   final DataPolicy? policy;
@@ -147,6 +176,7 @@ class CoreLayerEngine extends LayerEngine {
         _connection ??= policy?.probe.changes.listen((_) => unawaited(refreshOnline(force: true)));
       } catch (_) {}
       await _reload();
+      if (reattachJobs) await _reattach(core);
       _ready = true;
       notifyListeners();
       unawaited(refreshCatalogue());
@@ -379,6 +409,7 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the done list', id, area);
       }
       for (final p in (installed['partial'] as List? ?? const [])) {
         final m = (p as Map).cast<String, dynamic>();
@@ -402,7 +433,11 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the unfinished list', id, area);
       }
+    }
+    for (final e in _areas.entries) {
+      if (!seen.contains(e.key) && !_running.containsKey(e.value.id)) _logArea('not listed by the core, dropped', e.value.layerId, e.value);
     }
     // Areas that were deleted, or belong to a layer that is gone, drop out unless a download is still running.
     _areas.removeWhere((k, a) => !seen.contains(k) && !_running.containsKey(a.id));
@@ -412,6 +447,49 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   String _key(String layer, String area) => '$layer/$area';
+
+  final Map<String, String> _areaLogged = {};
+
+  /// One line when an area's state under a layer entry changes (which list the core put it in, its phase, bytes and tiles, and whether
+  /// a job of ours is still on it): the log of why a page can keep showing a download as running after its job ended. No addresses.
+  void _logArea(String where, String layer, DownloadedArea a) {
+    final text = '$where: ${a.phase.name}, ${a.bytes} B, ${a.doneTiles}/${a.totalTiles} tiles, job ${_running.containsKey(a.id) ? 'running' : 'none'}';
+    if (_areaLogged[_key(layer, a.id)] == text) return;
+    _areaLogged[_key(layer, a.id)] = text;
+    logInfo('Layer area ${a.id} under $layer $text');
+  }
+
+  /// A page loaded again while the server's downloads go on: each unfinished area whose saved job number is still a running job
+  /// is a running download again, so it shows its progress and Pause reaches the job.
+  Future<void> _reattach(SearchCore core) async {
+    // One download is listed under each layer that shares the store (hillshade, contours and elevation): one job, every listing.
+    final ids = {for (final a in _areas.values) if (a.phase == AreaPhase.failed) a.id};
+    for (final id in ids) {
+      final saved = _saved[id];
+      final jobId = saved?.job;
+      if (saved == null || jobId == null || _running.containsKey(id)) continue;
+      final listed = [for (final a in _areas.values) if (a.id == id) a];
+      try {
+        final job = core.attachJob(jobId);
+        final p = await job.progress();
+        if (p.isFinished) {
+          saved.job = null;
+          continue;
+        }
+        for (final a in listed) {
+          a
+            ..phase = AreaPhase.running
+            ..error = null
+            ..interrupted = false
+            ..paused = false;
+        }
+        _running[id] = _Run(listed.first, job, false, totalFromJob: saved.outline != null);
+        _poll ??= Timer.periodic(pollEvery, (_) => _tick());
+      } catch (_) {
+        saved.job = null;
+      }
+    }
+  }
 
   /// What was asked for, kept to carry on a download that stopped (the core's list does not hold the shape of an
   /// unfinished one). Kept in a file beside the tiles too: on iPhone the system stops a download that runs while Cache is in the
@@ -544,11 +622,11 @@ class CoreLayerEngine extends LayerEngine {
   static void _closePlanner(Future<SearchCore?> p) => p.then((c) => c?.close()).catchError((_) {});
 
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) {
-    final key = '$layerId ${area.west} ${area.south} ${area.east} ${area.north} $zoom $_online';
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline}) {
+    final key = '$layerId ${area.west} ${area.south} ${area.east} ${area.north} $zoom $_online ${outline == null ? '' : jsonEncode(outline).hashCode}';
     final kept = _estimates[key];
     if (kept != null && DateTime.now().difference(kept.at) < estimateFor) return kept.estimate;
-    final f = _estimate(layerId, area, zoom: zoom);
+    final f = _estimate(layerId, area, zoom: zoom, outline: outline);
     _estimates[key] = (at: DateTime.now(), estimate: f);
     // A failure (no connection, the source did not answer) is not kept: the next ask tries again.
     void forget() {
@@ -560,18 +638,18 @@ class CoreLayerEngine extends LayerEngine {
     return f;
   }
 
-  Future<AreaEstimate> _estimate(String layerId, GeoBounds area, {int? zoom}) async {
+  Future<AreaEstimate> _estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline}) async {
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final entry = _entries[layerId];
     if (def.onlineOnly || entry?['downloadable'] == false) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
     }
     final bbox = [area.west, area.south, area.east, area.north];
-    return _onPlanner((core) => zoom != null ? _estimateAt(core, layerId, bbox, zoom) : _stepDown(core, def, layerId, bbox));
+    return _onPlanner((core) => zoom != null ? _estimateAt(core, layerId, bbox, zoom, outline) : _stepDown(core, def, layerId, bbox, outline));
   }
 
   /// The most detail that fits: the layer's top zoom first, then one less at a time, at most five steps down.
-  Future<AreaEstimate> _stepDown(SearchCore core, LayerDef def, String layerId, List<double> bbox) async {
+  Future<AreaEstimate> _stepDown(SearchCore core, LayerDef def, String layerId, List<double> bbox, List<List<List<double>>>? outline) async {
     final top = def.maxZoom;
     final floor = (top - 5).clamp(def.minZoom, top);
     Map<String, dynamic>? last;
@@ -579,7 +657,7 @@ class CoreLayerEngine extends LayerEngine {
     for (var z = top; z >= floor; z--) {
       final Map<String, dynamic> plan;
       try {
-        plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z}));
+        plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z, 'polygon': ?outline}));
       } on CacheSearchException catch (e) {
         if (e.code == 'offline') {
           return AreaEstimate(tiles: 0, bytes: 0, maxZoom: z, allowed: false, problem: 'The size is worked out from the source, which needs a connection.');
@@ -603,10 +681,10 @@ class CoreLayerEngine extends LayerEngine {
 
   /// One zoom only: no lower zoom to fall back to, so the per-download cap does not apply (the download pop-up still checks the
   /// space).
-  Future<AreaEstimate> _estimateAt(SearchCore core, String layerId, List<double> bbox, int zoom) async {
+  Future<AreaEstimate> _estimateAt(SearchCore core, String layerId, List<double> bbox, int zoom, List<List<List<double>>>? outline) async {
     final Map<String, dynamic> plan;
     try {
-      plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom}));
+      plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom, 'polygon': ?outline}));
     } on CacheSearchException catch (e) {
       final problem = e.code == 'offline' ? 'The size is worked out from the source, which needs a connection.' : e.message;
       return AreaEstimate(tiles: 0, bytes: 0, maxZoom: zoom, allowed: false, problem: problem);
@@ -633,7 +711,7 @@ class CoreLayerEngine extends LayerEngine {
   Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
-    final est = await estimate(layerId, area, zoom: zoom);
+    final est = await estimate(layerId, area, zoom: zoom, outline: outline);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
     final id = 'a${DateTime.now().millisecondsSinceEpoch}';
     final minZoom = zoom ?? def.minZoom;
@@ -674,6 +752,11 @@ class CoreLayerEngine extends LayerEngine {
       ..paused = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
+    final kept = _saved[a.id];
+    if (reattachJobs && kept != null && !update) {
+      kept.job = job.id;
+      await _storeSaved();
+    }
     _running[a.id] = _Run(a, job, update, totalFromJob: totalFromJob);
     _areas[_key(a.layerId, a.id)] = a;
     _poll ??= Timer.periodic(pollEvery, (_) => _tick());
@@ -685,16 +768,40 @@ class CoreLayerEngine extends LayerEngine {
   /// one put back (as an unfinished download) the area the other had just deleted. One look at a time now: a look that finds
   /// another still running skips, and the next timer tick comes back to it.
   Future<void> _tick() async {
-    if (_disposed || _ticking) return;
+    if (_disposed) return;
+    if (_ticking) {
+      // Says why a page can show a download as running long after the server finished it: a look that never returns holds every
+      // later one off (logged once a minute).
+      final since = _tickStarted;
+      if (since != null && DateTime.now().difference(since) > const Duration(seconds: 30) && DateTime.now().difference(_stuckLogged) > const Duration(minutes: 1)) {
+        _stuckLogged = DateTime.now();
+        logInfo('Layer downloads: the last look at ${_running.length} running download(s) has not finished for ${DateTime.now().difference(since).inSeconds} s');
+      }
+      return;
+    }
     _ticking = true;
+    _tickStarted = DateTime.now();
     try {
       await _look();
+    } catch (e, st) {
+      // A look that fails must not end the looking: the job is already out of the running list, so nothing else would read the
+      // list again and the page would stay as it was.
+      _reloadPending = true;
+      logError('Layer downloads: a look at the running downloads failed', error: e, stack: st);
     } finally {
       _ticking = false;
     }
   }
 
+  DateTime? _tickStarted;
+  DateTime _stuckLogged = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, String> _lastProgressError = {};
+
   bool _ticking = false;
+
+  /// The list could not be read in time after a download ended: the next look reads it again.
+  bool _reloadPending = false;
+  Future<void>? _reloadInFlight;
 
   Future<void> _look() async {
     var changed = false;
@@ -704,10 +811,17 @@ class CoreLayerEngine extends LayerEngine {
       if (_disposed) return;
       JobProgress p;
       try {
-        p = await r.job.progress();
-      } catch (_) {
+        p = await r.job.progress().timeout(reloadTimeout);
+      } catch (e) {
+        // Said when it changes, not at every look: why a running row stays as it was.
+        final msg = e.toString();
+        if (_lastProgressError[r.area.id] != msg) {
+          _lastProgressError[r.area.id] = msg;
+          logError('Layer download ${r.area.id} (${r.area.layerId}): its progress could not be read', error: e);
+        }
         continue;
       }
+      _lastProgressError.remove(r.area.id);
       if (_disposed) return;
       final a = r.area;
       if (p.total > 0) {
@@ -724,25 +838,47 @@ class CoreLayerEngine extends LayerEngine {
       if (p.bytes != null && !r.update) a.bytes = p.bytes!;
       changed = true;
       if (!p.isFinished) continue;
+      logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
+      if (p.state == JobState.done && !r.update) {
+        // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
+        // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
+        for (final x in _areas.values.where((x) => x.id == a.id)) {
+          x
+            ..phase = AreaPhase.done
+            ..error = null
+            ..doneTiles = p.total > 0 ? p.total : x.doneTiles;
+          if (p.bytes != null) x.bytes = p.bytes!;
+        }
+        notifyListeners();
+      }
       try {
-        await r.job.free();
+        await r.job.free().timeout(reloadTimeout);
       } catch (_) {}
       if (_disposed) return;
-      final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
+      // The phone cuts a background app off the network (Android within seconds of leaving): that is a pause, not a lost connection.
+      final wasPausing = _pausing.remove(a.id);
+      final cutOff = p.state == JobState.failed && (p.errorCode == 'offline' || p.errorCode == 'fetch_failed') && !r.update && _inBackground();
+      final pausedNow = cutOff || (wasPausing && p.state == JobState.cancelled && !r.update);
       if (pausedNow) {
         // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
-        a
-          ..phase = AreaPhase.failed
-          ..error = null
-          ..paused = true;
+        for (final x in _areas.values.where((x) => x.id == a.id)) {
+          x
+            ..phase = AreaPhase.failed
+            ..error = null
+            ..paused = true;
+        }
         reload = true;
         continue;
       }
       if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
         // Finished, or a first download cancelled: nothing is left to carry on.
-        if (_saved.remove(a.id) != null) await _storeSaved();
+        if (_saved.remove(a.id) != null) {
+          try {
+            await _storeSaved().timeout(reloadTimeout);
+          } catch (_) {}
+        }
       }
       switch (p.state) {
         case JobState.done:
@@ -751,7 +887,7 @@ class CoreLayerEngine extends LayerEngine {
           if (!r.update) {
             // A first download that is cancelled leaves nothing behind.
             try {
-              await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id}));
+              await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id})).timeout(reloadTimeout);
             } catch (_) {}
             if (_disposed) return;
             _areas.remove(_key(a.layerId, a.id));
@@ -762,15 +898,38 @@ class CoreLayerEngine extends LayerEngine {
       }
       reload = true;
     }
-    if (reload) {
+    if (reload || _reloadPending) {
       // Tiles were added or removed: the second core reads the stores afresh.
       _dropPlanner();
       try {
-        await _reload();
-      } catch (_) {}
+        // A read that did not answer in time is still on its way: it is waited for again, not asked a second time (that would
+        // queue one more call behind a call that is already holding the others up).
+        final inFlight = _reloadInFlight ??= _reload().whenComplete(() {
+          _reloadInFlight = null;
+        }).then((_) {
+          if (_reloadPending) {
+            _reloadPending = false;
+            notifyListeners();
+          }
+        });
+        await inFlight.timeout(reloadTimeout);
+        _reloadPending = false;
+      } on TimeoutException {
+        _reloadPending = true;
+        logInfo('Layer downloads: the list was not answered in ${reloadTimeout.inSeconds} s; it is read again at the next look');
+      } catch (e) {
+        _reloadPending = true;
+        logError('Layer downloads: the list could not be read after a download ended', error: e);
+      }
     }
     if (_disposed) return;
-    if (_running.isEmpty) {
+    for (final r in settled) {
+      for (final x in _areas.values.where((x) => x.id == r.area.id)) {
+        logInfo('Layer area ${x.id} after its job ended, listed under ${x.layerId}: ${x.phase.name}, ${x.bytes} B');
+      }
+      if (!_areas.values.any((x) => x.id == r.area.id)) logInfo('Layer area ${r.area.id} after its job ended: not listed under any layer');
+    }
+    if (_running.isEmpty && !_reloadPending) {
       _poll?.cancel();
       _poll = null;
     }
@@ -872,7 +1031,10 @@ class _Run {
 }
 
 class _Saved {
-  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline});
+  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline, this.job});
+
+  /// The core's number for the download's job, kept in a browser so a reloaded page finds the running job again.
+  int? job;
   final GeoBounds bounds;
   final int minZoom;
   final int maxZoom;
@@ -885,6 +1047,7 @@ class _Saved {
         'minzoom': minZoom,
         'maxzoom': maxZoom,
         if (outline != null) 'polygon': outline,
+        if (job != null) 'job': job,
       };
 
   static _Saved? fromJson(Object? j) {
@@ -892,7 +1055,7 @@ class _Saved {
     final b = j['bbox'], lo = j['minzoom'], hi = j['maxzoom'];
     if (b is! List || b.length != 4 || b.any((v) => v is! num) || lo is! int || hi is! int) return null;
     final v = [for (final x in b) (x as num).toDouble()];
-    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']));
+    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']), job: j['job'] is int ? j['job'] as int : null);
   }
 
   static List<List<List<double>>>? _rings(Object? p) {

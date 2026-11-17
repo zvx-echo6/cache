@@ -101,7 +101,8 @@ class TestLayerEngine extends LayerEngine {
   }
 
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) async {
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline}) async {
+    (outlineAsked[layerId] ??= []).add(outline);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     if (def.onlineOnly) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
@@ -109,15 +110,16 @@ class TestLayerEngine extends LayerEngine {
     if (def.raw['fake_unavailable'] == true) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: 'This layer cannot be downloaded.');
     }
+    final share = outline == null ? 1.0 : outlineShare;
     final perTile = (def.raw['approx_tile_bytes'] as num?)?.toInt() ?? 30000;
     final maxTiles = (def.raw['download_limit_tiles'] as num?)?.toInt() ?? 3000;
     final maxBytes = (def.raw['download_limit_bytes'] as num?)?.toInt() ?? 50 * 1024 * 1024;
     if (zoom != null) {
-      final n = TileMath.countRange(area, zoom, zoom);
+      final n = (TileMath.countRange(area, zoom, zoom) * share).round();
       return AreaEstimate(tiles: n, bytes: n * perTile, maxZoom: zoom, allowed: true);
     }
     for (var z = def.maxZoom; z >= def.minZoom; z--) {
-      final n = TileMath.countRange(area, def.minZoom, z);
+      final n = (TileMath.countRange(area, def.minZoom, z) * share).round();
       if (n <= maxTiles && n * perTile <= maxBytes) {
         if (z < (def.minZoom + 10).clamp(def.minZoom, def.maxZoom)) break;
         return AreaEstimate(tiles: n, bytes: n * perTile, maxZoom: z, allowed: true);
@@ -139,6 +141,12 @@ class TestLayerEngine extends LayerEngine {
   /// Where each download (by label) was asked to start from.
   final Map<String, ({double lat, double lon})?> nearOf = {};
 
+  /// The outline each estimate was asked for, per layer in order; null for a box.
+  final Map<String, List<List<List<List<double>>>?>> outlineAsked = {};
+
+  /// What share of the box's tiles an outline touches (an estimate asked with an outline is that share of the box's).
+  double outlineShare = 1.0;
+
   /// The outline each download (by label, then layer) was asked for; null for a box.
   final Map<String, Map<String, List<List<List<double>>>?>> outlineOf = {};
 
@@ -148,7 +156,7 @@ class TestLayerEngine extends LayerEngine {
     nearOf[label] = near;
     (outlineOf[label] ??= {})[layerId] = outline;
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
-    final est = await estimate(layerId, area, zoom: zoom);
+    final est = await estimate(layerId, area, zoom: zoom, outline: outline);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
     final a = DownloadedArea(
       id: 'a${_next++}',
