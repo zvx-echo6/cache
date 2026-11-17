@@ -7,7 +7,6 @@ import 'dart:io';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_policy.dart';
-import 'package:cache/sharing/settings_log.dart';
 import 'package:cache/sharing/settings_sync.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache_search/cache_search.dart';
@@ -17,7 +16,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'browse/fakes.dart';
 import 'support/settings_rig.dart';
 import 'support/sync_fake.dart';
-import 'support/weather_fakes.dart';
 
 const _remove = ValueKey('watch-remove-place:x');
 

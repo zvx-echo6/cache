@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/settings_rig.dart';
-import '../test/support/weather_fakes.dart';
 import 'shot_kit.dart';
 
 void main() {
