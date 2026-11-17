@@ -608,7 +608,7 @@ class FgsAddTest {
         assertFalse(FgsAddArm.onLeave(a))
         FgsAddArm.armed = true
         assertTrue(FgsAddArm.onLeave(a))
-        assertTrue(shadowOf(a.application).nextStartedService.getBooleanExtra(FgsAddService.EXTRA_PDF, false))
+        assertTrue(shadowOf(a.application).nextStartedService.getBooleanExtra(FgsAddService.EXTRA_PDF, true))
     }
 
     @Test
