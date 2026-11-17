@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
+import 'support/weather_fakes.dart';
 import 'support/weather_screen_kit.dart';
 
 // Settings > Weather and alerts says what each source is doing: a summary, then groups (Needs attention, Working, Off).
@@ -357,6 +358,59 @@ void main() {
       expect(r.webSearch.lastFailure, SourceFailure.keyRejected);
       await tester.runAsync(() => r.webSearch.saveKey('k2'));
       expect(r.webSearch.lastFailure, SourceFailure.none);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Your own sources in the same list', () {
+    const id = 'my-gauge';
+
+    Future<void> addOwn(WidgetTester tester, SettingsRig r, {bool on = true}) async {
+      await tester.runAsync(() async {
+        await r.weather.replaceOwnSources([
+          {'entry': entry(id, 'hydrology', 'My gauge', provider: 'Me')..['description'] = 'Water level in my creek', 'definition': miniDefinition(id, title: 'My gauge', provider: 'Me')},
+        ]);
+        if (on) await r.weather.setSourceOn(r.weather.sourceById(id)!, true);
+        await r.weather.updateNow(force: true);
+      });
+    }
+
+    testWidgets('one that is on is listed with the same row as the others, and counted', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      final before = r.weather.enabledSources.length + 1;
+      await addOwn(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('All ${before + 1} sources working'), findsOneWidget);
+      final row = find.byKey(const ValueKey('source-$id'));
+      expect(row, findsOneWidget);
+      expect(find.descendant(of: row, matching: find.textContaining('Working · updated')), findsOneWidget);
+      expect(find.textContaining('Your source'), findsNothing, reason: 'the old row line is gone');
+      await r.dispose(tester);
+    });
+
+    testWidgets('one that is off is not in the list; one that does not answer needs attention with Try again', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await addOwn(tester, r, on: false);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('source-$id')), findsNothing, reason: 'off and not featured: under More sources');
+      await tester.runAsync(() async {
+        await r.weather.setSourceOn(r.weather.sourceById(id)!, true);
+        await r.weather.updateNow(force: true);
+        r.clock = r.clock.add(const Duration(hours: 3));
+        r.liveCore.stored[id] = {'age': '3 hours old', 'age_seconds': 10800, 'fetched_at': '2026-10-26T09:00:00-06:00', 'expired': true};
+        r.liveCore.fetchErrors[id] = const CacheSearchException('fetch_failed', 'Io: timed out reading response');
+        await r.weather.updateNow(force: true);
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('1 need attention'), findsOneWidget);
+      expect(find.byKey(const ValueKey('try-again-$id')), findsOneWidget);
+      expect(find.text("Me didn't answer. Showing what Cache saved 3 hours ago."), findsOneWidget);
       await r.dispose(tester);
     });
   });
