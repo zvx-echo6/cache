@@ -340,6 +340,39 @@ class WeatherState extends ChangeNotifier {
     };
   }
 
+  /// What Settings shows on [c]'s row: [statusOf], except that with no connection a failed download is not shown (the one
+  /// "No connection" notice says it; the row stays Working with what was saved).
+  SourceRowState rowStateOf(Connector c) {
+    final s = statusOf(c);
+    return noNetwork && s == SourceRowState.notAnswering ? SourceRowState.working : s;
+  }
+
+  /// A state that needs the person to do something (counted in "N need attention"). Limit reached and Nothing for this place do not.
+  static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
+
+  /// The sources Settings > Weather and alerts lists on its own (the featured ones; the rest are under More sources, your own sources
+  /// come later).
+  List<Connector> get listedSources => [for (final c in sources) if (c.featured && !isOwn(c)) c];
+
+  /// How many listed sources are on and fine, how many are on and need attention, and how many are off.
+  ({int working, int attention, int off}) get sourceCounts {
+    var working = 0, attention = 0, off = 0;
+    for (final c in listedSources) {
+      final s = rowStateOf(c);
+      if (s == SourceRowState.off) {
+        off++;
+      } else if (needsAttention(s)) {
+        attention++;
+      } else {
+        working++;
+      }
+    }
+    return (working: working, attention: attention, off: off);
+  }
+
+  /// When the last update ran (whether or not it got something); null before any.
+  DateTime? get lastCheckedAt => _lastRunAt ?? _lastOkAt;
+
   /// The kind of a failed download, from the core's error code and the HTTP status in its message.
   static SourceFailure failureKind(CacheSearchException e, {required bool needsKey, required bool hasKey}) {
     switch (e.code) {
