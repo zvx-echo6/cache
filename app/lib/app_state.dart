@@ -10,7 +10,7 @@ import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
 import 'browse/web/local_files.dart' show UploadCancelled, pickLocalFile, setLeaveWarning;
-import 'models/recommendations.dart' show ModelSettings;
+import 'models/recommendations.dart' show ModelSettings, RecommendedModels;
 import 'models/server_models.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
@@ -191,6 +191,29 @@ class AppState extends ChangeNotifier {
   /// The name the recommended list gives this file ("Gemma 4 E2B · tuned for Cache"); null for a file the list does not name, or
   /// while the list is not known (or this is not set).
   String? Function(ModelEntry e)? recommendedName;
+
+  RecommendedModels? _followed;
+
+  /// Follows [list]: a model it names is a recommended one and shows the list's name; a load waits for the list to be read before it
+  /// names the model; names are drawn again when the list arrives; and the built-in copy is read now (not the network), so a model
+  /// that is only resting is named from the list too.
+  void followRecommended(RecommendedModels list) {
+    _followed?.removeListener(_listArrived);
+    _followed = list;
+    isRecommended = (e) => list.isRecommendedFile(e.fileName);
+    recommendedName = (e) => list.nameOfFile(e.fileName);
+    recommendedReady = list.ready;
+    list.addListener(_listArrived);
+    unawaited(list.loadBuiltIn());
+  }
+
+  void _listArrived() => notifyListeners();
+
+  @override
+  void dispose() {
+    _followed?.removeListener(_listArrived);
+    super.dispose();
+  }
 
   /// The model's name on screen. A recommended model shows its name from the recommended list, so two files that llama.cpp
   /// describes alike (the stock and the uncensored E2B) are told apart; any other shows its real name, for example
