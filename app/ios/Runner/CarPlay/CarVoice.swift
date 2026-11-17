@@ -134,8 +134,10 @@ enum CarVoice {
 
   /// The arguments of Dart's `navigateTo` for a place: as the Android car's navigation request sends them
   /// (CacheCarAppService.handle), always to start.
-  static func arguments(for place: CarVoicePlace) -> [String: Any] {
+  static func arguments(for place: CarVoicePlace, fromSiri: Bool = false) -> [String: Any] {
     var a: [String: Any] = ["query": place.name, "start": true]
+    // Siri's "Starting the route" covers the phone's opening line: only the Navigate intent says so.
+    if fromSiri { a["fromSiri"] = true }
     if let lat = place.lat, let lon = place.lon {
       a["lat"] = lat
       a["lon"] = lon
@@ -173,7 +175,7 @@ enum CarVoice {
   /// Asks Dart to navigate to the place, once it is up (at most `wait` seconds), and has the car show what came of it while a
   /// car is connected. `done` gets the outcome, on the main thread. Main thread only.
   static func navigate(
-    _ place: CarVoicePlace, link: CarLink = .shared, wait: TimeInterval = dartWait,
+    _ place: CarVoicePlace, fromSiri: Bool = false, link: CarLink = .shared, wait: TimeInterval = dartWait,
     done: @escaping (CarVoiceOutcome) -> Void
   ) {
     whenReady(link: link, until: Date().addingTimeInterval(wait)) { ready in
@@ -181,7 +183,7 @@ enum CarVoice {
         done(.noAnswer)
         return
       }
-      link.call("navigateTo", arguments(for: place)) { answer in
+      link.call("navigateTo", arguments(for: place, fromSiri: fromSiri)) { answer in
         let result = outcome(answer, for: place)
         if link.carConnected { tell(result, link) }
         done(result)

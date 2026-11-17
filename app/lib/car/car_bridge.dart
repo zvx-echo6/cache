@@ -428,6 +428,7 @@ class CarBridge {
           start: a['start'] != false,
           stop: a['stop'] == true,
           search: a['search'] == true,
+          fromSiri: a['fromSiri'] == true,
         );
     }
     throw MissingPluginException(call.method);
@@ -544,12 +545,14 @@ class CarBridge {
   /// (`Navigate to <place> with Cache`, app/ios/Runner/CarPlay/CarVoice.swift), which says the place's [MapPlace.name] and
   /// shows its routes from the answer's `name`, `lat` and `lon`.
   ///
+  /// [fromSiri] (the iPhone's Navigate intent): guidance starts without the phone's opening line, since Siri's own words cover it.
+  ///
   /// [stop] (`intent=add_a_stop`) during a drive, or while a route is shown before Start, adds the place as a stop, as the
   /// car's own Add stop does (the next stop during a drive, after the stops there are before Start): the route keeps its
   /// destination, guidance is not started, and `added` says whether the stop was added (when not, the phone's notice says
   /// why, as for the car's Add stop). A name that is not saved comes back as the places found with `forStop`, for the car to
   /// list for Add stop. With no route there are no destinations to keep: it is a plain navigation request.
-  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false, bool search = false}) async {
+  Future<Map<String, Object?>> navigateTo({double? lat, double? lon, String? query, bool start = true, bool stop = false, bool search = false, bool fromSiri = false}) async {
     final asStop = stop && (nav.guiding || (nav.phase == NavPhase.previewing && nav.selected != null));
     final q = (query ?? '').trim();
     MapPlace? to;
@@ -576,7 +579,8 @@ class CarBridge {
     }
     if (nav.guiding) await nav.end();
     await nav.openDirections(to);
-    if (start && nav.route != null) await nav.start();
+    // Siri says "Starting the route to <name>" itself: the phone's opening line is left out for this start.
+    if (start && nav.route != null) await nav.start(quietOpening: fromSiri);
     return {'started': nav.guiding, 'id': to.id, 'name': to.name, 'lat': to.lat, 'lon': to.lon};
   }
 }
