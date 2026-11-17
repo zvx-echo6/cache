@@ -707,7 +707,7 @@ void main() {
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 403: Forbidden');
       expect((await h.weather.saveKey(firms, secret)).message, contains("didn't accept"));
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 503');
-      expect((await h.weather.saveKey(firms, secret)).message, contains('had a problem (HTTP 503)'));
+      expect((await h.weather.saveKey(firms, secret)).message, allOf(contains('had a problem'), isNot(contains('HTTP'))));
       h.core.previewError = const CacheSearchException('fetch_failed', 'Dns: failed');
       expect((await h.weather.saveKey(firms, secret)).message, contains("Couldn't reach NASA FIRMS"));
       h.core.previewError = null;
@@ -993,9 +993,9 @@ void main() {
       expect(r.ok, isFalse);
       expect(r.fetched, 2);
       expect(r.failures.length, 2);
-      expect(r.failures.first, 'NWS for Current location failed: the service answered HTTP 503');
+      expect(r.failures.first, 'NWS for Current location failed: the service had a problem');
       expect(r.words, startsWith('Updated, but NWS'));
-      expect(h.weather.sourceErrors['nws-alerts-point'], 'the service answered HTTP 503');
+      expect(h.weather.sourceErrors['nws-alerts-point'], 'the service had a problem');
       h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('quota', 'limit');
       expect((await h.weather.updateNow()).failures.first, contains('reached its limit for now'));
     });
@@ -1053,7 +1053,7 @@ void main() {
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
       await h.weather.updateNow();
-      expect(h.weather.status().headline, 'Updated just now · USGS for Current location failed: the service answered HTTP 500');
+      expect(h.weather.status().headline, 'Updated just now · USGS for Current location failed: the service had a problem');
     });
 
     test('every failing source is in the line, not only the first', () async {
@@ -1518,7 +1518,7 @@ void main() {
       final r = await h.weather.updateNow();
       expect(r.failures, hasLength(1));
       final failed = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).single;
-      expect((failed.missing, failed.error), (true, 'the service answered HTTP 500'));
+      expect((failed.missing, failed.error), (true, 'the service had a problem'));
       // the next update gets through without bringing anything for the place yet: nothing failed, so it says nothing
       h.core.fetchErrors.clear();
       await h.weather.updateNow();

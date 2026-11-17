@@ -1,5 +1,6 @@
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
 import 'package:cache/screens/settings_screen.dart';
+import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache_search/cache_search.dart';
@@ -125,6 +126,50 @@ void main() {
       await _calm(tester, r);
       await tester.pump();
       expect(find.text('All ${r.weather.enabledSources.length} working'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a source that is on is listed and counted whether or not it is featured; one that is off stays under More sources', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _mixed(tester, r);
+      await tester.runAsync(() async {
+        await r.weather.setSourceOn(r.weather.sourceById('swpc-kp')!, true);
+        r.liveCore.stored['swpc-kp'] = {'age': '3 hours old', 'age_seconds': 10800, 'fetched_at': '2026-10-26T09:00:00-06:00', 'expired': true};
+        r.liveCore.fetchErrors['swpc-kp'] = const CacheSearchException('fetch_failed', 'HTTP 500');
+        await r.weather.updateNow(force: true);
+      });
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('3 need attention · 1 off'), findsOneWidget);
+      expect(find.byKey(const ValueKey('source-swpc-kp')), findsOneWidget, reason: 'on, not featured: listed');
+      expect(find.byKey(const ValueKey('try-again-swpc-kp')), findsOneWidget);
+      expect(find.byKey(const ValueKey('source-avalanche-forecast-zones')), findsNothing, reason: 'off, not featured: under More sources');
+      expect(find.text('More sources'), findsOneWidget);
+      expect(find.textContaining('HTTP'), findsNothing);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a failed download says nothing of HTTP on the page, the source page or the Weather screen', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await sceneQuietDay(tester, r);
+      await tester.runAsync(() async {
+        await r.weather.setSourceOn(r.weather.sourceById(_usgs)!, true);
+        r.liveCore.fetchErrors[_usgs] = const CacheSearchException('fetch_failed', 'HTTP 500');
+        await r.weather.updateNow(force: true);
+      });
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('HTTP'), findsNothing);
+      expect(find.textContaining('answered'), findsNothing);
+      await r.show(tester, SourcePage(deps: r.deps, sourceId: _usgs));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('HTTP'), findsNothing);
+      await r.show(tester, WeatherScreen(key: UniqueKey(), weather: r.weather));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('HTTP'), findsNothing);
+      expect(find.textContaining('answered HTTP'), findsNothing);
       await r.dispose(tester);
     });
 
