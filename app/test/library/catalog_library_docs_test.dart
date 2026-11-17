@@ -195,11 +195,17 @@ void main() {
     expect(find.byKey(const ValueKey('library-docs-none-note')), findsNothing);
   });
 
-  testWidgets('a book of 8 files is one row with "8 copies", and the list counts books', (tester) async {
+  testWidgets('a book of 8 files is one row with "8 copies", and the counts are in books, in the list and in Catalog', (tester) async {
     await pumpWorld(tester, (w) => LibraryDocsPage(deps: testDeps(browse: w.browse, shelves: w.shelves), library: w.library('Homestead library')));
     expect(find.text('Homestead field notes'), findsOneWidget, reason: 'one row for the book, not one for each file');
     expect(find.text('8 copies'), findsOneWidget);
     expect(find.text('CDS 250-001 · Herbal and traditional medicine'), findsOneWidget);
     expect(w.shelves.documentsIn(w.library('Homestead library')).length, 1);
+    expect(w.shelves.booksIn(w.library('Homestead library')), 1);
+    // Catalog says the same: 1 book, not 8
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: CatalogPage(deps: testDeps(browse: w.browse, shelves: w.shelves))));
+    await tester.pump();
+    expect(find.descendant(of: find.byKey(const ValueKey('catalog-library/homestead')), matching: find.text('Ready · 1 book')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('catalog-library/field')), matching: find.text('Ready · 8 books')), findsOneWidget, reason: 'the number of rows in its list');
   });
 }
