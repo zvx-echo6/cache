@@ -63,7 +63,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>\n  cache-build selftest-pdfs <dir> [--pages N]"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library-patch --library <library folder (a copy)> [--version V] <pack.cdoc...>\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>\n  cache-build selftest-pdfs <dir> [--pages N]"
     );
     eprintln!(
         "more commands:\n  cache-build pages <in.pdf> --out <pages.json>\n  cache-build pack --pages <pages.json> --out <packs dir> (--fake-embedder | --embed-url URL) (--source FILE | --source-blake3 HEX --source-size N --file-name NAME) [the fact options of pdf, --meta-title T, --ppi N, --year N, --page-count N, --extractor-name NAME, --extractor-version V, --layout-version N]\nmore options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr] [--ocr-engine E --ocr-version V [--ocr-pages N] [--ocr-text-pages 1-5,9]] [--ocr-json FILE.json]\n  library: [--built-at TIME] [--classifier MODEL] [--sorter-report FILE.tsv]\n  cache-build view --library <library dir> [--packs <packs dir>]\n  cache-build view --bookshelves <dir> --library <library dir> [--library <library dir>...]"
@@ -141,6 +141,7 @@ fn main() {
     let code = match argv[0].as_str() {
         "pdf" => cmd_pdf(&a),
         "library" => cmd_library(&a),
+        "library-patch" => cmd_library_patch(&a),
         "view" => cmd_view(&a),
         "pack" => cmd_pack(&a),
         "pages" => cmd_pages(&a),
@@ -681,6 +682,37 @@ fn ocr_entry(v: &Value) -> (Option<OcrInfo>, Option<String>) {
         _ => None,
     };
     (ocr, text("original_blake3"))
+}
+
+/// `cache-build library-patch --library <library folder (a copy)> <pack.cdoc>...`: replace those documents in the folder, in place.
+fn cmd_library_patch(a: &Args) -> i32 {
+    let Some(lib) = a.get("--library") else { usage() };
+    if a.pos.is_empty() {
+        usage();
+    }
+    let mut packs = Vec::new();
+    for f in &a.pos {
+        match cache_builder::read_pack(&PathBuf::from(f)) {
+            Ok(p) => packs.push(p),
+            Err(e) => {
+                eprintln!("error: {f}: {e}");
+                return 1;
+            }
+        }
+    }
+    match cache_builder::patch::patch_library(&PathBuf::from(&lib), &packs, a.get("--version").as_deref()) {
+        Ok(r) => {
+            for (id, ov, nv, op, np) in &r.docs {
+                println!("{id}: version {ov} -> {nv}, pieces {op} -> {np}");
+            }
+            println!("library {lib}: {} points after the patch", r.points);
+            0
+        }
+        Err(e) => {
+            eprintln!("library-patch FAILED: {e}");
+            1
+        }
+    }
 }
 
 fn cmd_view(a: &Args) -> i32 {
