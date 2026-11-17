@@ -7,208 +7,9 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const GeoBounds home = GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
+import 'support/layers_native_fake.dart';
 
-/// The core's layer engine as far as the app can tell: a stateful stand-in for the cs_layers_* calls and layer_download
-/// jobs, living in the core's worker isolate (so it holds its state there). It answers like cache_search.h says.
-class _LayersNative implements CsNative {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-
-  int port = 0;
-  int scale = 1;
-  int plans = 0;
-  int planMs = 0;
-  bool online = true;
-  String? error;
-  final Map<String, Map<String, dynamic>> user = {};
-  final List<Map<String, dynamic>> areas = []; // the elevation store
-  final Map<int, Map<String, dynamic>> jobs = {};
-  final List<String> calls = [];
-  int _job = 0;
-  int frees = 0;
-
-  Map<String, dynamic> _def(String id, String kind, {Map<String, dynamic> extra = const {}}) =>
-      {'format': 1, 'id': id, 'title': id, 'description': 'd', 'kind': kind, 'transform': 'as_is', 'license': 'l', 'attribution': 'a', ...extra};
-
-  List<Map<String, dynamic>> _defs() => [
-        _def('contours', 'vector', extra: {'transform': 'contours', 'derived_from': 'elevation'}),
-        _def('hillshade', 'elevation', extra: {'transform': 'hillshade', 'derived_from': 'elevation'}),
-        _def('esri', 'raster', extra: {
-          'transform': 'online_only',
-          'source': {'type': 'xyz', 'url': 'https://e.test/{z}/{x}/{y}', 'maxzoom': 18},
-          'offline': {'allowed': false}
-        }),
-        _def('elevation', 'elevation', extra: {
-          'source': {'type': 'tilejson', 'url': 'https://t.test/t.json', 'maxzoom': 12, 'tile_size': 512, 'encoding': 'terrarium'},
-        }),
-        _def('basemap', 'vector', extra: {
-          'layout': 'protomaps-v4',
-          'source': {'type': 'pmtiles', 'url': 'https://p.test/p.pmtiles', 'minzoom': 0, 'maxzoom': 15},
-        }),
-        ...user.values,
-      ];
-
-  Map<String, dynamic> _list() => {
-        'layers': [
-          for (final d in _defs())
-            {
-              'definition': d,
-              'origin': user.containsKey(d['id']) ? 'user' : 'folder',
-              'download_layer': d['derived_from'] ?? d['id'],
-              'downloadable': d['id'] != 'esri',
-              'installed': (d['derived_from'] ?? d['id']) == 'elevation'
-                  ? {
-                      'downloaded': areas.isNotEmpty,
-                      'bytes': areas.fold<int>(0, (s, a) => s + (a['bytes'] as int)),
-                      'areas': [for (final a in areas) if (a['partial'] != true) a],
-                      'partial': [
-                        for (final a in areas)
-                          if (a['partial'] == true) {'area': a['id'], 'name': a['name'], 'tiles_total': a['tiles_requested'], 'version': '1'}
-                      ],
-                    }
-                  : {'downloaded': false, 'bytes': 0, 'areas': [], 'partial': []},
-            }
-        ],
-        'online': online,
-        'job_frees': frees,
-        'viewed_cache': {'bytes': 1000, 'max_bytes': 268435456},
-      };
-
-  @override
-  int open(String configJson) {
-    port = ((jsonDecode(configJson) as Map)['test_port'] as num?)?.toInt() ?? 4321;
-    scale = ((jsonDecode(configJson) as Map)['test_scale'] as num?)?.toInt() ?? 1;
-    planMs = ((jsonDecode(configJson) as Map)['test_plan_ms'] as num?)?.toInt() ?? 0;
-    return 7;
-  }
-
-  @override
-  String? lastError(int handle) => error;
-
-  @override
-  void close(int handle) {}
-
-  @override
-  String? layers(int handle, String op, String? arg) {
-    calls.add('$op:$arg');
-    error = null;
-    switch (op) {
-      case 'server':
-        if (arg != null) online = (jsonDecode(arg) as Map)['online'] as bool;
-        return jsonEncode({'port': port, 'base_url': 'http://127.0.0.1:$port', 'online': online});
-      case 'test_calls':
-        // What the app asked of the core so far (the jobs with their requests).
-        return jsonEncode({'calls': calls});
-      case 'test_new_port':
-        // The core's tile server lost its socket and the next 'server' call starts a new one on a new port.
-        port = int.parse(arg!);
-        return jsonEncode({'port': port});
-      case 'list':
-        return jsonEncode(_list());
-      case 'refresh':
-        if (!online) {
-          error = jsonEncode({'code': 'offline', 'message': 'no connection'});
-          return null;
-        }
-        return jsonEncode({'catalogues': [], 'updates': {}});
-      case 'plan':
-        final r = (jsonDecode(arg!) as Map).cast<String, dynamic>();
-        final z = r['maxzoom'] as int;
-        if (r['layer'] == 'esri') {
-          error = jsonEncode({'code': 'offline', 'message': 'online only'});
-          return null;
-        }
-        final tooBig = z > 13;
-        final already = areas.isNotEmpty ? 40 : 0;
-        plans++;
-        // A plan reads the source over the network: the worker is busy for that long.
-        if (planMs > 0) sleep(Duration(milliseconds: planMs));
-        return jsonEncode({
-          'tiles': 100 * z,
-          'tiles_to_download': 100 * z - already,
-          'tiles_already': already,
-          'already_bytes': already * 1000,
-          'estimated_bytes': scale * 1000 * (100 * z - already),
-          'plans_so_far': plans,
-          'ok_to_start': !tooBig,
-          'problems': tooBig ? [{'code': 'limit_exceeded', 'message': 'too many tiles for one download'}] : [],
-        });
-      case 'delete':
-        final r = (jsonDecode(arg!) as Map).cast<String, dynamic>();
-        areas.removeWhere((a) => a['id'] == r['area']);
-        return jsonEncode({'layer': r['layer'], 'removed': [r['area']]});
-      case 'save':
-        final d = (jsonDecode(arg!) as Map).cast<String, dynamic>();
-        if (d['title'] == 'bad') {
-          error = jsonEncode({'code': 'bad_json', 'message': 'title: not allowed'});
-          return null;
-        }
-        user[d['id'] as String] = d;
-        return jsonEncode({'id': d['id'], 'saved': true});
-      case 'remove':
-        user.remove(arg);
-        return jsonEncode({'id': arg, 'removed': true});
-    }
-    throw ArgumentError(op);
-  }
-
-  @override
-  int jobStart(String kind, String paramsJson) {
-    final p = (jsonDecode(paramsJson) as Map).cast<String, dynamic>();
-    calls.add('job:$kind:${jsonEncode({for (final e in p.entries) if (e.key != 'layers') e.key: e.value})}');
-    final id = ++_job;
-    // A resumed download (the same area id) carries on the unfinished one.
-    if (p['update'] != true && !areas.any((a) => a['id'] == p['area'])) {
-      areas.add({
-        'id': p['area'],
-        'name': p['name'],
-        'layer': 'elevation',
-        'bbox': p['bbox'],
-        'minzoom': p['minzoom'],
-        'maxzoom': p['maxzoom'],
-        'tiles_requested': 20,
-        'tiles_present': 0,
-        'bytes': 0,
-        'created': '2026-10-26T10:00:00Z',
-        'partial': true,
-      });
-    }
-    jobs[id] = {'area': p['area'], 'update': p['update'] == true, 'polls': 0, 'cancelled': false, 'fail': p['name'] == 'fails'};
-    return id;
-  }
-
-  @override
-  String? jobProgress(int job) {
-    final j = jobs[job]!;
-    j['polls'] = (j['polls'] as int) + 1;
-    if (j['cancelled'] == true) return jsonEncode({'state': 'cancelled', 'done': 3, 'total': 20, 'error': null});
-    if (j['fail'] == true && (j['polls'] as int) > 1) {
-      return jsonEncode({'state': 'failed', 'done': 3, 'total': 20, 'error': {'code': 'offline', 'message': 'x'}});
-    }
-    if ((j['polls'] as int) < 3) {
-      return jsonEncode({'state': 'running', 'done': 5, 'total': 20, 'error': null, 'detail': {'bytes': 5000}});
-    }
-    final a = areas.firstWhere((a) => a['id'] == j['area']);
-    a
-      ..['partial'] = false
-      ..['tiles_present'] = 20
-      ..['bytes'] = 20000
-      ..['created'] = j['update'] == true ? '2026-10-27T10:00:00Z' : a['created'];
-    return jsonEncode({'state': 'done', 'done': 20, 'total': 20, 'error': null, 'detail': {'bytes': 20000}});
-  }
-
-  @override
-  int jobCancel(int job) {
-    jobs[job]!['cancelled'] = true;
-    return 0;
-  }
-
-  @override
-  void jobFree(int job) => frees++;
-}
-
-CsNative _makeNative() => _LayersNative();
+const GeoBounds home = layersHome;
 
 Future<void> until(bool Function() ok) async {
   for (var i = 0; i < 200 && !ok(); i++) {
@@ -233,7 +34,7 @@ void main() {
       r.response.statusCode = r.uri.path.startsWith('/layers/hillshade/') ? 200 : 404;
       await r.response.close();
     });
-    core = await SearchCore.open(const [], extra: {'test_port': server.port}, native: _makeNative);
+    core = await SearchCore.open(const [], extra: {'test_port': server.port}, native: makeLayersNative);
     engine = CoreLayerEngine(
       openCore: () async => core,
       layersConfig: () => {'dir': layersDir.path},
@@ -299,7 +100,7 @@ void main() {
       // The planner's stand-in answers ten times the main one's bytes, so the answer says which core planned.
       openPlanner: (layers) async {
         opened.add(layers);
-        return planner = await SearchCore.open(const [], extra: {'layers': layers, 'test_scale': 10, 'test_plan_ms': 300}, native: _makeNative);
+        return planner = await SearchCore.open(const [], extra: {'layers': layers, 'test_scale': 10, 'test_plan_ms': 300}, native: makeLayersNative);
       },
     );
     await e.start();
@@ -346,6 +147,74 @@ void main() {
     expect(engine.storageOf('hillshade'), 0);
   });
 
+  test('a finished job is shown done at once even when the core\'s list is slow to answer, and the slow list is waited for, not asked again at every look (web-region-progress)', () async {
+    // The browser: every call goes through the server one at a time, so the list read after a job ends can queue behind a long call.
+    final slow = await SearchCore.open(const [], extra: {'test_port': server.port, 'test_list_block_ms': 3000}, native: makeLayersNative);
+    final e = CoreLayerEngine(
+      openCore: () async => slow,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reloadTimeout: const Duration(milliseconds: 200),
+    );
+    addTearDown(() async {
+      e.dispose();
+      await slow.close();
+    });
+    await e.start();
+    final a = await e.download('hillshade', home, label: 'slow list');
+    final clock = Stopwatch()..start();
+    while (clock.elapsedMilliseconds < 2000 && a.phase != AreaPhase.done) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    // The list blocks for 3 s after the job reports done: the page must not wait for it.
+    expect(a.phase, AreaPhase.done, reason: 'done within 2 s although the list takes 3 s');
+    expect(a.doneTiles, 20);
+    expect(a.bytes, 20000);
+    // The look is not stuck, and does not pile calls on a call that is already slow: the list was asked for once more after the
+    // start (the one that took 3 s), and not once per look in the meantime.
+    final lists = ((await slow.layers('test_calls'))['calls'] as List).where((c) => (c as String).startsWith('list')).length;
+    expect(lists, inInclusiveRange(2, 3), reason: 'start, and the read that was waited for');
+    expect(a.phase, AreaPhase.done);
+  });
+
+  test('a download that ends with no connection after the app left the front is Paused, not Stopped: no connection (web-region-progress)', () async {
+    final back = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      inBackground: () => true,
+    );
+    addTearDown(back.dispose);
+    await back.start();
+    final a = await back.download('hillshade', home, label: 'fails');
+    await until(() => a.phase == AreaPhase.failed);
+    expect(a.paused, isTrue, reason: 'the phone cut a background app off the network: Resume carries it on');
+    expect(a.error ?? '', isNot(contains('No connection')), reason: 'no "no connection" words for it');
+    // in front the same end is a real failure, with its words
+    final b = await engine.download('elevation', home, label: 'fails');
+    await until(() => b.phase == AreaPhase.failed);
+    expect(b.paused, isFalse);
+    expect(b.error, isNotNull);
+  });
+
+  test('a look that fails with a raw object (a JS error in the browser) still ends with the area done and the list read; the failing step is named (web-region-progress)', () async {
+    expect(CoreLayerEngine.said(Object()), 'Object');
+    expect(CoreLayerEngine.said(_Named('QuotaExceededError')), '_Named (QuotaExceededError)');
+    var thrown = 0;
+    engine.stepHook = (step) {
+      // a raw object, not an Exception or Error, as a JS error reaches Dart; once, at the step after the job ended
+      if (step == 'reload' && thrown++ == 0) throw _Named('boom');
+    };
+    final a = await engine.download('hillshade', home, label: 'raw throw');
+    await until(() => a.phase == AreaPhase.done);
+    expect(a.doneTiles, 20);
+    // the look that failed did not end the looking: the list is read at the next one
+    await until(() => engine.areasOf('hillshade').single.fetchedAt != null);
+    expect(thrown, greaterThanOrEqualTo(2), reason: 'the step was entered again by the retry');
+  });
+
   test('cancel stops a first download and leaves nothing', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
     // cancel returns when the download has ended and been cleaned up, so there is nothing to wait for afterwards.
@@ -387,7 +256,8 @@ void main() {
 
   test('update fetches the area again and keeps the old copy in use until it is done', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
-    await until(() => a.phase == AreaPhase.done);
+    // done is shown when the job ends; the date comes with the list the core is read for next
+    await until(() => a.phase == AreaPhase.done && a.fetchedAt != null);
     final first = a.fetchedAt!;
     await engine.update(a.id);
     expect(a.phase, AreaPhase.running);
@@ -423,6 +293,59 @@ void main() {
     }
     await until(() => again.areasOf('hillshade').single.phase == AreaPhase.done);
     expect(again.areasOf('hillshade').single.error, isNull);
+  });
+
+  test('a page loaded again while the server keeps downloading takes the running job back, and Pause stops it (web-region-progress)', () async {
+    // As in a browser: the engine keeps the job's number with the unfinished download.
+    engine.dispose();
+    engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await engine.start();
+    final a = await engine.download('hillshade', home, label: 'reloaded');
+    expect(a.phase, AreaPhase.running);
+    // The tab is closed or reloaded; the server's job (the same core) goes on.
+    engine.dispose();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reattachJobs: true,
+    );
+    await again.start();
+    final back = again.areasOf('hillshade').single;
+    expect(back.phase, AreaPhase.running, reason: 'before: it read as stopped part way while the server was still downloading');
+    await again.pause(back.id);
+    await until(() => back.phase == AreaPhase.failed);
+    expect(back.paused, isTrue, reason: 'Pause reached the server job and the area reads as paused');
+  });
+
+  test('two downloads running together: when both jobs end every listing of both areas reads done at once, with the final size (web-region-progress)', () async {
+    const other = GeoBounds(south: 42.70, west: -113.80, north: 42.80, east: -113.66);
+    final a = await engine.download('hillshade', home, label: 'first');
+    final b = await engine.download('elevation', other, label: 'second');
+    expect(a.phase, AreaPhase.running);
+    expect(b.phase, AreaPhase.running);
+    // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
+    bool settled() => engine.allAreas.length == 2 && engine.allAreas.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
+    for (var i = 0; i < 6000 && !settled(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(engine.allAreas.length, 2);
+    for (final x in engine.allAreas) {
+      expect(x.phase, AreaPhase.done, reason: x.id);
+      expect(x.bytes, 20000, reason: 'the final size from the core, not the last progress read');
+      expect(x.doneTiles, 20);
+    }
+    // every listing of an area (hillshade, contours and elevation share the store) is done too
+    for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
+    }
   });
 
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
@@ -549,4 +472,10 @@ void main() {
     expect(CoreLayerEngine.words('internal', 'HTTP 500 from https://cache.echo6.co/basemap/x.pmtiles'), 'The download stopped. Tap Update to continue.');
     expect(CoreLayerEngine.words('internal', 'disk error'), 'The download stopped: disk error');
   });
+}
+
+/// A thrown object that is neither an Exception nor an Error, with a `name` as a browser's error objects have.
+class _Named {
+  _Named(this.name);
+  final String name;
 }

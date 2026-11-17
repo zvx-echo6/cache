@@ -337,11 +337,12 @@ void main() {
     r.core.calls.clear();
     await _openCountySheet(tester);
     await r.settleUntil(tester, () => _shown(find.text('Download Twin Falls County?')));
-    expect(r.core.calls, isNot(contains('plan')), reason: 'the size comes with the catalogue (1.0.27 worked it out for a minute)');
     final offer = r.regions.offer(r.county);
     expect(offer.kind, RegionOfferKind.download);
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
-    expect(find.text(formatBytes(offer.bytes!)), findsOneWidget);
+    // the core's plan says what it takes on the device and what is fetched (the catalogue's figure only offline)
+    await r.settleUntil(tester, () => find.textContaining('Takes ', findRichText: true).evaluate().isNotEmpty);
+    expect(find.textContaining('Takes ', findRichText: true), findsOneWidget);
     expect(find.byType(CheckboxListTile), findsNothing, reason: 'no per-part sheet');
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pump();
@@ -733,6 +734,30 @@ void main() {
     final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
     await tester.runAsync(() => r.regions.download(drawn, routing: false, map: true, anyway: true));
     expect(r.s.engine.outlineOf[drawn.name]!.values, everyElement(isNull));
+    await r.dispose(tester);
+  });
+
+  testWidgets('a region\'s map size is asked for its outline, so the size shown and the free-space check are the outline\'s, not the box\'s', (tester) async {
+    final r = await _Rig.boot(tester);
+    final g = (await tester.runAsync(() => r.catalogue.geometry(r.county)))!;
+    final outline = mapOutline(r.county, g);
+    expect(outline, isNotNull);
+    r.s.engine.outlineShare = 0.6;
+    final plan = (await tester.runAsync(() => r.regions.plan(r.county)))!;
+    expect(r.s.engine.outlineAsked.values.expand((v) => v), everyElement(outline), reason: 'the plan asks for the outline, not the box');
+    expect(plan.map, isNotEmpty);
+    // The fake steps down to the deepest zoom that fits its limits, so the outline's smaller tile count can fit a deeper zoom: the
+    // figure shown is the outline's own (what the engine says for the outline), and not the box's.
+    final id = plan.map.first.def.id;
+    final withOutline = await tester.runAsync(() => r.s.engine.estimate(id, r.county.bounds!, outline: outline));
+    final box = await tester.runAsync(() => r.s.engine.estimate(id, r.county.bounds!));
+    expect(plan.map.first.estimate.bytes, withOutline!.bytes, reason: 'the figure shown is the outline\'s');
+    expect(plan.map.first.estimate.bytes, isNot(box!.bytes), reason: 'and not the box\'s');
+    // an area drawn on the map has no outline: sized as its box
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
+    r.s.engine.outlineAsked.clear();
+    await tester.runAsync(() => r.regions.plan(drawn));
+    expect(r.s.engine.outlineAsked.values.expand((v) => v), everyElement(isNull));
     await r.dispose(tester);
   });
 
