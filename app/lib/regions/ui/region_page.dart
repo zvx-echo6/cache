@@ -176,7 +176,7 @@ class RegionPage extends StatelessWidget {
                           key: const ValueKey('part-offroad-none'),
                           title: 'Off-road',
                           // WORDING (owner, exact): the line under the row.
-                          status: const [Part('No off-road data is published for this area.', Tone.quiet)],
+                          status: const [Part(kNoOffroadLine, Tone.quiet)],
                           trailing: const RowButton(key: ValueKey('add-offroad-disabled'), label: 'Add', onPressed: null),
                         ),
                       )
