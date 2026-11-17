@@ -63,20 +63,19 @@ void main() {
     await tester.runAsync(app.wake);
   }
 
-  testWidgets('held for memory: the calm card, with its texts and no emergency color', (tester) async {
+  testWidgets('held for memory: the slim bar, with its texts and no emergency color', (tester) async {
     await startWithNamedModel(tester);
     expect(app.heldForMemory, isTrue);
     expect(app.displayName(app.resting!), 'Gemma 4 E2B · Q4_K_M');
     await show(tester);
-    expect(find.text('Gemma 4 E2B is waiting for free memory.'), findsOneWidget, reason: 'the name without the label');
-    expect(find.textContaining('Q4_K_M'), findsNothing);
-    expect(find.text('Other apps are using it right now. Loading anyway may close some of them.'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Load anyway'), findsOneWidget);
+    expect(find.text('Waiting for free memory'), findsOneWidget);
+    expect(find.textContaining('Q4_K_M'), findsNothing, reason: 'the header and the bar name the model without the label');
+    expect(find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Gemma 4 E2B')), findsOneWidget);
+    expect(find.text('Other apps are using it right now. Loading anyway may close some of them.'), findsNothing);
+    expect(find.widgetWithText(TextButton, 'Load anyway'), findsOneWidget);
     expect(find.text('No model is loaded.'), findsNothing);
-    final em = emergency(tester);
-    expect(lineColor(tester), isNot(em));
-    final box = tester.widget<Container>(find.byKey(const ValueKey('ask-fix'))).decoration as BoxDecoration;
-    expect((box.border as Border).top.color, isNot(em.withValues(alpha: 0.6)));
+    expect(tester.getSize(find.byKey(const ValueKey('ask-fix'))).height, lessThan(60), reason: 'a slim bar, not a card');
+    expect(lineColor(tester), isNot(emergency(tester)));
   });
 
   testWidgets('the model chooser still shows the label', (tester) async {
@@ -89,11 +88,12 @@ void main() {
     expect(find.text('Gemma 4 E2B · Q4_K_M'), findsWidgets);
   });
 
-  testWidgets('with no plain name known, the card uses the display name as before', (tester) async {
+  testWidgets('with no plain name known, the header uses the display name as before', (tester) async {
     app.resting = app.models.first;
     await app.wake();
     await show(tester);
-    expect(find.text('Gemma 4 E2B is waiting for free memory.'), findsOneWidget, reason: 'the file-derived name has no label either');
+    expect(find.text('Waiting for free memory'), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('model-name')), matching: find.text('Gemma 4 E2B')), findsOneWidget, reason: 'the file-derived name has no label either');
   });
 
   testWidgets('not held and nothing chosen: the card is as it was (red line, Load <name>)', (tester) async {
@@ -103,12 +103,12 @@ void main() {
     expect(lineColor(tester), emergency(tester));
   });
 
-  testWidgets('resting but not held (let go in the background): the card is as it was', (tester) async {
+  testWidgets('resting but not held (let go in the background): the slim bar says resting, with Load', (tester) async {
     app.resting = app.models.first;
     await show(tester);
-    expect(find.text('No model is loaded.'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Load Gemma 4 E2B'), findsOneWidget);
-    expect(lineColor(tester), emergency(tester));
+    expect(find.text('Gemma 4 E2B is resting'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Load'), findsOneWidget);
+    expect(find.text('No model is loaded.'), findsNothing);
   });
 
   for (final (f, line, button) in [

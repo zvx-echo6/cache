@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../browse/web/device_api.dart' show readServerVersion;
+import '../../linux_ui.dart';
 import '../../net/web_link.dart';
 import '../../pdf/index/pdf_index_app.dart';
 import '../../pdf/index/pdf_timing.dart' show kPdfTimingSwitch, kPdfTimingCount;
@@ -23,7 +25,7 @@ const String kCreditsAsset = 'assets/credits.md';
 /// Library > Cache Documentation > Credits and licences: the version, the licence, the credits and the open-source licences.
 /// (What's new has its own row in Cache Documentation.)
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl, this.version = installedVersion, this.updates});
+  const AboutPage({super.key, this.openUrl, this.version = installedVersion, this.updates, this.serverVersion = readServerVersion});
 
   /// The iPhone's update check (the app's when null): the Version line says when a newer build is out, with Open TestFlight.
   final AppUpdates? updates;
@@ -33,6 +35,9 @@ class AboutPage extends StatelessWidget {
 
   /// The installed version and build (read from the phone; a test passes its own).
   final Future<String> Function() version;
+
+  /// The server's version, asked only in the browser (Cache for Linux); a test passes its own.
+  final Future<String?> Function() serverVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +67,12 @@ class AboutPage extends StatelessWidget {
                 );
               },
             ),
+            if (linuxUi)
+              SettingsRow(
+                key: const ValueKey('about-server-version'),
+                title: 'Server version',
+                statusWidget: _ServerVersionText(read: serverVersion),
+              ),
             SettingsRow(
               title: 'License',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
@@ -174,6 +185,26 @@ class _VersionTextState extends State<_VersionText> {
     future: _read,
     initialData: kAppVersion,
     builder: (context, snap) => statusText(context, [Part(snap.data ?? kAppVersion)]),
+  );
+}
+
+/// The server's version; nothing while it is read or when it cannot be.
+class _ServerVersionText extends StatefulWidget {
+  const _ServerVersionText({required this.read});
+
+  final Future<String?> Function() read;
+
+  @override
+  State<_ServerVersionText> createState() => _ServerVersionTextState();
+}
+
+class _ServerVersionTextState extends State<_ServerVersionText> {
+  late final Future<String?> _read = widget.read();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String?>(
+    future: _read,
+    builder: (context, snap) => statusText(context, [Part(snap.data ?? (snap.connectionState == ConnectionState.done ? 'Unknown' : '…'))]),
   );
 }
 

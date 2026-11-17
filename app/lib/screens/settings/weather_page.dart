@@ -12,7 +12,6 @@ import 'own_source_pages.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
 import 'source_page.dart';
-import '../../sharing/settings_sync.dart' show kWatchPlacesKey;
 import 'widgets.dart';
 import '../../guide/place_link.dart' show LinkText;
 import '../../platform/app_log.dart';
@@ -182,29 +181,6 @@ class _WatchGroupsState extends State<WatchGroups> {
     ));
   }
 
-  /// A watched place's name as the linked device it came from gave it.
-  String _waitingName(String id) {
-    final names = widget.deps.hub.settingsSync?.noteOf(kWatchPlacesKey);
-    final n = names is Map ? names[id.substring(6)] : null;
-    return n is String && n.isNotEmpty ? n : 'A saved place';
-  }
-
-  /// Stops watching a place that is waiting for its saved place, after a confirm. The saved place itself is not touched.
-  Future<void> _stopWatching(String id) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Stop watching this place?'),
-        content: const Text("Weather and alerts stop for it on all your linked devices. The saved place itself isn't deleted."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(key: const ValueKey('confirm-remove-place'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (ok == true) w.settings.setWatched(id, false);
-  }
-
   @override
   Widget build(BuildContext context) {
     final settings = w.settings;
@@ -220,8 +196,6 @@ class _WatchGroupsState extends State<WatchGroups> {
           final saved = [for (final p in all) if (p.kind == PlaceKind.saved) p];
           final words = _q.toLowerCase().split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
           final shown = [for (final p in saved) if (words.every('${p.name} ${p.subtitle}'.toLowerCase().contains)) p];
-          final here = {for (final p in saved) p.id};
-          final waiting = snap.hasData ? [for (final id in settings.watchedPlaces) if (id.startsWith('place:') && !here.contains(id)) id] : const <String>[];
           final blocked = loc.permission == LocationPermissionState.deniedForever || loc.problem == LocationProblem.permissionBlocked;
           Widget place(WatchPlace p) => SwitchRow(
             key: ValueKey('watch-${p.id}'),
@@ -278,23 +252,8 @@ class _WatchGroupsState extends State<WatchGroups> {
                         ),
                       ),
                     ),
-                  if (saved.isEmpty && waiting.isEmpty) const SettingsRow(key: ValueKey('watch-no-places'), title: 'None yet'),
+                  if (saved.isEmpty) const SettingsRow(key: ValueKey('watch-no-places'), title: 'None yet'),
                   for (final p in shown) place(p),
-                  // Watched on a linked device whose settings come here, and not on this device yet (it comes with the notebooks).
-                  for (final id in waiting)
-                    SettingsRow(
-                      key: ValueKey('watch-$id'),
-                      title: _waitingName(id),
-                      status: const [Part('waiting for this place', Tone.warn)],
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          RowButton(key: ValueKey('watch-remove-$id'), label: 'Remove', onPressed: () => _stopWatching(id)),
-                          const SizedBox(width: 8),
-                          Switch(value: true, onChanged: (on) => settings.setWatched(id, on)),
-                        ],
-                      ),
-                    ),
                 ],
               ),
             ],

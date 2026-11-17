@@ -441,9 +441,47 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Whether [l] is a library of books (its rows go to Bookshelves).
   bool holdsBooks(LibraryItem l) => _libs.any((x) => x.item.path == l.path);
 
-  /// How many books [l] holds, shelved or not: its catalogue's documents (what the not-shelved line counts too). A book with copies in
-  /// two libraries counts in each.
-  int booksIn(LibraryItem l) => _libs.where((x) => x.item.path == l.path).firstOrNull?.docs.length ?? 0;
+  /// How many books [l] holds, shelved or not, as Bookshelves counts books: a book of several files is one, and a catalogue document
+  /// Bookshelves has no book for counts as one. A book with copies in two libraries counts in each.
+  int booksIn(LibraryItem l) => documentsIn(l).length;
+
+  /// Every book of [l], as Bookshelves resolves it: the shelf it is on, Unsorted or Hidden, one entry per BOOK (a book of several
+  /// files, in this library or others, is one entry with its copies counted), and one entry for each document of the catalogue the
+  /// view has no book for (no copy: "on no shelf"). Empty when [l] holds no books. In the catalogue's order.
+  List<LibraryDoc> documentsIn(LibraryItem l) {
+    final lb = _libs.where((x) => x.item.path == l.path).firstOrNull;
+    if (lb == null) return const [];
+    final at = <String, _ViewBook>{
+      for (final vb in _view.values)
+        for (final c in vb.copies)
+          for (final loc in (c['locs'] as List? ?? const [])) '$loc': vb,
+    };
+    final out = <LibraryDoc>[];
+    final seen = <String>{};
+    for (final d in lb.docs.entries) {
+      if (_readOnly) {
+        final b = _books['${lb.item.folderName}/${d.key}'];
+        if (b != null) out.add(LibraryDoc(docId: d.key, title: b.title, place: DocPlace.unsorted, book: b));
+        continue;
+      }
+      final vb = at['${lb.id}/${d.key}'];
+      final shown = vb == null ? null : (_books[vb.id] ?? _hidden[vb.id]);
+      if (vb == null || shown == null) {
+        final id = '${lb.id}/${d.key}';
+        out.add(LibraryDoc(docId: d.key, title: d.value.title, place: DocPlace.none, book: _shelfBook(id: id, lb: lb, doc: d.key, title: d.value.title)));
+        continue;
+      }
+      if (!seen.add(vb.id)) continue;
+      out.add(LibraryDoc(
+        docId: d.key,
+        title: shown.title,
+        place: vb.removed ? DocPlace.hidden : (shown.shelf == null ? DocPlace.unsorted : DocPlace.shelved),
+        book: shown,
+        copies: vb.copies.length,
+      ));
+    }
+    return out;
+  }
 
   static void _signFiles(StringBuffer b, Directory dir) {
     if (!dir.existsSync()) return;
