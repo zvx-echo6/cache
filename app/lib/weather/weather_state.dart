@@ -1168,6 +1168,21 @@ class WeatherState extends ChangeNotifier {
   /// seconds; the Weather screen and Home show "Where I am" and the kept places meanwhile.
   List<WatchPlace> placeChoicesNow() => _choices(_savedKept ?? const []);
 
+  /// The saved places may have changed under the watches: a notebook came in (Notebooks sharing was switched on), so a place a linked
+  /// device watches is here now. A watch whose place is not on this device stays in the setting, is not listed and is not fetched; the
+  /// moment its place is here it is listed (the screens hear this) and its weather is fetched, with no tap and no restart.
+  Future<void> savedPlacesChanged() async {
+    if (_disposed) return;
+    final before = {for (final s in _savedKept ?? const <SavedPlaceRecord>[]) s.key};
+    await placeChoices();
+    final w = settings.watchedPlaces;
+    final after = {for (final s in _savedKept ?? const <SavedPlaceRecord>[]) s.key};
+    if (after.length == before.length && after.containsAll(before)) return;
+    notifyListeners();
+    onPlacesChanged?.call();
+    if (after.difference(before).any((k) => w.contains('place:$k'))) unawaited(updateNow());
+  }
+
   /// [watchedPlaces] at once, without the core (see [placeChoicesNow]).
   List<WatchPlace> watchedPlacesNow() => _watched(placeChoicesNow());
 
