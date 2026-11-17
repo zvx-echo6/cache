@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../browse/web/device_api.dart' show readServerStorage;
 import '../browse/web/device_library.dart' show DeviceLibrary;
 import '../browse/zim_download.dart' show FreeSpace, freeBytesOnDisk;
 import 'damaged_files.dart';
@@ -37,6 +38,7 @@ class StorageUsage extends ChangeNotifier {
     this.manifests = _noManifests,
     this.busy = _idle,
     this.device,
+    this.deviceKinds = readServerStorage,
     FreeSpace? freeSpace,
     TotalSpace? totalSpace,
     DamagedFiles? damaged,
@@ -47,6 +49,9 @@ class StorageUsage extends ChangeNotifier {
   /// In a browser: the server's Library (what is installed, and the disk it is on). Storage then reads those figures, because the
   /// browser has no folders of its own to measure. Null on a phone.
   final DeviceLibrary? device;
+
+  /// In a browser: the bytes the server keeps for each kind, by kind id (null when it cannot say).
+  final Future<Map<String, int>?> Function() deviceKinds;
 
   /// The kinds Storage lists, in order.
   final List<DataKind> kinds;
@@ -152,7 +157,15 @@ class StorageUsage extends ChangeNotifier {
       if (device != null) {
         await device!.refresh();
         _readFromDevice();
-        _bytes['library'] = device!.items.fold<int>(0, (a, i) => a + i.bytes);
+        // Each kind as the server measures it; without that, the Library is what is installed and the rest is not known.
+        final sizes = await deviceKinds();
+        if (sizes != null) {
+          for (final k in kinds) {
+            _bytes[k.id] = sizes[k.id] ?? 0;
+          }
+        } else {
+          _bytes['library'] = device!.items.fold<int>(0, (a, i) => a + i.bytes);
+        }
         measured = device!.loaded;
         return;
       }

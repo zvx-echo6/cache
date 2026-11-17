@@ -29,6 +29,7 @@
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
@@ -239,6 +240,13 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
         },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
+        ("GET", "/api/library/storage") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.storage()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the sizes could not be read"),
+            }
+        }
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
         ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
         ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),

@@ -266,3 +266,18 @@ Future<String?> readServerVersion({http.Client? client}) async {
     return null;
   }
 }
+
+/// The bytes the server keeps for each kind of the phone's Storage page ("library", "models", "regions", ...), read from
+/// `GET /api/library/storage`; null when they cannot be read.
+Future<Map<String, int>?> readServerStorage({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/storage')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final k = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['kinds'] : null;
+    if (k is! Map) return null;
+    return {for (final e in k.entries) e.key.toString(): (e.value as num?)?.toInt() ?? 0};
+  } catch (_) {
+    return null;
+  }
+}
