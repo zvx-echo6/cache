@@ -159,4 +159,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(calls.last, isEmpty, reason: 'no preference of its own: the system\'s choice is back');
   });
+
+  testWidgets('in a browser the photo comes as bytes (no local file) and is shown, not left black', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final bytes = _jpg(800, 600);
+    // The File is not there (as in a browser); only the bytes are.
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(CacheThemeId.dark),
+      home: PhotoViewer(ids: const ['web'], fileFor: (id) async => File('${_dir.path}/nope-$id.jpg'), bytesFor: (id) async => bytes),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 500)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(RawImage), findsOneWidget);
+    expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+    expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
+  });
 }
