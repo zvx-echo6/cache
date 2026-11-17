@@ -185,19 +185,28 @@ class WebSearchSetup extends ChangeNotifier {
     await apply();
   }
 
+  Map<String, dynamic>? _request;
+
+  /// This tab's setting for a tool request in a browser (Cache Server's engine is shared): `{provider, reference, online}`, or null
+  /// when web search is off. The reference is the server's `keystore://` name for the key; a raw key is never put here.
+  Map<String, dynamic>? get requestWeb => _request;
+
   /// Tells the search core: provider, key and online, or nothing when web search is off.
   Future<void> apply() async {
     try {
       if (!active) {
+        _request = null;
         await setWeb(null, null, false);
         return;
       }
       final key = await secrets.read(keyName);
       if (key == null || key.isEmpty) {
+        _request = null;
         await setWeb(null, null, false);
         return;
       }
       final online = await probe.current() != ConnectionKind.none;
+      _request = key.startsWith('keystore://') ? {'provider': provider, 'reference': key, 'online': online} : null;
       await setWeb(provider, key, online);
     } catch (e) {
       logError('Web search setup', error: e);
