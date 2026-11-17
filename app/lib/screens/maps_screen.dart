@@ -24,6 +24,7 @@ import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
+import '../maps/ui/map_pointer_gate.dart';
 import '../maps/ui/vehicle_arrow.dart';
 import '../platform.dart' as plat;
 import '../maps/ui/map_widgets.dart';
@@ -2338,7 +2339,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                   maps.setFollow(FollowMode.free);
                 }
               },
-              child: MapLibreMap(
+              child: MapPointerGate(
+                child: MapLibreMap(
                 styleString: style,
                 initialCameraPosition: CameraPosition(target: LatLng(_lat, _lon), zoom: _zoom),
                 onMapCreated: _onMapCreated,
@@ -2355,6 +2357,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 attributionButtonMargins: const math.Point(-200, -200),
                 myLocationEnabled: false,
                 rotateGesturesEnabled: true,
+              ),
               ),
             );
           }),
