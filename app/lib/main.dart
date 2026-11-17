@@ -796,6 +796,8 @@ class _CacheAppState extends State<CacheApp> {
     indexing: indexing,
     storage: StorageUsage(
       kinds: [for (final k in dataKinds) if (k.inStorage) k],
+      // In a browser: the figures come from the server (its Library and its disk), not from folders.
+      device: device,
       freeIn: () => app.modelsDir ?? sources.zimsDir,
       // Unfinished downloads (ZIMs, libraries, models) and the temporary folder.
       leftovers: () => [
