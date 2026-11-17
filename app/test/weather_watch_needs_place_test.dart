@@ -55,6 +55,9 @@ void main() {
       await r.weather.savedPlacesChanged();
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });
+    await tester.pump();
+    // the page reads the places again (the settings file is written for real, so give it real time)
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('watch-place:cabin')), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('watch-place:cabin')), matching: find.text('Cabin')), findsOneWidget);
