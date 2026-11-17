@@ -124,4 +124,26 @@ void main() {
     regions.dispose();
     await s.dispose(tester);
   });
+
+  testWidgets('a plan that finds nothing (roads not published, map too big) never reads "0 B": the catalogue\'s figure stays as the download', (tester) async {
+    final (regions, core, s) = await _boot(tester);
+    core.sizes[_county] = 0; // no road tiles published for the area
+    core.alreadyBytes = 0;
+    for (final l in s.maps.catalogueLayers) {
+      s.maps.setOn(l.id, false); // no map part to plan (a country's map is excluded the same way)
+    }
+    await _openDialog(tester, s, regions);
+    // give a plan every chance to arrive and change the line
+    await _settleUntil(tester, () => core.calls.contains('plan'), turns: 100);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await tester.pump(const Duration(milliseconds: 100));
+    Finder inDialog(String t) => find.descendant(of: find.byType(AlertDialog), matching: find.textContaining(t, findRichText: true));
+    expect(inDialog('0 B'), findsNothing, reason: 'before: "0 B on this device (0 B to download)"');
+    expect(inDialog('on this device'), findsNothing);
+    expect(inDialog('to download'), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
 }

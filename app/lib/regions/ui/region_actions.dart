@@ -55,6 +55,8 @@ Future<({int onDevice, int download})?> planSizeOf(RegionsState regions, List<(R
         download += pl.downloadBytes;
       }
       if (o.map) {
+        // Every layer too big for one download (a country): the plan has no map figure, and the part is not planned.
+        if (p.mapAllowed.isEmpty) return null;
         onDevice += p.mapBytes + p.mapBytesAlready;
         download += p.mapBytes;
       }
@@ -66,6 +68,8 @@ Future<({int onDevice, int download})?> planSizeOf(RegionsState regions, List<(R
       return null;
     }
   }
+  // Nothing planned (a country whose roads are not published and whose map is too big): never "0 B"; the catalogue's figure stays.
+  if (onDevice <= 0) return null;
   return (onDevice: onDevice, download: download);
 }
 
