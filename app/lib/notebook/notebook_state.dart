@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart' show CacheSearchException, Searc
 import 'package:flutter/foundation.dart';
 
 import 'notebook_model.dart';
+import 'notebook_store.dart';
 import '../app_fs.dart';
 import '../platform.dart' as plat;
 import '../platform/app_log.dart';
@@ -86,7 +87,7 @@ abstract class PrivateSharing {
 
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
 /// read again; [revision] counts the changes (an open notebook reads its entries again), and [onChanged] runs after each one.
-class NotebookState extends ChangeNotifier {
+class NotebookState extends ChangeNotifier implements NotebookStore {
   NotebookState({required this.backend, required this.mediaDir, AppFs? fs}) : _fsOverride = fs;
 
   final AppFs? _fsOverride;
@@ -111,6 +112,7 @@ class NotebookState extends ChangeNotifier {
   bool _started = false;
   int _revision = 0;
 
+  @override
   List<Notebook> get notebooks => _notebooks;
   bool get loading => _loading;
 
@@ -123,6 +125,7 @@ class NotebookState extends ChangeNotifier {
   /// The Log notebooks, most recently used first.
   List<Notebook> get logs => [for (final n in _notebooks) if (n.isLog) n];
 
+  @override
   Notebook? notebook(String id) {
     for (final n in _notebooks) {
       if (n.id == id) return n;
@@ -139,6 +142,7 @@ class NotebookState extends ChangeNotifier {
   }
 
   /// The saved places' notebook, made by the core the first time.
+  @override
   Future<Notebook> ensureSavedPlaces() async {
     final have = savedPlaces;
     if (have != null) return have;
@@ -151,6 +155,7 @@ class NotebookState extends ChangeNotifier {
       _change(() => backend.call('import', {'path': path, 'notebook_id': ?notebookId, 'now': now}));
 
   /// The notebook `notebook.add_journal_entry` writes to: the most recently used one of the Journal template.
+  @override
   Notebook? get journal {
     for (final n in _notebooks) {
       if (n.template == 'journal') return n;
@@ -165,6 +170,7 @@ class NotebookState extends ChangeNotifier {
     await reload();
   }
 
+  @override
   Future<void> reload() async {
     try {
       final r = await backend.call('notebooks');
@@ -194,6 +200,7 @@ class NotebookState extends ChangeNotifier {
   /// A notebook's fields are fixed once it exists (1.1: there is no field editor, 2026-11-13): saving one that exists keeps the
   /// fields it has, hidden ones included, whatever [def] lists. Its name, icon, color, Due again and switches still change. A new
   /// notebook gets [def]'s fields.
+  @override
   Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef}) =>
       _change(() async {
         final have = id == null ? null : await _stored(id);
@@ -223,6 +230,7 @@ class NotebookState extends ChangeNotifier {
   Future<void> setOnMap(Notebook n, bool on) => saveNotebook(id: n.id, def: n.def, map: on);
 
   /// True when another notebook than [exceptId] is called [name] (ignoring case and spacing).
+  @override
   bool nameTaken(String name, {String? exceptId}) {
     final n = name.trim().split(RegExp(r'\s+')).join(' ').toLowerCase();
     return _notebooks.any((x) => x.id != exceptId && x.name.toLowerCase() == n);
@@ -232,9 +240,11 @@ class NotebookState extends ChangeNotifier {
 
   /// A notebook's entries, newest first, drafts included: all of them. (The core answers 1000 when a call gives no limit, and
   /// notebook sync takes an entry it did not read for a deleted one, so the app always asks for every entry.)
+  @override
   Future<List<NbEntry>> entries(String notebookId) async =>
       [for (final e in (await backend.call('entries', {'notebook_id': notebookId, 'limit': kAllEntries}))['entries'] as List) NbEntry.fromJson(e as Map)];
 
+  @override
   Future<NbEntry?> entry(String id) async {
     try {
       return NbEntry.fromJson(await backend.call('entry', {'id': id}));
@@ -245,6 +255,7 @@ class NotebookState extends ChangeNotifier {
   }
 
   /// Saves the whole entry (a new one when [id] is null) and returns it as stored.
+  @override
   Future<NbEntry> saveEntry({
     String? id,
     required String notebookId,
@@ -287,6 +298,7 @@ class NotebookState extends ChangeNotifier {
     if (_hidden.remove(entryId)) notifyListeners();
   }
 
+  @override
   Future<void> deleteEntry(String id) => _change(() => backend.call('entry_delete', {'id': id}));
 
 
@@ -327,6 +339,7 @@ class NotebookState extends ChangeNotifier {
 
   // ---- photos and files ----
 
+  @override
   Future<File> photoFile(String id) async => File('${(await mediaDir()).path}/photos/$id.jpg');
   /// The ~1600 px local preview of a photo (kept on this device only; a photo may not have one).
   Future<File> previewFile(String id) async => File('${(await mediaDir()).path}/previews/$id.jpg');
