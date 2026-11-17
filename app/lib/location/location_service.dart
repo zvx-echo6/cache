@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 
 import '../app_fs.dart';
+import '../platform.dart' as plat;
+import '../platform/app_log.dart';
 import 'position_source.dart';
 
 /// Why there is no position right now, for the one line shown under the coordinates.
@@ -16,6 +18,10 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   LocationService({PositionSource? source, this.settingsDirOverride, this.onFix}) : _source = source ?? GeolocatorSource();
 
   final PositionSource _source;
+
+  /// Test hook: a test cannot set plat.isWeb (a compile-time define), so it sets this to run the browser path.
+  @visibleForTesting
+  static bool? debugWeb;
 
   /// Called with every new fix, and with null when location is disabled or access/service is lost. The app
   /// hands it to the search core (cs_set_location, cs_clear_location).
@@ -313,11 +319,18 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Silent, bounded preparation for chat. Recent fixes are reused; no permission
   /// prompt or extra stream is started, including while guidance owns location.
+  ///
+  /// In a browser the one-shot read is given [webTimeout] when that is longer than [timeout]: a desktop browser answers a
+  /// high-accuracy getCurrentPosition from Wi-Fi/network lookup in a few seconds, and with the phone's 2 s bound the late answer
+  /// was discarded on every turn, so a fix older than [maxAge] was never refreshed. Phones keep [timeout] exactly.
   Future<Fix?> prepareForChat({
     required bool Function() isCancelled,
     Duration timeout = const Duration(seconds: 2),
     Duration maxAge = const Duration(minutes: 2),
+    Duration webTimeout = const Duration(seconds: 6),
   }) async {
+    final web = debugWeb ?? plat.isWeb;
+    if (web && webTimeout > timeout) timeout = webTimeout;
     if (_disposed || !enabled || !_foreground || isCancelled()) return null;
     bool recent(Fix? f) {
       if (!_plausible(f)) return false;
@@ -329,6 +342,8 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     if (busy) return held();
     final generation = _resumeGeneration;
     var expired = false;
+    final started = DateTime.now();
+    var asked = false;
     bool valid() => !expired && !isCancelled() && _resumeIsCurrent(generation);
     Future<Fix?> read() async {
       final wasUnasked = permission == LocationPermissionState.notAsked && fix == null && problem == null;
@@ -351,6 +366,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (fixIsCurrent(maxAge: maxAge)) return fix;
       if (_held) return null;
+      asked = true;
       final current = await _source.current();
       if (!valid() || _held) return null;
       // A newer stream fix may have arrived during the one-shot request.
@@ -359,14 +375,23 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
       _publish(current);
       return current;
     }
+    var outcome = 'ok';
     try {
       final read0 = await read().timeout(timeout, onTimeout: () {
         expired = true;
+        outcome = 'timed out';
         return null;
       });
+      if (read0 == null && outcome == 'ok') outcome = 'no fix';
       return read0 ?? held();
     } catch (_) {
+      outcome = 'failed';
       return held(); // Location failure must never prevent an ordinary chat.
+    } finally {
+      if (web) {
+        final ms = DateTime.now().difference(started).inMilliseconds;
+        logInfo('Ask location (browser): ${asked ? 'fresh fix asked' : 'no fresh fix needed or possible'}, $ms ms, $outcome');
+      }
     }
   }
 
