@@ -28,8 +28,15 @@ class CoreLayerEngine extends LayerEngine {
     this.maxDownloadBytes = 800 * 1024 * 1024,
     this.policy,
     this.openPlanner,
+    bool? reattachJobs,
     this.estimateFor = const Duration(minutes: 10),
-  }) : _connected = connected ?? _platformConnected;
+  })  : _connected = connected ?? _platformConnected,
+        reattachJobs = reattachJobs ?? plat.isWeb;
+
+  /// In a browser the downloads are the server's and go on with no tab open: the core's job number is kept with the unfinished
+  /// download, and a page loaded again takes the running job back (so Pause and the progress reach it). A phone's jobs end with
+  /// the app, so there it is off.
+  final bool reattachJobs;
 
   /// The search core once it is open (null when it could not open).
   final Future<SearchCore?> Function() openCore;
@@ -147,6 +154,7 @@ class CoreLayerEngine extends LayerEngine {
         _connection ??= policy?.probe.changes.listen((_) => unawaited(refreshOnline(force: true)));
       } catch (_) {}
       await _reload();
+      if (reattachJobs) await _reattach(core);
       _ready = true;
       notifyListeners();
       unawaited(refreshCatalogue());
@@ -379,6 +387,7 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the done list', id, area);
       }
       for (final p in (installed['partial'] as List? ?? const [])) {
         final m = (p as Map).cast<String, dynamic>();
@@ -402,7 +411,11 @@ class CoreLayerEngine extends LayerEngine {
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
         seen.add(_key(id, aid));
+        _logArea('in the unfinished list', id, area);
       }
+    }
+    for (final e in _areas.entries) {
+      if (!seen.contains(e.key) && !_running.containsKey(e.value.id)) _logArea('not listed by the core, dropped', e.value.layerId, e.value);
     }
     // Areas that were deleted, or belong to a layer that is gone, drop out unless a download is still running.
     _areas.removeWhere((k, a) => !seen.contains(k) && !_running.containsKey(a.id));
@@ -412,6 +425,49 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   String _key(String layer, String area) => '$layer/$area';
+
+  final Map<String, String> _areaLogged = {};
+
+  /// One line when an area's state under a layer entry changes (which list the core put it in, its phase, bytes and tiles, and whether
+  /// a job of ours is still on it): the log of why a page can keep showing a download as running after its job ended. No addresses.
+  void _logArea(String where, String layer, DownloadedArea a) {
+    final text = '$where: ${a.phase.name}, ${a.bytes} B, ${a.doneTiles}/${a.totalTiles} tiles, job ${_running.containsKey(a.id) ? 'running' : 'none'}';
+    if (_areaLogged[_key(layer, a.id)] == text) return;
+    _areaLogged[_key(layer, a.id)] = text;
+    logInfo('Layer area ${a.id} under $layer $text');
+  }
+
+  /// A page loaded again while the server's downloads go on: each unfinished area whose saved job number is still a running job
+  /// is a running download again, so it shows its progress and Pause reaches the job.
+  Future<void> _reattach(SearchCore core) async {
+    // One download is listed under each layer that shares the store (hillshade, contours and elevation): one job, every listing.
+    final ids = {for (final a in _areas.values) if (a.phase == AreaPhase.failed) a.id};
+    for (final id in ids) {
+      final saved = _saved[id];
+      final jobId = saved?.job;
+      if (saved == null || jobId == null || _running.containsKey(id)) continue;
+      final listed = [for (final a in _areas.values) if (a.id == id) a];
+      try {
+        final job = core.attachJob(jobId);
+        final p = await job.progress();
+        if (p.isFinished) {
+          saved.job = null;
+          continue;
+        }
+        for (final a in listed) {
+          a
+            ..phase = AreaPhase.running
+            ..error = null
+            ..interrupted = false
+            ..paused = false;
+        }
+        _running[id] = _Run(listed.first, job, false, totalFromJob: saved.outline != null);
+        _poll ??= Timer.periodic(pollEvery, (_) => _tick());
+      } catch (_) {
+        saved.job = null;
+      }
+    }
+  }
 
   /// What was asked for, kept to carry on a download that stopped (the core's list does not hold the shape of an
   /// unfinished one). Kept in a file beside the tiles too: on iPhone the system stops a download that runs while Cache is in the
@@ -674,6 +730,11 @@ class CoreLayerEngine extends LayerEngine {
       ..paused = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
+    final kept = _saved[a.id];
+    if (reattachJobs && kept != null && !update) {
+      kept.job = job.id;
+      await _storeSaved();
+    }
     _running[a.id] = _Run(a, job, update, totalFromJob: totalFromJob);
     _areas[_key(a.layerId, a.id)] = a;
     _poll ??= Timer.periodic(pollEvery, (_) => _tick());
@@ -685,14 +746,29 @@ class CoreLayerEngine extends LayerEngine {
   /// one put back (as an unfinished download) the area the other had just deleted. One look at a time now: a look that finds
   /// another still running skips, and the next timer tick comes back to it.
   Future<void> _tick() async {
-    if (_disposed || _ticking) return;
+    if (_disposed) return;
+    if (_ticking) {
+      // Says why a page can show a download as running long after the server finished it: a look that never returns holds every
+      // later one off (logged once a minute).
+      final since = _tickStarted;
+      if (since != null && DateTime.now().difference(since) > const Duration(seconds: 30) && DateTime.now().difference(_stuckLogged) > const Duration(minutes: 1)) {
+        _stuckLogged = DateTime.now();
+        logInfo('Layer downloads: the last look at ${_running.length} running download(s) has not finished for ${DateTime.now().difference(since).inSeconds} s');
+      }
+      return;
+    }
     _ticking = true;
+    _tickStarted = DateTime.now();
     try {
       await _look();
     } finally {
       _ticking = false;
     }
   }
+
+  DateTime? _tickStarted;
+  DateTime _stuckLogged = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, String> _lastProgressError = {};
 
   bool _ticking = false;
 
@@ -705,9 +781,16 @@ class CoreLayerEngine extends LayerEngine {
       JobProgress p;
       try {
         p = await r.job.progress();
-      } catch (_) {
+      } catch (e) {
+        // Said when it changes, not at every look: why a running row stays as it was.
+        final msg = e.toString();
+        if (_lastProgressError[r.area.id] != msg) {
+          _lastProgressError[r.area.id] = msg;
+          logError('Layer download ${r.area.id} (${r.area.layerId}): its progress could not be read', error: e);
+        }
         continue;
       }
+      _lastProgressError.remove(r.area.id);
       if (_disposed) return;
       final a = r.area;
       if (p.total > 0) {
@@ -724,6 +807,7 @@ class CoreLayerEngine extends LayerEngine {
       if (p.bytes != null && !r.update) a.bytes = p.bytes!;
       changed = true;
       if (!p.isFinished) continue;
+      logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
       try {
@@ -733,10 +817,12 @@ class CoreLayerEngine extends LayerEngine {
       final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
       if (pausedNow) {
         // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
-        a
-          ..phase = AreaPhase.failed
-          ..error = null
-          ..paused = true;
+        for (final x in _areas.values.where((x) => x.id == a.id)) {
+          x
+            ..phase = AreaPhase.failed
+            ..error = null
+            ..paused = true;
+        }
         reload = true;
         continue;
       }
@@ -767,9 +853,17 @@ class CoreLayerEngine extends LayerEngine {
       _dropPlanner();
       try {
         await _reload();
-      } catch (_) {}
+      } catch (e) {
+        logError('Layer downloads: the list could not be read after a download ended', error: e);
+      }
     }
     if (_disposed) return;
+    for (final r in settled) {
+      for (final x in _areas.values.where((x) => x.id == r.area.id)) {
+        logInfo('Layer area ${x.id} after its job ended, listed under ${x.layerId}: ${x.phase.name}, ${x.bytes} B');
+      }
+      if (!_areas.values.any((x) => x.id == r.area.id)) logInfo('Layer area ${r.area.id} after its job ended: not listed under any layer');
+    }
     if (_running.isEmpty) {
       _poll?.cancel();
       _poll = null;
@@ -872,7 +966,10 @@ class _Run {
 }
 
 class _Saved {
-  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline});
+  _Saved(this.bounds, this.minZoom, this.maxZoom, {this.outline, this.job});
+
+  /// The core's number for the download's job, kept in a browser so a reloaded page finds the running job again.
+  int? job;
   final GeoBounds bounds;
   final int minZoom;
   final int maxZoom;
@@ -885,6 +982,7 @@ class _Saved {
         'minzoom': minZoom,
         'maxzoom': maxZoom,
         if (outline != null) 'polygon': outline,
+        if (job != null) 'job': job,
       };
 
   static _Saved? fromJson(Object? j) {
@@ -892,7 +990,7 @@ class _Saved {
     final b = j['bbox'], lo = j['minzoom'], hi = j['maxzoom'];
     if (b is! List || b.length != 4 || b.any((v) => v is! num) || lo is! int || hi is! int) return null;
     final v = [for (final x in b) (x as num).toDouble()];
-    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']));
+    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi, outline: _rings(j['polygon']), job: j['job'] is int ? j['job'] as int : null);
   }
 
   static List<List<List<double>>>? _rings(Object? p) {

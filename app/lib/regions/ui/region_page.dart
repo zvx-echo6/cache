@@ -21,7 +21,9 @@ Future<void> openRegionPage(BuildContext context, RegionsState regions, String i
 
 /// The line under a region's name: "Ready · 1.8 GB" when all of it is here; otherwise only the parts that are not ready and where
 /// each stands ("Places 40% · Off-road waiting"), in the warning colour when something stopped and the danger colour when it failed.
-List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.phase) {
+List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => regions.held && (l.phase == RegionPhase.downloading || l.phase == RegionPhase.stopped)
+    ? [Part('Paused · $kHeldNote', Tone.warn), Part(' · ${l.partsLine}')]
+    : switch (l.phase) {
   // A part not published for the area (places, or directions where the published roads do not reach) counts as done; the row
   // still says so, in the neutral colour with an info mark (a search that finds no places, or a route that cannot be worked out,
   // is then understood). On a narrow row the size goes before the note does.
@@ -334,8 +336,9 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
   // counted, and the line says so.
   final shared = o.offroad && o.offroadShared ? (offroadFrom.isEmpty ? ' · off-road shared' : ' · off-road shared with ${offroadFrom.join(', ')}') : '';
   final what = switch (o.kind) {
-    RegionOfferKind.download => '${sizeWords(o.bytes)}$shared',
-    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to go',
+    // The catalogue's figure is what is fetched (gzip), never the room it takes: said so (the core's plan gives the other when asked).
+    RegionOfferKind.download => '${o.bytes == null ? sizeWords(null) : regionSizeLine(download: o.bytes)}$shared',
+    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to download',
     RegionOfferKind.tryAgain => "Couldn't finish",
     RegionOfferKind.addParts => 'On this device · off-road not added',
     RegionOfferKind.busy => 'Downloading',

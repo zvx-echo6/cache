@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -115,6 +116,9 @@ class FakeRegions implements RegionsCoreLike {
   /// The person's Pause (`set_policy` `hold`).
   bool held = false;
 
+  /// A plan is answered only when this completes (a test that looks at what a pop-up shows before the plan arrives).
+  Completer<void>? planGate;
+
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, dynamic> args = const {}]) async {
     calls.add(method);
@@ -146,6 +150,7 @@ class FakeRegions implements RegionsCoreLike {
         _applyNetwork();
         return {'ok': true};
       case 'plan':
+        await planGate?.future;
         if (offline) throw const CacheSearchException('offline', 'The routing index could not be reached');
         final size = _size(args['id'] as String);
         final routing = {'tiles': 100, 'bytes': size, 'download_bytes': size - alreadyBytes, 'shared_tiles': 30};
