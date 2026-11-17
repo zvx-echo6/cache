@@ -52,6 +52,7 @@
 //!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
+//!   POST /api/llm/unload {v:1}              -> {unloaded}: frees the loaded model (a running generation is stopped and waited out); nothing loaded is fine
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
@@ -531,6 +532,12 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
                 Err(e) => return Some(api_error(e)),
             };
             ok(json!({"stopped": svc.stop(id.as_deref())}))
+        }
+        ("POST", "unload") => {
+            if let Err(e) = llm::parse_version_only(body) {
+                return Some(api_error(e));
+            }
+            blocking(move || svc.unload().map(|unloaded| json!({"unloaded": unloaded}))).await
         }
         _ => return None,
     })
@@ -1414,7 +1421,7 @@ mod tests {
     async fn the_llm_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-llm");
         let a = file_app(&d);
-        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop")] {
+        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop"), ("POST", "/api/llm/unload")] {
             assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
         }
         let c = sign_in(&a).await;
@@ -1427,7 +1434,7 @@ mod tests {
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=2", &c, "").await.0, 400);
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=1", &c, "").await.0, 200);
         // every POST carries v:1
-        for p in ["load", "generate", "stop"] {
+        for p in ["load", "generate", "stop", "unload"] {
             let (s, v) = json_call(&a, "POST", &format!("/api/llm/{p}"), &c, r#"{"v":2,"model":"chat.gguf","request":{}}"#).await;
             assert_eq!((s, v["error"]["code"].clone()), (400, json!("unsupported_version")), "{p}");
             assert_eq!(json_call(&a, "POST", &format!("/api/llm/{p}"), &c, "{}").await.0, 400, "{p}");
