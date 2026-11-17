@@ -43,9 +43,13 @@ Future<void> openRegionOffer(BuildContext context, RegionsState regions, RegionR
   var offer = regions.offer(rec);
   // Add off-road where no pack covers the region: no offer to confirm, but never silent either: it says why (the same words as the
   // greyed rows), whichever row or button asked.
-  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places && await regions.offroadCoveredNow(rec.id) == false) {
-    if (context.mounted) tell(ScaffoldMessenger.of(context), kNoOffroadLine);
-    return;
+  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places) {
+    final covered = await regions.offroadCoveredNow(rec.id);
+    if (!context.mounted) return;
+    if (covered == false) {
+      tell(ScaffoldMessenger.of(context), kNoOffroadLine);
+      return;
+    }
   }
   offer = regions.offer(rec);
   switch (offer.kind) {

@@ -523,10 +523,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('hit-$_county')), warnIfMissed: false);
       await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty, turns: 12);
       if (!covered) {
-        expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add off-road');
+        expect(find.textContaining('No off-road data is published for this area.', findRichText: true), findsOneWidget, reason: 'before: the row offered Add off-road');
         expect(find.byType(AlertDialog), findsNothing, reason: 'the greyed row has no tap');
       } else {
-        expect(find.text('No off-road data is published for this area.'), findsNothing);
+        expect(find.textContaining('No off-road data is published for this area.', findRichText: true), findsNothing);
         expect(find.byType(AlertDialog), findsOneWidget, reason: 'a pack covers it: the normal offer');
         await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
         await tester.pump();
