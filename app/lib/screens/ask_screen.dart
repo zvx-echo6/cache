@@ -491,7 +491,7 @@ class _AskScreenState extends State<AskScreen> {
                   if (msgs.isEmpty && held == null) {
                     final app = widget.app;
                     // A model on this device that is not loaded: the line at the top says what to do; nothing more here.
-                    if (_notLoaded) return const SizedBox.shrink();
+                    if (_notLoaded && !_sendable) return const SizedBox.shrink();
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32),
@@ -499,13 +499,13 @@ class _AskScreenState extends State<AskScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              app.active == null
+                              !_sendable
                                   ? 'Choose a model at the top to start.'
                                   : 'Ask a question. Cache looks in your sources before it answers.',
                               textAlign: TextAlign.center,
                               style: TextStyle(fontSize: 18, color: k.secondary),
                             ),
-                            if (app.active == null && app.loading == null) ...[
+                            if (!_sendable && app.loading == null) ...[
                               const SizedBox(height: 16),
                               FilledButton(
                                 key: const ValueKey('ask-open-models'),
