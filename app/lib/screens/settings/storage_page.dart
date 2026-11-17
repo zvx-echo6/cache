@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../desktop/desktop.dart';
 import '../../desktop/fact_table.dart';
@@ -10,7 +11,7 @@ import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
 import '../../platform/server_log.dart';
-import '../../share/share_fallback.dart' show showShareFallback;
+import '../../platform/share_or_copy.dart' show shareTextOrCopy;
 import '../../video/format.dart';
 import '../../weather/catalogue.dart' show isAllowedAddress;
 import '../../weather/weather_state.dart';
@@ -33,10 +34,14 @@ class _StoragePageState extends State<StoragePage> {
   StorageUsage get u => d.hub.storage;
   bool _cleaning = false;
 
+  /// In a browser: Cache Server's own log, whose level the Advanced row shows.
+  late final ServerLog? _serverLog = linuxUi ? ServerLog() : null;
+
   @override
   void initState() {
     super.initState();
     u.measure();
+    _serverLog?.refresh();
   }
 
   /// A list was opened to delete from: measure again when it closes.
@@ -65,7 +70,7 @@ class _StoragePageState extends State<StoragePage> {
     final k = context.t;
     final s = d.hub.settings;
     return ListenableBuilder(
-      listenable: Listenable.merge([u, s]),
+      listenable: Listenable.merge([u, s, ?_serverLog]),
       builder: (context, _) {
         final kinds = u.kinds;
         final colors = _colors(k);
@@ -150,8 +155,8 @@ class _StoragePageState extends State<StoragePage> {
               ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: linuxUi ? 'Log: ${logLevelTitle(appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather))),
+              status: linuxUi ? 'Log: ${logLevelTitle(_serverLog?.level ?? appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather, serverLog: _serverLog))).then((_) => _serverLog?.refresh()),
             ),
           ],
         );
@@ -270,13 +275,8 @@ class _IndexingSpeedPageState extends State<IndexingSpeedPage> {
     final text = await _server!.text();
     if (!context.mounted) return;
     if (text == null) return say(context, "Couldn't read the log.");
-    await showShareFallback(
-      context,
-      title: 'Share log',
-      blurb: "Cache Server's own log: what it did and what failed. Nothing leaves it unless you copy or download it.",
-      text: text,
-      fileName: 'cache-server-log.txt',
-    );
+    // The Copy and Download sheet (Download saves the text with the browser's own save); a browser with a share sheet uses that.
+    await shareTextOrCopy(context, 'Cache Server log', text, (title, t) => SharePlus.instance.share(ShareParams(text: t, title: title)));
   }
 
   Future<void> _clearServerLog(BuildContext context) async {

@@ -7,7 +7,7 @@ import 'package:cache/platform/app_log.dart';
 import 'package:cache/platform/server_log.dart';
 import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/settings/app_settings.dart';
-import 'package:cache/share/share_fallback.dart' show startWebDownload;
+import 'package:cache/platform/share_or_copy.dart' show saveFileInBrowser, systemShareAvailable;
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -90,16 +90,27 @@ void main() {
     await tester.pump();
     expect(server.level, LogLevel.detailed);
     expect(find.descendant(of: find.byKey(const ValueKey('log-detailed')), matching: find.byIcon(Icons.check)), findsOneWidget);
-    // Share log opens the Copy and Download dialog with the server's text
+    // Share log opens the Copy / Download sheet; Download saves the server's text with the browser's own save
+    final oldShare = systemShareAvailable;
+    final oldSave = saveFileInBrowser;
+    systemShareAvailable = () => false;
+    String? savedName;
+    String? savedText;
+    saveFileInBrowser = (name, mime, bytes) {
+      savedName = name;
+      savedText = utf8.decode(bytes);
+    };
+    addTearDown(() {
+      systemShareAvailable = oldShare;
+      saveFileInBrowser = oldSave;
+    });
     await tester.tap(find.byKey(const ValueKey('log-share')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('share-fallback')), findsOneWidget);
-    String? saved;
-    startWebDownload = (name, text) => saved = '$name|$text';
-    addTearDown(() => startWebDownload = (_, _) {});
-    await tester.tap(find.byKey(const ValueKey('share-save')));
+    expect(find.byKey(const ValueKey('web-share-download')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('web-share-download')));
     await tester.pumpAndSettle();
-    expect(saved, 'cache-server-log.txt|2026-11-17T00:00:00Z ERROR something failed');
+    expect(savedText, '2026-11-17T00:00:00Z ERROR something failed');
+    expect(savedName, endsWith('.md'));
     // Clear log clears the server's, and Share log then has nothing to share
     await tester.tap(find.byKey(const ValueKey('log-clear')));
     await tester.pumpAndSettle();
