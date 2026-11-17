@@ -62,11 +62,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         [Part(modelDownloadLine()!)]
       else if (app.active == null && app.resting != null)
         // the chosen model, not in memory now (let go, or too big for the memory free at start): still the one chosen
-        [Part(app.displayName(app.resting!))]
+        [Part(app.headerName(app.resting!))]
       else if (app.active == null)
         const [Part('Choose a model', Tone.warn)]
       else
-        [Part(app.displayName(app.active!))],
+        [Part(app.headerName(app.active!))],
       [Part(d.hub.webSearch.active ? 'web search on' : 'web search off')],
     ]);
   }
