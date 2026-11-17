@@ -84,7 +84,7 @@ Future<void> _show(WidgetTester tester, Widget page, Size size, {CacheThemeId th
 }
 
 Widget _desktop(SettingsRig r) {
-  final n = r.weather.sourceCounts;
+  final n = sourceCountsOf(r.deps);
   Widget list(BuildContext context) {
     Widget row(String key, IconData icon, String title, String status) =>
         SettingsRow(key: ValueKey(key), icon: icon, title: title, status: [Part(status)], selected: isPaneSelected(context, key), onTap: () {});
@@ -140,6 +140,32 @@ void main() {
     await snap(tester, _out, 'real-6-calm-desktop-dark');
     debugLinuxUi = null;
 
+    await r.dispose(tester);
+  });
+
+  testWidgets('sources status with web search and a source of your own', (tester) async {
+    final r = await _rig(tester);
+    await _scene(tester, r, calm: false);
+    await tester.runAsync(() async {
+      await r.webSearch.saveKey('k');
+      await r.weather.replaceOwnSources([
+        {
+          'entry': entry('creek-gauge', 'hydrology', 'Creek gauge', provider: 'My town')..['description'] = 'Water level in the creek',
+          'definition': miniDefinition('creek-gauge', title: 'Creek gauge', provider: 'My town'),
+        },
+      ]);
+      await r.weather.setSourceOn(r.weather.sourceById('creek-gauge')!, true);
+      await r.weather.updateNow(force: true);
+      r.clock = r.clock.add(const Duration(minutes: 12));
+    });
+    r.webSearch.noteSearch('{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}');
+    await _show(tester, WeatherPage(deps: r.deps), const Size(390, 2300));
+    await snap(tester, _out, 'more-1-mixed-light');
+    debugLinuxUi = true;
+    addTearDown(() => debugLinuxUi = null);
+    await _show(tester, _desktop(r), const Size(1440, 1800), theme: CacheThemeId.dark, desktop: true);
+    await snap(tester, _out, 'more-2-desktop-dark');
+    debugLinuxUi = null;
     await r.dispose(tester);
   });
 }
