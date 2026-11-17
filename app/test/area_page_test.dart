@@ -2,6 +2,7 @@ import 'package:cache/downloads/download_row.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/ui/area_page.dart';
+import 'package:cache/maps/ui/catalogue_screen.dart' show areaDl;
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:flutter/material.dart';
@@ -175,5 +176,33 @@ void main() {
     expect(find.byKey(const ValueKey('part-map-resume')), findsOneWidget);
     expect(find.byIcon(Icons.check_circle), findsNothing, reason: 'no tick on a part that is not there');
     await r.dispose(tester);
+  });
+
+  test('a paused area reads Paused after the list was read again; a real failure keeps its reason (web-region-progress)', () {
+    DownloadedArea area({bool paused = false, String? error, bool interrupted = false}) => DownloadedArea(
+          id: 'a1',
+          layerId: 'basemap',
+          bounds: const GeoBounds(south: 42, west: -114, north: 43, east: -113),
+          label: 'x',
+          minZoom: 0,
+          maxZoom: 14,
+          totalTiles: 100,
+        )
+          ..phase = AreaPhase.failed
+          ..paused = paused
+          ..error = error
+          ..interrupted = interrupted
+          ..doneTiles = 40
+          ..bytes = 4000;
+    // what the core's unfinished list leaves on a paused area: the generic words (a person's Pause, or the phone cutting a background app off)
+    const generic = 'Stopped before it finished. Tap Update to continue.';
+    expect(areaDl(area(paused: true, error: generic)).phase, DlPhase.paused);
+    expect(areaDl(area(paused: true)).phase, DlPhase.paused);
+    // a real failure says why
+    final failed = areaDl(area(error: 'No connection. Connect and tap Update to continue.'));
+    expect(failed.phase, DlPhase.failed);
+    expect(failed.reason, DlReason.noConnection);
+    // an unfinished download the app was closed on is a cut-off, as before
+    expect(areaDl(area(error: generic, interrupted: true)).phase, DlPhase.failed);
   });
 }

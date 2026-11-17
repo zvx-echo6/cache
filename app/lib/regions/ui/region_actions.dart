@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cache_search/cache_search.dart' show GeoPoint;
 import 'package:flutter/material.dart';
 
+import '../../maps/layers/layer_def.dart';
 import '../../maps/ui/format.dart';
 import '../../screens/download_confirm.dart';
 import '../../settings/data_policy.dart';
@@ -24,6 +25,101 @@ String partsSentence({bool map = false, bool routing = false, bool places = fals
 
 /// The size words of a download: "1.0 GB", or "Size unknown" when the catalogue has none for it.
 String sizeWords(int? bytes) => bytes == null ? 'Size unknown' : formatBytes(bytes);
+
+/// WORDING (cache-pm, approved): with the core's plan, the size on the device and what is fetched; without one (offline), only
+/// the catalogue's download figure.
+String regionSizeLine({int? onDevice, int? download}) {
+  // WORDING (cache-pm, approved): "Takes" says it is what it will need, not what is already there.
+  if (onDevice != null && download != null) return 'Takes ${formatBytes(onDevice)} on this device (${formatBytes(download)} to download)';
+  if (download != null) return '${formatBytes(download)} to download';
+  return 'Size unknown';
+}
+
+/// How a layer is named in the pop-up's notes: the base map is "the map"; another layer by its own name without a trailing
+/// bracket ("Hillshade", "Contour lines").
+String _layerWords(LayerDef d) => d.isBase ? 'the map' : d.title.replaceFirst(RegExp(r'\s*\([^)]*\)\s*$'), '');
+
+/// "Hillshade and contour lines", "The map and hillshade": [names] as a sentence start (the first one capitalised, the others as
+/// written after "and").
+String _namesSentence(List<String> names) {
+  String low(String n) => n == 'the map' || n.isEmpty ? n : n[0].toLowerCase() + n.substring(1);
+  final parts = [for (var i = 0; i < names.length; i++) i == 0 ? names[i] : low(names[i])];
+  final joined = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
+  return joined[0].toUpperCase() + joined.substring(1);
+}
+
+/// The notes under a region's size in the download pop-up (at most two lines), from its plan's map layers:
+/// - a layer that is too big at every zoom tried is left out of the download: "Hillshade is left out: too big for one download.";
+/// - a layer that was stepped down to a lower top zoom to fit: "The map is less detailed at close zoom to fit one download.";
+/// - none when everything fits at full detail. Left out comes first. A layer that shares another layer's tiles (contour lines with
+///   hillshade) goes with it.
+List<String> regionMapNotes(RegionPlan p) {
+  final left = <LayerDef>[], less = <LayerDef>[];
+  for (final m in p.map) {
+    if (!m.estimate.allowed) {
+      left.add(m.def);
+    } else if (m.estimate.maxZoom < m.def.maxZoom) {
+      less.add(m.def);
+    }
+  }
+  for (final s in p.sharing) {
+    final owner = p.map.where((m) => m.def.id == s.ownerId).firstOrNull;
+    if (owner == null) continue;
+    if (!owner.estimate.allowed) {
+      left.add(s.def);
+    } else if (owner.estimate.maxZoom < owner.def.maxZoom) {
+      less.add(s.def);
+    }
+  }
+  return [
+    if (left.isNotEmpty) '${_namesSentence([for (final d in left) _layerWords(d)])} ${left.length == 1 ? 'is' : 'are'} left out: too big for one download.',
+    if (less.isNotEmpty) '${_namesSentence([for (final d in less) _layerWords(d)])} ${less.length == 1 ? 'is' : 'are'} less detailed at close zoom to fit one download.',
+  ];
+}
+
+/// What downloading [list] would put on the device and fetch, from the core's plan (routing and places as the core counts them, the
+/// map layers' estimates, the off-road packs); null when any plan cannot be made (offline, the index out of reach). It is asked in the
+/// background and never waited for by the pop-up: the dialog
+/// then shows the catalogue's download figure alone.
+Future<({int onDevice, int download, List<String> notes})?> planSizeOf(RegionsState regions, List<(RegionRecord, RegionOffer)> list) async {
+  var onDevice = 0, download = 0;
+  final notes = <String>[];
+  for (final (rec, o) in list) {
+    try {
+      final p = await regions.plan(rec);
+      if (o.routing) {
+        final r = p.routing;
+        if (r == null || p.routingProblem != null) return null;
+        onDevice += r.bytes;
+        download += r.downloadBytes;
+      }
+      if (o.places) {
+        final pl = p.places;
+        if (pl == null || p.placesProblem != null) return null;
+        onDevice += pl.bytes;
+        download += pl.downloadBytes;
+      }
+      if (o.map) {
+        // Every layer too big for one download (a country): the plan has no map figure, and the part is not planned.
+        if (p.mapAllowed.isEmpty) return null;
+        for (final n in regionMapNotes(p)) {
+          if (!notes.contains(n)) notes.add(n);
+        }
+        onDevice += p.mapBytes + p.mapBytesAlready;
+        download += p.mapBytes;
+      }
+      if (o.offroad && p.offroadAllowed) {
+        onDevice += p.offroad!.downloadBytes + p.offroad!.bytesAlready;
+        download += p.offroad!.downloadBytes;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+  // Nothing planned (a country whose roads are not published and whose map is too big): never "0 B"; the catalogue's figure stays.
+  if (onDevice <= 0) return null;
+  return (onDevice: onDevice, download: download, notes: notes);
+}
 
 /// Says [text] at the bottom of the screen, with [action] when given: a button's result is always shown at once.
 /// A screen that has closed meanwhile (the answer came after it went) is told nothing.
@@ -91,24 +187,37 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
   if (!context.mounted) return;
   final one = todo.length == 1 ? todo.single : null;
   final shared = todo.any((t) => t.$2.offroad && t.$2.offroadShared);
-  final summary = [
+  List<String> summaryWith(String size, [List<String> notes = const []]) => [
     if (one != null)
       partsSentence(map: one.$2.map, routing: one.$2.routing, places: one.$2.places, offroad: one.$2.offroad)
     else
       [for (final t in todo) t.$1.name].join(', '),
     if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
-    sizeWords(bytes),
+    size,
+    ...notes,
   ].where((l) => l.isNotEmpty).toList();
+  // The pop-up opens at once with the catalogue's figure, said to be the download (never room on the device). The core's plan is
+  // asked meanwhile, not waited for (1.0.27 worked the size out for up to a minute before it opened, and said "Can't be downloaded
+  // here" when that failed); when it arrives the pop-up changes in place to what the region takes on the device and what is
+  // fetched. Offline there is no plan and the line stays as it was.
+  final live = ValueNotifier<DownloadUpdate?>(null);
+  var closed = false;
+  unawaited(planSizeOf(regions, todo).then((planned) {
+    if (planned == null || closed) return;
+    live.value = (summary: summaryWith(regionSizeLine(onDevice: planned.onDevice, download: planned.download), planned.notes), bytes: planned.onDevice);
+  }));
   final m = ScaffoldMessenger.of(context);
   final choice = await askToDownload(
     context,
     title: one != null ? 'Download ${one.$1.name}?' : 'Download ${todo.length} regions?',
-    summary: summary,
+    summary: summaryWith(bytes != null ? regionSizeLine(download: bytes) : sizeWords(null)),
     bytes: bytes,
     name: one?.$1.name ?? '${todo.length} regions',
     dir: dir.path,
     policy: regions.policy,
+    updates: live,
   );
+  closed = true;
   if (choice == DownloadChoice.cancel) return;
   final names = one?.$1.name ?? '${todo.length} regions';
   tell(m, choice == DownloadChoice.now ? 'Downloading $names' : '$names will download on Wi-Fi');
@@ -143,7 +252,7 @@ Future<void> askCarryOn(BuildContext context, RegionsState regions, String id, {
     context,
     title: again ? 'Try again with $name?' : 'Carry on with $name?',
     summary: [
-      if (left != null) '${formatBytes(left)} to go.' else 'The size of what is left is not known.',
+      if (left != null) '${formatBytes(left)} to download.' else 'The size of what is left is not known.',
       if ((o?.already ?? 0) > 0) '${formatBytes(o!.already)} is already here.',
       if (addOffroad) "Off-road is not on this device yet${o!.addBytes > 0 ? ' (${formatBytes(o.addBytes)})' : ''}. Add it from $name's page.",
     ],
