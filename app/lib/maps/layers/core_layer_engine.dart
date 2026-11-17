@@ -600,11 +600,11 @@ class CoreLayerEngine extends LayerEngine {
   static void _closePlanner(Future<SearchCore?> p) => p.then((c) => c?.close()).catchError((_) {});
 
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) {
-    final key = '$layerId ${area.west} ${area.south} ${area.east} ${area.north} $zoom $_online';
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline}) {
+    final key = '$layerId ${area.west} ${area.south} ${area.east} ${area.north} $zoom $_online ${outline == null ? '' : jsonEncode(outline).hashCode}';
     final kept = _estimates[key];
     if (kept != null && DateTime.now().difference(kept.at) < estimateFor) return kept.estimate;
-    final f = _estimate(layerId, area, zoom: zoom);
+    final f = _estimate(layerId, area, zoom: zoom, outline: outline);
     _estimates[key] = (at: DateTime.now(), estimate: f);
     // A failure (no connection, the source did not answer) is not kept: the next ask tries again.
     void forget() {
@@ -616,18 +616,18 @@ class CoreLayerEngine extends LayerEngine {
     return f;
   }
 
-  Future<AreaEstimate> _estimate(String layerId, GeoBounds area, {int? zoom}) async {
+  Future<AreaEstimate> _estimate(String layerId, GeoBounds area, {int? zoom, List<List<List<double>>>? outline}) async {
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final entry = _entries[layerId];
     if (def.onlineOnly || entry?['downloadable'] == false) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
     }
     final bbox = [area.west, area.south, area.east, area.north];
-    return _onPlanner((core) => zoom != null ? _estimateAt(core, layerId, bbox, zoom) : _stepDown(core, def, layerId, bbox));
+    return _onPlanner((core) => zoom != null ? _estimateAt(core, layerId, bbox, zoom, outline) : _stepDown(core, def, layerId, bbox, outline));
   }
 
   /// The most detail that fits: the layer's top zoom first, then one less at a time, at most five steps down.
-  Future<AreaEstimate> _stepDown(SearchCore core, LayerDef def, String layerId, List<double> bbox) async {
+  Future<AreaEstimate> _stepDown(SearchCore core, LayerDef def, String layerId, List<double> bbox, List<List<List<double>>>? outline) async {
     final top = def.maxZoom;
     final floor = (top - 5).clamp(def.minZoom, top);
     Map<String, dynamic>? last;
@@ -635,7 +635,7 @@ class CoreLayerEngine extends LayerEngine {
     for (var z = top; z >= floor; z--) {
       final Map<String, dynamic> plan;
       try {
-        plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z}));
+        plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z, 'polygon': ?outline}));
       } on CacheSearchException catch (e) {
         if (e.code == 'offline') {
           return AreaEstimate(tiles: 0, bytes: 0, maxZoom: z, allowed: false, problem: 'The size is worked out from the source, which needs a connection.');
@@ -659,10 +659,10 @@ class CoreLayerEngine extends LayerEngine {
 
   /// One zoom only: no lower zoom to fall back to, so the per-download cap does not apply (the download pop-up still checks the
   /// space).
-  Future<AreaEstimate> _estimateAt(SearchCore core, String layerId, List<double> bbox, int zoom) async {
+  Future<AreaEstimate> _estimateAt(SearchCore core, String layerId, List<double> bbox, int zoom, List<List<List<double>>>? outline) async {
     final Map<String, dynamic> plan;
     try {
-      plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom}));
+      plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom, 'polygon': ?outline}));
     } on CacheSearchException catch (e) {
       final problem = e.code == 'offline' ? 'The size is worked out from the source, which needs a connection.' : e.message;
       return AreaEstimate(tiles: 0, bytes: 0, maxZoom: zoom, allowed: false, problem: problem);
@@ -689,7 +689,7 @@ class CoreLayerEngine extends LayerEngine {
   Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
-    final est = await estimate(layerId, area, zoom: zoom);
+    final est = await estimate(layerId, area, zoom: zoom, outline: outline);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
     final id = 'a${DateTime.now().millisecondsSinceEpoch}';
     final minZoom = zoom ?? def.minZoom;

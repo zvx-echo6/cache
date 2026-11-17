@@ -737,6 +737,25 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a region\'s map size is asked for its outline, so the size shown and the free-space check are the outline\'s, not the box\'s', (tester) async {
+    final r = await _Rig.boot(tester);
+    final g = (await tester.runAsync(() => r.catalogue.geometry(r.county)))!;
+    final outline = mapOutline(r.county, g);
+    expect(outline, isNotNull);
+    r.s.engine.outlineShare = 0.6;
+    final plan = (await tester.runAsync(() => r.regions.plan(r.county)))!;
+    expect(r.s.engine.outlineAsked.values.expand((v) => v), everyElement(outline), reason: 'the plan asks for the outline, not the box');
+    expect(plan.map, isNotEmpty);
+    final box = await tester.runAsync(() => r.s.engine.estimate(plan.map.first.def.id, r.county.bounds));
+    expect(plan.map.first.estimate.bytes, lessThan(box!.bytes), reason: 'the figure shown is the outline\'s');
+    // an area drawn on the map has no outline: sized as its box
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.6, north: 42.6, east: -114.4), at: DateTime(2026, 11, 11));
+    r.s.engine.outlineAsked.clear();
+    await tester.runAsync(() => r.regions.plan(drawn));
+    expect(r.s.engine.outlineAsked.values.expand((v) => v), everyElement(isNull));
+    await r.dispose(tester);
+  });
+
   testWidgets('directions with no road data for the area: its page says not available yet, as it does for places, not Ready', (tester) async {
     final r = await _Rig.boot(tester);
     await tester.runAsync(() async {

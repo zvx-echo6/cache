@@ -1059,10 +1059,12 @@ class RegionsState extends ChangeNotifier {
     if (layers.isEmpty) return done(mapProblem: 'No map layer that can be kept offline is switched on.');
     final map = <MapLayerPlan>[];
     String? mapProblem;
+    // The size is of what the download fetches: the outline's tiles, not the whole box.
+    final outline = await _mapOutline(r);
     for (final card in layers) {
       final def = maps.downloadDefFor(card, bounds);
       try {
-        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds)));
+        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds, outline: outline)));
       } catch (_) {
         mapProblem = 'Could not work out the size of the map.';
       }
@@ -1201,7 +1203,7 @@ class RegionsState extends ChangeNotifier {
         for (final card in mapLayers) {
           final def = maps.downloadDefFor(card, bounds);
           if (!asked.add(maps.engine.downloadLayerOf(def.id))) continue;
-          final est = await maps.engine.estimate(def.id, bounds);
+          final est = await maps.engine.estimate(def.id, bounds, outline: outline);
           if (!est.allowed) continue;
           final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, outline: outline);
           k.areas.add(a.id);
