@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-import '../browse/web/device_api.dart' show readServerStorage;
+import '../browse/web/device_api.dart' show readServerCleanup, readServerStorage, runServerCleanup;
 import '../browse/web/device_library.dart' show DeviceLibrary;
 import '../browse/zim_download.dart' show FreeSpace, freeBytesOnDisk;
 import 'damaged_files.dart';
@@ -39,6 +39,8 @@ class StorageUsage extends ChangeNotifier {
     this.busy = _idle,
     this.device,
     this.deviceKinds = readServerStorage,
+    this.deviceCleanupBytes = readServerCleanup,
+    this.deviceCleanUp = runServerCleanup,
     FreeSpace? freeSpace,
     TotalSpace? totalSpace,
     DamagedFiles? damaged,
@@ -52,6 +54,10 @@ class StorageUsage extends ChangeNotifier {
 
   /// In a browser: the bytes the server keeps for each kind, by kind id (null when it cannot say).
   final Future<Map<String, int>?> Function() deviceKinds;
+
+  /// In a browser: what Clean up would free on the server, and Clean up itself (the bytes freed; null when it did not run).
+  final Future<int?> Function() deviceCleanupBytes;
+  final Future<int?> Function() deviceCleanUp;
 
   /// The kinds Storage lists, in order.
   final List<DataKind> kinds;
@@ -166,6 +172,7 @@ class StorageUsage extends ChangeNotifier {
         } else {
           _bytes['library'] = device!.items.fold<int>(0, (a, i) => a + i.bytes);
         }
+        cleanupBytes = await deviceCleanupBytes() ?? 0;
         measured = device!.loaded;
         return;
       }
@@ -214,6 +221,11 @@ class StorageUsage extends ChangeNotifier {
   Future<int> cleanUp() async {
     if (busy()) return 0;
     final before = cleanupBytes;
+    if (device != null) {
+      final freed = await deviceCleanUp() ?? 0;
+      await measure();
+      return freed;
+    }
     for (final m in await _damaged.find(manifests())) {
       try {
         await File(m.path).delete();
