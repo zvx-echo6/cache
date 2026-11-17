@@ -403,7 +403,6 @@ class LocalRegion {
       // A layer the person paused stopped on purpose: it is not a failure (its row offers Resume).
       final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted && !a.paused).firstOrNull;
       if (failed != null) return RegionPartStatus(kind, PartState.failed, fraction: f, bytes: bytes, problem: areaProblemWords(failed.error));
-      if (l.any((a) => a.phase == AreaPhase.failed && a.paused)) return RegionPartStatus(kind, PartState.paused, fraction: f, bytes: bytes);
       if (l.any((a) => a.phase == AreaPhase.failed)) return RegionPartStatus(kind, PartState.stopped, fraction: f, bytes: bytes);
       if (l.any((a) => a.phase == AreaPhase.running)) return RegionPartStatus(kind, PartState.downloading, fraction: f, bytes: bytes);
       return RegionPartStatus(kind, PartState.ready, fraction: 1, bytes: bytes);
