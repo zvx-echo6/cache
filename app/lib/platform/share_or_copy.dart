@@ -20,11 +20,23 @@ Future<void> shareOrCopy(BuildContext context, String text, {required Future<voi
     await share(text);
     return;
   }
-  await Clipboard.setData(ClipboardData(text: text));
+  final ok = await _copy(text);
   if (!context.mounted) return;
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(copied)));
+    ..showSnackBar(SnackBar(content: Text(ok ? copied : _copyFailed)));
+}
+
+const String _copyFailed = "Couldn't copy. Use Download instead.";
+
+/// Puts [text] on the clipboard; false when the browser refuses it.
+Future<bool> _copy(String text) async {
+  try {
+    await Clipboard.setData(ClipboardData(text: text));
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /// A text (a conversation, a report) shared with its title. With no share sheet (a browser without navigator.share) a small sheet
@@ -46,10 +58,10 @@ Future<void> shareTextOrCopy(BuildContext context, String title, String text, Fu
     ),
   );
   if (choice == 'copy') {
-    await Clipboard.setData(ClipboardData(text: text));
+    final ok = await _copy(text);
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Copied.')));
+      ..showSnackBar(SnackBar(content: Text(ok ? 'Copied.' : _copyFailed)));
   } else if (choice == 'download') {
     saveFileInBrowser(_fileName(title), 'text/markdown', Uint8List.fromList(utf8.encode(text)));
   }
