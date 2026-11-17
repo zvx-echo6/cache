@@ -977,7 +977,7 @@ impl Handle {
                     }
                     Shown::Kw(ki, hi) => {
                         let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
-                        let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
+                        let (address, cite, title) = kw_result(self, k.kind, &k.source_id, &h.piece);
                         let mut r = json!({
                             "address": address.clone(),
                             "title": title,
@@ -1204,12 +1204,12 @@ impl Handle {
 }
 
 /// A caption or EPUB hit as a result: its address, where its citation opens, and the title the model sees.
-fn kw_result(kind: &str, source_id: &str, p: &kwindex::StoredPiece) -> (String, Cite, String) {
+fn kw_result(h: &Handle, kind: &str, source_id: &str, p: &kwindex::StoredPiece) -> (String, Cite, String) {
     let address = kwindex::address_of(kind, source_id, &p.pid);
     let quote = Some(kwindex::first_words(&p.text, kwindex::QUOTE_WORDS));
     if kind == kwindex::ZIM_EPUB {
         let link = format!("{}#cache-b{}", zimsrc::format_address(source_id, &format!("{}!/{}", p.item, p.chapter)), p.block);
-        return (address, Cite { link: Some(link), quote, ..Default::default() }, crate::kwslot::epub_title(p));
+        return (address, Cite { link: Some(link), quote, ..Default::default() }, h.epub_hit_title(source_id, p));
     }
     let link = if kind == kwindex::CAPTIONS {
         kwindex::watch_link(source_id)

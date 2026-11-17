@@ -107,7 +107,9 @@ class NavState extends ChangeNotifier {
     this.guidanceLogEvery,
     this.rerouteTimeout = const Duration(seconds: 25),
     this.arrivalEndAfter = const Duration(minutes: 5),
-  }) : _clock = clock ?? DateTime.now;
+  }) : _clock = clock ?? DateTime.now {
+    location.addListener(_onLocation);
+  }
 
   final MapBackend backend;
   final LocationService location;
@@ -723,7 +725,20 @@ class NavState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Directions were asked for before the phone had a position, and the panel said so: the routes are still wanted.
+  bool _waitingForPosition = false;
+
+  /// The phone's position changed. If directions are waiting for the first one, ask for the routes now, so the panel does not keep
+  /// saying "not known" until something else (a mode switch) asks again.
+  void _onLocation() {
+    if (_disposed || !_waitingForPosition) return;
+    if (phase != NavPhase.previewing || fromPlace != null || here == null) return;
+    _waitingForPosition = false;
+    unawaited(_fetchRoutes());
+  }
+
   Future<void> _fetchRoutes() async {
+    _waitingForPosition = false;
     final to = selected;
     final fromPin = fromPlace;
     final from = fromPin == null ? here : GeoPoint(fromPin.lat, fromPin.lon);
@@ -735,6 +750,7 @@ class NavState extends ChangeNotifier {
     offroadDataMissing = false;
     outsideMaps = false;
     if (from == null) {
+      _waitingForPosition = true;
       routeError = 'Your position is not known yet. Turn on location to get directions from where you are.';
       notifyListeners();
       return;
@@ -788,6 +804,7 @@ class NavState extends ChangeNotifier {
   /// Back from the preview to looking at the map (the place stays selected).
   void cancelDirections() {
     _routeSeq++;
+    _waitingForPosition = false;
     phase = NavPhase.browsing;
     fromPlace = null;
     stops = const [];
@@ -1203,6 +1220,7 @@ class NavState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    location.removeListener(_onLocation);
     _searchTimer?.cancel();
     _meaningTimer?.cancel();
     _guidanceLogTimer?.cancel();

@@ -365,6 +365,7 @@ Future<FgsAddEnd> fgsAddJob({
   final ingest = Directory('$support${Platform.pathSeparator}ingest');
   final s = state ?? await _backgroundAddPdfState(support, ingest);
   Timer? tick;
+  void Function()? sendNow;
   var ids = <String>{};
   AddPdfSliceResult? r;
   try {
@@ -395,6 +396,7 @@ Future<FgsAddEnd> fgsAddJob({
       control.onProgress?.call(p);
     }
 
+    sendNow = send;
     send();
     tick = Timer.periodic(progressEvery, (_) => send());
     r = await AddPdfSlice(
@@ -411,6 +413,9 @@ Future<FgsAddEnd> fgsAddJob({
     return FgsAddEnd(r.words);
   } finally {
     tick?.cancel();
+    // the last state is always said, whatever the timer last saw (a run that ends between two ticks left the notification, and a test,
+    // at the step before the last)
+    sendNow?.call();
     indexThrottleShared = before;
     refresh.cancel();
     final why = control.stopWhy ?? r?.why ?? 'stopped';

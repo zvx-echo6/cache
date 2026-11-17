@@ -8,6 +8,10 @@ enum ActOutcomeForm { toolMessage, hostEvent }
 
 const ActOutcomeForm kActOutcomeForm = ActOutcomeForm.hostEvent;
 
+/// The last key of a declined outcome, said plainly: a small model reads `"ok":true` as success. The same text as the core's
+/// `DECLINED_NOTE` (cache_act/src/reply.rs).
+const String kDeclinedNote = 'The person tapped Cancel. Nothing was done or saved.';
+
 enum ConfirmState {
   /// Waiting for a tap.
   open,
@@ -101,7 +105,10 @@ class ConfirmCard {
   /// The message that carries [outcome] into the conversation.
   Map<String, dynamic> outcomeMessage(Map<String, dynamic> outcome, {ActOutcomeForm form = kActOutcomeForm}) => switch (form) {
         ActOutcomeForm.toolMessage => {'role': 'tool', 'tool_call_id': toolCallId, 'content': jsonEncode(outcome)},
-        ActOutcomeForm.hostEvent => {'role': 'system', 'content': jsonEncode({'host_event': 'act_outcome', ...outcome})},
+        ActOutcomeForm.hostEvent => {
+          'role': 'system',
+          'content': jsonEncode({'host_event': 'act_outcome', ...outcome, if (outcome['status'] == 'declined') 'note': kDeclinedNote}),
+        },
       };
 }
 

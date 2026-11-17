@@ -298,7 +298,7 @@ fn an_outcome_is_the_system_message_content_with_its_addresses_numbered() {
     assert_eq!(take(unsafe { cs_conversation_ids(f.c) }).unwrap(), r#"{"ids":[{"n":1,"address":"place:elk","title":"Elk camp"}]}"#);
     assert_eq!(
         f.outcome(f.c, json!({"ok": true, "status": "declined", "confirm_id": "c2", "action": "places.save"})).unwrap(),
-        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.save"}"#
+        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.save","note":"The person tapped Cancel. Nothing was done or saved."}"#
     );
     assert_eq!(
         f.outcome(f.c, json!({"ok": false, "status": "failed", "confirm_id": "c3", "action": "places.save", "error": {"type": "io", "detail": "disk full"}})).unwrap(),

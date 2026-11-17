@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -490,6 +491,33 @@ void main() {
       await settle(tester);
       expect(r.weather.isOn('own-creek'), isTrue);
       expect(jsonEncode(r.liveCore.fetches), contains('own-creek'), reason: 'fetched by itself, as Update now does');
+      await r.dispose(tester);
+    });
+
+    testWidgets('Try it on a host that does not answer can be cancelled: the form stays, no error, Try it again, a late answer changes nothing', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      r.web.hold = Completer<void>();
+      r.web.files['$api/slow'] = utf8.encode(jsonEncode(answer));
+      await r.show(tester, OwnSourceFormPage(deps: r.deps));
+      await tester.enterText(find.byKey(const ValueKey('own-name')), 'Slow');
+      await tester.enterText(find.byKey(const ValueKey('own-address')), '$api/slow');
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'waiting');
+      await tester.tap(find.byKey(const ValueKey('own-try-cancel')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const ValueKey('own-try-cancel')), findsNothing);
+      expect(find.byKey(const ValueKey('own-error')), findsNothing, reason: 'no error is shown');
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).controller!.text, 'Slow', reason: 'the form stays as typed');
+      expect(tester.widget<FilledButton>(find.byKey(const ValueKey('own-try'))).onPressed, isNotNull, reason: 'Try it can be pressed again');
+      // the cancelled try answers late: nothing happens
+      r.web.hold!.complete();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(find.text('Pick what to show'), findsNothing, reason: 'a late answer is ignored');
+      expect(find.text('Add your own source'), findsWidgets);
       await r.dispose(tester);
     });
 

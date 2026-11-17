@@ -9,6 +9,7 @@
 //! tags appear, whether or not they hold text. Text inside `script` and `style` is not text.
 
 use crate::error::{Error, Result};
+use std::collections::HashMap;
 use std::io::Read;
 
 // ---------------------------------------------------------------------------------------------------------
@@ -395,6 +396,10 @@ pub struct Package {
     pub title: Option<String>,
     /// The paths (inside the zip) of the XHTML chapters in reading order.
     pub spine: Vec<String>,
+    /// The EPUB 3 navigation document (`properties="nav"`), when the manifest has one.
+    pub nav: Option<String>,
+    /// The EPUB 2 table of contents (`application/x-dtbncx+xml`), when the manifest has one.
+    pub ncx: Option<String>,
 }
 
 fn is_html_type(t: &str) -> bool {
@@ -460,7 +465,14 @@ pub fn package(zip: &Zip) -> Package {
                 "item" => {
                     if let (Some(id), Some(href)) = (attr(&attrs, "id"), attr(&attrs, "href")) {
                         let html = attr(&attrs, "media-type").is_some_and(is_html_type);
-                        manifest.push((id.to_string(), resolve(&opf_path, &decode_entities(href)), html));
+                        let path = resolve(&opf_path, &decode_entities(href));
+                        if attr(&attrs, "properties").is_some_and(|p| p.split_whitespace().any(|w| w == "nav")) {
+                            pkg.nav.get_or_insert_with(|| path.clone());
+                        }
+                        if attr(&attrs, "media-type").is_some_and(|t| t.eq_ignore_ascii_case("application/x-dtbncx+xml")) {
+                            pkg.ncx.get_or_insert_with(|| path.clone());
+                        }
+                        manifest.push((id.to_string(), path, html));
                     }
                 }
                 "itemref" => {
@@ -498,6 +510,103 @@ pub fn package(zip: &Zip) -> Package {
         pkg.spine = all;
     }
     pkg
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Chapter titles
+
+fn one_line(s: &str) -> String {
+    decode_entities(s).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The labels of the table of contents by chapter path (no fragment): the EPUB 3 navigation document's `toc` list, else its
+/// first `nav`; else the EPUB 2 `toc.ncx`. The first label of a chapter wins.
+pub fn toc_labels(zip: &Zip, pkg: &Package) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    if let Some(nav) = pkg.nav.as_deref() {
+        if let Ok(raw) = zip.read(nav) {
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            // every nav: whether it is the `toc` one, and its links (href, label)
+            let mut navs: Vec<(bool, Vec<(String, String)>)> = Vec::new();
+            let mut open_nav = false;
+            let mut link: Option<(String, String)> = None;
+            scan(&text, |t| match t {
+                Tok::Start { name, attrs, .. } if name == "nav" => {
+                    let toc = attr(&attrs, "type").is_some_and(|v| v.split_whitespace().any(|w| w == "toc"));
+                    navs.push((toc, Vec::new()));
+                    open_nav = true;
+                }
+                Tok::End { name } if name == "nav" => open_nav = false,
+                Tok::Start { name, attrs, .. } if name == "a" && open_nav => {
+                    link = attr(&attrs, "href").map(|h| (h.to_string(), String::new()));
+                }
+                Tok::Text(s) => {
+                    if let Some((_, l)) = link.as_mut() {
+                        l.push_str(s);
+                        l.push(' ');
+                    }
+                }
+                Tok::End { name } if name == "a" => {
+                    if let (Some(l), Some(n)) = (link.take(), navs.last_mut()) {
+                        n.1.push(l);
+                    }
+                }
+                _ => {}
+            });
+            let pick = navs.iter().position(|n| n.0).or((!navs.is_empty()).then_some(0));
+            if let Some(k) = pick {
+                for (href, label) in &navs[k].1 {
+                    let label = one_line(label);
+                    if !label.is_empty() {
+                        out.entry(resolve(nav, &decode_entities(href))).or_insert(label);
+                    }
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(ncx) = pkg.ncx.as_deref() {
+            if let Ok(raw) = zip.read(ncx) {
+                let text = String::from_utf8_lossy(&raw).into_owned();
+                let (mut in_label, mut label) = (false, String::new());
+                scan(&text, |t| match t {
+                    Tok::Start { name, .. } if name == "navlabel" => {
+                        in_label = true;
+                        label.clear();
+                    }
+                    Tok::End { name } if name == "navlabel" => in_label = false,
+                    Tok::Text(s) if in_label => {
+                        label.push_str(s);
+                        label.push(' ');
+                    }
+                    Tok::Start { name, attrs, .. } if name == "content" => {
+                        let l = one_line(&label);
+                        if let (false, Some(src)) = (l.is_empty(), attr(&attrs, "src")) {
+                            out.entry(resolve(ncx, &decode_entities(src))).or_insert(l);
+                        }
+                        label.clear();
+                    }
+                    _ => {}
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The title of one chapter: its table-of-contents label, else its first h1-h3, else "Part N" (its 1-based place in the
+/// spine). `None` when the chapter is in none of those (not in the spine, and no label or heading).
+pub fn chapter_title(zip: &Zip, pkg: &Package, toc: &HashMap<String, String>, chapter: &str) -> Option<String> {
+    if let Some(l) = toc.get(chapter) {
+        return Some(l.clone());
+    }
+    if let Ok(raw) = zip.read(chapter) {
+        let xhtml = String::from_utf8_lossy(&raw);
+        if let Some(b) = blocks(&xhtml).into_iter().find(|b| (1..=3).contains(&b.level) && !b.text.is_empty()) {
+            return Some(b.text);
+        }
+    }
+    pkg.spine.iter().position(|c| c == chapter).map(|i| format!("Part {}", i + 1))
 }
 
 // ---------------------------------------------------------------------------------------------------------
