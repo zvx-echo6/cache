@@ -24,7 +24,7 @@ const _unplugged40 = BatteryReading(percent: 40, charging: false);
 const _low = BatteryReading(percent: 15, charging: false);
 const _quick = Duration(milliseconds: 20);
 
-class _Platform implements FgsPlatform {
+class _Platform extends FgsPlatform {
   final List<bool> armed = [];
   bool allowed = false;
   bool grants = true;
