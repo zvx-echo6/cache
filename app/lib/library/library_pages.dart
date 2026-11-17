@@ -6,7 +6,7 @@ import '../regions/regions_state.dart';
 import '../screens/settings/about_pages.dart';
 import '../screens/settings/widgets.dart';
 import '../search/index_overview.dart';
-import '../search/index_scheduler.dart' show indexSchedulerShared;
+import '../search/index_scheduler.dart' show indexSchedulerShared, indexProgressShared;
 import '../pdf/index/pdf_index_app.dart' show pdfIndexShared;
 import '../sharing/sharing_state.dart';
 import '../sources/libraries_state.dart';
@@ -225,7 +225,7 @@ class LibraryRootPage extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
               if (fgsNoticeShared case final n?) FgsAddNoticeCard(state: n),
-              if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
+              if (indexProgressShared case final s?) IndexOverviewLine(scheduler: s),
               ...?d.rootTop?.call(context),
               SettingsGroup(
                 rows: [

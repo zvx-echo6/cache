@@ -46,6 +46,8 @@ String? indexWaitWords(IndexWait w, {BatteryReading? battery, int bytesNeeded = 
   IndexWait.heat => warm ? 'Paused · device is warm' : 'Paused · keeping the device cool',
   IndexWait.closed => 'Paused · Cache is in the background',
   IndexWait.model => 'Paused · while Ask answers',
+  // the server's index work, held while the server is short of memory (Ask's own phrase for a model waiting on memory)
+  IndexWait.memory => 'Waiting for free memory',
   IndexWait.storage => bytesNeeded > 0 ? 'Needs ${formatBytes(bytesNeeded)} free · Free space' : 'Needs more free space · Free space',
   IndexWait.person => 'Paused by you · Resume',
   IndexWait.stuck => 'Stuck · skipped for now · Retry',
@@ -80,7 +82,7 @@ String? indexItemWords(IndexItem i, {BatteryReading? battery}) {
 /// The line Settings and the Library's overview show while there is work: "Getting search ready · 1 of 9 done", and why it does
 /// not go on as usual: "Getting search ready · 1 of 9 done · Paused · battery low (12%) · plug in to continue". Null when there is
 /// no work.
-String? indexStatusLine(IndexScheduler s) {
+String? indexStatusLine(IndexProgress s) {
   if (!s.busy) return null;
   final head = 'Getting search ready · ${s.doneCount} of ${s.totalCount} done';
   final running = s.running == null ? null : s.statusOf(s.running!);
@@ -95,7 +97,7 @@ String? indexStatusLine(IndexScheduler s) {
 
 /// The work the overview names under its line: what runs now, "Army Publishing · PDFs 340 of 5,768"; else the next in turn,
 /// "Army Publishing · PDFs"; null when there is none.
-String? indexCurrentWords(IndexScheduler s) {
+String? indexCurrentWords(IndexProgress s) {
   final items = s.items;
   final i = items.where((i) => i.state == IndexState.running).firstOrNull ?? items.where((i) => i.state != IndexState.done).firstOrNull;
   if (i == null) return null;
@@ -113,7 +115,7 @@ List<String> zimIndexKeys(String id) => ['zim-pdf/$id', 'zim-epub/$id', 'zim-cap
 
 /// The few words a Library row adds for its index work, from the scheduler alone: what runs on it now (with progress), else
 /// why its first held work waits, else what is queued; null when the scheduler has nothing for it.
-String? indexRowWords(IndexScheduler s, List<String> keys) {
+String? indexRowWords(IndexProgress s, List<String> keys) {
   final items = [for (final k in keys) ?s.statusOf(k)];
   final running = items.where((i) => i.state == IndexState.running).firstOrNull;
   if (running != null) return indexItemWords(running, battery: s.reading);

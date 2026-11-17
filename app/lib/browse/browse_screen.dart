@@ -10,7 +10,7 @@ import '../pdf/index/pdf_index_ui.dart';
 import '../search/core_index_calls.dart' show coreIndexShared;
 import '../search/epub_index_row.dart';
 import '../search/index_overview.dart';
-import '../search/index_scheduler.dart' show IndexState, indexSchedulerShared;
+import '../search/index_scheduler.dart' show IndexState, indexSchedulerShared, indexProgressShared;
 import '../search/index_status.dart';
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
@@ -613,7 +613,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   ),
                 ),
               // one line while search indexes are being made: what runs and why anything waits; tap for the queue
-              if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
+              if (indexProgressShared case final s?) IndexOverviewLine(scheduler: s),
               if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage, onOpenBuilt: _openBuilt),
               for (final t in transfers) _transferRow(k, t),
               if (task != null) _taskRow(k, task),
