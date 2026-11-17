@@ -131,9 +131,10 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
         kindOverride: 'library',
       ));
     }
-    final sig = out.map((i) => '${i.key}|${i.state}|${i.progress}|${i.step}').join(';') + '|$_buildPaused';
-    if (sig == _bSig) return;
-    _bSig = sig;
+    final sig = out.map((i) => '${i.key}|${i.state}|${i.progress}|${i.step}').join(';');
+    final sigFull = '$sig|$_buildPaused';
+    if (sigFull == _bSig) return;
+    _bSig = sigFull;
     _bItems = out;
     _compose();
     notifyListeners();
