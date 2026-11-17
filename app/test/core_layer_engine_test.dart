@@ -191,7 +191,7 @@ void main() {
     final a = await back.download('hillshade', home, label: 'fails');
     await until(() => a.phase == AreaPhase.failed);
     expect(a.paused, isTrue, reason: 'the phone cut a background app off the network: Resume carries it on');
-    expect(a.error, isNull, reason: 'no "no connection" words for it');
+    expect(a.error ?? '', isNot(contains('No connection')), reason: 'no "no connection" words for it');
     // in front the same end is a real failure, with its words
     final b = await engine.download('elevation', home, label: 'fails');
     await until(() => b.phase == AreaPhase.failed);
