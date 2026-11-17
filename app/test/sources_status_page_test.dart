@@ -3,6 +3,7 @@ import 'package:cache/screens/settings_screen.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/screens/weather_screen.dart';
+import 'package:cache/weather/source_health.dart' show SourceFailure;
 import 'package:cache_search/cache_search.dart';
 import 'dart:async';
 
@@ -30,6 +31,7 @@ Future<void> _calm(WidgetTester tester, SettingsRig r) async {
     final w = r.weather;
     r.liveCore.fetchErrors.clear();
     r.liveCore.stored.clear();
+    await r.webSearch.saveKey('k');
     await w.saveKey(w.sourceById('idaho511-events')!, 'k');
     await w.saveKey(w.sourceById(_firms)!, 'k');
     await w.setSourcesOn([for (final c in w.sources) if (c.featured && !w.isOwn(c)) c], true);
@@ -41,6 +43,7 @@ Future<void> _calm(WidgetTester tester, SettingsRig r) async {
 Future<void> _mixed(WidgetTester tester, SettingsRig r) async {
   await tester.runAsync(() async {
     final w = r.weather;
+    await r.webSearch.saveKey('k');
     await w.saveKey(w.sourceById('idaho511-events')!, 'k');
     await w.setSourcesOn([for (final c in w.sources) if (c.featured && !w.isOwn(c) && c.id != _usgs) c], true);
     await w.setSourceOn(w.sourceById(_usgs)!, false);
@@ -85,7 +88,7 @@ void main() {
       await _calm(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      final n = r.weather.enabledSources.length;
+      final n = r.weather.enabledSources.length + 1; // and Web search
       expect(find.text('All $n sources working'), findsOneWidget);
       for (final h in ['NEEDS ATTENTION', 'WORKING', 'OFF']) {
         expect(find.text(h), findsNothing, reason: h);
@@ -130,7 +133,7 @@ void main() {
       expect(find.text('2 need attention'), findsOneWidget);
       await _calm(tester, r);
       await tester.pump();
-      expect(find.text('All ${r.weather.enabledSources.length} working'), findsOneWidget);
+      expect(find.text('All ${r.weather.enabledSources.length + 1} working'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -261,6 +264,99 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsOneWidget);
       expect(find.text('2 need attention · 1 off'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Web search in the same list', () {
+    const row = ValueKey('source-web-search');
+    const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
+    const limit = '{"ok":false,"error":{"type":"fetch_failed","detail":"HTTP 429 (rate limited)"}}';
+    const results = '[1] Cache (web, fetched now) - a result';
+
+    testWidgets('no key and switched off: Off, with its switch; the switch opens the Kagi key sheet', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await tester.runAsync(r.webSearch.removeKey);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.byKey(row), findsOneWidget);
+      expect(find.text('Web search'), findsOneWidget);
+      expect(_top(tester, 'OFF'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
+      expect(find.text('${r.weather.enabledSources.length} need attention'), findsNothing);
+      await tester.tap(find.descendant(of: find.byKey(row), matching: find.byType(Switch)));
+      await tester.pumpAndSettle();
+      expect(find.text('Get a key from Kagi'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a key and no search yet, or a search that worked: Working', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: find.byKey(row), matching: find.textContaining('Working')), findsOneWidget);
+      r.webSearch.noteSearch(results);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: find.byKey(row), matching: find.textContaining('Working')), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('the last search was refused (a rejected key): Key not accepted, counted, with Replace key', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      r.webSearch.noteSearch(rejected);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('1 need attention'), findsOneWidget);
+      expect(find.text('Kagi no longer accepts the saved key.'), findsOneWidget);
+      expect(_top(tester, 'NEEDS ATTENTION'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
+      await tester.tap(find.byKey(const ValueKey('replace-key-web-search')));
+      await tester.pumpAndSettle();
+      expect(find.text('Get a key from Kagi'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('the last search hit its limit: Limit reached, not counted, no button; a later good search clears it', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      r.webSearch.noteSearch(limit);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('Kagi says it has reached its limit. Cache tries again later.'), findsOneWidget);
+      expect(find.text('NEEDS ATTENTION'), findsNothing);
+      expect(find.byKey(const ValueKey('replace-key-web-search')), findsNothing);
+      r.webSearch.noteSearch(results);
+      await tester.pumpAndSettle();
+      expect(find.text('Kagi says it has reached its limit. Cache tries again later.'), findsNothing);
+      await r.dispose(tester);
+    });
+
+    testWidgets('switched on with no key (a synced setting): Needs a key, with Add key', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await _calm(tester, r);
+      await tester.runAsync(r.webSearch.removeKey);
+      r.settings.setWebSearchOn(true);
+      await r.show(tester, WeatherPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.text('Kagi needs a key.'), findsOneWidget, reason: 'a paid service, so not "free"');
+      expect(find.byKey(const ValueKey('add-key-web-search')), findsOneWidget);
+      expect(find.text('1 need attention'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('a new key, or removing it, forgets the last search', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await tester.runAsync(() => r.webSearch.saveKey('k'));
+      r.webSearch.noteSearch(rejected);
+      expect(r.webSearch.lastFailure, SourceFailure.keyRejected);
+      await tester.runAsync(() => r.webSearch.saveKey('k2'));
+      expect(r.webSearch.lastFailure, SourceFailure.none);
       await r.dispose(tester);
     });
   });
