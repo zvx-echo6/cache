@@ -12,7 +12,6 @@ use common::*;
 use serde_json::json;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use tiny_http::{Header as HttpHeader, Response, Server};
 
 /// The archive holds every tile of this box, z0 to [ZMAX].
 const ARCHIVE_BOX: [f64; 4] = [-120.0, 40.0, -108.0, 50.0];
@@ -166,21 +165,38 @@ struct Host {
     data_gate: Arc<Gate>,
 }
 
-/// Serves the archive by ranges, logging what each request read and when.
+/// Serves the archive by ranges, logging what each request read and when. A thread for every connection, and every answer
+/// closes its connection. (tiny_http, used by the other tests' stubs, serves connections from a small pool of threads that a
+/// kept-alive connection holds while idle, and it can leave a new connection waiting for a thread: the reader's 16 concurrent
+/// requests then sat unanswered until the client's 60 s timeout, so a read that was only queued was taken for one that never
+/// overlapped the others.)
 fn host(a: &Archive) -> Host {
-    let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
-    let port = server.server_addr().to_ip().unwrap().port();
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let log: Arc<Mutex<Vec<Req>>> = Default::default();
     let (leaf_gate, data_gate) = (Arc::new(Gate::new(4)), Arc::new(Gate::new(2)));
     let (leaf0, data0) = (a.header.leaf_offset, a.header.data_offset);
-    for _ in 0..48 {
-        let (s, log, bytes, leaf_gate, data_gate) = (server.clone(), log.clone(), a.bytes.clone(), leaf_gate.clone(), data_gate.clone());
-        std::thread::spawn(move || {
-            while let Ok(req) = s.recv() {
+    let (log2, bytes, lg, dg) = (log.clone(), a.bytes.clone(), leaf_gate.clone(), data_gate.clone());
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { continue };
+            let (log, bytes, leaf_gate, data_gate) = (log2.clone(), bytes.clone(), lg.clone(), dg.clone());
+            std::thread::spawn(move || {
+                // the request head (a GET carries no body)
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match conn.read(&mut buf) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
                 let start = Instant::now();
-                let range = req.headers().iter().find(|h| h.field.equiv("Range")).and_then(|h| {
-                    let v = h.value.to_string();
-                    let (a, b) = v.strip_prefix("bytes=")?.split_once('-')?;
+                let head = String::from_utf8_lossy(&head).to_string();
+                let range = head.lines().find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    let (a, b) = k.eq_ignore_ascii_case("range").then(|| v.trim())?.strip_prefix("bytes=")?.split_once('-')?;
                     let (a, b): (u64, u64) = (a.parse().ok()?, b.parse().ok()?);
                     Some((a, b - a + 1))
                 });
@@ -193,13 +209,13 @@ fn host(a: &Archive) -> Host {
                 }
                 std::thread::sleep(DELAY);
                 let (s0, e0) = ((o as usize).min(bytes.len()), ((o + l) as usize).min(bytes.len()));
-                let body = bytes[s0..e0].to_vec();
+                let body = &bytes[s0..e0];
                 log.lock().unwrap().push(Req { kind, start });
-                let r = Response::from_data(body).with_status_code(206).with_header(HttpHeader::from_bytes("Content-Type", "application/octet-stream").unwrap());
-                let _ = req.respond(r);
-            }
-        });
-    }
+                let hdr = format!("HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = conn.write_all(hdr.as_bytes()).and_then(|_| conn.write_all(body));
+            });
+        }
+    });
     Host { port, log, leaf_gate, data_gate }
 }
 
