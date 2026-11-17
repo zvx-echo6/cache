@@ -1499,6 +1499,21 @@ void main() {
       expect(speaker.said, isNotEmpty);
     });
 
+    test('a route Siri started answers with the time and distance the opening line would have said', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'fromSiri': true})) as Map;
+      final summary = r['summary'] as String;
+      expect(summary, matches(RegExp(r'^\d.*, .*\.$')));
+      // The opening of the same route, as a start without Siri says it.
+      await fromCar('stop');
+      speaker.said.clear();
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital'});
+      await pumpEventQueue();
+      expect(speaker.said.single, contains(' $summary '));
+    });
+
     test('Add stop by Siri with no route is a plain navigation without the opening line; the flag changes nothing for a stop added to a route', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
