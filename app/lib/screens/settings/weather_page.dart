@@ -425,11 +425,13 @@ class StateRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final s = state;
+    // Only a problem the person can fix is in the warning colour (and counted); Limit reached is quiet.
+    final warn = WeatherState.needsAttention(s);
     // A problem row names its state only: its sentence says how old the saved data is, and the age does not fit beside the button.
     final line2 = switch (s) {
       SourceRowState.off => [Part(gives.isEmpty ? 'Off' : gives)],
       SourceRowState.working || SourceRowState.updating => [Part(stateWord(s)), if (ago.isNotEmpty) Part(' · updated $ago')],
-      _ => [Part(stateWord(s), Tone.warn)],
+      _ => [Part(stateWord(s), warn ? Tone.warn : Tone.normal)],
     };
     final Widget? trailing = switch (s) {
       SourceRowState.working => Switch(value: true, onChanged: onSwitch),
@@ -452,7 +454,7 @@ class StateRow extends StatelessWidget {
           statusText(context, line2, maxLines: s == SourceRowState.off ? 2 : 1),
           if (sentence != null) ...[
             const SizedBox(height: 2),
-            statusText(context, [Part(sentence!, Tone.warn)], maxLines: 2),
+            statusText(context, [Part(sentence!, warn ? Tone.warn : Tone.quiet)], maxLines: 2),
           ],
         ],
       ),
