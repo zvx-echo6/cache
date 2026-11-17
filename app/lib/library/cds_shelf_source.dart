@@ -445,6 +445,41 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// two libraries counts in each.
   int booksIn(LibraryItem l) => _libs.where((x) => x.item.path == l.path).firstOrNull?.docs.length ?? 0;
 
+  /// Every document of [l]'s catalogue, as Bookshelves resolves it: the shelf it is on, Unsorted, Hidden, or no book at all (a
+  /// document the view has no copy for). Empty when [l] holds no books. In the catalogue's order.
+  List<LibraryDoc> documentsIn(LibraryItem l) {
+    final lb = _libs.where((x) => x.item.path == l.path).firstOrNull;
+    if (lb == null) return const [];
+    final at = <String, _ViewBook>{
+      for (final vb in _view.values)
+        for (final c in vb.copies)
+          for (final loc in (c['locs'] as List? ?? const [])) '$loc': vb,
+    };
+    final out = <LibraryDoc>[];
+    for (final d in lb.docs.entries) {
+      if (_readOnly) {
+        final b = _books['${lb.item.folderName}/${d.key}'];
+        if (b != null) out.add(LibraryDoc(docId: d.key, title: b.title, place: DocPlace.unsorted, book: b));
+        continue;
+      }
+      final vb = at['${lb.id}/${d.key}'];
+      final shown = vb == null ? null : (_books[vb.id] ?? _hidden[vb.id]);
+      if (vb == null || shown == null) {
+        final id = '${lb.id}/${d.key}';
+        out.add(LibraryDoc(docId: d.key, title: d.value.title, place: DocPlace.none, book: _shelfBook(id: id, lb: lb, doc: d.key, title: d.value.title)));
+        continue;
+      }
+      out.add(LibraryDoc(
+        docId: d.key,
+        title: shown.title,
+        place: vb.removed ? DocPlace.hidden : (shown.shelf == null ? DocPlace.unsorted : DocPlace.shelved),
+        book: shown,
+        copies: vb.copies.length,
+      ));
+    }
+    return out;
+  }
+
   static void _signFiles(StringBuffer b, Directory dir) {
     if (!dir.existsSync()) return;
     final files = [for (final e in dir.listSync()) if (e is File) e]..sort((a, c) => a.path.compareTo(c.path));
