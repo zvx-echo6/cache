@@ -194,7 +194,9 @@ enum CarVoice {
   /// The arguments of `navigateTo` for "Add a stop at <place>": as navigate's, with `stop` (the same request the Android car's
   /// `intent=add_a_stop` sends).
   static func stopArguments(for place: CarVoicePlace) -> [String: Any] {
-    var a = arguments(for: place)
+    // `fromSiri`: with no route this becomes a plain navigation and Siri says "Starting the route" itself, so the phone's opening
+    // line is left out; Dart ignores the flag when the place is added as a stop to a route.
+    var a = arguments(for: place, fromSiri: true)
     a["stop"] = true
     return a
   }

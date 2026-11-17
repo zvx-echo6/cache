@@ -132,7 +132,7 @@ struct CarAddStopIntent: AppIntent {
       if case .places(_, let places) = plain, !connected {
         let choices = places.map { CarPlaceEntity(place: .found($0)) }
         let chosen = try await $place.requestDisambiguation(among: choices, dialog: IntentDialog("Where to?"))
-        plain = await CarVoiceRun.navigate(chosen.place)
+        plain = await CarVoiceRun.navigate(chosen.place, fromSiri: true)
         connected = CarLink.shared.carConnected
       }
       guard let words = CarVoice.words(plain, carConnected: connected) else { throw CarVoiceFailed() }

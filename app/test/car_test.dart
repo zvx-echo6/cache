@@ -1499,6 +1499,19 @@ void main() {
       expect(speaker.said, isNotEmpty);
     });
 
+    test('Add stop by Siri with no route is a plain navigation without the opening line; the flag changes nothing for a stop added to a route', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'stop': true, 'fromSiri': true});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isEmpty);
+      final added = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'stop': true, 'fromSiri': true})) as Map;
+      expect(added['added'], isTrue);
+      expect(nav.guiding, isTrue);
+    });
+
     test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
       backend.saved.add(('Place 1', 42.6, -113.7));
       location.publish(fixAt(42.5, -113.8));
