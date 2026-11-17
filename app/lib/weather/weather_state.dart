@@ -350,9 +350,9 @@ class WeatherState extends ChangeNotifier {
   /// A state that needs the person to do something (counted in "N need attention"). Limit reached and Nothing for this place do not.
   static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
 
-  /// The sources Settings > Weather and alerts lists on its own (the featured ones; the rest are under More sources, your own sources
-  /// come later).
-  List<Connector> get listedSources => [for (final c in sources) if (c.featured && !isOwn(c)) c];
+  /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on (a source that
+  /// is off and not featured is under More sources). Your own sources come later.
+  List<Connector> get listedSources => [for (final c in sources) if (!isOwn(c) && (c.featured || isOn(c.id))) c];
 
   /// How many listed sources are on and fine, how many are on and need attention, and how many are off.
   ({int working, int attention, int off}) get sourceCounts {
@@ -617,8 +617,8 @@ class WeatherState extends ChangeNotifier {
       if (m == null) return "Couldn't reach $who. Check your connection.";
       final code = int.parse(m.group(1)!);
       if (code == 401 || code == 403) return "$who didn't accept this key. Check you copied all of it.";
-      if (code >= 500) return '$who had a problem (HTTP $code). Try again in a moment.';
-      return '$who answered with an error (HTTP $code).';
+      if (code >= 500) return '$who had a problem. Try again in a moment.';
+      return '$who answered with an error.';
     }
     if (e.code == 'bad_response') return "$who answered with something Cache couldn't read. Try again later.";
     return "Couldn't check the key. Try again.";
@@ -1610,10 +1610,10 @@ class WeatherState extends ChangeNotifier {
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
         logError('Live update failed (${e.code})', error: e.message, detail: c.id);
         final who = c.provider.isEmpty ? c.title : c.provider;
-        _sourceErrors[c.id] = _fetchFailureWords(e);
+        _sourceErrors[c.id] = _fetchFailureWords(c, e);
         kinds.putIfAbsent(c.id, () => _failureOf(c, e));
         if (e.code == 'offline') _coreOffline = true;
-        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
+        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(c, e)}');
       } catch (e) {
         logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
         logError('Live update failed', error: e, detail: c.id);
@@ -1672,19 +1672,20 @@ class WeatherState extends ChangeNotifier {
   /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
   static const String _needsKeyWords = 'needs a key';
 
-  String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
-    'quota' => 'reached its limit for now',
-    'key_missing' => _needsKeyWords,
-    'bad_response' => 'sent something Cache could not read',
-    'fetch_failed' => _httpWords(e.message),
-    _ => "couldn't update",
-  };
+  /// A failed download as the person reads it (after "… failed:" for an update, after "Not downloaded:" on the Weather screen): from
+  /// the failure kind, never the HTTP status or the core's own words (those are in the log).
+  String _fetchFailureWords(Connector c, CacheSearchException e) => _failureWords(_failureOf(c, e));
 
-  String _httpWords(String m) {
-    final h = RegExp(r'HTTP (\d{3})').firstMatch(m);
-    if (h != null) return 'the service answered HTTP ${h.group(1)}';
-    return "couldn't be reached";
-  }
+  static String _failureWords(SourceFailure k) => switch (k) {
+    SourceFailure.limit => 'reached its limit for now',
+    SourceFailure.keyMissing => _needsKeyWords,
+    SourceFailure.keyRejected => 'no longer accepts the saved key',
+    SourceFailure.unreadable => 'sent something Cache could not read',
+    SourceFailure.providerError => 'the service had a problem',
+    SourceFailure.outOfArea => 'has nothing for this place',
+    SourceFailure.unreachable => "couldn't be reached",
+    SourceFailure.none => "couldn't update",
+  };
 
   // ---------------------------------------------------------------- the status line
 
@@ -1898,7 +1899,7 @@ class WeatherState extends ChangeNotifier {
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
       expired: g['expired'] == true || (kept && until != null && _now().isAfter(until)),
-      error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
+      error: le is Map ? _fetchFailureWords(c, CacheSearchException('${le['code'] ?? 'fetch_failed'}', '${le['message']}')) : _sourceErrors[c.id],
     );
   }
 

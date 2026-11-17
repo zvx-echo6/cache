@@ -88,8 +88,12 @@ class _WeatherPageState extends State<WeatherPage> {
       listenable: Listenable.merge([w, d.hub.settings]),
       builder: (context, _) {
         final all = w.sources;
-        final listed = [for (final c in all) if (c.featured) c];
-        final more = [for (final c in all) if (!c.featured) c];
+        // The featured sources, then any other source that is on (it needs watching like the rest); off and not featured: More sources.
+        final listed = [
+          for (final c in all) if (c.featured) c,
+          for (final c in all) if (!c.featured && !w.isOwn(c) && w.isOn(c.id)) c,
+        ];
+        final more = [for (final c in all) if (!listed.contains(c)) c];
         // Your own sources keep their old row until their step; they are not counted and sit with the working ones.
         SourceRowState state(Connector c) => w.isOwn(c) ? SourceRowState.working : w.rowStateOf(c);
         final attention = [for (final c in listed) if (WeatherState.needsAttention(state(c))) c];
