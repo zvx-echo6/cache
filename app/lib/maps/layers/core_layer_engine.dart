@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:http/http.dart' as http;
 
 import '../../app_fs.dart';
@@ -31,8 +32,10 @@ class CoreLayerEngine extends LayerEngine {
     bool? reattachJobs,
     this.estimateFor = const Duration(minutes: 10),
     this.reloadTimeout = const Duration(seconds: 20),
+    bool Function()? inBackground,
   })  : _connected = connected ?? _platformConnected,
-        reattachJobs = reattachJobs ?? plat.isWeb;
+        reattachJobs = reattachJobs ?? plat.isWeb,
+        _inBackground = inBackground ?? _appInBackground;
 
   /// In a browser the downloads are the server's and go on with no tab open: the core's job number is kept with the unfinished
   /// download, and a page loaded again takes the running job back (so Pause and the progress reach it). A phone's jobs end with
@@ -47,6 +50,19 @@ class CoreLayerEngine extends LayerEngine {
 
   final Future<bool> Function() _connected;
   final Duration pollEvery;
+
+  /// Whether the app is out of the front now (Home, Recents, another app). A download that ends with no connection then is the
+  /// phone cutting a background app off the network, not a lost connection: it is shown Paused and Resume carries it on.
+  final bool Function() _inBackground;
+
+  static bool _appInBackground() {
+    try {
+      final s = WidgetsBinding.instance.lifecycleState;
+      return s == AppLifecycleState.hidden || s == AppLifecycleState.paused;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// How long a look waits for the core's list after a download ended. In a browser every call goes through the server's one engine
   /// a call at a time, so the list can queue behind a long one (a size estimate); the finished download is shown done before the
@@ -841,7 +857,10 @@ class CoreLayerEngine extends LayerEngine {
         await r.job.free().timeout(reloadTimeout);
       } catch (_) {}
       if (_disposed) return;
-      final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
+      // The phone cuts a background app off the network (Android within seconds of leaving): that is a pause, not a lost connection.
+      final wasPausing = _pausing.remove(a.id);
+      final cutOff = p.state == JobState.failed && (p.errorCode == 'offline' || p.errorCode == 'fetch_failed') && !r.update && _inBackground();
+      final pausedNow = cutOff || (wasPausing && p.state == JobState.cancelled && !r.update);
       if (pausedNow) {
         // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
         for (final x in _areas.values.where((x) => x.id == a.id)) {

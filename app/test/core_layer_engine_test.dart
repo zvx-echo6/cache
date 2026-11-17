@@ -178,6 +178,27 @@ void main() {
     expect(a.phase, AreaPhase.done);
   });
 
+  test('a download that ends with no connection after the app left the front is Paused, not Stopped: no connection (web-region-progress)', () async {
+    final back = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      inBackground: () => true,
+    );
+    addTearDown(back.dispose);
+    await back.start();
+    final a = await back.download('hillshade', home, label: 'fails');
+    await until(() => a.phase == AreaPhase.failed);
+    expect(a.paused, isTrue, reason: 'the phone cut a background app off the network: Resume carries it on');
+    expect(a.error ?? '', isNot(contains('No connection')), reason: 'no "no connection" words for it');
+    // in front the same end is a real failure, with its words
+    final b = await engine.download('elevation', home, label: 'fails');
+    await until(() => b.phase == AreaPhase.failed);
+    expect(b.paused, isFalse);
+    expect(b.error, isNotNull);
+  });
+
   test('cancel stops a first download and leaves nothing', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
     // cancel returns when the download has ended and been cleaned up, so there is nothing to wait for afterwards.
