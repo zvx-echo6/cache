@@ -287,7 +287,7 @@ class _AskScreenState extends State<AskScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Text(
-                  a == null ? 'No model loaded' : '${app.displayName(a)} · loaded · about ${formatBytes(a.size)} of memory',
+                  a == null ? 'No model loaded' : '${app.headerName(a)} · loaded · about ${formatBytes(a.size)} of memory',
                   key: const ValueKey('model-menu-head'),
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text),
                 ),
@@ -375,7 +375,7 @@ class _AskScreenState extends State<AskScreen> {
                 ? 'Loading…'
                 : app.active == null
                 ? 'No model'
-                : app.displayName(app.active!);
+                : app.headerName(app.active!);
             return InkWell(
               key: const ValueKey('model-name'),
               onTap: _modelMenu,

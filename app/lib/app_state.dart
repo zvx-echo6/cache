@@ -197,9 +197,12 @@ class AppState extends ChangeNotifier {
   /// "SmolLM2 135M Instruct · Q4_0" (from its own metadata once loaded); the file name if not known yet.
   String displayName(ModelEntry e) => recommendedName?.call(e) ?? _names[e.key] ?? e.name;
 
-  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"); [displayName] when none was parsed. A recommended
-  /// model's is its name from the list.
-  String plainName(ModelEntry e) => recommendedName?.call(e) ?? _plainNames[e.key] ?? displayName(e);
+  /// The model's plain name, without the quantisation label ("Gemma 4 E2B"; a non-recommended model's general.name): the stored one,
+  /// else the stored full name, else the file name. It never carries the recommended list's name.
+  String plainName(ModelEntry e) => _plainNames[e.key] ?? _names[e.key] ?? e.name;
+
+  /// The name the Ask header, its model menu and the one-line Settings row show: the short name. Change this one line to switch them.
+  String headerName(ModelEntry e) => plainName(e);
 
   /// The quantisation label to show with [e]'s size: only a recommended model has one, and only when its name from the list does not
   /// already end with it ("Gemma 4 E4B · Q4_K_M" needs none). It is the one read when the model was loaded, else the one in its file
