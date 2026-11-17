@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../library/add_pdf/add_pdf_state.dart';
 import '../platform/app_log.dart';
+import '../maps/ui/format.dart' show formatBytes;
 import '../platform/battery.dart';
 import '../sources/libraries_state.dart' show defaultOwnFolderOnDisk, kLibrarySettingsFile;
 
@@ -132,6 +133,13 @@ FgsStart fgsStartOnLeave({required bool android, required Iterable<AddPdfJob> jo
 /// The Android side: whether leaving starts the service, and whether notifications are allowed.
 abstract class FgsPlatform {
   Future<void> arm(bool on);
+
+  /// Whether leaving now starts the service for a running region download (a layer job); false when the last one has ended (the
+  /// service stops when no PDF add runs either).
+  Future<void> armLayers(bool on) async {}
+
+  /// The region download's words, for the notification (see [FgsLayerWords.toJson]).
+  Future<void> layerProgress(Map<String, Object?> p) async {}
   Future<bool> notificationsAllowed();
   Future<bool> requestNotifications();
 }
@@ -143,6 +151,24 @@ class MethodChannelFgsPlatform implements FgsPlatform {
   Future<void> arm(bool on) async {
     try {
       await kFgsAppChannel.invokeMethod<void>('arm', {'on': on});
+    } on MissingPluginException {
+      // not Android
+    }
+  }
+
+  @override
+  Future<void> armLayers(bool on) async {
+    try {
+      await kFgsAppChannel.invokeMethod<void>('armLayers', {'on': on});
+    } on MissingPluginException {
+      // not Android
+    }
+  }
+
+  @override
+  Future<void> layerProgress(Map<String, Object?> p) async {
+    try {
+      await kFgsAppChannel.invokeMethod<void>('layerProgress', p);
     } on MissingPluginException {
       // not Android
     }
@@ -167,6 +193,45 @@ class MethodChannelFgsPlatform implements FgsPlatform {
   }
 }
 
+/// A running region map download (a core layer job), as far as the notification needs it.
+class FgsLayerJob {
+  const FgsLayerJob({required this.id, required this.label, required this.done, required this.total, this.bytes = 0});
+
+  final String id;
+  final String label;
+  final int done;
+  final int total;
+  final int bytes;
+}
+
+/// What the notification says of region downloads: [title] ("Downloading Austria", "Downloading 2 regions"), [text] ("42%", or the
+/// bytes while the tile total is not known; null when nothing is known) and the [bar] (0 to 1; null: indeterminate).
+class FgsLayerWords {
+  const FgsLayerWords({required this.title, required this.text, required this.bar, required this.count});
+
+  final String title;
+  final String? text;
+  final double? bar;
+  final int count;
+
+  Map<String, Object?> toJson() => {'title': title, 'text': text, 'bar': bar, 'count': count};
+}
+
+/// The words for [jobs] (the running region downloads). WORDING QUESTION (owner): draft, not yet approved.
+FgsLayerWords fgsLayerWords(Iterable<FgsLayerJob> jobs) {
+  final all = jobs.toList();
+  final total = all.fold<int>(0, (a, j) => a + j.total);
+  final done = all.fold<int>(0, (a, j) => a + j.done);
+  final bytes = all.fold<int>(0, (a, j) => a + j.bytes);
+  final bar = total > 0 ? (done / total).clamp(0.0, 1.0) : null;
+  return FgsLayerWords(
+    title: all.length == 1 ? 'Downloading ${all.first.label}' : 'Downloading ${all.length} regions',
+    text: bar != null ? '${(bar * 100).floor()}%' : (bytes > 0 ? formatBytes(bytes) : null),
+    bar: bar,
+    count: all.length,
+  );
+}
+
 /// Keeps Kotlin told whether leaving now starts the service, and asks once for notifications at the first background add.
 ///
 /// The question (Android 13 and later): at the first time adds are pending and the person could leave (the first background add),
@@ -179,6 +244,8 @@ class FgsAddCoordinator {
     required this.jobs,
     required this.battery,
     required this.askedFile,
+    this.layerJobs,
+    this.onLayerPause,
     this.android = true,
     this.sdk,
     this.ask,
@@ -189,6 +256,12 @@ class FgsAddCoordinator {
   final FgsPlatform platform;
   final Iterable<AddPdfJob> Function() jobs;
   final BatteryReader battery;
+
+  /// The running region downloads: the service also stays up for these (null: none are watched).
+  final Iterable<FgsLayerJob> Function()? layerJobs;
+
+  /// The notification's Pause (`layerPause`): pauses the region downloads, which keep what they fetched. There is no Cancel there.
+  final Future<void> Function()? onLayerPause;
 
   /// Remembers that the question was asked (it is asked once, ever).
   final File Function() askedFile;
@@ -209,12 +282,17 @@ class FgsAddCoordinator {
   /// What Android's side calls on [kFgsAppChannel].
   Future<Object?> handleCall(MethodCall call) async {
     if (call.method == 'left') onLeft?.call();
+    if (call.method == 'layerPause') await onLayerPause?.call();
     return null;
   }
 
   bool _armed = false;
   bool get armed => _armed;
   bool _asking = false;
+
+  /// Whether a region download is armed (leaving now starts the service for it, or it already runs).
+  bool get layersArmed => _layersArmed;
+  bool _layersArmed = false;
 
   /// Called whenever the adds change, and as Cache comes to the front: decides, and tells Kotlin when it changed.
   Future<FgsStart> update() async {
@@ -225,8 +303,21 @@ class FgsAddCoordinator {
       _armed = on;
       await platform.arm(on);
     }
+    await _updateLayers();
     if (on) await _maybeAsk();
     return d;
+  }
+
+  /// The region downloads: armed while any runs, with its words said (Android shows them once per second at most); disarmed, and
+  /// told so, when the last one ends.
+  Future<void> _updateLayers() async {
+    final running = android && layerJobs != null ? layerJobs!().toList() : const <FgsLayerJob>[];
+    final on = running.isNotEmpty;
+    if (on != _layersArmed) {
+      _layersArmed = on;
+      await platform.armLayers(on);
+    }
+    if (on) await platform.layerProgress(fgsLayerWords(running).toJson());
   }
 
   Future<void> _maybeAsk() async {

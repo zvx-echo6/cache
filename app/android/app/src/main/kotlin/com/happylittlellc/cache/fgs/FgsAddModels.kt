@@ -64,3 +64,19 @@ data class FgsFinish(
         )
     }
 }
+
+/**
+ * What the Dart side says of a running region map download (lib/background/fgs_add.dart, `FgsLayerWords`) on `co.cache/fgs_add`
+ * (`layerProgress`): [title] ("Downloading Austria"), [text] ("42%"; null when nothing is known), the [bar] (0..1, or null:
+ * indeterminate) and how many regions run.
+ */
+data class FgsLayerWords(val title: String, val text: String?, val bar: Double?, val count: Int) {
+    companion object {
+        fun from(m: Map<*, *>) = FgsLayerWords(
+            title = m["title"] as? String ?: "Downloading a region",
+            text = m["text"] as? String,
+            bar = (m["bar"] as? Number)?.toDouble(),
+            count = (m["count"] as? Number)?.toInt() ?: 1,
+        )
+    }
+}

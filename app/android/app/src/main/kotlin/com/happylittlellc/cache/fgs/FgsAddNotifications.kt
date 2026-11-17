@@ -127,6 +127,25 @@ object FgsAddNotifications {
         return b.build()
     }
 
+    // The lock screen's private version of a region download: no region name. WORDING QUESTION (owner): draft, not yet approved
+    const val PUBLIC_REGION_TITLE = "Downloading maps"
+
+    /**
+     * The ongoing notification while a region map download runs, with the same Pause (it pauses the download and keeps what it
+     * fetched; there is no Cancel here). [w] null: nothing is known yet. WORDING QUESTION (owner): draft, not yet approved.
+     */
+    fun layers(context: Context, w: FgsLayerWords?): Notification {
+        val b = base(context, CHANNEL_ADDING, w?.title ?: "Downloading a region", w?.text)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setPublicVersion(publicVersion(context, CHANNEL_ADDING, PUBLIC_REGION_TITLE, PUBLIC_ADDING_TEXT))
+            .addAction(0, "Pause", toService(context, 7413, ACTION_PAUSE))
+        val bar = w?.bar
+        if (bar != null) b.setProgress(1000, (bar * 1000).toInt().coerceIn(0, 1000), false) else b.setProgress(0, 0, true)
+        return b.build()
+    }
+
     /**
      * Shown at once when Pause is tapped, while the run finishes the piece it is on (a piece cannot be interrupted): the person sees
      * it was heard. Still ongoing (the service runs until the run ends), with no action; the ending notification replaces it.
