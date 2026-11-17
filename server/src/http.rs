@@ -1127,6 +1127,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_is_the_servers_own_and_needs_a_session() {
+        let d = TempDir::new("http-version");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        assert_eq!(route(&a, "GET", "/api/version", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/version", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+    }
+
+    #[tokio::test]
     async fn login_sets_a_cookie_and_it_works() {
         let d = TempDir::new("http2");
         let mut a = app(&d);
