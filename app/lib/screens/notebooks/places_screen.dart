@@ -1112,7 +1112,8 @@ Future<void> importPlacesInto(BuildContext context, NotebookState nb, {String? n
     if (r == null) return;
     final n = (r['places'] as num?)?.toInt() ?? 0;
     final shapes = ((r['lines'] as num?)?.toInt() ?? 0) + ((r['areas'] as num?)?.toInt() ?? 0);
-    final into = (r['notebook'] as Map?)?['def']?['name'] ?? 'the notebook';
+    // No notebook when the file had only lines and areas: they became a layer under Maps > Layers > My layers.
+    final into = (r['notebook'] as Map?)?['def']?['name'] ?? (r['notebook'] == null && n == 0 && shapes > 0 ? 'My layers' : 'the notebook');
     final nbId = ((r['notebook'] as Map?)?['id'] ?? notebookId) as String?;
     messenger.showSnackBar(SnackBar(
       content: Text('${n == 1 ? '1 place' : '$n places'}${shapes > 0 ? ' and $shapes lines and areas' : ''} added to $into'),

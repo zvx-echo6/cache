@@ -140,6 +140,22 @@ class LayerSheet extends StatelessWidget {
                         value: l.visible,
                         onChanged: (v) => u.setVisible(l, v),
                       ),
+                if (userLayers case final u?)
+                  for (final l in u.shapeLayers)
+                    SwitchListTile(
+                      key: ValueKey('my-layer-${l.id}'),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                      subtitle: Text(l.shapes == 1 ? '1 line or area' : '${l.shapes} lines and areas', style: TextStyle(fontSize: 14, color: k.secondary)),
+                      secondary: IconButton(
+                        key: ValueKey('remove-${l.id}'),
+                        tooltip: 'Delete ${l.name}',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => _deleteList(context, u, l),
+                      ),
+                      value: l.visible,
+                      onChanged: (v) => u.setVisible(l, v),
+                    ),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
@@ -212,7 +228,7 @@ class LayerSheet extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${l.name}?'),
-        content: const Text('Its repeaters are taken off the map and Cache no longer knows them. You can add the file again later.'),
+        content: Text(l.isRepeaters ? 'Its repeaters are taken off the map and Cache no longer knows them. You can add the file again later.' : 'Its lines and areas are taken off the map and Cache no longer knows them. You can add the file again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(key: const ValueKey('confirm-delete-list'), onPressed: () => Navigator.pop(ctx, true), child: Text('Delete', style: TextStyle(color: ctx.t.emergency))),
