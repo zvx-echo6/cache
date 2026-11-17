@@ -162,16 +162,15 @@ class NotebookSyncCore {
     this.logseqConfig,
     this.importTag = kDefaultImportTag,
     DateTime Function()? clock,
-    required Future<Templates> Function() templates,
+    required this.templates,
     SyncErrorLog? onError,
   })  : _now = clock ?? DateTime.now,
-        _templates = templates,
         _logError = onError ?? _noLog;
 
   final SyncErrorLog _logError;
 
   /// The built-in templates (and starter logs): a notebook that arrives without its definition is made from the one its files name.
-  final Future<Templates> Function() _templates;
+  final Future<Templates> Function() templates;
 
   /// The tag that imports a note (Obsidian and two-way Logseq).
   final String importTag;
@@ -555,7 +554,7 @@ class NotebookSyncCore {
     // No definition from this device's last sync, and the files say which built-in template the notebook was made from: made from
     // that template, with its fields, so every value lands in its field (the property names come from the labels, the same on both
     // devices). A template this build does not have is made as before.
-    final built = shared == null && d.template != null ? _builtIn(await _templates(), d.template!) : null;
+    final built = shared == null && d.template != null ? _builtIn(await templates(), d.template!) : null;
     if (built != null) {
       final made = await notebook.saveNotebook(
         template: built.template,
