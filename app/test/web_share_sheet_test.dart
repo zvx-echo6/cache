@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:cache/chat/answer_reports.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/history/conversation_store.dart';
-import 'package:cache/platform/share_or_copy.dart' show saveFileInBrowser, systemShareAvailable;
+import 'package:cache/platform/share_or_copy.dart' show saveFileInBrowser, shareOrCopy, systemShareAvailable;
 import 'package:cache/screens/answer_reports_ui.dart';
 import 'package:cache/screens/history_drawer.dart';
 import 'package:cache/theme.dart';
@@ -116,5 +116,53 @@ void main() {
     await tester.pumpAndSettle();
     expect(clipWrites.single, contains('How do I treat a burn?'));
     expect(find.text('Copied.'), findsOneWidget);
+  });
+
+  void failingClipboard(WidgetTester tester) {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') throw PlatformException(code: 'unavailable', message: 'clipboard blocked');
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+  }
+
+  testWidgets('Copy with a clipboard that fails says Couldn\'t copy, not Copied.', (tester) async {
+    failingClipboard(tester);
+    final dir = Directory.systemTemp.createTempSync('web-share-clip-fail');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final a = AnswerReports(dirOverride: dir);
+    await tester.runAsync(() => a.add(AnswerReport(
+          at: DateTime.utc(2026, 10, 27),
+          question: 'How do I treat a burn?',
+          answer: 'Cool it.',
+          model: 'Gemma 4 E2B',
+          reason: ReportReason.harmful,
+        )));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ReportedAnswersPage(reports: a, share: (t, md) async {})));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Share'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+    expect(find.text("Couldn't copy. Use Download instead."), findsOneWidget);
+    expect(find.text('Copied.'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the link share with a clipboard that fails says Couldn\'t copy, not Link copied', (tester) async {
+    failingClipboard(tester);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(onPressed: () => shareOrCopy(context, 'cachelink://x', share: (t) async {}, copied: 'Link copied'), child: const Text('Go')),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('Go'));
+    await tester.pumpAndSettle();
+    expect(find.text("Couldn't copy. Use Download instead."), findsOneWidget);
+    expect(find.text('Link copied'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }
