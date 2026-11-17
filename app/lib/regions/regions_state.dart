@@ -400,7 +400,8 @@ class LocalRegion {
       final done = l.fold<int>(0, (s, a) => s + a.doneTiles), total = l.fold<int>(0, (s, a) => s + a.totalTiles);
       final f = total == 0 ? null : (done / total).clamp(0.0, 1.0);
       final bytes = l.fold<int>(0, (s, a) => s + a.bytes);
-      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted).firstOrNull;
+      // A layer the person paused stopped on purpose: it is not a failure (its row offers Resume).
+      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted && !a.paused).firstOrNull;
       if (failed != null) return RegionPartStatus(kind, PartState.failed, fraction: f, bytes: bytes, problem: areaProblemWords(failed.error));
       if (l.any((a) => a.phase == AreaPhase.failed)) return RegionPartStatus(kind, PartState.stopped, fraction: f, bytes: bytes);
       if (l.any((a) => a.phase == AreaPhase.running)) return RegionPartStatus(kind, PartState.downloading, fraction: f, bytes: bytes);
