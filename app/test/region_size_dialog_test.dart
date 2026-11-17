@@ -168,10 +168,11 @@ Map<String, dynamic> _layerJson(String id, String title, {bool unavailable = fal
       'source': {'type': 'xyz', 'url': 'https://t.test/{z}/{x}/{y}.webp', 'minzoom': 0, 'maxzoom': 14, 'tile_size': 512},
       'approx_tile_bytes': 1000,
       if (unavailable) 'fake_unavailable': true,
-      'download_limit_tiles': ?limitTiles,
+      'download_limit_tiles': limitTiles ?? (1 << 30),
+      'download_limit_bytes': 1 << 40,
     };
 
-/// Only these layers are on (the first one is wholly allowed at full detail, so the map part is planned); the pop-up for the county is
+/// Only these layers are on (the first one is wholly allowed at full detail, so the map part is planned; titles must not match a built-in layer's, which would join its card); the pop-up for the county is
 /// open and its plan has arrived.
 Future<void> _openWith(WidgetTester tester, RegionsState regions, SettingsRig s, List<Map<String, dynamic>> layers) async {
   await tester.runAsync(() async {
@@ -207,7 +208,7 @@ void _regionNotesTests() {
   testWidgets('everything fits at full detail: no note under the size', (tester) async {
     final (regions, core, s) = await _boot(tester);
     core.sizes[_county] = 120 << 20;
-    await _openWith(tester, regions, s, [_layerJson('okshade', 'Hillshade')]);
+    await _openWith(tester, regions, s, [_layerJson('okshade', 'Shaded relief')]);
     expect(_inDialog('left out'), findsNothing);
     expect(_inDialog(lessText), findsNothing);
     expect(_inDialog('less detailed'), findsNothing);
@@ -217,8 +218,8 @@ void _regionNotesTests() {
   testWidgets('a layer too big at every zoom is left out, by its own name, and the size is of what downloads', (tester) async {
     final (regions, core, s) = await _boot(tester);
     core.sizes[_county] = 120 << 20;
-    await _openWith(tester, regions, s, [_layerJson('okmap', 'Okay layer'), _layerJson('bigshade', 'Hillshade', unavailable: true)]);
-    expect(_inDialog('Hillshade is left out: too big for one download.'), findsOneWidget);
+    await _openWith(tester, regions, s, [_layerJson('okmap', 'Okay layer'), _layerJson('bigshade', 'Shaded relief', unavailable: true)]);
+    expect(_inDialog('Shaded relief is left out: too big for one download.'), findsOneWidget);
     expect(_inDialog('less detailed'), findsNothing);
     await _close(tester, regions, s);
   });
@@ -227,8 +228,8 @@ void _regionNotesTests() {
     final (regions, core, s) = await _boot(tester);
     core.sizes[_county] = 120 << 20;
     final limit = await _tilesUpTo(tester, regions, 13); // the top zoom (14) does not fit, 13 does
-    await _openWith(tester, regions, s, [_layerJson('okmap', 'Okay layer'), _layerJson('stepshade', 'Hillshade', limitTiles: limit)]);
-    expect(_inDialog('Hillshade $lessText'), findsOneWidget);
+    await _openWith(tester, regions, s, [_layerJson('okmap', 'Okay layer'), _layerJson('stepshade', 'Shaded relief', limitTiles: limit)]);
+    expect(_inDialog('Shaded relief $lessText'), findsOneWidget);
     expect(_inDialog('left out'), findsNothing);
     await _close(tester, regions, s);
   });
@@ -239,10 +240,10 @@ void _regionNotesTests() {
     final limit = await _tilesUpTo(tester, regions, 13);
     await _openWith(tester, regions, s, [
       _layerJson('okmap', 'Okay layer'),
-      _layerJson('bigshade', 'Hillshade', unavailable: true),
+      _layerJson('bigshade', 'Shaded relief', unavailable: true),
       _layerJson('stepdetail', 'Land detail', limitTiles: limit),
     ]);
-    expect(_inDialog('Hillshade is left out: too big for one download.'), findsOneWidget);
+    expect(_inDialog('Shaded relief is left out: too big for one download.'), findsOneWidget);
     expect(_inDialog('Land detail $lessText'), findsOneWidget);
     final left = tester.getTopLeft(_inDialog('is left out')).dy, less = tester.getTopLeft(_inDialog('less detailed')).dy;
     expect(left, lessThan(less), reason: 'left out comes first');
@@ -254,10 +255,10 @@ void _regionNotesTests() {
     core.sizes[_county] = 120 << 20;
     await _openWith(tester, regions, s, [
       _layerJson('okmap', 'Okay layer'),
-      _layerJson('bigshade', 'Hillshade', unavailable: true),
+      _layerJson('bigshade', 'Shaded relief', unavailable: true),
       _layerJson('bigcontours', 'Contour lines', unavailable: true),
     ]);
-    expect(_inDialog('Hillshade and contour lines are left out: too big for one download.'), findsOneWidget);
+    expect(_inDialog('Shaded relief and contour lines are left out: too big for one download.'), findsOneWidget);
     await _close(tester, regions, s);
   });
 
