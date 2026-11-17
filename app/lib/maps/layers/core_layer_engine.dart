@@ -30,6 +30,7 @@ class CoreLayerEngine extends LayerEngine {
     this.openPlanner,
     bool? reattachJobs,
     this.estimateFor = const Duration(minutes: 10),
+    this.reloadTimeout = const Duration(seconds: 20),
   })  : _connected = connected ?? _platformConnected,
         reattachJobs = reattachJobs ?? plat.isWeb;
 
@@ -46,6 +47,11 @@ class CoreLayerEngine extends LayerEngine {
 
   final Future<bool> Function() _connected;
   final Duration pollEvery;
+
+  /// How long a look waits for the core's list after a download ended. In a browser every call goes through the server's one engine
+  /// a call at a time, so the list can queue behind a long one (a size estimate); the finished download is shown done before the
+  /// list is read, and a list that does not answer in this time is read again on the next look instead of holding every look off.
+  final Duration reloadTimeout;
 
   /// The mobile data rule for downloads and catalogue updates; null: no rule.
   final DataPolicy? policy;
@@ -761,6 +767,11 @@ class CoreLayerEngine extends LayerEngine {
     _tickStarted = DateTime.now();
     try {
       await _look();
+    } catch (e, st) {
+      // A look that fails must not end the looking: the job is already out of the running list, so nothing else would read the
+      // list again and the page would stay as it was.
+      _reloadPending = true;
+      logError('Layer downloads: a look at the running downloads failed', error: e, stack: st);
     } finally {
       _ticking = false;
     }
@@ -772,6 +783,9 @@ class CoreLayerEngine extends LayerEngine {
 
   bool _ticking = false;
 
+  /// The list could not be read in time after a download ended: the next look reads it again.
+  bool _reloadPending = false;
+
   Future<void> _look() async {
     var changed = false;
     var reload = false;
@@ -780,7 +794,7 @@ class CoreLayerEngine extends LayerEngine {
       if (_disposed) return;
       JobProgress p;
       try {
-        p = await r.job.progress();
+        p = await r.job.progress().timeout(reloadTimeout);
       } catch (e) {
         // Said when it changes, not at every look: why a running row stays as it was.
         final msg = e.toString();
@@ -810,8 +824,20 @@ class CoreLayerEngine extends LayerEngine {
       logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
       _running.remove(a.id);
       settled.add(r);
+      if (p.state == JobState.done) {
+        // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
+        // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
+        for (final x in _areas.values.where((x) => x.id == a.id)) {
+          x
+            ..phase = AreaPhase.done
+            ..error = null
+            ..doneTiles = p.total > 0 ? p.total : x.doneTiles;
+          if (p.bytes != null) x.bytes = p.bytes!;
+        }
+        notifyListeners();
+      }
       try {
-        await r.job.free();
+        await r.job.free().timeout(reloadTimeout);
       } catch (_) {}
       if (_disposed) return;
       final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
@@ -828,7 +854,11 @@ class CoreLayerEngine extends LayerEngine {
       }
       if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
         // Finished, or a first download cancelled: nothing is left to carry on.
-        if (_saved.remove(a.id) != null) await _storeSaved();
+        if (_saved.remove(a.id) != null) {
+          try {
+            await _storeSaved().timeout(reloadTimeout);
+          } catch (_) {}
+        }
       }
       switch (p.state) {
         case JobState.done:
@@ -837,7 +867,7 @@ class CoreLayerEngine extends LayerEngine {
           if (!r.update) {
             // A first download that is cancelled leaves nothing behind.
             try {
-              await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id}));
+              await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id})).timeout(reloadTimeout);
             } catch (_) {}
             if (_disposed) return;
             _areas.remove(_key(a.layerId, a.id));
@@ -848,12 +878,17 @@ class CoreLayerEngine extends LayerEngine {
       }
       reload = true;
     }
-    if (reload) {
+    if (reload || _reloadPending) {
       // Tiles were added or removed: the second core reads the stores afresh.
       _dropPlanner();
       try {
-        await _reload();
+        await _reload().timeout(reloadTimeout);
+        _reloadPending = false;
+      } on TimeoutException {
+        _reloadPending = true;
+        logInfo('Layer downloads: the list was not answered in ${reloadTimeout.inSeconds} s; it is read again at the next look');
       } catch (e) {
+        _reloadPending = true;
         logError('Layer downloads: the list could not be read after a download ended', error: e);
       }
     }
@@ -864,7 +899,7 @@ class CoreLayerEngine extends LayerEngine {
       }
       if (!_areas.values.any((x) => x.id == r.area.id)) logInfo('Layer area ${r.area.id} after its job ended: not listed under any layer');
     }
-    if (_running.isEmpty) {
+    if (_running.isEmpty && !_reloadPending) {
       _poll?.cancel();
       _poll = null;
     }

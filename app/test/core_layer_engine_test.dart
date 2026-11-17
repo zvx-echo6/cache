@@ -147,6 +147,39 @@ void main() {
     expect(engine.storageOf('hillshade'), 0);
   });
 
+  test('a finished job is shown done at once even when the core\'s list is slow to answer, and the list is read again later (web-region-progress)', () async {
+    // The browser: every call goes through the server one at a time, so the list read after a job ends can queue behind a long call.
+    final slow = await SearchCore.open(const [], extra: {'test_port': server.port, 'test_list_block_ms': 3000}, native: makeLayersNative);
+    final e = CoreLayerEngine(
+      openCore: () async => slow,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      reloadTimeout: const Duration(milliseconds: 200),
+    );
+    addTearDown(() async {
+      e.dispose();
+      await slow.close();
+    });
+    await e.start();
+    final a = await e.download('hillshade', home, label: 'slow list');
+    final clock = Stopwatch()..start();
+    while (clock.elapsedMilliseconds < 2000 && a.phase != AreaPhase.done) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    // The list blocks for 3 s after the job reports done: the page must not wait for it.
+    expect(a.phase, AreaPhase.done, reason: 'done within 2 s although the list takes 3 s');
+    expect(a.doneTiles, 20);
+    expect(a.bytes, 20000);
+    // The look is not stuck: the list is read again at a later look, and every look still runs.
+    var lists = 0;
+    for (var i = 0; i < 600 && lists < 3; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      lists = ((await slow.layers('test_calls'))['calls'] as List).where((c) => (c as String).startsWith('list')).length;
+    }
+    expect(lists, greaterThanOrEqualTo(3), reason: 'start, the one that timed out, and the retry');
+  });
+
   test('cancel stops a first download and leaves nothing', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
     // cancel returns when the download has ended and been cleaned up, so there is nothing to wait for afterwards.

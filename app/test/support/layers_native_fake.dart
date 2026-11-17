@@ -16,6 +16,10 @@ class LayersNative implements CsNative {
   int scale = 1;
   int plans = 0;
   int planMs = 0;
+
+  /// After a job has reported done, every list call takes this long (a call that queues behind a long one at the server).
+  int listBlockMs = 0;
+  bool _jobDone = false;
   bool online = true;
   String? error;
   final Map<String, Map<String, dynamic>> user = {};
@@ -80,6 +84,7 @@ class LayersNative implements CsNative {
     port = ((jsonDecode(configJson) as Map)['test_port'] as num?)?.toInt() ?? 4321;
     scale = ((jsonDecode(configJson) as Map)['test_scale'] as num?)?.toInt() ?? 1;
     planMs = ((jsonDecode(configJson) as Map)['test_plan_ms'] as num?)?.toInt() ?? 0;
+    listBlockMs = ((jsonDecode(configJson) as Map)['test_list_block_ms'] as num?)?.toInt() ?? 0;
     return 7;
   }
 
@@ -105,6 +110,7 @@ class LayersNative implements CsNative {
         port = int.parse(arg!);
         return jsonEncode({'port': port});
       case 'list':
+        if (_jobDone && listBlockMs > 0) sleep(Duration(milliseconds: listBlockMs));
         return jsonEncode(_list());
       case 'refresh':
         if (!online) {
@@ -195,6 +201,7 @@ class LayersNative implements CsNative {
       ..['tiles_present'] = 20
       ..['bytes'] = 20000
       ..['created'] = j['update'] == true ? '2026-10-27T10:00:00Z' : a['created'];
+    _jobDone = true;
     return jsonEncode({'state': 'done', 'done': 20, 'total': 20, 'error': null, 'detail': {'bytes': 20000}});
   }
 
