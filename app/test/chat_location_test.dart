@@ -207,6 +207,27 @@ void main() {
     location.dispose();
   });
 
+  testWidgets('web: a refresh that never answers keeps the stale fix for the map, bounded at 6 s, and the turn is not known',
+      (tester) async {
+    LocationService.debugWeb = true;
+    addTearDown(() => LocationService.debugWeb = null);
+    final source = FakeSource()..state = LocationPermissionState.granted..pendingFix = Completer<Fix>().future;
+    final location = LocationService(source: source, settingsDirOverride: Directory.systemTemp.createTempSync('loc'));
+    location.permission = LocationPermissionState.granted;
+    final old = aged(const Duration(minutes: 5));
+    location.publish(old);
+    var done = false;
+    Fix? got;
+    location.prepareForChat(isCancelled: () => false).then((f) { got = f; done = true; });
+    await tester.pump(const Duration(seconds: 3));
+    expect(done, isFalse, reason: 'the browser bound is longer than the phone 2 s');
+    await tester.pump(const Duration(seconds: 4));
+    expect(done, isTrue);
+    expect(got, isNull);
+    expect(location.fix, same(old));
+    location.dispose();
+  });
+
   test('an older fix arriving out of order is ignored', () async {
     final source = FakeSource()..state = LocationPermissionState.granted;
     final written = <Fix?>[];
