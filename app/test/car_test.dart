@@ -1483,6 +1483,22 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a route Siri started has no opening line of its own (Siri says it); one started otherwise has', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'fromSiri': true});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isEmpty);
+      await fromCar('stop');
+      speaker.said.clear();
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital'});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isNotEmpty);
+    });
+
     test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
       backend.saved.add(('Place 1', 42.6, -113.7));
       location.publish(fixAt(42.5, -113.8));
