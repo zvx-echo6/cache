@@ -778,12 +778,12 @@ void main() {
           'approx_tile_bytes': 40000,
         };
     await tester.runAsync(() async {
-      await r.s.engine.saveDefinition(jsonEncode(shade('sharedA')));
-      await r.s.engine.saveDefinition(jsonEncode(shade('sharedB')));
-      r.s.maps.setOn('sharedA', true);
-      r.s.maps.setOn('sharedB', true);
+      await r.s.engine.saveDefinition(jsonEncode(shade('sharedone')));
+      await r.s.engine.saveDefinition(jsonEncode(shade('sharedtwo')));
+      r.s.maps.setOn('sharedone', true);
+      r.s.maps.setOn('sharedtwo', true);
     });
-    expect(r.s.maps.isOn('sharedA') && r.s.maps.isOn('sharedB'), isTrue, reason: 'both are on');
+    expect(r.s.maps.isOn('sharedone') && r.s.maps.isOn('sharedtwo'), isTrue, reason: 'both are on');
     final plan = (await tester.runAsync(() => r.regions.plan(r.county)))!;
     final shared = plan.map.where((m) => r.s.engine.downloadLayerOf(m.def.id) == 'sharedsrc').toList();
     expect(shared, hasLength(1), reason: 'one estimate for the store, not one per layer that reads it');
