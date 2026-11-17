@@ -401,6 +401,15 @@ class NavState extends ChangeNotifier {
   DateTime? _lastReroute;
   bool _routeStarted = false;
 
+  /// The route's time and distance in the words the opening line uses, while guidance runs; null when there is no route.
+  String? get routeSummary {
+    final r = route, e = _engine;
+    return r == null || e == null || !guiding ? null : e.summary(r);
+  }
+
+  /// The opening line of the guidance just started is not spoken (see [start]).
+  bool _quietOpening = false;
+
   bool get available => backend.available;
   bool get guiding => phase == NavPhase.guiding;
 
@@ -817,7 +826,10 @@ class NavState extends ChangeNotifier {
   // ---- guidance ----------------------------------------------------------------------------------------------
 
   /// Start turn-by-turn on the chosen route.
-  Future<void> start() async {
+  ///
+  /// [quietOpening]: the opening line is not spoken for this start (Siri started the route and says its own words); every later
+  /// prompt is spoken as usual.
+  Future<void> start({bool quietOpening = false}) async {
     final r = route;
     if (r == null || phase != NavPhase.previewing) return;
     _cancelArrivalEnd();
@@ -829,6 +841,7 @@ class NavState extends ChangeNotifier {
     progress = null;
     _sendRoute = true;
     _routeStarted = false;
+    _quietOpening = quietOpening;
     _lastReroute = null;
     _passedStops.clear();
     _routeStops = _aheadIndexes();
@@ -1001,7 +1014,11 @@ class NavState extends ChangeNotifier {
       }
       if (!_routeStarted) {
         _routeStarted = true;
-        _say(_engine!.opening(r, p.current));
+        if (_quietOpening) {
+          _quietOpening = false;
+        } else {
+          _say(_engine!.opening(r, p.current));
+        }
       }
       for (final line in _engine!.update(p)) {
         _say(line);

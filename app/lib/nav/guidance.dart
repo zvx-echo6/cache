@@ -77,10 +77,13 @@ class GuidanceEngine {
     return '';
   }
 
+  /// The route's time and distance as the opening says them ("21 minutes, 15 miles."). Siri says it for a route it started.
+  String summary(MapRoute route) => '${fmt.spokenDuration(route.durationS)}, ${fmt.spoken(route.distanceM)}.';
+
   /// The first thing said when guidance starts.
   String opening(MapRoute route, ProgressManeuver first) {
     final lead = 'Starting navigation to ${destination.isEmpty ? 'your destination' : destination}.';
-    final where = '${fmt.spokenDuration(route.durationS)}, ${fmt.spoken(route.distanceM)}.';
+    final where = summary(route);
     final firstStep = first.isOffroad ? _sentence(clauseFor(first)) : _sentence(_asClause(first.spokenInstruction));
     return '$lead $where $firstStep';
   }
