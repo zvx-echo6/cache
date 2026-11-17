@@ -16,6 +16,7 @@ import 'models/search_model.dart' show isSearchModelFile;
 import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'platform/bench_options.dart';
 import 'platform/memory.dart';
+import 'models/gguf_header.dart' show readGgufGeneralName;
 import 'platform/memory_need.dart';
 import 'theme.dart';
 import 'platform/app_log.dart';
@@ -191,6 +192,14 @@ class AppState extends ChangeNotifier {
 
   /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
   ModelSettings? Function(ModelEntry e)? settingsFor;
+
+  /// Whether the recommended list names this file (by file name): true or false once the list is known, null while it is not. A
+  /// recommended model keeps the name llama.cpp's description gives it; any other is named by its file's own `general.name`; while
+  /// it is unknown (or this is not set) the description's name is kept, so a wrong name is never stored.
+  bool? Function(ModelEntry e)? isRecommended;
+
+  /// Completes when the recommended list has been read; a load waits for it before it names the model.
+  Future<void> Function()? recommendedReady;
 
   /// The settings of the model loaded now (none for a model the list does not name).
   ModelSettings activeSettings = ModelSettings.none;
@@ -430,7 +439,15 @@ class AppState extends ChangeNotifier {
       final info = await _loadModel(entry.path, own.nCtx ?? kContextTokens);
       logInfo('Model loaded in ${sw.elapsedMilliseconds} ms; ${await memorySnapshot()}; ${mappedFileSummary(entry.path) ?? ''}', detail: entry.fileName);
       if (info.weights != null) logInfo('Model weights: ${info.weights} (${info.weightsReason ?? ''})');
-      final parts = prettyModelParts(info.description, fileName: entry.fileName);
+      try {
+        await recommendedReady?.call();
+      } catch (_) {}
+      // Only a model the list is known not to name takes its own name; unknown counts as recommended (the name as before).
+      final recommended = isRecommended?.call(entry) ?? true;
+      // A browser's model is the server's: it sends the file's name in the load answer. On a device the file is read here (only the
+      // header's pairs up to the name), and only for a model that will use it.
+      final ownName = recommended ? null : (info.generalName ?? (kIsWeb ? null : readGgufGeneralName(entry.path)));
+      final parts = modelNameParts(info.description, fileName: entry.fileName, generalName: ownName, recommended: recommended);
       if (parts != null) {
         _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
         _plainNames[entry.key] = parts.name;
