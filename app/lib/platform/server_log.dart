@@ -5,12 +5,21 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../browse/web/device_api.dart' show kDeviceCallTimeout;
-import 'app_log.dart' show LogLevel;
+import 'app_log.dart' show AppLog, LogLevel, appLog;
 
 /// In a browser: Cache Server's own app log (`/api/log`, signed in only): its level, its text for Share log, and Clear log. A browser
 /// has no log file of its own, and this is never the server's system journal. The level is the server's, kept there.
 class ServerLog extends ChangeNotifier {
-  ServerLog({this.client});
+  ServerLog({this.client, AppLog? local}) : _local = local;
+
+  /// The browser app's own logger, which follows the server's level (so what the app logs in the console matches the level chosen
+  /// here: Detailed prints messages and stacks, as on a phone). The app's own [appLog] by default.
+  final AppLog? _local;
+  AppLog get _log => _local ?? appLog;
+
+  void _follow(LogLevel l) {
+    if (_log.level != l) unawaited(_log.setLevel(l));
+  }
 
   /// The HTTP client (tests give their own).
   final http.Client? client;
@@ -40,6 +49,7 @@ class ServerLog extends ChangeNotifier {
     final l = await _json(() => _c.get(Uri.parse('/api/log/level')));
     final t = await _json(() => _c.get(Uri.parse('/api/log')));
     level = _level(l?['level']) ?? level;
+    if (l != null) _follow(level);
     bytes = (t?['bytes'] as num?)?.toInt() ?? bytes;
     loaded = l != null;
     notifyListeners();
@@ -51,6 +61,7 @@ class ServerLog extends ChangeNotifier {
     final got = _level(r?['level']);
     if (got == null) return false;
     level = got;
+    _follow(got);
     notifyListeners();
     return true;
   }
