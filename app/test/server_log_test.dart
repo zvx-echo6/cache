@@ -72,6 +72,30 @@ void main() {
     expect(await ServerLog(client: MockClient((r) async => throw Exception('down'))).text(), isNull);
   });
 
+  test('the browser app\'s own logger follows the server\'s level: read on open and set from Settings', () async {
+    final client = MockClient((r) async {
+      final result = switch ('${r.method} ${r.url.path}') {
+        'GET /api/log/level' => {'level': 'detailed'},
+        'PUT /api/log/level' => {'level': (jsonDecode(r.body) as Map)['level']},
+        _ => {'text': '', 'bytes': 0},
+      };
+      return http.Response(jsonEncode({'ok': true, 'result': result}), 200);
+    });
+    final lines = <String>[];
+    final local = AppLog(echo: lines.add);
+    expect(local.level, LogLevel.standard);
+    final server = ServerLog(client: client, local: local);
+    await server.refresh();
+    expect(local.level, LogLevel.detailed, reason: 'read when Settings opens');
+    expect(local.writes(LogLevel.detailed), isTrue);
+    expect(await server.setLevel(LogLevel.minimal), isTrue);
+    expect(local.level, LogLevel.minimal, reason: 'set from Settings');
+    // a server that cannot be read leaves the logger where it was
+    final down = ServerLog(client: MockClient((r) async => http.Response('{}', 401)), local: local);
+    await down.refresh();
+    expect(local.level, LogLevel.minimal);
+  });
+
   testWidgets('in the browser the Advanced log rows use the server log: level, Share log (copy or download) and Clear log', (tester) async {
     debugLinuxUi = true;
     addTearDown(() => debugLinuxUi = null);
