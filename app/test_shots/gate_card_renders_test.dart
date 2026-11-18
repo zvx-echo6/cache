@@ -40,6 +40,7 @@ void main() {
         'plainNames': {key: 'Gemma 4 E2B'},
       }));
       await tester.runAsync(app.init);
+      await tester.runAsync(app.wake);
       expect(app.heldForMemory, isTrue);
     }
     final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
