@@ -175,24 +175,72 @@ Future<int?> drawnSizeOf(BuildContext context, RegionsState regions, RegionRecor
   }
 }
 
+String _flags(List<(RegionRecord, RegionOffer)> l) => [for (final t in l) '${t.$2.map}${t.$2.routing}${t.$2.places}${t.$2.offroad}'].join(',');
+
+/// A catalogue region (not an area drawn on the map): the only kind whose parts line is checked against what is really there.
+bool _checked(RegionRecord r) => !r.isDrawn && r.kind != kAreaRegionKind;
+
+/// The parts the pop-up can say at once, from what is already known: a region the catalogue sizes has them in its sizes (directions
+/// only with routing data, off-road only with a pack over it); one it does not size has the map alone until the checks come back
+/// ([honestOffer]). Nothing is assumed to be there.
+RegionOffer knownOffer(RegionsState regions, RegionRecord rec, RegionOffer o) {
+  if (!_checked(rec) || o.kind != RegionOfferKind.download) return o;
+  final sizes = rec.sizes;
+  final covered = regions.offroadCovered(rec.id);
+  final routing = o.routing && sizes != null && (sizes.routing ?? 0) > 0;
+  final offroad = o.offroad && covered != false && (sizes != null ? sizes.hasOffroad : covered == true);
+  return _with(o, routing: routing, offroad: offroad);
+}
+
+/// [knownOffer] once the checks are in: directions only when the routing plan has data, off-road only when the off-road catalogue has
+/// a pack over the region (the rule that greys "Add off-road"). A check that cannot be made now (offline) leaves the part as it was
+/// known: it never blocks or fails the pop-up.
+Future<RegionOffer> honestOffer(RegionsState regions, RegionRecord rec, RegionOffer o) async {
+  if (!_checked(rec) || o.kind != RegionOfferKind.download) return o;
+  var routing = o.routing;
+  try {
+    final p = await regions.plan(rec);
+    final r = p.routing;
+    if (p.routingProblem == null) routing = r != null && (r.bytes > 0 || r.downloadBytes > 0);
+  } catch (_) {}
+  bool? covered;
+  try {
+    covered = await regions.offroadCoveredNow(rec.id);
+  } catch (_) {}
+  final offroad = covered ?? o.offroad;
+  return _with(o, routing: routing, offroad: offroad);
+}
+
+RegionOffer _with(RegionOffer o, {required bool routing, required bool offroad}) => RegionOffer(
+  o.kind,
+  routing: routing,
+  map: o.map,
+  places: o.places,
+  offroad: offroad,
+  bytes: o.bytes,
+  already: o.already,
+  addBytes: o.addBytes,
+  offroadShared: offroad && o.offroadShared,
+);
+
 /// The download pop-up for regions not on the phone, then each starts (now, or once on Wi-Fi). One region: "Download Jerome County?",
 /// "Map, directions, places and off-road." and its size; several: "Download 3 regions?" and their sizes in all.
 Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List<RegionRecord> list, {Future<int?> Function()? drawnSize}) async {
-  final offers = [for (final r in list) (r, regions.offer(r))];
-  final todo = [for (final o in offers) if (o.$2.kind == RegionOfferKind.download) o];
+  final offers = [for (final r in list) (r, knownOffer(regions, r, regions.offer(r)))];
+  var todo = [for (final o in offers) if (o.$2.kind == RegionOfferKind.download) o];
   if (todo.isEmpty) return;
   var bytes = todo.every((t) => t.$2.bytes != null) ? todo.fold<int>(0, (s, t) => s + t.$2.bytes!) : null;
   if (bytes == null && drawnSize != null && todo.length == 1) bytes = await drawnSize();
   final dir = await regions.supportDir();
   if (!context.mounted) return;
-  final one = todo.length == 1 ? todo.single : null;
-  final shared = todo.any((t) => t.$2.offroad && t.$2.offroadShared);
+  final one0 = todo.length == 1 ? todo.single : null;
+  // What the line says is what is downloaded: [todo] is what the checks have found so far, and the download below asks for exactly that.
   List<String> summaryWith(String size, [List<String> notes = const []]) => [
-    if (one != null)
-      partsSentence(map: one.$2.map, routing: one.$2.routing, places: one.$2.places, offroad: one.$2.offroad)
+    if (todo.length == 1)
+      partsSentence(map: todo.single.$2.map, routing: todo.single.$2.routing, places: todo.single.$2.places, offroad: todo.single.$2.offroad)
     else
       [for (final t in todo) t.$1.name].join(', '),
-    if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
+    if (todo.any((t) => t.$2.offroad && t.$2.offroadShared)) "Off-road data for the state is already on this device; only this area's terrain is new.",
     size,
     ...notes,
   ].where((l) => l.isNotEmpty).toList();
@@ -202,24 +250,38 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
   // fetched. Offline there is no plan and the line stays as it was.
   final live = ValueNotifier<DownloadUpdate?>(null);
   var closed = false;
-  unawaited(planSizeOf(regions, todo).then((planned) {
-    if (planned == null || closed) return;
-    live.value = (summary: summaryWith(regionSizeLine(onDevice: planned.onDevice, download: planned.download), planned.notes), bytes: planned.onDevice);
-  }));
+  final startFlags = _flags(todo);
+  unawaited(() async {
+    // The parts line first (the checks never hold the pop-up back), then the size of exactly those parts.
+    final checked = [for (final t in todo) (t.$1, await honestOffer(regions, t.$1, t.$2))];
+    if (closed) return;
+    todo = checked;
+    final planned = await planSizeOf(regions, todo);
+    if (closed) return;
+    // Without a plan (offline) the catalogue's figure stays only if the parts are what it counted.
+    final sameParts = _flags(todo) == startFlags;
+    live.value = (
+      summary: summaryWith(
+        planned != null ? regionSizeLine(onDevice: planned.onDevice, download: planned.download) : (bytes != null && sameParts ? regionSizeLine(download: bytes) : sizeWords(null)),
+        planned?.notes ?? const [],
+      ),
+      bytes: planned != null ? planned.onDevice : (sameParts ? bytes : null),
+    );
+  }());
   final m = ScaffoldMessenger.of(context);
   final choice = await askToDownload(
     context,
-    title: one != null ? 'Download ${one.$1.name}?' : 'Download ${todo.length} regions?',
+    title: one0 != null ? 'Download ${one0.$1.name}?' : 'Download ${todo.length} regions?',
     summary: summaryWith(bytes != null ? regionSizeLine(download: bytes) : sizeWords(null)),
     bytes: bytes,
-    name: one?.$1.name ?? '${todo.length} regions',
+    name: one0?.$1.name ?? '${todo.length} regions',
     dir: dir.path,
     policy: regions.policy,
     updates: live,
   );
   closed = true;
   if (choice == DownloadChoice.cancel) return;
-  final names = one?.$1.name ?? '${todo.length} regions';
+  final names = one0?.$1.name ?? '${todo.length} regions';
   tell(m, choice == DownloadChoice.now ? 'Downloading $names' : '$names will download on Wi-Fi');
   for (final (rec, o) in todo) {
     unawaited(_run(m, 'download ${rec.name}', () async {
