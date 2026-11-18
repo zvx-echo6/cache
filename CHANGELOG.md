@@ -6,6 +6,47 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 53, test) - 2026-11-17
+
+### Car and Siri
+- Siri: say "Navigate with Cache", "Start a Cache route" or "Get Cache directions", and Siri asks "Where to?"; any place works. "Navigate to <place> with Cache" works for saved places
+- Siri knows your saved places' names from the phone, not only after CarPlay has listed them
+- A route Siri starts is confirmed once: Siri says the place, the time and the distance, and Cache doesn't talk over it
+
+### Maps and navigation
+- A region download keeps going when you leave Cache, with a notification you can pause
+- Region sizes come from the region's real outline, so the size shown is the size downloaded; a paused area still says Paused after a restart
+- A region's download offer says when the map or hillshade is less detailed, or left out, to fit one download
+- A region's download offer lists only what the region really has (map, directions, off-road)
+- A file with only lines in it becomes a map layer you can see, find in My layers and delete
+- The long-press menu opens under your finger, also in landscape with the side bar; Back closes it first
+- Directions ask for routes again as soon as your position arrives
+- Starting two map downloads together keeps their progress separate
+
+### Library and search
+- A book library in the Catalog opens a list of its books, one row per book
+- An EPUB search hit shows the book's title
+- ZIM downloads use Kiwix's mirrors, switch mirror when one fails or stalls, and check the file
+- Searching several libraries at once uses fewer threads
+
+### Ask
+- Send while the model is resting or loading: the question waits and is sent once it has loaded; a slim Load bar replaces the big card
+- "Ask about this" and "Ask Cache" send the question once the model has loaded
+- Settings shows a chosen model that loads when Ask opens, not "No model chosen"
+- A model's tuned and stock versions are named apart
+- Deleting a chat asks "Delete this chat?" first
+- After you decline a confirm card, the model is told nothing was saved
+
+### Weather
+- Weather watches only places this device has, and a place you delete stays gone, also after a sync
+- Place search shows results as you type
+- A new own source downloads as soon as it is saved; a slow Try it can be cancelled
+- The own-source form's examples start "For example:"; "turn off" agrees with the number of sources
+- Settings > Weather and alerts shows each source's state, problems first, with one button to fix each (Add key, Replace key, Try again)
+
+### Other
+- No false "Cache stopped unexpectedly" after a car run or an app update
+
 ## 1.1.0 (build 52, test) - 2026-11-16
 
 ### Maps and navigation
