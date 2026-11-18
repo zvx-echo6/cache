@@ -364,6 +364,26 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('downloads in the same millisecond receive distinct native area IDs', () async {
+    engine.dispose();
+    engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      areaIdMilliseconds: () => 1731848400123,
+    );
+    await engine.start();
+
+    final a = await engine.download('hillshade', home, label: 'first');
+    final b = await engine.download('elevation', home, label: 'second');
+
+    expect(a.id, isNot(b.id));
+    expect(a.id, matches(RegExp(r'^a[0-9]+$')));
+    expect(b.id, matches(RegExp(r'^a[0-9]+$')));
+    expect(engine.allAreas.map((area) => area.id).toSet(), {a.id, b.id});
+  });
+
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {
     final outline = [
       [
