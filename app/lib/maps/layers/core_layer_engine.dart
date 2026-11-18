@@ -835,7 +835,10 @@ class CoreLayerEngine extends LayerEngine {
       final n = (e as dynamic).name;
       if (n is String && n.isNotEmpty && n.length <= 40) name = n;
     } catch (_) {}
-    return name == null ? '${e.runtimeType}' : '${e.runtimeType} ($name)';
+    if (name != null) return '${e.runtimeType} ($name)';
+    // A JS error object Dart reads only as "JSObject": its text starts with its name ("ReferenceError: x is not defined").
+    final js = RegExp(r'^([A-Z][A-Za-z]*(?:Error|Exception))\b').firstMatch('$e')?.group(1);
+    return js ?? '${e.runtimeType}';
   }
 
   /// The list could not be read in time after a download ended: the next look reads it again.
@@ -843,105 +846,12 @@ class CoreLayerEngine extends LayerEngine {
   Future<void>? _reloadInFlight;
 
   Future<void> _look() async {
-    var changed = false;
-    var reload = false;
-    final settled = <_Run>[];
+    final st = _LookState();
     for (final r in List.of(_running.values)) {
       if (_disposed) return;
-      JobProgress p;
-      try {
-        _enter('progress');
-        p = await r.job.progress().timeout(reloadTimeout);
-      } catch (e) {
-        // Said when it changes, not at every look: why a running row stays as it was.
-        final msg = e.toString();
-        if (_lastProgressError[r.area.id] != msg) {
-          _lastProgressError[r.area.id] = msg;
-          logError('Layer download ${r.area.id} (${r.area.layerId}): its progress could not be read', error: e);
-        }
-        continue;
-      }
-      _lastProgressError.remove(r.area.id);
-      if (_disposed) return;
-      final a = r.area;
-      if (p.total > 0) {
-        if (!r.update) {
-          a
-            ..totalTiles = a.totalTiles == 0 || r.totalFromJob ? p.total : a.totalTiles
-            ..doneTiles = p.done;
-        } else {
-          a
-            ..totalTiles = p.total
-            ..doneTiles = p.done;
-        }
-      }
-      if (p.bytes != null && !r.update) a.bytes = p.bytes!;
-      changed = true;
-      if (!p.isFinished) continue;
-      logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
-      _running.remove(a.id);
-      settled.add(r);
-      _enter('done');
-      if (p.state == JobState.done && !r.update) {
-        // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
-        // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
-        for (final x in _areas.values.where((x) => x.id == a.id)) {
-          x
-            ..phase = AreaPhase.done
-            ..error = null
-            ..doneTiles = p.total > 0 ? p.total : x.doneTiles;
-          if (p.bytes != null) x.bytes = p.bytes!;
-        }
-        notifyListeners();
-      }
-      try {
-        _enter('free');
-        await r.job.free().timeout(reloadTimeout);
-      } catch (_) {}
-      if (_disposed) return;
-      // The phone cuts a background app off the network (Android within seconds of leaving): that is a pause, not a lost connection.
-      final wasPausing = _pausing.remove(a.id);
-      final cutOff = p.state == JobState.failed && (p.errorCode == 'offline' || p.errorCode == 'fetch_failed') && !r.update && _inBackground();
-      final pausedNow = cutOff || (wasPausing && p.state == JobState.cancelled && !r.update);
-      if (pausedNow) {
-        // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
-        for (final x in _areas.values.where((x) => x.id == a.id)) {
-          x
-            ..phase = AreaPhase.failed
-            ..error = null
-            ..paused = true;
-        }
-        reload = true;
-        continue;
-      }
-      if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
-        // Finished, or a first download cancelled: nothing is left to carry on.
-        if (_saved.remove(a.id) != null) {
-          try {
-            _enter('saved');
-            await _storeSaved().timeout(reloadTimeout);
-          } catch (_) {}
-        }
-      }
-      switch (p.state) {
-        case JobState.done:
-          a.error = null;
-        case JobState.cancelled:
-          if (!r.update) {
-            // A first download that is cancelled leaves nothing behind.
-            try {
-              await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id})).timeout(reloadTimeout);
-            } catch (_) {}
-            if (_disposed) return;
-            _areas.remove(_key(a.layerId, a.id));
-          }
-        default:
-          a.error = words(p.errorCode, p.errorMessage);
-          if (r.update) a.phase = AreaPhase.done;
-      }
-      reload = true;
+      if (!await _lookAt(r, st)) return;
     }
-    if (reload || _reloadPending) {
+    if (st.reload || _reloadPending) {
       // Tiles were added or removed: the second core reads the stores afresh.
       _enter('reload');
       _dropPlanner();
@@ -968,7 +878,7 @@ class CoreLayerEngine extends LayerEngine {
     }
     if (_disposed) return;
     _enter('settled');
-    for (final r in settled) {
+    for (final r in st.settled) {
       for (final x in _areas.values.where((x) => x.id == r.area.id)) {
         logInfo('Layer area ${x.id} after its job ended, listed under ${x.layerId}: ${x.phase.name}, ${x.bytes} B');
       }
@@ -978,11 +888,109 @@ class CoreLayerEngine extends LayerEngine {
       _poll?.cancel();
       _poll = null;
     }
-    if (changed) notifyListeners();
+    if (st.changed) notifyListeners();
     // A cancel is waiting for exactly this: the job ended, its leftovers are deleted and the lists are read again.
-    for (final r in settled) {
+    for (final r in st.settled) {
       if (!r.done.isCompleted) r.done.complete();
     }
+  }
+
+  /// One running download's look: its progress, and when its job ended what follows. What the look as a whole needs afterwards is kept
+  /// on [st], not in locals of the look: a loop with try/catch and `continue` over locals that outlive it ran into a dart2js
+  /// scope error in the browser ("changed0 is not defined"). Returns false when the engine was disposed meanwhile.
+  Future<bool> _lookAt(_Run r, _LookState st) async {
+    JobProgress p;
+    try {
+      _enter('progress');
+      p = await r.job.progress().timeout(reloadTimeout);
+    } catch (e) {
+      // Said when it changes, not at every look: why a running row stays as it was.
+      final msg = e.toString();
+      if (_lastProgressError[r.area.id] != msg) {
+        _lastProgressError[r.area.id] = msg;
+        logError('Layer download ${r.area.id} (${r.area.layerId}): its progress could not be read (${said(e)})', error: e);
+      }
+      return true;
+    }
+    _lastProgressError.remove(r.area.id);
+    if (_disposed) return false;
+    final a = r.area;
+    if (p.total > 0) {
+      if (!r.update) {
+        a
+          ..totalTiles = a.totalTiles == 0 || r.totalFromJob ? p.total : a.totalTiles
+          ..doneTiles = p.done;
+      } else {
+        a
+          ..totalTiles = p.total
+          ..doneTiles = p.done;
+      }
+    }
+    if (p.bytes != null && !r.update) a.bytes = p.bytes!;
+    st.changed = true;
+    if (!p.isFinished) return true;
+    logInfo('Layer download ${a.id} (${a.layerId}) ended: ${p.state.name}, ${p.done} of ${p.total} tiles${p.errorCode != null ? ', ${p.errorCode}' : ''}');
+    _running.remove(a.id);
+    st.settled.add(r);
+    _enter('done');
+    if (p.state == JobState.done && !r.update) {
+      // Shown done now, from what the job said, before anything else is awaited: every call to the core can queue behind a long
+      // one (in a browser, the server's one engine answers a call at a time), and a page must not keep showing 88% meanwhile.
+      for (final x in _areas.values.where((x) => x.id == a.id)) {
+        x
+          ..phase = AreaPhase.done
+          ..error = null
+          ..doneTiles = p.total > 0 ? p.total : x.doneTiles;
+        if (p.bytes != null) x.bytes = p.bytes!;
+      }
+      notifyListeners();
+    }
+    try {
+      _enter('free');
+      await r.job.free().timeout(reloadTimeout);
+    } catch (_) {}
+    if (_disposed) return false;
+    // The phone cuts a background app off the network (Android within seconds of leaving): that is a pause, not a lost connection.
+    final wasPausing = _pausing.remove(a.id);
+    final cutOff = p.state == JobState.failed && (p.errorCode == 'offline' || p.errorCode == 'fetch_failed') && !r.update && _inBackground();
+    final pausedNow = cutOff || (wasPausing && p.state == JobState.cancelled && !r.update);
+    if (pausedNow) {
+      // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
+      for (final x in _areas.values.where((x) => x.id == a.id)) {
+        x
+          ..phase = AreaPhase.failed
+          ..error = null
+          ..paused = true;
+      }
+      st.reload = true;
+      return true;
+    }
+    if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
+      // Finished, or a first download cancelled: nothing is left to carry on.
+      if (_saved.remove(a.id) != null) {
+        try {
+          _enter('saved');
+          await _storeSaved().timeout(reloadTimeout);
+        } catch (_) {}
+      }
+    }
+    if (p.state == JobState.done) {
+      a.error = null;
+    } else if (p.state == JobState.cancelled) {
+      if (!r.update) {
+        // A first download that is cancelled leaves nothing behind.
+        try {
+          await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id})).timeout(reloadTimeout);
+        } catch (_) {}
+        if (_disposed) return false;
+        _areas.remove(_key(a.layerId, a.id));
+      }
+    } else {
+      a.error = words(p.errorCode, p.errorMessage);
+      if (r.update) a.phase = AreaPhase.done;
+    }
+    st.reload = true;
+    return true;
   }
 
   @visibleForTesting
@@ -1060,6 +1068,13 @@ class CoreLayerEngine extends LayerEngine {
       update: !partial,
     );
   }
+}
+
+/// What a look at the running downloads gathers as it goes (kept off the look's locals, see [CoreLayerEngine._lookAt]).
+class _LookState {
+  bool changed = false;
+  bool reload = false;
+  final List<_Run> settled = [];
 }
 
 class _Run {
