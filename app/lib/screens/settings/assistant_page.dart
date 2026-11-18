@@ -15,6 +15,24 @@ import 'key_sheet.dart';
 import 'widgets.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
+/// Opens the Add a key sheet for web search (Kagi) and says so when the key was saved and web search is on. Also used by the Web search row
+/// of Weather and alerts.
+Future<void> setUpWebSearch(BuildContext context, SettingsDeps deps) async {
+  final saved = await showAddKeySheet(
+    context,
+    title: 'Web search',
+    gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
+        'It is a paid service and you need your own key.',
+    getKeyLabel: 'Get a key from Kagi',
+    getKeyUrl: 'https://kagi.com/api/keys',
+    steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
+    onSave: deps.hub.webSearch.saveKey,
+    openUrl: deps.hub.openUrl,
+    savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
+  );
+  if (saved == true && context.mounted) say(context, 'Web search is on');
+}
+
 /// Settings > Assistant: the model, the web search service and its switch, and the saved conversations.
 class AssistantPage extends StatelessWidget {
   AssistantPage({super.key, required this.deps, AnswerReports? reports}) : reports = reports ?? AnswerReports.shared;
@@ -42,21 +60,7 @@ class AssistantPage extends StatelessWidget {
     say(context, 'All conversations deleted');
   }
 
-  Future<void> _setUp(BuildContext context) async {
-    final saved = await showAddKeySheet(
-      context,
-      title: 'Web search',
-      gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
-          'It is a paid service and you need your own key.',
-      getKeyLabel: 'Get a key from Kagi',
-      getKeyUrl: 'https://kagi.com/api/keys',
-      steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
-      onSave: deps.hub.webSearch.saveKey,
-      openUrl: deps.hub.openUrl,
-      savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
-    );
-    if (saved == true && context.mounted) say(context, 'Web search is on');
-  }
+  Future<void> _setUp(BuildContext context) => setUpWebSearch(context, deps);
 
   Future<void> _manage(BuildContext context) async {
     final choice = await showFittedSheet<String>(

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../video/token_store.dart';
+import '../weather/source_health.dart';
 import 'app_settings.dart';
 import 'data_policy.dart';
 import '../platform/app_log.dart';
@@ -62,6 +63,36 @@ KeyCheck keyCheckFromToolContent(String content) {
   return const KeyCheck.failed("Couldn't check the key. Try again.");
 }
 
+/// How a web search went, from what the core's web_search tool answered: [SourceFailure.none] for results (or anything that is not the
+/// tool's error JSON). A refused key (the core's `key_missing`, or a 401/403) is [SourceFailure.keyRejected]; its `quota` or a 429 is
+/// [SourceFailure.limit]; the rest are trouble on the way, not for the person to fix.
+SourceFailure searchFailureFrom(String content) {
+  Map<String, dynamic>? j;
+  try {
+    final d = jsonDecode(content);
+    if (d is Map<String, dynamic>) j = d;
+  } catch (_) {}
+  if (j == null || j['ok'] != false) return SourceFailure.none;
+  final e = j['error'];
+  final type = e is Map ? '${e['type']}' : '';
+  final detail = e is Map ? '${e['detail']}' : '';
+  switch (type) {
+    case 'key_missing':
+      return SourceFailure.keyRejected;
+    case 'quota':
+      return SourceFailure.limit;
+    case 'bad_response':
+      return SourceFailure.unreadable;
+    case 'fetch_failed':
+      final m = RegExp(r'HTTP (\d{3})').firstMatch(detail);
+      if (m == null) return SourceFailure.unreachable;
+      final code = int.parse(m.group(1)!);
+      if (code == 401 || code == 403) return SourceFailure.keyRejected;
+      return code == 429 ? SourceFailure.limit : SourceFailure.providerError;
+  }
+  return SourceFailure.providerError;
+}
+
 /// The search service for the assistant's web search: its key (kept in the phone's secure storage and never shown again), the
 /// person's switch, and what the search core is told (cs_set_web: provider, key and whether the phone is online). The core has
 /// the key in memory only; it is set again every time the key, the switch or the connection changes, and once the core opens.
@@ -101,6 +132,32 @@ class WebSearchSetup extends ChangeNotifier {
 
   /// A key is saved. (The key itself is never handed out again.)
   bool get hasKey => _hasKey;
+
+  SourceFailure _lastFailure = SourceFailure.none;
+
+  /// How the assistant's last web search went (nothing is asked of Kagi to know); [SourceFailure.none] before any, and again after a
+  /// new key or none.
+  SourceFailure get lastFailure => _lastFailure;
+
+  /// Notes what the core answered to a web search the assistant made.
+  void noteSearch(String content) {
+    final f = searchFailureFrom(content);
+    if (f == _lastFailure) return;
+    _lastFailure = f;
+    notifyListeners();
+  }
+
+  /// What Settings > Weather and alerts says about web search, as for a source: off, needs a key (on without one), a key the last
+  /// search was refused with, its limit, else working. Trouble on the way is not shown (the next search clears it anyway).
+  SourceRowState get rowState {
+    if (!settings.webSearchOn) return SourceRowState.off;
+    if (!_hasKey) return SourceRowState.needsKey;
+    return switch (_lastFailure) {
+      SourceFailure.keyRejected || SourceFailure.keyMissing => SourceRowState.keyRejected,
+      SourceFailure.limit => SourceRowState.limitReached,
+      _ => SourceRowState.working,
+    };
+  }
 
   /// Web search is on: a key is saved and the switch is on.
   bool get active => _hasKey && settings.webSearchOn;
@@ -150,6 +207,7 @@ class WebSearchSetup extends ChangeNotifier {
       return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _hasKey = true;
+    _lastFailure = SourceFailure.none;
     settings.setWebSearchOn(true);
     notifyListeners();
     await apply();
@@ -162,6 +220,7 @@ class WebSearchSetup extends ChangeNotifier {
     if (key.isEmpty) return;
     await secrets.write(keyName, key);
     _hasKey = true;
+    _lastFailure = SourceFailure.none;
     notifyListeners();
     await apply();
   }
@@ -172,6 +231,7 @@ class WebSearchSetup extends ChangeNotifier {
       await secrets.delete(keyName);
     } catch (_) {}
     _hasKey = false;
+    _lastFailure = SourceFailure.none;
     settings.setWebSearchOn(false);
     notifyListeners();
     await apply();

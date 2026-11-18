@@ -166,6 +166,9 @@ class FakeLiveCore implements LiveCore {
   /// While set, cs_live_get waits for it: the core busy with something else (it answers one call at a time).
   Completer<void>? busy;
 
+  /// While set, a download waits for it (a slow provider): a test looks at the page meanwhile.
+  Completer<void>? fetchGate;
+
   @override
   Future<void> deleteSavedPlace(String key) async {
     deleted.add(key);
@@ -187,6 +190,7 @@ class FakeLiveCore implements LiveCore {
   @override
   Future<Map<String, dynamic>> fetch(Map<String, dynamic> request) async {
     fetches.add(request);
+    await fetchGate?.future;
     final e = fetchErrors[request['source']];
     if (e != null) throw e;
     // As the core does: a source whose definition needs a key is fetched with the key in the request, else with the one the core
