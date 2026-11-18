@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -134,7 +135,8 @@ void main() {
     final a = await engine.download('hillshade', home, label: 'This region');
     expect(a.phase, AreaPhase.running);
     expect(engine.areasOf('hillshade'), [a]);
-    await until(() => a.phase == AreaPhase.done);
+    // done is shown when the job ends; the store's size comes with the list the core is read for next
+    await until(() => a.phase == AreaPhase.done && engine.storageOf('hillshade') == 20000);
     expect(a.doneTiles, 20);
     expect(a.bytes, 20000);
     expect(a.bounds, home);
@@ -331,11 +333,24 @@ void main() {
     final b = await engine.download('elevation', other, label: 'second');
     expect(a.phase, AreaPhase.running);
     expect(b.phase, AreaPhase.running);
-    // waits for the condition itself, however slow the machine (no fixed deadline: a cold box failed a 4 s one once)
-    bool settled() => engine.allAreas.length == 2 && engine.allAreas.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
-    for (var i = 0; i < 6000 && !settled(); i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+    // The engine says when it has something new (every look at the jobs ends with a notice, after the list is read again): the test
+    // looks at the state then. It never polls and never keeps time, so a slow machine only makes it later, not wrong.
+    bool listed(String layer) {
+      final xs = engine.areasOf(layer);
+      return xs.length == 2 && xs.every((x) => x.phase == AreaPhase.done && x.bytes == 20000 && x.doneTiles == 20);
     }
+
+    // hillshade, contours and elevation share the store: each lists both areas, done, with the final size
+    bool settled() => ['elevation', 'hillshade', 'contours'].every(listed);
+    final seen = Completer<void>();
+    void look() {
+      if (settled() && !seen.isCompleted) seen.complete();
+    }
+
+    engine.addListener(look);
+    look();
+    await seen.future;
+    engine.removeListener(look);
     expect(engine.allAreas.length, 2);
     for (final x in engine.allAreas) {
       expect(x.phase, AreaPhase.done, reason: x.id);
@@ -344,8 +359,29 @@ void main() {
     }
     // every listing of an area (hillshade, contours and elevation share the store) is done too
     for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(engine.areasOf(l), hasLength(2), reason: l);
       expect(engine.areasOf(l).every((x) => x.phase == AreaPhase.done), isTrue, reason: l);
     }
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('downloads in the same millisecond receive distinct native area IDs', () async {
+    engine.dispose();
+    engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+      areaIdMilliseconds: () => 1731848400123,
+    );
+    await engine.start();
+
+    final a = await engine.download('hillshade', home, label: 'first');
+    final b = await engine.download('elevation', home, label: 'second');
+
+    expect(a.id, isNot(b.id));
+    expect(a.id, matches(RegExp(r'^a[0-9]+$')));
+    expect(b.id, matches(RegExp(r'^a[0-9]+$')));
+    expect(engine.allAreas.map((area) => area.id).toSet(), {a.id, b.id});
   });
 
   test('an outline goes to the core with the download and again when an unfinished one is carried on; the bar counts its tiles', () async {

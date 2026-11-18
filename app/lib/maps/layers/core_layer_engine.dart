@@ -33,6 +33,7 @@ class CoreLayerEngine extends LayerEngine {
     this.estimateFor = const Duration(minutes: 10),
     this.reloadTimeout = const Duration(seconds: 20),
     bool Function()? inBackground,
+    @visibleForTesting this.areaIdMilliseconds,
   })  : _connected = connected ?? _platformConnected,
         reattachJobs = reattachJobs ?? plat.isWeb,
         _inBackground = inBackground ?? _appInBackground;
@@ -54,6 +55,9 @@ class CoreLayerEngine extends LayerEngine {
   /// Whether the app is out of the front now (Home, Recents, another app). A download that ends with no connection then is the
   /// phone cutting a background app off the network, not a lost connection: it is shown Paused and Resume carries it on.
   final bool Function() _inBackground;
+  @visibleForTesting
+  final int Function()? areaIdMilliseconds;
+  int _lastAreaIdMilliseconds = 0;
 
   static bool _appInBackground() {
     try {
@@ -707,13 +711,24 @@ class CoreLayerEngine extends LayerEngine {
         bytesAlready: (plan['already_bytes'] as num?)?.toInt() ?? 0,
       );
 
+  String _newAreaId() {
+    var milliseconds = areaIdMilliseconds?.call() ?? DateTime.now().millisecondsSinceEpoch;
+    if (milliseconds <= _lastAreaIdMilliseconds) milliseconds = _lastAreaIdMilliseconds + 1;
+    var id = 'a$milliseconds';
+    while (_saved.containsKey(id) || _running.containsKey(id) || _areaLayer.containsKey(id) || _areas.values.any((area) => area.id == id)) {
+      id = 'a${++milliseconds}';
+    }
+    _lastAreaIdMilliseconds = milliseconds;
+    return id;
+  }
+
   @override
   Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near, List<List<List<double>>>? outline}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom, outline: outline);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
-    final id = 'a${DateTime.now().millisecondsSinceEpoch}';
+    final id = _newAreaId();
     final minZoom = zoom ?? def.minZoom;
     final a = DownloadedArea(
       id: id,
