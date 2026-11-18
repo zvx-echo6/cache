@@ -141,6 +141,7 @@ void main() {
 
     late final Completer<void> opening;
     late final Completer<SyncCoreLike> open;
+    late Future<void> setup;
     final sharing = SharingState(
       policy: r.policy,
       supportDir: () async => r.dir,
@@ -165,7 +166,7 @@ void main() {
     await tester.runAsync(() async {
       opening = Completer<void>();
       open = Completer<SyncCoreLike>();
-      unawaited(sharing.setUp());
+      setup = sharing.setUp();
       await opening.future;
     });
     expect(sharing.starting, isTrue);
@@ -177,7 +178,7 @@ void main() {
     said.add('sync open: identity loaded +9 ms');
     await tester.runAsync(() async {
       open.complete(r.sync);
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await setup;
     });
     // the end takes what is left, in order, and the drain timer is stopped
     expect(lines.where((l) => l.startsWith('sync open')), ['sync open: started +0 ms', 'sync open: links loaded +4 ms', 'sync open: identity loaded +9 ms']);
