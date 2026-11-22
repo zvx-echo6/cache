@@ -128,7 +128,20 @@ void main() {
   test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+  });
+
+  test('a tapped area\'s outline is above the roads and buildings and under the labels (Protomaps layout)', () {
+    final ids = [for (final l in build(CacheThemeId.light, withBase(protomaps))['layers'] as List) (l as Map)['id'] as String];
+    expect(ids.indexOf(kAreaFill), lessThan(ids.indexOf(kAreaCasing)));
+    expect(ids.indexOf(kAreaCasing), lessThan(ids.indexOf(kAreaLine)));
+    expect(ids.indexOf(kAreaFill), greaterThan(ids.indexOf('roads_major')));
+    expect(ids.indexOf(kAreaLine), lessThan(ids.indexOf('address_label')));
+    expect(ids.indexOf(kAreaLine), lessThan(ids.indexOf('places_locality')), reason: '"Twin Falls" stays readable');
+    final layers = {for (final l in build(CacheThemeId.tactical, withBase(protomaps))['layers'] as List) (l as Map)['id']: l};
+    final p = mapPaletteFor(CacheThemeId.tactical);
+    expect((layers[kAreaLine] as Map)['paint']['line-color'], p.css('pin'));
+    expect((layers[kAreaCasing] as Map)['paint']['line-color'], p.css('routeCasing'));
   });
 
   test('overlays are drawn between the base map\'s roads and labels, contour labels on top', () {

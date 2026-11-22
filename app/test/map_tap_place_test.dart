@@ -2,11 +2,14 @@
 // choice is a pure function (map_tap.dart); the Maps screen asks the map what is under the tap and opens what it chooses. Every name
 // and place here is made up.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/map_tap.dart';
+import 'package:cache/regions/area_lookup.dart';
+import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/style/style_generator.dart';
 import 'package:cache/maps/user_layers.dart';
@@ -289,6 +292,7 @@ class _Maps {
   late UserLayersState userLayers;
   final _TapCamera camera = _TapCamera();
   final List<String> openedBooks = [];
+  AreaSource? areas;
   late MapLibreMap map;
   late MapLibrePlatform Function() _platform;
 
@@ -335,6 +339,7 @@ class _Maps {
         elevation: rig.elevation,
         userLayers: userLayers,
         onOpenNotebook: openedBooks.add,
+        areas: areas,
       ),
     ));
     for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
@@ -367,6 +372,215 @@ class _Maps {
       await dir.delete(recursive: true);
     });
   }
+}
+
+// ---- areas: a town's label or empty ground opens the town or the county ----------------------------------------------------
+
+RegionRecord _region(String id, String name, String kind, {String? cls, int? pop, double? area, List<double>? bbox, String code = 'US-ID'}) => RegionRecord.fromJson({
+      'id': id,
+      'name': name,
+      'kind': kind,
+      'class': cls,
+      'region_code': code,
+      'population': pop,
+      'area_km2': area,
+      'bbox': bbox ?? [-113.6, 42.4, -113.4, 42.6],
+      'polygon': 'polygons/$id.geojson',
+    });
+
+final RegionRecord _town = _region('us-id-quillmoor', 'Quillmoor', 'locality', cls: 'city', pop: 49764, area: 50.4);
+final RegionRecord _county = _region('us-id-quill-county', 'Quill County', 'county', pop: 82375, area: 4988, bbox: [-114.0, 42.0, -113.0, 43.0]);
+final RegionRecord _state = _region('us-id', 'Idaho', 'region', pop: 2001619, area: 215996);
+
+Map<String, dynamic> _square(double w, double s, double e, double n) => {
+      'type': 'Polygon',
+      'coordinates': [
+        [[w, s], [e, s], [e, n], [w, n], [w, s]],
+      ],
+    };
+
+class _FakeAreas implements AreaSource {
+  AreaHit? hit;
+  final Set<String> noOutline = {};
+  final List<String> asked = [];
+
+  @override
+  Future<AreaHit?> areaAtPoint(double lat, double lon) async {
+    asked.add('${lat.toStringAsFixed(4)},${lon.toStringAsFixed(4)}');
+    return hit;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => noOutline.contains(r.id) ? null : _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+
+  @override
+  List<RegionRecord> townsIn(RegionRecord county, {int limit = 3}) => [_town, _region('us-id-kim', 'Kimberly', 'locality', pop: 4626), _region('us-id-buhl', 'Buhl', 'locality', pop: 4558)];
+}
+
+int _outlineFeatures(_Maps m) => ((m.camera.sources[kAreaSource]?['features'] as List?) ?? const []).length;
+
+void _areaScreenTests() {
+  group('a tap on a town or on empty ground', () {
+    testWidgets('a town\'s label opens the town: its card, an outline, About N people, Directions', (tester) async {
+      final m = _Maps();
+      final a = m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(a.asked, isNotEmpty);
+      expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
+      expect(find.text('Quillmoor'), findsWidgets);
+      expect(find.text('City'), findsOneWidget);
+      expect(find.text('Quill County, ID'), findsOneWidget);
+      expect(find.text('About 49,800 people'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
+      expect(_outlineFeatures(m), 1, reason: 'the town\'s outline is on the map');
+      await m.finish(tester);
+    });
+
+    testWidgets('the town card is up at once and its summary from the places data joins it when found', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      final gate = Completer<MapSearchResponse>();
+      m.rig.backend.onSearch = (q, {near, meaning}) => gate.future;
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(find.byKey(const ValueKey('place-card-summary')), findsNothing, reason: 'the card did not wait for the search');
+      expect(_outlineFeatures(m), 1);
+      gate.complete(MapSearchResponse(query: 'Quillmoor', kind: 'text', meaning: 'off', results: [
+        MapPlace(id: 'town:test:q1', type: 'place', name: 'Quillmoor', kind: 'City', lat: 42.5002, lon: -113.5002, summary: 'Quillmoor is a city in Idaho.', matched: 'name'),
+      ]));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump();
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(find.text('Quillmoor is a city in Idaho.'), findsOneWidget);
+      expect(find.text('About 49,800 people'), findsOneWidget, reason: 'the people line is still from the catalogue');
+      expect(_outlineFeatures(m), 1);
+      await m.finish(tester);
+    });
+
+    testWidgets('empty ground inside a town opens the town; in the county only, the county (no Directions)', (tester) async {
+      final m = _Maps();
+      final a = m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      m.nav.clearSelection();
+      await tester.pump();
+      expect(_outlineFeatures(m), 0);
+
+      a.hit = AreaHit(county: _county, state: _state);
+      await m.tap(tester, 42.9, -113.1);
+      expect(m.nav.selected?.id, 'area:us-id-quill-county');
+      expect(find.text('Quill County'), findsWidgets);
+      expect(find.text('County in Idaho'), findsOneWidget);
+      expect(find.text('About 82,400 people'), findsOneWidget);
+      expect(find.text('About 1,930 square miles'), findsOneWidget);
+      expect(find.text('Largest towns: Quillmoor, Kimberly, Buhl'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-directions')), findsNothing, reason: 'a county has no Directions');
+      expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
+      expect(_outlineFeatures(m), 1);
+      await m.finish(tester);
+    });
+
+    testWidgets('with a card open an empty tap only closes it and clears the outline; the next one opens again', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected, isNotNull);
+      expect(_outlineFeatures(m), 1);
+      await m.tap(tester, 42.45, -113.45);
+      expect(m.nav.selected, isNull, reason: 'closed, not replaced');
+      expect(_outlineFeatures(m), 0);
+      await m.tap(tester, 42.45, -113.45);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      await m.finish(tester);
+    });
+
+    testWidgets('the card\'s X clears the card and the outline together', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(_outlineFeatures(m), 1);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(m.nav.selected, isNull);
+      expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('another selection replaces the card and drops the outline: a chip beside the town', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(_outlineFeatures(m), 1);
+      m.nav.clearSelection();
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Cascade Park', reason: 'a chip ranks above an area');
+      expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip beside a town\'s label wins over the town', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Cascade Park');
+      expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('a line of an overlay under the tap keeps its card; no area opens', (tester) async {
+      final m = _Maps();
+      final a = m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      m.camera.trails.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'TRAIL_NAME': 'Hollow Fern Trail'}));
+      await m.tap(tester, 42.5001, -113.5);
+      expect(m.nav.selected?.name, 'Hollow Fern Trail');
+      expect(a.asked, isEmpty);
+      expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('a polygon that is not stored: the card opens, no outline is drawn', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()
+        ..hit = AreaHit(town: _town, county: _county, state: _state)
+        ..noOutline.add('us-id-quillmoor');
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('empty ground outside every outline opens nothing; a town label with no stored town keeps the old card', (tester) async {
+      final m = _Maps();
+      final a = m.areas = _FakeAreas();
+      await m.pump(tester);
+      await m.tap(tester, 44.0, -118.0);
+      expect(m.nav.selected, isNull);
+      m.camera.labels.add(_raw('Point', [-113.51, 42.51], {'name': 'Larkspur Flats'}));
+      a.hit = AreaHit(county: _county, state: _state);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Larkspur Flats');
+      expect(m.nav.selected?.id, startsWith('loc:'), reason: 'the county is not the label\'s town');
+      await m.finish(tester);
+    });
+  });
 }
 
 void _screenTests() {
@@ -612,4 +826,5 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   _pureTests();
   _screenTests();
+  _areaScreenTests();
 }

@@ -85,13 +85,17 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
   /// a phone), with the books done of all; the book being built says its step ("Building passages · 16 of 308"). No poller of its own.
   void attachBuilds(BuildController build) {
     _build?.removeListener(_onBuild);
-    _build = build..addListener(_onBuild);
+    _build?.resumeEverything = null;
+    _build = build
+      ..addListener(_onBuild)
+      ..resumeEverything = resumeAll;
     _onBuild();
   }
 
   @override
   void dispose() {
     _build?.removeListener(_onBuild);
+    _build?.resumeEverything = null;
     super.dispose();
   }
 
@@ -253,12 +257,15 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
     ]);
   }
 
+  /// The one Resume for the browser: every Resume button (the build panel's, the sheet's, the line's, the Catalog's) ends here. It
+  /// clears both pauses, the index queue's and the build queue's, whichever of them the person set, and whatever this last saw
+  /// (another tab may have paused).
   @override
   Future<void> resumeAll() async {
     final b = _build;
     await Future.wait([
-      if (_paused) () async { setPausedState(false); await setPaused(false); }(),
-      if (b != null && _buildPaused) b.resume(),
+      () async { setPausedState(false); await setPaused(false); }(),
+      if (b != null) b.resume(),
     ]);
   }
 

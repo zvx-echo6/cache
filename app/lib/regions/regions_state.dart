@@ -1251,6 +1251,9 @@ class RegionsState extends ChangeNotifier {
     if (r.isDrawn || r.kind == kAreaRegionKind) k.kind ??= r.kind;
     // Every part comes from the phone (or the region's centre) outwards, and each tile is used as soon as it is saved.
     final near = nearFor(r);
+    // The outlines of the region's counties, towns and state are kept with it, so a tap on the map can name them offline. Quietly:
+    // a failure leaves the download as it is.
+    if (!r.isDrawn && r.kind != kAreaRegionKind) unawaited(catalogue.storeAreaPolygons(r).then((_) {}, onError: (_) {}));
     if (routing || places) {
       final core = _core ?? (throw CacheSearchException('unsupported', routingUnavailable ?? 'Road routing downloads are not available.'));
       final geometry = await catalogue.geometry(r);

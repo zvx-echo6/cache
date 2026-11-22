@@ -124,6 +124,20 @@ void main() {
       expect(find.text('No other details for this place.'), findsOneWidget);
     });
 
+    for (final id in CacheThemeId.values) {
+      testWidgets('the card is fully solid in the ${id.name} theme: nothing of the map shows through it', (tester) async {
+        await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(id),
+          home: Scaffold(body: Stack(children: [
+            Container(color: const Color(0xFFFF00FF)),
+            Align(alignment: Alignment.bottomCenter, child: PlaceCard(nav: nav, place: found, fmt: const Fmt(UnitSystem.imperial), onClose: () {})),
+          ])),
+        ));
+        final box = tester.widgetList<DecoratedBox>(find.descendant(of: find.byType(PlaceCard), matching: find.byType(DecoratedBox))).map((d) => d.decoration).whereType<BoxDecoration>().firstWhere((d) => d.boxShadow != null);
+        expect(box.color!.a, 1.0, reason: 'an alpha under 1 lets the map\'s labels show faintly behind the title');
+      });
+    }
+
     testWidgets('a found place still is', (tester) async {
       await tester.pumpWidget(app(Scaffold(body: PlaceCard(nav: nav, place: found, fmt: const Fmt(UnitSystem.imperial), onClose: () {}))));
       expect(find.byKey(const ValueKey('place-save')), findsOneWidget);

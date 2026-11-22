@@ -16,6 +16,7 @@ import '../location/location_web_ui.dart';
 import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
+import '../maps/area_tap.dart';
 import '../maps/map_tap.dart';
 import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
@@ -23,6 +24,7 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
+import '../regions/area_lookup.dart' show AreaHit, AreaSource;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
@@ -334,7 +336,7 @@ const int kRouteRefits = 4;
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump, this.areas});
 
   /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
   /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
@@ -388,6 +390,11 @@ class MapsScreen extends StatefulWidget {
 
   /// Regions and downloads, offered from the layer sheet; null in tests that do not need it.
   final RegionsState? regions;
+
+  /// Where a tap finds the town and county of a point and their kept outlines; null: the region catalogue of [regions] (none: a tap on
+  /// empty ground opens nothing).
+  @visibleForTesting
+  final AreaSource? areas;
   final NavState nav;
   final CacheThemeId themeId;
 
@@ -1100,13 +1107,14 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final c = _controller;
     if (c == null || !_styleReady) return;
     final mark = _stepPoint() ?? _spot;
-    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${_area?.place.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
     if (sig == _navSig) return;
     _navSig = sig;
     try {
       await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
       await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
     } catch (_) {}
+    await _pushArea(c);
   }
 
   /// The map images of the chosen place and the search results that are notebook entries: the entry's icon in the pin style, as its
@@ -1176,11 +1184,18 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       _fitFor = null;
       _fitPad = null;
     }
-    // A place was chosen: bring it into view.
+    // Another card, or none: the area's outline goes with its card.
+    if (_area != null && nav.selected?.id != _area!.place.id) _area = null;
+    // A place was chosen: bring it into view (a town or county: the whole area).
     final sel = nav.selected;
     if (nav.phase == NavPhase.browsing && sel != null && _focusFor != sel.id) {
       _focusFor = sel.id;
-      _focusOn(sel.lat, sel.lon);
+      final a = _area;
+      if (a != null && a.place.id == sel.id) {
+        _fitAreaOutline(a);
+      } else {
+        _focusOn(sel.lat, sel.lon);
+      }
     }
     if (sel == null) _focusFor = null;
     setState(() {});
@@ -1555,6 +1570,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   String? _labelStyle;
   List<String> _labelIds = const [];
 
+  /// The town or county card a tap opened, its outline and facts; null when the card is something else.
+  AreaChoice? _area;
+
+  AreaSource? get _areaSource => widget.areas ?? widget.regions?.catalogue;
+
   List<String> _basemapLines() {
     final style = _styleJson;
     final base = maps.uses.where((u) => u.def.isBase).firstOrNull;
@@ -1644,6 +1664,20 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final f = read(raw, TapSource.basemap, '');
       if (f != null) hits.add(f);
     }
+    // A city or town's own label opens that town's card (and outline): told apart from a road's name by asking its layer on its own.
+    final areas = _areaSource;
+    if (areas != null && hits.isNotEmpty) {
+      final placeIds = [for (final l in _basemapLabels()) if (l.startsWith('places_locality')) l];
+      if (placeIds.isNotEmpty) {
+        final names = <String>{
+          for (final raw in await _query(c, point, placeIds, note)) ?featureName(raw is Map ? raw['properties'] : null),
+        };
+        for (var i = 0; i < hits.length; i++) {
+          final n = hits[i].name;
+          if (n != null && names.contains(n)) hits[i] = hits[i].asPlaceLabel();
+        }
+      }
+    }
     // The public places' chips are asked on their own, so they rank above a town or road name beside them (map_tap.dart).
     final chips = [for (final l in _basemapLabels()) if (poiLayerIds.contains(l)) l];
     if (chips.isNotEmpty) {
@@ -1688,7 +1722,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     final f = pickTapFeature(hits);
     logTap(f == null ? 'nothing (${hits.length} read)' : '${f.source.name}/${f.tier.name} named=${f.named} of ${hits.length} read');
-    if (f == null || seq != _tapSeq || !mounted) return false;
+    if (seq != _tapSeq || !mounted) return false;
+    // A town's label opens the town; empty ground opens the town or county there, but only when no card is open (a tap then
+    // just closes it, in [_onMapTap]). Chips, own pins, lines and overlays rank above both.
+    if (f == null) {
+      if (areas != null && nav.selected == null) return _openArea(at.latitude, at.longitude, seq, townOnly: false);
+      return false;
+    }
+    if (f.placeLabel && areas != null && await _openArea(f.lat, f.lon, seq, townOnly: true, name: f.name)) return true;
+    if (!mounted || seq != _tapSeq) return false;
     HapticFeedback.selectionClick();
     // A chip opens the place the places build linked it to (looked up by the chip's kind, name and point; no name-and-distance guess);
     // no link is the honest card. A town or road name is matched by name and distance, as before.
@@ -1723,6 +1765,95 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.userLayers?.clearRepeater();
     nav.select(choice.place);
     return true;
+  }
+
+  /// The card and outline of the town (or, on empty ground, the county) at a point, from what is on the phone: the catalogue's kept
+  /// outlines ([AreaSource.storedGeometry] only reads files, it never fetches, so a tap never waits for the network). The outline is
+  /// left out when its file is not there: the card then opens with the selection dot alone. True when a card opened.
+  Future<bool> _openArea(double lat, double lon, int seq, {required bool townOnly, String? name}) async {
+    final src = _areaSource;
+    if (src == null) return false;
+    AreaHit? hit;
+    try {
+      hit = await src.areaAtPoint(lat, lon);
+    } catch (_) {}
+    if (seq != _tapSeq || !mounted) return true;
+    final rec = hit == null ? null : (townOnly ? hit.town : areaOf(hit));
+    if (hit == null || rec == null) {
+      appLog.add(LogLevel.standard, 'INFO', 'map area at (${lat.toStringAsFixed(5)},${lon.toStringAsFixed(5)}) -> none');
+      return false;
+    }
+    Map<String, dynamic>? geometry;
+    try {
+      geometry = await src.storedGeometry(rec);
+    } catch (_) {}
+    if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
+    final towns = hit.town == null && rec.kind == 'county' ? src.townsIn(rec) : const <RegionRecord>[];
+    final choice = areaChoice(hit, geometry: geometry, fmt: nav.fmt, towns: towns);
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline=${geometry == null ? 'not stored, none drawn' : 'from stored file, no network'}');
+    HapticFeedback.selectionClick();
+    _tappedBook = null;
+    widget.userLayers?.clearRepeater();
+    _area = choice;
+    nav.select(choice.place);
+    // The card and the outline are up at once; the town's summary (from the places data, which may be slow or not there) joins the card
+    // when it is found.
+    if (hit.town != null && rec.id == hit.town!.id) unawaited(_addTownSummary(hit, geometry, towns, lat, lon, seq, choice));
+    return true;
+  }
+
+  Future<void> _addTownSummary(AreaHit hit, Map<String, dynamic>? geometry, List<RegionRecord> towns, double lat, double lon, int seq, AreaChoice shown) async {
+    final rec = hit.town!;
+    MapPlace? pack;
+    try {
+      final found = (await nav.backend.search(rec.name, near: GeoPoint(lat, lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
+      final label = TapFeature(source: TapSource.basemap, tier: TapTier.label, name: rec.name, kind: '', lat: lat, lon: lon);
+      pack = matchLabelPlace(label, found, reachM: math.max(kLabelMatchFloorM, 3000));
+    } catch (_) {}
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} places record: ${pack == null ? 'none' : pack.id}');
+    // Only if that card is still the one on screen (a later tap, or the X, was not waited for).
+    if (pack == null || !mounted || seq != _tapSeq || _area != shown || nav.selected?.id != shown.place.id) return;
+    final next = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: towns);
+    _area = next;
+    nav.select(next.place);
+  }
+
+  /// The camera shows the whole area above the card.
+  Future<void> _fitAreaOutline(AreaChoice a) async {
+    final c = _controller;
+    if (c == null) return;
+    final g = a.geometry;
+    final b = (g == null ? null : geometryBounds(g)) ?? a.region.bbox;
+    if (b == null || b[0] > b[2]) {
+      _focusOn(a.place.lat, a.place.lon);
+      return;
+    }
+    maps.setFollow(FollowMode.free);
+    final size = _fitMapSize();
+    final pad = EdgeInsets.fromLTRB(24, 150, 24, size.height * 0.56);
+    _camPad = null;
+    try {
+      await c.animateCamera(
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[1], b[0]), northeast: LatLng(b[3], b[2])), left: pad.left, right: pad.right, top: pad.top, bottom: pad.bottom),
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (_) {}
+  }
+
+  /// The outline on the map: the chosen area's polygon, or none (any other card, or no card). The fill fades once you zoom inside.
+  Future<void> _pushArea(MapLibreMapController c) async {
+    final a = _area;
+    final on = a != null && nav.selected?.id == a.place.id;
+    final g = on ? a.geometry : null;
+    try {
+      await c.setGeoJsonSource(kAreaSource, areaOutlineGeoJson(g));
+      final b = g == null ? null : geometryBounds(g);
+      if (b != null && b[0] <= b[2]) {
+        final size = _fitMapSize();
+        final fit = fitZoomFor(b, size.width - 48, math.max(120, size.height * 0.44 - 150));
+        await c.setLayerProperties(kAreaFill, FillLayerProperties(fillColor: _palette.css('pin'), fillOpacity: areaFillOpacity(fit, fill: widget.themeId == CacheThemeId.tactical ? 0.10 : 0.08)));
+      }
+    } catch (_) {}
   }
 
   void _notebookCard(NbEntry e) {
@@ -2590,7 +2721,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final VoidCallback? onOpen = entry != null
           ? () => open!(entry)
           : (book != null && openBook != null ? () => openBook(book) : null);
-      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null);
     }
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;

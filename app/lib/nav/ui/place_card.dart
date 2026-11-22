@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../browse/place_about.dart';
+import '../../maps/area_tap.dart' show AreaCardInfo;
 import '../../maps/map_tap.dart' show kPoiMatched;
 import '../../maps/ui/map_widgets.dart';
 import '../../screens/settings/places_page.dart' show confirmRemovePlace;
@@ -13,7 +14,7 @@ import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry, this.area});
 
   final NavState nav;
   final MapPlace place;
@@ -29,6 +30,9 @@ class PlaceCard extends StatelessWidget {
   /// The place is an entry of a Places notebook: Open, as on the notebook pin's sheet, opens that entry. Null leaves it out.
   final VoidCallback? onOpenEntry;
 
+  /// The place is a tapped town or county of the region catalogue: its facts, and whether it has Directions (a county has none).
+  final AreaCardInfo? area;
+
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
     final m = ScaffoldMessenger.of(context);
@@ -39,18 +43,24 @@ class PlaceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final dist = distanceLine(nav, fmt, place);
+    final a = area;
+    // A tapped area is a place of the whole map, not a point: no distance from the phone.
+    final dist = a == null ? distanceLine(nav, fmt, place) : null;
     final isPin = place.matched == 'pin' || place.isCoordinates;
     final saved = nav.savedFor(place);
     final detail = <Widget>[
       if (place.address.isNotEmpty)
         _line(context, Icons.place_outlined, place.address),
+      if (a?.people != null) _line(context, Icons.groups_outlined, a!.people!),
+      if (a?.squareArea != null) _line(context, Icons.square_foot, a!.squareArea!),
+      if (a?.largestTowns != null) _line(context, Icons.location_city, a!.largestTowns!),
       if (place.phone != null) _line(context, Icons.phone_outlined, place.phone!, copy: place.phone),
       if (place.hours != null) _line(context, Icons.schedule, place.hours!),
       if (place.website != null) _line(context, Icons.public, place.website!, copy: place.website),
     ];
     return Container(
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      // Fully solid: at 0.98 the map's labels and chips showed faintly through the title.
+      decoration: mapPanel(context, radius: 20, alpha: 1),
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
       child: SafeArea(
         top: false,
@@ -122,18 +132,20 @@ class PlaceCard extends StatelessWidget {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    Expanded(
-                      flex: 5,
-                      child: FilledButton.icon(
-                        key: const ValueKey('place-directions'),
-                        onPressed: nav.available ? () => nav.openDirections(place) : null,
-                        icon: const Icon(Icons.directions),
-                        label: const Text('Directions'),
+                    // A county has no Directions: it is an area, not somewhere to drive to.
+                    if (a?.directions ?? true)
+                      Expanded(
+                        flex: 5,
+                        child: FilledButton.icon(
+                          key: const ValueKey('place-directions'),
+                          onPressed: nav.available ? () => nav.openDirections(place) : null,
+                          icon: const Icon(Icons.directions),
+                          label: const Text('Directions'),
+                        ),
                       ),
-                    ),
                     // A place from a Places notebook is in that notebook already: no Save for it.
                     if (!place.isNotebookPlace) ...[
-                    const SizedBox(width: 8),
+                    if (a?.directions ?? true) const SizedBox(width: 8),
                     Expanded(
                       flex: 4,
                       child: saved == null

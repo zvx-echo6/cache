@@ -44,6 +44,12 @@ const String kNotebookPins = 'notebook-pins';
 /// The user's own map data that is not a notebook pin: repeater lists' repeaters and the lines and areas of files imported into
 /// Places notebooks.
 const String kUserSource = 'cache-user';
+
+/// The outline of a tapped town or county (area_tap.dart): its fill, its white casing and its red line, drawn under the labels.
+const String kAreaSource = 'cache-area';
+const String kAreaFill = 'area-fill';
+const String kAreaCasing = 'area-casing';
+const String kAreaLine = 'area-line';
 const String kUserAreas = 'user-areas';
 const String kUserLines = 'user-lines';
 const String kUserRepeaters = 'user-repeaters';
@@ -192,6 +198,13 @@ Map<String, dynamic> buildMapStyle({
         above.addAll(_vectorOverlay(palette, d, src, u.opacity));
     }
   }
+
+  // The tapped area's outline: above the roads and buildings, under the labels ("Twin Falls" stays readable).
+  sources[kAreaSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  above.addAll(_areaLayers(palette));
 
   final groundAt = base.indexWhere((l) => (l['id'] as String).startsWith(groundPrefix));
   final labelAt = base.indexWhere((l) => l['id'] == labelsId);
@@ -415,6 +428,31 @@ List<Map<String, dynamic>> _vectorOverlay(MapPalette p, LayerDef d, String src, 
 
 /// The route: the other routes in grey, then the chosen one with an outline, drawn solid on roads, dashed over open ground
 /// and dotted along a trail; and the pins (search results small, the chosen place large).
+/// The outline of a tapped area: the selection red (role `pin`) with a white casing (role `routeCasing`) under it, and a light fill of
+/// the same red. The fill's fade (gone once you are zoomed well inside the area) is set per tap, from the area's size.
+List<Map<String, dynamic>> _areaLayers(MapPalette p) => [
+      {
+        'id': kAreaFill,
+        'type': 'fill',
+        'source': kAreaSource,
+        'paint': {'fill-color': p.css('pin'), 'fill-opacity': p.id == CacheThemeId.tactical ? 0.10 : 0.08},
+      },
+      {
+        'id': kAreaCasing,
+        'type': 'line',
+        'source': kAreaSource,
+        'layout': {'line-join': 'round'},
+        'paint': {'line-color': p.css('routeCasing'), 'line-width': 6, 'line-opacity': 0.9},
+      },
+      {
+        'id': kAreaLine,
+        'type': 'line',
+        'source': kAreaSource,
+        'layout': {'line-join': 'round'},
+        'paint': {'line-color': p.css('pin'), 'line-width': 3},
+      },
+    ];
+
 List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
       {
         'id': kRouteAlt,
@@ -639,6 +677,9 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kRouteRoad,
     kRouteFollow,
     kRouteOffroad,
+    kAreaFill,
+    kAreaCasing,
+    kAreaLine,
     kUserAreas,
     kUserLines,
     kUserRepeaters,
