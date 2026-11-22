@@ -21,29 +21,26 @@ import '../../platform/app_log.dart';
 /// - [share]: Cache's own folder that notebook sync keeps the same on the linked devices, two-way, in the Obsidian format.
 enum SyncKind { obsidian, logseq, logseqExport, share }
 
-/// What needs a person's decision.
-enum ConflictKind { bothChanged, removedOutside, unreadable }
+/// What needs a person's decision. (Both sides changing the same words is not one: the other version is kept as a new entry.)
+enum ConflictKind { removedOutside, unreadable }
 
 class SyncConflict {
-  const SyncConflict({required this.entryId, required this.kind, required this.title, required this.path, this.cacheText, this.fileText});
+  const SyncConflict({required this.entryId, required this.kind, required this.title, required this.path});
 
   final String entryId;
   final ConflictKind kind;
   final String title;
   final String path;
-  final String? cacheText;
-  final String? fileText;
 
-  Map<String, dynamic> toJson() => {'entry': entryId, 'kind': kind.name, 'title': title, 'path': path, 'cache': ?cacheText, 'file': ?fileText};
+  Map<String, dynamic> toJson() => {'entry': entryId, 'kind': kind.name, 'title': title, 'path': path};
 
-  static SyncConflict fromJson(Map j) => SyncConflict(
-        entryId: '${j['entry']}',
-        kind: ConflictKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => ConflictKind.bothChanged),
-        title: '${j['title'] ?? ''}',
-        path: '${j['path'] ?? ''}',
-        cacheText: j['cache'] as String?,
-        fileText: j['file'] as String?,
-      );
+  /// A stored question; null for one a build before this rule kept (`bothChanged`): it is dropped, and the entry is found and
+  /// handled again.
+  static SyncConflict? fromJson(Map j) {
+    final kind = ConflictKind.values.where((k) => k.name == j['kind']).firstOrNull;
+    if (kind == null) return null;
+    return SyncConflict(entryId: '${j['entry']}', kind: kind, title: '${j['title'] ?? ''}', path: '${j['path'] ?? ''}');
+  }
 }
 
 /// What one run did.
@@ -143,7 +140,9 @@ class _Unit {
 
 /// The two-way sync of the notebooks with one folder, with the rules of the notebook spec (5.4, 6.3): what changed on one side
 /// since the last sync goes to the other; changed on both sides, the changes are merged word by word and the person is told;
-/// only when both changed the same words is the person asked. Cache creates, changes or deletes only files and blocks that
+/// when both changed the same words, one version stays on the entry and the other is kept as a new entry in the same notebook
+/// ("<title> (other version)"; the version whose text hashes lower stays, so every device decides the same). The person is
+/// told, never asked. Cache creates, changes or deletes only files and blocks that
 /// carry its `cache_id` and the photos it wrote.
 ///
 /// Obsidian and Logseq work on Cache's own files only, always (owner, 2026-10-31): a file or block Cache wrote (it carries
@@ -218,7 +217,7 @@ class NotebookSync {
       final j = jsonDecode(await stateFile.readAsString()) as Map;
       _items = {for (final e in (j['items'] as Map? ?? const {}).entries) '${e.key}': _Item.fromJson(e.value as Map)};
       _props = {for (final e in (j['props'] as Map? ?? const {}).entries) '${e.key}': (e.value as Map).cast<String, String>()};
-      _conflicts = [for (final c in (j['conflicts'] as List? ?? const [])) SyncConflict.fromJson(c as Map)];
+      _conflicts = [for (final c in (j['conflicts'] as List? ?? const [])) ?SyncConflict.fromJson(c as Map)];
       _ignored
         ..clear()
         ..addAll([for (final x in (j['ignored'] as List? ?? const [])) '$x']);
@@ -528,20 +527,6 @@ class NotebookSync {
     }
   }
 
-  /// Keeps the version not chosen in a conflict: `Conflicts/` (Obsidian), `pages/Cache conflicts.md` (Logseq).
-  Future<void> _keepCopy(String title, String text) async {
-    final stamp = _now().toIso8601String();
-    if (_logseq) {
-      const page = 'pages/Cache conflicts.md';
-      final cur = await folder.readText(page) ?? '';
-      final body = text.split('\n').where((l) => l.trim().isNotEmpty).map((l) => '\t$l').join('\n');
-      await folder.writeText(page, '$cur${cur.isEmpty || cur.endsWith('\n') ? '' : '\n'}- ${stamp.substring(0, 16).replaceFirst('T', ' ')} $title\n$body\n');
-      return;
-    }
-    final name = '${stamp.substring(0, 10)} ${stamp.substring(11, 13)}${stamp.substring(14, 16)} $title'.replaceAll(RegExp(r'[#|^:%\[\]/\\?*"<>]'), ' ').trim();
-    await folder.writeText('Conflicts/$name.md', text);
-  }
-
   // ---- reading into Cache ----
 
   Future<Notebook> _bookFor(EntryDoc d, Map<String, Notebook> byName) async {
@@ -743,9 +728,6 @@ class NotebookSync {
     _stopped.removeWhere((id) => !cache.containsKey(id));
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
-    // Both changed the same words: no question any more (the other version is kept as a new entry); one kept from an older build is
-    // dropped and the entry is found and handled again below.
-    if (kind == SyncKind.share) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.bothChanged) c];
     final open = {for (final c in _conflicts) c.entryId};
     final conflicts = <SyncConflict>[...unreadable];
     // A Cache file that is there but cannot be read (asked about, or ignored by the person's choice) is not missing: it is never
@@ -811,11 +793,7 @@ class NotebookSync {
               _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev);
               r.written++;
             } else {
-              if (kind == SyncKind.share) {
-                await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
-              } else {
-                conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
-              }
+              await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
             }
           } else {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
@@ -848,11 +826,7 @@ class NotebookSync {
           if (m.clean) {
             final mergedDoc = _parseAs(id, m.text, c.$1, when: doc.when);
             if (mergedDoc == null) {
-              if (kind == SyncKind.share) {
-                await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
-              } else {
-                conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
-              }
+              await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
               continue;
             }
             final saved = await _apply(id, mergedDoc, byName);
@@ -860,11 +834,7 @@ class NotebookSync {
             _rec(id, path, m.text, saved.rev);
             r.merged.add(doc.title ?? doc.when);
           } else {
-            if (kind == SyncKind.share) {
-              await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
-            } else {
-              conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
-            }
+            await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
           }
         }
       } else if (s != null) {
@@ -1022,13 +992,11 @@ class NotebookSync {
     return '${h.substring(0, 8)}-${h.substring(8, 12)}-4${h.substring(13, 16)}-a${h.substring(17, 20)}-${h.substring(20, 32)}';
   }
 
-  /// The person's decision on a conflict. Both changed: [keepCache] writes Cache's version to the folder, else the folder's
-  /// is read into Cache; the other is kept as a copy. Removed outside: [keepCache] writes it again, else deletes it here.
-  /// Unreadable: [keepCache] = ignore the file from now on.
+  /// The person's decision on a question. Removed outside: [keepCache] writes it again, else deletes it here. Unreadable:
+  /// [keepCache] = ignore the file from now on.
   Future<void> resolve(SyncConflict c, {required bool keepCache}) async {
     await _load();
     await notebook.reload();
-    final byName = {for (final n in notebook.notebooks) n.name: n};
     final e = c.entryId.isEmpty ? null : await notebook.entry(c.entryId);
     final book = e == null ? null : notebook.notebook(e.notebookId);
     switch (c.kind) {
@@ -1043,21 +1011,6 @@ class NotebookSync {
         } else {
           if (e != null) await notebook.deleteEntry(c.entryId);
           _items.remove(c.entryId);
-        }
-      case ConflictKind.bothChanged:
-        if (e == null || book == null) break;
-        final doc = _docOf(book, e);
-        final text = _renderFor(c.entryId, doc);
-        if (keepCache) {
-          if (c.fileText != null) await _keepCopy(doc.title ?? doc.when, c.fileText!);
-          _rec(c.entryId, await _write(c.entryId, doc, book, text), text, e.rev, extra: _items[c.entryId]?.extra ?? const []);
-        } else {
-          await _keepCopy(doc.title ?? doc.when, text);
-          final fileDoc = c.fileText == null ? null : _parseAs(c.entryId, c.fileText!, book, when: doc.when);
-          if (fileDoc != null) {
-            final saved = await _apply(c.entryId, fileDoc, byName);
-            _rec(c.entryId, c.path, c.fileText!, saved.rev);
-          }
         }
     }
     _conflicts = [for (final x in _conflicts) if (!(x.entryId == c.entryId && x.path == c.path && x.kind == c.kind)) x];

@@ -200,6 +200,40 @@ void main() {
       expect((await r.nb.entry(id))!.body, 'Pack the gravity filter and matches.\n#cachesync');
     });
 
+    test('an imported note changed in the same words in both places: the other version is a new Cache entry; the note keeps its shape', () async {
+      final r = _Rig(SyncKind.obsidian);
+      final j = await r.journal();
+      await r.engine.run();
+      const path = 'Trips/Camping list.md';
+      r.folder.text[path] = '---\ntags:\n  - cachesync\nrating: 5\n---\nPack the water filter.\n';
+      await r.engine.run();
+      final text = r.folder.text[path]!;
+      final id = _idIn(text);
+      final before = r.entryCount;
+      await r.edit(id, body: 'Pack the pump.');
+      r.folder.text[path] = text.replaceFirst('water filter', 'gravity filter');
+      final eng = r.engine;
+      final rep = await eng.run();
+      expect(rep.conflicts, 0);
+      expect(rep.keptAsTwo, ['Camping list']);
+      expect(eng.conflicts, isEmpty);
+      expect(r.entryCount, before + 1);
+      final all = await r.nb.entries(j.id);
+      final copy = all.firstWhere((x) => x.id != id);
+      expect(copy.title, 'Camping list (other version)');
+      expect({(await r.nb.entry(id))!.body, copy.body}, {'Pack the pump.', 'Pack the gravity filter.'});
+      // the note is still one note with the person's properties, the id and the tag; the copy is a Cache file
+      final note = r.folder.text[path]!;
+      expect(note, allOf(startsWith('---\ncache_id: $id\n'), contains('tags:\n  - cachesync\n'), contains('rating: 5\n')));
+      expect(r.folder.text.keys.where((k) => k.startsWith('Conflicts/')), isEmpty);
+      final files = r.folder.text.entries.where((e) => e.key.endsWith('.md') && e.key != path);
+      expect(files.single.value, allOf(contains('cache_id: ${copy.id}'), contains('title: Camping list (other version)')));
+      // nothing more to do, and the copy was not imported as a note
+      final again = await r.engine.run();
+      expect((again.imported.length, again.read, again.written, again.conflicts), (0, 0, 0, 0));
+      expect(r.entryCount, before + 1);
+    });
+
     test('a note without properties, an inline tag; untagged notes, tags in code and cachesync: off are never imported', () async {
       final r = _Rig(SyncKind.obsidian);
       await r.journal();

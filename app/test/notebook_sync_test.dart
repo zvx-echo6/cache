@@ -235,20 +235,23 @@ void main() {
       expect(rep.merged, ['Water cache restocked']);
       expect((await r.nb.entry(a.id))!.body, 'Swapped ten jugs at the garage.');
       expect(r.folder.text[path], endsWith('Swapped ten jugs at the garage.\n'));
-      // changed in both, the same words: Cache asks
+      // changed in both, the same words: the other version is kept as a new entry (nothing is asked, nothing goes to Conflicts/)
       e = (await r.nb.entry(a.id))!;
       await r.nb.saveEntry(id: e.id, notebookId: j.id, occurredAt: e.occurredAt, title: e.title, body: 'Swapped eleven jugs at the garage.');
       r.folder.text[path] = r.folder.text[path]!.replaceFirst('ten', 'twelve');
       final eng = r.engine;
       rep = await eng.run();
-      expect(rep.conflicts, 1);
-      final c = eng.conflicts.single;
-      expect(c.kind, ConflictKind.bothChanged);
-      // keep the file's: Cache takes it, Cache's version is kept as a copy
-      await eng.resolve(c, keepCache: false);
-      expect((await r.nb.entry(a.id))!.body, 'Swapped twelve jugs at the garage.');
-      expect(r.folder.text.keys.where((k) => k.startsWith('Conflicts/')).single, startsWith('Conflicts/2026-10-29 1702 Water cache restocked'));
+      expect(rep.conflicts, 0);
+      expect(rep.keptAsTwo, ['Water cache restocked']);
+      expect(eng.conflicts, isEmpty);
+      final two = [for (final x in await r.nb.entries(j.id)) if ((x.title ?? '').startsWith('Water cache restocked')) x];
+      expect(two.map((x) => x.title).toSet(), {'Water cache restocked', 'Water cache restocked (other version)'});
+      expect(two.map((x) => x.body).toSet(), {'Swapped eleven jugs at the garage.', 'Swapped twelve jugs at the garage.'});
+      final copyFile = r.folder.text.entries.where((x) => x.value.contains('title: Water cache restocked (other version)')).single;
+      expect(copyFile.value, contains('cache_id: ${two.firstWhere((x) => x.id != a.id).id}'));
+      expect(r.folder.text.keys.where((k) => k.startsWith('Conflicts/')), isEmpty);
       expect((await r.engine.run()).conflicts, 0);
+      expect((await r.engine.run()).written, 0);
       // deleted in Cache, file unchanged: the file goes
       await r.nb.deleteEntry(p.id);
       rep = await r.engine.run();
@@ -359,6 +362,30 @@ void main() {
       await r.engine.run();
       expect(r.folder.text['journals/2026_10_27.md'], mine);
       expect(r.folder.text['journals/2026_10_28.md'], contains('cache-id:: ${a.id}'));
+    });
+
+    test('Logseq: the same words changed in both places keeps the other version as a new entry on its day\'s page; nothing goes to Cache conflicts', () async {
+      final r = _Rig(SyncKind.logseq);
+      final j = await r.journal();
+      final a = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Restocked', body: 'six jugs');
+      await r.engine.run();
+      const page = 'journals/2026_10_27.md';
+      final e = (await r.nb.entry(a.id))!;
+      await r.nb.saveEntry(id: e.id, notebookId: j.id, occurredAt: e.occurredAt, title: e.title, body: 'eight jugs');
+      r.folder.text[page] = r.folder.text[page]!.replaceFirst('six jugs', 'ten jugs');
+      final eng = r.engine;
+      final rep = await eng.run();
+      expect(rep.conflicts, 0);
+      expect(rep.keptAsTwo, ['Restocked']);
+      expect(eng.conflicts, isEmpty);
+      final all = await r.nb.entries(j.id);
+      expect(all.map((x) => x.title).toSet(), {'Restocked', 'Restocked (other version)'});
+      expect(all.map((x) => x.body).toSet(), {'eight jugs', 'ten jugs'});
+      final copy = all.firstWhere((x) => x.id != a.id);
+      expect(r.folder.text[page], allOf(contains('cache-id:: ${a.id}'), contains('cache-id:: ${copy.id}'), contains('Restocked (other version)')));
+      expect(r.folder.text.keys, isNot(contains('pages/Cache conflicts.md')));
+      final again = await r.engine.run();
+      expect((again.written, again.read, again.conflicts), (0, 0, 0));
     });
 
     test('Logseq: a block deleted in the graph comes back; a block the person wrote is never read', () async {

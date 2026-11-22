@@ -8,18 +8,14 @@ import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag
 import '../../notebook/sync/sync_engine.dart';
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
-import 'notebook_screen.dart' show NotebookDeps, openNotebookEntry;
 
 /// Chooses a folder: its stored form and name, or null when none was chosen (tests give their own).
 typedef PickFolder = Future<({String path, String display})?> Function();
 
 /// Notebooks > Connections: Obsidian and Logseq folders, and notebook sync between your devices. Each says once what it does,
-/// its status line, and the changes that need a decision.
+/// its status line, and the changes that need a decision (a file removed outside, a file Cache cannot read).
 class ConnectionsScreen extends StatelessWidget {
-  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone, this.deps});
-
-  /// Opens a conflict's entry ("Changed in two places: …"); null leaves the title plain.
-  final NotebookDeps? deps;
+  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone});
 
   /// On a phone (Android, iOS): the Obsidian section says that Obsidian syncs only while it is open. Null: this device.
   final bool? phone;
@@ -134,6 +130,7 @@ class ConnectionsScreen extends StatelessWidget {
   Widget _section(BuildContext context, {required String key, required String title, required String what, required SyncTargetConfig? target, required VoidCallback onConnect}) {
     final k = context.t;
     final merged = target == null ? const <String>[] : connections.merged(target.id);
+    final keptTwo = target == null ? const <String>[] : connections.keptAsTwo(target.id);
     return Container(
       key: ValueKey('connection-$key'),
       padding: const EdgeInsets.all(14),
@@ -187,6 +184,12 @@ class ConnectionsScreen extends StatelessWidget {
               Text(
                 'Changed in both places and merged: ${merged.take(3).join(', ')}${merged.length > 3 ? ' and ${merged.length - 3} more' : ''}',
                 key: ValueKey('merged-$key'),
+                style: TextStyle(fontSize: 14, color: k.text),
+              ),
+            if (keptTwo.isNotEmpty)
+              Text(
+                'Changed in the same words in both places; the other version is kept as a new entry: ${keptTwo.take(3).join(', ')}${keptTwo.length > 3 ? ' and ${keptTwo.length - 3} more' : ''}',
+                key: ValueKey('kept-two-$key'),
                 style: TextStyle(fontSize: 14, color: k.text),
               ),
             if (connections.notAdded(target.id) case final n when n > 0)
@@ -246,22 +249,11 @@ class ConnectionsScreen extends StatelessWidget {
     messenger.showSnackBar(SnackBar(content: Text('Import tag is $tag.')));
   }
 
-  /// The entry a conflict is about, where it is edited.
-  Future<void> _openEntry(BuildContext context, SyncConflict c) async {
-    final d = deps;
-    if (d == null) return;
-    final e = await d.notebook.entry(c.entryId);
-    final book = e == null ? null : d.notebook.notebook(e.notebookId);
-    if (e == null || book == null || !context.mounted) return;
-    openNotebookEntry(context, d, book, e);
-  }
-
   Widget _conflict(BuildContext context, String id, SyncConflict c) {
     final k = context.t;
-    final (title, keepLabel, otherLabel, note) = switch (c.kind) {
-      ConflictKind.bothChanged => ('Changed in two places: ${c.title}', "Keep Cache's version", "Keep the file's version", 'The other version is kept as a copy.'),
-      ConflictKind.removedOutside => ('Removed in the folder: ${c.title}', 'Keep in Cache', 'Delete here too', null),
-      ConflictKind.unreadable => ("Couldn't read ${c.title}. Cache left it alone.", 'Ignore', null, null),
+    final (title, keepLabel, otherLabel) = switch (c.kind) {
+      ConflictKind.removedOutside => ('Removed in the folder: ${c.title}', 'Keep in Cache', 'Delete here too'),
+      ConflictKind.unreadable => ("Couldn't read ${c.title}. Cache left it alone.", 'Ignore', null),
     };
     return Card(
       key: ValueKey('conflict-${c.entryId}-${c.kind.name}'),
@@ -271,26 +263,7 @@ class ConnectionsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (c.kind == ConflictKind.bothChanged && deps != null)
-              Semantics(
-                button: true,
-                child: InkWell(
-                  key: ValueKey('conflict-open-${c.entryId}'),
-                  onTap: () => _openEntry(context, c),
-                  child: Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent)),
-                ),
-              )
-            else
-              Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
-            if (c.kind == ConflictKind.bothChanged) ...[
-              const SizedBox(height: 6),
-              Text('In Cache', style: TextStyle(fontSize: 12, color: k.secondary)),
-              Text(c.cacheText ?? '', maxLines: 6, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-              const SizedBox(height: 4),
-              Text('In the folder', style: TextStyle(fontSize: 12, color: k.secondary)),
-              Text(c.fileText ?? '', maxLines: 6, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-            ],
-            if (note != null) Text(note, style: TextStyle(fontSize: 13, color: k.secondary)),
+            Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
             Wrap(
               spacing: 8,
               children: [
