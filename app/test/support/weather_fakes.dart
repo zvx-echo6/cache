@@ -14,8 +14,9 @@ String miniDefinition(String id, {String? title, String provider = 'Provider', i
       'id': id,
       'title': title ?? id,
       'provider': provider,
-      'description': description,
-      'attribution': 'Data by $provider',
+      'description': kRealSourceText[id]?.description ?? description,
+      // The app shows the definition's own credit first (connector.dart), so it carries the same real text as the catalogue entry.
+      'attribution': kRealSourceText[id]?.attribution ?? 'Data by $provider',
       'refresh_minutes': refresh,
       if (keyAlias != null) 'api_key': {'alias': keyAlias, 'required': true},
       'request': {'url': 'https://example.org/$id?lat={lat}&lon={lon}'},
