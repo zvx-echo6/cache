@@ -27,7 +27,9 @@ use personal_rns::routing::request_handlers::{RequestPathHash, RequestPolicy};
 use tokio::sync::mpsc;
 
 pub mod blobs;
+#[cfg(feature = "rnode")]
 pub mod rnode;
+#[cfg(feature = "rnode")]
 pub mod standin;
 
 /// Cache's Reticulum destination name: `cache.sync.v1`.
@@ -78,6 +80,7 @@ pub enum Iface {
     TcpListen(String),
     /// Connect to a TCP listener at this address.
     TcpConnect(String),
+    #[cfg(feature = "rnode")]
     /// An RNode (LoRa), by a name for the interface, where it is, and its radio settings ([`rnode`]).
     RNode { name: String, port: rnode::RNodePort, radio: rnode::Radio },
 }
@@ -157,6 +160,7 @@ pub struct RnsNode {
     my_identity: IdentityHash,
     app_data: AnnounceAppDataBytes,
     /// The node's RNode interfaces (slow carriers), as Prns numbered them.
+    #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
     state: Arc<Mutex<State>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -199,20 +203,25 @@ impl RnsNode {
             })
             .collect();
         // RNodes: planned from RNS-style entries, so Prns's own bring-up, radio validation and reconnects are used.
+        #[cfg(feature = "rnode")]
+        let rnode_plan = {
         let mut rnode_text = String::new();
         for i in &cfg.interfaces {
             if let Iface::RNode { name, port, radio } = i {
                 rnode_text.push_str(&rnode::config_entry(name, port, radio)?);
             }
         }
-        let rnode_plan = if rnode_text.is_empty() {
+        if rnode_text.is_empty() {
             None
         } else {
             let report = prns_config::parse_and_plan(&format!("[interfaces]\n{rnode_text}"))
                 .map_err(|e| anyhow!("the RNode settings are not valid: {e:?}"))?;
             Some(report.value)
+        }
         };
+        #[cfg(feature = "rnode")]
         let rnode_ids: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>> = Arc::default();
+        #[cfg(feature = "rnode")]
         let rnode_ids_thread = rnode_ids.clone();
         let listens: Vec<String> = cfg
             .interfaces
@@ -322,7 +331,9 @@ impl RnsNode {
                             }
                         }
                     }
+                    #[cfg(feature = "rnode")]
                     let mut rnode_attachments = None;
+                    #[cfg(feature = "rnode")]
                     if let Some(plan) = &rnode_plan {
                         let ids = rnode_ids_thread.clone();
                         rnode_attachments = Some(
@@ -345,6 +356,7 @@ impl RnsNode {
                         _ = stop_rx => {}
                     }
                     drop(guards);
+                    #[cfg(feature = "rnode")]
                     drop(rnode_attachments);
                 });
             })
@@ -515,6 +527,7 @@ impl RnsNode {
             me,
             my_identity,
             app_data,
+            #[cfg(feature = "rnode")]
             rnode_ifaces: rnode_ids,
             state,
             tasks,
@@ -523,6 +536,7 @@ impl RnsNode {
     }
 
     /// How many RNode interfaces came up.
+    #[cfg(feature = "rnode")]
     pub fn rnode_count(&self) -> usize {
         self.rnode_ifaces.lock().unwrap().len()
     }
