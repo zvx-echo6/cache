@@ -167,7 +167,7 @@ void _pureTests() {
       expect(pickTapFeature([line])?.name, 'Hollow Fern Trail');
     });
 
-    test('a chip is read with its icon\'s name as its kind; a chip with no name is nothing', () {
+    test('a chip is read with its icon\'s name as its kind, named or not', () {
       Map<String, dynamic> raw(Map<String, dynamic> props) => _raw('Point', [-113.5, 42.5], props);
       TapFeature? chip(Map<String, dynamic> props) => tapFeatureFrom(raw(props), source: TapSource.basemap, kind: '', tapLat: 0, tapLon: 0, poi: true);
       expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.kind, 'Park');
@@ -175,7 +175,9 @@ void _pureTests() {
       expect(chip({'name': 'Chem Mart', 'kind': 'chemist'})?.kind, 'Pharmacy');
       expect(chip({'name': 'X', 'kind': 'church'})?.kind, '');
       expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.poi, isTrue);
-      expect(chip({'kind': 'park'}), isNull);
+      expect(chip({'kind': 'park'}), isNotNull, reason: 'a chip with no name still opens a card, named by its kind');
+      expect(chip({'kind': 'drinking_water'})?.kind, 'Drinking water');
+      expect(tapFeatureFrom(raw({'kind': 'park'}), source: TapSource.basemap, kind: '', tapLat: 0, tapLon: 0), isNull, reason: 'a name label with no name is nothing');
     });
 
     test('a chip the places data does not have opens a card with its name and kind, marked so the card says it has no details', () {
@@ -406,6 +408,17 @@ void _screenTests() {
       expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-open-entry')), findsNothing);
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip with no name: a card named by its kind, no lookup of a name', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'kind': 'drinking_water'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Drinking water');
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty);
+      expect(find.byKey(const ValueKey('place-card-no-details')), findsOneWidget);
       await m.finish(tester);
     });
 

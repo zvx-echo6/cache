@@ -1690,7 +1690,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (f == null || seq != _tapSeq || !mounted) return false;
     HapticFeedback.selectionClick();
     var candidates = const <MapPlace>[];
-    if (f.tier == TapTier.label) {
+    if (f.tier == TapTier.label && f.named) {
       // The places data the search box reads, for the label's name near it: the card then has what a search result has.
       try {
         candidates = (await nav.backend.search(f.name!, near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;

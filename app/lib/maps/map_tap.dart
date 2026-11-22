@@ -64,7 +64,7 @@ String? featureName(Object? properties) {
 
 /// Reads one feature of the map's query ([raw], a GeoJSON feature) drawn from [source]. A base-map feature is a label whatever its
 /// geometry (a road's name runs along its line); the others are a line or an area by their geometry. Null for a feature that cannot
-/// be read, a point of an overlay (the map draws none), or a base-map label with no name.
+/// be read, a point of an overlay (the map draws none), or a base-map label with no name (a chip is the exception: its card is named by its kind).
 TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required String kind, required double tapLat, required double tapLon, String? notebookId, bool poi = false}) {
   if (raw is! Map) return null;
   final g = raw['geometry'];
@@ -72,7 +72,8 @@ TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required Str
   final name = featureName(raw['properties']);
   final TapTier tier;
   if (source == TapSource.basemap) {
-    if (name == null) return null;
+    // A chip with no name (drinking water, restrooms) still opens its card, named by its kind.
+    if (name == null && !poi) return null;
     tier = TapTier.label;
   } else if (type.endsWith('LineString')) {
     tier = TapTier.line;
