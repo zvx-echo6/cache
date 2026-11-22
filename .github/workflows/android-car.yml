@@ -1,4 +1,4 @@
-# Android Auto: the car screen's JVM tests and the release dependency check, on rel-1.1, main, tags and by hand when the Android app or the
+# Android Auto: the car screen's JVM tests and the release dependency check, on main (rel-1.1 is frozen), tags and by hand when the Android app or the
 # car's Dart side changes (branches are checked on the Cache build boxes) (the Dart side's own tests, test/car_test.dart, run in tests.yml with the other app tests).
 #
 #   unit     the car screen's Robolectric tests (app/android/app/src/test): the templates the screens make against the Car App
@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  # rel-1.1 and main: a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
+  # main (rel-1.1 is frozen): a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
   group: android-car-${{ (github.ref == 'refs/heads/rel-1.1' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: true
 
