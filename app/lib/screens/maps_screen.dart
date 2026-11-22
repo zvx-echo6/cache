@@ -1690,8 +1690,17 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     logTap(f == null ? 'nothing (${hits.length} read)' : '${f.source.name}/${f.tier.name} named=${f.named} of ${hits.length} read');
     if (f == null || seq != _tapSeq || !mounted) return false;
     HapticFeedback.selectionClick();
+    // A chip opens the place the places build linked it to (looked up by the chip's kind, name and point; no name-and-distance guess);
+    // no link is the honest card. A town or road name is matched by name and distance, as before.
     var candidates = const <MapPlace>[];
-    if (f.tier == TapTier.label && f.named) {
+    MapPlace? linked;
+    if (f.poi) {
+      if (f.named && f.rawKind.isNotEmpty) {
+        try {
+          linked = await nav.backend.poiLink(kind: f.rawKind, name: f.name!, lat: f.lat, lon: f.lon).timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      }
+    } else if (f.tier == TapTier.label && f.named) {
       // The places data the search box reads, for the label's name near it: the card then has what a search result has.
       try {
         candidates = (await nav.backend.search(f.name!, near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
@@ -1699,10 +1708,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
     final reachM = math.max(kLabelMatchFloorM, kLabelMatchReach * metresPerPoint(f.lat, _zoom));
-    final choice = tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+    final choice = tapChoiceFor(f, match: f.poi ? linked : (f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null));
     if (f.tier == TapTier.label) {
       appLog.add(LogLevel.standard, 'INFO',
-          'map tap ${f.poi ? 'poi' : 'label'} name="${f.name}" kind=${f.kind.isEmpty ? '-' : f.kind} candidates=${candidates.length} reachM=${reachM.round()} -> ${choice.place.id} ${choice.place.matched == kPoiMatched || choice.place.id.startsWith('loc:') ? 'no-match' : 'matched'}');
+          'map tap ${f.poi ? 'poi' : 'label'} name="${f.name}" kind=${f.rawKind.isEmpty ? (f.kind.isEmpty ? '-' : f.kind) : f.rawKind} ${f.poi ? 'link=${linked == null ? 'none' : 'found'}' : 'candidates=${candidates.length} reachM=${reachM.round()}'} -> ${choice.place.id} ${choice.place.matched == kPoiMatched || choice.place.id.startsWith('loc:') ? 'no-match' : 'matched'}');
     }
     final book = choice.notebookId;
     _tappedBook = book == null ? null : (placeId: choice.place.id, notebookId: book);

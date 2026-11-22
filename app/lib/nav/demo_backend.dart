@@ -28,6 +28,9 @@ class DemoMapBackend implements MapBackend {
   bool get available => true;
 
   @override
+  Future<MapPlace?> poiLink({required String kind, required String name, required double lat, required double lon}) async => null;
+
+  @override
   Future<MapSearchResponse> search(String query, {GeoPoint? near, int limit = 10, bool meaning = true}) async {
     final q = query.trim().toLowerCase();
     final searches = (_json('demo.json')['searches'] as Map).cast<String, dynamic>();

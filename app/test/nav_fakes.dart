@@ -160,6 +160,16 @@ class FakeBackend implements MapBackend {
   final List<(String, double, double)> saved = [];
   bool saveFails = false;
 
+  /// The link of a chip by (kind, name): what the places build would have linked it to. Absent: no link.
+  final Map<(String, String), MapPlace> links = {};
+  final List<String> linkCalls = [];
+
+  @override
+  Future<MapPlace?> poiLink({required String kind, required String name, required double lat, required double lon}) async {
+    linkCalls.add('$kind:$name');
+    return links[(kind, name)];
+  }
+
   @override
   Future<MapSearchResponse> search(String query, {GeoPoint? near, int limit = 10, bool meaning = true}) async {
     calls.add('search:$query:${meaning ? 'm' : 'k'}');

@@ -168,6 +168,22 @@ class SearchCore {
       })) as Map)
           .cast<String, dynamic>());
 
+  /// The place the places build linked a base-map chip to (`poi_links`), by the chip's tile [kind] ("attraction"), [name] and point.
+  /// Null when the build has no link for it. Nothing is searched or guessed.
+  Future<MapPlace?> mapPoiLink({required String kind, required String name, required double lat, required double lon}) async {
+    final r = MapSearchResponse.fromJson(((await _call('mapSearch', {
+      'request': {
+        'query': name,
+        'near': {'lat': lat, 'lon': lon},
+        'limit': 1,
+        'meaning': false,
+        'poi': {'kind': kind, 'name': name, 'lat': lat, 'lon': lon},
+      },
+    })) as Map)
+        .cast<String, dynamic>());
+    return r.results.isEmpty ? null : r.results.first;
+  }
+
   /// The complete route. [to] and [from] are ends (`{"id"?, "lat", "lon", "name"?}`, from a [MapPlace.toEnd]); no [from]
   /// is the core's last GPS fix. A route that cannot be made is a [MapRoute] with `ok` false and its errors.
   Future<MapRoute> mapRoute({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) async =>

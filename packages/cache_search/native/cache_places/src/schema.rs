@@ -325,6 +325,11 @@ CREATE TABLE vectors (kind TEXT NOT NULL, ref INTEGER NOT NULL, vec BLOB NOT NUL
 
 -- How many places of each category and kind the tile holds. what is 'category' or 'kind'.
 CREATE TABLE tile_counts (what TEXT NOT NULL, id TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (what, id)) WITHOUT ROWID;
+
+-- The base map's chips linked to this tile's places (`places_pack poi-link`, see `poi`): one row per chip, with the chip's own
+-- normalised name (`poi::norm_name`), its tile `kind` (Protomaps' `pois.kind`), its point and the `source_id` of the place it is. Absent
+-- from tiles cut before the links; a tile without it merges as before and its chips have no link.
+CREATE TABLE poi_links (name_norm TEXT NOT NULL, kind TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, source_id TEXT NOT NULL);
 "#;
 
 /// The merged database on the phone (`regions/places/<build>.sqlite`, format [`MERGED_FORMAT_VERSION`]): every tile it has,
@@ -461,6 +466,11 @@ CREATE INDEX vectors_kind ON vectors(kind);
 -- The tiles merged in, and what each holds. This table, not the folder, is what the phone has.
 CREATE TABLE tiles (tile INTEGER PRIMARY KEY, path TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, merged_at INTEGER NOT NULL);
 CREATE TABLE tile_counts (tile INTEGER NOT NULL, what TEXT NOT NULL, id TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (tile, what, id)) WITHOUT ROWID;
+
+-- The tiles' chip links (`poi`), by the tile that carried them. Looked up by (name_norm, kind), then the nearest point.
+CREATE TABLE poi_links (tile INTEGER NOT NULL, name_norm TEXT NOT NULL, kind TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, source_id TEXT NOT NULL);
+CREATE INDEX poi_links_key ON poi_links(name_norm, kind);
+CREATE INDEX poi_links_tile ON poi_links(tile);
 "#;
 
 /// Quantise a vector as the `vectors.vec` column stores it (the vector is normalised first).

@@ -145,6 +145,15 @@ container on the build host; nothing is installed on the host itself.
 10. `places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build na-places-YYYY-MM-DD --out out --jobs N`:
    `out/<build>/1/aaa/bbb.sqlite.gz` and `out/<build>/index.tsv`, with the blocks' vectors.
 
+10b. `places_pack poi-link --tiles out/<build> --basemap https://cache.echo6.co/basemap/protomaps-planet-<date>.pmtiles --jobs 8
+   --tile-jobs 2 --report out/poi-link-report.tsv` (after `cut`, before upload): links the base map's chips to the tiles' places
+   and merges true duplicates (docs/PLACES-TILES.md, "Chip links"; the kind table is `poi-kinds.tsv`). It rewrites each tile
+   (`poi_links` table, merged duplicate rows, counts) and `index.tsv`, so run it before the checks of step 10's output. It reads the
+   base map by HTTP range requests (or a local `.pmtiles`), only the z15 tiles near each tile's candidate records, about 1 request
+   per 25 places and 0.9 bytes read per byte of tile (measured on six tiles: 10,464 requests, 100 MB for 264,000 places); it needs no other input. `--audit-bbox W,S,E,N` also reads every z15 tile of a
+   box so the report counts chips that have no record at all. The report lists every chip: linked (to which record, how far) or
+   unlinked with the reason; `report.merges.tsv` lists the merged records. A trial on one tile: `--tile-file tile.sqlite`.
+
 Kind descriptions: `scripts/describe_kinds.py --common out/<build>/common.sqlite --tsv kinds-described.tsv` asks
 claude-haiku-5-5 (Message Batches API, about 50 kinds per request) for one plain line per kind that is not in the file yet,
 and appends it with the model and date. The file is reviewed and kept here; run `common` again afterwards. A kind the

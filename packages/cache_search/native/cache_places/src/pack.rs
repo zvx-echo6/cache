@@ -556,6 +556,29 @@ impl Pack {
         Ok(conn.query_row(&format!("SELECT {cols} FROM places p WHERE p.source_id = ?1 LIMIT 1"), params![source_id], place_row).optional()?)
     }
 
+    /// The place the build linked a base map chip to (`poi_links`, see `poi`): the row with the chip's normalised name and tile
+    /// `kind` whose stored point is nearest the chip's own, within `poi::LINK_REACH_M`. None: no link (a pack or tile cut before the
+    /// links, a chip the build could not match, or a place that is not on the phone).
+    pub fn poi_link(&self, kind: &str, name: &str, lat: f64, lon: f64) -> Result<Option<PlaceRow>> {
+        let key = crate::poi::norm_name(name);
+        if key.is_empty() {
+            return Ok(None);
+        }
+        let rows: Vec<(String, f64, f64)> = {
+            let conn = self.conn();
+            if conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'poi_links'", [], |_| Ok(())).optional()?.is_none() {
+                return Ok(None);
+            }
+            let mut st = conn.prepare("SELECT source_id, lat, lon FROM poi_links WHERE name_norm = ?1 AND kind = ?2 AND lat BETWEEN ?3 AND ?4 AND lon BETWEEN ?5 AND ?6")?;
+            let found = st.query_map(params![key, kind, lat - 0.001, lat + 0.001, lon - 0.002, lon + 0.002], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            found
+        };
+        match crate::poi::nearest_row(&rows, lat, lon) {
+            Some(sid) => self.place_by_source_id(sid),
+            None => Ok(None),
+        }
+    }
+
     pub fn locality_by_source_id(&self, source_id: &str) -> Result<Option<LocalityRow>> {
         let conn = self.conn();
         Ok(conn.query_row(&format!("SELECT {} FROM localities l WHERE l.source_id = ?1 LIMIT 1", self.loc_cols()), params![source_id], locality_row).optional()?)
