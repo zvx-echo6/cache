@@ -15,7 +15,8 @@ export 'share_rules.dart' show kSettingsShareId, kSettingsShareDir, kBookshelves
 /// The chosen Ask model's setting: a model not on this device waits, with Download.
 const String kModelSettingKey = 'ask.model';
 
-/// The saved places weather watches: one that has not come to this device yet says "waiting for this place".
+/// The saved places weather watches. A watched place whose saved place is not on this device stays in the setting but is not listed
+/// or fetched until that place arrives.
 const String kWatchPlacesKey = 'weather.watch_places';
 
 /// The name of the model a waiting change uses ("Gemma 4 E2B · Q4_K_M"; its file name when the other device knew no better).
