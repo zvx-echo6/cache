@@ -1,0 +1,28 @@
+[package]
+name = "cache_rns"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Reticulum for Cache (1.2 spike): a device's Reticulum node on Prns, with its identity derived from and vouched for by its iroh key"
+
+[dependencies]
+# Prns, pinned to a git tag: crates.io still serves 0.3.7, which hangs on two request paths fixed in 0.3.8 (Prns #286, #287).
+# MIT OR Apache-2.0. Its provenance (how closely it follows the Python reference) is the owner's decision before anything ships.
+personal-rns = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1", features = ["tokio-host", "tcp", "rnode", "config", "serial", "udp", "pipe", "i2p"] }
+# serial, udp, pipe and i2p are not used: Prns 0.3.8's config path does not compile without them (a feature-combination bug, worth reporting upstream).
+# Plans RNode interfaces from RNS-style entries (the only public way in to Prns's RNode over Bluetooth). Same tag.
+prns-config = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1" }
+# The same iroh as cache_sync, for the device key the Reticulum identity is derived from and vouched by.
+iroh = "=1.3.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+anyhow = "1"
+blake3 = "1.8"
+# The same blob store as cache_sync: windows travel as its bao encoding and are verified and stored by it.
+iroh-blobs = "=0.103.1"
+bao-tree = "0.16"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }
+tempfile = "3"
