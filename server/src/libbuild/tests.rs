@@ -161,30 +161,90 @@ fn the_same_content_is_skipped_within_a_library_but_not_across_libraries() {
     assert_eq!(std::fs::read_dir(d.0.join("build/pending")).unwrap().count(), 0);
 }
 
-#[test]
-fn pause_finishes_the_current_book_then_holds_and_resume_goes_on() {
-    let d = TempDir::new("b4");
-    let (svc, fake) = rig(&d);
-    let lib = new_lib(&svc, "L");
-    let ids: Vec<String> = (0..3).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("topic{i}"), 2, None))).collect();
+/// Poll until `f` is true (5 s at most).
+fn wait_for(what: &str, f: impl Fn() -> bool) {
+    let t = Instant::now();
+    while !f() {
+        assert!(t.elapsed() < Duration::from_secs(5), "timed out waiting for: {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Start `run_one` on its own thread, pausing the service inside the book's first request to the embedder.
+fn run_paused_mid_book(svc: &Arc<BuildService>, fake: &Arc<FakeEmbed>) -> std::thread::JoinHandle<Run> {
     let s2 = svc.clone();
     *lock(&fake.hook) = Some(Box::new(move || {
         s2.pause();
     }));
-    assert!(matches!(svc.run_one(), Run::Ran));
+    let s3 = svc.clone();
+    std::thread::spawn(move || s3.run_one())
+}
+
+#[test]
+fn pause_holds_the_running_book_mid_book_and_resume_finishes_it_from_the_same_piece() {
+    let d = TempDir::new("b4");
+    let (svc, fake) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let ids: Vec<String> = (0..3).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("topic{i}"), 2, None))).collect();
+    let h = run_paused_mid_book(&svc, &fake);
+    wait_for("the book to be paused mid-book", || lock(&svc.st).paused && fake.calls.load(Ordering::Relaxed) >= 1);
     *lock(&fake.hook) = None;
-    assert_eq!(state(&svc, &ids[0]), S::Done, "the book in progress is finished");
-    assert!(matches!(svc.run_one(), Run::Idle));
+    // given time to go on, the book does not: no more embedder requests, nothing counted, still Building, not finished
+    std::thread::sleep(Duration::from_millis(400));
+    let calls = fake.calls.load(Ordering::Relaxed);
+    let done = item(&svc, &ids[0]).pieces_done;
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(fake.calls.load(Ordering::Relaxed), calls, "no embedder request while paused");
+    assert_eq!(item(&svc, &ids[0]).pieces_done, done, "pieces_done is frozen while paused");
+    assert_eq!(state(&svc, &ids[0]), S::Building, "the book stays in its Building state, held");
+    assert!(!h.is_finished(), "the build is held, not ended");
     assert_eq!((state(&svc, &ids[1]), state(&svc, &ids[2])), (S::Queued, S::Queued));
     let q = svc.queue();
     assert_eq!(q["paused"], json!(true));
-    assert_eq!(q["eta"]["low_seconds"], Value::Null);
     // paused is remembered across a restart
     let (svc2, _) = rig(&d);
     assert_eq!(svc2.queue()["paused"], json!(true));
     svc.resume();
+    assert!(matches!(h.join().unwrap(), Run::Ran));
+    assert_eq!(state(&svc, &ids[0]), S::Done, "resume finishes the same book");
+    assert_eq!(item(&svc, &ids[0]).attempts, 1, "nothing restarted the book");
+    // and the waiting books go on after it
     drain(&svc);
     assert!(ids.iter().all(|i| state(&svc, i) == S::Done));
+}
+
+#[test]
+fn a_paused_queue_does_not_start_the_next_book() {
+    let d = TempDir::new("b4b");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let ids: Vec<String> = (0..2).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("topic{i}"), 2, None))).collect();
+    svc.pause();
+    assert!(matches!(svc.run_one(), Run::Idle));
+    assert_eq!((state(&svc, &ids[0]), state(&svc, &ids[1])), (S::Queued, S::Queued));
+    svc.resume();
+    drain(&svc);
+    assert!(ids.iter().all(|i| state(&svc, i) == S::Done));
+}
+
+#[test]
+fn a_held_book_still_answers_service_stop() {
+    let d = TempDir::new("b4c");
+    let (svc, fake) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let id = add(&svc, &lib, "b.pdf", &book("topic", 2, None));
+    let h = run_paused_mid_book(&svc, &fake);
+    wait_for("the book to be held", || lock(&svc.st).paused && fake.calls.load(Ordering::Relaxed) >= 1);
+    *lock(&fake.hook) = None;
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(state(&svc, &id), S::Building);
+    svc.shutdown();
+    wait_for("the held build to end on stop", || h.is_finished());
+    h.join().unwrap();
+    // the stop took the attempt back, and the book waits to be built again; it was not failed or finished
+    let it = item(&svc, &id);
+    assert_eq!(it.state, S::Queued);
+    assert_eq!(it.attempts, 0);
 }
 
 #[test]
