@@ -210,7 +210,11 @@ fn pause_holds_the_running_book_mid_book_and_resume_finishes_it_from_the_same_pi
     svc.resume();
     assert!(matches!(h.join().unwrap(), Run::Ran));
     assert_eq!(state(&svc, &ids[0]), S::Done, "resume finishes the same book");
-    assert_eq!(item(&svc, &ids[0]).attempts, 1, "nothing restarted the book");
+    let end = item(&svc, &ids[0]);
+    assert_eq!(end.pieces_done, end.pieces_total.unwrap(), "every piece is counted once the book is finished");
+    // 16 pieces per batch: the calls after Resume are only the rest of the batches (a restart would have made them all again)
+    let batches = (end.pieces_total.unwrap() as usize).div_ceil(16);
+    assert!(fake.calls.load(Ordering::Relaxed) <= batches + 2, "the book went on, it was not started again");
     // and the waiting books go on after it
     drain(&svc);
     assert!(ids.iter().all(|i| state(&svc, i) == S::Done));
