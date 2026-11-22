@@ -1826,6 +1826,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The card is laid out in the frame after the selection: wait for it, so its top is where it really is.
     WidgetsBinding.instance.ensureVisualUpdate();
     await WidgetsBinding.instance.endOfFrame;
+    // The card's last lines (a note under the summary) settle a moment later: measure it then.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted || _area != a) return;
     final size = _fitMapSize();
     final pad = areaFitPadding(map: size, header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), panel: _boxOf(_panelKey));
