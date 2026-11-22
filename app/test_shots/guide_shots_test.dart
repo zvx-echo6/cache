@@ -1087,8 +1087,12 @@ void main() {
     await tester.pumpAndSettle();
     // The category chips run past the frame; the row is scrolled to its end so the topic chips the guide names (Medicine,
     // Preparedness) show.
-    await tester.drag(find.byWidgetPredicate((w) => w is ListView && w.scrollDirection == Axis.horizontal), const Offset(-4000, 0));
-    await tester.pumpAndSettle();
+    // (A drag only goes as far as the row has been laid out, so it is repeated until the row stops moving.)
+    final chipRow = find.byWidgetPredicate((w) => w is ListView && w.scrollDirection == Axis.horizontal);
+    for (var i = 0; i < 4; i++) {
+      await tester.drag(chipRow, const Offset(-4000, 0));
+      await tester.pumpAndSettle();
+    }
     await shot(tester, 'library-add');
 
     await show(tester, LibrariesScreen(libraries: libs));
@@ -1444,10 +1448,11 @@ void main() {
     // The layers sheet over the map, with public lands on as well: the whole screen, so the map shows above the sheet.
     m.r.maps.setOn(m.sample.publicLandsId, true);
     await restyled(tester, m);
+    // A taller frame (the sheet is 80% of the screen's height when it opens): the sheet shows every row, to "Get more layers".
+    // Put back after the picture.
+    await frame(tester, 1500);
     await tester.tap(find.byTooltip('Layers'));
     await settle(tester);
-    // A taller frame (the sheet is 80% of it): the sheet shows every row, to "Get more layers". Put back after the picture.
-    await frame(tester, 1500);
     await mapShot(tester, m, 'layers-sheet', 'layers');
     await frame(tester, 932);
     await tester.tapAt(const Offset(10, 60));
