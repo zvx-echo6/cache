@@ -85,7 +85,7 @@ class BuildListCards extends StatelessWidget {
           key: ValueKey(paused ? 'list-resume-${l.id}' : 'list-pause-${l.id}'),
           tooltip: paused ? 'Resume' : 'Pause',
           icon: Icon(paused ? Icons.play_arrow : Icons.pause),
-          onPressed: () => paused ? ctl.resume() : ctl.pause(),
+          onPressed: () => paused ? ctl.resumeAll() : ctl.pause(),
         ),
       ],
     );

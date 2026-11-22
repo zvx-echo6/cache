@@ -198,6 +198,12 @@ Future<void> show(WidgetTester tester, Widget page, {GlobalKey<ScaffoldMessenger
   await settle(tester);
 }
 
+/// The phone's frame made [height] points tall (a picture whose page runs longer than the usual frame), after [show].
+Future<void> frame(WidgetTester tester, double height) async {
+  phone(tester, size: Size(430, height), ratio: _ratio);
+  await settle(tester);
+}
+
 /// The debug-only warning about a list tile on a coloured box (the app's Weather cards); the phone's release build does not make it.
 void _ignoreDebugAsserts(WidgetTester tester) {
   while (tester.takeException() != null) {}
@@ -259,6 +265,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('maps-advanced')));
     await settle(tester);
+    // A taller frame: the list runs on to "Add a layer definition" (chapter 3 names it).
+    await frame(tester, 1400);
     await shot(tester, 'settings-maps-advanced');
     await o.dispose(tester);
   });
@@ -388,9 +396,11 @@ void main() {
       await r.weather.updateNow();
     });
     r.clock = r.clock.add(const Duration(hours: 1));
-    await show(tester, WeatherPage(deps: r.deps));
+    // A taller frame: the page runs on to the "More sources" group (chapter 1 and 3 name it); the frame is put back after.
+    await show(tester, WeatherPage(deps: r.deps), height: 1400);
     await tester.pumpAndSettle();
     await shot(tester, 'settings-weather');
+    await frame(tester, 932);
 
     // The watch list (1.0.29) sits above the sources: the row of the key-only source is further down the page.
     await tester.scrollUntilVisible(find.byKey(const ValueKey('source-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
@@ -404,7 +414,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, 'sample-key-0000'));
-    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1000);
+    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1100);
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
@@ -711,7 +721,7 @@ void main() {
         ..phase = TurnPhase.done
         ..text = 'The Delicate Arch trailhead is 2 miles east of you, about 4 minutes by road. The route is ready.'
         ..navigationActions = [NavigationAction(address: 'nav:r1', route: MapRoute.fromJson(fakeRouteJson(id: 'r1', name: 'Delicate Arch trailhead')))]);
-    await show(tester, askScreen(a), height: 520);
+    await show(tester, askScreen(a), height: 590);
     await shot(tester, 'ask-open-navigation');
 
     a.chat.messages
@@ -730,7 +740,7 @@ void main() {
             fields: const {},
           ),
         ]);
-    await show(tester, askScreen(a), height: 600);
+    await show(tester, askScreen(a), height: 680);
     await shot(tester, 'ask-confirm-card');
     await tester.pumpWidget(const SizedBox());
     a.layout.dispose();
@@ -836,7 +846,8 @@ void main() {
       searchPlaces: (q) async => found,
       savePlace: (p) async {},
     );
-    await show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(const []), onOpenSettings: () {}, onAsk: (_) {}));
+    // A taller frame: the Forecast card ends whole under "All 16 days".
+    await show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(const []), onOpenSettings: () {}, onAsk: (_) {}), height: 1030);
     await settle(tester, rounds: 12);
     _ignoreDebugAsserts(tester);
     await shot(tester, 'weather');
@@ -1074,6 +1085,14 @@ void main() {
 
     await show(tester, AddToLibraryScreen(browse: browse));
     await tester.pumpAndSettle();
+    // The category chips run past the frame; the row is scrolled to its end so the topic chips the guide names (Medicine,
+    // Preparedness) show.
+    // (A drag only goes as far as the row has been laid out, so it is repeated until the row stops moving.)
+    final chipRow = find.byWidgetPredicate((w) => w is ListView && w.scrollDirection == Axis.horizontal);
+    for (var i = 0; i < 4; i++) {
+      await tester.drag(chipRow, const Offset(-4000, 0));
+      await tester.pumpAndSettle();
+    }
     await shot(tester, 'library-add');
 
     await show(tester, LibrariesScreen(libraries: libs));
@@ -1362,6 +1381,7 @@ void main() {
   /// A Maps picture with the real map behind it: writes the scene (what the map shows now), puts the scene's rendered picture
   /// where the map is, tells the screen the camera the map has (the scale bar and the compass follow it), and takes the picture.
   Future<void> mapShot(WidgetTester tester, _MapRig m, String id, String scene) async {
+    await m.kit.loadChips(tester);
     final map = mapOf(tester);
     final size = tester.getSize(find.byType(MapLibreMap));
     final cam = m.kit.cameraOf(map, size);
@@ -1428,9 +1448,13 @@ void main() {
     // The layers sheet over the map, with public lands on as well: the whole screen, so the map shows above the sheet.
     m.r.maps.setOn(m.sample.publicLandsId, true);
     await restyled(tester, m);
+    // A taller frame (the sheet is 80% of the screen's height when it opens): the sheet shows every row, to "Get more layers".
+    // Put back after the picture.
+    await frame(tester, 1500);
     await tester.tap(find.byTooltip('Layers'));
     await settle(tester);
     await mapShot(tester, m, 'layers-sheet', 'layers');
+    await frame(tester, 932);
     await tester.tapAt(const Offset(10, 60));
     await settle(tester);
     m.r.maps.setOn(m.sample.publicLandsId, false);
@@ -1490,6 +1514,7 @@ void main() {
     final mapSize = tester.getSize(find.byType(MapLibreMap));
     final at = m.kit.cameraOf(mapOf(tester), mapSize).project(fix.lat, fix.lon, mapSize);
     expect((at - GuideLayout.read(tester).anchor).distance, lessThan(3), reason: 'the guidance camera does not put the position at its anchor');
+    await m.kit.loadChips(tester);
     m.kit.inset.write();
     await mapShot(tester, m, 'guidance', 'guidance');
     await tester.runAsync(() async => m.nav.end());
@@ -1559,6 +1584,8 @@ void main() {
 
     await tester.longPress(find.text(GuideSample.trailhead.name));
     await tester.pumpAndSettle();
+    // A taller frame: the form shows the Photos button whole (put back after the picture).
+    await frame(tester, 1100);
     // The form's small map. The app's PlaceMap is a platform view, so its scene is written here the way PlaceMap fills its map:
     // the app's style with the same layers on (the Maps test's, as the app has one map state), the place in the middle at the
     // zoom PlaceMap opens a pinned place at, and the place's pin drawn by the notebook pins' layer with the image PlaceMap adds
@@ -1566,6 +1593,7 @@ void main() {
     final style = _formMapStyle, pins = _formPinStyle;
     if (style == null || pins == null) fail('The place form needs the map style the Maps test keeps: run the whole file');
     final pin = n.mapPin!, look = n.mapLook!;
+    await kit.loadChips(tester);
     final images = <String, Uint8List>{};
     final image = (await tester.runAsync(() => PinImages((name, png) async {
       images[name] = png;
@@ -1595,6 +1623,7 @@ void main() {
     kit.show('place-form');
     await tester.pump();
     await shot(tester, 'places-edit');
+    await frame(tester, 932);
 
     await tester.dragUntilVisible(find.byKey(const ValueKey('weather-gear')), find.byType(ListView).last, const Offset(0, -200));
     await tester.tap(find.byKey(const ValueKey('weather-gear')));
