@@ -22,6 +22,66 @@ String miniDefinition(String id, {String? title, String provider = 'Provider', i
       'items': [],
     });
 
+/// The words the published catalogue (github.com/zvx-echo6/cache-packs, connectors/catalogue.json) gives these sources: description,
+/// credit and licence, as shipped, so the pictures and tests show real text, not filler. A source not listed gets filler text.
+const Map<String, ({String description, String attribution, String license})> kRealSourceText = {
+  'nws-alerts-point': (
+    description: 'active emergency alerts and weather warnings for the place (National Weather Service, US)',
+    attribution: 'Alerts from the US National Weather Service (weather.gov)',
+    license: 'US Government work, public domain',
+  ),
+  'avalanche-forecast-zones': (
+    description: 'current avalanche danger rating (1 low to 5 extreme) and travel advice for the forecast zones that contain the place or lie within 50 miles of it (default), nearest first, with the forecast\'s valid period and a link to the full forecast (US)',
+    attribution: 'Avalanche forecasts from the regional avalanche centers via avalanche.org; read the full forecast at the link before travelling in avalanche terrain',
+    license: 'Forecast data of the regional avalanche centers; see each center for terms',
+  ),
+  'usgs-quakes-near': (
+    description: 'recent earthquakes of magnitude 2 or more near the place (300 km by default), newest first, with distance and direction (USGS)',
+    attribution: 'Earthquake data from the US Geological Survey (earthquake.usgs.gov), public domain',
+    license: 'US Government work, public domain',
+  ),
+  'firms-viirs-near': (
+    description: 'VIIRS satellite hotspots (possible fires) detected in the last day within 100 km of the place (default), nearest first, with time, confidence and fire power; needs a free NASA FIRMS map key',
+    attribution: 'Active fire data from NASA LANCE / FIRMS (firms.modaps.eosdis.nasa.gov), VIIRS; a detection is a hot spot seen from orbit, not a confirmed fire',
+    license: 'NASA open data; the FIRMS API needs a free MAP_KEY',
+  ),
+  'wfigs-incidents-near': (
+    description: 'current wildfire incidents within 150 miles of the place (default), largest first, with size, containment, county, discovery time and distance (US, NIFC WFIGS)',
+    attribution: 'Wildfire incidents from the National Interagency Fire Center WFIGS (data-nifc.opendata.arcgis.com), public domain',
+    license: 'Public domain (NIFC open data)',
+  ),
+  'wfigs-perimeters-near': (
+    description: 'current wildfire perimeters within 150 miles of the place (default), nearest edge first, with distance and direction from the place to the fire edge (US, NIFC WFIGS)',
+    attribution: 'Wildfire perimeters from the National Interagency Fire Center WFIGS (data-nifc.opendata.arcgis.com), public domain',
+    license: 'Public domain (NIFC open data)',
+  ),
+  'nwps-gauges-near': (
+    description: 'NWS river forecast gauges within 40 miles of the place (default), nearest first: the latest observed stage and flow (kcfs = thousand cubic feet per second), the next forecast and the flood category (US, NOAA NWPS)',
+    attribution: 'River gauge data and forecasts from the NOAA National Water Prediction Service (water.noaa.gov), public domain',
+    license: 'US Government work, public domain',
+  ),
+  'idaho511-events': (
+    description: 'Idaho road events from 511 within 75 miles of the place (default): closures, crashes, incidents and roadwork, full closures first then nearest; needs a free 511 developer key',
+    attribution: 'Road event data from Idaho 511 (511.idaho.gov), Idaho Transportation Department; use is subject to the 511 developer terms',
+    license: 'Idaho 511 developer terms (free key)',
+  ),
+  'idaho511-winter-roads': (
+    description: 'statewide Idaho winter road conditions from 511 (dry, wet, snow, ice, closed) by road section; the same list for every place; needs a free 511 developer key',
+    attribution: 'Road condition data from Idaho 511 (511.idaho.gov), Idaho Transportation Department; use is subject to the 511 developer terms',
+    license: 'Idaho 511 developer terms (free key)',
+  ),
+  'swpc-kp': (
+    description: 'planetary Kp index (geomagnetic activity, 0 quiet to 9 extreme storm), newest first, 3-hourly; not tied to a place',
+    attribution: 'Space weather data from NOAA Space Weather Prediction Center (swpc.noaa.gov), US Government work',
+    license: 'US Government work, public domain',
+  ),
+  'openmeteo-forecast': (
+    description: 'weather forecast for the place: current conditions and a 16-day outlook with highs, lows, rain chance, rain and snow amounts, wind (Open-Meteo, worldwide)',
+    attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)',
+    license: 'CC BY 4.0 (free API: non-commercial use)',
+  ),
+};
+
 Map<String, dynamic> entry(
   String id,
   String category,
@@ -36,7 +96,7 @@ Map<String, dynamic> entry(
 }) => {
   'id': id,
   'title': title,
-  'description': 'what $title gives',
+  'description': kRealSourceText[id]?.description ?? 'what $title gives',
   'category': category,
   'provider': provider,
   'coverage': coverage,
@@ -44,8 +104,8 @@ Map<String, dynamic> entry(
   'key_alias': ?keyAlias,
   'default_on': keyAlias == null,
   'path': path ?? '$category/$id.json',
-  'attribution': 'Data by $provider',
-  'license': 'Public domain',
+  'attribution': kRealSourceText[id]?.attribution ?? 'Data by $provider',
+  'license': kRealSourceText[id]?.license ?? 'Public domain',
   'refresh': refresh,
   'docs': ?docs,
   'featured': ?featured,
@@ -92,7 +152,7 @@ Map<String, String> standardCatalogue() => buildCatalogue(connectors: [
   entry('nwps-gauges-near', 'hydrology', 'River gauges near the place (NWPS)', provider: 'NOAA NWPS', refresh: 30),
   entry('avalanche-forecast-zones', 'avalanche', 'Avalanche danger near the place (avalanche.org)', provider: 'avalanche.org', refresh: 60),
   entry('swpc-kp', 'space-weather', 'Space weather: Kp index', provider: 'NOAA SWPC', coverage: 'worldwide', featured: false),
-  entry('firms-viirs-near', 'fire', 'Satellite fire detections near the place (NASA FIRMS)', provider: 'NASA FIRMS', coverage: 'worldwide', keyAlias: 'firms', docs: 'https://firms.modaps.eosdis.nasa.gov/api/area/', featured: true),
+  entry('firms-viirs-near', 'fire', 'Satellite fire detections near the place (NASA FIRMS)', provider: 'NASA FIRMS', coverage: 'worldwide', keyAlias: 'firms', docs: 'https://firms.modaps.eosdis.nasa.gov/api/area/', featured: true, refresh: 30),
   entry('idaho511-events', 'roads', 'Road conditions (Idaho 511)', provider: 'Idaho 511', coverage: 'Idaho', keyAlias: 'idaho511', docs: 'https://511.idaho.gov/developers'),
   entry('idaho511-winter-roads', 'roads', 'Winter road conditions (Idaho 511)', provider: 'Idaho 511', coverage: 'Idaho', keyAlias: 'idaho511'),
 ]);
