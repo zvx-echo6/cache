@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:cache/linux_ui.dart' show debugLinuxUi;
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart' show Fix;
 import 'package:cache/maps/maps_state.dart';
@@ -180,6 +181,7 @@ Future<void> _withFittedRoute(WidgetTester tester, {required Size size, required
 }
 
 void main() {
+  _deskRouteFitTests();
   testWidgets(
     'preloaded snapshot fits on first style readiness and GPS cannot steal its preview',
     (tester) async {
@@ -662,5 +664,23 @@ void main() {
         }
       },
     );
+  }
+}
+
+void _deskRouteFitTests() {
+  for (final withFix in [true, false]) {
+    testWidgets('on the desktop layout ${withFix ? 'with' : 'without'} the position chip the route is fitted clear of the buttons at the map\'s right edge', (tester) async {
+      debugLinuxUi = true;
+      addTearDown(() => debugLinuxUi = null);
+      await _withFittedRoute(tester, size: const Size(1906, 909), route: fakeRouteJson(id: 'fit-desk'), position: withFix ? fixAt(42.5, -113.8) : null, check: (fit, map) {
+        final buttons = map.width - tester.getRect(find.byType(MapButton).first).left;
+        expect(buttons, 12 + 48, reason: 'the buttons are not at the right edge (12 in, 48 wide)');
+        for (final b in find.byType(MapButton).evaluate()) {
+          expect(tester.getRect(find.byWidget(b.widget)).left, map.width - buttons, reason: 'a button is not in the column');
+        }
+        expect(_fitPad(fit, 13), buttons + kRouteFitGap);
+        expect(_fitPad(fit, 11), tester.getRect(find.byType(DirectionsHeader)).right + kRouteFitGap);
+      });
+    });
   }
 }
