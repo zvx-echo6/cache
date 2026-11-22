@@ -244,7 +244,7 @@ class CatalogPage extends StatelessWidget {
               if (!nav.compact) const LibraryCrumbs(crumbs: [Crumb('Library', []), Crumb('Catalog')]),
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                child: Text(plat.isWeb ? 'Every search index on this device. Pause and Resume are on the Library\'s indexing line.' : 'Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                child: Text(plat.isWeb ? 'Every search index on this device. Pause and Resume are also on the Library\'s indexing line.' : 'Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
               if (indexSchedulerShared case final s? when s.busy)
                 Align(
