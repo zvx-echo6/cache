@@ -69,9 +69,12 @@ class MemFolder implements SyncFolder {
 Templates builtInTemplates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
 
 class _Rig {
-  _Rig(this.kind, {this.includePrivate = true}) {
-    nb = fakeNotebook(store);
+  _Rig(this.kind, {this.includePrivate = true, bool ownMedia = false}) : media = ownMedia ? Directory.systemTemp.createTempSync('cache-nbsync-media-') : null {
+    nb = fakeNotebook(store, media: media);
   }
+
+  /// This device's own photo files (the fake does what the core does with them); null: the folder every test shares.
+  final Directory? media;
 
   final SyncKind kind;
   final bool includePrivate;
@@ -429,6 +432,206 @@ void main() {
     });
   });
 
+  group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
+    // Two devices of one share, each with its own folder (what cache_sync carries: every file but hidden ones).
+    void carry(_Rig from, _Rig to) {
+      bool hidden(String p) => p.split('/').any((c) => c.startsWith('.'));
+      for (final e in from.folder.text.entries) {
+        if (!hidden(e.key)) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!hidden(e.key)) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    Future<SyncReport> go(_Rig from, _Rig to) async {
+      final rep = await from.engine.run();
+      carry(from, to);
+      return rep;
+    }
+
+    const first = 'Swapped six jugs at the shed. Next rotation in April.';
+
+    /// Both devices have one Journal entry, synced.
+    Future<(_Rig, _Rig, String, String)> synced({_Rig? a, _Rig? b}) async {
+      a ??= _Rig(SyncKind.share);
+      b ??= _Rig(SyncKind.share);
+      final ja = await a.journal();
+      final jb = await b.journal();
+      final e = await a.nb.saveEntry(notebookId: ja.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Water cache restocked', body: first);
+      await go(a, b);
+      await b.engine.run();
+      expect((await b.nb.entries(jb.id)).single.body, first);
+      return (a, b, ja.id, e.id);
+    }
+
+    Future<void> edit(_Rig r, String nb, String id, String body) async {
+      final e = (await r.nb.entry(id))!;
+      await r.nb.saveEntry(id: id, notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: body, photos: e.photos);
+    }
+
+    Future<List<(String, String?, String?)>> view(_Rig r, String nb) async => [for (final e in await r.nb.entries(nb)) (e.id, e.title, e.body)]..sort((x, y) => '${x.$2}'.compareTo('${y.$2}'));
+
+    test('A: this device and the other changed the same words; the file of the other lands first; both end with the original and an "(other version)", no question, and later edits travel', () async {
+      final (a, b, nb, id) = await synced();
+      await edit(a, nb, id, 'Swapped eight jugs at the shed. Next rotation in April.');
+      await edit(b, nb, id, 'Swapped ten jugs at the shed. Next rotation in April.');
+      await go(b, a); // the other device's file is in the shared folder before this device runs
+      final ra = await a.engine.run();
+      expect(ra.keptAsTwo, ['Water cache restocked']);
+      expect(ra.conflicts, 0);
+      carry(a, b);
+      final rb = await b.engine.run();
+      expect(rb.conflicts, 0);
+      carry(b, a);
+      final rc = await a.engine.run();
+      expect(rc.conflicts, 0);
+      final ea = a.engine, eb = b.engine;
+      await ea.run();
+      await eb.run();
+      expect(ea.conflicts, isEmpty);
+      expect(eb.conflicts, isEmpty);
+      final va = await view(a, nb), vb = await view(b, nb);
+      expect(va, vb);
+      expect(va.map((x) => x.$2), ['Water cache restocked', 'Water cache restocked (other version)']);
+      expect(va.map((x) => x.$3).toSet(), {'Swapped eight jugs at the shed. Next rotation in April.', 'Swapped ten jugs at the shed. Next rotation in April.'});
+      expect(va.first.$1, id);
+      // a later edit on each device reaches the other
+      await edit(a, nb, va[0].$1, 'Original, edited on A.');
+      await edit(b, nb, va[1].$1, 'Copy, edited on B.');
+      for (var i = 0; i < 2; i++) {
+        await go(a, b);
+        await b.engine.run();
+        await go(b, a);
+        await a.engine.run();
+      }
+      final wa = await view(a, nb), wb = await view(b, nb);
+      expect(wa, wb);
+      expect(wa.map((x) => x.$3), ['Original, edited on A.', 'Copy, edited on B.']);
+    });
+
+    test('B: different words changed on both: one entry, combined, no copy, and the run says it combined them', () async {
+      final (a, b, nb, id) = await synced();
+      await edit(a, nb, id, 'Swapped eight jugs at the shed. Next rotation in April.');
+      await edit(b, nb, id, 'Swapped six jugs at the shed. Next rotation in May.');
+      await go(b, a);
+      final ra = await a.engine.run();
+      expect(ra.merged, ['Water cache restocked']);
+      expect(ra.keptAsTwo, isEmpty);
+      expect(ra.conflicts, 0);
+      carry(a, b);
+      await b.engine.run();
+      for (final r in [a, b]) {
+        final v = await view(r, nb);
+        expect(v.map((x) => x.$3), ['Swapped eight jugs at the shed. Next rotation in May.']);
+      }
+    });
+
+    test('C: both devices meet the conflict in the same round: they still end with the same two entries, and no third', () async {
+      final (a, b, nb, id) = await synced();
+      await edit(a, nb, id, 'Swapped eight jugs at the shed. Next rotation in April.');
+      await edit(b, nb, id, 'Swapped ten jugs at the shed. Next rotation in April.');
+      // each sees the other's file before writing its own
+      final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+      final fileA = a.folder.text[path]!.replaceFirst('six', 'eight');
+      final fileB = b.folder.text[path]!.replaceFirst('six', 'ten');
+      a.folder.text[path] = fileB;
+      b.folder.text[path] = fileA;
+      final ra = await a.engine.run();
+      final rb = await b.engine.run();
+      expect([ra.keptAsTwo.length, rb.keptAsTwo.length, ra.conflicts, rb.conflicts], [1, 1, 0, 0]);
+      for (var i = 0; i < 2; i++) {
+        await go(a, b);
+        await b.engine.run();
+        await go(b, a);
+        await a.engine.run();
+      }
+      final va = await view(a, nb), vb = await view(b, nb);
+      expect(va, vb);
+      expect(va, hasLength(2));
+      expect(va.map((x) => x.$3).toSet(), {'Swapped eight jugs at the shed. Next rotation in April.', 'Swapped ten jugs at the shed. Next rotation in April.'});
+      expect(a.engine.conflicts, isEmpty);
+      expect(b.engine.conflicts, isEmpty);
+    });
+
+    test('D: a question an older build stored (both changed) is dropped on the next run, and the entry is handled by the new rule', () async {
+      final (a, b, nb, id) = await synced();
+      await edit(a, nb, id, 'Swapped eight jugs at the shed. Next rotation in April.');
+      final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+      final fileB = a.folder.text[path]!.replaceFirst('six', 'ten');
+      // the state an older build left: the entry skipped for good, with its question
+      final st = jsonDecode(a.state.readAsStringSync()) as Map<String, dynamic>;
+      st['conflicts'] = [
+        {'entry': id, 'kind': 'bothChanged', 'title': 'Water cache restocked', 'path': path, 'cache': 'x', 'file': fileB},
+      ];
+      a.state.writeAsStringSync(jsonEncode(st));
+      a.folder.text[path] = fileB;
+      final eng = a.engine;
+      final rep = await eng.run();
+      expect(rep.conflicts, 0);
+      expect(eng.conflicts, isEmpty);
+      expect(rep.keptAsTwo, ['Water cache restocked']);
+      expect(await view(a, nb), hasLength(2));
+      expect(((jsonDecode(a.state.readAsStringSync()) as Map)['conflicts'] as List), isEmpty);
+    });
+
+    test('an entry with photos: the other version gets photos of its own, and deleting either entry leaves the other\'s photo files', () async {
+      for (final deleteOriginal in [true, false]) {
+        final a = _Rig(SyncKind.share, ownMedia: true);
+        final j = await a.journal();
+        final media = a.media!;
+        const p = '5b1c0d2e-7a3f-4c11-8e45-0123456789ab';
+        for (final d in ['photos', 'thumbs']) {
+          File('${media.path}/$d/$p.jpg')
+            ..createSync(recursive: true)
+            ..writeAsBytesSync([1, 2, 3]);
+        }
+        final e = await a.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Ridge', body: first, photos: [const NbPhoto(id: p)]);
+        await a.engine.run();
+        final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+        expect(a.folder.text[path], contains('cache-$p.jpg'));
+        await edit(a, j.id, e.id, 'Swapped eight jugs at the shed. Next rotation in April.');
+        a.folder.text[path] = a.folder.text[path]!.replaceFirst('six', 'ten');
+        final rep = await a.engine.run();
+        expect(rep.keptAsTwo, ['Ridge']);
+        expect(rep.photosLeftOut, 0);
+        final all = await a.nb.entries(j.id);
+        expect(all, hasLength(2));
+        final orig = all.firstWhere((x) => x.id == e.id), copy = all.firstWhere((x) => x.id != e.id);
+        expect(copy.title, 'Ridge (other version)');
+        expect(orig.photos.map((x) => x.id), [p]);
+        expect(copy.photos, hasLength(1));
+        final q = copy.photos.single.id;
+        expect(q, isNot(p));
+        expect(q, matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')));
+        File ph(String d, String id) => File('${media.path}/$d/$id.jpg');
+        expect([ph('photos', p).existsSync(), ph('thumbs', p).existsSync(), ph('photos', q).existsSync(), ph('thumbs', q).existsSync()], everyElement(isTrue));
+        expect(ph('photos', q).readAsBytesSync(), [1, 2, 3]);
+        await a.nb.deleteEntry(deleteOriginal ? orig.id : copy.id);
+        final kept = deleteOriginal ? q : p, gone = deleteOriginal ? p : q;
+        expect(ph('photos', kept).existsSync(), isTrue, reason: 'the other entry keeps its photo');
+        expect(ph('thumbs', kept).existsSync(), isTrue);
+        expect(ph('photos', gone).existsSync(), isFalse);
+      }
+    });
+
+    test('a photo whose bytes are neither here nor in the folder is left out of the other version, and counted', () async {
+      final a = _Rig(SyncKind.share, ownMedia: true);
+      final j = await a.journal();
+      const p = '5b1c0d2e-7a3f-4c11-8e45-0123456789ab';
+      final e = await a.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Ridge', body: first, photos: [const NbPhoto(id: p)]);
+      await a.engine.run();
+      final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+      await edit(a, j.id, e.id, 'Swapped eight jugs at the shed. Next rotation in April.');
+      a.folder.text[path] = a.folder.text[path]!.replaceFirst('six', 'ten');
+      final rep = await a.engine.run();
+      expect(rep.photosLeftOut, 1);
+      final copy = (await a.nb.entries(j.id)).firstWhere((x) => x.id != e.id);
+      expect(copy.photos, isEmpty);
+      expect(copy.body, anyOf(contains('eight'), contains('ten')));
+    });
+  });
+
   group('a notebook\'s fields are fixed (1.1: the field editor is gone)', () {
     // Two devices of one share, each with its own folder. What cache_sync carries from one to the other: every file but hidden
     // ones (a name starting with "."), so `.cache/notebooks.json` stays on the device that wrote it.
@@ -473,7 +676,7 @@ void main() {
     }
 
     String fileOf(_Rig r, String title) =>
-        r.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && !e.key.startsWith('Conflicts/') && e.value.contains('title: $title')).value;
+        r.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && !e.key.startsWith('Conflicts/') && e.value.contains('\ntitle: $title\n')).value;
 
     Future<NbEntry> entryOf(_Rig r, String nb, String title) async => (await r.nb.entries(nb)).firstWhere((e) => e.title == title);
 
@@ -520,7 +723,7 @@ void main() {
       expect(fileOf(a, 'Lake'), contains('notebook: Hikes 2024'));
     });
 
-    test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
+    test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and a same-words conflict', () async {
       final (a, b, id, idb) = await twoDevices();
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
       expect((await entryOf(a, id, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A has no Weather field');
@@ -545,26 +748,25 @@ void main() {
       expect((await entryOf(a, id, 'Ridge')).values['f2'], 6);
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
       await syncTo(a, b);
-      // a conflict, answered with this device's version
+      // the same words changed on both: the other version is kept as a new entry (no question), and both keep the value
       await editA('Gentle.');
       await editB(body: 'Brutal.');
       await b.engine.run();
       carry(b, a);
       var ea = a.engine;
       await ea.run();
-      expect(ea.conflicts, hasLength(1));
-      await ea.resolve(ea.conflicts.single, keepCache: true);
+      expect(ea.conflicts, isEmpty);
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      expect(fileOf(a, 'Ridge (other version)'), contains('weather: Sunny'));
       await syncTo(a, b);
-      // a conflict, answered with the folder's version, then an edit here
+      // again, then an edit here
       await editA('Rocky.');
       await editB(body: 'Muddy.');
       await b.engine.run();
       carry(b, a);
       ea = a.engine;
       await ea.run();
-      expect(ea.conflicts, hasLength(1));
-      await ea.resolve(ea.conflicts.single, keepCache: false);
+      expect(ea.conflicts, isEmpty);
       await editA('Muddy, then dry.');
       await syncTo(a, b);
       expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
@@ -870,6 +1072,15 @@ void main() {
       final c = NotebookConnections(notebook: nb, dir: () async => Directory.systemTemp, onActivity: lines.add);
       c.say(SyncReport()..read = 5..arrived = 3..removedHere = 1);
       expect(lines, ['Notebooks: 3 entries arrived from your other devices', 'Notebooks: 2 entries updated from your other devices', 'Notebooks: 1 entry removed by your other devices']);
+      lines.clear();
+      c.say(SyncReport()..merged.add('Water'));
+      c.say(SyncReport()..merged.addAll(['A', 'B', 'C']));
+      c.say(SyncReport()..keptAsTwo.add('Water cache restocked'));
+      expect(lines, [
+        'Notebooks: 1 entry combined with changes from your other devices',
+        'Notebooks: 3 entries combined with changes from your other devices',
+        'Notebooks: Water cache restocked: both devices changed the same words; the other version is kept as a new entry',
+      ]);
       lines.clear();
       c.say(SyncReport()..written = 4);
       expect(lines, isEmpty, reason: 'what this device sent is not said');

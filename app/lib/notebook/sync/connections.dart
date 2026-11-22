@@ -372,6 +372,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       if (r.arrived > 0) 'Notebooks: ${entries(r.arrived)} arrived from your other devices',
       if (changed > 0) 'Notebooks: ${entries(changed)} updated from your other devices',
       if (r.removedHere > 0) 'Notebooks: ${entries(r.removedHere)} removed by your other devices',
+      if (r.merged.isNotEmpty) 'Notebooks: ${entries(r.merged.length)} combined with changes from your other devices',
+      for (final t in r.keptAsTwo) 'Notebooks: $t: both devices changed the same words; the other version is kept as a new entry',
     ]) {
       logInfo(line);
       onActivity?.call(line);

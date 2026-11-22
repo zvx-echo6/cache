@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 
 import '../../files.dart';
@@ -59,6 +60,13 @@ class SyncReport {
 
   /// Entries changed in both places whose changes were merged (the person is told, not asked).
   final List<String> merged = [];
+
+  /// Entries both sides changed in the same words: one version stays on the entry, the other is kept as a new entry in the same
+  /// notebook (their titles).
+  final List<String> keptAsTwo = [];
+
+  /// Photos of such a kept-as-new version whose bytes were not on this device (nor in the folder): left out of that new entry.
+  int photosLeftOut = 0;
   int conflicts = 0;
 
   /// Notes imported by their tag in this run (their titles), and the notebooks they went to.
@@ -735,6 +743,9 @@ class NotebookSync {
     _stopped.removeWhere((id) => !cache.containsKey(id));
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
+    // Both changed the same words: no question any more (the other version is kept as a new entry); one kept from an older build is
+    // dropped and the entry is found and handled again below.
+    if (kind == SyncKind.share) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.bothChanged) c];
     final open = {for (final c in _conflicts) c.entryId};
     final conflicts = <SyncConflict>[...unreadable];
     // A Cache file that is there but cannot be read (asked about, or ignored by the person's choice) is not missing: it is never
@@ -800,7 +811,11 @@ class NotebookSync {
               _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev);
               r.written++;
             } else {
-              conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+              if (kind == SyncKind.share) {
+                await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
+              } else {
+                conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+              }
             }
           } else {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
@@ -833,7 +848,11 @@ class NotebookSync {
           if (m.clean) {
             final mergedDoc = _parseAs(id, m.text, c.$1, when: doc.when);
             if (mergedDoc == null) {
-              conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+              if (kind == SyncKind.share) {
+                await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
+              } else {
+                conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+              }
               continue;
             }
             final saved = await _apply(id, mergedDoc, byName);
@@ -841,7 +860,11 @@ class NotebookSync {
             _rec(id, path, m.text, saved.rev);
             r.merged.add(doc.title ?? doc.when);
           } else {
-            conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+            if (kind == SyncKind.share) {
+              await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
+            } else {
+              conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
+            }
           }
         }
       } else if (s != null) {
@@ -918,6 +941,79 @@ class NotebookSync {
     ];
     final text = '${const JsonEncoder.withIndent(' ').convert({'format': 'cache-notebooks', 'version': 1, 'notebooks': list})}\n';
     if (await folder.readText('.cache/notebooks.json') != text) await folder.writeText('.cache/notebooks.json', text);
+  }
+
+  static String _sha(String s) => sha256.convert(utf8.encode(s)).toString();
+
+  /// An id shaped like [_newId]'s, from [a] and [b] alone: the same on every device.
+  static String _derivedId(String a, String b, {String variant = 'a'}) {
+    final h = _sha('$a\n$b');
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-4${h.substring(13, 16)}-$variant${h.substring(17, 20)}-${h.substring(20, 32)}';
+  }
+
+  /// Both sides changed entry [id] in the same words ([doc] and [text] are this device's, [f] the folder's). The version whose
+  /// text hashes lower stays on the entry, the same on every device; the other is kept as a new entry in the same notebook (its
+  /// id comes from the entry's id and its text, so every device makes the same one). The person is told, not asked.
+  Future<void> _keepBoth(String id, EntryDoc doc, String text, _Unit f, Notebook book, int rev, Map<String, Notebook> byName, SyncReport r) async {
+    final keepFile = _sha(f.text).compareTo(_sha(text)) < 0;
+    // The copy first: the version kept on the entry may drop photos this version still needs to copy.
+    await _makeCopy(_derivedId(id, keepFile ? text : f.text), keepFile ? doc : f.doc, byName, r);
+    if (keepFile) {
+      final saved = await _apply(id, f.doc, byName, text: f.text);
+      _rec(id, f.path, f.text, saved.rev);
+    } else {
+      final old = _items[id];
+      if (old == null) _rec(id, f.path, f.text, rev);
+      _rec(id, await _write(id, doc, book, text), text, rev, extra: old?.extra ?? const []);
+    }
+    r.keptAsTwo.add(doc.title ?? doc.when);
+  }
+
+  /// [d] as a new entry [copyId] in its notebook: titled "<title> (other version)", with its own copies of its photos.
+  Future<void> _makeCopy(String copyId, EntryDoc d, Map<String, Notebook> byName, SyncReport r) async {
+    if (_items.containsKey(copyId) || await notebook.entry(copyId) != null) return;
+    // A photo belongs to one entry (deleting an entry deletes its photos' files), so the copy gets its own under a new id.
+    Future<String?> own(String pid) async {
+      final to = _derivedId(pid, copyId, variant: '8');
+      if (await notebook.copyPhoto(pid, to)) return to;
+      final bytes = await folder.readBytes('$_attachments/cache-$pid.jpg');
+      if (bytes != null) {
+        await storePhotoBytes(to, bytes);
+        if (await notebook.photoBytes(to) != null) return to;
+      }
+      r.photosLeftOut++;
+      return null;
+    }
+
+    final fields = <String, Object?>{};
+    for (final e in d.fields.entries) {
+      final v = e.value;
+      fields[e.key] = v is List ? [for (final x in v) if (x is String) ?await own(x)] : v;
+    }
+    final named = (d.title ?? '').trim().isEmpty ? null : '${d.title!.trim()} (other version)';
+    final copy = EntryDoc(
+      id: copyId,
+      notebook: d.notebook,
+      when: d.when,
+      title: named,
+      body: d.body,
+      place: d.place,
+      photos: [for (final p in d.photos) ?await own(p)],
+      fields: fields,
+      private: d.private,
+      extra: d.extra,
+      props: d.props,
+      template: d.template,
+    );
+    final saved = await _apply(copyId, copy, byName);
+    final book = notebook.notebook(saved.notebookId) ?? byName[d.notebook]!;
+    final out = _docOf(book, saved);
+    final text = _render(out);
+    final extra = _items[copyId]?.extra ?? const <String>[];
+    // _apply recorded it with no place yet: it is written as a new file or block.
+    _items.remove(copyId);
+    final path = await _write(copyId, out, book, text);
+    _items[copyId] = _Item(path, text, saved.rev, extra: extra);
   }
 
   String _newId() {

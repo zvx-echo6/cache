@@ -16,6 +16,10 @@ class FakeNotebookBackend implements NotebookBackend {
   final List<Map<String, dynamic>> notebooks = [];
   final List<Map<String, dynamic>> entries = [];
   final List<String> calls = [];
+
+  /// When set, the fake does what the core does with photo files: an entry that no longer names a photo (or is deleted) takes the
+  /// photo's files (`photos/<id>.jpg`, `thumbs/<id>.jpg`) with it, and a photo id belongs to the entry that saved it last.
+  Directory? media;
   int _clock = 1000;
   int _ids = 0;
 
@@ -253,6 +257,13 @@ class FakeNotebookBackend implements NotebookBackend {
       if (a['props'] != null) 'props': a['props'],
     };
     if (old != null) entries.remove(old);
+    final named = _photoIds(e);
+    for (final o in entries) {
+      if (o['id'] == e['id']) continue;
+      // a photo id is one row: the entry that saved it last has it
+      o['photos'] = [for (final p in o['photos'] as List) if (!named.contains((p as Map)['id'])) p];
+    }
+    if (old != null) _dropPhotos(_photoIds(old).where((p) => !named.contains(p)));
     entries.add(e);
     if (e['draft'] != true) nb['last_used'] = now;
     return e;
@@ -267,8 +278,26 @@ class FakeNotebookBackend implements NotebookBackend {
     return {...p, 'key': key};
   }
 
+  static Set<String> _photoIds(Map<String, dynamic> e) => {
+        for (final p in e['photos'] as List) (p as Map)['id'] as String,
+        for (final v in (e['values'] as Map).values) if (v is List) ...v.whereType<String>(),
+      };
+
+  void _dropPhotos(Iterable<String> ids) {
+    final m = media;
+    if (m == null) return;
+    for (final id in ids) {
+      for (final f in ['photos', 'thumbs']) {
+        final file = File('${m.path}/$f/$id.jpg');
+        if (file.existsSync()) file.deleteSync();
+      }
+    }
+  }
+
   Map<String, dynamic> _deleteEntry(String id) {
-    entries.remove(_entry(id));
+    final gone = _entry(id);
+    _dropPhotos(_photoIds(gone));
+    entries.remove(gone);
     return {'deleted': id};
   }
 
@@ -289,5 +318,7 @@ class FakeNotebookBackend implements NotebookBackend {
 }
 
 /// A NotebookState on the fake, with a media folder in the system temp folder.
-NotebookState fakeNotebook(FakeNotebookBackend backend) =>
-    NotebookState(backend: backend, mediaDir: () async => Directory('${Directory.systemTemp.path}/cache-notebook-test-media'));
+NotebookState fakeNotebook(FakeNotebookBackend backend, {Directory? media}) {
+  backend.media = media;
+  return NotebookState(backend: backend, mediaDir: () async => media ?? Directory('${Directory.systemTemp.path}/cache-notebook-test-media'));
+}
