@@ -181,7 +181,6 @@ Future<void> _withFittedRoute(WidgetTester tester, {required Size size, required
 }
 
 void main() {
-  _deskRouteFitTests();
   testWidgets(
     'preloaded snapshot fits on first style readiness and GPS cannot steal its preview',
     (tester) async {
@@ -665,6 +664,8 @@ void main() {
       },
     );
   }
+
+  _deskRouteFitTests();
 }
 
 void _deskRouteFitTests() {

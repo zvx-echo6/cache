@@ -2590,7 +2590,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 builder: (context, c) => Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (panel == null) Flexible(child: top) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
+                    if (panel == null) (scaleAtLeft ? top : Flexible(child: top)) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
                     if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
                     if (panel != null) ...[
                       const SizedBox(height: 8),

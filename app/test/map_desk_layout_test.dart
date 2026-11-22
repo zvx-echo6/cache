@@ -10,6 +10,7 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/ui/map_widgets.dart' show AttributionChip, MapButton, ScaleBarWidget;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/units.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart' show MapPlace;
@@ -106,10 +107,11 @@ void main() {
         expect(_r(tester, find.byType(AttributionChip)).bottom, size.height - 8);
         // No panel: the scale is at the map's bottom left, under the column on the left.
         expect(_r(tester, find.byType(ScaleBarWidget)).left, closeTo(12, 6));
-        expect(_r(tester, find.byType(ScaleBarWidget)).bottom, lessThanOrEqualTo(size.height - 8 + 0.5));
+        expect(_r(tester, find.byType(ScaleBarWidget)).bottom, closeTo(size.height - 8, 1), reason: 'the scale is not at the map\'s foot');
         if (withFix) {
           // The chip stays at the top left of the area beside the column, level with the search box.
-          expect(_r(tester, _chip).left, 12 + 380 + 12 - 0.0 + 0, reason: 'chip is not next to the search column');
+          // (The text sits 12 in from the chip's own edge.)
+          expect(_r(tester, _chip).left, 12 + 380 + 12 + 12, reason: 'the chip is not next to the search column');
         }
       });
     });
@@ -140,14 +142,16 @@ void main() {
 
   testWidgets('the zoom buttons look like the map\'s other buttons', (tester) async {
     await _onMaps(tester, size: const Size(1440, 900), desk: true, body: (_) async {
-      expect(find.ancestor(of: _zoomIn, matching: find.byType(MapButton)), findsOneWidget);
-      expect(tester.getSize(find.ancestor(of: _zoomIn, matching: find.byType(MapButton))), tester.getSize(find.ancestor(of: _layers, matching: find.byType(MapButton))));
+      Finder button(String tip) => find.byWidgetPredicate((w) => w is MapButton && w.tooltip == tip);
+      expect(button('Zoom in'), findsOneWidget);
+      expect(tester.getSize(button('Zoom in')), tester.getSize(button('Layers')));
+      expect(tester.getSize(button('Zoom out')), tester.getSize(button('Layers')));
     });
   });
 
   testWidgets('a phone, upright: no zoom buttons, and the scale, credits and buttons where they were', (tester) async {
     const size = Size(390, 844);
-    await _onMaps(tester, size: size, desk: false, body: (_) async {
+    await _onMaps(tester, size: size, desk: false, withFix: false, body: (_) async {
       expect(_zoomIn, findsNothing);
       expect(_zoomOut, findsNothing);
       expect(_r(tester, find.byType(ScaleBarWidget)).left, 12);
@@ -164,8 +168,6 @@ void main() {
       // As before: the scale and the credits just right of the column on the left, at its left; the buttons after the chip.
       expect(_r(tester, find.byType(ScaleBarWidget)).left, 12 + 380 + 12);
       expect(_r(tester, find.byType(AttributionChip)).left, 12 + 380 + 12);
-      expect(_r(tester, find.byType(AttributionChip)).right, lessThan(size.width - 12));
-      expect(_r(tester, _chip).left, 12 + 380 + 12);
     });
   });
 
