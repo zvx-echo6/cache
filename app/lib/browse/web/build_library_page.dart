@@ -267,7 +267,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
             if (building) ...[
               const SizedBox(width: 8),
               if (paused)
-                FilledButton.icon(key: const ValueKey('resume-queue'), onPressed: () => _call(c.resume), icon: const Icon(Icons.play_arrow, size: 18), label: const Text('Resume'))
+                FilledButton.icon(key: const ValueKey('resume-queue'), onPressed: () => _call(c.resumeAll), icon: const Icon(Icons.play_arrow, size: 18), label: const Text('Resume'))
               else
                 OutlinedButton.icon(key: const ValueKey('pause-queue'), onPressed: _pause, icon: const Icon(Icons.pause, size: 16), label: const Text('Pause')),
               const SizedBox(width: 6),

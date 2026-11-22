@@ -286,6 +286,33 @@ void main() {
       expect(find.text('Pause'), findsOneWidget);
     });
 
+    testWidgets('Resume on the build page calls the attached resumeEverything (both pauses)', (tester) async {
+      api.q = queueOf([qitem('i2', 'lib1', 'building', title: 'Book', pieces: 1, total: 4)], low: 3600, high: 7200);
+      var everything = 0;
+      c.resumeEverything = () async {
+        everything++;
+        await c.resume();
+      };
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      await tester.tap(find.byKey(const ValueKey('pause-queue')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('resume-queue')));
+      await tester.pumpAndSettle();
+      expect(everything, 1);
+      expect(api.calls, ['pause', 'resume']);
+    });
+
+    testWidgets('Resume on the build page falls back to plain resume when no resumeEverything is attached', (tester) async {
+      api.q = queueOf([qitem('i2', 'lib1', 'building', title: 'Book', pieces: 1, total: 4)], low: 3600, high: 7200);
+      expect(c.resumeEverything, isNull);
+      await show(tester, BuiltLibraryPage(build: c, libraryId: 'lib1'));
+      await tester.tap(find.byKey(const ValueKey('pause-queue')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('resume-queue')));
+      await tester.pumpAndSettle();
+      expect(api.calls, ['pause', 'resume']);
+    });
+
     testWidgets('a book that failed shows why, with Retry and Dismiss; a duplicate is skipped with the name of the one it matches', (tester) async {
       api.q = queueOf([
         qitem('i1', 'lib1', 'building', title: 'Busy', pieces: 1, total: 9),
