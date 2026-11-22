@@ -1,4 +1,4 @@
-# Routine checks: run on rel-1.1, main, tags, pull requests and by hand; branches are checked on the Cache build boxes. No secrets are used.
+# Routine checks: run on main (where work goes), tags, pull requests and by hand (rel-1.1 is frozen at build 54); branches are checked on the Cache build boxes. No secrets are used.
 #
 #   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
 #            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  # rel-1.1 and main: a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
+  # main (rel-1.1 is frozen): a group per commit, so every commit's run finishes; other branches: a new push cancels the older run.
   group: tests-${{ (github.ref == 'refs/heads/rel-1.1' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: true
 
