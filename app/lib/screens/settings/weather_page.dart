@@ -26,7 +26,7 @@ Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool 
   final saved = await showAddKeySheet(
     context,
     title: title ?? c.title,
-    gives: '${c.description.isEmpty ? c.title : _sentence(c.description)} You need your own key from $provider.',
+    gives: 'You need your own key from $provider.',
     getKeyLabel: 'Get a key from $provider',
     getKeyUrl: c.docs ?? w.catalogues.map((k) => k.catalogue.homepage).firstWhere((h) => h.startsWith('https://'), orElse: () => 'https://cached.info'),
     steps: const ['Follow their steps to get a key, then copy it'],
@@ -37,15 +37,6 @@ Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool 
         : "Saving checks the key with one real download and turns on ${title ?? c.title}. The key stays on this device and isn't shown again.",
   );
   if (saved == true && context.mounted) say(context, replace ? 'Key replaced' : '${title ?? c.title} is on');
-}
-
-/// The first sentence of a description, capitalised, ending in a full stop.
-String _sentence(String s) {
-  var t = s.trim();
-  final cut = t.indexOf('. ');
-  if (cut > 0) t = t.substring(0, cut);
-  t = t.replaceAll(RegExp(r'[.;]+$'), '');
-  return '${t[0].toUpperCase()}${t.substring(1)}.';
 }
 
 /// Settings > Weather and alerts: how many sources work and when Cache last checked (with a small refresh button), what weather

@@ -105,6 +105,8 @@ void main() {
       await tester.tap(find.descendant(of: rowWith('Satellite fire detections near the place (NASA FIRMS)'), matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
+      expect(find.text('You need your own key from NASA FIRMS.'), findsOneWidget);
+      expect(find.textContaining('VIIRS satellite hotspots'), findsNothing, reason: 'the key sheet says only what the app says, not the source description');
       await tester.tap(find.byKey(const ValueKey('get-key')));
       await tester.pump();
       expect(r.opened, ['https://firms.modaps.eosdis.nasa.gov/api/area/']);
