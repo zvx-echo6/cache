@@ -1773,24 +1773,35 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       geometry = await src.storedGeometry(rec);
     } catch (_) {}
-    MapPlace? pack;
-    if (hit.town != null && rec.id == hit.town!.id) {
-      try {
-        final found = (await nav.backend.search(rec.name, near: GeoPoint(lat, lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
-        final label = TapFeature(source: TapSource.basemap, tier: TapTier.label, name: rec.name, kind: '', lat: lat, lon: lon);
-        pack = matchLabelPlace(label, found, reachM: math.max(kLabelMatchFloorM, 3000));
-      } catch (_) {}
-    }
     if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
-    final choice = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: hit.town == null && rec.kind == 'county' ? src.townsIn(rec) : const []);
-    appLog.add(LogLevel.standard, 'INFO',
-        'map area ${rec.id} (${rec.kind}) outline=${geometry == null ? 'not stored, none drawn' : 'from stored file, no network'} pack=${pack == null ? 'none' : pack.id}');
+    final towns = hit.town == null && rec.kind == 'county' ? src.townsIn(rec) : const <RegionRecord>[];
+    final choice = areaChoice(hit, geometry: geometry, fmt: nav.fmt, towns: towns);
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline=${geometry == null ? 'not stored, none drawn' : 'from stored file, no network'}');
     HapticFeedback.selectionClick();
     _tappedBook = null;
     widget.userLayers?.clearRepeater();
     _area = choice;
     nav.select(choice.place);
+    // The card and the outline are up at once; the town's summary (from the places data, which may be slow or not there) joins the card
+    // when it is found.
+    if (hit.town != null && rec.id == hit.town!.id) unawaited(_addTownSummary(hit, geometry, towns, lat, lon, seq, choice));
     return true;
+  }
+
+  Future<void> _addTownSummary(AreaHit hit, Map<String, dynamic>? geometry, List<RegionRecord> towns, double lat, double lon, int seq, AreaChoice shown) async {
+    final rec = hit.town!;
+    MapPlace? pack;
+    try {
+      final found = (await nav.backend.search(rec.name, near: GeoPoint(lat, lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
+      final label = TapFeature(source: TapSource.basemap, tier: TapTier.label, name: rec.name, kind: '', lat: lat, lon: lon);
+      pack = matchLabelPlace(label, found, reachM: math.max(kLabelMatchFloorM, 3000));
+    } catch (_) {}
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} places record: ${pack == null ? 'none' : pack.id}');
+    // Only if that card is still the one on screen (a later tap, or the X, was not waited for).
+    if (pack == null || !mounted || seq != _tapSeq || _area != shown || nav.selected?.id != shown.place.id) return;
+    final next = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: towns);
+    _area = next;
+    nav.select(next.place);
   }
 
   /// The camera shows the whole area above the card.
@@ -1805,7 +1816,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     maps.setFollow(FollowMode.free);
     final size = _fitMapSize();
-    final pad = EdgeInsets.fromLTRB(24, 150, 24, size.height * 0.5);
+    final pad = EdgeInsets.fromLTRB(24, 150, 24, size.height * 0.56);
     _camPad = null;
     try {
       await c.animateCamera(
@@ -1825,7 +1836,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final b = g == null ? null : geometryBounds(g);
       if (b != null && b[0] <= b[2]) {
         final size = _fitMapSize();
-        final fit = fitZoomFor(b, size.width - 48, math.max(120, size.height * 0.5 - 150));
+        final fit = fitZoomFor(b, size.width - 48, math.max(120, size.height * 0.44 - 150));
         await c.setLayerProperties(kAreaFill, FillLayerProperties(fillColor: _palette.css('pin'), fillOpacity: areaFillOpacity(fit, fill: widget.themeId == CacheThemeId.tactical ? 0.10 : 0.08)));
       }
     } catch (_) {}

@@ -2,6 +2,7 @@
 // choice is a pure function (map_tap.dart); the Maps screen asks the map what is under the tap and opens what it chooses. Every name
 // and place here is made up.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -418,6 +419,28 @@ void _areaScreenTests() {
       expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
       expect(_outlineFeatures(m), 1, reason: 'the town\'s outline is on the map');
+      await m.finish(tester);
+    });
+
+    testWidgets('the town card is up at once and its summary from the places data joins it when found', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      final gate = Completer<MapSearchResponse>();
+      m.rig.backend.onSearch = (q, {near, meaning}) => gate.future;
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(find.byKey(const ValueKey('place-card-summary')), findsNothing, reason: 'the card did not wait for the search');
+      expect(_outlineFeatures(m), 1);
+      gate.complete(MapSearchResponse(query: 'Quillmoor', kind: 'text', meaning: 'off', results: [
+        MapPlace(id: 'town:test:q1', type: 'place', name: 'Quillmoor', kind: 'City', lat: 42.5002, lon: -113.5002, summary: 'Quillmoor is a city in Idaho.', matched: 'name'),
+      ]));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump();
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(find.text('Quillmoor is a city in Idaho.'), findsOneWidget);
+      expect(find.text('About 49,800 people'), findsOneWidget, reason: 'the people line is still from the catalogue');
+      expect(_outlineFeatures(m), 1);
       await m.finish(tester);
     });
 
