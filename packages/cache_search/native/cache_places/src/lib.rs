@@ -20,6 +20,7 @@ pub mod map;
 pub mod merged;
 pub mod nearby;
 pub mod pack;
+pub mod poi;
 pub mod source;
 pub mod schema;
 pub mod share;

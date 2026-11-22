@@ -142,7 +142,10 @@ fn set_bbox(c: &Connection) -> Result<()> {
 pub fn ensure_indexes(c: &Connection) -> Result<()> {
     c.execute_batch(
         "CREATE INDEX IF NOT EXISTS main.tile_counts_what_id ON tile_counts(what, id, n);
-         CREATE INDEX IF NOT EXISTS main.places_matched ON places(matched_source_id) WHERE matched_source_id IS NOT NULL;",
+         CREATE INDEX IF NOT EXISTS main.places_matched ON places(matched_source_id) WHERE matched_source_id IS NOT NULL;
+         CREATE TABLE IF NOT EXISTS main.poi_links (tile INTEGER NOT NULL, name_norm TEXT NOT NULL, kind TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, source_id TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS main.poi_links_key ON poi_links(name_norm, kind);
+         CREATE INDEX IF NOT EXISTS main.poi_links_tile ON poi_links(tile);",
     )?;
     Ok(())
 }
@@ -168,6 +171,7 @@ fn delete_rows(c: &Connection, tile: u32) -> Result<()> {
     c.execute("DELETE FROM main.localities_ctx WHERE tile = ?1", params![tile])?;
     c.execute("DELETE FROM main.vectors WHERE kind IN ('place', 'locality') AND CAST(ref AS INTEGER) BETWEEN ?1 AND ?2", params![lo, hi])?;
     c.execute("DELETE FROM main.tile_counts WHERE tile = ?1", params![tile])?;
+    c.execute("DELETE FROM main.poi_links WHERE tile = ?1", params![tile])?;
     c.execute("DELETE FROM main.tiles WHERE tile = ?1", params![tile])?;
     Ok(())
 }
@@ -243,6 +247,17 @@ fn insert_rows(tx: &Transaction, tile: u32, rep: &mut MergeReport) -> Result<()>
          INSERT INTO main.tile_counts(tile, what, id, n) SELECT {tile}, what, id, n FROM t.tile_counts;",
         r = mid("ref"),
     ))?;
+    // A tile cut before the chip links has none: its chips then have no link.
+    let has_links = tx.query_row("SELECT 1 FROM t.sqlite_master WHERE type = 'table' AND name = 'poi_links'", [], |_| Ok(())).optional()?.is_some();
+    // The database has the build's links once a tile that went through `poi-link` (it says so in its meta) is in: the phone then
+    // never guesses a chip's place (`Pack::has_poi_links`). An empty table made by `ensure_indexes` does not say that.
+    let linked_tile = tx.query_row("SELECT 1 FROM t.meta WHERE key = 'poi_links'", [], |_| Ok(())).optional()?.is_some();
+    if linked_tile {
+        tx.execute("INSERT OR REPLACE INTO main.meta(key, value) VALUES ('poi_links', '1')", [])?;
+    }
+    if has_links {
+        tx.execute_batch(&format!("INSERT INTO main.poi_links(tile, name_norm, kind, lat, lon, source_id) SELECT {tile}, name_norm, kind, lat, lon, source_id FROM t.poi_links;"))?;
+    }
     rep.places = count(tx, "SELECT COUNT(*) FROM t.places")?;
     rep.localities = count(tx, "SELECT COUNT(*) FROM t.localities")?;
     rep.localities_ctx = count(tx, "SELECT COUNT(*) FROM t.localities_ctx")?;
@@ -419,6 +434,43 @@ mod tests {
         Connection::open(&other).unwrap().execute("UPDATE meta SET value = '99' WHERE key = 'tile_schema'", []).unwrap();
         assert!(create(&t.0.join("m2.sqlite"), &other).unwrap_err().message.contains("tile_schema"));
         assert!(!t.0.join("m2.sqlite").exists());
+    }
+
+    #[test]
+    fn a_tiles_chip_links_merge_with_it_are_looked_up_by_kind_name_and_point_and_go_with_the_tile() {
+        let t = Tmp::new("poilinks");
+        let mut c = fresh(&t);
+        let burley = tile_id_l1(BURLEY.0, BURLEY.1);
+        let shard = t.shard(burley);
+        let (sid, lat, lon): (String, f64, f64) = {
+            let m = Connection::open(&shard).unwrap();
+            let row = m.query_row("SELECT source_id, lat, lon FROM places WHERE name = 'Walgreens'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+            m.execute("INSERT INTO meta VALUES ('poi_links', '{}')", []).unwrap();
+            m.execute("INSERT INTO poi_links VALUES ('walgreens', 'pharmacy', ?1, ?2, ?3), ('walgreens', 'chemist', ?1, ?2, 'osm:other')", rusqlite::params![row.1, row.2, row.0]).unwrap();
+            row
+        };
+        merge_tile(&mut c, burley, &shard, "aa", 1).unwrap();
+        assert_eq!(n(&c, &format!("SELECT COUNT(*) FROM poi_links WHERE tile = {burley}")), 2);
+        let pack = crate::pack::Pack::open(&t.0.join("merged.sqlite")).unwrap();
+        assert!(pack.has_poi_links());
+        // The chip as the tiles give it (a few metres off, any zoom): the same name with other case and punctuation, the same kind.
+        let found = pack.poi_link("pharmacy", "WALGREENS.", lat + 0.00003, lon - 0.00002).unwrap().expect("linked");
+        assert_eq!(found.source_id, sid);
+        // The kind has to be the chip's: the "chemist" row points at a place this tile does not have, and a park chip has no row.
+        assert!(pack.poi_link("chemist", "Walgreens", lat, lon).unwrap().is_none(), "a link to a place that is not on the phone is no link");
+        assert!(pack.poi_link("park", "Walgreens", lat, lon).unwrap().is_none());
+        // 100 m away is another chip.
+        assert!(pack.poi_link("pharmacy", "Walgreens", lat + 0.001, lon).unwrap().is_none());
+        drop(pack);
+        // A tile without links (cut before them) merges as before and replaces the rows; removing the tile removes them.
+        let old = t.shard(burley);
+        Connection::open(&old).unwrap().execute_batch("DROP TABLE poi_links;").unwrap();
+        merge_tile(&mut c, burley, &old, "bb", 2).unwrap();
+        assert_eq!(n(&c, "SELECT COUNT(*) FROM poi_links"), 0);
+        // A database made before the links gets the table when a tile is merged or removed.
+        c.execute_batch("DROP TABLE poi_links;").unwrap();
+        remove_tile(&mut c, burley).unwrap();
+        assert_eq!(n(&c, "SELECT COUNT(*) FROM poi_links"), 0);
     }
 
     #[test]

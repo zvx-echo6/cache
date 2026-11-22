@@ -8,6 +8,11 @@ abstract class MapBackend {
 
   Future<MapSearchResponse> search(String query, {GeoPoint? near, int limit, bool meaning});
 
+  /// The place the places build linked a base-map chip to, by what the chip's tile carries: its `kind`, name and point. No place when
+  /// the build has no link for it (no guessing: the card then says there are no other details). `linksPresent` false: the places data
+  /// is from before the links (see [MapPoiLink]).
+  Future<MapPoiLink> poiLink({required String kind, required String name, required double lat, required double lon});
+
   /// The complete route; [from] is where to start (the app sends its own GPS fix). A route that cannot be made comes back
   /// with `ok` false and its errors.
   Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via, String mode, String? landAccess, int alternatives});
@@ -51,6 +56,10 @@ class CoreMapBackend implements MapBackend {
     }
     return _core().mapSearch(query, near: near, limit: limit, meaning: meaning, queryVector: vector);
   }
+
+  @override
+  Future<MapPoiLink> poiLink({required String kind, required String name, required double lat, required double lon}) =>
+      _core().mapPoiLink(kind: kind, name: name, lat: lat, lon: lon);
 
   @override
   Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) =>

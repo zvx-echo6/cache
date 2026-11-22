@@ -15,7 +15,7 @@ enum TapSource { basemap, imported, overlay }
 
 /// One feature under a tap, as the map's query of rendered features gave it, read into what a card needs.
 class TapFeature {
-  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId, this.poi = false, this.placeLabel = false});
+  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId, this.poi = false, this.placeLabel = false, this.rawKind = ''});
 
   final TapSource source;
   final TapTier tier;
@@ -36,10 +36,14 @@ class TapFeature {
   /// A public place of the base map's POI layer (a chip), which wins a tap over a town or road name beside it.
   final bool poi;
 
+  /// A chip's `kind` as the tile carries it ("attraction", "park"): the key of its link in the places data, with its name and point.
+  /// Empty for anything that is not a chip.
+  final String rawKind;
+
   /// The label of a city or town (not a road's name or a neighbourhood's): it opens that town's area card.
   final bool placeLabel;
 
-  TapFeature asPlaceLabel() => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi, placeLabel: true);
+  TapFeature asPlaceLabel() => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi, placeLabel: true, rawKind: rawKind);
 
   bool get named => name != null && name!.isNotEmpty;
 }
@@ -95,11 +99,13 @@ TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required Str
       lat = (c[1] as num).toDouble();
     }
   }
+  var rawKind = '';
   if (poi) {
     final props = raw['properties'];
-    kind = poiKindName(props is Map ? props['kind'] as String? : null);
+    rawKind = props is Map && props['kind'] is String ? props['kind'] as String : '';
+    kind = poiKindName(rawKind);
   }
-  return TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi);
+  return TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi, rawKind: rawKind);
 }
 
 /// The base map's label layers in a style ([styleJson], as the screen applied it): its symbol layers drawn from the base map's
@@ -170,8 +176,9 @@ const double kLabelMatchFloorM = 300;
 
 String _norm(String s) => s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
-/// The place of the places data that a base-map label is ([candidates], the core's map search for the label's name near it): one
-/// of the same name (letter case and spacing aside) within [reachM] of the label's point, the nearest. Null: none.
+/// The place of the places data that a base-map label (a town or a road's name; not a chip, whose place is linked at build time) is
+/// ([candidates], the core's map search for the label's name near it): one of the same name (letter case and spacing aside) within
+/// [reachM] of the label's point, the nearest. Null: none.
 MapPlace? matchLabelPlace(TapFeature label, List<MapPlace> candidates, {required double reachM}) {
   if (!label.named) return null;
   final want = _norm(label.name!);
@@ -214,10 +221,20 @@ TapChoice tapChoiceFor(TapFeature f, {MapPlace? match}) {
   );
 }
 
-/// The whole choice for a tap: the feature [pickTapFeature] takes from [hits], matched against [candidates] when it is a label.
-/// Null when the tap is on nothing.
-TapChoice? chooseMapTap(List<TapFeature> hits, {List<MapPlace> candidates = const [], double reachM = kLabelMatchFloorM}) {
+/// The whole choice for a tap: the feature [pickTapFeature] takes from [hits]. A chip opens its [linked] place (the one the places
+/// build linked it to; null when it has no link, which is the honest "No other details" card) and is never matched by name and
+/// distance. The one exception is [linksPresent] false, places data from before the links existed (an old build): then, and only
+/// then, a chip is matched against [candidates] by name and distance as a town or road name is. That is a transition fallback for old
+/// data, not a decision path: remove it once every published places build has links (docs/PLACES-TILES.md, "Chip links").
+/// A town or road name is matched against [candidates]. Null when the tap is on nothing.
+TapChoice? chooseMapTap(List<TapFeature> hits, {List<MapPlace> candidates = const [], double reachM = kLabelMatchFloorM, MapPlace? linked, bool linksPresent = true}) {
   final f = pickTapFeature(hits);
   if (f == null) return null;
-  return tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+  final MapPlace? match;
+  if (f.poi && linksPresent) {
+    match = linked;
+  } else {
+    match = f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null;
+  }
+  return tapChoiceFor(f, match: match);
 }

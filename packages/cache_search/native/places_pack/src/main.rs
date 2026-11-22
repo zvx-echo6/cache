@@ -15,6 +15,8 @@
 //!   places_pack summarize --blocks work/blocks --out summaries/N.sqlite   (what `common` reads from blocks, kept after the blocks go)
 //!   places_pack oa-merge --overture-csv addresses.csv --sources oa-sources.tsv --out addresses-oa.csv --provenance oa-provenance.tsv --attribution oa-attribution.json [--dist 30] [--bbox W,S,E,N] [--spool DIR]
 //!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
+//!   places_pack poi-link (--tiles out/NAME | --tile-file tile.sqlite) --basemap protomaps.pmtiles|https://... [--jobs 8] [--tile-jobs 1]
+//!       [--audit-bbox W,S,E,N] [--only 1/047/585,...] [--report report.tsv]   (after `cut`: links base map chips to places, merges duplicates)
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
 //!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--oa-attribution oa-attribution.json] [--rules categories.json]
 //!   places_pack wiki --packs work/blocks (the wiki flags above) --cache wiki-cache.sqlite
@@ -37,6 +39,7 @@ mod model;
 mod openaddresses;
 mod osm;
 mod overture;
+mod poi_link;
 #[cfg(test)]
 mod parity_tests;
 mod rules;
@@ -252,6 +255,22 @@ fn run() -> Result<(), String> {
                 "{} tiles, {} bytes, {} gzip bytes; {} places, {} towns, {} street rows, {} house numbers; in {}",
                 tiles.len(), s(|t| t.bytes), s(|t| t.gz_bytes), s(|t| t.places as u64), s(|t| t.localities as u64), s(|t| t.streets as u64), s(|t| t.addresses as u64), took()
             );
+            Ok(())
+        }
+        Some("poi-link") => {
+            let a = parse_args(&argv[1..])?;
+            let cfg = poi_link::Cfg {
+                tiles: a.get("tiles").map(PathBuf::from),
+                tile_file: a.get("tile-file").map(PathBuf::from),
+                basemap: a.get("basemap").cloned().ok_or("--basemap is required (a .pmtiles file or an https address)")?,
+                jobs: num(&a, "jobs", 8)?,
+                tile_jobs: num(&a, "tile-jobs", 1)?,
+                audit: a.get("audit-bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+                only: a.get("only").map(|o| o.split(',').map(str::to_string).collect()),
+                report: a.get("report").map(PathBuf::from),
+            };
+            let s = poi_link::run(&cfg)?;
+            println!("poi-link: {} tiles; {} of {} chips in their tiles linked; {} duplicate records merged; in {}", s.tiles, s.linked_in_cell, s.chips_in_cell, s.merged_records, took());
             Ok(())
         }
         Some("common") => {

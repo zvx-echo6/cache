@@ -1,0 +1,61 @@
+# The kind table of `places_pack poi-link`: how the base map's chip kinds line up with the places pack's records.
+# It is data between two schemas, not language rules.
+#   tile_kind  Protomaps v4 `pois.kind` (the value in the tiles; the kinds of app/lib/maps/poi_chips.dart)
+#   class      the chip's icon (poi_chips.dart `PoiIcon.id`): two records of the SAME class and name close together are one place
+#              mapped twice and are merged; records of different classes ("Stinker" the fuel station and "Stinker" the convenience
+#              store) stay apart
+#   osm_tags   the places pack's `places.kind` for a record from OpenStreetMap (`key=value`, as the pack writes it), comma-joined:
+#              a chip links only to a record whose kind is listed for its tile kind. A record of another kind never answers the chip.
+tile_kind	class	osm_tags
+fuel	fuel	amenity=fuel
+charging_station	charging	amenity=charging_station
+aerodrome	airport	aeroway=aerodrome
+restaurant	food	amenity=restaurant
+fast_food	food	amenity=fast_food
+food_court	food	amenity=food_court
+bakery	food	shop=bakery
+ice_cream	food	amenity=ice_cream,shop=ice_cream
+bar	food	amenity=bar
+pub	food	amenity=pub
+cafe	cafe	amenity=cafe
+coffee	cafe	shop=coffee
+supermarket	groceries	shop=supermarket
+convenience	groceries	shop=convenience
+variety_store	groceries	shop=variety_store
+wholesale	groceries	shop=wholesale
+department_store	shop	shop=department_store
+doityourself	shop	shop=doityourself
+outdoor	shop	shop=outdoor
+mall	shop	shop=mall
+hotel	lodging	tourism=hotel
+motel	lodging	tourism=motel
+hostel	lodging	tourism=hostel
+guest_house	lodging	tourism=guest_house
+chalet	lodging	tourism=chalet
+camp_site	camp	tourism=camp_site
+caravan_site	camp	tourism=caravan_site
+park	park	leisure=park
+nature_reserve	park	leisure=nature_reserve
+garden	park	leisure=garden
+golf_course	park	leisure=golf_course
+peak	peak	natural=peak
+volcano	peak	natural=volcano
+trailhead	trailhead	highway=trailhead
+ranger_station	ranger	amenity=ranger_station
+hospital	hospital	amenity=hospital,healthcare=hospital
+clinic	clinic	amenity=clinic,healthcare=clinic
+doctors	clinic	amenity=doctors,healthcare=doctor
+pharmacy	pharmacy	amenity=pharmacy
+chemist	pharmacy	shop=chemist
+police	police	amenity=police
+fire_station	fire	amenity=fire_station
+drinking_water	water	amenity=drinking_water
+toilets	restroom	amenity=toilets
+attraction	landmark	tourism=attraction
+museum	landmark	tourism=museum
+monument	landmark	historic=monument
+viewpoint	landmark	tourism=viewpoint
+stadium	landmark	leisure=stadium
+theatre	landmark	amenity=theatre
+zoo	landmark	tourism=zoo
+information	info	tourism=information

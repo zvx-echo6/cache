@@ -1741,8 +1741,21 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (f.placeLabel && areas != null && await _openArea(f.lat, f.lon, seq, townOnly: true, name: f.name)) return true;
     if (!mounted || seq != _tapSeq) return false;
     HapticFeedback.selectionClick();
+    // A chip opens the place the places build linked it to (looked up by the chip's kind, name and point; no name-and-distance guess);
+    // no link is the honest card. A town or road name is matched by name and distance, as before.
+    // TRANSITION FALLBACK, to remove once every published places build has links (docs/PLACES-TILES.md, "Chip links"): places data
+    // from before the links (a build with no poi_links) cannot answer a chip, so only then is the chip matched by name and distance.
     var candidates = const <MapPlace>[];
-    if (f.tier == TapTier.label && f.named) {
+    MapPlace? linked;
+    var oldData = false;
+    if (f.poi && f.named && f.rawKind.isNotEmpty) {
+      try {
+        final a = await nav.backend.poiLink(kind: f.rawKind, name: f.name!, lat: f.lat, lon: f.lon).timeout(const Duration(seconds: 3));
+        linked = a.place;
+        oldData = !a.linksPresent;
+      } catch (_) {}
+    }
+    if ((f.tier == TapTier.label && f.named && !f.poi) || (oldData && f.named)) {
       // The places data the search box reads, for the label's name near it: the card then has what a search result has.
       try {
         candidates = (await nav.backend.search(f.name!, near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false).timeout(const Duration(seconds: 3))).results;
@@ -1750,10 +1763,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
     final reachM = math.max(kLabelMatchFloorM, kLabelMatchReach * metresPerPoint(f.lat, _zoom));
-    final choice = tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+    final byName = f.tier == TapTier.label && (!f.poi || oldData);
+    final choice = tapChoiceFor(f, match: f.poi && !oldData ? linked : (byName ? matchLabelPlace(f, candidates, reachM: reachM) : null));
     if (f.tier == TapTier.label) {
       appLog.add(LogLevel.standard, 'INFO',
-          'map tap ${f.poi ? 'poi' : 'label'} name="${f.name}" kind=${f.kind.isEmpty ? '-' : f.kind} candidates=${candidates.length} reachM=${reachM.round()} -> ${choice.place.id} ${choice.place.matched == kPoiMatched || choice.place.id.startsWith('loc:') ? 'no-match' : 'matched'}');
+          'map tap ${f.poi ? 'poi' : 'label'} name="${f.name}" kind=${f.rawKind.isEmpty ? (f.kind.isEmpty ? '-' : f.kind) : f.rawKind} ${f.poi && !oldData ? 'link=${linked == null ? 'none' : 'found'}' : '${f.poi ? 'oldData ' : ''}candidates=${candidates.length} reachM=${reachM.round()}'} -> ${choice.place.id} ${choice.place.matched == kPoiMatched || choice.place.id.startsWith('loc:') ? 'no-match' : 'matched'}');
     }
     final book = choice.notebookId;
     _tappedBook = book == null ? null : (placeId: choice.place.id, notebookId: book);

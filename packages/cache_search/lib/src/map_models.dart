@@ -205,6 +205,15 @@ class PlacesCoverage {
   final int pending;
 }
 
+/// The answer to a chip's link lookup: the linked [place] (null: no link), and whether the places data has links at all.
+/// [linksPresent] false is data from before the links (an old build): the app then falls back to matching by name and distance.
+class MapPoiLink {
+  const MapPoiLink({this.place, this.linksPresent = true});
+
+  final MapPlace? place;
+  final bool linksPresent;
+}
+
 class MapSearchResponse {
   const MapSearchResponse({
     required this.query,
