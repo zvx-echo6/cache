@@ -8,6 +8,7 @@ import '../maps/geo.dart';
 import '../platform.dart' as plat;
 import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
+import 'area_lookup.dart';
 
 /// Where the public region catalogue is published (cache-packs' regions recipe): index.json, one shard per country
 /// (`<iso>.json` and `<iso>.search.json`), `search-global.json` and `polygons/<id>.geojson`.
@@ -416,6 +417,104 @@ class RegionCatalogue {
     return j;
   }
 
+  /// The outline of [r] as it is kept on the phone, never fetched: null when it is not there or cannot be read (a part-written or
+  /// corrupt file is skipped, not an error). What a lookup of the town and county of a point reads.
+  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async {
+    try {
+      final String? text;
+      if (plat.isWeb) {
+        text = await (_webFs ??= createAppFs()).readString(AppRoot.support, '$kRegionCatalogueDir/polygons/${r.id}.geojson');
+      } else {
+        final f = File('${(await dir()).path}/polygons/${r.id}.geojson');
+        text = await f.exists() ? await f.readAsString() : null;
+      }
+      if (text == null) return null;
+      return _geometryOf((jsonDecode(text) as Map).cast<String, dynamic>());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Map<String, dynamic> _geometryOf(Map<String, dynamic> j) {
+    final type = j['type'];
+    if (type == 'FeatureCollection') return ((j['features'] as List).first as Map)['geometry'].cast<String, dynamic>();
+    if (type == 'Feature') return (j['geometry'] as Map).cast<String, dynamic>();
+    return j;
+  }
+
+  /// The regions a region's download keeps outlines for: its counties and its cities and towns (every level below it, found through
+  /// the parents of the records of its shard), and the state it is in. A country or a group of states has none: it is too big
+  /// to keep every outline for. Needs the region's shard read ([shard]).
+  List<RegionRecord> areaRecordsOf(RegionRecord r) {
+    if (r.isDrawn || r.kind == 'country' || r.kind == 'dependency' || r.kind == 'multi_state' || r.kind == 'multi_country') return const [];
+    final s = _shards[r.id.split('-').first];
+    if (s == null) return const [];
+    final children = <String, List<RegionRecord>>{};
+    for (final x in s.records.values) {
+      for (final p in x.parents) {
+        (children[p] ??= []).add(x);
+      }
+    }
+    final out = <String, RegionRecord>{};
+    final queue = [r.id];
+    final seen = {r.id};
+    while (queue.isNotEmpty) {
+      for (final c in children[queue.removeLast()] ?? const <RegionRecord>[]) {
+        if (!seen.add(c.id)) continue;
+        queue.add(c.id);
+        if (c.kind == 'county' || c.kind == 'locality') out[c.id] = c;
+      }
+    }
+    if (r.kind == 'county' || r.kind == 'locality') out[r.id] = r;
+    // The state (and only it) above the region.
+    final up = [...r.parents];
+    final done = <String>{};
+    while (up.isNotEmpty) {
+      final p = s.records[up.removeLast()];
+      if (p == null || !done.add(p.id)) continue;
+      if (p.kind == 'region') out[p.id] = p;
+      up.addAll(p.parents);
+    }
+    if (r.kind == 'region') out[r.id] = r;
+    return out.values.where((x) => x.polygon != null).toList();
+  }
+
+  /// Keeps the outlines of [areaRecordsOf] on the phone beside the region's download, so tapping a place on the map can name its town
+  /// and county offline. They are the catalogue's polygon files, kept as the region's own outline is (one file each, found again
+  /// by [storedGeometry]); [parallel] at a time. One that cannot be fetched is left out and the rest go on. More than [maxFiles] is
+  /// not done at all.
+  Future<AreaStoreResult> storeAreaPolygons(RegionRecord r, {int maxFiles = 1500, int parallel = 4}) async {
+    try {
+      await shard(r.id.split('-').first);
+    } catch (_) {
+      return const AreaStoreResult(wanted: 0, stored: 0, failed: 0);
+    }
+    final want = areaRecordsOf(r);
+    if (want.length > maxFiles) return AreaStoreResult(wanted: want.length, stored: 0, failed: 0, tooMany: true);
+    var stored = 0, failed = 0, next = 0;
+    Future<void> worker() async {
+      while (next < want.length) {
+        final x = want[next++];
+        try {
+          await _readGeometry(x); // fetched and kept (a copy younger than the catalogue's age is kept as it is)
+          stored++;
+        } catch (_) {
+          failed++;
+        }
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < parallel; i++) worker()]);
+    return AreaStoreResult(wanted: want.length, stored: stored, failed: failed);
+  }
+
+  /// The town, county and state of a point from the outlines kept on the phone (never fetched). The shards of the countries around
+  /// the point are read first; null when the point is in none of the outlines that are there.
+  Future<AreaHit?> areaAtPoint(double lat, double lon) async {
+    await readShardAt(lat, lon);
+    return areaAt(lat, lon, [for (final s in _shards.values) ...s.records.values], storedGeometry);
+  }
+
   /// The smallest state-sized or smaller region of the read shards whose box holds the point: what a quiet
   /// "Download `<region>`?" on the map would offer. Not shown anywhere yet.
   RegionRecord? regionAt(double lat, double lon, {Set<String> kinds = const {'region', 'sub_state', 'valley', 'county'}}) {
@@ -502,6 +601,16 @@ class RegionCatalogue {
       throw NetworkProblem('The region list could not be read: $e');
     }
   }
+}
+
+/// What [RegionCatalogue.storeAreaPolygons] did: outlines asked for, kept, and not fetched; [tooMany] when it did none for lack of room.
+class AreaStoreResult {
+  const AreaStoreResult({required this.wanted, required this.stored, required this.failed, this.tooMany = false});
+
+  final int wanted;
+  final int stored;
+  final int failed;
+  final bool tooMany;
 }
 
 /// The folder of the support folder the region catalogue and the off-road catalogue are kept in.
