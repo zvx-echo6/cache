@@ -31,6 +31,22 @@ class GeoPoint {
 double? _d(Object? v) => v is num ? v.toDouble() : null;
 int? _i(Object? v) => v is num ? v.round() : null;
 String? _s(Object? v) => v is String && v.isNotEmpty ? v : null;
+/// The core's `hours_week`: seven days of `[start, end]` pairs, or null when it is not exactly that.
+List<List<List<int>>>? _week(Object? v) {
+  if (v is! List || v.length != 7) return null;
+  final out = <List<List<int>>>[];
+  for (final d in v) {
+    if (d is! List) return null;
+    final day = <List<int>>[];
+    for (final r in d) {
+      if (r is! List || r.length != 2 || r[0] is! num || r[1] is! num) return null;
+      day.add([(r[0] as num).round(), (r[1] as num).round()]);
+    }
+    out.add(day);
+  }
+  return out;
+}
+
 Map<String, dynamic> _m(Object? v) => v is Map ? v.cast<String, dynamic>() : const {};
 List<dynamic> _l(Object? v) => v is List ? v : const [];
 
@@ -92,6 +108,10 @@ class MapPlace {
     this.score = 0,
     this.phone,
     this.hours,
+    this.hoursWeek,
+    this.hoursExact = true,
+    this.timezone,
+    this.utcOffsetMin,
     this.website,
     this.summary,
     this.wikipediaTitle,
@@ -118,6 +138,10 @@ class MapPlace {
         score: _d(j['score']) ?? 0,
         phone: _s(j['phone']),
         hours: _s(j['hours']),
+        hoursWeek: _week(j['hours_week']),
+        hoursExact: j['hours_exact'] != false,
+        timezone: _s(j['timezone']),
+        utcOffsetMin: _i(j['utc_offset_min']),
         website: _s(j['website']),
         summary: _s(j['summary']),
         wikipediaTitle: _s(j['wikipedia_title']),
@@ -164,6 +188,19 @@ class MapPlace {
   final double score;
   final String? phone;
   final String? hours;
+
+  /// `hours` as a week, when it is a plain weekly pattern (no holidays, sun events, months or comments; the core decides): Monday
+  /// first, each day the open ranges that START that day as `[start, end]` minutes from that day's midnight, `end` past 1440 when
+  /// the range runs past midnight. Null: show `hours` as it is, and no Open or Closed.
+  final List<List<List<int>>>? hoursWeek;
+
+  /// False: the week is what the value says, but whether the place is open just after midnight is not certain, so the card
+  /// says no Open or Closed.
+  final bool hoursExact;
+
+  /// The IANA zone of the place's position and its offset from UTC in minutes when the search was made (null: not known).
+  final String? timezone;
+  final int? utcOffsetMin;
   final String? website;
 
   /// The first paragraph of the place's Wikipedia article, where the pack has one.

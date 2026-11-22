@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### Places
+- A place's opening hours are in plain words ("Mon–Fri 9 AM–7 PM · Sat 10 AM–5 PM", "Open 24 hours") in your phone's 12 or 24 hour setting, with Open now or Closed now when the hours are a plain weekly schedule; hours with holidays, sunrise or sunset, seasons or notes are shown as written, with no Open or Closed
+
 ## 1.1.0 (build 54, test) - 2026-11-21
 
 Build 53 with the car screens back on.
