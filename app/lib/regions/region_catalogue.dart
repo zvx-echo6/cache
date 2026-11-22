@@ -443,7 +443,7 @@ class RegionCatalogue {
   }
 
   /// The regions a region's download keeps outlines for: its counties and its cities and towns (every level below it, found through
-  /// the parents of the records of its shard), and the state it is in. A country or a group of states has none: it is too big
+  /// the parents of the records of its shard), and the county and state it is in. A country or a group of states has none: it is too big
   /// to keep every outline for. Needs the region's shard read ([shard]).
   List<RegionRecord> areaRecordsOf(RegionRecord r) {
     if (r.isDrawn || r.kind == 'country' || r.kind == 'dependency' || r.kind == 'multi_state' || r.kind == 'multi_country') return const [];
@@ -466,13 +466,13 @@ class RegionCatalogue {
       }
     }
     if (r.kind == 'county' || r.kind == 'locality') out[r.id] = r;
-    // The state (and only it) above the region.
+    // The county and the state above the region (the county a town is in, the state a county is in).
     final up = [...r.parents];
     final done = <String>{};
     while (up.isNotEmpty) {
       final p = s.records[up.removeLast()];
       if (p == null || !done.add(p.id)) continue;
-      if (p.kind == 'region') out[p.id] = p;
+      if (p.kind == 'region' || p.kind == 'county') out[p.id] = p;
       up.addAll(p.parents);
     }
     if (r.kind == 'region') out[r.id] = r;

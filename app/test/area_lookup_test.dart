@@ -35,8 +35,6 @@ final List<Map<String, dynamic>> _records = [
   _rec('us-metro-twin-falls-id', 'Twin Falls metro', 'metro', [-114.8, 42.0, -114.0, 42.9], 5000, 100000, ['us']),
 ];
 
-String _fixture(String id) => File('test/fixtures/regions/$id.geojson').readAsStringSync();
-
 List<RegionRecord> get _all => [for (final r in _records) RegionRecord.fromJson(r)];
 
 Future<Map<String, dynamic>?> _fromFixtures(RegionRecord r) async {
