@@ -632,6 +632,7 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
       base != null && MapLayout.parse(base.def.raw['layout']) == MapLayout.protomapsV4 ? protomapsTemplate! : omtTemplate;
   return [
     if (base != null) for (final l in template['layers'] as List) (l as Map)['id'] as String else 'background',
+    if (base != null && protomapsTemplate != null && identical(template, protomapsTemplate)) ...poiLayerIds,
     for (final u in layers) ...overlayLayerIds(u.def),
     kRouteAlt,
     kRouteCasing,
