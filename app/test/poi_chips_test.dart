@@ -94,6 +94,11 @@ void main() {
       });
     }
 
+    test('the filter set after the chips is a different filter with the same meaning, so the tiles are laid out again', () {
+      expect(jsonEncode(poiFilterAfterChips()), isNot(jsonEncode(poiFilter())));
+      expect(jsonEncode(poiFilterAfterChips()), contains(jsonEncode(poiFilter())));
+    });
+
     test('a browser draws the images three times as big, so the layer draws them a third of the size', () {
       final phone = protomapsLayers(mapPaletteFor(CacheThemeId.light), pmTemplate, 's').firstWhere((l) => l['id'] == 'pois');
       final web = protomapsLayers(mapPaletteFor(CacheThemeId.light), pmTemplate, 's', poiIconScale: 1 / 3).firstWhere((l) => l['id'] == 'pois');

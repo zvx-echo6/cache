@@ -185,6 +185,11 @@ List<Object> poiFilter() => [
       ],
     ];
 
+/// The same filter, written so it differs from [poiFilter]. A symbol layer lays its tiles out once with whatever images the style has;
+/// chips added after that stay unseen until the tiles are laid out again, and a changed filter does that (an equal one does not).
+/// So the map is given this one after the chips are added.
+List<Object> poiFilterAfterChips() => ['all', poiFilter(), ['has', 'kind']];
+
 /// The public places: a round chip (an image `poi-<icon>`, added at style load, see poi_chips.dart) and the name beside it. The name is
 /// optional, so a crowded chip keeps its icon. Medical and emergency kinds sort first, so they win a collision. The chip is 0.78 of its size
 /// at zoom 12 and full size from zoom 16.

@@ -15,6 +15,7 @@ import '../geo.dart';
 import '../maps_state.dart';
 import '../palette/map_palette.dart';
 import '../poi_chips.dart';
+import '../style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../style/style_generator.dart';
 import 'map_assets.dart';
 
@@ -276,6 +277,9 @@ class _PlaceMapState extends State<PlaceMap> {
     if (c == null) return;
     await addPoiChips((name, png) => c.addImage(name, png), mapPaletteFor(widget.themeId),
         ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
+    try {
+      await c.setFilter(poiLayerIds.first, poiFilterAfterChips()); // Lays the tiles out again with the chips.
+    } catch (_) {} // A style without the POI layer.
   }
 
   /// The area's outline ([PlaceMap.extent]), drawn as the user's own areas are.
