@@ -255,6 +255,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await shot(tester, 'settings-maps');
 
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('maps-advanced')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('maps-advanced')));
     await settle(tester);
     await shot(tester, 'settings-maps-advanced');
@@ -390,11 +392,12 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'settings-weather');
 
-    // The watch list (1.0.29) sits above the sources: the row with Get key is further down the page.
-    await tester.scrollUntilVisible(find.byKey(const ValueKey('get-key-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
+    // The watch list (1.0.29) sits above the sources: the row of the key-only source is further down the page.
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('source-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
     await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
+    // The source is off, so its row has a switch (the Add key button shows once it is on and has no key): the switch asks for the key.
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('source-firms-viirs-near')), matching: find.byType(Switch)));
     await tester.pumpAndSettle();
     await shot(tester, 'key-sheet', crop: _sheet);
     await tester.tapAt(const Offset(10, 60));
@@ -853,6 +856,8 @@ void main() {
       savePlace: (p) async {},
     )));
     await settle(tester, rounds: 10);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('weather-choose-place')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
     await settle(tester);
     await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'mo');
