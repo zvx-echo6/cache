@@ -6,7 +6,6 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
-import 'package:cache/maps/area_tap.dart';
 import 'package:cache/maps/map_tap.dart';
 import 'package:cache/regions/area_lookup.dart';
 import 'package:cache/regions/region_catalogue.dart';

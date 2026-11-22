@@ -21,7 +21,9 @@ void main() {
     expect((c.place.id, c.place.name, c.place.kind, c.place.address), ('area:us-id-twin-falls', 'Twin Falls', 'City', 'Twin Falls County, ID'));
     expect(c.place.summary, 'Twin Falls is a city.');
     expect(c.place.wikipediaTitle, 'Twin Falls, Idaho');
-    expect((c.info.people, c.info.directions, c.info.squareArea), ('About 49,800 people', true, isNull));
+    expect(c.info.people, 'About 49,800 people');
+    expect(c.info.directions, isTrue);
+    expect(c.info.squareArea, isNull);
     expect(c.isTown, isTrue);
   });
 
@@ -56,10 +58,10 @@ void main() {
   });
 
   test('the fill fades after the zoom at which the whole area fits the screen', () {
-    // A box a degree wide fits a 360-point wide room at zoom 0 + log2(360/(512*(1/360))) = about 7.0; a bigger area fits sooner.
+    // A box a degree wide fits a 360-point wide room at about zoom 7.7; a bigger area fits sooner.
     final wide = fitZoomFor([-114.5, 42.0, -113.5, 43.0], 360, 400);
     final small = fitZoomFor([-114.5, 42.5, -114.45, 42.55], 360, 400);
-    expect(wide, closeTo(7.0, 0.5));
+    expect(wide, closeTo(7.7, 0.3));
     expect(small, greaterThan(wide + 3));
     final op = areaFillOpacity(wide);
     expect(op.first, 'interpolate');

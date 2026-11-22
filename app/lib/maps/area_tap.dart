@@ -5,7 +5,6 @@ import 'package:cache_search/cache_search.dart' show MapPlace;
 import '../nav/units.dart';
 import '../regions/area_lookup.dart';
 import '../regions/region_catalogue.dart';
-import 'geo.dart';
 
 /// A tap on a town's label or on empty ground opens the card of the town or county there, and draws its outline (DESIGN.md, "The
 /// outline" and "The cards"). Everything here is pure; the Maps screen asks [AreaSource] and shows the result.

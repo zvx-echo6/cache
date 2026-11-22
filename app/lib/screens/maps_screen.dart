@@ -1192,7 +1192,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       _focusFor = sel.id;
       final a = _area;
       if (a != null && a.place.id == sel.id) {
-        _fitArea(a);
+        _fitAreaOutline(a);
       } else {
         _focusOn(sel.lat, sel.lon);
       }
@@ -1794,7 +1794,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   }
 
   /// The camera shows the whole area above the card.
-  Future<void> _fitArea(AreaChoice a) async {
+  Future<void> _fitAreaOutline(AreaChoice a) async {
     final c = _controller;
     if (c == null) return;
     final g = a.geometry;
