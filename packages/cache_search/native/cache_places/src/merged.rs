@@ -249,6 +249,12 @@ fn insert_rows(tx: &Transaction, tile: u32, rep: &mut MergeReport) -> Result<()>
     ))?;
     // A tile cut before the chip links has none: its chips then have no link.
     let has_links = tx.query_row("SELECT 1 FROM t.sqlite_master WHERE type = 'table' AND name = 'poi_links'", [], |_| Ok(())).optional()?.is_some();
+    // The database has the build's links once a tile that went through `poi-link` (it says so in its meta) is in: the phone then
+    // never guesses a chip's place (`Pack::has_poi_links`). An empty table made by `ensure_indexes` does not say that.
+    let linked_tile = tx.query_row("SELECT 1 FROM t.meta WHERE key = 'poi_links'", [], |_| Ok(())).optional()?.is_some();
+    if linked_tile {
+        tx.execute("INSERT OR REPLACE INTO main.meta(key, value) VALUES ('poi_links', '1')", [])?;
+    }
     if has_links {
         tx.execute_batch(&format!("INSERT INTO main.poi_links(tile, name_norm, kind, lat, lon, source_id) SELECT {tile}, name_norm, kind, lat, lon, source_id FROM t.poi_links;"))?;
     }
@@ -439,12 +445,14 @@ mod tests {
         let (sid, lat, lon): (String, f64, f64) = {
             let m = Connection::open(&shard).unwrap();
             let row = m.query_row("SELECT source_id, lat, lon FROM places WHERE name = 'Walgreens'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+            m.execute("INSERT INTO meta VALUES ('poi_links', '{}')", []).unwrap();
             m.execute("INSERT INTO poi_links VALUES ('walgreens', 'pharmacy', ?1, ?2, ?3), ('walgreens', 'chemist', ?1, ?2, 'osm:other')", rusqlite::params![row.1, row.2, row.0]).unwrap();
             row
         };
         merge_tile(&mut c, burley, &shard, "aa", 1).unwrap();
         assert_eq!(n(&c, &format!("SELECT COUNT(*) FROM poi_links WHERE tile = {burley}")), 2);
         let pack = crate::pack::Pack::open(&t.0.join("merged.sqlite")).unwrap();
+        assert!(pack.has_poi_links());
         // The chip as the tiles give it (a few metres off, any zoom): the same name with other case and punctuation, the same kind.
         let found = pack.poi_link("pharmacy", "WALGREENS.", lat + 0.00003, lon - 0.00002).unwrap().expect("linked");
         assert_eq!(found.source_id, sid);

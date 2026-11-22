@@ -169,9 +169,10 @@ class SearchCore {
           .cast<String, dynamic>());
 
   /// The place the places build linked a base-map chip to (`poi_links`), by the chip's tile [kind] ("attraction"), [name] and point.
-  /// Null when the build has no link for it. Nothing is searched or guessed.
-  Future<MapPlace?> mapPoiLink({required String kind, required String name, required double lat, required double lon}) async {
-    final r = MapSearchResponse.fromJson(((await _call('mapSearch', {
+  /// `place` is null when the build has no link for it; `linksPresent` false when the places data has none at all (an old build,
+  /// see [MapPoiLink]). Nothing is searched or guessed here.
+  Future<MapPoiLink> mapPoiLink({required String kind, required String name, required double lat, required double lon}) async {
+    final raw = ((await _call('mapSearch', {
       'request': {
         'query': name,
         'near': {'lat': lat, 'lon': lon},
@@ -180,8 +181,9 @@ class SearchCore {
         'poi': {'kind': kind, 'name': name, 'lat': lat, 'lon': lon},
       },
     })) as Map)
-        .cast<String, dynamic>());
-    return r.results.isEmpty ? null : r.results.first;
+        .cast<String, dynamic>();
+    final r = MapSearchResponse.fromJson(raw);
+    return MapPoiLink(place: r.results.isEmpty ? null : r.results.first, linksPresent: raw['poi_links'] != false);
   }
 
   /// The complete route. [to] and [from] are ends (`{"id"?, "lat", "lon", "name"?}`, from a [MapPlace.toEnd]); no [from]

@@ -117,6 +117,13 @@ void _pureTests() {
       expect(chooseMapTap([chip])!.place.id, startsWith('loc:'));
     });
 
+    test('places data from before the links (old build): a chip is matched by name and distance, as a label is (transition fallback)', () {
+      final chip = _f(TapSource.basemap, TapTier.label, name: 'Shoshone Falls', kind: 'Park', lat: 42.5933, lon: -114.4003).poiCopy(rawKind: 'park');
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      expect(chooseMapTap([chip], candidates: [park], linksPresent: false, reachM: 500)!.place, same(park));
+      expect(chooseMapTap([chip], candidates: [park], linksPresent: true, reachM: 500)!.place.matched, kPoiMatched, reason: 'new data: links only');
+    });
+
     test('no match: the label\'s name at its point, so Directions go there', () {
       final label = _f(TapSource.basemap, TapTier.label, name: 'Larkspur Flats', lat: 42.51, lon: -113.52);
       final c = chooseMapTap([label], candidates: [_place('town:test:x', 'Elsewhere', 42.51, -113.52)])!;
@@ -441,6 +448,19 @@ void _screenTests() {
       expect(m.nav.selected?.kind, 'Park');
       expect(m.rig.backend.linkCalls, ['attraction:Shoshone Falls', 'park:Shoshone Falls']);
       expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty, reason: 'a chip is never searched for');
+      await m.finish(tester);
+    });
+
+    testWidgets('old places data (no links in it): the chip is matched by name and distance, the old way', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      m.rig.backend.linksPresent = false;
+      m.rig.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [park]);
+      m.camera.pois.add(_raw('Point', [-114.4003, 42.5933], {'name': 'Shoshone Falls', 'kind': 'park'}));
+      await m.tap(tester, 42.5933, -114.4003);
+      expect(m.nav.selected?.id, 'place:osm:w121853382');
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), ['search:Shoshone Falls:k']);
       await m.finish(tester);
     });
 

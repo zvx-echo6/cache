@@ -116,6 +116,13 @@ moves less than 15 m (a node moves when a mapper moves it; an area's label point
 the key (renamed, retagged, moved), or one the pack's build did not see, has no link and opens the "No other details for this place."
 card until the next places build, which reads the basemap of its day.
 
+**Transition fallback, to remove.** The app asks the core whether the places data has links at all (`cs_map_search`'s answer to a
+`poi` probe carries `poi_links`: true once a merged tile that went through `poi-link` is in, false for an older build). Only when
+it is false, a chip is still matched by name and distance (300 m or more, as before) so an old build's chips keep working. When it
+is true the app uses links only and never guesses; a chip with no link gets the "No other details" card. Remove the fallback
+(`maps_screen.dart` `_tapMapFeature` and `chooseMapTap`'s `linksPresent`) once every published places build has links, i.e. once the
+first build made with `poi-link` has been published and the earlier ones are gone from `data.cached.info/places/`.
+
 ## On the device
 
 In the regions folder (`dir`):

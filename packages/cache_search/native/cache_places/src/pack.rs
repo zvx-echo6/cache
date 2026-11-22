@@ -556,6 +556,12 @@ impl Pack {
         Ok(conn.query_row(&format!("SELECT {cols} FROM places p WHERE p.source_id = ?1 LIMIT 1"), params![source_id], place_row).optional()?)
     }
 
+    /// The database was built from tiles that went through `places_pack poi-link` (an old build's tiles were not): its chips are
+    /// answered by their links alone. False is the old data that the app still matches by name and distance (a transition fallback).
+    pub fn has_poi_links(&self) -> bool {
+        self.conn().query_row("SELECT 1 FROM meta WHERE key = 'poi_links'", [], |_| Ok(())).optional().ok().flatten().is_some()
+    }
+
     /// The place the build linked a base map chip to (`poi_links`, see `poi`): the row with the chip's normalised name and tile
     /// `kind` whose stored point is nearest the chip's own, within `poi::LINK_REACH_M`. None: no link (a pack or tile cut before the
     /// links, a chip the build could not match, or a place that is not on the phone).

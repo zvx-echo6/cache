@@ -218,12 +218,15 @@ TapChoice tapChoiceFor(TapFeature f, {MapPlace? match}) {
 
 /// The whole choice for a tap: the feature [pickTapFeature] takes from [hits]. A chip opens its [linked] place (the one the places
 /// build linked it to; null when it has no link, which is the honest "No other details" card) and is never matched by name and
-/// distance here. A town or road name is matched against [candidates]. Null when the tap is on nothing.
-TapChoice? chooseMapTap(List<TapFeature> hits, {List<MapPlace> candidates = const [], double reachM = kLabelMatchFloorM, MapPlace? linked}) {
+/// distance. The one exception is [linksPresent] false, places data from before the links existed (an old build): then, and only
+/// then, a chip is matched against [candidates] by name and distance as a town or road name is. That is a transition fallback for old
+/// data, not a decision path: remove it once every published places build has links (docs/PLACES-TILES.md, "Chip links").
+/// A town or road name is matched against [candidates]. Null when the tap is on nothing.
+TapChoice? chooseMapTap(List<TapFeature> hits, {List<MapPlace> candidates = const [], double reachM = kLabelMatchFloorM, MapPlace? linked, bool linksPresent = true}) {
   final f = pickTapFeature(hits);
   if (f == null) return null;
   final MapPlace? match;
-  if (f.poi) {
+  if (f.poi && linksPresent) {
     match = linked;
   } else {
     match = f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null;

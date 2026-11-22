@@ -35,6 +35,7 @@ fn a_tapped_chip_answers_with_its_linked_place_and_an_unlinked_chip_with_nothing
     let (sid, lat, lon): (String, f64, f64) = {
         let m = Connection::open(&shard).unwrap();
         let row = m.query_row("SELECT source_id, lat, lon FROM places WHERE name = 'Walgreens'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        m.execute("INSERT INTO meta VALUES ('poi_links', '{}')", []).unwrap();
         m.execute("INSERT INTO poi_links VALUES ('walgreens', 'pharmacy', ?1, ?2, ?3)", params![row.1, row.2, row.0]).unwrap();
         row
     };
@@ -47,6 +48,7 @@ fn a_tapped_chip_answers_with_its_linked_place_and_an_unlinked_chip_with_nothing
     // The chip, a few metres off its stored point and with the name spelled as the tile does.
     let v = core.search("Walgreens", &probe("pharmacy", "Walgreens", lat + 0.00002, lon + 0.00002), None).unwrap();
     assert_eq!(v["interpreted"]["kind"], "poi");
+    assert_eq!(v["poi_links"], true);
     let r = &v["results"];
     assert_eq!(r.as_array().unwrap().len(), 1, "{v}");
     assert_eq!(r[0]["id"], format!("place:{sid}"));
@@ -56,7 +58,29 @@ fn a_tapped_chip_answers_with_its_linked_place_and_an_unlinked_chip_with_nothing
     for p in [probe("attraction", "Walgreens", lat, lon), probe("pharmacy", "Walgreens", lat + 0.01, lon), probe("pharmacy", "CVS", lat, lon)] {
         let v = core.search("x", &p, None).unwrap();
         assert!(v["results"].as_array().unwrap().is_empty(), "{v}");
+        assert_eq!(v["poi_links"], true, "no link in a database that has links is still a database that has links");
     }
+}
+
+#[test]
+fn a_database_from_tiles_cut_before_the_links_says_it_has_none() {
+    let dir = Tmp(std::env::temp_dir().join(format!("cp-poi-old-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let tile = tile_id_l1(BURLEY.0, BURLEY.1);
+    let common = dir.0.join("common.sqlite");
+    write_fixture_common(&common, FIXTURE_BUILD);
+    let shard = dir.0.join("shard.sqlite");
+    write_fixture_shard(&shard, tile, FIXTURE_BUILD);
+    Connection::open(&shard).unwrap().execute_batch("DROP TABLE poi_links;").unwrap();
+    let db = dir.0.join("merged.sqlite");
+    let mut c = create(&db, &common).unwrap();
+    merge_tile(&mut c, tile, &shard, "aa", 1).unwrap();
+    drop(c);
+    let core = PlacesCore::new(&PlacesCfg { packs: vec![db.to_string_lossy().into_owned()], merged_dir: None });
+    let v = core.search("x", &probe("pharmacy", "Walgreens", BURLEY.0, BURLEY.1), None).unwrap();
+    assert_eq!(v["poi_links"], false);
+    assert!(v["results"].as_array().unwrap().is_empty());
 }
 
 /// With a real tile (`CACHE_POI_TILE`, `CACHE_POI_COMMON`, the tile's id in `CACHE_POI_TILE_ID`): the chips at Shoshone Falls.

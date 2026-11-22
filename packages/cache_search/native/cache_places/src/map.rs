@@ -513,6 +513,8 @@ impl PlacesCore {
             // A chip: the build's link, looked up by what the tile carries. No link is an empty answer, not a search.
             let row = packs.iter().find_map(|k| k.poi_link(&p.kind, &p.name, p.lat, p.lon).ok().flatten().map(|r| (k.clone(), r)));
             out.insert("interpreted".into(), json!({"kind": "poi"}));
+            // Whether the places data has links at all: an old build's has none, and the app then falls back to name and distance.
+            out.insert("poi_links".into(), json!(packs.iter().any(|k| k.has_poi_links())));
             out.insert("meaning".into(), json!("off"));
             out.insert("results".into(), json!(row.map(|(k, r)| vec![cand_json(&cand_place(&[k], &r, 1.0, "link"), opts.near, 1.0)]).unwrap_or_default()));
             return Ok(Value::Object(out));
