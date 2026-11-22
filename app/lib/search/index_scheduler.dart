@@ -143,7 +143,9 @@ abstract class IndexWorkSource {
 /// Why nothing runs right now, when there is work: Cache is in the background, the battery is low, long work waits for
 /// charging, not enough room, the device is warm, Ask is answering, or the person paused it all.
 /// [stuck]: it ran with no progress at all for [IndexScheduler.stuckAfter] and was skipped for now (Retry, or the next start).
-enum IndexWait { none, closed, battery, charging, storage, heat, model, person, stuck, memory }
+/// [failed]: the server's helper ended the job with an error (Retry). Only the server's progress reports it; the phone's own work
+/// never does.
+enum IndexWait { none, closed, battery, charging, storage, heat, model, person, stuck, memory, failed }
 
 /// Where one piece of work stands: running now, queued (next in turn, nothing holds it but the one running), held (with its
 /// reason), or done this session.

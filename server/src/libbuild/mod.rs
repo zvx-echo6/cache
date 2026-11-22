@@ -33,7 +33,7 @@
 //! incremental keyword index yet), so a library is searchable by meaning at once and by keyword when that job ends.
 //!
 //! **The queue** is `queue.json`, written atomically at every change of state. One book at a time. A book that was being built when
-//! the server stopped starts again from scratch. Pause finishes the current book and then holds; Stop drops the books still
+//! the server stopped starts again from scratch. Pause holds the book being built where it is (mid-book, between two batches of vectors) and Resume goes on from the same piece; Stop drops the books still
 //! waiting. A book is judged a duplicate by the BLAKE3 of its PDF within its library. Pages without a text layer are skipped and
 //! counted ("partial: N pages need OCR"); a PDF with no text layer at all is `ocr_needed`, never `failed`.
 
@@ -138,10 +138,17 @@ impl Embed for Arc<EmbedService> {
 struct Adapter<'a> {
     embed: &'a dyn Embed,
     error: Mutex<Option<EmbedErr>>,
+    /// Called before every batch: blocks while the queue is paused (the book is held where it is) and says whether to go on
+    /// (`false`: the service is stopping).
+    hold: &'a dyn Fn() -> bool,
 }
 
 impl Embedder for Adapter<'_> {
     fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        if !(self.hold)() {
+            *lock(&self.error) = Some(EmbedErr::Waiting("Building was stopped.".into()));
+            return Vec::new();
+        }
         match self.embed.embed(texts) {
             Ok(v) => v,
             Err(e) => {
@@ -803,6 +810,22 @@ impl BuildService {
         *g = false;
     }
 
+    /// Pause holds the book being built where it is: called before each batch of vectors, it waits while the queue is paused, so
+    /// no more work is done and nothing restarts; Resume (or a stop of the service) wakes it. Returns `false` when the service is
+    /// stopping, so a held book ends at once (it goes back to the queue, as at any stop).
+    fn hold_while_paused(&self) -> bool {
+        loop {
+            if self.is_stopping() {
+                return false;
+            }
+            if !lock(&self.st).paused {
+                return true;
+            }
+            // woken by resume() or shutdown() through `poke`; the timeout is only a safety net
+            self.sleep(Duration::from_secs(1));
+        }
+    }
+
     // ---- paths
 
     fn libs_dir(&self) -> PathBuf {
@@ -1081,7 +1104,8 @@ impl BuildService {
             opts.doc_id = Some(old.doc_id.clone());
             opts.doc_version = old.doc_version + 1;
         }
-        let adapter = Adapter { embed: self.embed.as_ref(), error: Mutex::new(None) };
+        let hold = || self.hold_while_paused();
+        let adapter = Adapter { embed: self.embed.as_ref(), error: Mutex::new(None), hold: &hold };
         let mut seen_text: Option<(usize, usize)> = None;
         let id = item.id.clone();
         let extractor = lock(&self.extractor).clone();
@@ -1860,6 +1884,7 @@ impl BuildService {
 
     // ---- queue controls
 
+    /// The book being built stops where it is (between two batches of vectors) and goes on from there at Resume.
     pub fn pause(&self) -> Value {
         lock(&self.st).paused = true;
         self.save_queue();

@@ -800,7 +800,7 @@ class AddPdfJobCard extends StatelessWidget {
       IndexWait.charging => ('Start now', Icons.play_arrow_outlined, () => state.startNow(job)),
       IndexWait.battery => ('Resume anyway', Icons.play_arrow_outlined, () => state.resumeAnyway(job)),
       IndexWait.person => ('Resume', Icons.play_arrow_outlined, () => scheduler?.resumeAll()),
-      IndexWait.stuck => ('Retry', Icons.refresh, () => scheduler?.retry(job.key)),
+      IndexWait.stuck || IndexWait.failed => ('Retry', Icons.refresh, () => scheduler?.retry(job.key)),
       IndexWait.storage => ('Free space', Icons.storage_outlined, () => openStorageForSpace?.call(context)),
       _ => ('Pause', Icons.pause, () => state.pause(job)),
     };

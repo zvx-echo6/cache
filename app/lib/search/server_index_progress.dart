@@ -173,7 +173,8 @@ class ServerIndexProgress extends ChangeNotifier implements IndexProgress {
       if (state == 'done') {
         out.add(IndexItem(key: key, state: IndexState.done, title: title, kindOverride: kind));
       } else if (state == 'stuck' || state == 'failed') {
-        out.add(IndexItem(key: key, state: IndexState.held, title: title, why: IndexWait.stuck, position: ++place, progress: progress, step: indexDoingWords(kind), kindOverride: kind));
+        // the helper's no-progress watchdog says stuck; a job that ended with an error says failed, and is worded as that
+        out.add(IndexItem(key: key, state: IndexState.held, title: title, why: state == 'failed' ? IndexWait.failed : IndexWait.stuck, position: ++place, progress: progress, step: indexDoingWords(kind), kindOverride: kind));
       } else if (state == 'running' && !_paused) {
         out.add(IndexItem(key: key, state: IndexState.running, title: title, why: _hold, progress: progress, kindOverride: kind));
       } else {

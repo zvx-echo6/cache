@@ -321,7 +321,7 @@ class CatalogRow extends StatelessWidget {
     if (s == null || item == null) return null;
     if (item.state == IndexState.running && item.why == IndexWait.none) return ('Pause', s.pauseAll);
     if (item.why == IndexWait.person) return ('Resume', s.resumeAll);
-    if (item.why == IndexWait.stuck) return ('Try again', () => s.retry(entry.key));
+    if (item.why == IndexWait.stuck || item.why == IndexWait.failed) return ('Try again', () => s.retry(entry.key));
     if (item.why == IndexWait.storage && openStorageForSpace != null) return ('Free space', () => openStorageForSpace!(context));
     return null;
   }
