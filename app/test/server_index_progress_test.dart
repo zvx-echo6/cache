@@ -1,6 +1,7 @@
 // The Library's index line and queue sheet in a browser: fed by the server's `index.state` `_queue`, with the same words as on a
 // phone, and Pause all, Resume and Retry going to the server (index.pause, index.retry).
 import 'package:cache/browse/web/build_api.dart';
+import 'package:cache/browse/web/build_list.dart';
 import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/search/index_overview.dart';
 import 'package:cache/search/server_index_progress.dart';
@@ -200,7 +201,47 @@ void main() {
       expect(p.pausedAll, isTrue);
       await tester.runAsync(p.resumeAll);
       expect(api.calls, contains('resume'));
-      expect(server.calls, isEmpty);
+      // Resume clears both pauses, whichever one the person set
+      expect(server.calls, ['index.pause {paused: false}']);
+    });
+
+    testWidgets('Pause all, then Resume from the build panel clears both pauses', (tester) async {
+      final api = FakeBuildApi()
+        ..libs = [const BuildLibrary(id: 'proof', title: 'Proof-Library', building: true)]
+        ..q = BuildQueue(items: [book('b1', 'building', pieces: 2, total: 10), book('b2', 'queued')]);
+      final ctl = BuildController(api: api, poll: false);
+      final server = _Server();
+      final p = server.progress..attachBuilds(ctl);
+      await tester.runAsync(ctl.refresh);
+      await tester.runAsync(p.pauseAll);
+      expect(server.calls, ['index.pause {paused: true}']);
+      expect(api.calls, ['pause']);
+      expect(p.pausedAll, isTrue);
+      await tester.pumpWidget(_app(ListenableBuilder(listenable: ctl, builder: (_, _) => BuildListCards(ctl: ctl))));
+      await tester.tap(find.byKey(const ValueKey('list-resume-proof')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(server.calls.last, 'index.pause {paused: false}');
+      expect(api.calls.last, 'resume');
+      expect(p.pausedAll, isFalse);
+    });
+
+    testWidgets('Pause all, then Resume from the queue sheet clears both pauses', (tester) async {
+      final api = FakeBuildApi()
+        ..libs = [const BuildLibrary(id: 'proof', title: 'Proof-Library', building: true)]
+        ..q = BuildQueue(items: [book('b1', 'building', pieces: 2, total: 10), book('b2', 'queued')]);
+      final ctl = BuildController(api: api, poll: false);
+      final server = _Server();
+      final p = server.progress..attachBuilds(ctl);
+      await tester.runAsync(ctl.refresh);
+      await tester.runAsync(p.pauseAll);
+      await _open(tester, p);
+      await tester.tap(find.byKey(const ValueKey('index-resume-all')));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(server.calls.last, 'index.pause {paused: false}');
+      expect(api.calls.last, 'resume');
+      expect(p.pausedAll, isFalse);
     });
   });
 }
