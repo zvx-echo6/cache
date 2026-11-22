@@ -231,6 +231,8 @@ impl RnsNode {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         std::thread::Builder::new()
             .name("cache-rns".into())
+            // Prns's futures are large: the default 2 MiB stack overflows in debug builds (found 2026-11-22), so give it margin.
+            .stack_size(32 * 1024 * 1024)
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
