@@ -59,7 +59,8 @@ class PlaceCard extends StatelessWidget {
       if (place.website != null) _line(context, Icons.public, place.website!, copy: place.website),
     ];
     return Container(
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      // Fully solid: at 0.98 the map's labels and chips showed faintly through the title.
+      decoration: mapPanel(context, radius: 20, alpha: 1),
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
       child: SafeArea(
         top: false,
