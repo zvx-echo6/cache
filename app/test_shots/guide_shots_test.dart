@@ -1362,6 +1362,7 @@ void main() {
   /// A Maps picture with the real map behind it: writes the scene (what the map shows now), puts the scene's rendered picture
   /// where the map is, tells the screen the camera the map has (the scale bar and the compass follow it), and takes the picture.
   Future<void> mapShot(WidgetTester tester, _MapRig m, String id, String scene) async {
+    await m.kit.loadChips(tester);
     final map = mapOf(tester);
     final size = tester.getSize(find.byType(MapLibreMap));
     final cam = m.kit.cameraOf(map, size);
@@ -1490,6 +1491,7 @@ void main() {
     final mapSize = tester.getSize(find.byType(MapLibreMap));
     final at = m.kit.cameraOf(mapOf(tester), mapSize).project(fix.lat, fix.lon, mapSize);
     expect((at - GuideLayout.read(tester).anchor).distance, lessThan(3), reason: 'the guidance camera does not put the position at its anchor');
+    await m.kit.loadChips(tester);
     m.kit.inset.write();
     await mapShot(tester, m, 'guidance', 'guidance');
     await tester.runAsync(() async => m.nav.end());
@@ -1566,6 +1568,7 @@ void main() {
     final style = _formMapStyle, pins = _formPinStyle;
     if (style == null || pins == null) fail('The place form needs the map style the Maps test keeps: run the whole file');
     final pin = n.mapPin!, look = n.mapLook!;
+    await kit.loadChips(tester);
     final images = <String, Uint8List>{};
     final image = (await tester.runAsync(() => PinImages((name, png) async {
       images[name] = png;

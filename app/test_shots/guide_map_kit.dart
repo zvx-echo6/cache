@@ -14,7 +14,11 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:cache/maps/palette/map_palette.dart' show mapPaletteFor;
+import 'package:cache/maps/poi_chips.dart' show addPoiChips;
 import 'package:cache/nav/overview/overview_camera.dart';
+import 'package:cache/notebook/pin_image.dart' show pinImageRatio;
+import 'package:cache/theme.dart' show CacheThemeId;
 import 'package:cache/nav/overview/route_overview.dart';
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
@@ -210,6 +214,7 @@ class GuideSnapshotter implements RouteSnapshotter {
 
   /// Writes the scene of the picture the screen asked for, and checks the picture it was given (see [GuideMaps.show]).
   void write() {
+    if (_maps.chips.isEmpty) fail('GuideMaps.loadChips was not called before the scene was written');
     final style = _style, camera = _camera;
     if (style == null || camera == null) fail('The Maps screen did not ask for the whole-route picture');
     // The route and its ends are written into this style by the screen, so the scene has no data of its own.
@@ -238,6 +243,17 @@ class GuideMaps {
   final String theme;
 
   final GuideMapController controller = GuideMapController();
+
+  /// The public-place chips the base map's POI layer draws by name, as the app adds them at each style load (the same table and
+  /// painter, lib/maps/poi_chips.dart, at this phone's ratio). Every scene carries them: the style asks for them wherever a POI is
+  /// in view, whether or not the screen has finished adding them when the scene is written.
+  final Map<String, Uint8List> chips = {};
+
+  Future<void> loadChips(WidgetTester tester) async {
+    if (chips.isNotEmpty) return;
+    await tester.runAsync(() => addPoiChips((name, png) async => chips[name] = png, mapPaletteFor(CacheThemeId.values.byName(theme)), ratio: pinImageRatio(kGuidePhoneScale)));
+    if (chips.isEmpty) fail('The POI chips could not be drawn for the map scenes');
+  }
 
   /// The style the Maps screen built its map with (the same call the screen makes; the test sets it once the map is there).
   String? firstStyle;
@@ -323,7 +339,7 @@ class GuideMaps {
       'pixelRatio': ratio,
       'camera': camera.toJson(),
       'sources': SplayTreeMap<String, dynamic>.of(sources),
-      'images': {for (final e in SplayTreeMap<String, Uint8List>.of(images).entries) e.key: base64Encode(e.value)},
+      'images': {for (final e in SplayTreeMap<String, Uint8List>.of({...chips, ...images}).entries) e.key: base64Encode(e.value)},
       'style': jsonDecode(style),
     });
     File('$_writeDir/$scene.json')
