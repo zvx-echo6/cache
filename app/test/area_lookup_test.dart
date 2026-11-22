@@ -17,6 +17,7 @@ Map<String, dynamic> _rec(String id, String name, String kind, List<double> bbox
       'name': name,
       'kind': kind,
       'country': 'US',
+      'region_code': 'US-ID',
       'parents': parents,
       'bbox': bbox,
       'area_km2': area,
@@ -32,6 +33,8 @@ final List<Map<String, dynamic>> _records = [
   _rec('us-id-buhl', 'Buhl', 'locality', [-114.77574, 42.58381, -114.74207, 42.61167], 4.86, 4558, ['us-id-twin-falls-county']),
   // In the catalogue, with no outline anywhere (a county whose file was never kept).
   _rec('us-id-ada-county', 'Ada County', 'county', [-116.5137, 43.11227, -115.97486, 43.80742], 2742, 434211, ['us-id']),
+  // A town of the next state that has this county among its parents (as Tremonton, Utah, does a valley of Idaho's).
+  {..._rec('us-ut-tremonton', 'Tremonton', 'locality', [-112.2, 41.7, -112.1, 41.75], 10, 9000, ['us-id-twin-falls-county']), 'region_code': 'US-UT'},
   _rec('us-metro-twin-falls-id', 'Twin Falls metro', 'metro', [-114.8, 42.0, -114.0, 42.9], 5000, 100000, ['us']),
 ];
 
@@ -178,7 +181,7 @@ void main() {
     test('which outlines a region keeps: its counties and towns, and its state', () async {
       final c = RegionCatalogue(dir: () async => dir, fetch: fetch);
       final shard = await c.shard('us');
-      expect({for (final r in c.areaRecordsOf(shard['us-id']!)) r.id}, {'us-id', 'us-id-twin-falls-county', 'us-id-twin-falls', 'us-id-kimberly', 'us-id-buhl', 'us-id-ada-county'});
+      expect({for (final r in c.areaRecordsOf(shard['us-id']!)) r.id}, {'us-id', 'us-id-twin-falls-county', 'us-id-twin-falls', 'us-id-kimberly', 'us-id-buhl', 'us-id-ada-county'}, reason: 'not the Utah town');
       expect({for (final r in c.areaRecordsOf(shard['us-id-twin-falls-county']!)) r.id}, {'us-id', 'us-id-twin-falls-county', 'us-id-twin-falls', 'us-id-kimberly', 'us-id-buhl'});
       expect({for (final r in c.areaRecordsOf(shard['us-id-kimberly']!)) r.id}, {'us-id', 'us-id-twin-falls-county', 'us-id-kimberly'});
       expect(c.areaRecordsOf(RegionRecord.fromJson({'id': 'us', 'name': 'United States', 'kind': 'country'})), isEmpty);

@@ -81,6 +81,7 @@ class RegionRecord {
     this.description,
     this.polygon,
     this.country,
+    this.regionCode,
     this.sizes,
   });
 
@@ -104,6 +105,9 @@ class RegionRecord {
 
   /// The ISO 3166-1 code of the country it is in ("US").
   final String? country;
+
+  /// The ISO 3166-2 code of the state it is in ("US-ID"), where the catalogue says.
+  final String? regionCode;
 
   /// What each part weighs, from the catalogue; null for a region it has no sizes for (and a drawn area).
   final RegionSizes? sizes;
@@ -129,6 +133,7 @@ class RegionRecord {
     description: j['description'] as String?,
     polygon: j['polygon'] as String?,
     country: j['country'] as String?,
+    regionCode: j['region_code'] as String?,
     sizes: RegionSizes.fromJson(j['sizes']),
   );
 
@@ -476,7 +481,9 @@ class RegionCatalogue {
       up.addAll(p.parents);
     }
     if (r.kind == 'region') out[r.id] = r;
-    return out.values.where((x) => x.polygon != null).toList();
+    // A town of the next state can have a county here among its parents (a valley that crosses the border): it is not this region's.
+    final code = r.regionCode;
+    return out.values.where((x) => x.polygon != null && (code == null || x.regionCode == null || x.regionCode == code)).toList();
   }
 
   /// Keeps the outlines of [areaRecordsOf] on the phone beside the region's download, so tapping a place on the map can name its town
