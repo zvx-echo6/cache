@@ -536,6 +536,21 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
+    testWidgets('on a style load the Maps screen hides the POI layer, adds every chip, then shows it (the same helper as the place map)', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final e = m.camera.styleEvents;
+      final first = e.indexOf('visible:pois:false'), last = e.lastIndexOf('visible:pois:true');
+      expect(first, greaterThanOrEqualTo(0));
+      expect(last, greaterThan(first));
+      final images = [for (var i = 0; i < e.length; i++) if (e[i].startsWith('image:poi-')) i];
+      expect(images.length, 22);
+      expect(images.first, greaterThan(first), reason: 'hidden before the first chip');
+      expect(images.last, lessThan(last), reason: 'shown only after the last chip');
+      expect(e.sublist(images.last).contains('filter:pois'), isTrue, reason: 'laid out again with the chips before it is shown');
+      await m.finish(tester);
+    });
+
     testWidgets('a polygon that is not stored: the card opens, no outline is drawn', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()

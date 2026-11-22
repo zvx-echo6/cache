@@ -151,7 +151,65 @@ void main() {
           n++;
           if (n == 2) throw StateError('no');
         }, mapPaletteFor(CacheThemeId.dark), ratio: 3);
-        expect(n, 22);
+        expect(n, 23, reason: 'the failed chip is tried once more, so the others still come');
+      });
+    });
+
+    testWidgets('a chip that fails twice is logged and its kind gets the plain dot; no kind is left without an image', (tester) async {
+      await tester.runAsync(() async {
+        final added = <String, Uint8List>{}, log = <String>[];
+        var fuelTries = 0;
+        await addPoiChips((name, png) async => added[name] = png, mapPaletteFor(CacheThemeId.light), ratio: 3, log: log.add,
+            render: (icon, p, {double ratio = 3, bool dot = false}) {
+          if (icon.id == 'fuel' && !dot) {
+            fuelTries++;
+            throw StateError('no glyph');
+          }
+          return renderPoiChipPng(icon, p, ratio: ratio, dot: dot);
+        });
+        expect(fuelTries, 2, reason: 'tried, then once more');
+        expect(added.keys.toSet(), {for (final i in poiIcons) i.image}, reason: 'every kind has an image');
+        final full = await renderPoiChipPng(poiIcons.first, mapPaletteFor(CacheThemeId.light), ratio: 3);
+        expect(added['poi-fuel'], isNot(full), reason: 'the dot is not the chip');
+        expect(log.where((l) => l.contains('poi-fuel')).length, 3, reason: 'two failures and the dot, logged');
+      });
+    });
+
+    testWidgets('a chip that fails once is retried and gets its own chip, not the dot', (tester) async {
+      await tester.runAsync(() async {
+        final added = <String, Uint8List>{};
+        var tries = 0;
+        await addPoiChips((name, png) async => added[name] = png, mapPaletteFor(CacheThemeId.light), ratio: 3,
+            render: (icon, p, {double ratio = 3, bool dot = false}) {
+          if (icon.id == 'food' && !dot && ++tries == 1) throw StateError('once');
+          return renderPoiChipPng(icon, p, ratio: ratio, dot: dot);
+        });
+        expect(added['poi-food'], await renderPoiChipPng(poiIcons.firstWhere((i) => i.id == 'food'), mapPaletteFor(CacheThemeId.light), ratio: 3));
+      });
+    });
+
+    testWidgets('the POI layer is hidden until every chip is in, laid out again, then shown; and shown even when a step throws', (tester) async {
+      await tester.runAsync(() async {
+        final events = <String>[];
+        await installPoiChips(
+          add: (n, png) async => events.add('image:$n'),
+          setVisible: (v) async => events.add('visible:$v'),
+          relayout: () async => events.add('relayout'),
+          palette: mapPaletteFor(CacheThemeId.dark),
+          ratio: 3,
+        );
+        expect(events.first, 'visible:false');
+        expect(events.sublist(1, 23), [for (final i in poiIcons) 'image:${i.image}']);
+        expect(events.sublist(23), ['relayout', 'visible:true']);
+        final after = <String>[];
+        await installPoiChips(
+          add: (n, png) async {},
+          setVisible: (v) async => after.add('visible:$v'),
+          relayout: () async => throw StateError('no layer'),
+          palette: mapPaletteFor(CacheThemeId.dark),
+          ratio: 3,
+        );
+        expect(after, ['visible:false', 'visible:true']);
       });
     });
   });

@@ -864,12 +864,14 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// The public-place chips (the base map's POI layer draws them by name), at the screen's own scale like the pins; then the layer's
   /// filter is set again so its tiles are laid out with the chips (see [poiFilterAfterChips]).
-  Future<void> _addPoiChips(MapLibreMapController c, double screenRatio) async {
-    await addPoiChips((name, png) => c.addImage(name, png), _palette, ratio: pinImageRatio(screenRatio));
-    try {
-      await c.setFilter(poiLayerIds.first, poiFilterAfterChips());
-    } catch (_) {} // A style without the POI layer (OpenMapTiles layout).
-  }
+  Future<void> _addPoiChips(MapLibreMapController c, double screenRatio) => installPoiChips(
+        add: (name, png) => c.addImage(name, png),
+        setVisible: (v) => c.setLayerVisibility(poiLayerIds.first, v),
+        relayout: () => c.setFilter(poiLayerIds.first, poiFilterAfterChips()),
+        palette: _palette,
+        ratio: pinImageRatio(screenRatio),
+        log: (m) => appLog.add(LogLevel.standard, 'WARN', m),
+      );
 
   void _onCameraMove(CameraPosition p) {
     _lat = p.target.latitude;

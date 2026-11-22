@@ -43,12 +43,27 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
   final Map<String, Map<String, dynamic>> sources = {};
   @override
   Future<void> forceOnlineMode() async {}
+
+  /// What the screen did to the style's images and layers, in order: 'image:<name>', 'visible:<layer>:<bool>', 'filter:<layer>'.
+  final List<String> styleEvents = [];
   @override
   Future<void> addImage(
     String name,
     Uint8List bytes, [
     bool sdf = false,
-  ]) async {}
+  ]) async {
+    styleEvents.add('image:$name');
+  }
+
+  @override
+  Future<void> setLayerVisibility(String layerId, bool visible) async {
+    styleEvents.add('visible:$layerId:$visible');
+  }
+
+  @override
+  Future<void> setFilter(String layerId, dynamic filter) async {
+    styleEvents.add('filter:$layerId');
+  }
   @override
   Future<void> setGeoJsonSource(String id, Map<String, dynamic> geojson) async {
     sources[id] = geojson;

@@ -9,6 +9,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import '../../notebook/notebook_map.dart' show PinLook;
 import '../../notebook/notebook_model.dart';
 import '../../notebook/pin_image.dart';
+import '../../platform/app_log.dart' show LogLevel, appLog;
 import '../../platform/phone_window.dart';
 import '../../theme.dart';
 import '../geo.dart';
@@ -275,11 +276,14 @@ class _PlaceMapState extends State<PlaceMap> {
   Future<void> _addPoiChips() async {
     final c = _c;
     if (c == null) return;
-    await addPoiChips((name, png) => c.addImage(name, png), mapPaletteFor(widget.themeId),
-        ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
-    try {
-      await c.setFilter(poiLayerIds.first, poiFilterAfterChips()); // Lays the tiles out again with the chips.
-    } catch (_) {} // A style without the POI layer.
+    await installPoiChips(
+      add: (name, png) => c.addImage(name, png),
+      setVisible: (v) => c.setLayerVisibility(poiLayerIds.first, v),
+      relayout: () => c.setFilter(poiLayerIds.first, poiFilterAfterChips()),
+      palette: mapPaletteFor(widget.themeId),
+      ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0),
+      log: (m) => appLog.add(LogLevel.standard, 'WARN', m),
+    );
   }
 
   /// The area's outline ([PlaceMap.extent]), drawn as the user's own areas are.

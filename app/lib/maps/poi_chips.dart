@@ -111,30 +111,79 @@ PoiChipLook poiChipLook(MapPalette p, String group) {
 }
 
 /// Draws one chip centred on [centre] of [canvas] (in points).
-void paintPoiChip(Canvas canvas, Offset centre, IconData symbol, PoiChipLook look) {
+void paintPoiChip(Canvas canvas, Offset centre, IconData? symbol, PoiChipLook look) {
   canvas.drawCircle(centre, _edgeR, Paint()..color = look.edge);
   canvas.drawCircle(centre, _ringR, Paint()..color = look.ring);
   canvas.drawCircle(centre, _discR, Paint()..color = look.fill);
+  if (symbol == null) return; // The plain dot: the disc and ring alone.
   final tp = pinGlyph(symbol, 12.5, color: look.glyph);
   tp.paint(canvas, centre - Offset(tp.width / 2, tp.height / 2));
 }
 
-/// The chip as PNG bytes: [kPoiChipSize] points square at [ratio] pixels per point.
-Future<Uint8List> renderPoiChipPng(PoiIcon icon, MapPalette p, {double ratio = 3}) async {
+/// The chip as PNG bytes: [kPoiChipSize] points square at [ratio] pixels per point. [dot] draws the plain dot (no glyph), the fallback
+/// for a chip that cannot be drawn.
+Future<Uint8List> renderPoiChipPng(PoiIcon icon, MapPalette p, {double ratio = 3, bool dot = false}) async {
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), icon.symbol, poiChipLook(p, icon.group));
+  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), dot ? null : icon.symbol, poiChipLook(p, icon.group));
   final px = (kPoiChipSize * ratio).round();
   final img = await rec.endRecording().toImage(px, px);
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
 
-/// Adds every chip of [p]'s theme to the map style (`addImage`), at [ratio] pixels per point (see `pinImageRatio`). A new style drops its images,
-/// so this runs on each style load. A chip that cannot be drawn or added is skipped, so one failure never loses the others.
-Future<void> addPoiChips(Future<void> Function(String name, Uint8List png) add, MapPalette p, {required double ratio}) async {
+/// Adds every chip of [p]'s theme to the map style (`addImage`), at [ratio] pixels per point (see `pinImageRatio`). A new style drops its
+/// images, so this runs on each style load. A chip that cannot be drawn or added is logged and tried once more; if it fails again its
+/// kind gets the plain dot of its group colour instead, so a kind is never left without an image. [render] draws a chip (a test's).
+Future<void> addPoiChips(
+  Future<void> Function(String name, Uint8List png) add,
+  MapPalette p, {
+  required double ratio,
+  void Function(String message)? log,
+  Future<Uint8List> Function(PoiIcon icon, MapPalette p, {double ratio, bool dot}) render = renderPoiChipPng,
+}) async {
   for (final i in poiIcons) {
+    var done = false;
+    for (var attempt = 1; attempt <= 2 && !done; attempt++) {
+      try {
+        await add(i.image, await render(i, p, ratio: ratio, dot: false));
+        done = true;
+      } catch (e) {
+        log?.call('POI chip ${i.image} failed (attempt $attempt): $e');
+      }
+    }
+    if (done) continue;
     try {
-      await add(i.image, await renderPoiChipPng(i, p, ratio: ratio));
+      await add(i.image, await render(i, p, ratio: ratio, dot: true));
+      log?.call('POI chip ${i.image} is the plain dot');
+    } catch (e) {
+      log?.call('POI chip ${i.image} has no image at all: $e');
+    }
+  }
+}
+
+/// What a style load does for the POI layer, once, for both maps: hides the layer, adds every chip ([addPoiChips]), lays the layer out
+/// again with them ([relayout]) and only then shows it, so a tile is never laid out and drawn while a chip it asks for is missing.
+/// The layer is shown whatever happens (a thrown step is logged), so a failure never leaves the map without its places.
+Future<void> installPoiChips({
+  required Future<void> Function(String name, Uint8List png) add,
+  required Future<void> Function(bool visible) setVisible,
+  required Future<void> Function() relayout,
+  required MapPalette palette,
+  required double ratio,
+  void Function(String message)? log,
+  Future<Uint8List> Function(PoiIcon icon, MapPalette p, {double ratio, bool dot}) render = renderPoiChipPng,
+}) async {
+  try {
+    await setVisible(false);
+  } catch (_) {} // A style without the POI layer (OpenMapTiles layout).
+  try {
+    await addPoiChips(add, palette, ratio: ratio, log: log, render: render);
+    await relayout();
+  } catch (e) {
+    log?.call('POI chips: $e');
+  } finally {
+    try {
+      await setVisible(true);
     } catch (_) {}
   }
 }
