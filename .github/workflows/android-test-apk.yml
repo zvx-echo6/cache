@@ -184,8 +184,6 @@ jobs:
         working-directory: app
         env:
           ORG_GRADLE_PROJECT_cacheTestApk: 'true'
-          # Android Auto is off by default (src/car/AndroidManifest.xml); the test APK turns it on for testing with the DHU.
-          ORG_GRADLE_PROJECT_cacheAndroidAuto: 'true'
         run: |
           flutter --version
           flutter pub get

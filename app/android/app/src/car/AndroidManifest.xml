@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android Auto: Cache's navigation on the car's screen (car/CacheCarAppService.kt and the rest of the car package). Merged into
-     the app's manifest only when the build has -PcacheAndroidAuto=true (build.gradle.kts). The default (and so the Play release)
-     leaves it out: Android Auto ships together with CarPlay, so until then the release APK does not appear in Android Auto. The
-     test APK (android-test-apk.yml) and the car screen's tests (android-car.yml) turn it on. -->
+     the app's manifest in every build (build.gradle.kts): Android Auto is always on, together with CarPlay. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- The navigation templates, and the car surface the map is drawn on. -->
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>

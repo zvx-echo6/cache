@@ -310,8 +310,6 @@ jobs:
         working-directory: app
         env:
           CACHE_LLAMA_GEMMA4_PREFILL_OPT: 'ON'
-          # Android Auto is on only when this is exactly 'true' (app/android/app/build.gradle.kts); always 'true' for store builds.
-          ORG_GRADLE_PROJECT_cacheAndroidAuto: 'true'
         run: |
           flutter --version
           flutter pub get

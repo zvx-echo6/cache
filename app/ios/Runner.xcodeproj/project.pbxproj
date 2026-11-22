@@ -442,7 +442,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				CACHE_CARPLAY = NO;
+				CACHE_CARPLAY = YES;
 				CACHE_ENTITLEMENTS_NO = Runner/Runner.entitlements;
 				CACHE_ENTITLEMENTS_YES = Runner/RunnerCarPlay.entitlements;
 				CODE_SIGN_ENTITLEMENTS = "$(CACHE_ENTITLEMENTS_$(CACHE_CARPLAY))";
@@ -627,7 +627,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				CACHE_CARPLAY = NO;
+				CACHE_CARPLAY = YES;
 				CACHE_ENTITLEMENTS_NO = Runner/Runner.entitlements;
 				CACHE_ENTITLEMENTS_YES = Runner/RunnerCarPlay.entitlements;
 				CODE_SIGN_ENTITLEMENTS = "$(CACHE_ENTITLEMENTS_$(CACHE_CARPLAY))";
@@ -655,7 +655,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				CACHE_CARPLAY = NO;
+				CACHE_CARPLAY = YES;
 				CACHE_ENTITLEMENTS_NO = Runner/Runner.entitlements;
 				CACHE_ENTITLEMENTS_YES = Runner/RunnerCarPlay.entitlements;
 				CODE_SIGN_ENTITLEMENTS = "$(CACHE_ENTITLEMENTS_$(CACHE_CARPLAY))";

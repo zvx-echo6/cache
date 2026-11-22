@@ -30,9 +30,8 @@ android {
         manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
         // True only in that test build: MainActivity reads the bench's intent extras (cache_preread_mbps) then.
         buildConfigField("boolean", "TEST_APK", testApk.toString())
-        // True only when built with -PcacheAndroidAuto=true (the same switch that merges the car manifest): Dart reads it through
-        // the cache/build channel, so Settings shows its Car group only then.
-        buildConfigField("boolean", "CACHE_ANDROID_AUTO", ((project.findProperty("cacheAndroidAuto") as String?) == "true").toString())
+        // Always true: Android Auto is in every build (the car manifest is always merged). Dart reads it through the cache/build channel.
+        buildConfigField("boolean", "CACHE_ANDROID_AUTO", "true")
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28
@@ -101,15 +100,10 @@ flutter {
     source = "../.."
 }
 
-// Android Auto is in the code but off by default: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the
-// navigation intents, the car permissions) are merged only with -PcacheAndroidAuto=true. Play builds leave Android Auto out
-// unless the store workflow's android_auto input is on (.github/workflows/android-play.yml), which is for internal and closed testing only;
-// the test APK and the car tests turn it on.
-val androidAuto = (project.findProperty("cacheAndroidAuto") as String?) == "true"
-if (androidAuto) {
-    androidComponents {
-        onVariants { variant -> variant.sources.manifests.addStaticManifestFile("src/car/AndroidManifest.xml") }
-    }
+// Android Auto is always on: its manifest entries (src/car/AndroidManifest.xml: the CarAppService, the navigation intents, the car
+// permissions) are merged into every build.
+androidComponents {
+    onVariants { variant -> variant.sources.manifests.addStaticManifestFile("src/car/AndroidManifest.xml") }
 }
 
 // The foreground service's test hook (src/testhook/AndroidManifest.xml: a receiver a device round can send Pause and Resume to with
