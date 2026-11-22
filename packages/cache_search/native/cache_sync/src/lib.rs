@@ -17,24 +17,23 @@
 
 pub mod identity;
 pub mod index;
+pub mod transport;
 
 use anyhow::{anyhow, bail, Context, Result};
 use index::{Action, Entry, Index, Ver};
 use iroh::{
-    endpoint::{presets, AfterHandshakeOutcome, Connection, EndpointHooks, VarInt},
-    protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl,
+    endpoint::{presets, VarInt},
+    Endpoint, EndpointAddr, RelayMode, RelayUrl,
 };
 use iroh_blobs::{
     api::{
         blobs::{AddPathOptions, ExportMode, ExportOptions, ImportMode},
-        downloader::{DownloadOptions, DownloadProgressItem, Shuffled, SplitStrategy},
     },
     store::{
         fs::{options::Options as StoreOptions, FsStore},
         GcConfig, ProtectOutcome,
     },
-    BlobFormat, BlobsProtocol, Hash, HashAndFormat,
+    BlobFormat, Hash, HashAndFormat,
 };
 use n0_future::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -44,11 +43,12 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
+use transport::{Ask, FetchEvent, IrohTransport, Serve, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -587,34 +587,16 @@ impl GateState {
     }
 }
 
-/// Refuses every connection from a key that is not linked, except on the linking protocol (which wants the one-time code).
-#[derive(Debug)]
-struct Gate {
-    allowed: Arc<RwLock<HashSet<EndpointId>>>,
-    state: Arc<GateState>,
-}
-
-impl EndpointHooks for Gate {
-    async fn after_handshake<'a>(&'a self, conn: &'a Connection) -> AfterHandshakeOutcome {
-        if conn.alpn() == PAIR_ALPN || self.allowed.read().map(|a| a.contains(&conn.remote_id())).unwrap_or(false) {
-            AfterHandshakeOutcome::accept()
-        } else {
-            let r = self.state.refusal(now_ms());
-            AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(r.code()), reason: r.reason().to_vec() }
-        }
-    }
-}
-
 /// What one linked device last sent of its secrets: their digest, and the secrets until the app takes them.
 type Received = (String, Option<BTreeMap<String, String>>);
 
 struct Inner {
     dir: PathBuf,
     me: String,
-    endpoint: Endpoint,
+    /// The network: iroh today, Reticulum beside it in 1.2 ([`transport`]).
+    net: Arc<dyn Transport>,
     store: FsStore,
     saved: Mutex<Saved>,
-    allowed: Arc<RwLock<HashSet<EndpointId>>>,
     /// What the Gate needs besides `allowed` ([`GateState`]).
     gate: Arc<GateState>,
     /// Devices whose Gate refused the last check-in with 403 "not linked", and when the first of those was (see
@@ -675,7 +657,6 @@ type Settling = ((u64, i64), Instant);
 pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
     inner: Arc<Inner>,
-    router: Option<Router>,
     /// Held while this engine lives: the folder is not opened a second time in this process.
     _folder: FolderGuard,
 }
@@ -1557,9 +1538,7 @@ impl Inner {
     /// received. The same for a link taken off here and for one the other device unlinked. Files already here stay.
     fn remove_peer(&self, id: &str) -> Result<()> {
         self.saved.lock().unwrap().peers.retain(|p| p.id != id);
-        if let Ok(k) = id.parse::<EndpointId>() {
-            self.allowed.write().unwrap().remove(&k);
-        }
+        self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
         self.secrets.lock().unwrap().remove(id);
         self.received.lock().unwrap().remove(id);
@@ -1612,9 +1591,7 @@ impl Inner {
             return;
         }
         for p in &gone {
-            if let Ok(k) = p.id.parse::<EndpointId>() {
-                self.allowed.write().unwrap().remove(&k);
-            }
+            self.net.disallow(&p.id);
             self.run.lock().unwrap().peers.remove(&p.id);
             self.secrets.lock().unwrap().remove(&p.id);
             self.received.lock().unwrap().remove(&p.id);
@@ -1644,19 +1621,7 @@ impl Inner {
 
     /// Asks `peer` for the secrets it holds for this device.
     async fn fetch_secrets(&self, peer: &str) -> Result<BTreeMap<String, String>> {
-        let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
-        let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
-            .await
-            .map_err(|_| anyhow!("not reachable"))?
-            .map_err(|e| anyhow!("not reachable: {e}"))?;
-        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        send.write_all(b"secrets").await.map_err(|e| anyhow!("{e}"))?;
-        send.finish().map_err(|e| anyhow!("{e}"))?;
-        let bytes = tokio::time::timeout(Duration::from_secs(30), recv.read_to_end(1024 * 1024))
-            .await
-            .map_err(|_| anyhow!("timed out reading the keys"))?
-            .map_err(|e| anyhow!("{e}"))?;
-        conn.close(0u32.into(), b"done");
+        let (bytes, _) = self.net.ask(peer, Ask::Secrets, &AtomicU32::new(0)).await?;
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
@@ -1823,46 +1788,12 @@ impl Inner {
     }
 
     async fn fetch_index(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
-        // The close code of the other device's Gate, whichever step meets it (at connect the text carries it; at write or read
-        // only the error's source does).
-        let seen = |e: &(dyn std::error::Error + 'static)| {
-            // 403 is the one that can unlink; any other close code of the Gate only says why this try failed.
-            let c = if closed_403(e) { Some(403) } else { closed_code(e) };
-            if let Some(c) = c {
-                closed.store(c, Ordering::Relaxed);
-            }
-        };
-        let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
-        let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
-            .await
-            .map_err(|_| anyhow!("not reachable"))?
-            .map_err(|e| {
-                seen(&e);
-                anyhow!("not reachable: {e}")
-            })?;
-        let via = conn.paths().iter().find(|p| p.is_selected()).map(|p| if p.is_relay() { "relay" } else { "direct" }).unwrap_or("direct").to_string();
-        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| {
-            seen(&e);
-            anyhow!("{e}")
-        })?;
-        send.write_all(b"index").await.map_err(|e| {
-            seen(&e);
-            anyhow!("{e}")
-        })?;
-        send.finish().map_err(|e| anyhow!("{e}"))?;
-        let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(MAX_INDEX))
-            .await
-            .map_err(|_| anyhow!("timed out reading the file list"))?
-            .map_err(|e| {
-                seen(&e);
-                anyhow!("{e}")
-            })?;
-        conn.close(0u32.into(), b"done");
+        let (bytes, via) = self.net.ask(peer, Ask::Index, closed).await?;
         Ok((serde_json::from_slice(&bytes).context("the file list from the device is not valid")?, via))
     }
 
     /// Who has `hash` (by their last index), us excluded, among the devices `share` is kept with.
-    fn providers(&self, share: &str, hash: &str) -> Vec<EndpointId> {
+    fn providers(&self, share: &str, hash: &str) -> Vec<String> {
         let found: Vec<String> = {
             let run = self.run.lock().unwrap();
             run.peers
@@ -1872,7 +1803,7 @@ impl Inner {
                 .map(|(id, _)| id.clone())
                 .collect()
         };
-        found.into_iter().filter(|id| self.shares_with(share, id)).filter_map(|id| id.parse().ok()).collect()
+        found.into_iter().filter(|id| self.shares_with(share, id)).collect()
     }
 
     /// Takes from `from` what is newer there. A file that cannot be fetched or deleted is noted and the rest goes on, so one
@@ -2019,15 +1950,9 @@ impl Inner {
                 path: path.to_string(),
                 size: entry.size,
                 done: 0,
-                from: providers.iter().map(|p| self.peer_name(&p.to_string())).collect(),
+                from: providers.iter().map(|p| self.peer_name(p)).collect(),
             });
-            let strategy = if providers.len() > 1 { SplitStrategy::Split } else { SplitStrategy::None };
-            let dl = self.store.downloader(&self.endpoint);
-            let mut stream = dl
-                .download_with_opts(DownloadOptions::new(HashAndFormat::raw(hash), Shuffled::new(providers), strategy))
-                .stream()
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+            let mut stream = self.net.fetch(&self.store, hash, providers).await?;
             let mut failed = None;
             let mut last_progress = Instant::now();
             loop {
@@ -2035,15 +1960,13 @@ impl Inner {
                 match tokio::time::timeout(Duration::from_secs(1), stream.next()).await {
                     Ok(None) => break,
                     Ok(Some(item)) => match item {
-                        DownloadProgressItem::Progress(n) => {
+                        FetchEvent::Progress(n) => {
                             last_progress = Instant::now();
                             if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
                                 t.done = n;
                             }
                         }
-                        DownloadProgressItem::Error(e) => failed = Some(if is_no_space(&e) { NO_SPACE.to_string() } else { format!("{e}") }),
-                        DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
-                        _ => {}
+                        FetchEvent::Failed(m) => failed = Some(m),
                     },
                     Err(_) => {}
                 }
@@ -2306,30 +2229,18 @@ fn links_grace_until(dir: &Path, recovered: bool) -> Result<u64> {
     Ok(at.saturating_add(links_grace(dir).as_millis() as u64))
 }
 
-/// Answers linking requests that carry the code being shown.
-#[derive(Clone)]
-struct PairProto(Arc<Inner>);
-
-impl std::fmt::Debug for PairProto {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("PairProto")
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 struct PairHello {
     token: String,
     name: String,
 }
 
-impl ProtocolHandler for PairProto {
-    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
-        let (mut send, mut recv) = conn.accept_bi().await?;
-        let bytes = recv.read_to_end(4096).await.map_err(AcceptError::from_err)?;
-        let hello: Option<PairHello> = serde_json::from_slice(&bytes).ok();
-        let inner = &self.0;
+/// What the network asks of the engine: answers linking requests that carry the code being shown, and the questions of linked devices.
+impl Serve for Inner {
+    fn pair_hello(&self, peer: &str, bytes: &[u8]) -> Vec<u8> {
+        let hello: Option<PairHello> = serde_json::from_slice(bytes).ok();
         let ok = {
-            let mut p = inner.pairing.lock().unwrap();
+            let mut p = self.pairing.lock().unwrap();
             match (&*p, &hello) {
                 (Some((tok, until)), Some(h)) if *tok == h.token && Instant::now() < *until => {
                     *p = None; // one use
@@ -2339,19 +2250,36 @@ impl ProtocolHandler for PairProto {
             }
         };
         let reply = if let (true, Some(h)) = (ok, hello) {
-            let id = conn.remote_id();
             // Not confirmed until the other device comes back: this answer may never reach it.
-            add_peer(inner, &id.to_string(), &h.name, true);
-            inner.note(format!("Linked with {}", h.name));
-            inner.wake.notify_one();
-            json!({"ok": true, "name": inner.saved.lock().unwrap().name})
+            add_peer(self, peer, &h.name, true);
+            self.note(format!("Linked with {}", h.name));
+            self.wake.notify_one();
+            json!({"ok": true, "name": self.saved.lock().unwrap().name})
         } else {
             json!({"ok": false, "error": "that code is not being shown any more"})
         };
-        send.write_all(reply.to_string().as_bytes()).await.map_err(AcceptError::from_err)?;
-        send.finish()?;
-        conn.closed().await;
-        Ok(())
+        reply.to_string().into_bytes()
+    }
+
+    fn answer(self: Arc<Self>, peer: String, ask: Ask) -> transport::BoxFut<'static, Vec<u8>> {
+        Box::pin(async move {
+            // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
+            self.confirm_peer(&peer);
+            match ask {
+                Ask::Secrets => {
+                    // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
+                    let mine = self.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
+                    serde_json::to_vec(&mine).unwrap_or_default()
+                }
+                Ask::Index => tokio::task::spawn_blocking(move || serde_json::to_vec(&self.our_index_for(&peer)).unwrap_or_default())
+                    .await
+                    .unwrap_or_default(),
+            }
+        })
+    }
+
+    fn asked(&self, _peer: &str) {
+        self.wake.notify_one();
     }
 }
 
@@ -2361,48 +2289,8 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
         s.peers.retain(|p| p.id != id);
         s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
-    if let Ok(k) = id.parse::<EndpointId>() {
-        inner.allowed.write().unwrap().insert(k);
-    }
+    inner.net.allow(id);
     let _ = inner.save();
-}
-
-/// Sends a linked device this device's index.
-#[derive(Clone)]
-struct SyncProto(Arc<Inner>);
-
-impl std::fmt::Debug for SyncProto {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SyncProto")
-    }
-}
-
-impl ProtocolHandler for SyncProto {
-    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
-        let (mut send, mut recv) = conn.accept_bi().await?;
-        let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
-        let peer = conn.remote_id().to_string();
-        // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
-        self.0.confirm_peer(&peer);
-        if ask == b"secrets" {
-            // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
-            let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
-            send.write_all(&serde_json::to_vec(&mine).unwrap_or_default()).await.map_err(AcceptError::from_err)?;
-            send.finish()?;
-            conn.closed().await;
-            return Ok(());
-        }
-        let inner = self.0.clone();
-        let body = tokio::task::spawn_blocking(move || serde_json::to_vec(&inner.our_index_for(&peer)).unwrap_or_default())
-            .await
-            .map_err(AcceptError::from_err)?;
-        send.write_all(&body).await.map_err(AcceptError::from_err)?;
-        send.finish()?;
-        conn.closed().await;
-        // A peer asking means it may have changes too: compare soon.
-        self.0.wake.notify_one();
-        Ok(())
-    }
 }
 
 impl SyncEngine {
@@ -2419,7 +2307,7 @@ impl SyncEngine {
             }
         };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
-        let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
+        let inner = match rt.block_on(Self::start(cfg.clone(), &steps)) {
             Ok(v) => v,
             Err(e) => {
                 steps.step("failed");
@@ -2462,7 +2350,7 @@ impl SyncEngine {
         });
         if let Some(secs) = cfg.lifetime_secs {
             let inner4 = inner.clone();
-            let router4 = router.clone();
+            let net4 = inner.net.clone();
             rt.spawn(async move {
                 tokio::time::sleep(Duration::from_secs(secs)).await;
                 // Closed already (close sets `stop` first): nothing left to do.
@@ -2471,15 +2359,15 @@ impl SyncEngine {
                 }
                 inner4.note("Stopped: the time limit of this run was reached");
                 inner4.wake.notify_one();
-                let _ = tokio::time::timeout(Duration::from_secs(5), router4.shutdown()).await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), net4.shutdown()).await;
                 let _ = inner4.store.shutdown().await;
             });
         }
         steps.step("done");
-        Ok(SyncEngine { rt, inner, router: Some(router), _folder: folder })
+        Ok(SyncEngine { rt, inner, _folder: folder })
     }
 
-    async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {
+    async fn start(cfg: Config, steps: &OpenSteps) -> Result<Arc<Inner>> {
         std::fs::create_dir_all(&cfg.dir)?;
         // Read before anything is written: if the links cannot be read now, nothing here may be changed.
         let fresh = !cfg.dir.join("sync.json").exists();
@@ -2496,10 +2384,8 @@ impl SyncEngine {
         if migrate_links(&mut saved) {
             write_saved(&cfg.dir.join("sync.json"), &saved)?;
         }
-        let allowed: Arc<RwLock<HashSet<EndpointId>>> =
-            Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
 
-        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone()).hooks(Gate { allowed: allowed.clone(), state: gate.clone() });
+        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone());
         b = if !cfg.relay {
             b.relay_mode(RelayMode::Disabled)
         } else if !cfg.relay_urls.is_empty() {
@@ -2532,7 +2418,8 @@ impl SyncEngine {
         if let Some(port) = cfg.port.filter(|p| *p != 0) {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
-        let endpoint = b.bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
+        let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone()).await?;
+        let net: Arc<dyn Transport> = iroh_net.clone();
         steps.step("endpoint bound");
 
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
@@ -2552,11 +2439,10 @@ impl SyncEngine {
 
         let inner = Arc::new(Inner {
             dir: cfg.dir.clone(),
-            me: endpoint.id().to_string(),
-            endpoint: endpoint.clone(),
+            me: net.id(),
+            net,
             store: store.clone(),
             saved: Mutex::new(saved),
-            allowed,
             gate: gate.clone(),
             refused: Mutex::new(HashMap::new()),
             pairing: Mutex::new(None),
@@ -2588,17 +2474,12 @@ impl SyncEngine {
         steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
-        let blobs = BlobsProtocol::new(&store, None);
-        let router = Router::builder(endpoint)
-            .accept(iroh_blobs::ALPN, blobs)
-            .accept(PAIR_ALPN, PairProto(inner.clone()))
-            .accept(SYNC_ALPN, SyncProto(inner.clone()))
-            .spawn();
+        iroh_net.serve(&store, inner.clone());
         inner.note("Started");
         if let Some(n) = saved_note {
             inner.note(n);
         }
-        Ok((inner, router))
+        Ok(inner)
     }
 
     /// The whole interface: `method` with JSON `args`, a JSON answer. Errors come back as `{"error": "..."}` from the C ABI.
@@ -2616,41 +2497,30 @@ impl SyncEngine {
             "link_code" => {
                 let tok = token();
                 *inner.pairing.lock().unwrap() = Some((tok.clone(), Instant::now() + LINK_WINDOW));
-                let ep = inner.endpoint.clone();
-                let addr = self.rt.block_on(async move {
-                    let _ = tokio::time::timeout(Duration::from_secs(5), ep.online()).await;
-                    ep.addr()
-                });
+                let net = inner.net.clone();
+                let addr = self.rt.block_on(async move { net.link_addr().await });
                 let code = encode_code(&LinkCode { a: addr, t: tok, n: inner.saved.lock().unwrap().name.clone() })?;
                 Ok(json!({"code": code, "valid_secs": LINK_WINDOW.as_secs()}))
             }
             "link" => {
                 let code = decode_code(&s("code").ok_or_else(|| anyhow!("code is required"))?)?;
-                if code.a.id == inner.endpoint.id() {
+                if code.a.id.to_string() == inner.net.id() {
                     bail!("that is this device's own code");
                 }
                 let name = inner.saved.lock().unwrap().name.clone();
-                let ep = inner.endpoint.clone();
+                let net = inner.net.clone();
                 let peer = code.a.id;
                 // Allowed before connecting: the reply comes back on our own connection, and from now on it may connect to us.
-                inner.allowed.write().unwrap().insert(peer);
+                inner.net.allow(&peer.to_string());
                 let reply: Result<Value> = self.rt.block_on(async move {
-                    let conn = tokio::time::timeout(Duration::from_secs(45), ep.connect(code.a, PAIR_ALPN))
-                        .await
-                        .map_err(|_| anyhow!("the other device did not answer"))?
-                        .map_err(|e| anyhow!("could not reach the other device: {e}"))?;
-                    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-                    send.write_all(&serde_json::to_vec(&PairHello { token: code.t, name })?).await.map_err(|e| anyhow!("{e}"))?;
-                    send.finish().map_err(|e| anyhow!("{e}"))?;
-                    let bytes = recv.read_to_end(4096).await.map_err(|e| anyhow!("{e}"))?;
-                    conn.close(0u32.into(), b"done");
+                    let bytes = net.pair(code.a, serde_json::to_vec(&PairHello { token: code.t, name })?).await?;
                     Ok(serde_json::from_slice(&bytes)?)
                 });
                 let reply = match reply {
                     Ok(r) => r,
                     Err(e) => {
                         if !inner.saved.lock().unwrap().peers.iter().any(|p| p.id == peer.to_string()) {
-                            inner.allowed.write().unwrap().remove(&peer);
+                            inner.net.disallow(&peer.to_string());
                         }
                         return Err(e);
                     }
@@ -2658,7 +2528,7 @@ impl SyncEngine {
                 if reply.get("ok").and_then(|v| v.as_bool()) != Some(true) {
                     // Only if the device was not linked already: a refused second try must not lock out a device that is.
                     if !inner.saved.lock().unwrap().peers.iter().any(|p| p.id == peer.to_string()) {
-                        inner.allowed.write().unwrap().remove(&peer);
+                        inner.net.disallow(&peer.to_string());
                     }
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
@@ -3014,8 +2884,8 @@ impl SyncEngine {
             }
             "network_changed" => {
                 // The phone moved between Wi-Fi and mobile data: find new paths at once.
-                let ep = inner.endpoint.clone();
-                self.rt.block_on(async move { ep.network_change().await });
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.network_change().await });
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
@@ -3087,12 +2957,12 @@ impl SyncEngine {
                 })
             })
             .collect();
-        let addr = inner.endpoint.addr();
+        let (relay, direct) = inner.net.addresses();
         json!({
             "id": inner.me,
             "name": saved.name,
-            "relay": addr.relay_urls().next().map(|u| u.to_string()),
-            "direct": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
+            "relay": relay,
+            "direct": direct,
             "network": inner.network.load(Ordering::Relaxed),
             "reserve_bytes": inner.reserve.load(Ordering::Relaxed),
             "free_bytes": Inner::free_bytes(&inner.dir),
@@ -3111,19 +2981,17 @@ impl SyncEngine {
     /// The UDP port this device listens on (IPv4): the one `port` named, or the one the system gave when `port` was 0 or
     /// absent. A device found again only by its address (no lookup service) is opened again on it.
     pub fn port(&self) -> Option<u16> {
-        self.inner.endpoint.bound_sockets().into_iter().find(|a| a.is_ipv4()).map(|a| a.port())
+        self.inner.net.port()
     }
 
     /// Stops the rounds, closes connections and flushes the store.
-    pub fn close(mut self) {
+    pub fn close(self) {
         self.inner.stop.store(true, Ordering::Relaxed);
         self.inner.wake.notify_one();
-        let router = self.router.take();
+        let net = self.inner.net.clone();
         let store = self.inner.store.clone();
         self.rt.block_on(async move {
-            if let Some(r) = router {
-                let _ = tokio::time::timeout(Duration::from_secs(5), r.shutdown()).await;
-            }
+            net.shutdown().await;
             let _ = store.shutdown().await;
         });
     }
