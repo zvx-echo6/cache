@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
+import '../desktop/desktop.dart' show isLinuxDesktop;
 import '../location/coords.dart';
 import '../linux_ui.dart';
 import '../location/location_service.dart';
@@ -2459,7 +2460,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _controls(BuildContext context, Fix? fix, FollowMode follow) {
+  /// The desktop map layout: in the browser, and in Cache on Linux's desktop window (1024 wide and up). The one place that says so;
+  /// a phone, upright or held sideways, never has it, and is laid out as it always was.
+  bool get _deskMap => plat.isWeb || isLinuxDesktop(context);
+
+  Widget _controls(BuildContext context, Fix? fix, FollowMode follow, {bool zoom = false}) {
     return Column(
       key: _controlsKey,
       mainAxisSize: MainAxisSize.min,
@@ -2498,6 +2503,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
             onPressed: _northUp,
             child: CompassNeedle(bearing: _bearing),
           ),
+        ],
+        // Zoom, with the other buttons (the desktop layout only: a phone zooms with two fingers).
+        if (zoom) ...[
+          const SizedBox(height: 12),
+          MapButton(icon: Icons.add, tooltip: 'Zoom in', onPressed: () => _controller?.animateCamera(CameraUpdate.zoomIn())),
+          const SizedBox(height: 12),
+          MapButton(icon: Icons.remove, tooltip: 'Zoom out', onPressed: () => _controller?.animateCamera(CameraUpdate.zoomOut())),
         ],
       ],
     );
@@ -2560,6 +2572,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
               : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions),
     );
     final panel = _panel(searching);
+    final desk = _deskMap;
+    // The same state that decides the column's panel: with none, the column has nothing at its foot and the scale may be there.
+    // (Searching, the foot is not drawn at all.)
+    final scaleAtLeft = desk && panel == null && !searching;
+    final Widget scaleBar = KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2));
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(12, 12, 12, 8 + (searching ? MediaQuery.viewInsetsOf(context).bottom : 0)),
@@ -2573,7 +2590,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 builder: (context, c) => Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (panel == null) Flexible(child: top) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
+                    if (panel == null) (scaleAtLeft ? top : Flexible(child: top)) else ConstrainedBox(constraints: BoxConstraints(maxHeight: c.maxHeight / 2), child: top),
                     if (!previewing && !guiding && nav.fromPlace != null) Padding(padding: const EdgeInsets.only(top: 8), child: MapOverlay(child: _fromChip(context))),
                     if (panel != null) ...[
                       const SizedBox(height: 8),
@@ -2586,6 +2603,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                         ),
                       ),
                     ],
+                    // The desktop layout, no panel: the scale at the map's bottom left, under the search bar.
+                    if (scaleAtLeft) ...[const Spacer(), Align(alignment: Alignment.bottomLeft, child: scaleBar)],
                   ],
                 ),
               ),
@@ -2599,9 +2618,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (fix != null && !guiding) Flexible(child: MapOverlay(child: _coordsChip(context, fix))),
-                        const Spacer(),
-                        MapOverlay(child: _controls(context, fix, follow)),
+                        // The desktop layout: the chip has the room to the buttons (a Flexible beside a Spacer shared it, and the
+                        // buttons came to rest part-way across), so the buttons are at the right edge with or without it.
+                        if (desk)
+                          Expanded(child: Align(alignment: Alignment.topLeft, child: fix != null && !guiding ? MapOverlay(child: _coordsChip(context, fix)) : const SizedBox.shrink()))
+                        else ...[
+                          if (fix != null && !guiding) Flexible(child: MapOverlay(child: _coordsChip(context, fix))),
+                          const Spacer(),
+                        ],
+                        MapOverlay(child: _controls(context, fix, follow, zoom: desk)),
                       ],
                     ),
                   const Spacer(),
@@ -2619,13 +2644,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [KeyedSubtree(key: _scaleKey, child: ScaleBarWidget(lat: _scaleView.$1, zoom: _scaleView.$2))])),
+                            // The desktop layout with no panel in the column on the left: the scale is at the map's own foot, over
+                            // that column (below), not here.
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [if (!scaleAtLeft) scaleBar])),
                             if (_insetOn && !_insetHidden) ...[const SizedBox(width: 8), MapOverlay(child: _inset(context))],
                           ],
                         ),
                         // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                         const SizedBox(height: 6),
-                        Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
+                        Align(alignment: desk ? Alignment.centerRight : Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
                       ],
                     ),
                 ],
