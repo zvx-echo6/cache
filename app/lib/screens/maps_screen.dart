@@ -1573,6 +1573,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   /// The town or county card a tap opened, its outline and facts; null when the card is something else.
   AreaChoice? _area;
 
+  /// A place or area card is showing over the map (not while a search list or a route is): Back closes it.
+  bool get _cardOpen => nav.phase == NavPhase.browsing && nav.selected != null && !(nav.searchOpen && nav.query.trim().isNotEmpty);
+
+  /// The room the shown area's outline was fitted into (its padding), for the fill's fade; null when none is shown.
+  EdgeInsets? _areaPad;
+
   AreaSource? get _areaSource => widget.areas ?? widget.regions?.catalogue;
 
   List<String> _basemapLines() {
@@ -1802,9 +1808,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final next = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: towns);
     _area = next;
     nav.select(next.place);
+    // The card grew with its summary: fit again into what is left above it.
+    unawaited(_fitAreaOutline(next));
   }
 
-  /// The camera shows the whole area above the card.
+  /// The camera shows the whole area between the top controls and the card, as they are laid out now (measured, not a margin).
   Future<void> _fitAreaOutline(AreaChoice a) async {
     final c = _controller;
     if (c == null) return;
@@ -1815,8 +1823,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       return;
     }
     maps.setFollow(FollowMode.free);
+    // The card is laid out in the frame after the selection: wait for it, so its top is where it really is.
+    WidgetsBinding.instance.ensureVisualUpdate();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _area != a) return;
     final size = _fitMapSize();
-    final pad = EdgeInsets.fromLTRB(24, 150, 24, size.height * 0.56);
+    final pad = areaFitPadding(map: size, header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), panel: _boxOf(_panelKey));
+    _areaPad = pad;
     _camPad = null;
     try {
       await c.animateCamera(
@@ -1824,22 +1837,31 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         duration: const Duration(milliseconds: 600),
       );
     } catch (_) {}
+    await _pushAreaFade(c);
+  }
+
+  /// The fill's fade, from the zoom at which the outline fits the room it was fitted into.
+  Future<void> _pushAreaFade(MapLibreMapController c) async {
+    final a = _area, pad = _areaPad;
+    final g = a == null || nav.selected?.id != a.place.id ? null : a.geometry;
+    final b = g == null ? null : geometryBounds(g);
+    if (b == null || b[0] > b[2] || pad == null) return;
+    final size = _fitMapSize();
+    final fit = fitZoomFor(b, math.max(120, size.width - pad.horizontal), math.max(120, size.height - pad.vertical));
+    try {
+      await c.setLayerProperties(kAreaFill, FillLayerProperties(fillColor: _palette.css('pin'), fillOpacity: areaFillOpacity(fit, fill: widget.themeId == CacheThemeId.tactical ? 0.10 : 0.08)));
+    } catch (_) {}
   }
 
   /// The outline on the map: the chosen area's polygon, or none (any other card, or no card). The fill fades once you zoom inside.
   Future<void> _pushArea(MapLibreMapController c) async {
     final a = _area;
     final on = a != null && nav.selected?.id == a.place.id;
-    final g = on ? a.geometry : null;
+    if (!on) _areaPad = null;
     try {
-      await c.setGeoJsonSource(kAreaSource, areaOutlineGeoJson(g));
-      final b = g == null ? null : geometryBounds(g);
-      if (b != null && b[0] <= b[2]) {
-        final size = _fitMapSize();
-        final fit = fitZoomFor(b, size.width - 48, math.max(120, size.height * 0.44 - 150));
-        await c.setLayerProperties(kAreaFill, FillLayerProperties(fillColor: _palette.css('pin'), fillOpacity: areaFillOpacity(fit, fill: widget.themeId == CacheThemeId.tactical ? 0.10 : 0.08)));
-      }
+      await c.setGeoJsonSource(kAreaSource, areaOutlineGeoJson(on ? a.geometry : null));
     } catch (_) {}
+    await _pushAreaFade(c);
   }
 
   void _notebookCard(NbEntry e) {
@@ -2379,7 +2401,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_ring == null && _step == null && !_peek && widget.onBackToJump == null) || !widget.active,
+      canPop: (_ring == null && _step == null && !_peek && !_cardOpen && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         // With the long-press ring open, Back closes the ring and nothing else.
@@ -2391,6 +2413,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           _endPeek();
         } else if (_step != null) {
           _closeSteps();
+        } else if (_cardOpen) {
+          // A place or area card is open: Back closes it (and its outline and selection); the next Back leaves as it always did.
+          nav.clearSelection();
         } else {
           widget.onBackToJump?.call();
         }

@@ -536,6 +536,40 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
+    testWidgets('Back with an area card open closes the card, the outline and the selection and stays on Maps; the next Back is not taken', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(_outlineFeatures(m), 1);
+      expect(await tester.binding.handlePopRoute(), isTrue, reason: 'the screen took Back');
+      await tester.pump();
+      expect(m.nav.selected, isNull);
+      expect(_outlineFeatures(m), 0, reason: 'the outline stays cleared');
+      expect(find.byKey(const ValueKey('place-card-name')), findsNothing);
+      expect(await tester.binding.handlePopRoute(), isFalse, reason: 'with no card open Back is the system\'s: it leaves');
+      await m.finish(tester);
+    });
+
+    testWidgets('Back with a place card (a chip\'s) open closes it; with a route shown it is not taken for the card', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Cascade Park');
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      expect(m.nav.selected, isNull);
+      expect(await tester.binding.handlePopRoute(), isFalse);
+      m.rig.backend.onRoute = (to, mode, from) async => MapRoute.fromJson(driveRouteJson(withStop: false));
+      await tester.runAsync(() => m.nav.openDirections(driveDestination));
+      await tester.pump();
+      expect(m.nav.phase, NavPhase.previewing);
+      expect(await tester.binding.handlePopRoute(), isFalse, reason: 'a route preview is not a card');
+      await m.finish(tester);
+    });
+
     testWidgets('a polygon that is not stored: the card opens, no outline is drawn', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()

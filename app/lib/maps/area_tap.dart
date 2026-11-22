@@ -1,6 +1,8 @@
 import 'dart:math' as math;
+import 'dart:ui' show Rect, Size;
 
 import 'package:cache_search/cache_search.dart' show MapPlace;
+import 'package:flutter/painting.dart' show EdgeInsets;
 
 import '../nav/units.dart';
 import '../regions/area_lookup.dart';
@@ -198,3 +200,13 @@ List<Object> areaFillOpacity(double fitZoom, {double fill = 0.08, double fade = 
       fitZoom + fade,
       0,
     ];
+
+/// The room an area's outline is fitted into: below the search bar and the location box, left of the map's buttons, above the card.
+/// Each is the box of the widget as laid out, in the map's own points; a missing one leaves the room it would have covered (the card:
+/// half the map). [margin] is the breathing room around the outline.
+EdgeInsets areaFitPadding({required Size map, Rect? header, Rect? chip, Rect? buttons, Rect? panel, double margin = 16}) {
+  final top = math.max(header?.bottom ?? 0, chip?.bottom ?? 0) + margin;
+  final bottom = panel != null ? map.height - panel.top + margin : map.height * 0.5;
+  final right = buttons != null ? map.width - buttons.left + margin : margin;
+  return EdgeInsets.fromLTRB(margin, top, right, bottom);
+}
