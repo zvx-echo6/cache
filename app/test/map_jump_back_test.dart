@@ -225,7 +225,10 @@ void main() {
     expect(selectedTab(tester), 'Maps');
 
     await back(tester);
-    expect(closed, 1, reason: 'Back leaves the app, as before');
+    expect(closed, 0, reason: 'the place card is open on Maps: Back closes it first');
+    expect(nav.selected, isNull);
+    await back(tester);
+    expect(closed, 1, reason: 'the next Back leaves the app, as before');
     await finish(tester);
   });
 

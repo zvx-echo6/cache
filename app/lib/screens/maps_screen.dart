@@ -2435,6 +2435,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           _endPeek();
         } else if (_step != null) {
           _closeSteps();
+        } else if (widget.onBackToJump != null) {
+          // The card was opened by a jump from another tab (Show on map): Back returns there first, as it always did.
+          widget.onBackToJump!.call();
         } else if (_cardOpen) {
           // A place or area card is open: Back closes it (and its outline and selection); the next Back leaves as it always did.
           nav.clearSelection();
