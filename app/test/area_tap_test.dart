@@ -65,7 +65,7 @@ void main() {
     expect(small, greaterThan(wide + 3));
     final op = areaFillOpacity(wide);
     expect(op.first, 'interpolate');
-    expect(op.sublist(4), [wide, 0.08, wide + 1.5, 0]);
+    expect(op.sublist(3), [wide, 0.08, wide + 1.5, 0]);
   });
 }
 

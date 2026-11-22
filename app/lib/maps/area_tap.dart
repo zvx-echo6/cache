@@ -78,7 +78,7 @@ AreaChoice areaChoice(AreaHit hit, {MapPlace? pack, Map<String, dynamic>? geomet
   if (town != null) {
     final county = hit.county?.name;
     final st = stateShort(town, hit);
-    final inLine = [if (county != null) county, if (st.isNotEmpty) st].join(', ');
+    final inLine = [?county, if (st.isNotEmpty) st].join(', ');
     return AreaChoice(
       region: town,
       geometry: geometry,
