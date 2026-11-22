@@ -32,6 +32,9 @@ String clockText(int minutes, {required bool use24h}) {
   final m = minutes % 1440;
   final h = m ~/ 60, mm = m % 60;
   if (use24h) return '${h.toString().padLeft(2, '0')}:${mm.toString().padLeft(2, '0')}';
+  // The 12 hour setting says "midnight" and "noon" for the two times that are ambiguous as 12 AM and 12 PM.
+  if (mm == 0 && h == 0) return 'midnight';
+  if (mm == 0 && h == 12) return 'noon';
   final h12 = h % 12 == 0 ? 12 : h % 12;
   return '$h12${mm == 0 ? '' : ':${mm.toString().padLeft(2, '0')}'} ${h < 12 ? 'AM' : 'PM'}';
 }
