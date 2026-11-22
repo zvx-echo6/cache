@@ -318,8 +318,6 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.aab"
       - name: Verify the signed bundle
-        env:
-          ANDROID_AUTO: 'true'
         run: |
           aab="out/Cache-${{ needs.plan.outputs.build_name }}.aab"
           ls -l "$aab"; sha256sum "$aab"
@@ -339,8 +337,7 @@ jobs:
           test -s "$RUNNER_TEMP/manifest-check.pb" || { echo "::error::The bundle has no base/manifest/AndroidManifest.xml"; exit 1; }
           car=$(LC_ALL=C grep -a -c CacheCarAppService "$RUNNER_TEMP/manifest-check.pb" || true)
           rm -f "$RUNNER_TEMP/manifest-check.pb"
-          if [[ "$ANDROID_AUTO" == "true" && "$car" -eq 0 ]]; then echo "::error::android_auto is on but the bundle's manifest has no CacheCarAppService"; exit 1; fi
-          if [[ "$ANDROID_AUTO" != "true" && "$car" -ne 0 ]]; then echo "::error::android_auto is off but the bundle's manifest declares CacheCarAppService"; exit 1; fi
+          if [[ "$car" -eq 0 ]]; then echo "::error::the bundle's manifest has no CacheCarAppService (Android Auto is always on)"; exit 1; fi
           echo "Android Auto in the bundle: $([[ "$car" -ne 0 ]] && echo on || echo off) (android_auto input: $ANDROID_AUTO)"
           signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
           if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then

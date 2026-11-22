@@ -334,7 +334,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
       - name: Verify the signed archive
         run: |
-          EXPECT_CARPLAY=true EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
       - name: Export the .ipa
         run: |
@@ -364,7 +364,7 @@ jobs:
           shasum -a 256 out/*.ipa
           mkdir "$RUNNER_TEMP/ipa-check"
           unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
-          EXPECT_CARPLAY=true EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
           rm -rf "$RUNNER_TEMP/ipa-check"
       - uses: actions/upload-artifact@v4

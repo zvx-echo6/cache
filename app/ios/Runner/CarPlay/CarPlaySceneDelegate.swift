@@ -2,9 +2,8 @@ import CarPlay
 import os
 import UIKit
 
-/// Whether this build has the car screen: the CACHE_CARPLAY build setting (NO unless the build passes YES), written into
-/// Info.plist. The same setting chooses the entitlements file, so a build with it off carries no CarPlay entitlement:
-/// CarPlay then never shows the app and never asks it for a scene, and nothing in this folder runs.
+/// Whether this build has the car screen: the CACHE_CARPLAY build setting (the project sets YES for every build), written into
+/// Info.plist. The same setting chooses the entitlements file, so every build carries the CarPlay entitlement.
 enum CarPlayBuild {
   static let isOn = (Bundle.main.object(forInfoDictionaryKey: "CacheCarPlay") as? String) == "YES"
 }
