@@ -312,6 +312,13 @@ fn cand_json(c: &Cand, near: Option<(f64, f64)>, score: f64) -> Value {
     m.insert("score".into(), json!(round_to(score, 3)));
     put(&mut m, "phone", &c.phone);
     put(&mut m, "hours", &c.hours);
+    // The week the card shows and the zone it is read in, when the value is a plain weekly pattern (hours.rs).
+    if let Some(h) = &c.hours {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        for (k, v) in crate::hours::card_fields(h, c.lat, c.lon, now).unwrap_or_default() {
+            m.insert(k.into(), v);
+        }
+    }
     put(&mut m, "website", &c.website);
     put(&mut m, "summary", &c.summary);
     put(&mut m, "wikipedia_title", &c.wikipedia_title);

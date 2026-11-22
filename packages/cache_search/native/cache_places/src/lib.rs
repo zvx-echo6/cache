@@ -14,6 +14,7 @@ pub mod feed;
 pub mod fixture;
 pub mod geo;
 pub mod geocoder;
+pub mod hours;
 pub mod kind;
 pub mod locate;
 pub mod map;

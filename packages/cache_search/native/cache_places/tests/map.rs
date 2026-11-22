@@ -137,6 +137,13 @@ fn a_category_gives_its_row_then_the_nearest_places_from_the_anchor_town() {
     assert!(r[1]["distance_m"].as_i64().unwrap() > 150_000, "distance is from the map centre");
     assert_eq!(r[1]["phone"], "+1 208 678 3050");
     assert_eq!(r[1]["hours"], "Mo-Su 08:00-22:00");
+    // a plain weekly pattern also comes as a week, with the zone of the place (Burley is on Mountain time)
+    assert_eq!(r[1]["hours_week"], json!(vec![json!([[480, 1320]]); 7]));
+    assert_eq!(r[1]["hours_exact"], true);
+    assert_eq!(r[1]["timezone"], "America/Boise");
+    assert!([-420, -360].contains(&r[1]["utc_offset_min"].as_i64().unwrap()));
+    // a place with no hours has none of it
+    assert!(r[2].get("hours_week").is_none() && r[2].get("timezone").is_none());
     assert_eq!(r[1]["address"], "1414 Overland Ave, Burley, ID");
     assert_eq!(r[1]["matched"], "category");
     assert!(r[1]["id"].as_str().unwrap().starts_with("place:"));

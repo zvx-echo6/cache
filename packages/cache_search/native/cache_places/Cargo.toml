@@ -13,6 +13,14 @@ serde_json.workspace = true
 cache_tool = { path = "../cache_tool" }
 # Pack age: the build time is parsed and compared with the caller's "now" (no clock feature: "now" is always passed in).
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# Readable opening hours on the place card: the OSM opening_hours grammar parsed and evaluated by opening-hours (MIT OR
+# Apache-2.0, maintained by Remi Dupre; pure Rust) and its syntax crate, pinned to 2.1.5 (published 2026-11-04). The
+# parts of the grammar that cannot be answered for a place without more data (holidays, sun events, seasons) are left out.
+opening-hours = { version = "=2.1.5", default-features = false }
+opening-hours-syntax = { version = "=2.1.5" }
+# The place's time zone from its position (offline): the same crates and settings as cache_live, so one copy is linked.
+tzf-rs = { version = "2", default-features = false, features = ["bundled"] }
+chrono-tz = { version = "0.10", default-features = false }
 
 [dev-dependencies]
 # Test-only cross-check of the UTM series against an independent implementation.

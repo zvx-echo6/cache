@@ -892,7 +892,10 @@ char *cs_live_preview(const char *request_json);
  *     older free text ("no places data is installed"). A result is
  *     {"id","type":"place"|"town"|"address"|"category"|"coordinates","name","kind","category","address","lat","lon","distance_m",
  *      "direction","bearing_deg","matched":"name"|"category"|"meaning"|"coordinates","score", and when known "phone","hours",
- *      "website","summary","wikipedia_title","wikidata_id"}; "kind" is the text for the card ("Drinking water tap"), "kind_id"
+ *      "website","summary","wikipedia_title","wikidata_id"; when "hours" is a plain weekly pattern (no holidays, sun events,
+ *      months or comments) also "hours_week" ([Mon..Sun], each day the open ranges that start that day as [start,end] minutes from
+ *      its midnight; end > 1440 runs past midnight), and with it "timezone" (IANA) and "utc_offset_min" (now) when the zone of the
+ *      position is known}; "kind" is the text for the card ("Drinking water tap"), "kind_id"
  *      and "kind_label" (after "kind", when the pack has kinds) are the stable id (drinking_water, picnic_shelter, town) and the
  *      label, and "unnamed":true marks a place that has no name (its "name" is then its kind label); a coordinates result also has "formats" (decimal, dms, usng,
  *      plus_code), "format" and "precision_m"; a category result has no position (its nearest places follow it). "id" is what

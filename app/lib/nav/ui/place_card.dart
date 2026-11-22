@@ -8,6 +8,7 @@ import '../../maps/map_tap.dart' show kPoiMatched;
 import '../../maps/ui/map_widgets.dart';
 import '../../screens/settings/places_page.dart' show confirmRemovePlace;
 import '../../theme.dart';
+import '../hours_text.dart';
 import '../nav_state.dart';
 import '../units.dart';
 import 'search_panel.dart';
@@ -48,6 +49,7 @@ class PlaceCard extends StatelessWidget {
     final dist = a == null ? distanceLine(nav, fmt, place) : null;
     final isPin = place.matched == 'pin' || place.isCoordinates;
     final saved = nav.savedFor(place);
+    final hours = hoursViewFor(place, use24h: MediaQuery.alwaysUse24HourFormatOf(context));
     final detail = <Widget>[
       if (place.address.isNotEmpty)
         _line(context, Icons.place_outlined, place.address),
@@ -55,7 +57,7 @@ class PlaceCard extends StatelessWidget {
       if (a?.squareArea != null) _line(context, Icons.square_foot, a!.squareArea!),
       if (a?.largestTowns != null) _line(context, Icons.location_city, a!.largestTowns!),
       if (place.phone != null) _line(context, Icons.phone_outlined, place.phone!, copy: place.phone),
-      if (place.hours != null) _line(context, Icons.schedule, place.hours!),
+      if (hours != null) _hoursLine(context, hours),
       if (place.website != null) _line(context, Icons.public, place.website!, copy: place.website),
     ];
     return Container(
@@ -208,6 +210,36 @@ class PlaceCard extends StatelessWidget {
       ),
     );
     return copy == null ? row : InkWell(onTap: () => _copy(context, copy), child: row);
+  }
+
+  /// The opening hours: "Open now" or "Closed now" first, only when it is known for sure, then the hours in plain words (or the
+  /// value as the places data has it, when it is more than a weekly pattern).
+  Widget _hoursLine(BuildContext context, HoursView h) {
+    final k = context.t;
+    final open = h.openNow;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.schedule, size: 20, color: k.secondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text.rich(
+              key: const ValueKey('place-card-hours'),
+              TextSpan(
+                style: TextStyle(fontSize: 16, color: k.text),
+                children: [
+                  if (open != null) TextSpan(text: open ? 'Open now' : 'Closed now', style: TextStyle(fontWeight: FontWeight.w700, color: open ? k.ok : k.secondary)),
+                  if (open != null) const TextSpan(text: ' · '),
+                  TextSpan(text: h.text),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The formats of a point, in the order a person reaches for them.
