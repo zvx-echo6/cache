@@ -60,7 +60,8 @@ void main() {
       }
       // Each row says its state (Working until a download says otherwise); an off source says what it gives.
       expect(find.descendant(of: rowWith('Weather forecast (Open-Meteo)'), matching: find.text('Working')), findsOneWidget);
-      expect(find.descendant(of: rowWith('Earthquakes near the place (USGS)'), matching: find.text('What Earthquakes near the place (USGS) gives')), findsOneWidget);
+      expect(find.descendant(of: rowWith('Earthquakes near the place (USGS)'), matching: find.textContaining('Recent earthquakes of magnitude 2 or more near the place')), findsOneWidget);
+      expect(kRealSourceText['usgs-quakes-near']!.description, startsWith('recent earthquakes'), reason: 'the row shows the catalogue\'s words with a capital');
       // A featured source that needs a key and is off is Off, with its switch; the switch asks for the key.
       expect(find.text('Satellite fire detections near the place (NASA FIRMS)'), findsOneWidget);
       expect(switchIn(tester, 'Satellite fire detections near the place (NASA FIRMS)').value, isFalse);
@@ -227,12 +228,12 @@ void main() {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pumpAndSettle();
       expect(find.text('Wildfires near the place (WFIGS)'), findsOneWidget);
-      expect(find.text('what Wildfires near the place (WFIGS) gives'), findsOneWidget);
+      expect(find.text(kRealSourceText['wfigs-incidents-near']!.description), findsOneWidget);
       expect(find.text('NIFC WFIGS'), findsOneWidget);
       expect(find.text('US'), findsOneWidget);
       expect(find.text('Every 30 min'), findsOneWidget);
-      expect(find.text('Data by NIFC WFIGS'), findsOneWidget);
-      expect(find.text('Public domain'), findsOneWidget);
+      expect(find.text(kRealSourceText['wfigs-incidents-near']!.attribution), findsOneWidget);
+      expect(find.text(kRealSourceText['wfigs-incidents-near']!.license), findsOneWidget);
       expect(find.text('Cache connectors'), findsOneWidget);
       expect(find.text('12 minutes old'), findsOneWidget);
       expect(find.text('Current'), findsOneWidget);

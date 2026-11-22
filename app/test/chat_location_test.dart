@@ -188,6 +188,46 @@ void main() {
     expect(location.fix, same(old), reason: 'what the map shows is never cleared by a timeout');
   });
 
+  testWidgets('web: a stale fix with no stream gets a fresh one-shot fix that takes a browser-realistic 3 s (failing first)',
+      (tester) async {
+    LocationService.debugWeb = true;
+    addTearDown(() => LocationService.debugWeb = null);
+    final source = _SlowSource()..state = LocationPermissionState.granted;
+    final location = LocationService(source: source, settingsDirOverride: Directory.systemTemp.createTempSync('loc'));
+    location.permission = LocationPermissionState.granted;
+    location.publish(aged(const Duration(minutes: 5)));
+    Fix? got;
+    var done = false;
+    location.prepareForChat(isCancelled: () => false).then((f) { got = f; done = true; });
+    await tester.pump(const Duration(seconds: 4));
+    expect(done, isTrue);
+    expect(source.currentCalls, 1);
+    expect(got, isNotNull, reason: 'a 3 s browser fix must not be dropped by the 2 s phone bound');
+    expect(DateTime.now().difference(got!.time).inMinutes, lessThan(1));
+    location.dispose();
+  });
+
+  testWidgets('web: a refresh that never answers keeps the stale fix for the map, bounded at 6 s, and the turn is not known',
+      (tester) async {
+    LocationService.debugWeb = true;
+    addTearDown(() => LocationService.debugWeb = null);
+    final source = FakeSource()..state = LocationPermissionState.granted..pendingFix = Completer<Fix>().future;
+    final location = LocationService(source: source, settingsDirOverride: Directory.systemTemp.createTempSync('loc'));
+    location.permission = LocationPermissionState.granted;
+    final old = aged(const Duration(minutes: 5));
+    location.publish(old);
+    var done = false;
+    Fix? got;
+    location.prepareForChat(isCancelled: () => false).then((f) { got = f; done = true; });
+    await tester.pump(const Duration(seconds: 3));
+    expect(done, isFalse, reason: 'the browser bound is longer than the phone 2 s');
+    await tester.pump(const Duration(seconds: 4));
+    expect(done, isTrue);
+    expect(got, isNull);
+    expect(location.fix, same(old));
+    location.dispose();
+  });
+
   test('an older fix arriving out of order is ignored', () async {
     final source = FakeSource()..state = LocationPermissionState.granted;
     final written = <Fix?>[];
@@ -373,4 +413,15 @@ void main() {
     expect(source.settingsOpened, 1);
     expect(source.prompts, 0);
   });
+}
+
+/// A browser's one-shot fix: answers after a delay (high accuracy, desktop), stamped with the time it was taken.
+class _SlowSource extends FakeSource {
+  Duration delay = const Duration(seconds: 3);
+  @override
+  Future<Fix> current() async {
+    currentCalls++;
+    await Future<void>.delayed(delay);
+    return Fix(lat: 42.5, lon: -113.8, accuracyM: 10, time: DateTime.now());
+  }
 }
