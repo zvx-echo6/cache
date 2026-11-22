@@ -72,7 +72,7 @@ async fn two_devices_over_a_standin_lora_channel() {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
     println!("RESULT rnode_discovery secs={:.1} rnodes_up a={} b={}", t.elapsed().as_secs_f64(), a.rnode_count(), b.rnode_count());
-    assert_eq!(sa.stats.bring_ups.load(Ordering::Relaxed) >= 1, true, "Prns brought the stand-in up");
+    assert!(sa.stats.bring_ups.load(Ordering::Relaxed) >= 1, "Prns brought the stand-in up");
 
     let t = Instant::now();
     let r = b.request(&ka.public(), "/cache/hello", b"over lora", Duration::from_secs(60)).await.unwrap();
