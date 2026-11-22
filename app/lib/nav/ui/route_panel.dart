@@ -19,7 +19,7 @@ class DirectionsHeader extends StatelessWidget {
     final k = context.t;
     final to = nav.selected;
     return Container(
-      decoration: mapPanel(context, radius: 28, alpha: 0.97),
+      decoration: mapPanel(context, radius: 28),
       child: Row(
         children: [
           IconButton(tooltip: 'Back', icon: Icon(Icons.arrow_back, color: k.text), onPressed: nav.cancelDirections),
@@ -124,7 +124,7 @@ class RoutePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     return Container(
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      decoration: mapPanel(context, radius: 20),
       // The room on the right (16, as on the left) is inside the choices and beside Start, so the choices' scroll bar is in it.
       padding: const EdgeInsets.fromLTRB(16, 12, 0, 14),
       child: SafeArea(

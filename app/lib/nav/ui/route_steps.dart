@@ -151,7 +151,7 @@ class _RouteStepCardState extends State<RouteStepCard> {
       onHorizontalDragUpdate: (d) => _drag += d.primaryDelta ?? 0,
       onHorizontalDragEnd: _dragEnd,
       child: Container(
-        decoration: mapPanel(context, radius: 20, alpha: 0.98),
+        decoration: mapPanel(context, radius: 20),
         padding: const EdgeInsets.fromLTRB(16, 4, 8, 14),
         child: SafeArea(
           top: false,

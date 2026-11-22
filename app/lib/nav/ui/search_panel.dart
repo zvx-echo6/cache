@@ -80,7 +80,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          decoration: mapPanel(context, radius: 28, alpha: 0.97),
+          decoration: mapPanel(context, radius: 28),
           child: Row(
             children: [
               if (open || nav.query.isNotEmpty)
@@ -131,7 +131,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
           // The list takes what the screen has left above the keyboard (the Maps screen leaves room for it).
           Flexible(
             child: Container(
-              decoration: mapPanel(context, radius: 16, alpha: 0.97),
+              decoration: mapPanel(context, radius: 16),
               clipBehavior: Clip.antiAlias,
               child: _results(context),
             ),

@@ -5,8 +5,9 @@ import 'package:flutter/material.dart';
 import '../../theme.dart';
 import '../geo.dart';
 
-/// Panels drawn over the map: a surface colour that reads on any map style.
-BoxDecoration mapPanel(BuildContext context, {double radius = 12, double alpha = 0.9}) {
+/// Panels drawn over the map: the theme's surface colour, fully solid so the map's labels never show through. Only the small chips (the
+/// scale, the credits) pass a lower [alpha] on purpose.
+BoxDecoration mapPanel(BuildContext context, {double radius = 12, double alpha = 1}) {
   final k = context.t;
   return BoxDecoration(
     color: k.surface.withValues(alpha: alpha),

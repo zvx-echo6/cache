@@ -236,7 +236,7 @@ class GuidanceBar extends StatelessWidget {
         );
     return Container(
       key: const ValueKey('guidance-bar'),
-      decoration: bare ? null : mapPanel(context, radius: 20, alpha: 0.98),
+      decoration: bare ? null : mapPanel(context, radius: 20),
       // The screen's bottom inset (the home indicator) is kept below the card by the Maps screen, not inside it as an empty strip.
       // Inside the guidance card the elevation handle is above, so no top padding.
       padding: EdgeInsets.fromLTRB(8, bare ? 0 : 4, 8, 4),

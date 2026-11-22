@@ -23,7 +23,7 @@ class GuidanceDock extends StatelessWidget {
       builder: (context, _) => Container(
         key: const ValueKey('guidance-dock'),
         clipBehavior: Clip.antiAlias,
-        decoration: mapPanel(context, radius: 20, alpha: 0.98),
+        decoration: mapPanel(context, radius: 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,

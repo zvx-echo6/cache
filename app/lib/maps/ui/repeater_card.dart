@@ -81,7 +81,7 @@ class RepeaterCard extends StatelessWidget {
     }
     return Container(
       key: const ValueKey('repeater-card'),
-      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      decoration: mapPanel(context, radius: 20),
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
       child: SafeArea(
         top: false,
