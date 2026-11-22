@@ -41,6 +41,13 @@ pub struct Counts {
     pub bytes_hashed: Option<u64>,
 }
 
+/// When one linked folder was last checked. Kept per folder, so checking one folder never loses another's time.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderCheck {
+    pub last_attempt_at: Option<u64>,
+    pub last_successful_at: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct JobFile {
     pub active: Option<CheckJob>,
@@ -51,6 +58,20 @@ pub struct JobFile {
     pub registered_roots: BTreeSet<String>,
     #[serde(default)]
     pub state_error: Option<Value>,
+    /// Last check time of each folder (the per-library `latest` job is kept as before, for what the browser shows).
+    #[serde(default)]
+    pub folders: BTreeMap<String, FolderCheck>,
+}
+
+/// Record a finished check for each folder it covered: `(folder id, whether that folder's check was clean)`.
+pub fn record_folder_checks(file: &mut JobFile, covered: &[(String, bool)], at: u64) {
+    for (id, clean) in covered {
+        let entry = file.folders.entry(id.clone()).or_default();
+        entry.last_attempt_at = Some(at);
+        if *clean {
+            entry.last_successful_at = Some(at);
+        }
+    }
 }
 
 pub fn recover_interrupted(file: &mut JobFile, at: u64) -> bool {
@@ -108,6 +129,7 @@ pub fn update_control_during_active(file: &mut JobFile, root_id: &str, paused: b
 pub fn unlink_controls(file: &mut JobFile, root_id: &str, last_root: bool) {
     file.controls.remove(root_id);
     file.registered_roots.remove(root_id);
+    file.folders.remove(root_id);
     file.latest = None;
     if last_root {
         file.controls.clear();
@@ -175,6 +197,27 @@ mod tests {
         assert_eq!(restored.latest.as_ref().unwrap().state, "interrupted");
         assert_eq!(restored.latest.as_ref().unwrap().last_successful_at, Some(42));
         assert!(restored.active.is_none());
+    }
+
+    #[test]
+    fn each_folder_keeps_its_own_last_check_time_across_other_folders_checks_and_unlinks() {
+        let mut file = JobFile::default();
+        file.registered_roots.extend(["a".to_string(), "b".to_string()]);
+        record_folder_checks(&mut file, &[("a".into(), true), ("b".into(), false)], 100);
+        record_folder_checks(&mut file, &[("b".into(), true)], 200); // checking b leaves a's time alone
+        assert_eq!(file.folders["a"], FolderCheck { last_attempt_at: Some(100), last_successful_at: Some(100) });
+        assert_eq!(file.folders["b"], FolderCheck { last_attempt_at: Some(200), last_successful_at: Some(200) });
+        record_folder_checks(&mut file, &[("a".into(), false)], 300); // a failed attempt keeps the last success
+        assert_eq!(file.folders["a"], FolderCheck { last_attempt_at: Some(300), last_successful_at: Some(100) });
+        file.latest = Some(job(None));
+        unlink_controls(&mut file, "a", false);
+        assert!(!file.folders.contains_key("a"));
+        assert_eq!(file.folders["b"].last_successful_at, Some(200), "unlinking a does not touch b");
+        let restored: JobFile = serde_json::from_slice(&serde_json::to_vec(&file).unwrap()).unwrap();
+        assert_eq!(restored.folders, file.folders);
+        // state saved before this field existed still loads
+        let old: JobFile = serde_json::from_str(r#"{"active":null,"latest":null}"#).unwrap();
+        assert!(old.folders.is_empty());
     }
 
     #[test]

@@ -1,9 +1,11 @@
+import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
 import '../../notebook/notebook_map.dart';
 import '../../notebook/media.dart';
 import '../../notebook/notebook_state.dart';
+import '../../notebook/notebook_text.dart' show isoLocal;
 import '../../screens/notebooks/places_screen.dart' show importPlacesInto;
 import '../../regions/regions_state.dart';
 import '../../regions/ui/regions_list_sheet.dart';
@@ -16,7 +18,8 @@ import 'catalogue_screen.dart';
 import '../../layout/adaptive.dart' show isShort, showFittedSheet;
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
-Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers}) {
+Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location,
+    {RegionsState? regions, NotebookState? notebooks, UserLayersState? userLayers, void Function(String notebookId)? onOpenNotebook, void Function(String listId)? onOpenList, String? focusLayer}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -24,12 +27,12 @@ Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationServic
     useSafeArea: true,
     // 560 wide at most, as every sheet; most of the window's height (all of a short window's, a phone held sideways).
     constraints: BoxConstraints(maxWidth: 560, maxHeight: isShort(context) ? double.infinity : MediaQuery.sizeOf(context).height * 0.8),
-    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers),
+    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks, userLayers: userLayers, onOpenNotebook: onOpenNotebook, onOpenList: onOpenList, focusLayer: focusLayer),
   );
 }
 
 class LayerSheet extends StatelessWidget {
-  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers});
+  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks, this.userLayers, this.onOpenNotebook, this.onOpenList, this.pickRepeaters, this.focusLayer});
 
   final MapsState maps;
   final LocationService location;
@@ -42,6 +45,29 @@ class LayerSheet extends StatelessWidget {
 
   /// The repeater lists, also under "My layers", and "Add from a file".
   final UserLayersState? userLayers;
+
+  /// A notebook under "My layers" (a tap on its name; the switch still shows or hides it), and Show on "Added N repeaters" after
+  /// Add from a file: that notebook. Null: the rows only switch.
+  final void Function(String notebookId)? onOpenNotebook;
+
+  /// A repeater list under "My layers" (a tap on its name): the list. Null: the rows only switch.
+  final void Function(String listId)? onOpenList;
+
+  /// The layer whose row is brought into view when the sheet opens (a layer tapped in "Get more layers"); null: none.
+  final String? focusLayer;
+
+  /// The file picker of Add from a file's repeater list (tests give their own); null: the phone's.
+  @visibleForTesting
+  final Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pickRepeaters;
+
+  /// Closes this sheet when it is still open, then opens what was asked for (a notebook or a list over the map).
+  static void _go(BuildContext context, void Function(String id) open, String id) {
+    if (context.mounted) {
+      final route = ModalRoute.of(context);
+      if (route is ModalBottomSheetRoute && route.isActive) Navigator.of(context).removeRoute(route);
+    }
+    open(id);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,20 +92,61 @@ class LayerSheet extends StatelessWidget {
                 Text('MY LAYERS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: k.secondary)),
                 if (notebooks case final nb?)
                   for (final n in myLayers(nb.notebooks))
-                    SwitchListTile(
-                      key: ValueKey('my-layer-${n.id}'),
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
-                      value: n.map,
-                      onChanged: (v) => nb.setOnMap(n, v),
-                    ),
+                    if (onOpenNotebook case final open?)
+                      ListTile(
+                        key: ValueKey('my-layer-${n.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        trailing: Switch(key: ValueKey('my-layer-switch-${n.id}'), value: n.map, onChanged: (v) => nb.setOnMap(n, v)),
+                        onTap: () => _go(context, open, n.id),
+                      )
+                    else
+                      SwitchListTile(
+                        key: ValueKey('my-layer-${n.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        value: n.map,
+                        onChanged: (v) => nb.setOnMap(n, v),
+                      ),
                 if (userLayers case final u?)
                   for (final l in u.repeaterLists)
+                    if (onOpenList case final open?)
+                      ListTile(
+                        key: ValueKey('my-layer-${l.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        leading: IconButton(
+                          key: ValueKey('remove-${l.id}'),
+                          tooltip: 'Delete ${l.name}',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _deleteList(context, u, l),
+                        ),
+                        title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        trailing: Switch(key: ValueKey('my-layer-switch-${l.id}'), value: l.visible, onChanged: (v) => u.setVisible(l, v)),
+                        onTap: () => _go(context, open, l.id),
+                      )
+                    else
+                      SwitchListTile(
+                        key: ValueKey('my-layer-${l.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                        subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        secondary: IconButton(
+                          key: ValueKey('remove-${l.id}'),
+                          tooltip: 'Delete ${l.name}',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _deleteList(context, u, l),
+                        ),
+                        value: l.visible,
+                        onChanged: (v) => u.setVisible(l, v),
+                      ),
+                if (userLayers case final u?)
+                  for (final l in u.shapeLayers)
                     SwitchListTile(
                       key: ValueKey('my-layer-${l.id}'),
                       contentPadding: EdgeInsets.zero,
                       title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
-                      subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', style: TextStyle(fontSize: 14, color: k.secondary)),
+                      subtitle: Text(l.shapes == 1 ? '1 line or area' : '${l.shapes} lines and areas', style: TextStyle(fontSize: 14, color: k.secondary)),
                       secondary: IconButton(
                         key: ValueKey('remove-${l.id}'),
                         tooltip: 'Delete ${l.name}',
@@ -93,7 +160,19 @@ class LayerSheet extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     key: const ValueKey('my-layers-add'),
-                    onPressed: () => addMapFile(context, notebooks: notebooks, userLayers: userLayers),
+                    // Show on "Added N repeaters" opens what the file went into: the new Repeaters notebook (or, with no notebooks,
+                    // the new list).
+                    onPressed: () => addMapFile(
+                      context,
+                      notebooks: notebooks,
+                      userLayers: userLayers,
+                      onShowList: switch ((notebooks, onOpenNotebook, onOpenList)) {
+                        (_?, final open?, _) => (id) => _go(context, open, id),
+                        (null, _, final open?) => (id) => _go(context, open, id),
+                        _ => null,
+                      },
+                      pickRepeaters: pickRepeaters,
+                    ),
                     icon: const Icon(Icons.add),
                     label: const Text('Add from a file'),
                   ),
@@ -149,7 +228,7 @@ class LayerSheet extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${l.name}?'),
-        content: const Text('Its repeaters are taken off the map and Cache no longer knows them. You can add the file again later.'),
+        content: Text(l.isRepeaters ? 'Its repeaters are taken off the map and Cache no longer knows them. You can add the file again later.' : 'Its lines and areas are taken off the map and Cache no longer knows them. You can add the file again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(key: const ValueKey('confirm-delete-list'), onPressed: () => Navigator.pop(ctx, true), child: Text('Delete', style: TextStyle(color: ctx.t.emergency))),
@@ -164,10 +243,12 @@ class LayerSheet extends StatelessWidget {
     final on = maps.isOn(l.id);
     final held = maps.areasOfCard(l).where((a) => a.phase == AreaPhase.done).isNotEmpty;
     final status = l.onlineOnly ? 'Needs a connection' : (held ? 'Downloaded for offline' : 'Streams when online');
-    return Column(
+    final row = Column(
+      key: ValueKey('layer-row-${l.id}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SwitchListTile(
+          key: ValueKey('layer-switch-${l.id}'),
           contentPadding: EdgeInsets.zero,
           title: Text(l.title, style: const TextStyle(fontSize: 17)),
           subtitle: Text(status, style: TextStyle(fontSize: 14, color: k.secondary)),
@@ -200,14 +281,44 @@ class LayerSheet extends StatelessWidget {
           ),
       ],
     );
+    return l.id == focusLayer ? _BringIntoView(child: row) : row;
   }
+}
+
+/// Brings its child into view in the list around it once, when it is first laid out (the layer tapped in "Get more layers").
+class _BringIntoView extends StatefulWidget {
+  const _BringIntoView({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_BringIntoView> createState() => _BringIntoViewState();
+}
+
+class _BringIntoViewState extends State<_BringIntoView> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Scrollable.ensureVisible(context, duration: const Duration(milliseconds: 300), alignment: 0.3);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// "Add from a file", the same sheet from Notebooks (its + menu) and Maps > Layers > My layers: places (a KML, KMZ, GPX or GeoJSON
 /// file, into your Places notebook) or a repeater list (a RepeaterBook KML and/or a CHIRP CSV of the same export), then the phone's
 /// file picker. Reading a file shows "Reading file…" with a bar until it is done; the end says how many came in, with Show when
 /// [onShowList] is given (the list notebook).
-Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLayersState? userLayers, void Function(String listId)? onShowList}) async {
+Future<void> addMapFile(
+  BuildContext context, {
+  NotebookState? notebooks,
+  UserLayersState? userLayers,
+  void Function(String listId)? onShowList,
+  @visibleForTesting Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pickRepeaters,
+}) async {
   final kind = await showFittedSheet<String>(
     context: context,
     showDragHandle: true,
@@ -229,7 +340,7 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
               subtitle: const Text('KML, KMZ, GPX or GeoJSON. They go into your Places notebook.'),
               onTap: () => Navigator.pop(ctx, 'places'),
             ),
-          if (userLayers != null)
+          if (notebooks != null || userLayers != null)
             ListTile(
               key: const ValueKey('add-file-repeaters'),
               minTileHeight: 56,
@@ -247,7 +358,11 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
   if (kind == 'places') {
     final nb = notebooks!;
     final mine = nb.notebooks.where((n) => n.savedPlaces).firstOrNull;
-    await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now);
+    await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now, onOpen: onShowList);
+    return;
+  }
+  if (notebooks != null) {
+    await importRepeatersIntoNotebook(ScaffoldMessenger.of(context), notebooks, onShow: onShowList, pick: pickRepeaters);
     return;
   }
   await importRepeaterFile(ScaffoldMessenger.of(context), userLayers!, onShowList: onShowList);
@@ -323,4 +438,67 @@ Future<String?> updateRepeaterList(BuildContext context, UserLayersState u, User
   final id = await importRepeaterFile(ScaffoldMessenger.of(context), u, name: list.name);
   if (id != null && id != list.id) await u.delete(list);
   return id;
+}
+
+String _repeatersWord(int n) => n == 1 ? '1 repeater' : '$n repeaters';
+
+/// Picks a repeater file (a KML and/or a CSV) and reads it into a Repeaters notebook: a new one, or [notebookId] as an update. Says
+/// what happened: "Added 214 repeaters to Notebooks." (with Show), or for an update what changed, what stayed as the person had it and,
+/// when they had deleted some the file still lists, "Add them back". Returns the notebook's id, or null when nothing came in.
+Future<String?> importRepeatersIntoNotebook(
+  ScaffoldMessengerState m,
+  NotebookState nb, {
+  String? notebookId,
+  void Function(String notebookId)? onShow,
+  DateTime Function() now = DateTime.now,
+  Future<RepeaterUpdate?> Function(Future<RepeaterUpdate> Function(List<String> paths) use)? pick,
+}) async {
+  void tellAgain(String text) {
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('repeaters-failed'),
+      content: Text(text),
+      action: SnackBarAction(label: 'Choose another file', onPressed: () => importRepeatersIntoNotebook(m, nb, notebookId: notebookId, onShow: onShow, now: now, pick: pick)),
+    ));
+  }
+
+  try {
+    final r = await (pick ?? withPickedFiles<RepeaterUpdate>)((paths) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(readingFileBar());
+      return nb.importRepeaters(paths, notebookId: notebookId, now: isoLocal(now()));
+    });
+    if (r == null) return null;
+    m.hideCurrentSnackBar();
+    if (notebookId == null) {
+      m.showSnackBar(SnackBar(
+        key: const ValueKey('repeaters-added'),
+        content: Text('Added ${_repeatersWord(r.added)} to Notebooks.${r.withoutPosition > 0 ? ' ${r.withoutPosition} have no position and are not on the map.' : ''}'),
+        action: onShow == null ? null : SnackBarAction(label: 'Show', onPressed: () => onShow(r.notebookId)),
+      ));
+      return r.notebookId;
+    }
+    final parts = [
+      if (r.added > 0) '${r.added} added',
+      if (r.updated > 0) '${r.updated} changed',
+      if (r.keptEdits > 0) 'your edits kept on ${r.keptEdits}',
+      if (r.notInFile > 0) '${r.notInFile} not in the latest file',
+    ];
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('repeaters-updated'),
+      duration: const Duration(seconds: 10),
+      content: Text([
+        parts.isEmpty ? 'Nothing changed: the file matches your list.' : 'Updated: ${parts.join(', ')}.',
+        if (r.deleted.isNotEmpty) '${_repeatersWord(r.deleted.length)} you deleted ${r.deleted.length == 1 ? 'is still in the file and stays' : 'are still in the file and stay'} deleted.',
+      ].join(' ')),
+      action: r.deleted.isEmpty
+          ? null
+          : SnackBarAction(label: 'Add them back', onPressed: () => nb.addBackRepeaters(r.notebookId, now: isoLocal(now()))),
+    ));
+    return r.notebookId;
+  } catch (e) {
+    final empty = e is CacheSearchException && e.message.contains('no repeaters');
+    tellAgain(empty ? 'No repeaters found in that file.' : 'Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.');
+    return null;
+  }
 }

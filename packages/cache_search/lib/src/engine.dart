@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'errors.dart';
 import 'map_models.dart';
@@ -55,12 +56,21 @@ class SearchEngine {
           if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
       ];
 
-  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
+  /// cs_status's "open_timings": the lines the core wrote about how long its last open took (none from an older core).
+  List<String> openTimings() => [
+        for (final t in (_object(_ok(native.status(_h)))['open_timings'] as List? ?? const []))
+          if (t is String) t,
+      ];
+
+  /// [meaningLimit]: a time limit on each library's meaning search (cs_search's `meaning_ms`); a library over it is searched by
+  /// keywords for this query and named in [SearchResponse.meaningTimedOut]. No limit when null.
+  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector, Duration? meaningLimit}) {
     final options = {
       'k': k,
       'offset': offset,
       'sources': sources,
       'query_vector': queryVector?.toJson(),
+      'meaning_ms': ?meaningLimit?.inMilliseconds,
     };
     return SearchResponse.fromJson(_object(_ok(native.search(_h, query, jsonEncode(options)))));
   }
@@ -69,12 +79,33 @@ class SearchEngine {
   ReadResult read(String address, {int maxChars = 6000}) =>
       ReadResult.fromJson(_object(_ok(native.read(_h, address, maxChars))));
 
+  /// A library document read whole, page by page, cut to [maxChars] of text in all (cs_read_document). Only `lib:` addresses.
+  LibraryDocument readDocument(String address, {int maxChars = 200000}) {
+    final n = native is CsDocumentNative ? native as CsDocumentNative : null;
+    if (n == null || !n.hasReadDocument) throw const CacheSearchException('unsupported', 'This build of the core cannot read a whole document yet');
+    return LibraryDocument.fromJson(_object(_ok(n.readDocument(_h, address, maxChars))));
+  }
+
   /// Raw bytes of a ZIM entry (HTML, CSS, images), following redirects.
   ZimBytes zimGet(String address) =>
       native.zimGet(_h, address) ?? (throw CacheSearchException.fromJson(native.lastError(_h)));
 
   /// The address of a ZIM's main page.
   String zimMainPage(String zimId) => _object(_ok(native.zimMainPage(_h, zimId)))['address'] as String;
+
+  /// The ZIM's own icon (its `Illustration_48x48@1` metadata, PNG bytes), or null when it has none or the loaded core lacks
+  /// cs_zim_illustration.
+  Uint8List? zimIllustration(String zimId) {
+    final n = native is CsZimIconNative ? native as CsZimIconNative : null;
+    if (n == null || !n.hasZimIllustration) return null;
+    final s = n.zimIllustration(_h, zimId);
+    if (s == null) {
+      final e = CacheSearchException.fromJson(native.lastError(_h));
+      if (e.code == 'not_found') return null;
+      throw e;
+    }
+    return base64Decode(_object(s)['png_base64'] as String);
+  }
 
   List<Suggestion> suggest(String prefix, {int k = 10, List<String>? sources}) => [
         for (final s in (_object(_ok(native.suggest(_h, prefix, jsonEncode({'k': k, 'sources': sources}))))['suggestions'] as List? ?? const []))
@@ -117,6 +148,17 @@ class SearchEngine {
     final n = native;
     if (n is! CsLiveJobNative) return null;
     final j = (n as CsLiveJobNative).liveFetchStart(_h, jsonEncode(request));
+    if (j == -1) return null;
+    if (j == 0) throw CacheSearchException.fromJson(native.lastError(_h));
+    return CoreJob(native, j);
+  }
+
+  /// cs_layers_refresh_start: `layers('refresh')` as a job on a thread of its own (its "result" is the refresh's answer); null when
+  /// the core has no such call (then `layers('refresh')` is the way).
+  CoreJob? layersRefreshJob() {
+    final n = native;
+    if (n is! CsLayersJobNative) return null;
+    final j = (n as CsLayersJobNative).layersRefreshStart(_h);
     if (j == -1) return null;
     if (j == 0) throw CacheSearchException.fromJson(native.lastError(_h));
     return CoreJob(native, j);

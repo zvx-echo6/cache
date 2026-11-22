@@ -2,9 +2,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart';
 import '../pdf/open_pdf.dart' show openPdfReader;
-import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom;
+import '../browse/web/device_api.dart' show DeviceException;
+import '../pdf/pdf_source.dart' show PdfFileSource, PdfFrom, PdfGone, PdfServerSource;
 
+import '../screens/settings/sharing_page.dart' show SharingDevicePage;
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
@@ -15,7 +18,7 @@ import 'book_edit_pages.dart';
 import 'library_panes.dart';
 import 'same_book_pages.dart';
 import 'shelf_source.dart';
-import 'shelves_pages.dart' show shelfColor;
+import 'shelves_pages.dart' show shelfColor, showOnBookshelves;
 
 /// "CDS 350 · Beekeeping".
 String _shelfWords(LibraryDeps d, String id) {
@@ -39,10 +42,14 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
   Placement p;
   try {
     p = await placer.place(moves);
-  } catch (_) {
+  } catch (e) {
+    // A big set goes in batches: the ones already sent stay placed, so say how far it got.
+    final text = e is PartialPlacementException
+        ? 'Only ${e.placed} of ${booksWord(e.total)} placed. The rest could not be saved. Try again.'
+        : 'That could not be saved. Try again.';
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      ..showSnackBar(SnackBar(content: Text(text)));
     return null;
   }
   final text = p.books.length == 1
@@ -54,7 +61,7 @@ Future<Placement?> placeAndSay(BuildContext context, LibraryDeps d, List<(ShelfB
       SnackBar(
         key: const ValueKey('placed-snack'),
         content: Text(text),
-        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => placer.undo(p)),
+        action: SnackBarAction(key: const ValueKey('placed-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => placer.undo(p))),
       ),
     );
   return p;
@@ -101,7 +108,7 @@ Future<void> openPlace(BuildContext context, LibraryDeps d, ShelfBook b, {List<S
 
 /// "Where does this book go?": the three best guesses as chips (the first marked "Best guess"), then every division (the ten
 /// classes, then their divisions), and Leave unsorted. A tap saves it, says its new number with Undo, and goes on to the next book
-/// of [queue]. No scores are shown. Move titles itself "Move to another division".
+/// of [queue]. No scores are shown. Move titles itself "Move to another category".
 class PlacePanel extends StatefulWidget {
   const PlacePanel({super.key, required this.deps, required this.bookId, required this.onDone, this.queue = const []});
 
@@ -155,6 +162,38 @@ class _PlacePanelState extends State<PlacePanel> {
     });
   }
 
+  /// Move > Unsorted: the book goes back to Unsorted (the log's `unsort` event, its number retired, as Add PDF's Undo does), so a
+  /// filing can be undone. Says so with Undo, which files it in its old division again.
+  Future<void> _unsort(ShelfBook b) async {
+    final placer = d.shelves.placer;
+    if (_busy || placer is! ShelfUnsorter || b.shelf == null) return;
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await (placer as ShelfUnsorter).unsort(b);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('That could not be saved. Try again.')));
+      return;
+    }
+    if (!mounted) return;
+    _busy = false;
+    final was = Placement([PlacedBook(before: b, shelf: '', callNumber: null)]);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: const ValueKey('unsorted-snack'),
+          content: const Text('Moved to Unsorted.'),
+          action: SnackBarAction(key: const ValueKey('unsorted-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () async => await placer?.undo(was))),
+        ),
+      );
+    widget.onDone(true);
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: d.changes,
@@ -174,15 +213,15 @@ class _PlacePanelState extends State<PlacePanel> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(move ? 'Move to another division' : 'Where does this book go?', key: const ValueKey('place-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+              Text(move ? 'Move to another category' : 'Where does this book go?', key: const ValueKey('place-title'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
               const SizedBox(height: 6),
               Text(b.title, key: const ValueKey('place-book'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
               if (move) Text('Now ${b.callNumber ?? _shelfWords(d, b.shelf!)}', style: TextStyle(fontSize: 13, color: k.secondary)),
               const SizedBox(height: 8),
               Text(
                 example == null
-                    ? 'The book gets its call number in the division you pick.'
-                    : 'The book gets its call number in the division you pick, for example $example.',
+                    ? 'The book gets its call number in the category you pick.'
+                    : 'The book gets its call number in the category you pick, for example $example.',
                 style: TextStyle(fontSize: 13, height: 1.4, color: k.secondary),
               ),
               if (placer == null) ...[
@@ -205,12 +244,23 @@ class _PlacePanelState extends State<PlacePanel> {
                   ],
                 ),
               ],
+              if (move && placer is ShelfUnsorter)
+                ListTile(
+                  key: const ValueKey('place-unsorted'),
+                  dense: true,
+                  minTileHeight: 44,
+                  contentPadding: EdgeInsets.zero,
+                  enabled: !_busy,
+                  title: Text('Unsorted', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
+                  subtitle: Text('Take it off its shelf', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  onTap: () => _unsort(b),
+                ),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 4,
                 children: [
                   if (!side)
-                    TextButton(key: const ValueKey('place-all-divisions'), onPressed: () => setState(() => _all = !_all), child: Text(_all ? 'Hide divisions' : 'See all divisions')),
+                    TextButton(key: const ValueKey('place-all-divisions'), onPressed: () => setState(() => _all = !_all), child: Text(_all ? 'Hide categories' : 'See all categories')),
                   if (!move) TextButton(key: const ValueKey('place-leave'), onPressed: _busy ? null : () => _choose(b, null), child: const Text('Leave unsorted')),
                 ],
               ),
@@ -370,7 +420,7 @@ class UnsortedPage extends StatelessWidget {
                                 TextButton(
                                   key: ValueKey('all-divisions-${b.id}'),
                                   onPressed: () => openPlace(context, d, b, queue: queue),
-                                  child: const Text('All divisions'),
+                                  child: const Text('All categories'),
                                 ),
                               ],
                             ),
@@ -390,7 +440,10 @@ class UnsortedPage extends StatelessWidget {
 
 /// One fact of the book page: its name small above, its value, and a line under it.
 class _Fact {
-  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey});
+  const _Fact(this.label, this.value, {this.line, this.tone = Tone.normal, this.action, this.valueKey, this.onTap});
+
+  /// The value opens what it names (the shelf, the device): drawn as a link.
+  final VoidCallback? onTap;
 
   final String label;
   final String value;
@@ -398,6 +451,23 @@ class _Fact {
   final Tone tone;
   final Widget? action;
   final String? valueKey;
+}
+
+/// A fact's value: plain, or a link (accent, underlined, a button for a screen reader) when it opens something.
+Widget _factValue(BuildContext context, _Fact f) {
+  final k = context.t;
+  final linked = f.onTap != null;
+  final text = Text(
+    f.value,
+    key: f.valueKey == null ? null : ValueKey<String>(f.valueKey!),
+    style: TextStyle(
+      fontSize: 15,
+      color: linked ? k.accent : (f.tone == Tone.normal ? k.text : toneColor(k, f.tone)),
+      decoration: linked ? TextDecoration.underline : null,
+      decorationColor: k.accent,
+    ),
+  );
+  return linked ? Semantics(button: true, child: InkWell(onTap: f.onTap, child: text)) : text;
 }
 
 Widget _facts(BuildContext context, List<_Fact> facts) {
@@ -421,11 +491,7 @@ Widget _facts(BuildContext context, List<_Fact> facts) {
                     children: [
                       Text(facts[i].label, style: TextStyle(fontSize: 13, color: k.secondary)),
                       const SizedBox(height: 2),
-                      Text(
-                        facts[i].value,
-                        key: facts[i].valueKey == null ? null : ValueKey(facts[i].valueKey),
-                        style: TextStyle(fontSize: 15, color: facts[i].tone == Tone.normal ? k.text : toneColor(k, facts[i].tone)),
-                      ),
+                      _factValue(context, facts[i]),
                       if (facts[i].line != null) Text(facts[i].line!, style: TextStyle(fontSize: 13, color: k.secondary)),
                     ],
                   ),
@@ -455,7 +521,7 @@ class BookPage extends StatelessWidget {
       listenable: d.changes,
       builder: (context, _) {
         final k = context.t;
-        final b = d.shelves.book(bookId);
+        final b = d.shelves.bookOrHidden(bookId);
         if (b == null) {
           return Scaffold(
             appBar: libraryAppBar(context, title: 'Book'),
@@ -479,20 +545,26 @@ class BookPage extends StatelessWidget {
           rows: [
             if (d.shelves.copies != null) ...[
               SettingsRow(key: const ValueKey('book-rename'), title: 'Rename', onTap: () => openRename(context, d, b)),
-              SettingsRow(
-                key: const ValueKey('book-hide'),
-                title: 'Hide from Bookshelves',
-                status: const [Part('On all your devices. No file is deleted.')],
-                chevron: false,
-                onTap: () => hideBook(context, d, b),
-              ),
+              if (d.shelves.isHidden(b.id))
+                SettingsRow(key: const ValueKey('book-show'), title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+              else
+                SettingsRow(
+                  key: const ValueKey('book-hide'),
+                  title: 'Hide from Bookshelves',
+                  status: const [Part('On all your devices. No file is deleted.')],
+                  chevron: false,
+                  onTap: () => hideBook(context, d, b),
+                ),
             ],
-            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete book', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+            SettingsRow(key: const ValueKey('book-delete'), title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
           ],
         );
+        final desktop = DesktopMetrics.of(context);
         return Scaffold(
           appBar: libraryAppBar(context, title: b.title, titleWidget: LibraryCrumbs(crumbs: crumbsWithLast)),
-          body: LayoutBuilder(
+          body: desktop != null
+              ? _desktopBody(context, d, b, desktop, card)
+              : LayoutBuilder(
             builder: (context, c) {
               final wide = c.maxWidth >= 860;
               final body = wide
@@ -524,26 +596,178 @@ class BookPage extends StatelessWidget {
     );
   }
 
+  /// Opens a book the server holds in the PDF reader, from its bytes. A PDF the server no longer has (404) is the reader's "gone"
+  /// page; any other failure goes to the reader as it is, which tells signed out from not reached.
+  static void _openServerPdf(BuildContext context, ShelfBook b, Future<List<int>> Function() fetch) {
+    openPdfReader(
+      context,
+      PdfServerSource(
+        id: '${b.libraryId}/${b.docId}',
+        title: b.title,
+        fetch: () async {
+          try {
+            return await fetch();
+          } on DeviceException catch (e) {
+            if (e.status == 404) throw const PdfGone();
+            rethrow;
+          }
+        },
+      ),
+      page: 1,
+    );
+  }
+
+  /// The Linux desktop's book pane: the catalogue card on top, the actions in one row of ordinary buttons under it, the facts as a
+  /// label and value list, then the quiet group (Rename, Hide from Bookshelves, Delete book). Left-aligned, 760 wide at most.
+  static Widget _desktopBody(BuildContext context, LibraryDeps d, ShelfBook b, DesktopMetrics m, Widget card) {
+    final k = context.t;
+    final f = d.files;
+    final path = b.pdfPath;
+    final fetch = d.shelves.pdfFetcher(b);
+    final here = path != null && _pdfBytes(b) != null;
+    final original = d.originals?.available(b) ?? false;
+    final placer = d.shelves.placer;
+    final facts = _bookFacts(context, d, b);
+    final line = k.secondary.withValues(alpha: 0.2);
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(m.gutter, 24, m.gutter, 24),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: DesktopMetrics.formMaxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              card,
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  // in a browser the PDF is on the server: Open reads it from there, in the reader (nothing to download here)
+                  if (b.onServer && fetch != null)
+                    FilledButton(key: const ValueKey('book-open'), onPressed: () => _openServerPdf(context, b, fetch), child: const Text('Open')),
+                  if (!b.onServer && here)
+                    FilledButton(
+                      key: const ValueKey('book-open'),
+                      onPressed: () => openPdfReader(context, PdfFileSource(path, title: b.title, from: PdfFrom.library), page: 1),
+                      child: const Text('Open'),
+                    ),
+                  if (!b.onServer && here && f.canRemove)
+                    OutlinedButton(key: const ValueKey('book-remove-pdf'), onPressed: () => _removeHere(context, d, [b]), child: const Text('Remove PDF from this device'))
+                  else if (!b.onServer && !here)
+                    OutlinedButton(key: const ValueKey('book-download'), onPressed: f.download(b), child: const Text('Download to this device')),
+                  if (d.shelves.copies != null)
+                    OutlinedButton(key: const ValueKey('book-same-as'), onPressed: () => openSameBook(context, d, b), child: const Text('Same book as…')),
+                  if (placer != null)
+                    OutlinedButton(
+                      key: const ValueKey('book-move'),
+                      onPressed: () => openPlace(context, d, b, replace: true),
+                      child: Text(b.shelf == null ? 'Place it' : 'Move'),
+                    ),
+                  if (original)
+                    OutlinedButton.icon(
+                      key: const ValueKey('book-open-original'),
+                      onPressed: () => d.originals!.open(b),
+                      icon: const Icon(Icons.folder_open_outlined, size: 18),
+                      label: const Text('Open original'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Container(
+                decoration: BoxDecoration(border: Border(top: BorderSide(color: line))),
+                child: Column(
+                  children: [
+                    for (final fact in facts)
+                      Container(
+                        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: line))),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(width: 140, child: Text(fact.label, style: TextStyle(fontSize: 13, color: k.secondary))),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _factValue(context, fact),
+                                  if (fact.line != null) Text(fact.line!, style: TextStyle(fontSize: 13, color: k.secondary)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (b.spares.isNotEmpty) ...[const SizedBox(height: 16), _spares(context, d, b)],
+              const SizedBox(height: 24),
+              Material(
+                color: k.surface,
+                borderRadius: BorderRadius.circular(14),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    if (d.shelves.copies != null) ...[
+                      SettingsRow(key: const ValueKey('book-rename'), compact: true, title: 'Rename', onTap: () => openRename(context, d, b)),
+                      Divider(height: 1, color: line),
+                      if (d.shelves.isHidden(b.id))
+                        SettingsRow(key: const ValueKey('book-show'), compact: true, title: 'Show on Bookshelves', chevron: false, onTap: () => showOnBookshelves(context, d, b))
+                      else
+                        SettingsRow(
+                          key: const ValueKey('book-hide'),
+                          compact: true,
+                          title: 'Hide from Bookshelves',
+                          status: const [Part('On all your devices. No file is deleted.')],
+                          chevron: false,
+                          onTap: () => hideBook(context, d, b),
+                        ),
+                      Divider(height: 1, color: line),
+                    ],
+                    SettingsRow(key: const ValueKey('book-delete'), compact: true, title: 'Delete', danger: true, chevron: false, onTap: () => showDeleteBook(context, d, b)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   static List<_Fact> _bookFacts(BuildContext context, LibraryDeps d, ShelfBook b) {
     final search = d.shelves.searchOf(b);
     final placer = d.shelves.placer;
     // whether the PDF is here is the file itself; which other device has it, when this device knows (stream-back)
     final from = d.files.stateOf(b).from;
     final here = _pdfBytes(b);
-    final String pdf = here != null
-        ? 'On this device · ${formatBytes(here)}'
-        : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
+    final String pdf = b.onServer
+        // in a browser the device is the server the page is signed in to: the PDF is kept there
+        ? ['On this device', if (b.bytes case final n? when n > 0) formatBytes(n)].join(' · ')
+        : here != null
+            ? 'On this device · ${formatBytes(here)}'
+            : (from == null ? 'Not on this device' : 'Not on this device. Opens from $from when it is online.');
+    // the linked device that name is (one, and only one, or the words stay plain)
+    final sharing = d.sharing;
+    final peers = from == null || sharing == null ? const <Map<String, dynamic>>[] : [for (final p in sharing.peers) if (p['name'] == from) p];
+    final VoidCallback? openPeer = b.onServer || here != null || peers.length != 1 || sharing == null
+        ? null
+        : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SharingDevicePage(sharing: sharing, peer: peers.single['id'] as String)));
+    final shelfNow = b.shelf == null ? null : d.shelves.shelf(b.shelf!);
     return [
       _Fact(
         'Subject',
         b.shelf == null ? 'Unsorted' : _shelfWords(d, b.shelf!),
         valueKey: 'book-subject',
+        onTap: shelfNow == null ? null : () => LibraryNav.of(context).open(context, shelfSpec(d, shelfNow)),
         line: b.shelf == null ? null : (b.shelvedBy == ShelvedBy.person ? 'Placed by you' : 'Filed by Cache'),
         action: placer == null
             ? null
             : RowButton(key: const ValueKey('book-move'), label: b.shelf == null ? 'Place it' : 'Move', onPressed: () => openPlace(context, d, b, replace: true)),
       ),
-      _Fact('PDF', pdf, valueKey: 'book-pdf'),
+      _Fact('PDF', pdf, valueKey: 'book-pdf', onTap: openPeer),
       _Fact(
         'Search',
         switch (search.state) {
@@ -660,9 +884,21 @@ class BookPage extends StatelessWidget {
     final f = d.files;
     final download = f.download(b);
     final path = b.pdfPath;
+    final fetch = d.shelves.pdfFetcher(b);
     final here = path != null && _pdfBytes(b) != null;
     final original = d.originals?.available(b) ?? false;
     final buttons = <Widget>[
+      // in a browser the PDF is on the server: Open reads it from there, in the reader, from its bytes (no file, nothing to download)
+      if (b.onServer && fetch != null)
+        Expanded(
+          child: FilledButton(
+            key: const ValueKey('book-open'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+            onPressed: () => _openServerPdf(context, b, fetch),
+            child: const Text('Open'),
+          ),
+        ),
+      if (!b.onServer) ...[
       // Open: the book's own PDF in the app's PDF reader, at its first page
       if (here)
         Expanded(
@@ -692,6 +928,7 @@ class BookPage extends StatelessWidget {
             child: const Text('Download to this device', textAlign: TextAlign.center),
           ),
         ),
+      ],
     ];
     return [
       if (buttons.isNotEmpty) Row(children: [for (var i = 0; i < buttons.length; i++) ...[if (i > 0) const SizedBox(width: 8), buttons[i]]]),
@@ -786,22 +1023,84 @@ Future<void> _removeHere(BuildContext context, LibraryDeps d, List<ShelfBook> bo
     ..showSnackBar(SnackBar(content: Text(text)));
 }
 
-/// Delete book: two clearly separate choices. "Remove from this device" takes the book, its PDF and its search entry off this
-/// device only, after checking right now that another device has it; "Delete from all your devices" deletes it everywhere and
-/// cannot be undone. A choice this device cannot do yet says so.
-Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) => showModalBottomSheet<void>(
-  context: context,
-  showDragHandle: true,
-  isScrollControlled: true,
-  builder: (ctx) => DeleteBookSheet(deps: d, book: b, onDeleted: () => LibraryNav.of(context).goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!))),
-);
+/// The words of the Delete book sheet (drafts until the owner has seen the renders; owner decisions 2026-11-14: one red button with
+/// the title, the size and "can't be undone"; the shelf place and the call number are kept, so the text does not promise to delete
+/// them).
+String deleteEverywhereText(ShelfBook b) =>
+    'Deletes this book, its PDF and its search entries on this device and on your linked devices that get ${b.libraryName ?? 'My books'} '
+    "from it. This can't be undone.";
+const String kDeletedEverywhere = 'Deleted. Your other devices remove it when they next connect.';
+// WORDING QUESTION: a book of a library the person did not make (a downloaded or shared one) cannot be deleted from here.
+const String kNotYoursToDelete = "This book isn't in a library you made, so you can't delete it here.";
+// WORDING QUESTION: the delete failed (a file could not be removed).
+const String kDeleteFailed = "Couldn't delete the book. Try again.";
+
+// WORDING (for cache-pm): the confirmation, owner's design 2026-11-15: the question, and under it, only when the book is synced
+// with another device, the line.
+const String kDeleteQuestion = 'Delete this book?';
+const String kDeleteSyncedLine = 'Deleting this will delete this from all synced devices.';
+// WORDING (for cache-pm): the snackbar after a delete that was not synced (the synced one is [kDeletedEverywhere]).
+const String kDeleted = 'Deleted.';
+
+/// Delete (owner's design, 2026-11-15): always asks "Delete this book?" with Cancel and Delete; a book synced with another device
+/// ([BookFiles.syncedWithOtherDevice]) also says "Deleting this will delete this from all synced devices.". A book of a library the
+/// person did not make (or where deleting is not available) keeps the sheet that says why. It is permanent in 1.1 (Recently
+/// deleted is 1.2).
+Future<void> showDeleteBook(BuildContext context, LibraryDeps d, ShelfBook b) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final nav = LibraryNav.of(context);
+  if (!(d.files.canDeleteEverywhere && d.files.canDeleteBook(b))) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => DeleteBookSheet(files: d.files, book: b),
+    );
+  }
+  final synced = d.files.syncedWithOtherDevice(b);
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('delete-confirm'),
+      title: const Text(kDeleteQuestion),
+      content: synced ? const Text(kDeleteSyncedLine, key: ValueKey('delete-synced-line')) : null,
+      actions: [
+        TextButton(key: const ValueKey('delete-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('delete-confirm-button'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (yes != true) return;
+  try {
+    await d.files.deleteEverywhere(b);
+  } catch (_) {
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(key: ValueKey('delete-failed'), content: Text(kDeleteFailed)));
+    return;
+  }
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(synced
+        ? const SnackBar(key: ValueKey('deleted-everywhere'), content: Text(kDeletedEverywhere))
+        : const SnackBar(key: ValueKey('deleted'), content: Text(kDeleted)));
+  if (!context.mounted) return;
+  nav.goTo(context, b.shelf == null ? [bookshelvesSpec(d)] : shelfPath(d, b.shelf!));
+}
 
 class DeleteBookSheet extends StatefulWidget {
-  const DeleteBookSheet({super.key, required this.deps, required this.book, this.onDeleted});
+  const DeleteBookSheet({super.key, required this.files, required this.book, this.onDeleted});
 
-  final LibraryDeps deps;
+  final BookFiles files;
   final ShelfBook book;
-  final VoidCallback? onDeleted;
+
+  /// After the sheet closed on a delete: true for "Delete from all your devices", false for "Remove from this device".
+  final void Function(bool everywhere)? onDeleted;
 
   @override
   State<DeleteBookSheet> createState() => _DeleteBookSheetState();
@@ -809,18 +1108,20 @@ class DeleteBookSheet extends StatefulWidget {
 
 class _DeleteBookSheetState extends State<DeleteBookSheet> {
   bool _asking = false;
+  bool _deleting = false;
   String? _refused;
+  String? _failed;
 
   Future<void> _remove() async {
     setState(() {
       _asking = true;
       _refused = null;
     });
-    final (outcome, _, _) = await widget.deps.files.removeFromDevice([widget.book]);
+    final (outcome, _, _) = await widget.files.removeFromDevice([widget.book]);
     if (!mounted) return;
     if (outcome == RemoveOutcome.removed) {
       Navigator.of(context).pop();
-      widget.onDeleted?.call();
+      widget.onDeleted?.call(false);
       return;
     }
     setState(() {
@@ -830,17 +1131,34 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
   }
 
   Future<void> _deleteEverywhere() async {
-    await widget.deps.files.deleteEverywhere(widget.book);
+    setState(() {
+      _deleting = true;
+      _failed = null;
+    });
+    try {
+      await widget.files.deleteEverywhere(widget.book);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _deleting = false;
+          _failed = kDeleteFailed;
+        });
+      }
+      return;
+    }
     if (!mounted) return;
     Navigator.of(context).pop();
-    widget.onDeleted?.call();
+    widget.onDeleted?.call(true);
   }
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final f = widget.deps.files;
+    final f = widget.files;
     final b = widget.book;
+    final busy = _asking || _deleting;
+    final canDelete = f.canDeleteEverywhere && f.canDeleteBook(b);
+    final deleteNote = !f.canDeleteEverywhere ? 'Not available on this device yet.' : _failed;
     Widget choice({required String title, required String text, required Widget button, bool danger = false, String? note, Key? key}) => Container(
       key: key,
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -853,11 +1171,10 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           Text(text, style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
           const SizedBox(height: 10),
           button,
-          if (note != null) ...[const SizedBox(height: 6), Text(note, style: TextStyle(fontSize: 13, color: k.secondary))],
+          if (note != null) ...[const SizedBox(height: 6), Text(note, key: ValueKey('$key-note'), style: TextStyle(fontSize: 13, color: k.secondary))],
         ],
       ),
     );
-    const unavailable = 'Not available on this device yet.';
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -866,32 +1183,45 @@ class _DeleteBookSheetState extends State<DeleteBookSheet> {
           children: [
             Text('Delete book', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
             const SizedBox(height: 2),
-            Text(b.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
+            Text(b.title, key: const ValueKey('delete-title'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text)),
+            if (b.bytes case final n? when n > 0)
+              Text(formatBytes(n), key: const ValueKey('delete-size'), style: TextStyle(fontSize: 13, color: k.secondary)),
             const SizedBox(height: 12),
-            choice(
-              key: const ValueKey('delete-here'),
-              title: 'Remove from this device',
-              text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
-              button: OutlinedButton(
-                key: const ValueKey('delete-here-button'),
-                onPressed: !f.canRemove || _asking ? null : _remove,
-                child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+            if (f.canRemove) ...[
+              choice(
+                key: const ValueKey('delete-here'),
+                title: 'Remove from this device',
+                text: 'Takes the book, its PDF and its search entry off this device only. Cache asks your other devices right now whether one has a checked copy. If none does, nothing is removed.',
+                button: OutlinedButton(
+                  key: const ValueKey('delete-here-button'),
+                  onPressed: busy ? null : _remove,
+                  child: Text(_asking ? 'Asking your other devices...' : 'Remove from this device'),
+                ),
+                note: _refused,
               ),
-              note: !f.canRemove ? unavailable : _refused,
-            ),
-            const SizedBox(height: 10),
+              const SizedBox(height: 10),
+            ],
+            if (f.canDeleteEverywhere && !f.canDeleteBook(b))
+              // not theirs to delete: only why, no explanation of an action they cannot take and no greyed button
+              Container(
+                key: const ValueKey('delete-all'),
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(color: k.background, borderRadius: BorderRadius.circular(16)),
+                child: Text(kNotYoursToDelete, key: const ValueKey('delete-all-note'), style: TextStyle(fontSize: 14, height: 1.4, color: k.secondary)),
+              )
+            else
             choice(
               key: const ValueKey('delete-all'),
               danger: true,
               title: 'Delete from all your devices',
-              text: 'Deletes the book, its search index and its call number ${b.callNumber ?? ''} on every device you have linked. This cannot be undone.'.replaceAll('number  on', 'number on'),
+              text: deleteEverywhereText(b),
               button: FilledButton(
                 key: const ValueKey('delete-all-button'),
                 style: FilledButton.styleFrom(backgroundColor: k.emergency, foregroundColor: k.background),
-                onPressed: f.canDeleteEverywhere && !_asking ? _deleteEverywhere : null,
-                child: const Text('Delete from all your devices'),
+                onPressed: canDelete && !busy ? _deleteEverywhere : null,
+                child: Text(_deleting ? 'Deleting...' : 'Delete from all your devices'),
               ),
-              note: f.canDeleteEverywhere ? null : unavailable,
+              note: deleteNote,
             ),
           ],
         ),

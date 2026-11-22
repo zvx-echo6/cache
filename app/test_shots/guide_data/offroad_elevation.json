@@ -1,0 +1,42 @@
+{
+ "_comment": "Heights along the Double Arch Trail of the guide's off-road route (offroad_route.json), for the elevation chart: one sample every 40 m, read as the app reads them (bilinear between pixel centres) from the zoom-12 elevation tiles the map's hillshade is drawn from. Read once, on 2026-11-12. The walk's line is the trail's own line in the base map tiles, not a route recorded from the core.",
+ "source": {
+  "tiles": "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp",
+  "encoding": "terrarium",
+  "read": [
+   "12/801/1569"
+  ],
+  "attribution": "© Mapterhorn"
+ },
+ "step_m": 40.0,
+ "dist_m": [
+  0.0,
+  40.0,
+  80.0,
+  120.0,
+  160.0,
+  200.0,
+  240.0,
+  280.0,
+  320.0,
+  360.0,
+  400.0,
+  440.0,
+  475.1
+ ],
+ "height_m": [
+  1562.84,
+  1561.32,
+  1562.53,
+  1562.86,
+  1560.95,
+  1561.55,
+  1564.57,
+  1567.3,
+  1570.13,
+  1571.49,
+  1571.19,
+  1584.62,
+  1583.05
+ ]
+}

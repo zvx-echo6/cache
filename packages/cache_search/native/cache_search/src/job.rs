@@ -95,7 +95,7 @@ thread_local! {
 
 /// The kinds that do background index work, which run gently unless asked otherwise.
 fn gentle_kind(kind: &str) -> bool {
-    matches!(kind, "index_zim" | "index_library" | "index_seal" | "index_source" | "pdfindex_finish" | "test_pace")
+    matches!(kind, "index_zim" | "index_library" | "index_extend" | "index_seal" | "index_source" | "pdfindex_finish" | "test_pace")
 }
 
 /// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
@@ -161,6 +161,10 @@ struct IndexLibraryParams {
     /// Not in the header: documents per checkpoint (default 200,000). Tests use a small value.
     #[serde(default = "default_lib_checkpoint")]
     checkpoint_docs: usize,
+    /// `index_extend` only, not in the header: the most missing pieces an extension holds in memory before the library is built whole
+    /// instead (default [`crate::libindex::MAX_EXTEND_PIECES`]). Tests use a small value.
+    #[serde(default)]
+    max_extend_pieces: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -243,12 +247,15 @@ impl Job {
         match kind {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
+            "index_extend" => Self::start_index_extend(params_json),
             "update_library" => Self::start_update_library(params_json),
             "library_manifest" => Self::start_library_manifest(params_json),
             "unpack_library" => Self::start_unpack_library(params_json),
             "check_library" => Self::start_check_library(params_json),
             "library_template" => Self::start_library_template(params_json),
+            "own_library_sync" => Self::start_own_library_sync(params_json),
             "video_download" => Self::start_video_download(params_json),
+            "video_repair" => Self::start_video_repair(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_seal" => Self::start_index_seal(params_json),
@@ -487,6 +494,55 @@ impl Job {
         })
     }
 
+    /// Start an `index_extend` job: `{"library_path","indexes_dir","index_dir"?,"settings"?,"heap_mb"?}` (as `index_library` with an
+    /// indexes folder). Brings the library's newest keyword snapshot up to date with its shard as the next generation of the same
+    /// source: the old files hard-linked plus one new segment of the missing points (idxsnap::extend_library). `busy` while another
+    /// job builds the source or the library is being updated.
+    fn start_index_extend(params_json: &str) -> Result<Job> {
+        let p: IndexLibraryParams = serde_json::from_str(params_json)?;
+        let Some(root) = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from) else {
+            return Err(Error::bad_json("indexes_dir must not be empty"));
+        };
+        if p.library_path.is_empty() {
+            return Err(Error::bad_json("library_path must not be empty"));
+        }
+        if let Some(s) = &p.settings {
+            LibrarySettings::parse(s)?;
+        }
+        let lib_path = PathBuf::from(&p.library_path);
+        if !lib_path.is_dir() {
+            return Err(Error::not_found(format!("library folder {} not found", lib_path.display())));
+        }
+        let token = libreg::entry_for(&lib_path).begin_build()?;
+        let (library_id, version) = match p.settings.as_ref().map(LibrarySettings::parse).transpose()? {
+            Some(st) => (st.library_id, st.version),
+            None => (crate::library::dir_name(&lib_path), None),
+        };
+        let source_id = idxsnap::library_source_id(&library_id, version.as_deref());
+        let legacy = (!p.index_dir.is_empty()).then_some(PathBuf::from(&p.index_dir)).or_else(|| idxsnap::legacy_for(&root, &source_id));
+        let root = idxsnap::snap_root(&root, idxsnap::KIND_LIBRARY, &source_id, legacy.as_deref());
+        let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
+        let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+        let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
+        let max_pieces = p.max_extend_pieces.unwrap_or(crate::libindex::MAX_EXTEND_PIECES);
+        Self::spawn("cs-index-extend", (lock, token), 0, move |sh| {
+            idxsnap::extend_library(
+                &idxsnap::ExtendRequest {
+                    library_path: &lib_path,
+                    settings: settings.as_ref(),
+                    sd: &sd,
+                    source_id: &source_id,
+                    library_id: &library_id,
+                    version: version.as_deref(),
+                    heap_mb,
+                    checkpoint_docs: checkpoint,
+                    max_pieces,
+                },
+                &Self::hooks(sh),
+            )
+        })
+    }
+
     /// Start an `update_library` job. Parameter errors, a snapshot manifest that does not describe the library
     /// and a library that is busy (another update, or an index build) are reported here and no job exists. The
     /// library is marked as updating before this returns, so a search or `cs_status` right after sees it.
@@ -623,6 +679,25 @@ impl Job {
         })
     }
 
+    /// Start an `own_library_sync` job: `{"library_dir"}`, a person's own library (My books) made to match its packs on this device
+    /// (`ownlib.rs`). The detail is `{"own","rebuilt","reason","books","points","conflicts_removed","unreadable"}`.
+    fn start_own_library_sync(params_json: &str) -> Result<Job> {
+        let p: Value = serde_json::from_str(params_json)?;
+        let dir = p.get("library_dir").and_then(Value::as_str).unwrap_or_default().to_string();
+        if dir.is_empty() {
+            return Err(Error::bad_json("library_dir must not be empty"));
+        }
+        let lib = PathBuf::from(dir);
+        Self::spawn("cs-own-library", (), 1, move |sh| {
+            let d = crate::ownlib::sync(&lib, &|| sh.cancel.load(Ordering::SeqCst))?;
+            if let Ok(mut g) = sh.detail.lock() {
+                *g = Some(d);
+            }
+            sh.set_progress(1, 1);
+            Ok(Outcome::Done)
+        })
+    }
+
     /// Start a `library_template` job: write the blank library template to `out_path`.
     fn start_library_template(params_json: &str) -> Result<Job> {
         let p: LibraryTemplateParams = serde_json::from_str(params_json)?;
@@ -644,6 +719,25 @@ impl Job {
                 cache_video::Outcome::Done => Ok(Outcome::Done),
                 cache_video::Outcome::Cancelled => Ok(Outcome::Cancelled),
             }
+        })
+    }
+
+    /// Start a `video_repair` job (`{"dir"}`, the videos folder): the saved HLS videos from before saved videos were rewritten as
+    /// plain MP4 are rewritten, one at a time, on the job's thread. Progress is videos of those to look at.
+    fn start_video_repair(params_json: &str) -> Result<Job> {
+        #[derive(serde::Deserialize)]
+        struct P {
+            dir: String,
+        }
+        let p: P = serde_json::from_str(params_json).map_err(|e| Error::bad_json(format!("params_json: {e}")))?;
+        if p.dir.is_empty() {
+            return Err(Error::bad_json("dir must not be empty"));
+        }
+        let video = cache_video::Video::new(&cache_video::VideoCfg { dir: p.dir });
+        Self::spawn("cs-video-repair", (), 0, move |sh| {
+            let cancel = || sh.cancel.load(Ordering::SeqCst);
+            cache_video::remux::repair_saved(&video, &|d, t| sh.set_progress(d, t), &cancel).map_err(crate::ext::video_err)?;
+            Ok(if cancel() { Outcome::Cancelled } else { Outcome::Done })
         })
     }
 

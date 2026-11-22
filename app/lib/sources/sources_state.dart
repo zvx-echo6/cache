@@ -18,6 +18,8 @@ import '../search/search_access.dart';
 import '../platform/app_log.dart';
 import '../platform.dart' as plat;
 
+export '../sharing/share_rules.dart' show kZimNotShared;
+
 /// One ZIM file in the sources folder.
 class ZimFile {
   ZimFile({required this.path, required this.size});
@@ -128,6 +130,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return _retrying ?? _coreOpened.future;
   }
 
+  final Completer<Map<String, dynamic>?> _configBuilt = Completer<Map<String, dynamic>?>();
+
+  /// The sections of the cs_open config besides the sources ([openedExtra]) once they are built, before the core opens its
+  /// sources (the car's own places handle, car/car_places.dart, opens with some of them); null when they could not be built.
+  Future<Map<String, dynamic>?> whenConfigReady() => _configBuilt.future;
+
   /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
   /// starts once the core is up waits on this, so a core opened by Try again starts it too.
   Future<SearchCore> whenCoreOpen() => _everOpened.future;
@@ -184,9 +192,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// One start of the core: null (with [unavailable] saying why) when it could not open.
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
+    final clock = Stopwatch()..start();
     try {
       // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
-      final extra = _extra = coreExtras ?? (plat.isWeb ? const <String, dynamic>{} : await _defaultExtras());
+      final extra = _extra = coreExtras ?? (plat.isWeb ? await _webExtras() : await _defaultExtras());
+      if (!_configBuilt.isCompleted) _configBuilt.complete(extra);
       core = await SearchCore.open(
         plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
@@ -194,6 +204,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       );
     } catch (e, stack) {
       logError('Search core startup failed', error: e, stack: stack);
+      if (!_configBuilt.isCompleted) _configBuilt.complete(null);
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
@@ -204,7 +215,38 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     unavailable = null;
     if (!_everOpened.isCompleted) _everOpened.complete(core);
     notifyListeners();
+    logInfo('Search core opened in ${clock.elapsedMilliseconds} ms (${_configs().length} sources)');
+    unawaited(_logOpenTimings(core));
     return core;
+  }
+
+  /// The core's own lines about how long its open took (the ZIM opens and the steps after them), into the log.
+  Future<void> _logOpenTimings(SearchCore core) async {
+    try {
+      for (final line in await core.openTimings()) {
+        logInfo(line);
+      }
+    } catch (_) {}
+  }
+
+  /// In a browser the server holds the folders, so the config sections come from it (`server.features`): the whole `extras` the
+  /// server's engine was opened with, as the phone has them in [openedExtra] (`layers` for the map's layer engine, `routing` and
+  /// `places` for map search, Directions and guidance, ...). The server leaves `routing` out when it has no road router, so
+  /// the browser then shows what a phone without one shows. Without an answer the sections are empty, as they were.
+  Future<Map<String, dynamic>> _webExtras() async {
+    try {
+      return webExtrasFrom(await HttpTransport().call('server.features', const {}));
+    } catch (e) {
+      logError('Server features', error: e);
+      return const <String, dynamic>{};
+    }
+  }
+
+  /// The `extras` of a `server.features` reply (see the helper's FeaturesOp): every section, empty when the reply has none.
+  @visibleForTesting
+  static Map<String, dynamic> webExtrasFrom(Object? features) {
+    final extras = features is Map ? features['extras'] : null;
+    return extras is Map ? extras.cast<String, dynamic>() : const <String, dynamic>{};
   }
 
   static CsNative _defaultNative() => FfiCsNative.open();
@@ -319,11 +361,73 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   File _originFile(String zimPath) => File('$zimPath.origin.json');
   File _iconFile(String zimPath) => File('$zimPath.icon.png');
 
-  /// The icon saved when the ZIM came from the catalogue, or null.
+  /// The ZIM's own icon, kept as a cache file of its own (not `.icon.png`): that one is the person's choice or the catalogue's and
+  /// travels to the person's other devices, while this one is read from the ZIM itself and each device makes it for itself.
+  File _illustrationFile(String zimPath) => File('$zimPath.illustration.png');
+
+  /// The ZIMs whose own icon was asked for in this run, so a ZIM without one is asked once, not at every redraw.
+  final Set<String> _illustrationAsked = {};
+  bool _closed = false;
+
+  /// The icon to show for [z]: the one saved when the ZIM came from the catalogue (or that the person chose), else the ZIM's own
+  /// (`Illustration_48x48@1`) once it has been read, else null (a letter). The ZIM's own is read lazily and the rows are told
+  /// when it arrives, so this never waits.
   File? iconOf(ZimFile z) {
     if (plat.isWeb) return null;
     final f = _iconFile(z.path);
-    return f.existsSync() ? f : null;
+    if (f.existsSync()) return f;
+    final own = _illustrationFile(z.path);
+    if (own.existsSync()) return own;
+    _readIllustration(z);
+    return null;
+  }
+
+  /// True when a picture is saved for [z] (`.icon.png`: the person's choice or the catalogue's); that one shows over the ZIM's own.
+  bool hasSavedIcon(ZimFile z) => !plat.isWeb && _iconFile(z.path).existsSync();
+
+  /// Saves [png] as [z]'s icon (the catalogue's), replacing the old one in one step, and tells the rows.
+  Future<void> saveIcon(ZimFile z, Uint8List png) async {
+    await writeBytesAtomic(_iconFile(z.path), png);
+    if (!_closed) notifyListeners();
+  }
+
+  /// The ZIM's own icon read through the core now (null when it has none or there is no core).
+  @visibleForTesting
+  Future<Uint8List?> illustrationBytes(ZimFile z) async {
+    final core = _core, id = idOf(z);
+    if (core == null || id == null) return null;
+    return core.zimIllustration(id);
+  }
+
+  /// Reads [z]'s own icon again and replaces the cached `.illustration.png`. False when the ZIM has none (the cache is kept as it was).
+  /// Never touches `.icon.png`.
+  Future<bool> refreshIllustration(ZimFile z) async {
+    try {
+      final png = await illustrationBytes(z);
+      if (png == null || png.isEmpty) return false;
+      await writeBytesAtomic(_illustrationFile(z.path), png);
+      _illustrationAsked.add(z.path);
+      if (!_closed) notifyListeners();
+      return true;
+    } catch (e) {
+      logError('ZIM icon', error: e);
+      return false;
+    }
+  }
+
+  void _readIllustration(ZimFile z) {
+    final core = _core, id = idOf(z);
+    if (core == null || id == null || !_illustrationAsked.add(z.path)) return;
+    unawaited(() async {
+      try {
+        final png = await core.zimIllustration(id);
+        if (png == null || png.isEmpty) return;
+        await writeBytesAtomic(_illustrationFile(z.path), png);
+        if (!_closed) notifyListeners();
+      } catch (e) {
+        logError('ZIM icon', error: e);
+      }
+    }());
   }
 
   /// What this ZIM is in the catalogue's terms: the record saved at install, else the file name's.
@@ -407,9 +511,58 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
       });
 
+  /// In a browser: whether the server's index work is paused by the person (Catalog's Pause all) and whether there is any, as the
+  /// server says (`index.pause`). The same Pause and Resume as the phone's, working on the server's work.
+  bool serverIndexPaused = false;
+  bool serverIndexBusy = false;
+  bool _pauseReading = false;
+
+  Future<void> _readServerPause() async {
+    final core = _core;
+    if (core == null || _pauseReading) return;
+    _pauseReading = true;
+    try {
+      final r = await core.indexPause();
+      if (r.paused != serverIndexPaused || r.busy != serverIndexBusy) {
+        serverIndexPaused = r.paused;
+        serverIndexBusy = r.busy;
+        // Work that began, or a Pause from another tab: the watcher must run to see it change again.
+        _keepServerWatch();
+        notifyListeners();
+      }
+    } on CacheSearchException {
+      // A server older than index.pause: there is nothing to pause.
+    } finally {
+      _pauseReading = false;
+    }
+  }
+
+  /// Pause all (true) or Resume (false) for the server's index work.
+  Future<void> setServerIndexPaused(bool paused) async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      final r = await core.indexPause(paused);
+      serverIndexPaused = r.paused;
+      serverIndexBusy = r.busy;
+    } on CacheSearchException catch (e) {
+      error = _words(e);
+    }
+    _watchServerIndexing();
+    notifyListeners();
+  }
+
   void _watchServerIndexing() {
     if (!plat.isWeb) return;
-    if (!_serverWorkLeft) {
+    unawaited(_readServerPause());
+    _keepServerWatch();
+  }
+
+  /// The 2-second watcher runs while a ZIM waits for its keyword index, and also while the server says it has index work or that
+  /// the work is paused: seals, EPUBs, captions and PDFs go on long after the keyword indexes, and the Pause all / Resume button
+  /// must follow them (each round reads `index.pause` again).
+  void _keepServerWatch() {
+    if (_closed || (!_serverWorkLeft && !serverIndexBusy && !serverIndexPaused)) {
       _serverWatch?.cancel();
       _serverWatch = null;
       return;
@@ -525,7 +678,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } catch (e) {
       error = _words(e);
     } finally {
-      notifyListeners();
+      // a refresh that was under way when the state was disposed ends quietly
+      if (!_closed) notifyListeners();
     }
   }
 
@@ -757,6 +911,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       }
     }
     _failed.remove(dest.path);
+    // A new edition may carry a new picture: the old cached one goes and the ZIM is asked again.
+    _illustrationAsked.remove(dest.path);
+    try {
+      final own = _illustrationFile(dest.path);
+      if (own.existsSync()) own.deleteSync();
+    } catch (_) {}
     await refresh();
     return zims.firstWhere(
       (z) => z.path == dest.path,
@@ -794,9 +954,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     List<String>? zimIds,
     int k = 20,
     int offset = 0,
+    Duration? meaningLimit,
   }) async {
     final core = _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
-    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds));
+    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds), meaningLimit: meaningLimit);
   }
 
   /// The embedding models the searchable sources in [ids] (every source when null) name, the search model first.
@@ -873,7 +1034,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       final f = File(z.path);
       if (f.existsSync()) f.deleteSync();
-      for (final side in [_originFile(z.path), _iconFile(z.path)]) {
+      _illustrationAsked.remove(z.path);
+      for (final side in [_originFile(z.path), _iconFile(z.path), _illustrationFile(z.path)]) {
         if (side.existsSync()) side.deleteSync();
       }
       final idx = Directory(_indexDir(z));
@@ -915,7 +1077,21 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     final core =
         _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
     final r = await core.read(address, maxChars: maxChars);
-    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page);
+    return ReadPage(title: r.title, text: r.text, truncated: r.truncated, page: r.page, pageLabel: r.pageLabel);
+  }
+
+  @override
+  Future<ReadDocument> readDocument(String address) async {
+    final core =
+        _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
+    final d = await core.readDocument(address);
+    return ReadDocument(
+      title: d.title,
+      atPage: d.atPage,
+      moreBefore: d.moreBefore,
+      moreAfter: d.moreAfter,
+      pages: [for (final p in d.pages) DocumentPageText(text: p.text, pageLabel: p.pageLabel, addresses: p.addresses)],
+    );
   }
 
   /// Makes the numbering of a new chat in the core, or null when there is no core (then the loop counts itself).
@@ -925,6 +1101,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   @override
   void dispose() {
+    _closed = true;
     _poll?.cancel();
     _serverWatch?.cancel();
     _core?.close();

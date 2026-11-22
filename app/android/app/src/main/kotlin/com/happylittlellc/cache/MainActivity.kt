@@ -3,21 +3,21 @@ package com.happylittlellc.cache
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.Context
-import android.os.BatteryManager
 import android.os.Bundle
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.os.Build
-import android.os.PowerManager
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import com.happylittlellc.cache.car.GeoView
+import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
+import com.happylittlellc.cache.fgs.FgsAddArm
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -27,9 +27,96 @@ class MainActivity : FlutterActivity() {
     private var keyboardVisible = false
     private val restoreSystemBars = Runnable { applySystemBars() }
 
+    // Test APK only (BuildConfig.TEST_APK): the bench's launch extra, read by Dart through the cache/bench channel. In the release
+    // build nothing is read and the channel answers zeros.
+    private var benchPrereadMbps: Int? = null  // null: the extra was not given (the app's default applies)
+    private var benchDateOffsetDays: Int? = null  // cache_date_offset_days: shifts the system prompt's date line only
+    private var benchEmbedThreads: Int? = null  // cache_embed_threads: the search model's thread count (measurement)
+    private var benchUbatch: Int? = null  // cache_ubatch: the chat context's n_ubatch (measurement)
+
+    private fun readBenchExtras(i: Intent?) {
+        if (!BuildConfig.TEST_APK || i == null) return
+        if (i.hasExtra("cache_preread_mbps")) benchPrereadMbps = i.getIntExtra("cache_preread_mbps", 0)
+        if (i.hasExtra("cache_date_offset_days")) benchDateOffsetDays = i.getIntExtra("cache_date_offset_days", 0)
+        if (i.hasExtra("cache_embed_threads")) benchEmbedThreads = i.getIntExtra("cache_embed_threads", 0)
+        if (i.hasExtra("cache_ubatch")) benchUbatch = i.getIntExtra("cache_ubatch", 0)
+    }
+
+    // A cachelink: link (a camera scanning a device's link code). Held until Dart takes it (a cold start: the link arrives before
+    // Dart listens) and also pushed to a running Dart on the co.cache/link channel. Flutter's own deep-link routing is off
+    // (flutter_deeplinking_enabled in the manifest), so the link never becomes a route.
+    private var linkChannel: MethodChannel? = null
+    private var pendingLink: String? = null
+
+    private fun readLink(i: Intent?) {
+        if (i == null || i.action != Intent.ACTION_VIEW) return
+        // An activity brought back from the Recents list repeats the intent it was first started with; that is not a new link.
+        if ((i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        val uri = i.data ?: return
+        if (!"cachelink".equals(uri.scheme, ignoreCase = true)) return
+        val link = i.dataString ?: return
+        // Cleared so a re-created activity does not deliver the same link again.
+        i.data = null
+        pendingLink = link
+        linkChannel?.invokeMethod("opened", link, object : MethodChannel.Result {
+            override fun success(result: Any?) { if (pendingLink == link) pendingLink = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
+    // A tap on a guidance notification (OpenMaps.kt): the Maps tab. Held until Dart takes it (a cold start) and also pushed to a
+    // running Dart on the co.cache/open channel (lib/nav/open_maps.dart).
+    private var openChannel: MethodChannel? = null
+    private var pendingOpen: Any? = null  // "maps", or a map (what, lat, lon, query) for a geo: link opened here
+
+    private fun readOpen(i: Intent?) {
+        if (!OpenMaps.wants(i)) return
+        // Cleared so a re-created activity does not open the Maps tab again.
+        i!!.removeExtra(OpenMaps.EXTRA)
+        pendingOpen = OpenMaps.MAPS
+        openChannel?.invokeMethod("open", OpenMaps.MAPS, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
+    // A geo: link with no car connected (Cache picked from "Open with"): the Maps tab, with the search or the point. Held until
+    // Dart takes it, and pushed to a running Dart on the co.cache/open channel.
+    private fun openGeo(v: GeoView) {
+        val (lat, lon, query) = when (v) {
+            is GeoView.Search -> Triple(v.lat, v.lon, v.query)
+            is GeoView.Point -> Triple(v.req.lat, v.req.lon, v.req.query)
+        }
+        val what = hashMapOf<String, Any?>("what" to OpenMaps.MAPS, "lat" to lat, "lon" to lon, "query" to query)
+        pendingOpen = what
+        openChannel?.invokeMethod("open", what, object : MethodChannel.Result {
+            override fun success(result: Any?) { pendingOpen = null }
+            override fun error(code: String, message: String?, details: Any?) {}
+            override fun notImplemented() {}
+        })
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        // A navigation request (Android Auto's NAVIGATE with a "geo:" address; the filter is on this activity because Android
+        // Auto asks for it there, src/car/AndroidManifest.xml): the car session takes it when a car is connected, otherwise it
+        // is dropped. Flutter never sees it: it would read the address as a page to open, and the app has no such pages.
+        if (NavIntent.fromPhone(intent, ::openGeo)) return
+        super.onNewIntent(intent)
+        readBenchExtras(intent)
+        readLink(intent)
+        readOpen(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         SharedEngine.activityStarted()
+        // The same when the request is what started this activity: the app opens as from its icon.
+        if (NavIntent.fromPhone(intent, ::openGeo)) intent = NavIntent.plainLaunch(intent)
         super.onCreate(savedInstanceState)
+        readBenchExtras(intent)
+        readLink(intent)
+        readOpen(intent)
         // Observe, but do not consume, the insets Flutter needs for safe areas and text input.
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val keyboardNow = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -44,10 +131,44 @@ class MainActivity : FlutterActivity() {
     }
 
     // One engine for the phone screen and the car screen (Android Auto, see car/SharedEngine.kt): guidance runs once, in Dart.
-    // With no car the engine still goes with the activity, as before.
     override fun provideFlutterEngine(context: Context): FlutterEngine = SharedEngine.obtain(context)
 
-    override fun shouldDestroyEngineWithHost(): Boolean = SharedEngine.releaseFromActivity()
+    // The engine never goes with this activity: it is kept for the life of the process, and the next phone screen or car
+    // session attaches to the same running app (car/SharedEngine.kt says why). Flutter asks this more than once, so it only
+    // answers; cleanUpFlutterEngine tells the engine's keeper that this screen has let go.
+    override fun shouldDestroyEngineWithHost(): Boolean = false
+
+    // Leaving with adds pending starts the foreground service that carries them on (fgs/FgsAddArm.kt). Home comes here; Back at the
+    // root finishes the activity (onPause sees it); the app switcher (Recents) may give only a pause, so a pause that does not get
+    // its window focus back soon counts; and the stop is the last chance. All while Cache is still just leaving, as Android 12 requires.
+    private val leaveCheck = Runnable { if (!hasWindowFocus() && !isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.PAUSED) }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) FgsAddArm.onLeave(this, FgsAddArm.Leave.HINT) else window.decorView.postDelayed(leaveCheck, 1500)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        window.decorView.removeCallbacks(leaveCheck)
+        FgsAddArm.resumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        FgsAddArm.onLeave(this, FgsAddArm.Leave.STOP)
+    }
+
+    // The app's own launches (the file picker, a permission prompt) make a leave hint that is not the person leaving.
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        FgsAddArm.noteInternalLaunch()
+        super.startActivityForResult(intent, requestCode, options)
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -73,6 +194,39 @@ class MainActivity : FlutterActivity() {
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        linkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/link").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        val link = pendingLink
+                        pendingLink = null
+                        result.success(link)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        openChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/open").also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        val open = pendingOpen
+                        pendingOpen = null
+                        result.success(open)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+            // A request this activity was (re)created with while Dart already runs (the shared engine: Dart took at its own start,
+            // not now): pushed as well. Dart not listening yet answers notImplemented and the request stays for its take.
+            pendingOpen?.let { open ->
+                it.invokeMethod("open", open, object : MethodChannel.Result {
+                    override fun success(result: Any?) { if (pendingOpen === open) pendingOpen = null }
+                    override fun error(code: String, message: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
+            }
+        }
         systemUiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/system_ui").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -96,6 +250,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -104,6 +259,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pending = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.INTERNET), REQUEST_CODE)
                         }
                     }
@@ -115,6 +271,7 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             pendingNotifications = result
+                            FgsAddArm.noteInternalLaunch()
                             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE_NOTIFICATIONS)
                         }
                     }
@@ -123,115 +280,62 @@ class MainActivity : FlutterActivity() {
             }
         // The device's free memory (lib/platform/memory.dart): the model loads only when it fits what is free now, and is let go
         // when Android says memory is low.
-        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/memory").also {
-            it.setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "read" -> result.success(memory())
-                    // The log's header: the phone's maker and model.
-                    "device" -> result.success("${Build.MANUFACTURER} ${Build.MODEL}")
-                    // The log: why the app's process ended the last times (Android 11 and later).
-                    "exits" -> result.success(exits())
-                    else -> result.notImplemented()
-                }
-            }
-        }
-        // The whole-route picture during guidance (RouteSnapshot.kt).
-        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
+        // The memory channel is answered by the engine (MemoryAnswers, set in car/SharedEngine.kt); this screen only sends the
+        // system's "trim" on it.
+        memoryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MemoryAnswers.CHANNEL)
+        // The bench's options (test APK only; nothing in the release build).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "read" -> result.success(battery())
+                    // Only what was given: no "preread_mbps" key when the extra is absent, and never in the release build.
+                    "get" -> {
+                        val out = mutableMapOf<String, Any>("testApk" to BuildConfig.TEST_APK)
+                        val mbps = benchPrereadMbps
+                        if (BuildConfig.TEST_APK && mbps != null) out["preread_mbps"] = mbps
+                        val days = benchDateOffsetDays
+                        if (BuildConfig.TEST_APK && days != null) out["date_offset_days"] = days
+                        val ub = benchUbatch
+                        if (BuildConfig.TEST_APK && ub != null) out["cache_ubatch"] = ub
+                        val et = benchEmbedThreads
+                        if (BuildConfig.TEST_APK && et != null) out["cache_embed_threads"] = et
+                        result.success(out)
+                    }
                     else -> result.notImplemented()
                 }
             }
+        // What this build was made with (cache/build) is answered by the engine itself, with or without this activity
+        // (car/SharedEngine.kt).
+        // The whole-route picture during guidance (RouteSnapshot.kt).
+        routeSnapshot = RouteSnapshot(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         window.decorView.removeCallbacks(restoreSystemBars)
         systemUiChannel?.setMethodCallHandler(null)
         systemUiChannel = null
-        memoryChannel?.setMethodCallHandler(null)
         memoryChannel = null
-        // The engine can outlive this activity while the car screen uses it: let go of the handlers that need the activity.
+        // The engine outlives this activity: let go of the handlers that need the activity (the next one sets its own).
+        linkChannel?.setMethodCallHandler(null)
+        linkChannel = null
+        openChannel?.setMethodCallHandler(null)
+        openChannel = null
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery").setMethodCallHandler(null)
+        FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
-    }
-
-    private fun exits(): List<Map<String, Any>> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyList()
-        return try {
-            am.getHistoricalProcessExitReasons(packageName, 0, 8).map { e ->
-                val reason = when (e.reason) {
-                    android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
-                    android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native crash"
-                    android.app.ApplicationExitInfo.REASON_ANR -> "not responding"
-                    android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "low memory"
-                    android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "closed itself"
-                    android.app.ApplicationExitInfo.REASON_SIGNALED -> "stopped by a signal"
-                    android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by the user"
-                    android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force stopped"
-                    android.app.ApplicationExitInfo.REASON_OTHER -> "other"
-                    else -> "reason ${e.reason}"
-                }
-                mapOf("time" to e.timestamp, "reason" to reason, "description" to (e.description ?: ""), "pss" to e.pss, "rss" to e.rss)
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun memory(): Map<String, Any> {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyMap()
-        val info = ActivityManager.MemoryInfo()
-        am.getMemoryInfo(info)
-        return mapOf("avail" to info.availMem, "total" to info.totalMem, "threshold" to info.threshold, "low" to info.lowMemory)
+        SharedEngine.activityEnded()
     }
 
     // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not
     // the one killed. Delivered on top of what Flutter does with it.
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + memory())
+        memoryChannel?.invokeMethod("trim", mapOf("level" to level) + MemoryAnswers.memory(this))
     }
 
-    // Battery level and whether the phone is plugged in (lib/platform/battery.dart): long automatic work (search indexes)
-    // waits for charging or enough battery. The sticky battery broadcast answers at once and needs no permission.
-    private fun battery(): Map<String, Any> {
-        val status: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = status?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = status?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        val plugged = status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val percent = if (level >= 0 && scale > 0) level * 100 / scale else -1
-        val out = mutableMapOf<String, Any>("percent" to percent, "charging" to (plugged != 0), "thermal" to thermal())
-        headroom()?.let { out["headroom"] = it }
-        return out
-    }
-
-    // How warm the phone is (Android 10 and later): background index work eases off as it warms and pauses when severe.
-    private fun thermal(): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "unknown"
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return "unknown"
-        return when (pm.currentThermalStatus) {
-            PowerManager.THERMAL_STATUS_NONE -> "nominal"
-            PowerManager.THERMAL_STATUS_LIGHT -> "light"
-            PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
-            PowerManager.THERMAL_STATUS_SEVERE -> "severe"
-            else -> "critical"
-        }
-    }
-
-    // The thermal headroom over the next 10 seconds (Android 11 and later; 1.0 is where the phone throttles hard), null where
-    // the phone does not give one.
-    private fun headroom(): Double? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return null
-        val h = pm.getThermalHeadroom(10)
-        return if (h.isNaN()) null else h.toDouble()
-    }
+    // Battery and heat (co.cache/battery) are answered by the cache_device plugin, in every engine.
 
     private fun notificationsGranted() =
         checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

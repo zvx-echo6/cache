@@ -6,13 +6,13 @@ use cache_sync::{excluded, Config, SyncEngine};
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
-/// The app's patterns (app/lib/sources/libraries_state.dart kLibraryNotShared, app/lib/regions/regions_state.dart
-/// kRegionsNotShared and kMapLayersNotShared); keep them equal.
+/// The app's patterns (app/lib/sharing/share_rules.dart kLibraryNotShared, kRegionsNotShared and kMapLayersNotShared, which the
+/// phone and Cache Server both use); keep them equal.
 fn app_patterns() -> Value {
     json!({
-        "libraries": ["*/index"],
-        "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
-        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
+        "libraries": ["*/index", "*/index-snapshots"],
+        "regions": ["index", "places/index", "**/*-shm", "**/*-journal", "regions.sqlite*", "places/*.sqlite*", "places/*/common.sqlite*", "places/CURRENT", "**/* (conflict, *"],
+        "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal", "store/*.sqlite*", "**/* (conflict, *"],
     })
 }
 
@@ -82,6 +82,26 @@ fn patterns_match_by_segment() {
 }
 
 #[test]
+fn sync_conflict_copies_never_travel_beside_the_live_databases() {
+    let p: Vec<String> = ["**/* (conflict, *", "regions.sqlite*"].iter().map(|s| s.to_string()).collect();
+    for yes in ["regions (conflict, A, 2026-11-15 2040 UTC).sqlite", "regions (conflict, A, 2026-11-15 2040 UTC).sqlite-wal", "store/basemap (conflict, A, 2026-11-15 2040 UTC).sqlite", "places/2026-10 (conflict, B, 2026-11-14 1010 UTC).sqlite"] {
+        assert!(excluded(&p, yes), "{yes} stays where it was made");
+    }
+    for no in ["store-share/basemap/abc.sqlite", "tiles/2026-10/1/047/701.gph", "regions-share/abc.json"] {
+        assert!(!excluded(&p, no), "{no} syncs");
+    }
+}
+
+#[test]
+fn a_librarys_own_snapshots_beside_its_index_never_sync() {
+    let p = vec!["*/index".to_string(), "*/index-snapshots".to_string()];
+    assert!(excluded(&p, "lib1/index-snapshots"));
+    assert!(excluded(&p, "lib1/index-snapshots/library/mine/snap/b1/manifest.json"));
+    assert!(!excluded(&p, "lib1/index-snapshots2/x"));
+    assert!(!excluded(&p, "lib1/shard/index-snapshots/x"));
+}
+
+#[test]
 fn globs_within_a_segment_and_at_any_depth() {
     let p: Vec<String> = ["tiles.sqlite*", "**/*-shm", "places/index", "index"].iter().map(|s| s.to_string()).collect();
     for yes in ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "regions.sqlite-shm", "places/2026-10.sqlite-shm", "a/b/c/x-shm", "index", "index/2026-10.tsv", "places/index/2026-10.tsv"] {
@@ -100,10 +120,15 @@ fn region_caches_never_travel() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let (ra, rb, ma, mb) = (tmp.path().join("regions-a"), tmp.path().join("regions-b"), tmp.path().join("maps-a"), tmp.path().join("maps-b"));
-    let parts = ["regions.sqlite", "regions.sqlite-wal", "tiles/2026-10/1/047/701.gph", "places/2026-10.sqlite", "places/2026-10/common.sqlite", "places/CURRENT", "offroad/offroad-2026-10/idaho/offroad.sqlite"];
-    let caches = ["index/2026-10.tsv", "places/index/2026-10.tsv", "regions.sqlite-shm", "places/2026-10.sqlite-shm"];
-    let layer_parts = ["store/osm.sqlite", "store/osm.sqlite-wal", "catalogue.json", "latest.json", "user-defs/mine.json"];
-    let layer_caches = ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "tilejson/osm.json", "store/osm.sqlite-shm"];
+    // Each device's live databases (regions.sqlite, places/<build>.sqlite, store/<layer>.sqlite, with their logs) never travel either:
+    // they have one writer, and each device shares a snapshot of its own under its own name instead (maps_two_writers.rs).
+    let parts = ["tiles/2026-10/1/047/701.gph", "regions-share/A.json", "places-share/2026-10/A.sqlite", "offroad/offroad-2026-10/idaho/offroad.sqlite"];
+    let caches = [
+        "index/2026-10.tsv", "places/index/2026-10.tsv", "regions.sqlite-shm", "places/2026-10.sqlite-shm", "regions.sqlite", "regions.sqlite-wal",
+        "places/2026-10.sqlite", "places/2026-10.sqlite-wal", "places/2026-10/common.sqlite", "places/CURRENT",
+    ];
+    let layer_parts = ["store-share/osm/A.sqlite", "store-share/A.deletes.json", "catalogue.json", "latest.json", "user-defs/mine.json"];
+    let layer_caches = ["tiles.sqlite", "tiles.sqlite-wal", "tiles.sqlite-shm", "tilejson/osm.json", "store/osm.sqlite-shm", "store/osm.sqlite", "store/osm.sqlite-wal"];
     for f in parts.iter().chain(&caches) {
         write(&ra.join(f), &format!("A {f}"));
     }
@@ -216,6 +241,35 @@ fn a_library_index_never_travels() {
     std::fs::remove_dir_all(fa.join("lib1")).unwrap();
     until("the library gone from B", 60, &a, &b, || !fb.join("lib1").exists());
     assert!(fb.is_dir(), "the shared folder itself stays");
+    a.close();
+    b.close();
+}
+
+/// A library's settings file arrives on the other device byte for byte: sync copies files by hash and never reads or rewrites them,
+/// so a library whose settings say `"own": true` (made on the person's other device) is `own` there too, and one that does not say it
+/// never becomes so.
+#[test]
+fn a_librarys_settings_file_arrives_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (la, lb) = (tmp.path().join("libs-a"), tmp.path().join("libs-b"));
+    let mine = "{\n  \"format\": 1,\n  \"library_id\": \"my-books-x\",\n  \"own\": true,\n  \"own_default\": true\n}\n";
+    let built = "{\"format\":1,\"library_id\":\"field\",\"version\":\"7\"}";
+    write(&la.join("my-books-x/cache-library.json"), mine);
+    write(&la.join("field/cache-library.json"), built);
+    write(&la.join("my-books-x/copies.jsonl"), "{}\n");
+    std::fs::create_dir_all(&lb).unwrap();
+    let a = engine(&da, "Desk", None, true);
+    let b = engine(&db, "Phone", None, true);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    call(&a, "share_add", json!({"id": "libraries", "name": "Libraries", "path": la}));
+    call(&b, "share_add", json!({"id": "libraries", "name": "Libraries", "path": lb}));
+    std::thread::sleep(Duration::from_secs(6));
+    until("both settings files on B", 90, &a, &b, || lb.join("my-books-x/cache-library.json").exists() && lb.join("field/cache-library.json").exists());
+    rounds(&a, &b);
+    assert_eq!(std::fs::read(lb.join("my-books-x/cache-library.json")).unwrap(), mine.as_bytes(), "byte for byte");
+    assert_eq!(std::fs::read(lb.join("field/cache-library.json")).unwrap(), built.as_bytes());
     a.close();
     b.close();
 }

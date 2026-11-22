@@ -4,6 +4,7 @@ import '../chat/answer_reports.dart';
 import '../history/share.dart';
 import '../theme.dart';
 import 'settings/widgets.dart';
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 /// What the person chose in the report sheet.
 class ReportChoice {
@@ -102,9 +103,12 @@ class _ReportSheetState extends State<_ReportSheet> {
 
 /// Settings > Assistant > Reported answers: the saved reports, each shareable and removable.
 class ReportedAnswersPage extends StatelessWidget {
-  const ReportedAnswersPage({super.key, required this.reports, this.share = shareMarkdown});
+  const ReportedAnswersPage({super.key, required this.reports, this.share = shareMarkdown, this.onOpenChat});
 
   final AnswerReports reports;
+
+  /// Opens the chat a report came from (a row with a chat id is tappable; one without stays plain). Null: no row opens.
+  final void Function(int chatId)? onOpenChat;
   final ShareMarkdown share;
 
   String _when(DateTime at) {
@@ -148,7 +152,7 @@ class ReportedAnswersPage extends StatelessWidget {
                             IconButton(
                               tooltip: 'Share',
                               icon: const Icon(Icons.ios_share),
-                              onPressed: () => share('Reported answer', r.toMarkdown()),
+                              onPressed: () => shareTextOrCopy(context, 'Reported answer', r.toMarkdown(), share),
                             ),
                             IconButton(
                               tooltip: 'Remove',
@@ -158,6 +162,7 @@ class ReportedAnswersPage extends StatelessWidget {
                           ],
                         ),
                         chevron: false,
+                        onTap: r.chatId == null || onOpenChat == null ? null : () => onOpenChat!(r.chatId!),
                       ),
                   ],
                 ),
@@ -166,7 +171,7 @@ class ReportedAnswersPage extends StatelessWidget {
                     SettingsRow(
                       title: 'Share all reports',
                       chevron: false,
-                      onTap: () => share('Reported answers', [for (final r in items) r.toMarkdown()].join('\n---\n\n')),
+                      onTap: () => shareTextOrCopy(context, 'Reported answers', [for (final r in items) r.toMarkdown()].join('\n---\n\n'), share),
                     ),
                   ],
                 ),

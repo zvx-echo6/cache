@@ -10,7 +10,7 @@ typedef UserLayerCall = Future<Map<String, dynamic>> Function(String call, [Stri
 
 /// One repeater list or map layer of the user's map data, as cs_userlayers_list gives it.
 class UserLayer {
-  const UserLayer({required this.id, required this.kind, required this.name, required this.visible, this.notebookId, this.count = 0});
+  const UserLayer({required this.id, required this.kind, required this.name, required this.visible, this.notebookId, this.count = 0, this.shapes = 0});
 
   final String id;
 
@@ -25,6 +25,9 @@ class UserLayer {
   /// Repeaters (a list) or points (a layer).
   final int count;
 
+  /// Lines and areas (a layer).
+  final int shapes;
+
   bool get isRepeaters => kind == 'repeaters';
 
   static UserLayer fromJson(Map j) => UserLayer(
@@ -34,6 +37,7 @@ class UserLayer {
         visible: j['visible'] != false,
         notebookId: j['notebook_id'] as String?,
         count: ((j['repeaters'] ?? j['points']) as num?)?.toInt() ?? 0,
+        shapes: (((j['lines'] as num?) ?? 0) + ((j['areas'] as num?) ?? 0)).toInt(),
       );
 }
 
@@ -149,6 +153,13 @@ class UserLayersState extends ChangeNotifier {
 
   List<UserLayer> get repeaterLists => [for (final l in _all) if (l.isRepeaters) l];
 
+  /// The layers of lines and areas that belong to no notebook (what a file's lines became when it went into the saved places):
+  /// listed under My layers with a switch and a delete, as the repeater lists are.
+  List<UserLayer> get shapeLayers => [for (final l in _all) if (!l.isRepeaters && l.notebookId == null) l];
+
+  /// The layer or list with [id], or null.
+  UserLayer? layerById(String id) => _all.where((l) => l.id == id).firstOrNull;
+
   /// The repeaters the map drew last, by list id and item number (a tap on the map finds its repeater here).
   final Map<(String, int), Repeater> _drawn = {};
 
@@ -175,6 +186,29 @@ class UserLayersState extends ChangeNotifier {
   }
 
   bool focusPending = false;
+
+
+  /// A point of an imported layer ([ord]: the point's number in the layer, as `layer:<layer>/<point>` gives it), with the layer
+  /// it is in; null when the layer or the point is not there any more.
+  Future<({UserLayer layer, String name, double lat, double lon})?> layerPoint(String layerId, int ord) async {
+    final l = layerById(layerId);
+    if (l == null || l.isRepeaters) return null;
+    try {
+      final g = await _call('get', l.id);
+      for (final f in (g['features'] as List? ?? const [])) {
+        final m = f as Map;
+        if ((m['id'] as num?)?.toInt() != ord) continue;
+        final geo = m['geometry'] as Map?;
+        final c = geo?['coordinates'];
+        if (geo?['type'] != 'Point' || c is! List || c.length < 2 || c[0] is! num || c[1] is! num) return null;
+        final name = '${(m['properties'] as Map?)?['name'] ?? ''}'.trim();
+        return (layer: l, name: name.isEmpty ? '${l.name} point $ord' : name, lat: (c[1] as num).toDouble(), lon: (c[0] as num).toDouble());
+      }
+    } catch (e) {
+      logError('User layers', error: e);
+    }
+    return null;
+  }
 
   /// The repeaters of list [listId], in its own order (null when it cannot be read).
   Future<RepeaterNotebookSource?> repeaterSource(String listId) async {
@@ -261,6 +295,25 @@ class UserLayersState extends ChangeNotifier {
       } catch (_) {}
     }
     return {'type': 'FeatureCollection', 'features': features};
+  }
+
+  /// Where the repeaters of the shown lists are: the points of [mapGeoJson]'s repeater pins, and nothing else of them. For the
+  /// car's map (car_pins.dart); it leaves alone what a tap on the phone's map looks up.
+  Future<List<({double lat, double lon})>> shownRepeaterPositions() async {
+    final out = <({double lat, double lon})>[];
+    for (final l in repeaterLists) {
+      if (!l.visible) continue;
+      try {
+        final g = await _call('get', l.id);
+        for (final r in (g['repeaters'] as List? ?? const [])) {
+          final m = r as Map;
+          final lat = m['lat'], lon = m['lon'];
+          if (lat is! num || lon is! num) continue;
+          out.add((lat: lat.toDouble(), lon: lon.toDouble()));
+        }
+      } catch (_) {}
+    }
+    return out;
   }
 }
 

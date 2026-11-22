@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../app_fs.dart';
+import '../notebook/map_icons.dart' show RecentIcons;
+import '../notebook/pin_image.dart' show PinStyle;
 import 'geo.dart';
 import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
@@ -19,6 +21,29 @@ String shortAttribution(String credit) {
   var t = (end < 0 ? credit : credit.substring(0, end)).trim();
   if (t.endsWith('.')) t = t.substring(0, t.length - 1);
   return t.length > 80 ? '${t.substring(0, 79).trimRight()}…' : t;
+}
+
+/// The credit for the Protomaps base map's land cover (its `landcover` layer is Daylight's landcover, made from
+/// ESA WorldCover 2020, CC BY 4.0). Wording from Overture's attribution guideline.
+const List<String> kWorldCoverCredit = [
+  '© ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. CC BY 4.0.',
+  'Data from the Daylight Map Distribution',
+];
+
+/// The lines at the end of the full map credits (the sheet the credit line on the map opens), after each layer's
+/// own credit and licence. The WorldCover credit is there only while a Protomaps-layout base map is drawn.
+List<String> mapCreditNotes(List<StyleLayerUse> uses) {
+  final protomaps = uses.any((u) => u.def.isBase && MapLayout.parse(u.def.raw['layout']) == MapLayout.protomapsV4);
+  return [
+    'Map data © OpenStreetMap contributors, ODbL 1.0 (openstreetmap.org/copyright).',
+    if (protomaps) ...[
+      'Base map: Protomaps basemap tiles and the @protomaps/basemaps style layers (BSD-3-Clause). '
+          'Map fonts: Noto Sans, SIL Open Font License 1.1.',
+      ...kWorldCoverCredit,
+    ] else
+      'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
+          'Map fonts: Noto Sans, SIL Open Font License 1.1.',
+  ];
 }
 
 /// How the camera follows the phone.
@@ -71,6 +96,25 @@ class MapsState extends ChangeNotifier {
   SavedCamera? savedCamera;
   FollowMode follow = FollowMode.free;
 
+  /// How pins draw (Maps settings > Pin style). Per device, not synced.
+  PinStyle pinStyle = PinStyle.icon;
+
+  /// The map icons last chosen, newest first (the icon picker's Recent). Per device, not synced.
+  RecentIcons recentIcons = const RecentIcons();
+
+  void setPinStyle(PinStyle s) {
+    if (s == pinStyle) return;
+    pinStyle = s;
+    _save();
+    notifyListeners();
+  }
+
+  /// A map icon was chosen: it goes to the top of Recent.
+  void iconUsed(String id) {
+    recentIcons = recentIcons.used(id);
+    _save();
+  }
+
   /// What the map shows right now (set by the map screen), for "This region" downloads.
   GeoBounds? viewBounds;
 
@@ -115,6 +159,9 @@ class MapsState extends ChangeNotifier {
         if (seen is List) _seen.addAll(seen.cast<String>());
         final defs = j['definitions'];
         if (defs is Map) _definitions..clear()..addAll({for (final e in defs.entries) e.key as String: e.value == true});
+        pinStyle = PinStyle.byName(j['pin_style']);
+        final ri = j['recent_icons'];
+        if (ri is List) recentIcons = RecentIcons([for (final x in ri) if (x is String) x].take(12).toList());
         final c = j['camera'];
         if (c is Map) {
           savedCamera = SavedCamera((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble(), (c['zoom'] as num).toDouble());
@@ -123,6 +170,25 @@ class MapsState extends ChangeNotifier {
     } catch (_) {}
     engine.addListener(_onEngine);
     await _startEngine();
+  }
+
+  /// Takes the layers that are on from maps.json again (a change from a linked device was applied to the file on the server) and
+  /// tells listeners, without saving. Only that field is read: the camera, the opacities and the rest stay as they are in memory.
+  /// Async only for the file read; a file that is missing or unreadable changes nothing.
+  Future<void> reload() async {
+    final fs = _fs;
+    if (fs == null) return;
+    try {
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text == null) return;
+      final on = ((jsonDecode(text) as Map<String, dynamic>)['enabled'] as List).cast<String>();
+      _enabled
+        ..clear()
+        ..addAll(on);
+    } catch (_) {
+      return;
+    }
+    notifyListeners();
   }
 
   Future<void> _startEngine() async {
@@ -298,8 +364,11 @@ class MapsState extends ChangeNotifier {
   String get styleKey => [
         for (final u in uses) '${u.def.id}:${u.opacity.toStringAsFixed(2)}',
         engine.ready ? 'ready' : 'wait',
+        'pins-${pinStyle.name}',
         // The connection came back: the style is applied again with new source addresses, so blank tiles are asked for again.
         'net${engine.sourcesGeneration}',
+        // The tile server was started again on a new port (iOS took the old one away while the app was in the back).
+        'port${engine.port}',
         for (final l in engine.layers) l.styleSignature,
       ].join(',');
 
@@ -315,6 +384,7 @@ class MapsState extends ChangeNotifier {
       layers: uses,
       tilesUrl: (d) => engine.tilesUrl(d.id),
       glyphsUrl: glyphsUrl,
+      pinStyle: pinStyle,
     );
     return jsonEncode(style);
   }
@@ -333,6 +403,48 @@ class MapsState extends ChangeNotifier {
   }
 
   void clearDrawRequest() => drawRequest = false;
+
+  // ---- asked for from off the map --------------------------------------------------------------------------
+
+  /// An area asked to be shown on the map from off it (a region's Show on map, a layer's downloaded area): the shell brings the
+  /// Maps tab ([asks]) and the map screen fits the map to it once its map is ready ([takeAreaAsk]). Null: none.
+  GeoBounds? get areaAsk => _areaAsk;
+  GeoBounds? _areaAsk;
+
+  /// A layer of "Get more layers" tapped: the shell brings the Maps tab ([asks]) and the map screen opens the layer sheet at that
+  /// layer's switch ([takeLayerAsk]). Null: none.
+  String? get layerAsk => _layerAsk;
+  String? _layerAsk;
+
+  /// Counts the asks above, so the shell answers each one once.
+  int get asks => _asks;
+  int _asks = 0;
+
+  /// The Maps tab with the map fitted to [area].
+  void showAreaOnMap(GeoBounds area) {
+    _areaAsk = area;
+    _asks++;
+    notifyListeners();
+  }
+
+  /// The Maps tab with the layer sheet open at layer [id].
+  void showLayerOnMap(String id) {
+    _layerAsk = id;
+    _asks++;
+    notifyListeners();
+  }
+
+  GeoBounds? takeAreaAsk() {
+    final a = _areaAsk;
+    _areaAsk = null;
+    return a;
+  }
+
+  String? takeLayerAsk() {
+    final l = _layerAsk;
+    _layerAsk = null;
+    return l;
+  }
 
   void rememberCamera(double lat, double lon, double zoom) {
     savedCamera = SavedCamera(lat, lon, zoom);
@@ -403,6 +515,8 @@ class MapsState extends ChangeNotifier {
         'opacity': _opacity,
         'definitions': _definitions,
         'seen': _seen.toList(),
+        'pin_style': pinStyle.name,
+        'recent_icons': recentIcons.ids,
         if (savedCamera != null)
           'camera': {'lat': savedCamera!.lat, 'lon': savedCamera!.lon, 'zoom': savedCamera!.zoom},
       }));

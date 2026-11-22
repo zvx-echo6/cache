@@ -1,16 +1,27 @@
+import 'dart:async' show Timer;
+
+import 'package:flutter/foundation.dart' show ValueListenable, ValueNotifier;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent, KeyDownEvent, LogicalKeyboardKey;
 
 import '../app_state.dart';
 import '../chat/answer_progress.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../actions/setup_status.dart' show setupGuideTitle;
+import '../chat/ask_target.dart';
+import '../chat/progress_steps.dart' show ToolStep, nearbyQuery, stepQuery;
 import '../chat/tool.dart' show SourceResult;
 import '../chat/navigation_action.dart';
+import '../desktop/ask_column.dart';
+import '../desktop/desktop.dart';
 import '../history/share.dart';
 import '../layout/adaptive.dart' show ReadingWidth, isDesktop, showFittedSheet;
 import '../layout/layout_state.dart';
+import '../linux_ui.dart';
 import '../location/location_service.dart';
+import '../location/location_web_ui.dart';
 import '../location/position_source.dart' show LocationPermissionState;
 import '../theme.dart';
 import '../video/format.dart';
@@ -21,6 +32,7 @@ import 'confirm_card.dart';
 import 'history_drawer.dart';
 import 'model_search_screen.dart' show downloadModel;
 import 'models_screen.dart';
+import '../platform/share_or_copy.dart' show shareTextOrCopy;
 
 class AskScreen extends StatefulWidget {
   const AskScreen({
@@ -31,6 +43,7 @@ class AskScreen extends StatefulWidget {
     this.onOpenPassage,
     this.onOpenVideo,
     this.onOpenNavigation,
+    this.onOpenTarget,
     this.share = shareMarkdown,
     this.layout,
     this.location,
@@ -38,6 +51,9 @@ class AskScreen extends StatefulWidget {
     this.reports,
     this.readOnly = false,
     this.onBack,
+    this.held,
+    this.returned,
+    this.onHold,
   });
 
   /// No model on this device: the chat stays readable and copyable, and the composer is one line with "Choose a model".
@@ -45,6 +61,15 @@ class AskScreen extends StatefulWidget {
 
   /// The back arrow of a read-only chat (in place of the chats list).
   final VoidCallback? onBack;
+
+  /// The question typed while the model is not loaded, held until it is (shown in the chat, with a note); null: none.
+  final ValueListenable<String?>? held;
+
+  /// A held question that was dropped, to put back in the field (not over text already there); the screen clears it once taken.
+  final ValueNotifier<String?>? returned;
+
+  /// Holds a typed question and wakes the model ([Shell]); null: Send does nothing while no model is loaded.
+  final void Function(String text)? onHold;
 
   /// Where "Report this answer" keeps its reports (on this phone); the app's store when null.
   final AnswerReports? reports;
@@ -71,6 +96,10 @@ class AskScreen extends StatefulWidget {
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
+  /// Opens what a citation, a step of the steps list, or a card points at when it is not a page, passage or video: a place, a
+  /// layer's point, a notebook entry, live data, a search. The shell routes it to Maps, Notebooks, Weather or Home's search.
+  final void Function(AskTarget target)? onOpenTarget;
+
   @override
   State<AskScreen> createState() => _AskScreenState();
 }
@@ -83,9 +112,23 @@ class _AskScreenState extends State<AskScreen> {
   void initState() {
     super.initState();
     widget.chat.addListener(_scrollDown);
+    _takeReturned();
+    widget.returned?.addListener(_takeReturned);
     _shownId = widget.chat.activeId;
     // A chat opens on its latest turn (the answer and any card under it), not at its first question.
     _jumpToEnd();
+  }
+
+  /// A dropped held question comes back into the field. If the person has already typed something there, it stays and the question is
+  /// added after it on a new line, so nothing typed is lost.
+  void _takeReturned() {
+    final n = widget.returned;
+    final text = n?.value;
+    if (n == null || text == null) return;
+    n.value = null;
+    final now = _input.text;
+    final joined = now.isEmpty ? text : '$now\n$text';
+    _input.value = TextEditingValue(text: joined, selection: TextSelection.collapsed(offset: joined.length));
   }
 
   /// The chat the conversation shows, to tell when another one is opened.
@@ -107,6 +150,7 @@ class _AskScreenState extends State<AskScreen> {
       reason: r.reason,
       note: r.note,
       sources: [for (final s in m.sources) s.result.title],
+      chatId: widget.chat.activeId,
     ));
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -116,7 +160,9 @@ class _AskScreenState extends State<AskScreen> {
 
   @override
   void dispose() {
+    _stopWatchingWebBlock?.call();
     widget.chat.removeListener(_scrollDown);
+    widget.returned?.removeListener(_takeReturned);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -140,14 +186,64 @@ class _AskScreenState extends State<AskScreen> {
 
   void _send() {
     final text = _input.text;
-    if (text.trim().isEmpty || !widget.chat.canSend) return;
+    if (text.trim().isEmpty) return;
+    if (!widget.chat.canSend) {
+      // A model is chosen but not loaded: the question shows in the chat at once and waits ([Shell] holds it and wakes the model).
+      final hold = widget.onHold;
+      if (hold == null || widget.chat.busy || !_sendable) return;
+      _input.clear();
+      hold(text.trim());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      });
+      return;
+    }
     _input.clear();
     widget.chat.send(text);
+    _explainWebBlock();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
   }
 
+
+  /// Send works when a model is loaded, or chosen and on its way (resting, held back for memory, loading). With none chosen, and
+  /// when a load failed, it stays off.
+  bool get _sendable {
+    final app = widget.app;
+    return app.active != null || (app.failed == null && (app.resting != null || app.loading != null));
+  }
+
+  /// In the browser, with the location on but blocked there, shows the same "Allow location in your browser" dialog the map shows. The
+  /// question is not held back: it has already gone. The block may only be found while the question's own location read runs, so a
+  /// block that appears within a few seconds of sending is shown too, once.
+  VoidCallback? _stopWatchingWebBlock;
+
+  void _explainWebBlock() {
+    final location = widget.location;
+    if (!linuxUi || location == null || !location.enabled) return;
+    if (webLocationBlocked(location)) {
+      showHowToAllow(context);
+      return;
+    }
+    _stopWatchingWebBlock?.call();
+    late final VoidCallback listener;
+    Timer? stop;
+    void done() {
+      location.removeListener(listener);
+      stop?.cancel();
+      _stopWatchingWebBlock = null;
+    }
+    _stopWatchingWebBlock = done;
+    listener = () {
+      if (!location.enabled) return done();
+      if (!webLocationBlocked(location)) return;
+      done();
+      if (mounted) showHowToAllow(context);
+    };
+    location.addListener(listener);
+    stop = Timer(const Duration(seconds: 5), done);
+  }
 
   /// The "+" menu: the "Use my location" switch (Cache uses the location whenever the phone allows it and never asks). When the
   /// phone blocks it, the switch is off and says why, with the way to the phone's settings.
@@ -163,7 +259,11 @@ class _AskScreenState extends State<AskScreen> {
           final k = ctx.t;
           final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
           final serviceOff = location.problem == LocationProblem.serviceOff;
-          final why = blocked
+          // In the browser the words are Settings' own for a blocked browser, and the way out is the how-to-allow dialog.
+          final webBlocked = blocked && linuxUi;
+          final why = webBlocked
+              ? 'Blocked in this browser'
+              : blocked
               ? "Blocked in the device's settings"
               : serviceOff
               ? "The device's location is switched off"
@@ -180,14 +280,25 @@ class _AskScreenState extends State<AskScreen> {
                     title: const Text('Use my location', style: TextStyle(fontSize: 15)),
                     subtitle: Text(why, style: TextStyle(fontSize: 12, color: blocked || serviceOff ? k.warning : k.secondary)),
                     value: location.enabled && !blocked && !serviceOff,
-                    onChanged: blocked || serviceOff ? null : location.setEnabled,
+                    // In the browser a block is not a dead end: turning the switch on shows how to allow it.
+                    onChanged: serviceOff || (blocked && !linuxUi)
+                        ? null
+                        : blocked
+                        ? (on) {
+                            if (on) showHowToAllow(ctx);
+                          }
+                        : location.setEnabled,
                   ),
                   if (blocked || serviceOff)
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton(
-                        onPressed: blocked ? location.openAppSettings : location.openLocationSettings,
-                        child: const Text("Open the device's settings"),
+                        onPressed: webBlocked
+                            ? () => showHowToAllow(ctx)
+                            : blocked
+                            ? location.openAppSettings
+                            : location.openLocationSettings,
+                        child: Text(webBlocked ? 'How to allow' : "Open the device's settings"),
                       ),
                     ),
                 ],
@@ -222,7 +333,7 @@ class _AskScreenState extends State<AskScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Text(
-                  a == null ? 'No model loaded' : '${app.displayName(a)} · loaded · about ${formatBytes(a.size)} of memory',
+                  a == null ? 'No model loaded' : '${app.headerName(a)} · loaded · about ${formatBytes(a.size)} of memory',
                   key: const ValueKey('model-menu-head'),
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text),
                 ),
@@ -248,7 +359,7 @@ class _AskScreenState extends State<AskScreen> {
               children: [
                 for (final m in app.models)
                   if (m.path != app.active?.path && !app.isUnsupported(m))
-                    ListTile(minTileHeight: 48, title: Text(app.displayName(m)), subtitle: Text(formatBytes(m.size)), onTap: () => Navigator.pop(ctx, m)),
+                    ListTile(minTileHeight: 48, title: Text(app.displayName(m)), subtitle: Text(app.sizeLine(m)), onTap: () => Navigator.pop(ctx, m)),
               ],
             ),
           ),
@@ -256,6 +367,13 @@ class _AskScreenState extends State<AskScreen> {
         if (m != null) await app.activate(m);
       case 'unload':
         await app.unload();
+        // A browser whose server could not free the model: say why, as the Models screen does (same words, same source).
+        final failed = app.loadError;
+        if (mounted && failed != null && failed.startsWith('Could not unload the model')) {
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(SnackBar(content: Text(failed)));
+        }
       case 'manage':
         _openModels();
     }
@@ -267,7 +385,7 @@ class _AskScreenState extends State<AskScreen> {
     final id = widget.chat.activeId;
     final md = id == null ? null : widget.chat.exportMarkdown(id);
     final title = id == null ? null : widget.chat.store?.get(id)?.title;
-    if (md != null) await widget.share(title ?? 'Chat', md);
+    if (md != null && mounted) await shareTextOrCopy(context, title ?? 'Chat', md, widget.share);
   }
 
   @override
@@ -308,9 +426,11 @@ class _AskScreenState extends State<AskScreen> {
             final app = widget.app;
             final name = app.loading != null
                 ? 'Loading…'
-                : app.active == null
-                ? 'No model'
-                : app.displayName(app.active!);
+                : app.active != null
+                ? app.headerName(app.active!)
+                : app.resting != null && app.failed == null
+                ? app.headerName(app.resting!)
+                : 'No model';
             return InkWell(
               key: const ValueKey('model-name'),
               onTap: _modelMenu,
@@ -327,7 +447,7 @@ class _AskScreenState extends State<AskScreen> {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
-                          color: app.active == null && app.loading == null
+                          color: app.active == null && app.loading == null && !(app.resting != null && app.failed == null)
                               ? k.warning
                               : k.text,
                         ),
@@ -365,18 +485,20 @@ class _AskScreenState extends State<AskScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: Column(
+        child: DesktopReadingColumn(
+          child: Column(
           children: [
             ListenableBuilder(listenable: widget.app, builder: (context, _) => _fixLine(context) ?? const SizedBox.shrink()),
             Expanded(
               child: ListenableBuilder(
-                listenable: Listenable.merge([widget.chat, widget.app]),
+                listenable: Listenable.merge([widget.chat, widget.app, ?widget.held]),
                 builder: (context, _) {
                   final msgs = widget.chat.messages;
-                  if (msgs.isEmpty) {
+                  final held = widget.held?.value;
+                  if (msgs.isEmpty && held == null) {
                     final app = widget.app;
                     // A model on this device that is not loaded: the line at the top says what to do; nothing more here.
-                    if (_notLoaded) return const SizedBox.shrink();
+                    if (_notLoaded && !_sendable) return const SizedBox.shrink();
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32),
@@ -384,13 +506,13 @@ class _AskScreenState extends State<AskScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              app.active == null
+                              !_sendable
                                   ? 'Choose a model at the top to start.'
                                   : 'Ask a question. Cache looks in your sources before it answers.',
                               textAlign: TextAlign.center,
                               style: TextStyle(fontSize: 18, color: k.secondary),
                             ),
-                            if (app.active == null && app.loading == null) ...[
+                            if (!_sendable && app.loading == null) ...[
                               const SizedBox(height: 16),
                               FilledButton(
                                 key: const ValueKey('ask-open-models'),
@@ -408,8 +530,10 @@ class _AskScreenState extends State<AskScreen> {
                     builder: (context, c) => ListView.builder(
                     controller: _scroll,
                     padding: ReadingWidth.padFor(context, c.maxWidth, style: _readingStyle).copyWith(top: 8, bottom: 16),
-                    itemCount: msgs.length,
-                    itemBuilder: (_, i) => msgs[i].isUser
+                    itemCount: msgs.length + (held == null ? 0 : 1),
+                    itemBuilder: (_, i) => i == msgs.length
+                        ? _HeldBubble(held!, _heldModelName())
+                        : msgs[i].isUser
                         ? _UserBubble(msgs[i].text)
                         : _AssistantBlock(
                             msgs[i],
@@ -417,6 +541,7 @@ class _AskScreenState extends State<AskScreen> {
                             onOpenPassage: widget.onOpenPassage,
                             onOpenVideo: widget.onOpenVideo,
                             onOpenNavigation: widget.onOpenNavigation,
+                            onOpenTarget: widget.onOpenTarget,
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
@@ -428,6 +553,7 @@ class _AskScreenState extends State<AskScreen> {
 
             ReadingWidth(style: _readingStyle, child: _composer(context)),
           ],
+        ),
         ),
       ),
     );
@@ -453,9 +579,20 @@ class _AskScreenState extends State<AskScreen> {
 
   /// The fix for a model that is on this device but not loaded: one red line at the top and one button.
   Widget? _fixLine(BuildContext context) {
-    if (!_notLoaded) return null;
     final app = widget.app;
     final k = context.t;
+    if (!widget.readOnly && app.started && app.active == null && app.failed == null) {
+      final loading = app.loading;
+      if (loading != null) return _loadBar(k, 'Loading ${app.plainName(loading)}…', null, null, key: const ValueKey('ask-loading'));
+      final resting = app.resting;
+      if (resting != null && app.models.isNotEmpty) {
+        final name = app.plainName(resting);
+        return app.heldForMemory
+            ? _loadBar(k, 'Waiting for free memory', 'Load anyway', () => app.wake(force: true))
+            : _loadBar(k, '$name is resting', 'Load', () => app.wake(force: true));
+      }
+    }
+    if (!_notLoaded) return null;
     final failed = app.failed;
     final String line;
     final String button;
@@ -483,7 +620,7 @@ class _AskScreenState extends State<AskScreen> {
       if (resting != null) {
         // the chosen model, let go to leave memory free: it loads again
         button = 'Load ${app.displayName(resting)}';
-        onPressed = app.wake;
+        onPressed = () => app.wake(force: true);
       } else if (usable.isEmpty) {
         button = 'Choose a model';
         onPressed = _openModels;
@@ -507,6 +644,31 @@ class _AskScreenState extends State<AskScreen> {
         ],
       ),
     );
+  }
+
+  /// The slim bar under the header for a chosen model that is not loaded: resting, held back for memory (nothing is broken, so the
+  /// calm colors, no red), or loading (no button). One line, with a text button on the right.
+  Widget _loadBar(CacheTokens k, String text, String? button, VoidCallback? onPressed, {Key key = const ValueKey('ask-fix')}) {
+    return Container(
+      key: key,
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 44),
+      padding: const EdgeInsets.only(left: 16, right: 4),
+      decoration: BoxDecoration(color: k.surface, border: Border(bottom: BorderSide(color: k.secondary.withValues(alpha: 0.2)))),
+      child: Row(
+        children: [
+          Expanded(child: Text(text, key: const ValueKey('ask-fix-line'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text))),
+          if (button != null) TextButton(key: const ValueKey('ask-fix-button'), onPressed: onPressed, child: Text(button)),
+        ],
+      ),
+    );
+  }
+
+  /// The model a held question waits for.
+  String? _heldModelName() {
+    final app = widget.app;
+    final m = app.resting ?? app.loading;
+    return m == null ? null : app.plainName(m);
   }
 
   /// "Delete and download again": the damaged file goes; a recommended model downloads again (its download pop-up first), any other
@@ -539,6 +701,19 @@ class _AskScreenState extends State<AskScreen> {
     );
   }
 
+  /// Enter without Shift sends the question (the desktop composer). Shift+Enter falls through, so the field adds the new line. An
+  /// input method still composing a word keeps its Enter.
+  KeyEventResult _enterSends(FocusNode node, KeyEvent event) {
+    final enter = event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter || HardwareKeyboard.instance.isShiftPressed) return KeyEventResult.ignored;
+    if (_input.value.composing.isValid && !_input.value.composing.isCollapsed) return KeyEventResult.ignored;
+    if (event is KeyDownEvent) {
+      if (_sendable) _send();
+    }
+    // The key-up and repeats of a handled Enter are swallowed too, so a held Enter never adds a line.
+    return KeyEventResult.handled;
+  }
+
   Widget _composer(BuildContext context) {
     final k = context.t;
     if (widget.readOnly) return _offLine(context);
@@ -546,7 +721,7 @@ class _AskScreenState extends State<AskScreen> {
       listenable: Listenable.merge([widget.chat, widget.app]),
       builder: (context, _) {
         final busy = widget.chat.busy;
-        final ready = widget.app.active != null;
+        final ready = _sendable;
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
           child: Row(
@@ -571,15 +746,21 @@ class _AskScreenState extends State<AskScreen> {
                 const SizedBox(width: 4),
               ],
               Expanded(
-                child: TextField(
-                  controller: _input,
-                  enabled: ready,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.newline,
-                  style: const TextStyle(fontSize: 18),
-                  decoration: InputDecoration(
-                    hintText: ready ? 'Ask anything' : 'No model',
+                child: Focus(
+                  // On the Linux desktop (a hardware keyboard) Enter sends and Shift+Enter starts a new line. A phone is untouched.
+                  canRequestFocus: false,
+                  skipTraversal: true,
+                  onKeyEvent: isLinuxDesktop(context) ? _enterSends : null,
+                  child: TextField(
+                    controller: _input,
+                    enabled: ready,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    style: TextStyle(fontSize: isLinuxDesktop(context) ? 16 : 18),
+                    decoration: InputDecoration(
+                      hintText: ready ? 'Ask anything' : 'No model',
+                    ),
                   ),
                 ),
               ),
@@ -611,6 +792,33 @@ class _AskScreenState extends State<AskScreen> {
   }
 }
 
+/// A question asked before the model has loaded: shown as sent, with a quiet line that says when it will go.
+class _HeldBubble extends StatelessWidget {
+  const _HeldBubble(this.text, this.model);
+
+  final String text;
+  final String? model;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        _UserBubble(text),
+        Padding(
+          padding: const EdgeInsets.only(right: 4, top: 2),
+          child: Text(
+            key: const ValueKey('ask-held-note'),
+            model == null ? 'Sent when the model has loaded' : 'Sent when $model has loaded',
+            style: TextStyle(fontSize: 13, color: k.secondary),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _UserBubble extends StatelessWidget {
   const _UserBubble(this.text);
 
@@ -630,7 +838,7 @@ class _UserBubble extends StatelessWidget {
         ),
         child: Text(
           text,
-          style: TextStyle(fontSize: 18, height: 1.35, color: k.text),
+          style: TextStyle(fontSize: isLinuxDesktop(context) ? 15 : 18, height: 1.35, color: k.text),
         ),
       ),
     );
@@ -638,7 +846,7 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onOpenTarget, this.onReport, this.chat});
 
   final ChatMessage msg;
 
@@ -649,6 +857,7 @@ class _AssistantBlock extends StatefulWidget {
   final void Function(String address, String quote)? onOpenPassage;
   final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
+  final void Function(AskTarget target)? onOpenTarget;
 
   @override
   State<_AssistantBlock> createState() => _AssistantBlockState();
@@ -657,19 +866,82 @@ class _AssistantBlock extends StatefulWidget {
 class _AssistantBlockState extends State<_AssistantBlock> {
   /// What tapping a citation does: a video moment opens the player there (a saved video's or a ZIM's caption); a citation the
   /// reader can show opens it ([SourceResult.readerAddress]: a ZIM page, a PDF page, an EPUB chapter), with its passage
-  /// marked when it has one; anything else does nothing.
+  /// marked when it has one; the phone's setup opens its guide section; a route opens in Maps; a place, a layer's point, a repeater
+  /// or notebook entry and live data go to the shell ([AskScreen.onOpenTarget]). A web page does nothing (an owner decision is
+  /// pending).
   VoidCallback? _tapOf(SourceResult r) {
     final video = widget.onOpenVideo;
     if (r.isVideoMoment && video != null) return () => video(r.link!, r.time!, r.lang);
+    // A passage of a library (a book, or the guide) opens through the shell at its own address: the passage screen, or the
+    // guide at its section. It is not the reader's (no "Open the article"), and a #page form of it is not an address the
+    // library reads.
+    final lib = widget.onOpenSource;
+    if (r.address.startsWith('lib:') && lib != null) return () => lib(r.address);
+    // The phone's setup (app.setup_status) opens the guide section that part names.
+    if (lib != null && setupGuideTitle(r.address) != null) return () => lib(r.address);
+    // A route opens in Maps as the "Open navigation" button does (a route whose snapshot is gone says so).
+    final navigate = widget.onOpenNavigation;
+    if (navigate != null && r.address.startsWith('nav:') && r.address.length > 4) {
+      final action = widget.msg.navigationActions.where((x) => x.address == r.address).firstOrNull ?? NavigationAction(address: r.address);
+      return () => navigate(action);
+    }
     final a = r.readerAddress;
-    if (a == null) return null;
-    final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
-    if (passage != null && quote != null) return () => passage(a, quote);
-    if (source != null) return () => source(a);
+    if (a != null) {
+      final (passage, source, quote) = (widget.onOpenPassage, widget.onOpenSource, r.quote);
+      if (passage != null && quote != null) return () => passage(a, quote);
+      if (source != null) return () => source(a);
+    }
+    // A place, a layer's point, a repeater or notebook entry, live data: the shell opens it.
+    return _targetTap(r.target);
+  }
+
+  VoidCallback? _targetTap(AskTarget? t) {
+    final open = widget.onOpenTarget;
+    return t == null || open == null ? null : () => open(t);
+  }
+
+  /// What tapping the mark of source [n] in the answer does: what tapping that source's row does.
+  VoidCallback? _citeTap(int n) {
+    final r = widget.msg.sources.where((s) => s.id == n).firstOrNull;
+    return r == null ? null : _tapOf(r.result);
+  }
+
+  /// What tapping a finished step's line does: open what it read or made, run its search again, or show its route; null when it
+  /// points at nothing.
+  VoidCallback? _stepTap(ToolStep s) {
+    switch (s.tool) {
+      case 'read' || 'act':
+        final r = s.source;
+        return r == null ? null : _tapOf(r);
+      case 'search':
+        final q = stepQuery(s);
+        return q == null ? null : _targetTap(AskHomeSearch(query: q));
+      case 'nearby':
+        final q = nearbyQuery(s);
+        return q == null ? null : _targetTap(AskMapSearch(query: q));
+      case 'navigate':
+        final navigate = widget.onOpenNavigation;
+        final action = s.routes.firstOrNull;
+        return navigate == null || action == null ? null : () => navigate(action);
+    }
     return null;
   }
 
   bool _open = false;
+
+  /// The opened list of sources (key for the scroll, on the Linux desktop).
+  final _listKey = GlobalKey();
+
+  /// Opening the sources scrolls the conversation so every one is in reach: they open below the answer, behind the composer's edge.
+  void _toggleSources() {
+    setState(() => _open = !_open);
+    if (!_open || !isLinuxDesktop(context)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (!mounted || c == null) return;
+      Scrollable.ensureVisible(c, duration: Duration.zero, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -683,15 +955,23 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           AnswerProgress(
             phase: m.phase,
             activeTool: m.activeTool,
+            activeStep: m.activeStep,
+            steps: m.steps,
             notes: m.toolNotes,
             text: m.text,
-            failed: m.error != null,
+            failed: m.error != null || m.cutShort,
             queuePosition: m.queuePosition,
+            dropCitations: m.isDone && m.sources.isEmpty,
+            onCite: (n) => _citeTap(n)?.call(),
+            canCite: (n) => _citeTap(n) != null,
+            stepTap: _stepTap,
           ),
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
               lines: widget.chat?.actions?.cardLines(card.action, card.fields, card.summary),
+              targets: widget.chat?.actions?.cardTargets(card.action, card.fields, card.result),
+              onOpen: widget.onOpenTarget,
               enabled: widget.chat?.canSend ?? false,
               onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
             ),
@@ -719,12 +999,17 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ],
               ),
             ),
+          if (m.cutShort && m.isDone)
+            _newChatNote(context, 'This answer was cut short because the chat is full.', 14, k.secondary, 'ask-cut-short'),
+          if (m.chatFull && m.isDone)
+            _newChatNote(context, 'This chat is full. Start a new chat to keep asking.', 16, k.text, 'ask-chat-full'),
           if (m.error != null)
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
           if (m.error == kCoreDidNotStart && widget.chat != null)
             TextButton(key: const ValueKey('ask-try-again'), onPressed: widget.chat!.retryLast, child: const Text('Try again')),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
-            _sourcesRow(context, m),
+            // On the Linux desktop the sources chip has 12 pixels of air above it.
+            isLinuxDesktop(context) && m.sources.isNotEmpty ? Padding(padding: const EdgeInsets.only(top: 12), child: _sourcesRow(context, m)) : _sourcesRow(context, m),
           if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)
             Align(
               alignment: Alignment.centerLeft,
@@ -735,7 +1020,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 label: Text('Report this answer', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
             ),
-          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
+          if (m.isDone && m.error == null && !m.chatFull && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
             Text(
               'No answer was produced.',
               style: TextStyle(fontSize: 15, color: k.secondary),
@@ -745,13 +1030,38 @@ class _AssistantBlockState extends State<_AssistantBlock> {
     );
   }
 
+  /// A plain note with a New chat button (the same action as the app bar's), for a full chat.
+  Widget _newChatNote(BuildContext context, String message, double size, Color color, String key) {
+    if (widget.chat == null) return Text(message, style: TextStyle(fontSize: size, color: color));
+    return Padding(
+      key: ValueKey(key),
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: TextStyle(fontSize: size, height: 1.35, color: color)),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('ask-new-chat'),
+            onPressed: widget.chat!.newChat,
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+            icon: const Icon(Icons.add_comment_outlined, size: 20),
+            label: const Text('New chat'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _sourcesRow(BuildContext context, ChatMessage m) {
     final k = context.t;
     if (m.sources.isEmpty) {
+      // A turn that searched or read the sources but cites none of them says so (owner, 2026-11-14); "Not from your sources" is
+      // only for an answer that used none.
       return Padding(
         padding: const EdgeInsets.only(top: 6),
         child: Text(
-          'Not from your sources',
+          m.searchedSources ? 'Searched your sources, but cites none of them' : 'Not from your sources',
           style: TextStyle(fontSize: 14, color: k.secondary),
         ),
       );
@@ -762,7 +1072,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: () => setState(() => _open = !_open),
+          onTap: _toggleSources,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),
             child: Align(
@@ -802,6 +1112,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           ),
         ),
         if (_open)
+          Column(
+            key: _listKey,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           for (final s in m.sources)
             Container(
               margin: const EdgeInsets.only(top: 6),
@@ -851,6 +1165,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 ),
               ),
             ),
+            ],
+          ),
       ],
     );
   }

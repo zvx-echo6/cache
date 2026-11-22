@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.happylittlellc.cache.OpenMaps
 import com.happylittlellc.cache.R
 
 /**
@@ -33,6 +34,8 @@ class CarLocationService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            // A tap opens the Maps tab (the drive screen while guiding).
+            .setContentIntent(OpenMaps.pending(this, TAP))
             .build()
         try {
             ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -47,6 +50,9 @@ class CarLocationService : Service() {
         private const val TAG = "CacheCar"
         const val CHANNEL = "cache_car_connected"
         const val ID = 7310
+
+        /** The request code of the notification's tap. */
+        const val TAP = 7311
 
         fun start(context: Context) {
             val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)

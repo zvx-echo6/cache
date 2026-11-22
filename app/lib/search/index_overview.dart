@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import '../platform/app_log.dart' show appLog;
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../theme.dart';
-import '../library/add_pdf/add_pdf_pages.dart' show openAddPdfProgress;
-import '../library/add_pdf/add_pdf_state.dart' show addPdfShared, addPdfErrorWords;
+import '../library/add_pdf/add_pdf_pages.dart' show addPdfDoneLine, openAddPdfProgress;
+import '../library/add_pdf/add_pdf_state.dart' show AddPdfJob, AddPdfState, addPdfShared, addPdfErrorWords;
 import 'index_scheduler.dart';
 import 'index_status.dart';
 
@@ -16,13 +16,16 @@ import 'index_status.dart';
 /// continue"), and under it the work running now ("Army Publishing · PDFs 340 of 5,768"). Tapping it opens the queue
 /// ([showIndexQueueSheet]). When everything is done it says "Search ready · 9 of 9" for a moment ([doneFor]), then goes.
 class IndexOverviewLine extends StatefulWidget {
-  const IndexOverviewLine({super.key, required this.scheduler, this.doneFor = const Duration(seconds: 4), this.queueOnTap = false});
+  const IndexOverviewLine({super.key, required this.scheduler, this.doneFor = const Duration(seconds: 4), this.queueOnTap = false, this.clock = DateTime.now});
 
   final IndexScheduler scheduler;
 
   /// A tap always opens the queue (on Add PDF's progress page, which a PDF's work otherwise opens).
   final bool queueOnTap;
   final Duration doneFor;
+
+  /// The time now (a test sets its own): a PDF that was just added is said for a while.
+  final DateTime Function() clock;
 
   @override
   State<IndexOverviewLine> createState() => _IndexOverviewLineState();
@@ -33,6 +36,7 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
   int _lastTotal = 0;
   int? _doneTotal;
   Timer? _hide;
+  Timer? _doneLine;
 
   @override
   void initState() {
@@ -47,6 +51,7 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     widget.scheduler.removeListener(_changed);
     addPdfShared?.removeListener(_changed);
     _hide?.cancel();
+    _doneLine?.cancel();
     super.dispose();
   }
 
@@ -75,11 +80,42 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
     // a PDF whose adding stopped: the card stays, its line in the danger color ("Water purification manual · Stopped: no readable
     // text"), until it is tried again or put away on the progress page
     final stopped = addPdfShared?.failed.firstOrNull;
-    final line = stopped == null ? s.line : 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done';
+    // a PDF paused by the person is not index work, so the scheduler does not list it: the card stays, so its Resume can be
+    // reached, with the same words as its own card ("Paused by you · Resume")
+    final paused = stopped == null && !s.busy ? addPdfShared?.active.where((j) => j.pausedByPerson).toList() ?? const [] : const <AddPdfJob>[];
+    // a PDF that was just added: what it did ("Added to My books · 9 pieces searchable") comes before a paused one waiting beside it
+    // (the person must see the book went in), for a short while; the paused line is back after that
+    final now = widget.clock();
+    final added = stopped == null && !s.busy ? addPdfShared?.justFinished(now) : null;
+    _doneLine?.cancel();
+    if (added != null) {
+      final left = AddPdfState.kDoneLineFor - now.difference(added.finishedAt!);
+      _doneLine = Timer(left + const Duration(milliseconds: 50), () {
+        if (mounted) setState(() {});
+      });
+    }
+    final line = stopped != null
+        ? 'Getting search ready · ${s.busy ? s.doneCount : 0} of ${(s.busy ? s.totalCount : 0) + addPdfShared!.failed.length} done'
+        : (added != null
+            ? addPdfDoneLine(addPdfShared!, added)
+            : (paused.isNotEmpty ? (paused.length == 1 ? 'Paused · 1 PDF waiting' : 'Paused · ${paused.length} PDFs waiting') : s.line));
     final done = _doneTotal;
     if (line == null && done == null) return const SizedBox.shrink();
-    final held = line != null && s.reason != IndexWait.none && stopped == null;
-    final current = stopped != null ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}' : (line == null ? null : indexCurrentWords(s));
+    // everything paused by the person: said plainly, in the normal text color (nothing is wrong)
+    final held = line != null && s.reason != IndexWait.none && stopped == null && added == null && paused.isEmpty;
+    var current = stopped != null
+        ? '${stopped.title} · Stopped: ${addPdfErrorWords(stopped).stopped}'
+        : (added != null ? added.title : (paused.isNotEmpty ? '${paused.first.title} · Paused by you · Resume' : (line == null ? null : indexCurrentWords(s))));
+    // a PDF a watched folder found: the folder and how many its check found come first ("Manuals: 2 new PDFs · ...")
+    final run = s.running;
+    if (stopped == null && current != null && run != null && run.startsWith('pdf-add/')) {
+      final j = addPdfShared?.byId(run.substring('pdf-add/'.length));
+      final check = j?.checkId;
+      if (j != null && j.watchName != null && check != null) {
+        final n = addPdfShared!.jobs.where((o) => o.checkId == check).length;
+        current = '${j.watchName}: ${n == 1 ? '1 new PDF' : '$n new PDFs'} · $current';
+      }
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
       child: Material(
@@ -88,7 +124,9 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           key: const ValueKey('index-overview'),
-          onTap: line == null ? null : (!widget.queueOnTap && (stopped != null || (s.running?.startsWith('pdf-add/') ?? false)) ? () => openAddPdfProgress(context) : () => showIndexQueueSheet(context, s)),
+          onTap: line == null
+              ? null
+              : (!widget.queueOnTap && (stopped != null || added != null || paused.isNotEmpty || (s.running?.startsWith('pdf-add/') ?? false)) ? () => openAddPdfProgress(context) : () => showIndexQueueSheet(context, s)),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             child: Row(
@@ -114,7 +152,9 @@ class _IndexOverviewLineState extends State<IndexOverviewLine> {
                           borderRadius: BorderRadius.circular(3),
                           child: LinearProgressIndicator(
                             key: const ValueKey('index-overview-bar'),
-                            value: line == null ? 1 : (s.busy ? s.fraction : 0),
+                            // full when it is all done (a book added whose words are in); MOVING (indeterminate) while the added book's
+                            // words are being put in the search index: an empty bar would read as stuck
+                            value: added != null && addPdfShared!.wordsPendingFor(added) ? null : (line == null || added != null ? 1 : (s.busy ? s.fraction : 0)),
                             minHeight: 6,
                             color: held ? k.secondary : k.accent,
                             backgroundColor: k.secondary.withValues(alpha: 0.15),

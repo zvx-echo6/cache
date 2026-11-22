@@ -109,6 +109,9 @@ class FakeWeb {
   final List<Uri> requested = [];
   bool offline = false;
 
+  /// While set, Try it's fetch waits for it: a host that does not answer.
+  Completer<void>? hold;
+
   /// Serves [catalogue] (see [buildCatalogue]) under [base].
   void serve(String base, Map<String, String> catalogue) {
     for (final e in catalogue.entries) {
@@ -127,6 +130,7 @@ class FakeWeb {
   /// The same server as Try it of Add your own source reads it (net/fetch.dart's failures).
   Future<List<int>> tryFetch(Uri u, Duration timeout) async {
     requested.add(u);
+    if (hold != null) await hold!.future;
     if (offline) throw FetchException(FetchFailure.unreachable, u.host);
     final b = files[u.toString()];
     if (b == null) throw FetchException(FetchFailure.status, u.host, status: 404);
@@ -135,7 +139,8 @@ class FakeWeb {
 }
 
 /// The search core's live part, in memory. It registers whatever definition files are in the folder (as the real core does), refuses
-/// the ids in [invalid], and records every call. [keys] is what the core holds: the app never reads a key back from it.
+/// the ids in [invalid], and records every call. [keys] is what the core holds: the app never reads a key back from it, and a
+/// fetch of a source that needs a key uses it when the request has none (as the core's cs_live_fetch does).
 class FakeLiveCore implements LiveCore {
   FakeLiveCore(this.liveDir);
 
@@ -148,6 +153,10 @@ class FakeLiveCore implements LiveCore {
   final Set<String> invalid = {};
   final Map<String, CacheSearchException> fetchErrors = {};
   final Map<String, Map<String, dynamic>> stored = {};
+
+  /// What is stored for one place alone, by "source place-key" (a saved place's key; "at:42.54,-113.79" for where the phone
+  /// is). A place without an entry here gets what [stored] has for the source.
+  final Map<String, Map<String, dynamic>> storedAt = {};
   CacheSearchException? previewError;
   Map<String, dynamic> previewResult = {'valid': true, 'item_count': 1};
   List<SavedPlaceRecord> saved = [];
@@ -156,6 +165,9 @@ class FakeLiveCore implements LiveCore {
 
   /// While set, cs_live_get waits for it: the core busy with something else (it answers one call at a time).
   Completer<void>? busy;
+
+  /// While set, a download waits for it (a slow provider): a test looks at the page meanwhile.
+  Completer<void>? fetchGate;
 
   @override
   Future<void> deleteSavedPlace(String key) async {
@@ -178,15 +190,35 @@ class FakeLiveCore implements LiveCore {
   @override
   Future<Map<String, dynamic>> fetch(Map<String, dynamic> request) async {
     fetches.add(request);
+    await fetchGate?.future;
     final e = fetchErrors[request['source']];
     if (e != null) throw e;
+    // As the core does: a source whose definition needs a key is fetched with the key in the request, else with the one the core
+    // was handed (setKey); with neither it answers key_missing.
+    final id = '${request['source']}';
+    if (_needsKey(id) && '${request['api_key'] ?? ''}'.isEmpty && (keys[id] ?? '').isEmpty) {
+      throw CacheSearchException('key_missing', '$id needs the API key');
+    }
     return {'fetched': fetchedNew};
+  }
+
+  /// Whether the definition of [id] in the folder says it needs a key.
+  bool _needsKey(String id) {
+    try {
+      final f = File('${liveDir.path}/$id.json');
+      if (!f.existsSync()) return false;
+      final k = (jsonDecode(f.readAsStringSync()) as Map)['api_key'];
+      return k is Map && k['required'] != false;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
   Future<Map<String, dynamic>> get(Map<String, dynamic> request) async {
     await busy?.future;
-    final s = stored['${request['source']}'];
+    final place = request['place'];
+    final s = (place is Map ? storedAt['${request['source']} ${place['key']}'] : null) ?? stored['${request['source']}'];
     if (s == null) throw const CacheSearchException('not_found', 'nothing downloaded');
     return s;
   }

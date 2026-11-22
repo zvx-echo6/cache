@@ -73,7 +73,7 @@ enum IndexAction {
     Remove,
 }
 
-struct CoreStaged {
+pub(crate) struct CoreStaged {
     lib: PathBuf,
     entry: Arc<LibEntry>,
     shard: PathBuf,
@@ -86,7 +86,7 @@ struct CoreStaged {
     _guard: UpdateGuard,
 }
 
-fn upsert(shard_dir: &Path, points: &[Point]) -> Result<()> {
+pub(crate) fn upsert(shard_dir: &Path, points: &[Point]) -> Result<()> {
     let shard = EdgeShard::load(shard_dir, None).map_err(|e| io("opening the staged shard", e))?;
     let upd = |op: PointOperations| shard.update(UpdateOperation::PointOperation(op)).map_err(|e| io("adding points", e));
     let mut batch = Vec::new();
@@ -127,6 +127,14 @@ fn remove_dir(p: &Path) {
 }
 
 fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
+    begin_write_with(library_dir, points, false)
+}
+
+/// [`begin_write`], or with `fresh` a NEW shard holding only `points` (a person's own library rebuilt from its packs, see
+/// `ownlib.rs`): the stage starts as the blank shard instead of a copy of the library's, so a shard that is missing or that a
+/// sync put together from two devices' files is never read; the device keyword index, built for the old shard, is removed
+/// (`index_library` builds it again).
+pub(crate) fn begin_write_with(library_dir: &Path, points: &[Point], fresh: bool) -> Result<CoreStaged> {
     ensure_init();
     let shard = library_dir.join("shard");
     let entry = libreg::entry_for(&shard);
@@ -138,15 +146,17 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
         }
         libupdate::recover_leftovers(&shard)?;
     }
-    if !shard.is_dir() {
-        return Err(Error::not_found(format!("library shard {} not found", shard.display())));
+    if !fresh {
+        if !shard.is_dir() {
+            return Err(Error::not_found(format!("library shard {} not found", shard.display())));
+        }
+        library::check_not_damaged(&shard, true)?;
     }
-    library::check_not_damaged(&shard, true)?;
     let index = library_dir.join(INDEX_DIR);
     let index_stage = library_dir.join(INDEX_STAGE);
     let index_old = library_dir.join(INDEX_OLD);
     // space: the copies of the shard and the index, the new points (vector and text) and the margin
-    let shard_bytes = tree_size(&shard)?;
+    let shard_bytes = if shard.is_dir() { tree_size(&shard)? } else { 0 };
     let index_bytes = if index.is_dir() { tree_size(&index)? } else { 0 };
     let new_bytes: u64 = points.iter().map(|p| (p.vector.len() * 4 + p.payload.to_string().len()) as u64 * 2).sum();
     let needed = shard_bytes.saturating_add(index_bytes).saturating_add(new_bytes).saturating_add(margin_for(shard_bytes));
@@ -181,11 +191,19 @@ fn begin_write(library_dir: &Path, points: &[Point]) -> Result<CoreStaged> {
     };
     // from here `Drop` removes the copies on any failure
     remove_dir(&st.stage);
-    copy_tree(&st.shard, &st.stage)?;
+    if fresh {
+        crate::libadd::make_blank_shard(&st.stage)?;
+    } else {
+        copy_tree(&st.shard, &st.stage)?;
+    }
     upsert(&st.stage, points)?;
     write_segments_manifest(&st.stage)?;
     sync_tree(&st.stage)?;
-    if st.index.is_dir() {
+    if fresh {
+        if st.index.is_dir() {
+            st.index_action = IndexAction::Remove;
+        }
+    } else if st.index.is_dir() {
         let given: Option<Value> = std::fs::read_to_string(library_dir.join(SETTINGS_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok());
         let ro = library::open_shard_for_scroll(&st.stage)?;
         let settings = library::resolve_settings(&ro, &st.stage, given.as_ref())?;
@@ -308,7 +326,10 @@ impl Classifier for CoreClassifier {
     fn classify(&self, pieces: &[cache_pack::pack::PackPiece]) -> Option<Filing> {
         let v = cache_pack::sorter::classify(&self.model, pieces).ok()?;
         let best = v.top.first()?;
-        let label = self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == best.division).map(|c| c.label.clone()).unwrap_or_else(|| best.division.clone());
+        let label_of = |div: &str| self.model.classes().iter().find(|c| cache_classify::division_code(c.division) == div).map(|c| c.label.clone()).unwrap_or_else(|| div.to_string());
+        let label = label_of(&best.division);
+        // the top three, best first: kept in the pack so Unsorted can offer them
+        let suggestions = v.top.iter().map(|s| cache_pack::pack::ShelfSuggestion { div: s.division.clone(), label: label_of(&s.division), score: Some(s.score) }).collect();
         Some(Filing {
             suggested: cache_pack::pack::Suggested {
                 div: best.division.clone(),
@@ -317,6 +338,8 @@ impl Classifier for CoreClassifier {
                 classifier_version: Some(v.version),
                 source: "classifier".to_string(),
                 second_div: v.top.get(1).map(|s| s.division.clone()),
+                filed: Some(v.division.is_some()),
+                suggestions,
             },
             filed: v.division.is_some(),
         })
@@ -404,18 +427,41 @@ pub fn service_with(provider: cache_ingest::EnvProvider) -> Service {
 }
 
 /// `cs_ingest_probe`: tries to load PDFium and the embedder with the paths of `engines` and reports; keeps nothing loaded and writes
-/// nothing. Only malformed JSON is an error.
+/// nothing. `load_embedder` false skips the embedder's load (reported as `{"ok": null, "skipped": true}`); the model file's
+/// presence and `hash_model` still apply. Only malformed JSON is an error.
 pub fn probe(args: &str) -> Result<String> {
     use serde_json::json;
     let v: Value = serde_json::from_str(args).map_err(|e| Error::bad_json(format!("the request is not JSON: {e}")))?;
     let engines = v.get("engines").cloned().unwrap_or(Value::Null);
+    // `fonts`: true installs the process's one PDFium font mapper (idempotent; see cache_ingest::pdfium::install_fonts). With
+    // `fonts_only` that is all: the answer is `{"fonts": {...}}` and nothing else is tried.
+    let fonts = if v.get("fonts").and_then(Value::as_bool).unwrap_or(false) {
+        Some(match cache_ingest::pdfium::install_fonts(text(&engines, "pdfium_lib").as_deref()) {
+            Ok((from, installed)) => json!({"ok": true, "from": from, "installed": installed}),
+            Err(e) => json!({"ok": false, "error": e.message}),
+        })
+    } else {
+        None
+    };
+    if v.get("fonts_only").and_then(Value::as_bool).unwrap_or(false) {
+        // and the addresses of the process's one PDFium lock (see cache_ingest::pdfium), for pdfrx's worker
+        let f = cache_ingest::pdfium::lock_functions();
+        return Ok(json!({
+            "fonts": fonts,
+            "lock_fns": {"acquire": f.acquire, "release": f.release, "drop_owner": f.drop_owner, "finalize": f.finalize},
+            "lock_status": cache_ingest::pdfium::lock_status(),
+        })
+        .to_string());
+    }
     let hash_model = v.get("hash_model").and_then(Value::as_bool).unwrap_or(true);
+    let load_embedder = v.get("load_embedder").and_then(Value::as_bool).unwrap_or(true);
     let pdfium = match cache_ingest::pdfium::probe(text(&engines, "pdfium_lib").as_deref()) {
         Ok(from) => json!({"ok": true, "version": text(&engines, "pdfium_version"), "from": from}),
         Err(e) => json!({"ok": false, "version": null, "from": null, "error": e.message}),
     };
     let (lib, model, expected) = (text(&engines, "embed_lib"), text(&engines, "embed_model"), text(&engines, "embed_sha256"));
     let embedder = match (&lib, &model) {
+        _ if !load_embedder => json!({"ok": null, "skipped": true}),
         (Some(l), Some(m)) => match cache_embed::Embedder::load(l, m, None, None, 1) {
             Ok(_) => json!({"ok": true}),
             Err(e) => json!({"ok": false, "error": e.to_string()}),
@@ -441,5 +487,16 @@ pub fn probe(args: &str) -> Result<String> {
             Err(e) => json!({"ok": false, "version": null, "error": e}),
         },
     };
-    Ok(json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier}).to_string())
+    let mut out = json!({"pdfium": pdfium, "embedder": embedder, "model": model_report, "classifier": classifier});
+    // `dump`: {"pdf": "<path>", "dpi": 72}: what the job reads from that PDF, page by page (see cache_ingest::pdfium::dump)
+    if let Some(f) = fonts {
+        out["fonts"] = f;
+    }
+    if let Some(d) = v.get("dump") {
+        let pdf = d.get("pdf").and_then(Value::as_str).ok_or_else(|| Error::bad_json("dump.pdf must be a path"))?;
+        let dpi = d.get("dpi").and_then(Value::as_u64).unwrap_or(72) as u32;
+        let timings = d.get("timings").and_then(Value::as_bool).unwrap_or(false);
+        out["dump"] = cache_ingest::pdfium::dump_with(text(&engines, "pdfium_lib"), Path::new(pdf), dpi, timings).map_err(to_core)?;
+    }
+    Ok(out.to_string())
 }

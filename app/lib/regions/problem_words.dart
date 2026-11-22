@@ -1,6 +1,7 @@
 import 'package:cache_search/cache_search.dart';
 
 import '../settings/data_policy.dart';
+import 'region_catalogue.dart' show RegionRecord;
 
 /// Plain words for why a map download stopped, from the layer engine's message for it (which may still say "tap Update"): what
 /// happened, without the next step, which the screen gives as a button.
@@ -16,6 +17,7 @@ String areaProblemWords(String? message) {
 /// can read like "a download needs \"bbox\" ..."). [what] is the action in words ("carry on with Idaho").
 String downloadProblemWords(Object e, {required String what}) {
   if (e is MobileDataBlocked) return e.message;
+  if (e is DownloadsPaused) return e.message;
   if (e is CacheSearchException) {
     return switch (e.code) {
       'offline' || 'fetch_failed' => "Couldn't $what: no connection. Connect, then try again.",
@@ -31,3 +33,17 @@ String downloadProblemWords(Object e, {required String what}) {
 
 /// A message the app itself wrote for people (a sentence with no code, address or JSON in it).
 bool _plain(String m) => m.isNotEmpty && !RegExp(r'[{}\[\]"`]|://|_[a-z]').hasMatch(m) && m.length < 160;
+
+/// A new region download asked for while the person's Pause is on: its map and roads were added and are held, and its off-road part
+/// waits. The row says so, with Resume, which clears the pause and starts it ([RegionsState.resumeAndStart]).
+class DownloadsPaused implements Exception {
+  const DownloadsPaused(this.region);
+
+  final RegionRecord region;
+
+  // WORDING (cache-pm): "Downloads are paused. Tap Resume to start <region>."
+  String get message => 'Downloads are paused. Tap Resume to start ${region.name}.';
+
+  @override
+  String toString() => message;
+}

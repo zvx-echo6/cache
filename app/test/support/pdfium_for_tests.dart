@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/pdf/pdfium_init.dart' show pdfiumLockRequired;
 import 'package:pdfrx/pdfrx.dart';
 
 /// The PDFium release the app is built with (pdfium_dart's build hook downloads the same one into the app).
@@ -9,6 +10,8 @@ const String kTestPdfiumRelease = 'chromium%2F7811';
 /// person would point at it: PDFIUM_PATH, a copy the build hook already made under .dart_tool or build/, or else the same
 /// release from pdfium-binaries, downloaded once into the system temp folder (tests on CI have a network).
 Future<void> pdfiumForTests() async {
+  // the tests that run pdfrx without the core (it has the lock the app takes)
+  pdfiumLockRequired = false;
   Pdfrx.pdfiumModulePath ??= _fromEnv() ?? _built() ?? await _downloaded();
   await pdfrxInitialize(tmpPath: Directory.systemTemp.createTempSync('pdfrx-cache').path);
 }

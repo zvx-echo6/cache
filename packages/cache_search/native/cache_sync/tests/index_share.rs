@@ -226,3 +226,46 @@ fn the_hidden_files_a_snapshot_needs_travel_and_no_others() {
     a.close();
     b.close();
 }
+
+/// A generation g2 of an appendable library's snapshot reuses g1's segment files (the same bytes under another folder), and an older
+/// build's clean-up on A removes g2 (it takes the earliest as the only one). The delete is A's alone: B keeps g2 and g1, and A does
+/// not fetch g2 back. The file shared by both generations (seg-1) is not sent again: B already holds its bytes.
+#[test]
+fn an_older_builds_removal_of_a_newer_generation_stays_on_that_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (ia, ib) = (tmp.path().join("idx-a"), tmp.path().join("idx-b"));
+    let generation = |root: &Path, build: &str, delta: &str| {
+        let d = root.join("library/mine/snap").join(build);
+        write(&d.join("seg-1"), "the first segment, shared by both generations");
+        write(&d.join(delta), &format!("segment added in {build}"));
+        write(&d.join("manifest.json"), &format!("{{\"build\":\"{build}\"}}"));
+    };
+    generation(&ia, "g1", "seg-2");
+    std::fs::create_dir_all(&ib).unwrap();
+    let a = engine(&da, "Desk", None);
+    let b = engine(&db, "Phone", None);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    call(&a, "share_add", json!({"id": "indexes", "name": "Search indexes", "path": ia}));
+    call(&b, "share_add", json!({"id": "indexes", "name": "Search indexes", "path": ib}));
+    until("g1 on B", 60, &a, &b, || ib.join("library/mine/snap/g1/manifest.json").exists());
+
+    generation(&ia, "g2", "seg-3");
+    until("g2 on B", 60, &a, &b, || ib.join("library/mine/snap/g2/manifest.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(ib.join("library/mine/snap/g2/seg-1")).unwrap(),
+        "the first segment, shared by both generations"
+    );
+
+    // the older build's clean-up on A removes g2, the newer generation
+    std::fs::remove_dir_all(ia.join("library/mine/snap/g2")).unwrap();
+    rounds(&a, &b);
+    rounds(&a, &b);
+    assert!(ib.join("library/mine/snap/g2/manifest.json").exists(), "A's delete of g2 stays on A: B keeps g2");
+    assert!(ib.join("library/mine/snap/g1/manifest.json").exists());
+    assert!(!ia.join("library/mine/snap/g2").exists(), "A does not fetch back what it removed");
+    assert!(ia.join("library/mine/snap/g1/manifest.json").exists());
+    a.close();
+    b.close();
+}

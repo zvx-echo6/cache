@@ -7,7 +7,7 @@ import 'package:cache/browse/web/local_files.dart';
 import 'web_fakes.dart';
 
 /// The device's building service, as the browser's code sees it: what the test sets is what it answers, and what it is asked is kept.
-class FakeBuildApi implements BuildApi {
+class FakeBuildApi implements BuildApi, BuildLibraryDeleteApi {
   List<BuildLibrary> libs = [];
   final Map<String, List<BuildBook>> bookMap = {};
   BuildQueue q = const BuildQueue();
@@ -36,6 +36,12 @@ class FakeBuildApi implements BuildApi {
     final l = BuildLibrary(id: 'lib${++_n}', title: title);
     libs = [...libs, l];
     return l;
+  }
+
+  @override
+  Future<void> deleteLibrary(String id) async {
+    calls.add('delete-library $id');
+    libs = [for (final x in libs) if (x.id != id) x];
   }
 
   @override

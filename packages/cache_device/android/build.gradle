@@ -1,0 +1,28 @@
+// Battery and heat readings for every Flutter engine of the app (the app's own and WorkManager's background one). Java, no
+// dependencies (no Kotlin plugin to line up with the app's Android Gradle Plugin).
+
+group = "co.cache.cache_device"
+version = "1.0"
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "co.cache.cache_device"
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk = 21
+    }
+}

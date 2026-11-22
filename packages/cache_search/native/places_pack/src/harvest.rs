@@ -15,6 +15,7 @@ use crate::rules::Rules;
 use cache_places::schema::tile_id_l1;
 use rusqlite::{params, Connection};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -61,10 +62,15 @@ pub fn harvest(rules: &Rules, rules_json: &str, sources: &mut [Box<dyn PlaceSour
     c.execute_batch(HARVEST_SQL).map_err(|e| e.to_string())?;
     let c = Rc::new(RefCell::new(c));
     let sink_conn = Rc::clone(&c);
+    // Extracts that overlap at an edge (Geofabrik's neighbouring regions keep every way that crosses the border) give the same
+    // OSM element twice: the first is kept.
+    let mut seen: HashSet<String> = HashSet::new();
     let mut h = Harvest::with_sink(Box::new(move |mut p, l, a| {
         if !include_general {
             p.retain(|r| r.category.is_some());
         }
+        p.retain(|r| r.source != "osm" || seen.insert(r.source_id.clone()));
+        let l: Vec<RawLocality> = l.into_iter().filter(|x| seen.insert(format!("locality:{}", x.source_id))).collect();
         write(&sink_conn.borrow(), p, l, a)
     }));
     let mut described = Vec::new();

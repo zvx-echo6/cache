@@ -69,13 +69,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
 }
 
 /// The square glyph at the start of an alert row: "!!" on red for serious, "!" on yellow for all, a dash for none. The glyph carries
-/// the meaning, so the colour is never the only sign.
+/// the meaning, so the colour is never the only sign. [size] is its side (28 here; the Weather screen's event rows draw it at 36).
 class AlertGlyph extends StatelessWidget {
-  const AlertGlyph(this.icon, {super.key, this.text, this.color});
+  const AlertGlyph(this.icon, {super.key, this.text, this.color, this.size = 28});
 
   final IconData? icon;
   final String? text;
   final Color? color;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -83,13 +84,13 @@ class AlertGlyph extends StatelessWidget {
     final fill = color ?? k.background;
     final on = color == null ? k.secondary : k.background;
     return Container(
-      width: 28,
-      height: 28,
+      width: size,
+      height: size,
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: fill, borderRadius: BorderRadius.circular(7)),
+      decoration: BoxDecoration(color: fill, borderRadius: BorderRadius.circular(size / 4)),
       child: text != null
-          ? Text(text!, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: on, height: 1))
-          : Icon(icon, size: 18, color: on),
+          ? Text(text!, style: TextStyle(fontSize: size / 2, fontWeight: FontWeight.w800, color: on, height: 1))
+          : Icon(icon, size: size * 9 / 14, color: on),
     );
   }
 }

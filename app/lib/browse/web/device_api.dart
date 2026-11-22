@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import '../../net/signed_out.dart' show reportSignedOut;
 
 /// Why a call to this device failed: [code] is the device's own word for it (`no_space`, `unauthorized`, `host_not_allowed`), [status]
 /// the HTTP status (0: no answer at all).
@@ -65,7 +66,7 @@ class DeviceJob {
   final int bytes;
   final int total;
 
-  /// `queued`, `running`, `done`, `failed` or `cancelled`.
+  /// `queued`, `running`, `paused`, `done`, `failed` or `cancelled`.
   final String state;
   final String? error;
 
@@ -74,6 +75,8 @@ class DeviceJob {
   final DateTime? finishedAt;
 
   bool get active => state == 'queued' || state == 'running';
+  /// Stopped by the person; what was downloaded is kept and Resume continues it.
+  bool get paused => state == 'paused';
   bool get failed => state == 'failed';
   bool get done => state == 'done';
   double? get fraction => total <= 0 ? null : (bytes / total).clamp(0.0, 1.0);
@@ -118,13 +121,31 @@ abstract class DeviceApi {
 
   /// Cancels a waiting or running transfer, or takes a finished one off the list.
   Future<void> cancelJob(String id);
+
+  /// Pauses a waiting or running transfer (the part is kept), or continues a paused one.
+  Future<void> pauseJob(String id);
+  Future<void> resumeJob(String id);
   Future<void> removeItem(String id);
 
   /// The search core reads the library folders again (after the browser put a library in place).
   Future<void> rescan();
 
-  /// Reads a catalogue address through the device (it only reads the catalogue hosts the app uses).
-  Future<List<int>> fetch(Uri url);
+  /// Reads an address through the device. [scope] says what kind of read it is and so which addresses the device allows: null is
+  /// the catalogue hosts the app uses; see [FetchScope]. [plain] also accepts http (the phone's `httpsOnly: false`).
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false});
+}
+
+/// The kinds of read Cache Server's `/api/fetch` knows (server/src/fetch_scope.rs). Each allows its own addresses and holds the answer
+/// to small text, data or pictures; none reaches a private address.
+class FetchScope {
+  /// Hugging Face's model API, and the catalogue hosts.
+  static const String models = 'models';
+
+  /// A PeerTube site's API, and its caption and thumbnail files.
+  static const String video = 'video';
+
+  /// An address the person typed (an own data source): any public host.
+  static const String user = 'user';
 }
 
 /// How long a call to the device may take before it counts as not answering. Without a limit one call that never ends would stop the
@@ -156,7 +177,10 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   static DeviceException _error(http.Response r) {
-    if (r.statusCode == 401) return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    if (r.statusCode == 401) {
+      reportSignedOut();
+      return const DeviceException('unauthorized', 'Sign in again.', status: 401);
+    }
     try {
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       final e = j is Map ? j['error'] : null;
@@ -203,6 +227,16 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   @override
+  Future<void> pauseJob(String id) async {
+    await _result('POST', '/api/library/jobs/${Uri.encodeComponent(id)}/pause');
+  }
+
+  @override
+  Future<void> resumeJob(String id) async {
+    await _result('POST', '/api/library/jobs/${Uri.encodeComponent(id)}/resume');
+  }
+
+  @override
   Future<void> removeItem(String id) async {
     await _result('DELETE', '/api/library/items/${Uri.encodeComponent(id)}');
   }
@@ -213,9 +247,65 @@ class HttpDeviceApi implements DeviceApi {
   }
 
   @override
-  Future<List<int>> fetch(Uri url) async {
-    final r = await _send('GET', '/api/fetch?url=${Uri.encodeComponent(url.toString())}');
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) async {
+    final r = await _send('GET', '/api/fetch?url=${Uri.encodeComponent(url.toString())}${scope == null ? '' : '&scope=$scope'}${plain ? '&plain=1' : ''}');
     if (r.statusCode != 200) throw _error(r);
     return r.bodyBytes;
+  }
+}
+
+/// The server's own version ("0.1.0+1c6891f"), read from `GET /api/version`; null when it cannot be read.
+Future<String?> readServerVersion({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/version')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final v = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['version'] : null;
+    return v is String && v.isNotEmpty ? v : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The bytes the server keeps for each kind of the phone's Storage page ("library", "models", "regions", ...), read from
+/// `GET /api/library/storage`; null when they cannot be read.
+Future<Map<String, int>?> readServerStorage({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/storage')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final k = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['kinds'] : null;
+    if (k is! Map) return null;
+    return {for (final e in k.entries) e.key.toString(): (e.value as num?)?.toInt() ?? 0};
+  } catch (_) {
+    return null;
+  }
+}
+
+/// What Clean up would free on the server (its unfinished downloads and upload leftovers), from `GET /api/library/cleanup`; null
+/// when it cannot be read.
+Future<int?> readServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['bytes'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Clean up on the server (`POST /api/library/cleanup`): the bytes it freed; null when it would not (a download is running) or
+/// could not be reached.
+Future<int?> runServerCleanup({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).post(Uri.parse('/api/library/cleanup')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    final b = j is Map && j['ok'] == true && j['result'] is Map ? (j['result'] as Map)['freed'] : null;
+    return b is num ? b.toInt() : null;
+  } catch (_) {
+    return null;
   }
 }

@@ -1,0 +1,16 @@
+{
+  "title": "Wingdings",
+  "pages": [
+    {
+      "text": "abcdefghijklmnop ABCDEFGHIJKLMNOP\r\na line in Arial",
+      "label": null,
+      "png_sha256": {
+        "windows": "ab23ea163444799235a07f85746622bf527c732daaecb5d2b5aa48027fa89235",
+        "linux": "ab23ea163444799235a07f85746622bf527c732daaecb5d2b5aa48027fa89235"
+      },
+      "width": 612,
+      "height": 792,
+      "dpi": 72
+    }
+  ]
+}

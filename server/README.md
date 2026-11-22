@@ -32,6 +32,59 @@ op `server.features` says what is there:
      "places":  {"available": <the merged places database is there>, "merged_dir": "<path>"},
      "extras":  {<the config sections the core was opened with; "routing" only when routing is available>}}
 
+### Regions
+
+The browser downloads regions the way the phone does, and the server runs the download, so it goes on with no tab open. The helper
+answers three ops through `/api/core` (`server/helper/bin/regions_ops.dart`): `regions.open` (the engine is open; `unavailable` when the
+core has none), `regions.call {method, args}` and `regions.close` (nothing: the engine is the server's). The methods are the region
+engine's (`status`, `plan`, `add`, `remove`, `stream`, `set_policy`, `check_update`, `update`; docs/REGIONS.md) on the same engine the
+search core opened (one per folder, `<data>/app/support/regions`), plus the off-road packs, which the phone downloads in Dart and the
+helper downloads here (`offroad_packs.dart`): `offroad_fetch {path,url,bytes,sha256}`, `offroad_status {paths}`, `offroad_cancel {path}`
+and `offroad_remove {path}`. A pack is `<build>/<id>/offroad.sqlite` under `regions/offroad`, fetched only from the data host
+(`data.cached.info`, `cache.echo6.co`), resumed from its `.part` file and checked against its SHA-256. When the core opens, the helper
+reads `<support>/regions-app.json` (written by the app), gives the engine the person's Pause (the engine does not keep it) and
+carries on the packs the kept regions still miss. The region and off-road catalogues are fetched through `/api/fetch` and kept in
+`<support>/region-catalogue`.
+
+### Map tiles
+
+The core's layer engine serves map tiles from a tile server inside the helper process, on 127.0.0.1 and a random port, which a browser cannot
+reach. The server forwards to it:
+
+    GET /api/tiles/layers/<id>/<z>/<x>/<y>[.ext]     -> the tile, as the tile server answers it
+    GET /api/tiles/layers/<id>/tilejson.json         -> the layer's TileJSON
+
+The answer is passed through unchanged: 200 with the tile (`Content-Type`, `X-Cache-Status`), 204 where the source has no tile, 503 with
+`Retry-After` for a tile that may come later (the map asks again). It needs the same signed-in session cookie as every `/api/` call; MapLibre's
+requests are same-origin, so they carry it and there is no separate token. The port is found by the helper's `layers` op with `server`
+(the call the browser makes to start the tile server; no `online` option is sent), kept, and asked for again once when a connection fails
+(after a helper restart); 503 `core_unavailable` while the helper is down, 502 `tile_server_unreachable` when the port does not answer.
+Only `layers/...` paths of letters, digits, `.`, `_`, `-` are forwarded (404 otherwise), only GET and HEAD, and the query is dropped.
+The map fonts are not here: they are Flutter assets under `/assets/assets/map/fonts/`.
+
+### Videos
+
+The browser's Videos run on the same engine as the phone's. The helper opens a video core handle on `<data>/app/docs/videos` (the phone's folder
+under the files root, so a video that arrives by sync lands there too) and answers the `video.*` ops through `/api/core`: `video.info`,
+`video.call {op, request}` (any `cs_video_*` call), `video.jobStart|jobProgress|jobCancel|jobFree` and `video.jobs`. A download is a core job
+in the helper, so it goes on with no tab open; pausing cancels it and keeps the partial file, resuming starts it again (the core continues the
+file), and a tab opened later lists the running and finished downloads with `video.jobs`. A server restart ends running downloads; their partial
+files stay. The helper handles one request at a time, so a slow video-site call holds up other ops until it answers.
+
+Playing goes through three GET routes. A same-origin `<video>` sends the session cookie, so none needs a token:
+
+    GET|HEAD /api/video/media/<path under the videos folder>   a saved video, sound, caption or picture, with Range (206, 416)
+    GET|HEAD /api/video/zim/<zim id>/<entry path>              a video or caption entry of a ZIM, with Range (the last entry read is kept in memory)
+    GET      /api/video/stream?u=<address>                     a video site's file, caption or picture, read by the server, with Range
+
+`media` takes plain file names only (no `..`, hidden or empty names, backslashes) and the real file must be inside the videos folder (404
+otherwise). `stream` reaches `http`/`https` hosts whose every address is public: the client's name lookup refuses loopback, private,
+link-local, shared (100.64/10), multicast and reserved addresses, so a redirect or a DNS answer cannot reach this machine or the home
+network (502); up to four redirects; `Range` is passed on; an upstream error status is passed on with no body. What it sends back has a
+media, caption or picture type only (anything else is `application/octet-stream`) and `Content-Security-Policy: sandbox`, so a page from a
+video site cannot run on this origin. An HLS playlist (`.m3u8`) is rewritten so its parts, keys and sub-playlists come back through this
+route; a private video's `videoFileToken` is kept on addresses of the site it came with. 401 without a session; only GET and HEAD.
+
 ### The text embedder
 
 The server embeds text with the same model the phone uses (bge-m3 Q8_0, the pinned `lm-kit/bge-m3-gguf` revision in
@@ -47,6 +100,24 @@ the tarball: it is downloaded into `<data>/models/` on first need, resuming a `.
 Both need a signed-in session. The loaded model takes about 700 MB and is let go after two minutes without a call. On x86_64
 the library uses AVX2, FMA and F16C; a CPU without them gets `embed_unavailable`. In Rust, the builder calls
 `EmbedService::embed_batch(&[String])`.
+
+### Model files (the Models screens in the browser)
+
+`src/models.rs` keeps the chat-model files for the browser: the server runs the downloads (one at a time, resumable from
+`<data>/models/.partial/`, SHA-256 checked, no tab needed), so a download goes on with the page closed. It fetches only from
+huggingface.co and its file store (`*.huggingface.co`, `*.hf.co`) and from data.cached.info / cache.echo6.co, https only, and every
+redirect hop is checked against that list. All behind the sign-in:
+
+    GET    /api/models/downloads                       -> {downloads: [{name, state: queued|running|verifying|paused|failed|done, done, total, error?}]}
+    POST   /api/models/downloads {name, repo, revision, path | url, size, sha256?, search?}   -> the same; queues or continues one
+    POST   /api/models/downloads/<name>/pause|resume   -> the same
+    DELETE /api/models/downloads/<name>                -> the same; stops it and throws the part file away
+    DELETE /api/models/files/<name>                    -> deletes a model file (409 in_use for the loaded one)
+    POST   /api/models/upload?name=<x.gguf>            -> streams the body (Content-Length needed) into the models folder
+    GET    /api/system/memory                          -> {total, avail, threshold, low} in bytes, from /proc/meminfo
+
+`search: true` makes the server start the search model (above) when that file is done. The embedder's own download is listed
+in `downloads` as one more entry.
 
 ### The chat model (Ask in the browser)
 
@@ -183,10 +254,46 @@ Under the data folder (`/var/lib/cache-app` when installed):
 | `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
 | `zims/`, `libraries/`, `index/` | the older folders, no longer read |
 
+## Indexing
+
+With no browser open, the helper indexes what the phone indexes (`server/helper/bin/index_driver.dart`): the keyword index of each
+ZIM and library, seals of older indexes, the EPUBs and caption files inside ZIMs (`index_source`), and the PDFs inside ZIMs. The
+PDF text comes from MuPDF, through the hidden `cache pdf-text` command that the helper runs for each PDF (`CACHE_PDF_TEXT_EXE`,
+which the server sets to itself); the chunks and records are the core's own, so the indexes are the phone's format. Work yields to
+the host's heat (thermal zones) and memory (`/proc/meminfo`). Design: `renders/linux-parity/indexing-design.md`.
+
+Pause and Resume (the Catalog's "Pause all" and "Resume", helper op `index.pause`) stop what runs, keeping what it did, and start
+nothing until Resume; like the phone's they are kept in memory, so a restart resumes. Design: `renders/linux-parity/library-rest-design.md`.
+
+## The guide library
+
+The setup guide the app bundles is installed on the server with no browser open, so guide search works in a browser as on a phone.
+The server gives the helper the package from its web build (`<web>/assets/assets/guide/cache-guide.cache-library`, as
+`CACHE_GUIDE_LIBRARY`); after the core opens, `server/helper/bin/guide_install.dart` unpacks it to `app/docs/libraries/cache-guide`
+(the steps of the phone's `LibrariesState.ensureGuide`) and replaces it when the app carries another `version`. Not done when
+`sources.json` gives the sources (that list is the operator's own).
+
+## The starter map layers
+
+The map layers the app bundles (hillshade, contour lines, the elevation layer from Mapterhorn that route elevation charts and
+off-road routing read, imagery, WorldCover and OpenFreeMap) are put in place as on a phone. The server gives the helper the folder
+from its web build (`<web>/assets/packages/cache_search/layers`, as `CACHE_STARTER_LAYERS`); before the core opens,
+`server/helper/bin/starter_layers.dart` writes each definition to `app/support/layer-defs` when it is missing or differs (the
+phone's `installStarterLayers`).
+
 ## The helper
 
 The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`
-(the two `app/` folders above). It answers three kinds of op over the line protocol:
+(the two `app/` folders above) and `CACHE_DATA` (the data folder). It answers these ops over the line protocol (`sharing.*` only with
+`CACHE_DATA`):
+
+- **`sharing.*`**: the sharing host (`server/helper/bin/sharing_host.dart`), the one owner of the sync engine on the server: it opens the
+  engine on `<data>/sync`, shares the folders of the share table (the phone's share ids on the server's folders), polls the engine's
+  status every 2 s into a cache, and keeps `<data>/sharing.json` (the phone's format). It starts with the helper when `sharing.json`
+  says sharing is set up, and stops when the helper's input ends. A browser asks it through `sharing.state`, `sharing.setup`,
+  `sharing.set_kind`, `sharing.set_item`, `sharing.link_start` and `sharing.call` (only `link_code`, `unlink`, `set_name`,
+  `set_peer_name`, `set_link`, `sync_now`, `share_items`, and `status` from the cache; the keys, `set_secrets` and `take_secrets`,
+  are never reachable from a browser). The network settings are the engine's own defaults, as on the phone; nothing here opens a port.
 
 - **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
   (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the
@@ -199,8 +306,19 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   (`bad_path`); missing files give `not_found`, other failures `io_error`. Bytes travel as `{"$bytes": "<base64>"}`.
 - every other op goes to the core's dispatcher.
 
-Not done yet: **`history.*`**. The browser's chat history is not saved on the server; it waits for the shared Flutter-free
-package split (step 4), because `ConversationStore` imports Flutter-dependent code.
+- **`history.*`**: the Ask conversations, kept on the server (one JSON file per conversation in `app/support/history/`, no
+  SQLite in the helper) so every tab and browser lists, reopens, renames and deletes the same ones. The browser's store is
+  `app/lib/history/server_conversation_store.dart`. Ops are in `server/helper/bin/history_ops.dart`.
+- **`keys.*`**: the keystore, `<data>/keystore.json` (owner only, outside the `fs.*` roots): the Kagi and data-source keys, video
+  tokens and the app PIN. `keys.names`, `keys.set`, `keys.delete`, and `keys.get` for names the phone UI shows (`*.user`) and
+  the PIN hash only. A browser hands a key to the engine as a reference, `keystore://<name>`, which the helper swaps for the
+  value before the core op runs, so the browser never holds the key. The helper remembers the last `setWeb` and sends it to the
+  engine again after `open`. Code inside the helper (the sharing host's `set_secrets` and `take_secrets`) calls the `KeyStore`
+  class directly (`get`, `set`, `delete`, `names`). These are not the sign-in keys of `src/keys.rs`. The swap also reaches the
+  video ops (`video.call`'s request and `video.jobStart`'s token, which the helper answers itself) and `GET /api/fetch` (a
+  reference in `url`, for trying an own data source with its saved key: the server asks the helper's `keys.expandUrl`, which a
+  tab may not call). Code on a signed-in page can still use a reference to send a stored key to an address of its own choosing
+  (within what the fetch rules allow), so "the browser never holds the key" is about normal use, not a script on the page.
 
 ## TLS
 

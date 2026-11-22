@@ -53,6 +53,13 @@ When a newer build is published, `update` fetches every region's tiles of the ne
 all of them are there the device keeps routing on the old build; then it switches, deletes the old build's folder and
 index, and empties the stream cache.
 
+A build can be taken off the server while devices still route on it. When a request for the device's build answers 404
+(a tile, or its index) and `current.json` names another build, the engine asks for that build's index
+(`<build>/index.tsv.gz`, the first byte only): if that answers 404 too, the build is gone and the device starts the same
+update as `update` (status shows it as any update), once; with no regions it moves at once and the stream that found it
+is tried again on the new build. A route meanwhile uses the old build's tiles on the device. One tile missing from a build
+that is still there fails as before, and no answer at all (offline, a refused connection) never moves anything.
+
 Downloads respect the network policy exactly as sync does: with `"network": false` no request is made at all, and status
 says `"Paused: no network it may use"`. Before a region starts, the free space is checked against what it needs plus a
 reserve (`reserve_bytes`, 1 GiB by default); if it is short the download pauses with the reason.

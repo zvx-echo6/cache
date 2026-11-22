@@ -58,6 +58,8 @@ class CoreDispatcher {
         eng().deleteSavedPlace(a['key'] as String);
       case 'setSources':
         eng().setSources(sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+      case 'openTimings':
+        result = eng().openTimings();
       case 'rejected':
         result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
       case 'status':
@@ -75,6 +77,10 @@ class CoreDispatcher {
               'updating': s.updating,
               'docs': s.docs,
               'keyword_source': s.keywordSource,
+              // whether the library has points its keyword index lacks: left out here, the app never saw it (the index job for a book
+              // just added was never listed, and the card never knew its words were still to come)
+              'keyword_pending': s.keywordPending,
+              'settings': s.settings,
               'embedding_model': s.embeddingModel,
               'whole_library_only': s.wholeLibraryOnly,
               'source_id': s.sourceId,
@@ -94,42 +100,21 @@ class CoreDispatcher {
           queryVector: a['queryVector'] == null
               ? null
               : QueryVector((a['queryVector'] as Map)['model'] as String, [for (final x in (a['queryVector'] as Map)['vector'] as List) (x as num).toDouble()]),
+          meaningLimit: a['meaningMs'] == null ? null : Duration(milliseconds: a['meaningMs'] as int),
         );
-        result = {
-          'results': [
-            for (final h in r.results)
-              {
-                'address': h.address,
-                'title': h.title,
-                'snippet': h.snippet,
-                'source_id': h.sourceId,
-                'source_kind': h.sourceKind,
-                'source_title': h.sourceTitle,
-                'page': h.page,
-                // The worker passes on every field the app reads (a PDF passage's real page).
-                if (h.pdfPage != null) 'pdf_page': h.pdfPage,
-              }
-          ],
-          'total_estimate': r.totalEstimate,
-          'vector_sources': r.vectorSources,
-          'keyword_only_sources': r.keywordOnlySources,
-        };
+        // One serialisation for both directions (SearchHit.toJson and fromJson), so no field of a hit is lost on the way.
+        result = r.toJson();
       case 'read':
-        final r = eng().read(a['address'] as String, maxChars: a['maxChars'] as int);
-        result = {
-          'address': r.address,
-          'title': r.title,
-          'text': r.text,
-          'truncated': r.truncated,
-          'author': r.author,
-          'page': r.page,
-          'source_type': r.sourceType,
-        };
+        result = eng().read(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
+      case 'readDocument':
+        result = eng().readDocument(a['address'] as String, maxChars: a['maxChars'] as int).toJson();
       case 'zimGet':
         final z = eng().zimGet(a['address'] as String);
         result = [z.bytes, z.mime];
       case 'zimMainPage':
         result = eng().zimMainPage(a['zimId'] as String);
+      case 'zimIllustration':
+        result = eng().zimIllustration(a['zimId'] as String);
       case 'suggest':
         result = [
           for (final s in eng().suggest(a['prefix'] as String, k: a['k'] as int, sources: (a['sources'] as List?)?.cast<String>()))
@@ -209,6 +194,14 @@ class CoreDispatcher {
       case 'liveFetchStart':
         // null: this core has no cs_live_fetch_start (the caller uses liveFetch)
         final j = eng().liveFetchJob((a['request'] as Map).cast<String, dynamic>());
+        if (j != null) {
+          final key = nextKey++;
+          jobs[key] = j;
+          result = key;
+        }
+      case 'layersRefreshStart':
+        // null: this core has no cs_layers_refresh_start (the caller uses layers('refresh'))
+        final j = eng().layersRefreshJob();
         if (j != null) {
           final key = nextKey++;
           jobs[key] = j;

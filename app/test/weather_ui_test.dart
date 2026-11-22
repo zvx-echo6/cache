@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -48,26 +49,30 @@ void main() {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
       expect(find.text('Weather and alerts'), findsOneWidget);
-      expect(find.text('Nothing switched on yet'), findsOneWidget);
+      expect(find.text('Not checked yet'), findsOneWidget, reason: 'the defaults are on from the start');
       expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget);
       expect(find.text('Update now'), findsNothing);
       expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);
       for (final t in ['Weather alerts (NWS, by point)', 'Weather forecast (Open-Meteo)', 'Wildfires near the place (WFIGS)', 'Earthquakes near the place (USGS)']) {
         expect(find.text(t), findsOneWidget, reason: t);
-        expect(switchIn(tester, t).value, isFalse, reason: '$t starts off');
+        // Weather always works: the forecast, alerts and wildfires are on from the start; the rest start off.
+        expect(switchIn(tester, t).value, t != 'Earthquakes near the place (USGS)', reason: '$t at the start');
       }
-      // Each row says what the source gives and who provides it.
-      expect(find.text('What Weather forecast (Open-Meteo) gives · Open-Meteo'), findsOneWidget);
-      // A featured source that needs a key has "Get key" on its row.
+      // Each row says its state (Working until a download says otherwise); an off source says what it gives.
+      expect(find.descendant(of: rowWith('Weather forecast (Open-Meteo)'), matching: find.text('Working')), findsOneWidget);
+      expect(find.descendant(of: rowWith('Earthquakes near the place (USGS)'), matching: find.text('What Earthquakes near the place (USGS) gives')), findsOneWidget);
+      // A featured source that needs a key and is off is Off, with its switch; the switch asks for the key.
       expect(find.text('Satellite fire detections near the place (NASA FIRMS)'), findsOneWidget);
-      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsOneWidget);
+      expect(switchIn(tester, 'Satellite fire detections near the place (NASA FIRMS)').value, isFalse);
+      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsNothing);
       // The rest, under More sources.
       expect(find.text('Space weather: Kp index'), findsNothing);
       expect(find.text('More sources'), findsOneWidget);
       expect(find.text('3 more'), findsOneWidget);
       // Weather alerts and fires have their own icons.
-      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-      expect(find.text('Where I am'), findsNothing, reason: 'the places are the Places notebook now');
+      // (The status line above also has this icon now: "Not updated yet" is a warning, and the sources are on from the start.)
+      expect(find.descendant(of: rowWith('Weather alerts (NWS, by point)'), matching: find.byIcon(Icons.warning_amber_rounded)), findsOneWidget);
+      expect(find.text('Current location'), findsNothing, reason: 'the places are the Places notebook now');
       expect(find.text('Watch these places'), findsNothing);
       expect(find.text('Advanced'), findsNothing);
       await r.dispose(tester);
@@ -76,27 +81,27 @@ void main() {
     testWidgets('a keyless source is switched on with its switch: it is registered with the core and in the policy', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      const t = 'Wildfires near the place (WFIGS)';
+      const t = 'Earthquakes near the place (USGS)';
       await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pump();
       await tester.pump();
       expect(switchIn(tester, t).value, isTrue);
-      expect(r.weather.registeredIds, {'wfigs-incidents-near'});
-      expect(r.liveCore.policies.last!['enabled_sources'], ['wfigs-incidents-near']);
-      expect(find.text('Not updated yet'), findsOneWidget);
+      expect(r.weather.registeredIds, contains('usgs-quakes-near'));
+      expect(r.liveCore.policies.last!['enabled_sources'], contains('usgs-quakes-near'));
+      expect(find.text('Not checked yet'), findsOneWidget);
       await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pump();
       await tester.pump();
       expect(switchIn(tester, t).value, isFalse);
-      expect(r.weather.registeredIds, isEmpty);
+      expect(r.weather.registeredIds, isNot(contains('usgs-quakes-near')));
       await r.dispose(tester);
     });
 
-    testWidgets('Get key on the row: saving checks the key, switches the source on and never shows it again', (tester) async {
+    testWidgets('the switch of a source that needs a key asks for it: saving checks the key, switches the source on and never shows it again', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
+      await tester.tap(find.descendant(of: rowWith('Satellite fire detections near the place (NASA FIRMS)'), matching: find.byType(Switch)));
       await tester.pumpAndSettle();
       expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('get-key')));
@@ -127,18 +132,18 @@ void main() {
     testWidgets('the refresh button updates and says what happened; on mobile data it still updates', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.descendant(of: rowWith('Weather alerts (NWS, by point)'), matching: find.byType(Switch)));
-      await tester.pump();
+      final n = r.weather.enabledSources.length;
+      expect(n, greaterThan(0), reason: 'the defaults are on from the start');
       await _tapRefresh(tester);
       expect(find.text('Updated'), findsOneWidget, reason: 'the snack bar');
-      expect(find.text('Updated just now'), findsOneWidget, reason: 'the status line');
-      expect(r.liveCore.fetches.length, 1);
+      expect(find.text('Last checked just now'), findsOneWidget, reason: 'the status line');
+      expect(r.liveCore.fetches.length, n, reason: 'each source that is on, once');
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
       r.probe.change(ConnectionKind.mobile);
       await tester.pumpAndSettle();
       await _tapRefresh(tester);
-      expect(r.liveCore.fetches.length, 2, reason: 'updates use mobile data');
+      expect(r.liveCore.fetches.length, 2 * n, reason: 'updates use mobile data');
       await r.dispose(tester);
     });
 
@@ -159,7 +164,7 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('old data turns the line into a warning with the age and the reason', (tester) async {
+    testWidgets('no connection: one notice at the top and when it last checked', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() async {
         await r.weather.setRowOn(kCurated.first, true);
@@ -169,7 +174,8 @@ void main() {
       r.probe.change(ConnectionKind.none);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('Updated 3 days ago · No connection since Monday'), findsOneWidget);
+      expect(find.text('No connection. Showing what was saved.'), findsOneWidget);
+      expect(find.text('Last checked 3 days ago'), findsOneWidget);
       expect(find.byIcon(Icons.warning_amber_rounded), findsWidgets);
       await r.dispose(tester);
     });
@@ -230,7 +236,7 @@ void main() {
       expect(find.text('Cache connectors'), findsOneWidget);
       expect(find.text('12 minutes old'), findsOneWidget);
       expect(find.text('Current'), findsOneWidget);
-      expect(find.text('HTTP 500: busy'), findsOneWidget);
+      expect(find.textContaining('HTTP'), findsNothing, reason: 'the core\'s own words are not shown; the row says the state in its own words');
       expect(switchIn(tester, 'Use this source').value, isTrue);
       await tester.tap(rowWith('Use this source'));
       await tester.pumpAndSettle();
@@ -278,6 +284,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('remove-key')));
       await tester.pumpAndSettle();
       expect(find.textContaining('turns off'), findsOneWidget);
+      expect(find.text('Satellite fire detections near the place (NASA FIRMS) turns off. You can add a key again later.'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isTrue);
@@ -289,6 +296,22 @@ void main() {
       expect(r.secrets.values, isEmpty);
       expect(r.liveCore.keys['firms-viirs-near'], isNull);
       expect(find.text('Get key'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Removing a key shared by two sources', () {
+    testWidgets('says "turn off" (plural) when two sources use the key', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('idaho511-events')!, secret));
+      await r.show(tester, SourcePage(deps: r.deps, sourceId: 'idaho511-events'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.pumpAndSettle();
+      expect(find.text('Road conditions (Idaho 511) and Winter road conditions (Idaho 511) turn off. You can add a key again later.'), findsOneWidget);
+      expect(find.textContaining('turns off'), findsNothing);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
       await r.dispose(tester);
     });
   });
@@ -309,6 +332,79 @@ void main() {
       });
       await tester.pumpAndSettle();
     }
+
+    testWidgets('the Latitude and Longitude buttons keep the focus in the address, the cursor after what they put in', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final addr = find.byKey(const ValueKey('own-address'));
+      await tester.tap(addr);
+      await tester.pumpAndSettle();
+      await tester.enterText(addr, '$api?site=12&lat=');
+      await tester.pump();
+      TextField f() => tester.widget<TextField>(addr);
+      await tester.tap(find.byKey(const ValueKey('insert-lat')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue, reason: 'the button did not take the focus');
+      expect(f().controller!.text, '$api?site=12&lat={lat}');
+      expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+      await tester.enterText(addr, '${f().controller!.text}&lon=');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('insert-lon')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue);
+      expect(f().controller!.text, '$api?site=12&lat={lat}&lon={lon}');
+      expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+    });
+
+    testWidgets('the empty Web address shows an example, worded as one', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final hint = tester.widget<TextField>(find.byKey(const ValueKey('own-address'))).decoration!.hintText!;
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).decoration!.hintText, 'For example: Temperature');
+      expect(hint, 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
+    });
+
+    testWidgets('typing on through the keyboard after Latitude and Longitude lands right after the placeholder, and the address keeps the focus', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, MoreSourcesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('add-own-source')));
+      await tester.pumpAndSettle();
+      final addr = find.byKey(const ValueKey('own-address'));
+      await tester.tap(addr);
+      await tester.pumpAndSettle();
+      TextField f() => tester.widget<TextField>(addr);
+      // the keyboard types, as the framework does for the IME
+      void type(String more) {
+        final c = f().controller!;
+        final text = '${c.text}$more';
+        tester.testTextInput.updateEditingValue(TextEditingValue(text: text, selection: TextSelection.collapsed(offset: text.length)));
+      }
+
+      type('https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude=');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('insert-lat')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue, reason: 'Latitude did not take the focus');
+      expect(tester.testTextInput.isVisible, isTrue);
+      expect(tester.testTextInput.editingState!['text'], f().controller!.text, reason: 'the keyboard holds what the field shows');
+      type('&longitude=');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('insert-lon')));
+      await tester.pump();
+      expect(f().focusNode!.hasFocus, isTrue, reason: 'Longitude did not take the focus');
+      expect(f().controller!.text, 'https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}');
+      expect(f().controller!.selection, TextSelection.collapsed(offset: f().controller!.text.length));
+    });
 
     testWidgets('More sources: Add your own source, the form, Try it, pick what to show, Save source; it is on under Your own', (tester) async {
       tall(tester);
@@ -347,16 +443,19 @@ void main() {
       expect(find.text('Latitude'), findsOneWidget, reason: 'a value of the answer, named from its key');
       expect(find.text('1.42'), findsOneWidget);
       expect(find.byKey(const ValueKey('own-preview')), findsOneWidget);
-      // the first three are ticked; tick the level and the trend only, and rename the level
+      // untick what was ticked at first; tick the level and the trend only, and rename the level
       for (final p in ['station.id', 'station.latitude', 'station.longitude']) {
         final box = find.descendant(of: find.byKey(ValueKey('own-value-$p')), matching: find.byType(Checkbox));
         if (tester.widget<Checkbox>(box).value == true) await tester.tap(box);
         await tester.pump();
       }
       await tester.scrollUntilVisible(find.byKey(const ValueKey('own-value-water.level')), 200, scrollable: find.byType(Scrollable).first);
-      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.level')), matching: find.byType(Checkbox)));
-      await tester.tap(find.descendant(of: find.byKey(const ValueKey('own-value-water.trend')), matching: find.byType(Checkbox)));
-      await tester.pump();
+      // Ticked, whatever was ticked at first (the place's own echo is not, so the level may be already).
+      for (final p in ['water.level', 'water.trend']) {
+        final box = find.descendant(of: find.byKey(ValueKey('own-value-$p')), matching: find.byType(Checkbox));
+        if (tester.widget<Checkbox>(box).value != true) await tester.tap(box);
+        await tester.pump();
+      }
       await tester.tap(find.text('Level'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('own-rename')), 'Water level');
@@ -369,7 +468,7 @@ void main() {
       expect(find.text('Pick what to show'), findsNothing);
       expect(find.text('YOUR OWN'), findsOneWidget);
       expect(find.text('Creek level at the bridge'), findsOneWidget);
-      expect(find.text('Your source · checked every 30 min'), findsOneWidget);
+      expect(find.descendant(of: rowWith('Creek level at the bridge'), matching: find.textContaining('Working')), findsOneWidget, reason: 'the same row and states as the others');
       expect(switchIn(tester, 'Creek level at the bridge').value, isTrue);
       final c = r.weather.ownSources.single;
       expect(c.id, 'own-creek-level-at-the-bridge');
@@ -380,6 +479,48 @@ void main() {
       expect(r.liveCore.checked.last, c.defText, reason: 'the core checked it as it checks every definition');
       expect(r.liveCore.keys[c.id], secret, reason: 'the core gets the key in memory');
       expect(File('${r.liveDir.path}/${c.id}.json').readAsStringSync(), isNot(contains(secret)));
+      await r.dispose(tester);
+    });
+
+    testWidgets('Save source fetches the new source straight away, for the watched place, without Update now', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      const draft = OwnDraft(name: 'Creek', address: '$api?lat={lat}&lon={lon}');
+      final t = OwnTry.ok('sensors.example.org', flattenJson(answer), asked: const ['water.level'], place: (lat: 42.54, lon: -113.79));
+      await r.show(tester, OwnSourcePickPage(deps: r.deps, draft: draft, first: t));
+      await tester.pump();
+      expect(r.liveCore.fetches, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('own-save')));
+      await settle(tester);
+      expect(r.weather.isOn('own-creek'), isTrue);
+      expect(jsonEncode(r.liveCore.fetches), contains('own-creek'), reason: 'fetched by itself, as Update now does');
+      await r.dispose(tester);
+    });
+
+    testWidgets('Try it on a host that does not answer can be cancelled: the form stays, no error, Try it again, a late answer changes nothing', (tester) async {
+      tall(tester);
+      final r = await SettingsRig.create(tester);
+      r.web.hold = Completer<void>();
+      r.web.files['$api/slow'] = utf8.encode(jsonEncode(answer));
+      await r.show(tester, OwnSourceFormPage(deps: r.deps));
+      await tester.enterText(find.byKey(const ValueKey('own-name')), 'Slow');
+      await tester.enterText(find.byKey(const ValueKey('own-address')), '$api/slow');
+      await tester.tap(find.byKey(const ValueKey('own-try')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'waiting');
+      await tester.tap(find.byKey(const ValueKey('own-try-cancel')));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const ValueKey('own-try-cancel')), findsNothing);
+      expect(find.byKey(const ValueKey('own-error')), findsNothing, reason: 'no error is shown');
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('own-name'))).controller!.text, 'Slow', reason: 'the form stays as typed');
+      expect(tester.widget<FilledButton>(find.byKey(const ValueKey('own-try'))).onPressed, isNotNull, reason: 'Try it can be pressed again');
+      // the cancelled try answers late: nothing happens
+      r.web.hold!.complete();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+      expect(find.text('Pick what to show'), findsNothing, reason: 'a late answer is ignored');
+      expect(find.text('Add your own source'), findsWidgets);
       await r.dispose(tester);
     });
 

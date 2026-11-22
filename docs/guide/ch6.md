@@ -43,6 +43,7 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 - "Cache's search couldn't start, so this wasn't answered.": tap "Try again". If it repeats, restart Cache.
 - "No answer was produced." or "The model stopped without an answer": ask again in other words, or tap "New chat". Try another model if it repeats.
 - "Not from your sources": the answer isn't from your device or a search. Check it.
+- "Searched your sources, but cites none of them": Cache searched, but the answer doesn't name a source. Check it.
 - "Navigation unavailable: this route snapshot is no longer available.": ask for directions again.
 - "Report saved on this device. Find it in Settings > Assistant.": saved. That page is now "Cache model and web search".
 - "Ask needs a model on this device.": you have no model. Tap "Choose a model". See Use Cache with no model in chapter 2.
@@ -310,7 +311,7 @@ Texts you may see on a part:
 
 ## Weather status messages
 
-The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) says how fresh data is, for example "Updated 1 hour ago". It warns when old, for example "Updated 3 days ago". The "Weather" box says the same and has "Update now".
+The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) says how fresh data is, for example "Updated 1 hour ago". It warns when old, for example "Updated 3 days ago". The top card of "Weather" has one line with the age and "Update now".
 
 - "Nothing is switched on yet." on "Weather", or "Nothing switched on yet" in settings: turn on a source.
 - "Not updated yet": tap the refresh button, or "Update now".
@@ -320,11 +321,22 @@ The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) sa
 ## Weather screen messages
 
 - "Waiting for your position." with "The forecast and alerts for where you are show here once the device knows where it is.": nothing is wrong. Wait.
+- "No forecast yet": the forecast hasn't been downloaded yet. Tap "Update now".
+- "Forecast expired, needs a connection": connect and tap "Update now".
+- "No forecast is switched on": no forecast source is on. Tap the line to open the settings.
 - "Not downloaded yet. Update now to get it.": tap "Update now".
 - "Expired · [age] · needs a connection for more": connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when online.
+- "Not checked yet": alerts and fires haven't been checked for this place yet. Tap "Update now".
+- "Last checked [when].": alert and fire data is too old to trust. Connect and update. Offline, it adds "Needs a connection for anything newer."
 - "That alert has ended or is no longer in the data.": the alert is over.
 - "No active emergency alerts": none are listed for the place right now. Nothing is wrong.
+
+One line under the top card says what needs attention. Tap it to open the settings.
+
+- "[source] has not updated since [when]": that source didn't update. Its page in the settings shows why.
+- "[source] needs a key": tap "Get key" on the source's row in the settings.
+- "Alerts and fires are not switched on": no alert or fire source is on. Turn one on in the settings.
 
 ## Update messages
 
@@ -426,6 +438,7 @@ In ["Settings" > "Weather and alerts" > "More sources" > "Add your own source"](
 - "[site] answered with an error (HTTP [code]).": check the address, or try later.
 - "[site] answered, but not with JSON. This version of Cache only reads JSON.": this kind of service can't be added yet.
 - "[site] answered, but there are no values in it.", "[site] didn't answer in time.", "Couldn't reach [site]. Check the address and your connection.": check the address and tap "Try again".
+- "Couldn't find [site]. Check the web address.": check the address and tap "Try again".
 - "Tick at least one value to show."
 - "Cache can't use this source: [reason]": the source was not saved.
 
@@ -501,6 +514,7 @@ If a device's files are bigger than your space, Cache fetches what fits and paus
 
 When linking fails, the sharing engine says why:
 - "this is not a Cache link code" or "the link code is damaged": copy the whole code again.
+- "This link code is from a newer Cache. Update Cache here, then try again.": the code starts with a number above 1 (CACHE2-, CACHE3-), made by a newer version of Cache. Update Cache on this device.
 - "that is this device's own code": enter it on the other device.
 - "the other device did not answer" or "could not reach the other device: [reason]": open Cache on both, make sure both are online, and try a new code.
 - "the other device refused the link": make a fresh code on the other device.

@@ -4,20 +4,21 @@
 //! ```json
 //! {
 //!   "format": 1,
-//!   "built_from": {"libraries": {"recon": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
+//!   "built_from": {"libraries": {"field": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
 //!   "books": {
 //!     "<id: the smallest copy key>": {
 //!       "title": "Wilderness Medicine", "title_from": "log" | "seed" | "pack",
 //!       "aka": ["Other pack title"],
 //!       "reading": "<copy key>",
-//!       "copies": [{"copy": "...", "locs": ["recon/wm"], "available": true, "title": "pack title" | null,
+//!       "copies": [{"copy": "...", "locs": ["field/wm"], "available": true, "title": "pack title" | null,
 //!                   "own_call": {"div","seq","suffix","text"} | null,
 //!                   "locations": [{"dev","folder_id","relpath","version","source_blake3"}]}],
 //!       "shelf": "610" | null, "shelved": true, "by": "auto" | "user" | null,
 //!       "call": {"div": "610", "seq": 1, "suffix": 0, "text": "CDS 610-001"} | null,
 //!       "removed": false,
 //!       "author": "Ann" | null, "edition": "7th edition" | null, "year": 2018 | null,
-//!       "suggested": {"div": "610", "label": "Medicine" | null, "from": "seed" | "pack"} | null
+//!       "suggested": {"div": "610", "label": "Medicine" | null, "from": "seed" | "pack", "filed": true | false,
+//!                     "suggestions": [{"div", "label", "score"}]  (only when the pack has them)} | null
 //!     }
 //!   },
 //!   "retired": {"610": [5]},
@@ -77,7 +78,13 @@ pub fn view_value(r: &Resolved, libs: &[LibraryInput], logs: &[(String, u64)]) -
                 "author": b.author,
                 "edition": b.edition,
                 "year": b.year,
-                "suggested": b.suggested.as_ref().map(|s| json!({"div": s.div, "label": s.label, "from": s.from})),
+                "suggested": b.suggested.as_ref().map(|s| {
+                    let mut o = json!({"div": s.div, "label": s.label, "from": s.from, "filed": s.filed});
+                    if !s.top.is_empty() {
+                        o["suggestions"] = json!(s.top.iter().map(|x| json!({"div": x.div, "label": x.label, "score": x.score})).collect::<Vec<_>>());
+                    }
+                    o
+                }),
             }),
         );
     }

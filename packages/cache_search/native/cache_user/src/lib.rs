@@ -4,7 +4,7 @@
 pub mod mapdata;
 
 use cache_tool::{SavedPlace, SavedPlaces};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -44,6 +44,9 @@ pub fn check_coords(lat: f64, lon: f64) -> Result<()> {
 /// The saved places of one user.sqlite.
 pub struct UserStore {
     path: PathBuf,
+    /// Opened read-only ([UserStore::read_only]): no table is made, nothing is written, and a missing file or table reads as no
+    /// places.
+    read_only: bool,
 }
 
 #[derive(Serialize)]
@@ -79,10 +82,28 @@ fn now() -> i64 {
 
 impl UserStore {
     pub fn new(db_path: impl AsRef<Path>) -> UserStore {
-        UserStore { path: db_path.as_ref().to_path_buf() }
+        UserStore { path: db_path.as_ref().to_path_buf(), read_only: false }
+    }
+
+    /// A store that only reads (a second handle that lists the places, such as the car's): its connections are opened
+    /// read-only, so it never takes the file's write lock; save and delete answer `unsupported`.
+    pub fn read_only(db_path: impl AsRef<Path>) -> UserStore {
+        UserStore { path: db_path.as_ref().to_path_buf(), read_only: true }
+    }
+
+    fn writable(&self) -> Result<()> {
+        if self.read_only {
+            return Err(Error { code: "unsupported", message: "this store of saved places only reads".into() });
+        }
+        Ok(())
     }
 
     fn db(&self) -> Result<Connection> {
+        if self.read_only {
+            let c = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+            c.busy_timeout(std::time::Duration::from_secs(5))?;
+            return Ok(c);
+        }
         if let Some(dir) = self.path.parent() {
             if !dir.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(dir);
@@ -99,7 +120,16 @@ impl UserStore {
     }
 
     pub fn all(&self) -> Result<Vec<SavedPlace>> {
+        if self.read_only && !self.path.exists() {
+            return Ok(Vec::new());
+        }
         let c = self.db()?;
+        if self.read_only {
+            let has: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'places')", [], |r| r.get(0))?;
+            if !has {
+                return Ok(Vec::new());
+            }
+        }
         let mut st = c.prepare("SELECT key,name,lat,lon,label FROM places ORDER BY created_at, rowid")?;
         let rows = st.query_map([], |r| Ok(SavedPlace { key: r.get(0)?, name: r.get(1)?, lat: r.get(2)?, lon: r.get(3)?, label: r.get(4)? }))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -125,6 +155,7 @@ impl UserStore {
             #[serde(default)]
             label: Option<String>,
         }
+        self.writable()?;
         let p: In = serde_json::from_str(json).map_err(|e| Error::bad(format!("place_json: {e}")))?;
         check_coords(p.lat, p.lon)?;
         let name = p.name.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -160,6 +191,7 @@ impl UserStore {
 
     /// `cs_place_delete`: `{"deleted":"<key>"}`, or `not_found`.
     pub fn delete(&self, key: &str) -> Result<String> {
+        self.writable()?;
         let n = self.db()?.execute("DELETE FROM places WHERE key=?1", [key])?;
         if n == 0 {
             return Err(Error { code: "not_found", message: format!("no saved place with key {key:?}") });
@@ -227,6 +259,30 @@ mod tests {
         assert_eq!(s.delete("home").unwrap_err().code, "not_found");
         // order of fields in the output
         assert_eq!(b.as_object().unwrap().keys().collect::<Vec<_>>(), ["key", "name", "lat", "lon", "label"]);
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn read_only_lists_and_never_writes() {
+        let (rw, p) = store("ro");
+        let ro = UserStore::read_only(&p);
+        // no file yet: no places, and the file is not made
+        assert_eq!(ro.list_json().unwrap(), r#"{"places":[]}"#);
+        assert!(!p.exists());
+        // a file without the table: no places
+        Connection::open(&p).unwrap().execute_batch("CREATE TABLE other(x);").unwrap();
+        assert!(ro.all().unwrap().is_empty());
+        // what the writing store saved, the reading one lists
+        rw.save(r#"{"name":"Home","lat":42.5,"lon":-113.7}"#).unwrap();
+        assert_eq!(ro.all().unwrap().iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), ["home"]);
+        assert_eq!(ro.resolve("home").unwrap().name, "Home");
+        // it cannot write
+        assert_eq!(ro.save(r#"{"name":"Cabin","lat":1,"lon":2}"#).unwrap_err().code, "unsupported");
+        assert_eq!(ro.delete("home").unwrap_err().code, "unsupported");
+        assert_eq!(rw.all().unwrap().len(), 1);
+        // its connection is read-only at the SQLite level as well
+        assert!(ro.db().unwrap().execute("DELETE FROM places", []).is_err());
+        assert_eq!(rw.all().unwrap().len(), 1);
         let _ = std::fs::remove_file(p);
     }
 

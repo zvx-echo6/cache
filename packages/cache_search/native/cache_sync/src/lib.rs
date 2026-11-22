@@ -43,7 +43,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, RwLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -61,6 +61,14 @@ const STALL: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Two refusals of "not linked" from the same device must be at least this far apart before this device drops the link.
+const UNLINK_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// How long a link made by showing a code may wait for the other device to show that it holds the link too, before it is
+/// removed here ([`Peer::unconfirmed`]). A slow clean-up, not a time limit: removing a real link is worse than keeping a
+/// dead entry, and the other device may be put away for days right after linking. Counted from the time saved with the
+/// link, so a restart does not start the wait again. A clock that is behind never removes anything; a clock wrongly far
+/// ahead could remove such a link early, which is accepted because only links never confirmed are ever touched.
+const CONFIRM_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
 
@@ -71,6 +79,52 @@ fn now_ms() -> u64 {
 /// `true`, for serde defaults.
 fn t() -> bool {
     true
+}
+
+/// The lines the open has said and nobody has taken yet, oldest first. Nothing calls out to the app: a callback into Dart from an
+/// engine thread aborted the process in a background (WorkManager) isolate ("Cannot invoke native callback from a leaf call"), so the
+/// app asks for the lines instead ([`take_log`]).
+static LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The most lines kept: an app that never asks must not grow it without end (the oldest go first).
+const LOG_KEEP: usize = 200;
+
+/// Returns the lines said since the last call, oldest first, and clears them.
+pub fn take_log() -> Vec<String> {
+    std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
+}
+
+/// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
+struct OpenSteps(Instant);
+
+impl OpenSteps {
+    fn step(&self, name: &str) {
+        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
+        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+        if b.len() >= LOG_KEEP {
+            b.remove(0);
+        }
+        b.push(line);
+    }
+}
+
+/// A send-only allow list for one folder of a share ([`Config::send_gate`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SendGate {
+    /// The folder, relative to the share's root ("photos").
+    #[serde(default)]
+    pub dir: String,
+    /// The files under it that may be offered, as paths relative to the share's root.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl SendGate {
+    /// `rel` is held back: it is under the folder and not in the allow list.
+    fn holds_back(&self, rel: &str) -> bool {
+        let dir = self.dir.trim_matches('/');
+        !dir.is_empty() && rel.strip_prefix(dir).is_some_and(|r| r.starts_with('/')) && !self.allow.iter().any(|a| a == rel)
+    }
 }
 
 /// The `cs_sync_open` config.
@@ -138,6 +192,12 @@ pub struct Config {
     /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
     #[serde(default)]
     pub hidden: BTreeMap<String, Vec<String>>,
+    /// Shares whose files the Activity does not list one by one (share ids): the app says what arrived in its own words (the
+    /// notebooks: "3 entries arrived from your other devices"), and a file line would name the person's notebook files. Only the
+    /// lines that announce a normal change to a file (got, deleted by a device, kept, conflict copy) are left out; a failure or a
+    /// stop of the share is still said.
+    #[serde(default)]
+    pub quiet: Vec<String>,
     /// What this device has switched off in a shared folder, by share id (patterns as for `exclude`): the person's choice of
     /// items in one share (a library, a map layer, a model). Such a path is neither fetched here nor offered to the others, and
     /// its deletes stay here, but this device keeps listing it with its history, so switching it on again carries on where it
@@ -145,6 +205,13 @@ pub struct Config {
     /// list later.
     #[serde(default)]
     pub off: BTreeMap<String, Vec<String>>,
+    /// Folders of a share whose files are OFFERED only when listed, by share id: `{"dir": "photos", "allow": ["photos/a.jpg"]}`
+    /// offers a file under `photos/` only if it is in `allow` (every other path of the share is unaffected). Unlike `off` it
+    /// governs sending only: a file under `dir` is still fetched from the other devices, so what arrives is never held back.
+    /// Nothing already sent is recalled. `set_gate` replaces a share's gate later.
+    #[serde(default)]
+    #[serde(rename = "gate")]
+    pub send_gate: BTreeMap<String, SendGate>,
     /// Shares kept only with some linked devices, by share id: the link kinds ([`Link`]'s `mode`) a device must have for the share
     /// to be offered to it and taken from it. A link starts `"off"` until the person answers ([`new_link`]); links made before
     /// that were given `"match"` once ([`migrate_links`]). A link with no mode at all counts as `"match"`. A share not listed goes to every linked device. The person's
@@ -152,6 +219,11 @@ pub struct Config {
     /// share's list later.
     #[serde(default)]
     pub with: BTreeMap<String, Vec<String>>,
+    /// The engine stops itself this many seconds after it opened, whether or not it was closed: no more rounds, the router and
+    /// the store shut down (so another engine can open the folder). For a background run, whose process may be stopped by the
+    /// system before it can close the engine; absent: no limit (the app's own engine).
+    #[serde(default)]
+    pub lifetime_secs: Option<u64>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -195,6 +267,52 @@ struct Peer {
     /// What the two devices agreed about this link, as last set on either ([`Link`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     link: Option<Link>,
+    /// When the device last answered (ms since 1970) and how (`direct` or `relay`), so a start does not forget it. Written at most
+    /// about once a minute ([`Peer::seen`]). Absent in files saved by older versions, and until the device has answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_seen: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<String>,
+    /// The name the device last called itself. `name` follows it when it changes, and stays as the person set it ("Rename") until
+    /// the device announces a different one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    announced: Option<String>,
+    /// Set on the device that showed the link code, until the other device has shown that it holds the link too: its answer to
+    /// the code may never have reached it, and then it does not know it is linked. Absent once confirmed, on the device that
+    /// read the code, and in files saved by older versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unconfirmed: bool,
+}
+
+/// The least time between two writes of a device's last seen time.
+const SEEN_SAVE_EVERY_MS: u64 = 60_000;
+
+impl Peer {
+    /// Notes that the device answered at `now` through `via`. True when that changed what is saved (the first time, and then at
+    /// most once in [`SEEN_SAVE_EVERY_MS`]), so the caller writes the file.
+    fn seen(&mut self, now: u64, via: &str) -> bool {
+        let due = match self.last_seen {
+            None => true,
+            Some(t) => now < t || now - t >= SEEN_SAVE_EVERY_MS,
+        };
+        if due {
+            self.last_seen = Some(now);
+            self.via = Some(via.to_string());
+        }
+        due
+    }
+
+    /// Takes the name the device now calls itself. True when it was new (the caller writes the file). A name the person gave this
+    /// device here stays until the device announces a different one.
+    fn adopt_name(&mut self, announced: &str) -> bool {
+        let announced = announced.trim();
+        if announced.is_empty() || self.announced.as_deref() == Some(announced) {
+            return false;
+        }
+        self.announced = Some(announced.to_string());
+        self.name = announced.to_string();
+        true
+    }
 }
 
 /// What two linked devices keep about their link, the same on both: the app's value (for Cache, how settings go between them:
@@ -205,6 +323,26 @@ struct Peer {
 struct Link {
     v: Value,
     t: u64,
+}
+
+/// Who answered a link's first question and when (`by`, `at` in the app's value), if anyone has.
+fn link_answer(l: &Link) -> Option<(&str, u64)> {
+    let by = l.v.get("by")?.as_str()?;
+    Some((by, l.v.get("at").and_then(|a| a.as_u64()).unwrap_or(u64::MAX)))
+}
+
+/// Whether `theirs` (the copy `peer` sent) replaces `mine`, so both devices end up with the same one. The first answer to the
+/// link's question is the pair's: a record with an answer beats one without; of two answers the earlier `at` wins, then the
+/// lower device id. The same answer on both: the later `t` wins (a change made since on the device's page), and on the same
+/// `t` the device with the greater key, so both still agree.
+fn link_replaces(mine: &Link, theirs: &Link, peer: &str, me: &str) -> bool {
+    match (link_answer(mine), link_answer(theirs)) {
+        (None, Some(_)) => return true,
+        (Some(_), None) => return false,
+        (Some(a), Some(b)) if a != b => return (b.1, b.0) < (a.1, a.0),
+        _ => {}
+    }
+    theirs.t > mine.t || (theirs.t == mine.t && theirs.v != mine.v && peer > me)
 }
 
 /// A link's kind for [`Config::with`]: its `mode`, or `"match"` while it has none (a link only an older version of the other
@@ -361,10 +499,99 @@ impl Run {
     }
 }
 
+/// Whether `e`, or anything it wraps, is a connection closed by the other device with code 403 (its Gate: "not linked").
+///
+/// Why not the error's text: the other device's Gate closes the connection only after the handshake (iroh endpoint/connection.rs
+/// `conn.close(error_code, &reason)` in conn_from_noq_conn), and this side's connect() finishes before that close arrives. Where
+/// the close is then met decides what the error says. At connect or open_bi it is `ConnectionError::ApplicationClosed`, whose text
+/// is "closed by peer: not linked (code 403)" (noq-proto connection/mod.rs ConnectionError). On a slower machine it is met at
+/// write_all or read_to_end instead, as `WriteError::ConnectionLost` (noq send_stream.rs) or `ReadToEndError::Read(ReadError::
+/// ConnectionLost)` (noq recv_stream.rs), whose text is only "connection lost" / "read error: connection lost": the reason is in
+/// the error's source, not in its text. The close code is the same in every case, so it is what is looked for.
+///
+/// What it cannot see, and why that cannot stick: iroh's `ConnectingError::HandshakeFailure` ("Failure finalizing the handshake",
+/// connection.rs conn_from_noq_conn) carries no 403. But it is raised only when the connection has no ALPN or peer certificate AND
+/// no close reason (iroh: "if the authentication error raced with a connection error, the connection error wins"). A close by the
+/// other device's Gate always sets the close reason (noq connection.rs `close_reason`: "when the connection is closed ... is always
+/// true"), and the handshake data is read from the crypto session, which a close does not clear. So a Gate close can never come out
+/// as a HandshakeFailure: it is met at connect, open_bi, write or read, each of which this finds. A HandshakeFailure can only be a
+/// peer whose handshake gave no ALPN or certificate; it is not the Gate's verdict, is never taken for one, and unlinks nothing.
+fn closed_403(e: &(dyn std::error::Error + 'static)) -> bool {
+    closed_code(e) == Some(403)
+}
+
+/// The code of the close by the other device that `e`, or anything it wraps, is (see [`closed_403`] for why by code).
+fn closed_code(e: &(dyn std::error::Error + 'static)) -> Option<u32> {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if let Some(iroh::endpoint::ConnectionError::ApplicationClosed(c)) = x.downcast_ref::<iroh::endpoint::ConnectionError>() {
+            return [403u32, 409, 503].into_iter().find(|n| c.error_code == VarInt::from_u32(*n));
+        }
+        cur = x.source();
+    }
+    None
+}
+
+/// What a device's Gate knows besides who is linked: whether it may say "not linked" at all.
+#[derive(Debug, Default)]
+struct GateState {
+    /// The links file has been read and the device is up. Before that the Gate does not know who is linked.
+    ready: AtomicBool,
+    /// How many writes of `sync.json` are running now.
+    writing: AtomicUsize,
+    /// Until when (ms since 1970) the links are not to be trusted to be complete: after a recovery of the links file (or a fresh
+    /// start). 0: they are.
+    grace_until: AtomicU64,
+}
+
+/// What the Gate answers a key that is not linked, by close code. Only [`Refusal::NotLinked`] is ever taken by the other device
+/// for an unlink; the others are never.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refusal {
+    /// 403 "not linked": the links come from a healthy file and this key is not in them.
+    NotLinked,
+    /// 409 "links reset": the links were recovered or just made, so this may be a device that was linked and is forgotten.
+    LinksReset,
+    /// 503 "busy": the links are not loaded yet, or the file is being rewritten; try again later.
+    Busy,
+}
+
+impl Refusal {
+    fn code(self) -> u32 {
+        match self {
+            Refusal::NotLinked => 403,
+            Refusal::LinksReset => 409,
+            Refusal::Busy => 503,
+        }
+    }
+    fn reason(self) -> &'static [u8] {
+        match self {
+            Refusal::NotLinked => b"not linked",
+            Refusal::LinksReset => b"links reset",
+            Refusal::Busy => b"busy",
+        }
+    }
+}
+
+impl GateState {
+    /// The answer to a key that is not linked. "Not linked" only when the links are loaded, no rewrite of them is running, and
+    /// they did not come from a recovery lately: a device that lost its links must never tell the others they were unlinked.
+    fn refusal(&self, now: u64) -> Refusal {
+        if !self.ready.load(Ordering::SeqCst) || self.writing.load(Ordering::SeqCst) > 0 {
+            Refusal::Busy
+        } else if now < self.grace_until.load(Ordering::SeqCst) {
+            Refusal::LinksReset
+        } else {
+            Refusal::NotLinked
+        }
+    }
+}
+
 /// Refuses every connection from a key that is not linked, except on the linking protocol (which wants the one-time code).
 #[derive(Debug)]
 struct Gate {
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    state: Arc<GateState>,
 }
 
 impl EndpointHooks for Gate {
@@ -372,7 +599,8 @@ impl EndpointHooks for Gate {
         if conn.alpn() == PAIR_ALPN || self.allowed.read().map(|a| a.contains(&conn.remote_id())).unwrap_or(false) {
             AfterHandshakeOutcome::accept()
         } else {
-            AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(403), reason: b"not linked".to_vec() }
+            let r = self.state.refusal(now_ms());
+            AfterHandshakeOutcome::Reject { error_code: VarInt::from_u32(r.code()), reason: r.reason().to_vec() }
         }
     }
 }
@@ -387,6 +615,11 @@ struct Inner {
     store: FsStore,
     saved: Mutex<Saved>,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
+    /// What the Gate needs besides `allowed` ([`GateState`]).
+    gate: Arc<GateState>,
+    /// Devices whose Gate refused the last check-in with 403 "not linked", and when the first of those was (see
+    /// [`Inner::refused_by`]). In memory only: a restart starts the count again, which can only keep a link longer.
+    refused: Mutex<HashMap<String, Instant>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
     run: Mutex<Run>,
@@ -399,6 +632,10 @@ struct Inner {
     stop: AtomicBool,
     /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
     settle_again: Arc<AtomicBool>,
+    /// Files dated in the future (a device with a wrong clock), by share then path: the size and modification time each was
+    /// last seen with, and since when. Their date cannot say whether they are still being written, so they count as settled
+    /// once they have stayed the same for [`SETTLE`]. In memory only; an entry goes when its file settles, changes or goes.
+    settling: Mutex<HashMap<String, HashMap<String, Settling>>>,
     /// The first round has put right what an interrupted write left (see [`Writes`]).
     recovered: AtomicBool,
     /// What never syncs, by share id ([`Config::exclude`]).
@@ -411,10 +648,14 @@ struct Inner {
     last: BTreeMap<String, Vec<String>>,
     /// [`Config::hidden`].
     hidden: BTreeMap<String, Vec<String>>,
+    /// [`Config::quiet`].
+    quiet: HashSet<String>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::off`], as `set_off` last left it.
     off: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::send_gate`], as `set_gate` last left it.
+    send_gate: Mutex<BTreeMap<String, SendGate>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
@@ -428,10 +669,40 @@ struct Inner {
     received: Mutex<HashMap<String, Received>>,
 }
 
+/// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
+type Settling = ((u64, i64), Instant);
+
 pub struct SyncEngine {
     rt: tokio::runtime::Runtime,
     inner: Arc<Inner>,
     router: Option<Router>,
+    /// Held while this engine lives: the folder is not opened a second time in this process.
+    _folder: FolderGuard,
+}
+
+/// The folders engines of this process run on. A second `open` on one of them (the app's own engine is running and a background
+/// round opens another on the same folder, in the same process) answers at once with an error instead of waiting on the first
+/// one's store, which a background round did without ever coming back (found on a Pixel).
+static OPEN_FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+struct FolderGuard(PathBuf);
+
+impl FolderGuard {
+    fn take(dir: &Path) -> Result<FolderGuard> {
+        let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let mut open = OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner());
+        if open.contains(&key) {
+            bail!("another engine of this app already runs on this folder");
+        }
+        open.push(key.clone());
+        Ok(FolderGuard(key))
+    }
+}
+
+impl Drop for FolderGuard {
+    fn drop(&mut self) {
+        OPEN_FOLDERS.lock().unwrap_or_else(|l| l.into_inner()).retain(|p| p != &self.0);
+    }
 }
 
 /// The code a device shows for linking: its address, a one-time token, and its name.
@@ -448,11 +719,59 @@ fn encode_code(c: &LinkCode) -> Result<String> {
     Ok(format!("{CODE_PREFIX}{}", data_encoding::BASE32_NOPAD.encode(&serde_json::to_vec(c)?)))
 }
 
+/// Why a link code cannot be read. The text is what the person may be shown; [`LinkCodeError::kind`] is the stable name the app
+/// tells the cases apart by (the answer's `kind`, never the text).
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinkCodeError {
+    /// Not a Cache link code at all.
+    NotACode,
+    /// A `CACHE1-` code whose body cannot be read.
+    Damaged,
+    /// `CACHE<n>-` with n above 1: made by a newer Cache.
+    Newer,
+}
+
+impl LinkCodeError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotACode => "link_code_not_a_code",
+            Self::Damaged => "link_code_damaged",
+            Self::Newer => "link_code_newer",
+        }
+    }
+}
+
+impl std::fmt::Display for LinkCodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotACode => "this is not a Cache link code",
+            Self::Damaged => "the link code is damaged",
+            Self::Newer => "this link code is from a newer version of Cache",
+        })
+    }
+}
+
+impl std::error::Error for LinkCodeError {}
+
+/// The kind of a failure that is a [`LinkCodeError`], for the answer to the app.
+pub fn error_kind(e: &anyhow::Error) -> Option<&'static str> {
+    e.downcast_ref::<LinkCodeError>().map(LinkCodeError::kind)
+}
+
 fn decode_code(s: &str) -> Result<LinkCode> {
     let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
-    let body = s.strip_prefix(CODE_PREFIX).ok_or_else(|| anyhow!("this is not a Cache link code"))?;
-    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| anyhow!("the link code is damaged"))?;
-    serde_json::from_slice(&bytes).map_err(|_| anyhow!("the link code is damaged"))
+    let Some(body) = s.strip_prefix(CODE_PREFIX) else {
+        return Err(if made_by_newer(&s) { LinkCodeError::Newer } else { LinkCodeError::NotACode }.into());
+    };
+    let bytes = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| LinkCodeError::Damaged)?;
+    Ok(serde_json::from_slice(&bytes).map_err(|_| LinkCodeError::Damaged)?)
+}
+
+/// `CACHE<n>-` (already upper-cased) with n above 1: a code from a later format. A number too big to read is later too.
+fn made_by_newer(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("CACHE") else { return false };
+    let Some((n, _)) = rest.split_once('-') else { return false };
+    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().map_or(true, |n| n > 1)
 }
 
 fn token() -> String {
@@ -498,11 +817,24 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
+///
+/// `complete` is cleared when anything could not be read (a folder that cannot be listed, a file whose details cannot be
+/// read): what is missing from `out` then may only be unreadable, so a scan must not take it as gone.
+fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>, complete: &mut bool) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        *complete = false;
+        return;
+    };
+    for e in rd {
+        let Ok(e) = e else {
+            *complete = false;
+            continue;
+        };
         let p = e.path();
-        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        let Ok(m) = std::fs::symlink_metadata(&p) else {
+            *complete = false;
+            continue;
+        };
         if m.file_type().is_symlink() {
             continue;
         }
@@ -511,7 +843,7 @@ fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut V
             continue;
         }
         if m.is_dir() {
-            walk(root, &p, skip, hidden, out);
+            walk(root, &p, skip, hidden, out, complete);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -607,9 +939,71 @@ impl Inner {
         self.dir.join("index").join(format!("{share}.seen.json"))
     }
 
+    /// Set (holding the new path) while a share re-pointed to a new folder has not yet had its first, reconciling scan. A mark
+    /// naming a folder the share does not have (the app stopped between writing it and changing the path) is ignored.
+    fn moved_path(&self, share: &str) -> PathBuf {
+        self.dir.join("index").join(format!("{share}.moved"))
+    }
+
+    fn moved_marker(&self, share: &str) -> Option<PathBuf> {
+        std::fs::read_to_string(self.moved_path(share)).ok().map(PathBuf::from)
+    }
+
+    /// Adds a share, or re-points one this device already has (same id) at `path`: the folder's absolute path changes when the
+    /// app's container moves (an iOS update). The name stays; the share is marked so its first scan never records deletes.
+    /// The same folder under another id is refused. Returns whether the share was already there.
+    fn upsert_share(&self, id: &str, name: String, path: PathBuf) -> Result<bool> {
+        let existed;
+        let moved;
+        let share_name;
+        {
+            let mut sv = self.saved.lock().unwrap();
+            if sv.shares.iter().any(|x| x.id != id && x.path == path) {
+                bail!("that folder is already shared");
+            }
+            if let Some(x) = sv.shares.iter_mut().find(|x| x.id == id) {
+                existed = true;
+                moved = x.path != path;
+                if moved {
+                    // The mark is on disk before the path changes, and both happen under the lock a round copies the shares
+                    // under: no round can scan the new folder as an ordinary one and record what it lacks as deleted, and
+                    // two re-points of one share at once cannot leave the mark naming one folder and the share the other.
+                    // If it cannot be written the re-point fails with nothing changed.
+                    std::fs::create_dir_all(self.dir.join("index"))?;
+                    std::fs::write(self.moved_path(id), path.to_string_lossy().as_bytes())?;
+                }
+                x.path = path.clone();
+                share_name = x.name.clone();
+            } else {
+                existed = false;
+                moved = false;
+                share_name = name.clone();
+                sv.shares.push(Share { id: id.to_string(), name, path: path.clone() });
+            }
+        }
+        if moved {
+            self.save()?;
+            self.note(format!("{share_name}: folder moved after an update; checking files"));
+        } else if !existed {
+            self.save()?;
+        }
+        Ok(existed)
+    }
+
+    /// Writes the links and shares to disk. The lock is held through the write: one save at a time, and what is on disk is
+    /// never older than what a later save wrote (two saves at once would share the temporary file and could land out of order).
     fn save(&self) -> Result<()> {
-        let s = self.saved.lock().unwrap().clone();
-        write_json(&self.saved_path(), &s)
+        let s = self.saved.lock().unwrap();
+        // The Gate does not say "not linked" while the file is being rewritten.
+        struct Writing<'a>(&'a AtomicUsize);
+        impl Drop for Writing<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        self.gate.writing.fetch_add(1, Ordering::SeqCst);
+        let _w = Writing(&self.gate.writing);
+        write_saved(&self.saved_path(), &s)
     }
 
     /// Hidden paths that do sync in `share` ([`Config::hidden`]).
@@ -670,13 +1064,14 @@ impl Inner {
     fn offered(&self, share: &str) -> Index {
         let skip = self.skip(share);
         let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
+        let gate = self.send_gate.lock().unwrap().get(share).cloned();
         let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
         let idx = self.load_index(share);
         Index {
             files: idx
                 .files
                 .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
+                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !gate.as_ref().is_some_and(|g| g.holds_back(p)) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
         }
@@ -833,6 +1228,13 @@ impl Inner {
         self.run.lock().unwrap().note(msg);
     }
 
+    /// A line that announces a normal change to one file of share `share_id`: left out when the share is [`Config::quiet`].
+    fn note_file(&self, share_id: &str, msg: impl Into<String>) {
+        if !self.quiet.contains(share_id) {
+            self.note(msg);
+        }
+    }
+
     fn peer_name(&self, id: &str) -> String {
         self.saved.lock().unwrap().peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| id[..8.min(id.len())].to_string())
     }
@@ -939,12 +1341,17 @@ impl Inner {
         let root = share.path.clone();
         let skip = self.skip(&share.id).to_vec();
         let hidden = self.hidden_ok(&share.id).to_vec();
-        let files = tokio::task::spawn_blocking(move || {
+        let (files, complete) = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &skip, &hidden, &mut v);
-            v
+            let mut complete = true;
+            walk(&root, &root, &skip, &hidden, &mut v, &mut complete);
+            (v, complete)
         })
         .await?;
+        // The first scan after the folder was re-pointed ([`Inner::repoint_share`]) only reconciles: what the index lists and the
+        // folder lacks is forgotten (the other devices bring it back if they have it), never recorded as a delete. A scan that
+        // could not read everything records no deletes either.
+        let moved = self.moved_marker(&share.id).as_deref() == Some(share.path.as_path());
         #[cfg(feature = "test-hooks")]
         {
             // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
@@ -969,6 +1376,12 @@ impl Inner {
             changed = true;
         }
         let mut unsettled = false;
+        // The sizes of the files this scan holds back as still being written: a file that went and one of the same size that
+        // is still settling may be a rename, whose delete waits for the scan that also lists the new path (below).
+        let mut settling_sizes: HashSet<u64> = HashSet::new();
+        // The files dated in the future that the last rescan held back, and the ones this rescan holds back ([`Inner::settling`]).
+        let watched = self.settling.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
+        let mut watching: HashMap<String, Settling> = HashMap::new();
         let mut writes = self.load_writes(&share.id);
         let writes_before = writes.len();
         // Content whose file here moved, changed or went: if it lives on at another path, the store must read it from there.
@@ -983,9 +1396,22 @@ impl Inner {
                 continue;
             }
             // Still being written (a copy or a download in progress): left for a later round, so half a file never goes out.
-            if (now_ms() as i64).saturating_sub(key.1) < SETTLE.as_millis() as i64 {
-                unsettled = true;
-                continue;
+            let age = (now_ms() as i64).saturating_sub(key.1);
+            if age < SETTLE.as_millis() as i64 {
+                // A date in the future says nothing about when the file was last written (a wrong clock on the device that
+                // made it): such a file waits until it has been seen unchanged for as long, and no longer.
+                let since = match watched.get(&rel) {
+                    Some(&(k, since)) if k == key => since,
+                    _ => Instant::now(),
+                };
+                if age >= 0 || since.elapsed() < SETTLE {
+                    if age < 0 {
+                        watching.insert(rel.clone(), (key, since));
+                    }
+                    unsettled = true;
+                    settling_sizes.insert(m.len());
+                    continue;
+                }
             }
             let tag = Self::tag_name(&share.id, &rel);
             let added = self
@@ -1011,11 +1437,34 @@ impl Inner {
             }
             seen.insert(rel, key);
         }
+        // Only what is still held back stays watched: a file that settled, changed or went is dropped.
+        if watching.is_empty() {
+            self.settling.lock().unwrap().remove(&share.id);
+        } else {
+            self.settling.lock().unwrap().insert(share.id.clone(), watching);
+        }
         // A file still waiting to be written (cut off, to come again) has not gone.
-        let gone: Vec<String> =
-            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect();
+        let gone: Vec<String> = if complete {
+            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect()
+        } else {
+            Vec::new()
+        };
         for p in gone {
+            if moved {
+                stale.push(idx.files[&p].hash.clone());
+                idx.files.remove(&p);
+                seen.remove(&p);
+                let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+                changed = true;
+                continue;
+            }
             let old = idx.files[&p].clone();
+            // Perhaps renamed to a file still being written (a rename of a file that arrived moments ago keeps that file's
+            // time): the delete waits for the next scan, so the other devices learn the new path in the same list and write
+            // it before they delete the old one, while their store can still read the content from it.
+            if settling_sizes.contains(&old.size) {
+                continue;
+            }
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
             seen.remove(&p);
@@ -1023,6 +1472,10 @@ impl Inner {
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        // Reconciled: normal delete detection resumes (unless the scan was cut short, then the next scan reconciles too).
+        if moved && complete && self.moved_marker(&share.id).as_deref() == Some(share.path.as_path()) {
+            let _ = std::fs::remove_file(self.moved_path(&share.id));
+        }
         if writes.len() != writes_before {
             self.store_writes(&share.id, &writes)?;
         }
@@ -1064,15 +1517,120 @@ impl Inner {
         modes.contains(&mode)
     }
 
-    /// The link as `peer` last set it, when that is later than the copy here (on the same time, the device with the greater key
-    /// wins, so both end up the same).
+    /// What to do with `remote` (a linked device's view of `share`, [`Inner::remote_view`]): [`index::merge`] with this device's
+    /// index. Everything a linked device changes, replaces or deletes arrives here as it is.
+    fn merge_from(&self, share: &str, remote: &Index, _peer: &str) -> Vec<Action> {
+        index::merge(&self.load_index(share), remote)
+    }
+
+    /// The linked device `peer` has shown that it holds the link too: the link is no longer waiting ([`Peer::unconfirmed`]).
+    fn confirm_peer(&self, peer: &str) {
+        let changed = {
+            let mut sv = self.saved.lock().unwrap();
+            sv.peers.iter_mut().find(|p| p.id == peer).map(|p| std::mem::take(&mut p.unconfirmed)).unwrap_or(false)
+        };
+        if changed {
+            let _ = self.save();
+        }
+    }
+
+    /// How long a link may stay unconfirmed ([`CONFIRM_WINDOW`]).
+    fn confirm_window(&self) -> Duration {
+        #[cfg(feature = "test-hooks")]
+        if let Some(ms) = std::fs::read_to_string(self.dir.join("confirm-window-ms")).ok().and_then(|v| v.trim().parse().ok()) {
+            // A test's own, shorter wait: the milliseconds in `<dir>/confirm-window-ms`.
+            return Duration::from_millis(ms);
+        }
+        CONFIRM_WINDOW
+    }
+
+    /// How long two refusals of "not linked" must be apart before the link is dropped ([`UNLINK_INTERVAL`]).
+    fn unlink_interval(&self) -> Duration {
+        #[cfg(feature = "test-hooks")]
+        if let Some(ms) = std::fs::read_to_string(self.dir.join("unlink-interval-ms")).ok().and_then(|v| v.trim().parse().ok()) {
+            return Duration::from_millis(ms);
+        }
+        UNLINK_INTERVAL
+    }
+
+    /// Takes the link to `id` out of everything this device holds about it: the saved links, who may connect, what was learned and
+    /// received. The same for a link taken off here and for one the other device unlinked. Files already here stay.
+    fn remove_peer(&self, id: &str) -> Result<()> {
+        self.saved.lock().unwrap().peers.retain(|p| p.id != id);
+        if let Ok(k) = id.parse::<EndpointId>() {
+            self.allowed.write().unwrap().remove(&k);
+        }
+        self.run.lock().unwrap().peers.remove(id);
+        self.secrets.lock().unwrap().remove(id);
+        self.received.lock().unwrap().remove(id);
+        self.refused.lock().unwrap().remove(id);
+        self.save()
+    }
+
+    /// Notes how a check-in with `peer` ended, and drops the link when the other device has refused it as "not linked" (403) in
+    /// two rounds at least [`UNLINK_INTERVAL`] apart. `closed` is the close code of the other device's Gate, if that is what ended
+    /// it, and `answered` that it answered. Only 403 ever counts: a 409 (its links were reset), a 503 (busy), a timeout or any other
+    /// error is never an unlink, and a 409 or an answer forgets the 403 seen before. Nothing is sent and nothing is said: the other
+    /// device does not list this one, and this one stops listing it. True when the link was dropped.
+    fn check_in_ended(&self, peer: &str, closed: Option<u32>, answered: bool) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-unlink-on-403").exists() {
+            // A device that acts as an older build, which does not know this rule.
+            return false;
+        }
+        let drop_it = {
+            let mut m = self.refused.lock().unwrap();
+            if closed == Some(403) {
+                let first = *m.entry(peer.to_string()).or_insert_with(Instant::now);
+                first.elapsed() >= self.unlink_interval()
+            } else {
+                if answered || closed == Some(409) {
+                    m.remove(peer);
+                }
+                false
+            }
+        };
+        drop_it && self.remove_peer(peer).is_ok()
+    }
+
+    /// Removes the links made here by showing a code that the other device still has not confirmed [`CONFIRM_WINDOW`] after
+    /// they were made: it never learned it was linked, so the entry here would stay for ever as a device that never answers.
+    /// A confirmed link is never touched.
+    fn drop_unconfirmed(&self) {
+        let window = self.confirm_window().as_millis() as u64;
+        let now = now_ms();
+        let mut gone: Vec<Peer> = Vec::new();
+        // Saturating: a link dated after now (the clock went back) has waited no time at all.
+        self.saved.lock().unwrap().peers.retain(|p| {
+            if !p.unconfirmed || now.saturating_sub(p.linked) < window {
+                return true;
+            }
+            gone.push(p.clone());
+            false
+        });
+        if gone.is_empty() {
+            return;
+        }
+        for p in &gone {
+            if let Ok(k) = p.id.parse::<EndpointId>() {
+                self.allowed.write().unwrap().remove(&k);
+            }
+            self.run.lock().unwrap().peers.remove(&p.id);
+            self.secrets.lock().unwrap().remove(&p.id);
+            self.received.lock().unwrap().remove(&p.id);
+            self.note(format!("{} did not finish linking with this device, so the link was removed. Link the two again to connect them.", p.name));
+        }
+        let _ = self.save();
+    }
+
+    /// The link as `peer` last set it, when it should replace the copy here (see [`link_replaces`]).
     fn adopt_link(&self, peer: &str, theirs: Link) {
         let changed = {
             let mut sv = self.saved.lock().unwrap();
             let Some(p) = sv.peers.iter_mut().find(|p| p.id == peer) else { return };
             let newer = match &p.link {
                 None => true,
-                Some(l) => theirs.t > l.t || (theirs.t == l.t && theirs.v != l.v && peer > self.me.as_str()),
+                Some(l) => link_replaces(l, &theirs, peer, self.me.as_str()),
             };
             if newer {
                 p.link = Some(theirs);
@@ -1102,33 +1660,46 @@ impl Inner {
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
+    /// Free bytes now on the volume holding `path` (or its nearest existing parent): the figure shown on screen.
     fn free_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, false)
+    }
+
+    /// What a transfer may count on before the reserve: [`Inner::free_bytes`] everywhere except iPhone, where it also counts half
+    /// of the space iOS can purge. Every space check uses this, so the reserve is the only margin.
+    fn allowed_bytes(path: &Path) -> Option<u64> {
+        Self::volume_free(&Self::existing(path)?, true)
+    }
+
+    fn existing(path: &Path) -> Option<PathBuf> {
         let mut p = path.to_path_buf();
         while !p.exists() {
             if !p.pop() {
                 return None;
             }
         }
-        Self::volume_free(&p)
+        Some(p)
     }
 
-    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix).
+    /// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix); `allowance` makes no difference here.
     #[cfg(not(target_os = "ios"))]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, _allowance: bool) -> Option<u64> {
         fs4::available_space(p).ok()
     }
 
-    /// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts the space iOS can purge as iPhone Storage in
-    /// Settings does; statvfs leaves it out.
+    /// iPhone: the app's `cache_free_now_bytes_on_disk` (statvfs, same binary) for the figure shown, and its
+    /// `cache_free_bytes_on_disk` (free now plus half of what iOS can purge) for the checks.
     #[cfg(target_os = "ios")]
-    fn volume_free(p: &Path) -> Option<u64> {
+    fn volume_free(p: &Path, allowance: bool) -> Option<u64> {
         use std::os::unix::ffi::OsStrExt;
         extern "C" {
             fn cache_free_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
+            fn cache_free_now_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
         }
         let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
-        // SAFETY: `c` is a valid NUL-terminated path; the helper only reads it.
-        u64::try_from(unsafe { cache_free_bytes_on_disk(c.as_ptr()) }).ok()
+        // SAFETY: `c` is a valid NUL-terminated path; the helpers only read it.
+        let n = unsafe { if allowance { cache_free_bytes_on_disk(c.as_ptr()) } else { cache_free_now_bytes_on_disk(c.as_ptr()) } };
+        u64::try_from(n).ok()
     }
 
     /// One round: rescan every shared folder, then for every linked device fetch its index and apply what is newer there.
@@ -1155,20 +1726,34 @@ impl Inner {
             self.run.lock().unwrap().paused = Some("Sync is paused: no network it may use".into());
             return;
         }
+        self.drop_unconfirmed();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
                 break;
             }
-            let res = self.fetch_index(&p.id).await;
+            let closed = AtomicU32::new(0);
+            let res = self.fetch_index(&p.id, &closed).await;
+            // Whether the other device has unlinked this one (see check_in_ended): then there is nothing more to do with it.
+            let code = Some(closed.load(Ordering::Relaxed)).filter(|c| *c != 0);
+            if self.check_in_ended(&p.id, code, res.is_ok()) {
+                continue;
+            }
             let mut asks = None;
+            let mut learned = None;
+            // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
+            // enough: a device still waiting for the answer to a code already lets this one in.)
+            if p.unconfirmed && res.as_ref().map(|(idx, _)| idx.link.is_some()).unwrap_or(false) {
+                self.confirm_peer(&p.id);
+            }
             {
                 let mut run = self.run.lock().unwrap();
                 let st = run.peers.entry(p.id.clone()).or_default();
                 match res {
                     Ok((idx, via)) => {
                         st.last_seen = Some(now_ms());
+                        learned = Some((idx.name.clone(), via.clone()));
                         st.via = Some(via);
                         st.error = None;
                         asks = Some((idx.link.clone(), idx.secrets.clone()));
@@ -1178,6 +1763,16 @@ impl Inner {
                         st.via = None;
                         st.error = Some(format!("{e:#}"));
                     }
+                }
+            }
+            if let Some((name, via)) = learned {
+                // Saved with the time and the name the device gave itself, so "last seen" survives a restart and a rename shows.
+                let changed = {
+                    let mut sv = self.saved.lock().unwrap();
+                    sv.peers.iter_mut().find(|x| x.id == p.id).map(|sp| sp.seen(now_ms(), &via) | sp.adopt_name(&name)).unwrap_or(false)
+                };
+                if changed {
+                    let _ = self.save();
                 }
             }
             let Some((link, secrets)) = asks else { continue };
@@ -1227,20 +1822,41 @@ impl Inner {
         }
     }
 
-    async fn fetch_index(&self, peer: &str) -> Result<(RemoteIndex, String)> {
+    async fn fetch_index(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
+        // The close code of the other device's Gate, whichever step meets it (at connect the text carries it; at write or read
+        // only the error's source does).
+        let seen = |e: &(dyn std::error::Error + 'static)| {
+            // 403 is the one that can unlink; any other close code of the Gate only says why this try failed.
+            let c = if closed_403(e) { Some(403) } else { closed_code(e) };
+            if let Some(c) = c {
+                closed.store(c, Ordering::Relaxed);
+            }
+        };
         let id: EndpointId = peer.parse().map_err(|_| anyhow!("bad device key"))?;
         let conn = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(id, SYNC_ALPN))
             .await
             .map_err(|_| anyhow!("not reachable"))?
-            .map_err(|e| anyhow!("not reachable: {e}"))?;
+            .map_err(|e| {
+                seen(&e);
+                anyhow!("not reachable: {e}")
+            })?;
         let via = conn.paths().iter().find(|p| p.is_selected()).map(|p| if p.is_relay() { "relay" } else { "direct" }).unwrap_or("direct").to_string();
-        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        send.write_all(b"index").await.map_err(|e| anyhow!("{e}"))?;
+        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| {
+            seen(&e);
+            anyhow!("{e}")
+        })?;
+        send.write_all(b"index").await.map_err(|e| {
+            seen(&e);
+            anyhow!("{e}")
+        })?;
         send.finish().map_err(|e| anyhow!("{e}"))?;
         let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(MAX_INDEX))
             .await
             .map_err(|_| anyhow!("timed out reading the file list"))?
-            .map_err(|e| anyhow!("{e}"))?;
+            .map_err(|e| {
+                seen(&e);
+                anyhow!("{e}")
+            })?;
         conn.close(0u32.into(), b"done");
         Ok((serde_json::from_slice(&bytes).context("the file list from the device is not valid")?, via))
     }
@@ -1259,13 +1875,25 @@ impl Inner {
         found.into_iter().filter(|id| self.shares_with(share, id)).filter_map(|id| id.parse().ok()).collect()
     }
 
+    /// Takes from `from` what is newer there. A file that cannot be fetched or deleted is noted and the rest goes on, so one
+    /// bad file does not hold up its share; only losing the network stops it. A file with no room for it is passed over and
+    /// comes back as the error at the end, so the status still says sync is paused.
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
         let remote = &self.remote_view(&sh.id, remote);
-        let mut actions = index::merge(&self.load_index(&sh.id), remote);
-        // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
-        if let Some(last) = self.last.get(&sh.id) {
-            actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
-        }
+        let mut actions = self.merge_from(&sh.id, remote, from);
+        // Deletes come after what is fetched: a rename here is a delete of the old path and a fetch of the new one, and the store
+        // may read that content from the old path, so it must still be there when the new one is written (the store is pointed
+        // at the new path once the old one goes, below). What says the rest has come comes after the rest ([`Config::last`]),
+        // deletes included. The sort keeps the order otherwise.
+        let last: &[String] = self.last.get(&sh.id).map(|v| v.as_slice()).unwrap_or(&[]);
+        actions.sort_by_key(|a| match a {
+            Action::Fetch { path, .. } if excluded(last, path) => 2,
+            Action::Delete { .. } => 1,
+            _ => 0,
+        });
+        // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
+        let mut held = false;
+        let mut no_room: Option<anyhow::Error> = None;
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -1286,47 +1914,78 @@ impl Inner {
                         keep.hist.push(r.ver.clone());
                         idx.files.insert(path.clone(), keep);
                         self.store_index(&sh.id, &idx, &seen)?;
-                        self.note(format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
+                        self.note_file(&sh.id, format!("{}: kept {path}, changed here after {} deleted it", sh.name, self.peer_name(from)));
                     }
                 }
                 Action::Delete { path, entry } => {
                     let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
-                    let mut idx = self.load_index(&sh.id);
-                    let mut seen = self.load_seen(&sh.id);
-                    // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
-                    if let Ok(m) = std::fs::metadata(&full) {
-                        if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
-                            continue;
+                    let done: Result<()> = async {
+                        let mut idx = self.load_index(&sh.id);
+                        let mut seen = self.load_seen(&sh.id);
+                        // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
+                        if let Ok(m) = std::fs::metadata(&full) {
+                            if seen.get(&path) != Some(&(m.len(), mtime_ms(&m))) {
+                                return Ok(());
+                            }
+                            std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
+                            prune_empty(&sh.path, &full, self.skip(&sh.id));
                         }
-                        std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
-                        prune_empty(&sh.path, &full, self.skip(&sh.id));
+                        let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
+                        seen.remove(&path);
+                        let gone = idx.files.get(&path).filter(|e| !e.deleted).map(|e| e.hash.clone());
+                        idx.files.insert(path.clone(), entry);
+                        self.store_index(&sh.id, &idx, &seen)?;
+                        self.unmark_writing(&sh.id, &path)?;
+                        self.note_file(&sh.id, format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                        // The content that was here may live on at another path (a rename): the store reads it from there now.
+                        if let Some(h) = gone {
+                            self.repoint(&h, None).await;
+                        }
+                        Ok(())
                     }
-                    let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
-                    seen.remove(&path);
-                    idx.files.insert(path.clone(), entry);
-                    self.store_index(&sh.id, &idx, &seen)?;
-                    self.unmark_writing(&sh.id, &path)?;
-                    self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
+                    .await;
+                    if let Err(e) = done {
+                        held = true;
+                        self.note(format!("{} from {}: {e:#}", sh.name, self.peer_name(from)));
+                    }
                 }
-                Action::Fetch { path, entry, conflict } => self.fetch(sh, &path, entry, conflict, from).await?,
+                Action::Fetch { path, entry, conflict } => {
+                    // Not while anything before it is missing: it stays for a later round.
+                    if held && excluded(last, &path) {
+                        continue;
+                    }
+                    match self.fetch(sh, &path, entry, conflict, from).await {
+                        Ok(true) => {}
+                        Ok(false) => held = true,
+                        Err(e) => {
+                            held = true;
+                            let msg = format!("{e:#}");
+                            // With no network it may use nothing else can come either: the round says sync is paused.
+                            if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
+                                return Err(e);
+                            }
+                            if msg.starts_with("Paused:") {
+                                // No room for this one; a smaller file after it may still fit.
+                                if no_room.is_none() {
+                                    no_room = Some(e);
+                                }
+                            } else {
+                                self.note(format!("{} from {}: {msg}", sh.name, self.peer_name(from)));
+                            }
+                        }
+                    }
+                }
             }
         }
-        Ok(())
+        match no_room {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<()> {
-        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
-            self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
-            return Ok(());
-        };
-        // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
-        // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
-        if let Ok(m) = std::fs::metadata(&full) {
-            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
-                self.settle_again.store(true, Ordering::Relaxed);
-                return Ok(());
-            }
-        }
+    /// Makes sure the store holds `entry`'s content (fetched from the devices that have it), to be written at `full` (`path` in
+    /// `sh`): the room needed is checked where the store is and where `full` is.
+    async fn ensure_blob(self: &Arc<Self>, sh: &Share, path: &str, full: &Path, entry: &Entry) -> Result<Hash> {
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
         let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
         if !have {
@@ -1337,14 +1996,14 @@ impl Inner {
             let need = entry.size;
             // The store takes it first; where the shared folder is on another file system (a phone's internal and shared
             // storage) the copy into place needs the room there too.
-            for at in [&self.dir, &full] {
-                if let Some(free) = Self::free_bytes(at) {
+            for at in [self.dir.as_path(), full] {
+                if let Some(free) = Self::allowed_bytes(at) {
                     if free < need.saturating_add(reserve) {
                         bail!(
                             "Paused: {} needs {}, {} is free and {} is kept free",
                             path,
                             human(need),
-                            human(free),
+                            human(Self::free_bytes(at).unwrap_or(free)),
                             human(reserve)
                         );
                     }
@@ -1382,7 +2041,7 @@ impl Inner {
                                 t.done = n;
                             }
                         }
-                        DownloadProgressItem::Error(e) => failed = Some(format!("{e}")),
+                        DownloadProgressItem::Error(e) => failed = Some(if is_no_space(&e) { NO_SPACE.to_string() } else { format!("{e}") }),
                         DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
                         _ => {}
                     },
@@ -1401,9 +2060,36 @@ impl Inner {
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
+                if f == NO_SPACE {
+                    bail!("Paused: no room to keep {path} ({} needed). Free up space and it carries on.", human(need));
+                }
                 bail!("{path}: {f} (will resume)");
             }
         }
+        Ok(hash)
+    }
+
+    /// Fetches one file and writes it in place. False when it was put off (the file here is not what was last indexed), so
+    /// the caller knows it has not come yet.
+    async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<bool> {
+        #[cfg(feature = "test-hooks")]
+        if std::fs::read_to_string(self.dir.join("fail-fetch")).map(|v| v.trim() == path).unwrap_or(false) {
+            // A file that cannot be fetched: the one `<dir>/fail-fetch` names, for as long as it names it.
+            bail!("test: could not fetch {path}");
+        }
+        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
+            self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
+            return Ok(true);
+        };
+        // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
+        // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
+        if let Ok(m) = std::fs::metadata(&full) {
+            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
+                self.settle_again.store(true, Ordering::Relaxed);
+                return Ok(false);
+            }
+        }
+        let hash = self.ensure_blob(sh, path, &full, &entry).await?;
         // In place: a conflicting local file first becomes a copy beside it.
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1416,7 +2102,7 @@ impl Inner {
             let copy = index::conflict_name(path, &self.saved.lock().unwrap().name, &stamp);
             if let Some(cfull) = safe_join(&sh.path, &copy) {
                 std::fs::rename(&full, &cfull)?;
-                self.note(format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
+                self.note_file(&sh.id, format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
                 // Picked up as a new file by the next scan; the store is pointed at it below.
                 conflict_copy = Some(cfull);
             }
@@ -1432,11 +2118,15 @@ impl Inner {
             self.stop.store(true, Ordering::Relaxed);
             bail!("test: cut off writing {path}");
         }
+        let size_of_entry = entry.size;
         if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await {
             // Whatever part got written goes; the content stays in the store and the next round writes it again.
             if std::fs::remove_file(&full).is_err() && full.exists() {
                 // Left for the recovery a start does, before the next scan could take it for an edit.
                 self.recovered.store(false, Ordering::Relaxed);
+            }
+            if is_no_space(&e) {
+                bail!("Paused: no room to write {path} ({} needed). Free up space and it carries on.", human(size_of_entry));
             }
             bail!("could not write {path}: {e}");
         }
@@ -1444,7 +2134,7 @@ impl Inner {
         let entry_hash = entry.hash.clone();
         let size = entry.size;
         self.written(sh, path, &full, entry).await?;
-        self.note(format!("{}: got {path} ({})", sh.name, human(size)));
+        self.note_file(&sh.id, format!("{}: got {path} ({})", sh.name, human(size)));
         // The content that was here: kept as a conflict copy, or still in use at another path.
         if let Some(c) = conflict_copy {
             if let Some(h) = &old_hash {
@@ -1455,8 +2145,25 @@ impl Inner {
         } else if let Some(h) = old_hash.filter(|h| *h != entry_hash) {
             self.repoint(&h, Some(&full)).await;
         }
-        Ok(())
+        Ok(true)
     }
+}
+
+/// The failure text that stands for a full disk while a transfer is fetched (so it is not shown as a raw error).
+const NO_SPACE: &str = "no space left on the device";
+
+/// True when `e` (or an error it wraps) is the operating system's "disk full" (ENOSPC, 28 on iOS, Android and Linux).
+fn is_no_space(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = cur {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            if io.raw_os_error() == Some(28) {
+                return true;
+            }
+        }
+        cur = err.source();
+    }
+    false
 }
 
 fn chrono_stamp() -> String {
@@ -1488,6 +2195,115 @@ fn write_json<T: Serialize>(p: &Path, v: &T) -> Result<()> {
     std::fs::write(&tmp, serde_json::to_vec(v)?)?;
     std::fs::rename(&tmp, p)?;
     Ok(())
+}
+
+/// Reads the links and shares (`sync.json`), and what to say in the activity if they were not simply read. A missing file is a
+/// fresh start. A file that is there but cannot be read is an error, so nothing is saved over it and the app can try again. A
+/// file that does not parse is moved aside (never deleted) and the last good copy (`sync.json.bak`) is used; with no good copy
+/// the device starts with no links.
+fn load_saved(p: &Path) -> Result<(Saved, Option<String>)> {
+    let bytes = match std::fs::read(p) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Saved::default(), None)),
+        Err(e) => bail!("could not read {}: {e}", p.display()),
+    };
+    if let Ok(saved) = serde_json::from_slice::<Saved>(&bytes) {
+        return Ok((saved, None));
+    }
+    // An earlier damaged file is kept too.
+    let mut aside = p.with_extension("json.damaged");
+    if aside.exists() {
+        aside = p.with_extension(format!("json.damaged.{}", now_ms()));
+    }
+    std::fs::rename(p, &aside).with_context(|| format!("could not move the damaged {} aside", p.display()))?;
+    let bak = p.with_extension("json.bak");
+    match read_json::<Saved>(&bak) {
+        Some(saved) => {
+            // Put back at once, so a start that fails further on does not leave the next one with no links file at all.
+            std::fs::copy(&bak, p).with_context(|| format!("could not restore {}", p.display()))?;
+            Ok((saved, Some("The saved links could not be read; they were restored from the last good copy".into())))
+        }
+        None => Ok((
+            Saved::default(),
+            Some(format!(
+                "The saved links could not be read and there was no good copy: this device starts with no links (the damaged file is kept as {})",
+                aside.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            )),
+        )),
+    }
+}
+
+/// Writes the links and shares (`sync.json`): flushed to disk before it replaces the file, and the file it replaces is kept as
+/// `sync.json.bak` when it is a good one, so a damaged file can be put right at the next start ([`load_saved`]).
+fn write_saved(p: &Path, v: &Saved) -> Result<()> {
+    use std::io::Write as _;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = p.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(&serde_json::to_vec(v)?)?;
+    f.sync_all()?;
+    drop(f);
+    #[cfg(feature = "test-hooks")]
+    if let Some(d) = p.parent() {
+        // A rewrite caught part way: held while `<dir>/hold-write` exists (it says so with `<dir>/hold-write.held`).
+        let hold = d.join("hold-write");
+        if hold.exists() {
+            let _ = std::fs::write(d.join("hold-write.held"), b"");
+            while hold.exists() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _ = std::fs::remove_file(d.join("hold-write.held"));
+        }
+    }
+    // Only a file that still parses is worth keeping; failing to keep it does not stop the save.
+    if let Ok(old) = std::fs::read(p) {
+        if serde_json::from_slice::<Saved>(&old).is_ok() {
+            let bak_tmp = p.with_extension("bak.tmp");
+            if std::fs::write(&bak_tmp, &old).is_ok() {
+                let _ = std::fs::rename(&bak_tmp, p.with_extension("json.bak"));
+            }
+        }
+    }
+    std::fs::rename(&tmp, p)?;
+    Ok(())
+}
+
+/// How long after a recovery of the links file (or a fresh start) the Gate says "links reset" instead of "not linked": the same
+/// time a link may wait to be confirmed ([`CONFIRM_WINDOW`]); `<dir>/grace-ms` makes it shorter in tests.
+fn links_grace(dir: &Path) -> Duration {
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::fs::read_to_string(dir.join("grace-ms")).ok().and_then(|v| v.trim().parse().ok()) {
+        return Duration::from_millis(ms);
+    }
+    let _ = dir;
+    CONFIRM_WINDOW
+}
+
+/// Until when (ms since 1970) this start's links are not to be trusted to be complete, 0 for never. `recovered`: this start used
+/// the last good copy of the links, recreated them empty, or is a fresh start. That is written to `<dir>/links-recovered-at` (and
+/// flushed) before the Gate answers anyone, so the grace goes on across restarts; a start from a healthy file only reads it.
+fn links_grace_until(dir: &Path, recovered: bool) -> Result<u64> {
+    use std::io::Write as _;
+    let marker = dir.join("links-recovered-at");
+    let at = if recovered {
+        let now = now_ms();
+        let tmp = dir.join("links-recovered-at.tmp");
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(now.to_string().as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &marker)?;
+        now
+    } else {
+        // A marker that cannot be read is no marker (a healthy file is what the links come from).
+        std::fs::read_to_string(&marker).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0)
+    };
+    if at == 0 {
+        return Ok(0);
+    }
+    Ok(at.saturating_add(links_grace(dir).as_millis() as u64))
 }
 
 /// Answers linking requests that carry the code being shown.
@@ -1524,7 +2340,8 @@ impl ProtocolHandler for PairProto {
         };
         let reply = if let (true, Some(h)) = (ok, hello) {
             let id = conn.remote_id();
-            add_peer(inner, &id.to_string(), &h.name);
+            // Not confirmed until the other device comes back: this answer may never reach it.
+            add_peer(inner, &id.to_string(), &h.name, true);
             inner.note(format!("Linked with {}", h.name));
             inner.wake.notify_one();
             json!({"ok": true, "name": inner.saved.lock().unwrap().name})
@@ -1538,11 +2355,11 @@ impl ProtocolHandler for PairProto {
     }
 }
 
-fn add_peer(inner: &Inner, id: &str, name: &str) {
+fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()) });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
     }
     if let Ok(k) = id.parse::<EndpointId>() {
         inner.allowed.write().unwrap().insert(k);
@@ -1565,6 +2382,8 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
+        // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
+        self.0.confirm_peer(&peer);
         if ask == b"secrets" {
             // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
             let mine = self.0.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
@@ -1589,8 +2408,24 @@ impl ProtocolHandler for SyncProto {
 impl SyncEngine {
     /// Opens (or creates) the identity, store and settings in `cfg.dir`, binds the endpoint and starts the sync rounds.
     pub fn open(cfg: Config) -> Result<SyncEngine> {
+        let steps = OpenSteps(Instant::now());
+        steps.step("started");
+        std::fs::create_dir_all(&cfg.dir)?;
+        let folder = match FolderGuard::take(&cfg.dir) {
+            Ok(g) => g,
+            Err(e) => {
+                steps.step("folder already open in this process");
+                return Err(e);
+            }
+        };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("cache-sync").enable_all().build()?;
-        let (inner, router) = rt.block_on(Self::start(cfg.clone()))?;
+        let (inner, router) = match rt.block_on(Self::start(cfg.clone(), &steps)) {
+            Ok(v) => v,
+            Err(e) => {
+                steps.step("failed");
+                return Err(e);
+            }
+        };
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
         rt.spawn(async move {
@@ -1598,28 +2433,73 @@ impl SyncEngine {
                 if inner2.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                inner2.round().await;
+                // The round runs as a task of its own: if it panics, only that round ends, and the next one comes after the usual
+                // wait (in the loop itself a panic would end every later round until the app is started again).
+                let inner3 = inner2.clone();
+                let one = tokio::spawn(async move {
+                    #[cfg(feature = "test-hooks")]
+                    {
+                        // One round that panics: when `<dir>/panic-round` exists (taken away first, so only one does).
+                        let marker = inner3.dir.join("panic-round");
+                        if marker.exists() {
+                            let _ = std::fs::remove_file(&marker);
+                            panic!("test: a round panicked");
+                        }
+                    }
+                    inner3.round().await
+                });
+                if let Err(e) = one.await {
+                    if e.is_panic() {
+                        let p = e.into_panic();
+                        let msg = p.downcast_ref::<&str>().map(|m| m.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "no details".into());
+                        // Said even if the panic left the run log's lock poisoned: this line must not end the loop too.
+                        inner2.run.lock().unwrap_or_else(|l| l.into_inner()).note(format!("Sync stopped on an internal error and started again: {msg}"));
+                    }
+                }
                 let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
                 let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
             }
         });
-        Ok(SyncEngine { rt, inner, router: Some(router) })
+        if let Some(secs) = cfg.lifetime_secs {
+            let inner4 = inner.clone();
+            let router4 = router.clone();
+            rt.spawn(async move {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                // Closed already (close sets `stop` first): nothing left to do.
+                if inner4.stop.swap(true, Ordering::Relaxed) {
+                    return;
+                }
+                inner4.note("Stopped: the time limit of this run was reached");
+                inner4.wake.notify_one();
+                let _ = tokio::time::timeout(Duration::from_secs(5), router4.shutdown()).await;
+                let _ = inner4.store.shutdown().await;
+            });
+        }
+        steps.step("done");
+        Ok(SyncEngine { rt, inner, router: Some(router), _folder: folder })
     }
 
-    async fn start(cfg: Config) -> Result<(Arc<Inner>, Router)> {
+    async fn start(cfg: Config, steps: &OpenSteps) -> Result<(Arc<Inner>, Router)> {
         std::fs::create_dir_all(&cfg.dir)?;
+        // Read before anything is written: if the links cannot be read now, nothing here may be changed.
+        let fresh = !cfg.dir.join("sync.json").exists();
+        let (mut saved, saved_note) = load_saved(&cfg.dir.join("sync.json"))?;
+        // Whether the links can be trusted to be complete, for what the Gate may say to a key that is not linked.
+        let gate = Arc::new(GateState::default());
+        gate.grace_until.store(links_grace_until(&cfg.dir, fresh || saved_note.is_some())?, Ordering::SeqCst);
+        steps.step("links loaded");
         let (secret, _) = identity::load_or_create(&cfg.dir)?;
-        let mut saved: Saved = read_json(&cfg.dir.join("sync.json")).unwrap_or_default();
+        steps.step("identity loaded");
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
         }
         if migrate_links(&mut saved) {
-            write_json(&cfg.dir.join("sync.json"), &saved)?;
+            write_saved(&cfg.dir.join("sync.json"), &saved)?;
         }
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(saved.peers.iter().filter_map(|p| p.id.parse().ok()).collect()));
 
-        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone()).hooks(Gate { allowed: allowed.clone() });
+        let mut b = Endpoint::builder(presets::Minimal).secret_key(secret.clone()).hooks(Gate { allowed: allowed.clone(), state: gate.clone() });
         b = if !cfg.relay {
             b.relay_mode(RelayMode::Disabled)
         } else if !cfg.relay_urls.is_empty() {
@@ -1653,6 +2533,7 @@ impl SyncEngine {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
         let endpoint = b.bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
+        steps.step("endpoint bound");
 
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         let w2 = wanted.clone();
@@ -1667,6 +2548,7 @@ impl SyncEngine {
         let mut opts = StoreOptions::new(&store_dir);
         opts.gc = Some(gc);
         let store = FsStore::load_with_opts(store_dir.join("blobs.db"), opts).await.map_err(|e| anyhow!("could not open the store: {e}"))?;
+        steps.step("blob store opened");
 
         let inner = Arc::new(Inner {
             dir: cfg.dir.clone(),
@@ -1675,6 +2557,8 @@ impl SyncEngine {
             store: store.clone(),
             saved: Mutex::new(saved),
             allowed,
+            gate: gate.clone(),
+            refused: Mutex::new(HashMap::new()),
             pairing: Mutex::new(None),
             run: Mutex::new(Run::default()),
             wanted,
@@ -1684,6 +2568,7 @@ impl SyncEngine {
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
+            settling: Mutex::new(HashMap::new()),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
             local_deletes: cfg.local_deletes.clone(),
@@ -1691,13 +2576,18 @@ impl SyncEngine {
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
             hidden: cfg.hidden.clone(),
+            quiet: cfg.quiet.iter().cloned().collect(),
             off: Mutex::new(cfg.off.clone()),
+            send_gate: Mutex::new(cfg.send_gate.clone()),
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
             received: Mutex::new(HashMap::new()),
         });
         inner.save()?;
+        steps.step("state saved");
+        // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
+        gate.ready.store(true, Ordering::SeqCst);
         let blobs = BlobsProtocol::new(&store, None);
         let router = Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs)
@@ -1705,6 +2595,9 @@ impl SyncEngine {
             .accept(SYNC_ALPN, SyncProto(inner.clone()))
             .spawn();
         inner.note("Started");
+        if let Some(n) = saved_note {
+            inner.note(n);
+        }
         Ok((inner, router))
     }
 
@@ -1763,25 +2656,21 @@ impl SyncEngine {
                     }
                 };
                 if reply.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-                    inner.allowed.write().unwrap().remove(&peer);
+                    // Only if the device was not linked already: a refused second try must not lock out a device that is.
+                    if !inner.saved.lock().unwrap().peers.iter().any(|p| p.id == peer.to_string()) {
+                        inner.allowed.write().unwrap().remove(&peer);
+                    }
                     bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
-                add_peer(inner, &peer.to_string(), &pname);
+                add_peer(inner, &peer.to_string(), &pname, false);
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
             }
             "unlink" => {
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
-                inner.saved.lock().unwrap().peers.retain(|p| p.id != id);
-                if let Ok(k) = id.parse::<EndpointId>() {
-                    inner.allowed.write().unwrap().remove(&k);
-                }
-                inner.run.lock().unwrap().peers.remove(&id);
-                inner.secrets.lock().unwrap().remove(&id);
-                inner.received.lock().unwrap().remove(&id);
-                inner.save()?;
+                inner.remove_peer(&id)?;
                 Ok(json!({"ok": true}))
             }
             "set_link" => {
@@ -1867,14 +2756,7 @@ impl SyncEngine {
                 }
                 let name = s("name").unwrap_or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Shared".into()));
                 let id = s("id").unwrap_or_else(|| token()[..13].to_lowercase());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id || x.path == path) {
-                        bail!("that folder is already shared");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "id": id}))
             }
@@ -1889,14 +2771,7 @@ impl SyncEngine {
                         run.peers.values().filter_map(|p| p.index.as_ref()).flat_map(|i| i.shares.iter()).find(|x| x.id == id).map(|x| x.name.clone())
                     })
                     .unwrap_or_else(|| "Shared".into());
-                {
-                    let mut sv = inner.saved.lock().unwrap();
-                    if sv.shares.iter().any(|x| x.id == id) {
-                        bail!("already joined");
-                    }
-                    sv.shares.push(Share { id: id.clone(), name, path });
-                }
-                inner.save()?;
+                inner.upsert_share(&id, name, path)?;
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
@@ -1954,10 +2829,17 @@ impl SyncEngine {
                 Ok(json!({"ok": true}))
             }
             "share_remove" => {
-                // Stops sharing; the files stay where they are.
+                // Stops sharing; the files stay where they are. `keep_history` (bool, default false) keeps the share's index, its
+                // seen file and its store tags, so adding the same id again later picks its history up: a kind switched off and
+                // on again then tells an edit or a delete made meanwhile from a file it never had. Without it (a share retired
+                // for good) all of that is deleted.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let keep = args.get("keep_history").and_then(|v| v.as_bool()).unwrap_or(false);
                 inner.saved.lock().unwrap().shares.retain(|x| x.id != id);
                 inner.save()?;
+                if keep {
+                    return Ok(json!({"ok": true}));
+                }
                 let _ = std::fs::remove_file(inner.index_path(&id));
                 let _ = std::fs::remove_file(inner.seen_path(&id));
                 let store = inner.store.clone();
@@ -2037,6 +2919,27 @@ impl SyncEngine {
                 }
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "set_gate" => {
+                // What a share offers from one folder, from now on: only the files in `allow` (see [`Config::send_gate`]); no `dir`
+                // (or null) removes the gate. Receiving is never affected.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let dir = s("dir").unwrap_or_default();
+                let allow: Vec<String> = match args.get("allow") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("allow must be a list of paths or null"),
+                };
+                {
+                    let mut g = inner.send_gate.lock().unwrap();
+                    if dir.is_empty() {
+                        g.remove(&id);
+                    } else {
+                        g.insert(id, SendGate { dir, allow });
+                    }
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
             }
             "share_items" => {
                 // A share's items: its paths grouped by their first `depth` segments (a library's folder, a ZIM, a map layer's
@@ -2143,10 +3046,11 @@ impl SyncEngine {
                 }
                 let free = st.index.as_ref().and_then(|i| i.free_bytes);
                 json!({
-                    "id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen, "via": st.via, "error": st.error,
+                    "id": p.id, "name": p.name, "linked": p.linked, "last_seen": st.last_seen.or(p.last_seen), "via": st.via.clone().or(p.via.clone()), "live": st.last_seen.is_some(), "error": st.error,
                     "free_bytes": free,
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
+                    "unconfirmed": p.unconfirmed,
                 })
             })
             .collect();
@@ -2164,7 +3068,7 @@ impl SyncEngine {
                         continue;
                     }
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &inner.remote_view(&sh.id, &rs.index)) {
+                        for a in inner.merge_from(&sh.id, &inner.remote_view(&sh.id, &rs.index), pid) {
                             if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;
@@ -2225,3 +3129,271 @@ impl SyncEngine {
     }
 }
 
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("could not export")
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn a_full_disk_is_told_from_other_errors() {
+        assert!(is_no_space(&std::io::Error::from_raw_os_error(28)));
+        assert!(is_no_space(&Wrapped(std::io::Error::from_raw_os_error(28))));
+        assert!(!is_no_space(&std::io::Error::from_raw_os_error(13)));
+        assert!(!is_no_space(&std::io::Error::new(std::io::ErrorKind::NotFound, "gone")));
+    }
+
+    #[test]
+    fn checks_use_the_allowance_and_screens_the_free_figure() {
+        // Off iPhone the two are the same statvfs figure; on iPhone the allowance can be larger, never smaller.
+        let d = std::env::temp_dir();
+        let (now, allowed) = (Inner::free_bytes(&d).unwrap(), Inner::allowed_bytes(&d).unwrap());
+        assert!(allowed >= now.saturating_sub(1 << 20));
+    }
+}
+
+#[cfg(test)]
+mod link_merge_tests {
+    use super::*;
+
+    fn l(v: Value, t: u64) -> Link {
+        Link { v, t }
+    }
+    fn answered(mode: &str, by: &str, at: u64, t: u64) -> Link {
+        l(json!({"mode": mode, "from": by, "by": by, "at": at}), t)
+    }
+
+    #[test]
+    fn an_answer_beats_the_pending_question() {
+        let pending = new_link();
+        let a = answered("send", "a", 100, 100);
+        assert!(link_replaces(&pending, &a, "a", "b"));
+        assert!(!link_replaces(&a, &pending, "b", "a"));
+    }
+
+    #[test]
+    fn the_earlier_answer_wins_whatever_the_stamp() {
+        let first = answered("send", "a", 100, 100);
+        // b answered Off later but its record was stamped later too.
+        let late = answered("off", "b", 200, 205);
+        assert!(!link_replaces(&first, &late, "b", "a"));
+        assert!(link_replaces(&late, &first, "a", "b"));
+    }
+
+    #[test]
+    fn the_same_moment_goes_to_the_lower_id_and_both_agree() {
+        let a = answered("send", "a", 100, 100);
+        let b = answered("off", "b", 100, 101);
+        assert!(!link_replaces(&a, &b, "b", "a"));
+        assert!(link_replaces(&b, &a, "a", "b"));
+    }
+
+    #[test]
+    fn a_later_change_to_the_same_answer_wins() {
+        let a = answered("send", "a", 100, 100);
+        let mut changed = answered("match", "a", 100, 300);
+        changed.v["from"] = json!("b");
+        assert!(link_replaces(&a, &changed, "a", "b"));
+        assert!(!link_replaces(&changed, &a, "a", "b"));
+    }
+
+    #[test]
+    fn records_with_no_answer_keep_the_later_stamp_rule() {
+        let old = l(json!({"mode": "match"}), 5);
+        let newer = l(json!({"mode": "off"}), 9);
+        assert!(link_replaces(&old, &newer, "p", "m"));
+        assert!(!link_replaces(&newer, &old, "p", "m"));
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+
+    fn peer() -> Peer {
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+    }
+
+    #[test]
+    fn last_seen_and_via_survive_a_save() {
+        let mut p = peer();
+        assert!(p.seen(1_000_000, "relay"));
+        let back: Peer = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
+        assert_eq!((back.last_seen, back.via.as_deref()), (Some(1_000_000), Some("relay")));
+    }
+
+    #[test]
+    fn a_file_saved_before_last_seen_existed_loads_with_none() {
+        let old = r#"{"name":"Me","peers":[{"id":"p","name":"Desk","linked":5}],"shares":[]}"#;
+        let saved: Saved = serde_json::from_str(old).unwrap();
+        let p = &saved.peers[0];
+        assert_eq!((p.last_seen, p.via.clone(), p.announced.clone()), (None, None, None));
+        // Nothing new is written for a device that never answered.
+        assert!(!serde_json::to_string(p).unwrap().contains("last_seen"));
+    }
+
+    #[test]
+    fn the_time_is_written_at_most_about_once_a_minute() {
+        let mut p = peer();
+        assert!(p.seen(1_000_000, "direct"), "the first time is written");
+        assert!(!p.seen(1_000_000 + 59_999, "relay"), "not again within the minute");
+        assert_eq!((p.last_seen, p.via.as_deref()), (Some(1_000_000), Some("direct")));
+        assert!(p.seen(1_000_000 + 60_000, "relay"), "after the minute it is");
+        assert_eq!((p.last_seen, p.via.as_deref()), (Some(1_060_000), Some("relay")));
+        assert!(p.seen(500_000, "direct"), "a clock that went back does not stop it");
+    }
+
+    #[test]
+    fn a_rename_on_the_other_device_is_taken() {
+        let mut p = peer();
+        assert!(!p.adopt_name("Android device"), "same name: nothing to write");
+        assert!(p.adopt_name("Pixel nine"));
+        assert_eq!(p.name, "Pixel nine");
+        assert!(!p.adopt_name("Pixel nine"));
+        assert!(!p.adopt_name("  "), "an empty name is ignored");
+        assert_eq!(p.name, "Pixel nine");
+    }
+
+    #[test]
+    fn a_name_set_here_stays_until_the_device_renames_itself() {
+        let mut p = peer();
+        p.name = "Kitchen tablet".into(); // Rename on this device
+        assert!(!p.adopt_name("Android device"), "the device still calls itself what it did");
+        assert_eq!(p.name, "Kitchen tablet");
+        assert!(p.adopt_name("Pixel 9"));
+        assert_eq!(p.name, "Pixel 9");
+    }
+
+    #[test]
+    fn an_old_file_takes_the_name_the_device_announces() {
+        let old = r#"{"id":"p","name":"Android device","linked":5}"#;
+        let mut p: Peer = serde_json::from_str(old).unwrap();
+        assert!(p.adopt_name("Pixel nine"));
+        assert_eq!(p.name, "Pixel nine");
+    }
+}
+
+#[cfg(test)]
+mod gate_close_tests {
+    use super::*;
+    use iroh::endpoint::{ApplicationClose, ConnectionError, ReadError, ReadToEndError, WriteError};
+
+    fn gate_close(code: u32) -> ConnectionError {
+        ConnectionError::ApplicationClosed(ApplicationClose { error_code: VarInt::from_u32(code), reason: (&b"not linked"[..]).into() })
+    }
+
+    /// What the earlier check looked at: the error's text, as `anyhow!("{e:#}")` makes it.
+    fn old_text_check<E: std::error::Error>(e: &E) -> bool {
+        format!("{e:#}").to_lowercase().contains("not linked")
+    }
+
+    #[test]
+    fn a_403_met_while_writing_or_reading_is_found_by_its_code_not_its_text() {
+        // Met at connect or open_bi: the text carries the reason, and the code is found too.
+        let at_connect = gate_close(403);
+        assert!(old_text_check(&at_connect));
+        assert!(closed_403(&at_connect));
+        // Met while writing the message: the text says only "connection lost"; the old check misses it, the code is found.
+        let at_write = WriteError::ConnectionLost(gate_close(403));
+        assert!(!old_text_check(&at_write), "{at_write:#}");
+        assert!(closed_403(&at_write));
+        // Met while reading the answer.
+        let at_read = ReadToEndError::Read(ReadError::ConnectionLost(gate_close(403)));
+        assert!(!old_text_check(&at_read), "{at_read:#}");
+        assert!(closed_403(&at_read));
+        // Any other close is not taken for the Gate's.
+        assert!(!closed_403(&WriteError::ConnectionLost(gate_close(7))));
+        assert!(!closed_403(&ReadToEndError::Read(ReadError::ConnectionLost(ConnectionError::TimedOut))));
+        assert!(!closed_403(&WriteError::ClosedStream));
+    }
+}
+
+#[cfg(test)]
+mod gate_refusal_tests {
+    use super::*;
+
+    fn state(ready: bool, writing: usize, grace_until: u64) -> GateState {
+        let s = GateState::default();
+        s.ready.store(ready, Ordering::SeqCst);
+        s.writing.store(writing, Ordering::SeqCst);
+        s.grace_until.store(grace_until, Ordering::SeqCst);
+        s
+    }
+
+    #[test]
+    fn not_linked_is_said_only_from_loaded_links_not_being_rewritten_and_not_in_the_grace() {
+        assert_eq!(state(true, 0, 0).refusal(1_000), Refusal::NotLinked);
+        // Before the links are loaded, or while sync.json is rewritten: a retryable refusal, never 403.
+        assert_eq!(state(false, 0, 0).refusal(1_000), Refusal::Busy);
+        assert_eq!(state(true, 1, 0).refusal(1_000), Refusal::Busy);
+        // In the grace after a recovery or a fresh start: 409, never 403; and 403 again once it has passed.
+        assert_eq!(state(true, 0, 5_000).refusal(1_000), Refusal::LinksReset);
+        assert_eq!(state(true, 0, 5_000).refusal(5_000), Refusal::NotLinked);
+        assert_eq!(state(false, 0, 5_000).refusal(1_000), Refusal::Busy);
+        assert_eq!(Refusal::NotLinked.code(), 403);
+        assert_ne!(Refusal::LinksReset.code(), 403);
+        assert_ne!(Refusal::Busy.code(), 403);
+    }
+
+    #[test]
+    fn the_grace_is_written_before_it_is_used_and_a_healthy_start_only_reads_it() {
+        let d = tempfile::tempdir().unwrap();
+        // A healthy start with no marker: no grace.
+        assert_eq!(links_grace_until(d.path(), false).unwrap(), 0);
+        // A recovery: the marker is written, and the grace runs from now.
+        let until = links_grace_until(d.path(), true).unwrap();
+        assert!(until >= now_ms() + CONFIRM_WINDOW.as_millis() as u64 - 5_000);
+        assert!(d.path().join("links-recovered-at").exists());
+        // A later healthy start reads it back: the same grace.
+        assert_eq!(links_grace_until(d.path(), false).unwrap() / 1000, until / 1000);
+    }
+}
+
+#[cfg(test)]
+mod link_code_tests {
+    use super::*;
+
+    fn kind(s: &str) -> Option<&'static str> {
+        decode_code(s).err().as_ref().and_then(error_kind)
+    }
+
+    #[test]
+    fn a_code_from_a_newer_cache_is_told_apart() {
+        for s in ["CACHE2-ABCDEF", "cache3-abcdef", "  CACHE12-\nAB CD ", "CACHE2-", "CACHE99999999999999999999999-X"] {
+            assert_eq!(kind(s), Some("link_code_newer"), "{s}");
+        }
+        assert_eq!(decode_code("CACHE2-ABC").unwrap_err().to_string(), "this link code is from a newer version of Cache");
+    }
+
+    #[test]
+    fn the_other_cases_keep_their_kinds() {
+        assert_eq!(kind("CACHE1-"), Some("link_code_damaged"));
+        assert_eq!(kind("CACHE1-!!!!"), Some("link_code_damaged"));
+        assert_eq!(kind("cache1-TESTCODE"), Some("link_code_damaged"));
+        for s in ["HELLO", "", "CACHE-ABC", "CACHE0-ABC", "CACHEX-ABC", "CACHE2ABC"] {
+            assert_eq!(kind(s), Some("link_code_not_a_code"), "{s}");
+        }
+        assert_eq!(decode_code("HELLO").unwrap_err().to_string(), "this is not a Cache link code");
+    }
+
+    #[test]
+    fn a_real_code_still_decodes() {
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into() };
+        let code = encode_code(&c).unwrap();
+        assert!(code.starts_with("CACHE1-"));
+        let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();
+        assert_eq!((back.t, back.n, back.a.id), ("TOK".to_string(), "Desk".to_string(), c.a.id));
+    }
+}

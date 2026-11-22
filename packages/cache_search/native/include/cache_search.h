@@ -257,6 +257,22 @@ char *cs_search(cs_handle *h, const char *query, const char *options_json);
  *          (fields are null when the library's settings do not map them) */
 char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
 
+/* A library document read whole, page by page: "lib:<library-id>/<point-id>" only (any other address returns NULL with code
+ * "bad_json"; not_found and busy as for cs_read). The document is every point of the library whose mapped document field
+ * equals the opened point's (at most 5000 points, points matching a leave-out rule dropped). Order: by the payload field
+ * "piece" (whole number from 0) when every point has one, otherwise by the mapped page (numbers in numeric order, else
+ * as text), then by point id. Consecutive passages with the same page are one page; a page's text is its passages' texts
+ * joined with a blank line. The opened passage is always in the answer (even when the 5000-point scroll did not reach it).
+ * Around it the answer takes a window of whole passages, grown one at a time after, then before, while the text (with
+ * 2 characters per joined passage) stays within max_chars; a window that does not reach the start or the end of the
+ * document says so in "more_before" / "more_after". When the opened passage alone is over max_chars it is cut at a paragraph
+ * end. With no mapped document field, or no value for it on the opened point, the document is the one passage as a
+ * single page ("more_after" is true when it was cut).
+ * {"address","title","at_page":N,"more_before":bool,"more_after":bool,
+ *  "pages":[{"page":null|number|"text","text","addresses":["lib:<id>/<point-id>",...]}]}
+ * (title is the opened point's title without a page suffix; at_page is the index in "pages" of the page holding the opened point, in the window) */
+char *cs_read_document(cs_handle *h, const char *address, int32_t max_chars);
+
 /* --- Browse: raw ZIM entries --- */
 
 /* Raw bytes of a ZIM entry (HTML, CSS, image, ...), following redirects.
@@ -298,6 +314,11 @@ char *cs_captions_search(cs_handle *h, const char *request_json);
 
 /* {"address":"zim:<uuid>/<main page path>"} */
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
+
+/* cs_zim_illustration: {"png_base64"} - the ZIM's own icon, its "Illustration_48x48@1" metadata (a PNG), base64 encoded. NULL
+ * (cs_last_error, code "not_found") for an unknown id or a ZIM without an illustration (or one that is not a PNG, or over 1 MiB).
+ * Read through the Rust zim crate, never libzim. */
+char *cs_zim_illustration(cs_handle *h, const char *zim_id);
 
 /* --- PDF indexes of ZIMs ---
  *
@@ -446,7 +467,8 @@ int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t 
  * cs_live_set_key: the API key of one source (source_id is a live source id, e.g. "alerts"); NULL key_or_null (or an empty
  * one) clears it. The key is kept in memory only: it is never written to disk, logged, or put in any result, error,
  * status or debug output; it is cleared by NULL and on cs_close. Returns 0; -1 with code "bad_json" for a NULL source_id.
- * Both only store state: a fetch itself is made by cs_live_fetch or by a tool built on the fetcher. */
+ * Both only store state: a fetch itself is made by cs_live_fetch (which uses the source's key when its request has none) or by
+ * a tool built on the fetcher. */
 int32_t cs_live_set_fetch_policy(cs_handle *h, const char *policy_json);
 int32_t cs_live_set_key(cs_handle *h, const char *source_id, const char *key_or_null);
 
@@ -539,7 +561,7 @@ char *cs_act_finish(cs_conv *c, const char *run_id, const char *reply_json);
  * "action":"places.save","result":{...} (done) | "error":{"type","detail"?} (failed)}; ok is true for done and declined, false
  * for failed. Returns the exact content of the system message the host adds to the conversation, keys in this order:
  *   {"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{...}}
- *   {"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}
+ *   {"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save","note":"The person tapped Cancel. Nothing was done or saved."}
  *   {"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c1","action":"places.save","error":{"type":...,"detail":...}}
  * "address" objects in a done result are numbered in c, so they are citable. NULL with cs_last_error(NULL), code "bad_json", for a
  * NULL argument, a status other than the three, a missing key, an ok that does not go with the status, a done without a result or
@@ -586,7 +608,7 @@ char *cs_place_delete(cs_handle *h, const char *key);
  *            "photos":[{"id","width"?,"height"?,"bytes"?}],"files":[{"id","name","mime"?,"bytes"?}],"props"?,"draft",
  *            "private","created","updated","rev"} (created/updated in Unix ms; rev counts changes; private = its own or its
  *            notebook's). A value is a number, true/false, text, a place, or a list of photo ids (a photo field). "props":
- *            {"color"?: a marker colour's name (lower-case letters), "on_map"?: false = not drawn on the map}.
+ *            {"color"?: a marker colour's name (lower-case letters), "icon"?: a map icon's id (lower-case letters, digits, _), "on_map"?: false = not drawn on the map}.
  * A notebook: {"id","template","def","private","map","template_ref","created","updated","last_used","rev","entries":n,
  *            "files":n,"places":n,"last_entry":entry|null} (counts of entries, attached files and entries with a place;
  *            counts and last_entry leave drafts out; last_used = when an entry was last
@@ -797,7 +819,8 @@ char *cs_live_sources(cs_handle *h);
  * that needs one the place lacks fails with "fetch_failed" saying which. "params" are the user's values for the source's
  * "params" (cs_live_sources lists them; a missing one takes its default). With parameters other than the defaults the
  * row is stored under the place key "<key>~<8 hex>" (reported in the result's "place"). "secrets" gives other
- * secrets by alias (a Basic login: both of its aliases); "api_key" is the value for the source's api_key alias. "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
+ * secrets by alias (a Basic login: both of its aliases); "api_key" is the value for the source's api_key alias, and without it
+ * the key set for the source with cs_live_set_key is used (a key in the request comes first). "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
  * unless the stored copy is younger than the source's refresh interval and still valid (then "fetched":false and no
  * network); maps the response with the definition and stores it with the raw response. The API key is used for this
  * call only and never stored. A failed download returns NULL (codes fetch_failed, quota, key_missing, bad_response,
@@ -817,7 +840,11 @@ cs_job *cs_live_fetch_start(cs_handle *h, const char *request_json);
  *  "last_error":null|{"code","message","at"},"truncated"?:true (a paged result was cut at the definition's page cap),
  *  "missing_requests"?:n (repeated requests that failed and are missing),"params"?:{...} (the values it was fetched with),
  *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
- *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
+ *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>,"app"?:{"<name>":<value>}}]}
+ * ("app": the values the definition names for the app alone, as the response has them: an alert's message type, references and
+ * VTEC. The live_data tool never includes them. An item with a distance field also has "distances":{"<field label>":
+ * {"km":n,"inside":bool}}: the same distance as a number (km 0 and inside true when the place is inside the item's area), also
+ * for the app alone, so it never reads "inside the area" out of the field's text.)
  * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */
@@ -897,7 +924,7 @@ char *cs_live_preview(const char *request_json);
  *   Where a GPS fix is on a route from cs_map_route (found by route_id; after a restart send the route object as "route"
  *   and it is loaded again). Fixes are matched near the last match first, so a route that passes itself is not confused.
  *   Returns {"route_id","fix","matched":{lat,lon,distance_along_m,offset_m,segment,route_bearing_deg},"on_route","off_route",
- *   "off_route_count","arrived","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
+ *   "off_route_count","arrived","stops_reached","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
  *   "off_route" is true once the fix has been more than off_route_m from the route (or the GPS accuracy if larger; twice
  *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "current",
  *   "next" and "then" are maneuvers: {index,kind,type,instruction,street_names,travel,lat,lon,distance_m,length_m,cardinal,bearing_deg}
@@ -1066,6 +1093,12 @@ char *cs_layers_list(cs_handle *h);
  * {"catalogues":[{"url","layers":N,"invalid":[...]}|{"url","error":{"code","message"}}],"updates":{"<id>":"<version>"|{"error"}}}. */
 char *cs_layers_refresh(cs_handle *h);
 
+/* cs_layers_refresh as a job, on a thread of its own: the catalogue's network wait never holds the caller (the app's one core
+ * worker). Poll cs_job_progress: when "done", "result" is what cs_layers_refresh returns; a failed refresh is "failed" with
+ * cs_layers_refresh's error. The handle's catalogue is updated when it is done. Free it with cs_job_free. NULL on error
+ * (cs_last_error(h)): "not_configured" without "layers". */
+cs_job *cs_layers_refresh_start(cs_handle *h);
+
 /* Add or edit a user definition (the Advanced section): the JSON of one definition, validated ("bad_json" lists every
  * problem). A user definition overrides one with the same id. Returns {"id","saved":true}. */
 char *cs_layers_save(cs_handle *h, const char *definition_json);
@@ -1086,7 +1119,7 @@ char *cs_layers_remove(cs_handle *h, const char *id);
  * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
 char *cs_layers_server(cs_handle *h, const char *options_json);
 
-/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..] or [[[lon,lat],..],..] (rings, even-odd),
  * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
  * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
  * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",
@@ -1197,6 +1230,14 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "own_library_sync": {"library_dir"}
+ *   a person's own library (My books: "own": true in its cache-library.json and a folder name starting with "my-books")
+ *   made to match its packs on this device: sync conflict copies in it are removed, then, unless this device rebuilt it
+ *   before (.local/own-shard.json) and its copies.jsonl, documents.tsv and shard hold exactly the packs, a new shard is
+ *   made from the packs' own vectors and the lists from the packs, swapped in by the Add PDF commit journal (all or
+ *   nothing); the device keyword index is removed for index_library to build again. Any other library is left alone.
+ *   "detail": {"own","rebuilt","reason","books","points","conflicts_removed":[paths],"unreadable":[...]}. busy while an
+ *   Add PDF or an update writes the library. See src/ownlib.rs.
  * kind "zim_pdfs": {"zim_path"}
  *   the list cs_zim_pdfs gives, made on the job's thread (the ZIM is opened by path; "zim_name" is its metadata Name, else the
  *   file name). Progress is directory entries looked at, of all; when done the progress JSON adds "result" (the list).
@@ -1300,8 +1341,14 @@ typedef struct cs_sync cs_sync;
  * NULL on failure (reason in cs_last_error(NULL)). Independent of any cs_handle; runs on its own threads. */
 cs_sync *cs_sync_open(const char *config_json);
 
+/* The lines cs_sync_open has said since the last call, as a JSON array of strings, oldest first (one short line per step, with the
+ * time since the open began); they are cleared. "[]" when there are none. Free with cs_free_string. Thread-safe, also while an open is
+ * running on another thread. The engine never calls into the app: the app asks. */
+char *cs_sync_take_log(void);
+
 /* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
- * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
+ * sync_now, set_policy, network_changed. share_remove takes an optional "keep_history" (bool, default false): true keeps the
+ * share's index, seen file and stored tags, so adding the same id again reuses them. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
 char *cs_sync_call(cs_sync *s, const char *method, const char *args_json);
 
 /* Stops the engine and frees it. */

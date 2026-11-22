@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../app_fs.dart';
 
@@ -38,6 +39,17 @@ class PdfZimSource extends PdfSource {
 
   /// Where the copy goes; the app's temporary folder when null.
   final Future<Directory> Function()? tempDir;
+}
+
+/// A PDF the Cache server holds (a book on its shelves), fetched in full by [fetch]. The browser's source for a library book: it has
+/// no file of the book, so the reader opens it from these bytes. [id] names it (the viewer wants a name that is unique per PDF).
+class PdfServerSource extends PdfSource {
+  const PdfServerSource({required this.id, required this.fetch, required super.title, super.from = PdfFrom.library});
+
+  final String id;
+
+  /// The PDF's bytes; throws [PdfGone] when the server has no such PDF.
+  final Future<List<int>> Function() fetch;
 }
 
 /// The copy did not fit on the device: [bytes] is the room it needs.
@@ -137,6 +149,9 @@ Future<(String path, PdfTempCopy? copy)> preparePdf(
     case PdfFileSource(:final path):
       if (!await File(path).exists()) throw const PdfGone();
       return (path, null);
+    case PdfServerSource():
+      // Only the browser has one, and it opens from bytes ([loadPdfBytes]); there is no file to prepare.
+      throw const PdfGone();
     case PdfZimSource():
       onCopying?.call(null);
       final bytes = await source.read(source.address);
@@ -155,3 +170,27 @@ Future<(String path, PdfTempCopy? copy)> preparePdf(
 class PdfCancelled implements Exception {
   const PdfCancelled();
 }
+
+/// The PDF's bytes, for the browser: there is no temporary folder there, so nothing is written; the reader opens the document from
+/// these bytes (`PdfDocument.openData`). A ZIM entry is read from the core, a server book is fetched, and a file has no meaning in a
+/// browser. Throws [PdfGone] when the PDF is not there and [PdfCancelled] when [cancelled] says so.
+Future<Uint8List> loadPdfBytes(PdfSource source, {bool Function()? cancelled}) async {
+  final List<int> bytes;
+  switch (source) {
+    case PdfFileSource():
+      throw const PdfGone();
+    case PdfZimSource():
+      bytes = await source.read(source.address);
+    case PdfServerSource():
+      bytes = await source.fetch();
+  }
+  if (cancelled?.call() ?? false) throw const PdfCancelled();
+  return bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+}
+
+/// A name for the viewer that is unique per PDF.
+String pdfSourceName(PdfSource source) => switch (source) {
+      PdfFileSource(:final path) => path,
+      PdfZimSource(:final address) => address,
+      PdfServerSource(:final id) => 'server:$id',
+    };

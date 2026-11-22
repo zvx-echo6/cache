@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cache/chat/citations.dart';
@@ -56,6 +57,48 @@ class FakeSearch extends Tool {
 
 SourceResult r(String t, String s) => SourceResult(title: t, snippet: s, address: 'local:$t');
 
+/// A search that waits for [release] before it returns, so a test can stop the turn while the tool runs.
+class GatedSearch extends Tool {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  int finished = 0;
+
+  @override
+  String get name => 'search';
+  @override
+  String get description => 'search';
+  @override
+  Map<String, dynamic> get parameters => {'type': 'object'};
+  @override
+  Future<List<SourceResult>> run(Map<String, dynamic> args) async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    finished++;
+    return [r('Compass', 'It points north.')];
+  }
+}
+
+/// Writes the start of an answer, then waits for stop() and ends with what it had written, as the engine does.
+class StoppableBackend implements ModelBackend {
+  final List<Map<String, dynamic>> requests = [];
+  final started = Completer<void>();
+  final _stop = Completer<void>();
+
+  @override
+  Stream<PartialMessage> generate(Map<String, dynamic> request) async* {
+    requests.add(request);
+    yield const PartialMessage(content: 'Boil the');
+    if (!started.isCompleted) started.complete();
+    await _stop.future;
+    yield const PartialMessage(isFinal: true, content: 'Boil the');
+  }
+
+  @override
+  void stop() {
+    if (!_stop.isCompleted) _stop.complete();
+  }
+}
+
 void main() {
   group('citation check', () {
     test('keeps known markers, removes unknown ones', () {
@@ -80,6 +123,46 @@ void main() {
     test('other brackets are left alone', () {
       final c = checkCitations('Use [a] and [] and [1x].', {1});
       expect(c.text, 'Use [a] and [] and [1x].');
+    });
+
+    test('a list of valid numbers is kept as written', () {
+      final c = checkCitations('Boil it [1, 2]. Or filter [1,3].', {1, 2, 3});
+      expect(c.text, 'Boil it [1, 2]. Or filter [1,3].');
+      expect(c.kept, [1, 2, 3]);
+    });
+
+    test('a range of valid numbers is kept as written', () {
+      final c = checkCitations('See [1-3] and [4\u20135].', {1, 2, 3, 4, 5});
+      expect(c.text, 'See [1-3] and [4\u20135].');
+      expect(c.kept, [1, 2, 3, 4, 5]);
+    });
+
+    test('a list with some unknown numbers keeps only the valid ones', () {
+      final c = checkCitations('Boil it [2, 7, 1].', {1, 2});
+      expect(c.text, 'Boil it [1, 2].');
+      expect(c.kept, [1, 2]);
+    });
+
+    test('a range reaching past the results keeps the valid ones inside it', () {
+      final c = checkCitations('See [4-9].', {1, 2, 3, 4, 5});
+      expect(c.text, 'See [4, 5].');
+      expect(c.kept, [4, 5]);
+    });
+
+    test('a list or range with no valid number is removed', () {
+      final c = checkCitations('Made up [6, 7] and [8-9].', {1, 2});
+      expect(c.text, 'Made up and.');
+      expect(c.kept, isEmpty);
+    });
+
+    test('a list or range with a 0 is not a citation and stays', () {
+      final c = checkCitations('Pairs [0, 1] and [0-2].', {1, 2});
+      expect(c.text, 'Pairs [0, 1] and [0-2].');
+      expect(c.kept, isEmpty);
+    });
+
+    test('an answer citing only by list now has sources', () {
+      expect(checkCitations('Store water in sealed containers [1, 2].', {1, 2}).kept, [1, 2]);
     });
   });
 
@@ -277,6 +360,47 @@ void main() {
       final toolMsg = (backend.requests[1]['messages'] as List).last as Map;
       expect(toolMsg['content'], contains('no tool called nope'));
       expect(updates.last.error, isNull);
+    });
+
+    test('Stop while a tool runs: the tool finishes, no further generation starts, and the turn ends as a stopped answer does', () async {
+      final search = GatedSearch();
+      final backend = FakeBackend([(_) => toolCall('compass'), (_) => answer('The next answer.')]);
+      final loop = ToolLoop(backend: backend, tools: [search]);
+      final turn = loop.ask('compass?').toList();
+      await search.entered.future;
+      loop.stop();
+      search.release.complete();
+      final updates = await turn;
+      expect(search.finished, 1, reason: 'the running tool finishes');
+      expect(backend.requests, hasLength(1), reason: 'its result does not start another generation');
+      expect(updates.where((u) => u.phase == TurnPhase.done), hasLength(1));
+      expect(updates.last.phase, TurnPhase.done);
+      expect(updates.last.text, isEmpty);
+      expect(updates.last.error, isNull);
+      // The conversation keeps the call, its result and an empty answer: what Stop before the model's first word leaves.
+      expect([for (final m in loop.messages) m['role']], ['user', 'assistant', 'tool', 'assistant']);
+      expect(loop.messages[2]['content'], '[1] Compass — It points north.');
+      expect(loop.messages.last, {'role': 'assistant', 'content': ''});
+
+      // The next question is asked and answered as usual.
+      final next = await loop.ask('again?').toList();
+      expect(backend.requests, hasLength(2));
+      expect(next.last.phase, TurnPhase.done);
+      expect(next.last.text, 'The next answer.');
+    });
+
+    test('Stop while the answer is written ends the turn with the text so far', () async {
+      final backend = StoppableBackend();
+      final loop = ToolLoop(backend: backend, tools: const []);
+      final turn = loop.ask('water?').toList();
+      await backend.started.future;
+      loop.stop();
+      final updates = await turn;
+      expect(backend.requests, hasLength(1));
+      expect(updates.last.phase, TurnPhase.done);
+      expect(updates.last.text, 'Boil the');
+      expect(updates.last.error, isNull);
+      expect(loop.messages.last, {'role': 'assistant', 'content': 'Boil the'});
     });
   });
 

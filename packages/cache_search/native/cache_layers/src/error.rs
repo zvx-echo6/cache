@@ -110,7 +110,8 @@ pub fn available_bytes(path: &std::path::Path) -> Result<u64> {
     Ok((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
 }
 
-/// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts purgeable space as Settings does.
+/// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts free space now plus half of the purgeable space
+/// (the allowance for pre-checks).
 #[cfg(target_os = "ios")]
 pub fn available_bytes(path: &std::path::Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;

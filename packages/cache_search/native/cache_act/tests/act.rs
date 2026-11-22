@@ -70,6 +70,7 @@ fn call(a: &ActState, st: &mut ConvState, args: Value) -> String {
     with_ctx(true, true, |ctx| match a.call(ctx, &args, st) {
         Ok(ToolOutput::Json(v)) => v.to_string(),
         Ok(ToolOutput::Text(t)) => t,
+        Ok(ToolOutput::Pieces(_)) => unreachable!("act gives JSON"),
         Err(e) => e.to_json().to_string(),
     })
 }
@@ -537,6 +538,17 @@ fn outcome(v: Value) -> Result<String, String> {
 }
 
 #[test]
+fn only_a_declined_outcome_carries_the_note() {
+    let done = outcome(json!({"ok":true,"status":"done","confirm_id":"c1","action":"a.b","result":{"x":1}})).unwrap();
+    let failed = outcome(json!({"ok":false,"status":"failed","confirm_id":"c3","action":"a.b","error":{"type":"io"}})).unwrap();
+    assert_eq!(done, r#"{"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"a.b","result":{"x":1}}"#);
+    assert_eq!(failed, r#"{"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c3","action":"a.b","error":{"type":"io"}}"#);
+    assert!(!done.contains("note") && !failed.contains("note"));
+    let declined = outcome(json!({"ok":true,"status":"declined","confirm_id":"c2","action":"a.b"})).unwrap();
+    assert!(declined.ends_with(r#","action":"a.b","note":"The person tapped Cancel. Nothing was done or saved."}"#), "{declined}");
+}
+
+#[test]
 fn an_outcome_is_the_system_message_in_the_contracts_key_order() {
     assert_eq!(
         outcome(json!({"confirm_id":"c1","action":"places.save","status":"done","ok":true,"result":{"saved":"Elk camp"}})).unwrap(),
@@ -544,7 +556,7 @@ fn an_outcome_is_the_system_message_in_the_contracts_key_order() {
     );
     assert_eq!(
         outcome(json!({"ok":true,"status":"declined","confirm_id":"c2","action":"places.save"})).unwrap(),
-        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.save"}"#
+        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"places.save","note":"The person tapped Cancel. Nothing was done or saved."}"#
     );
     assert_eq!(
         outcome(json!({"ok":false,"status":"failed","confirm_id":"c3","action":"places.save","error":{"detail":"disk full","type":"io"}})).unwrap(),
@@ -553,7 +565,7 @@ fn an_outcome_is_the_system_message_in_the_contracts_key_order() {
     // a declined outcome carries nothing else, whatever the host added
     assert_eq!(
         outcome(json!({"ok":true,"status":"declined","confirm_id":"c2","action":"a.b","result":{"x":1},"extra":1})).unwrap(),
-        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"a.b"}"#
+        r#"{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c2","action":"a.b","note":"The person tapped Cancel. Nothing was done or saved."}"#
     );
 }
 

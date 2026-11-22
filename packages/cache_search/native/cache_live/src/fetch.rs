@@ -189,7 +189,8 @@ impl Live {
     /// `cs_live_fetch`: `{source, place, params?, api_key?, secrets?, force?, now?}`. Downloads unless the stored copy is
     /// younger than the source's refresh interval (and still valid and mapped by the same definition), maps and stores
     /// it, and returns what `get` returns plus `"fetched": true|false`. A failed download leaves the last good copy in
-    /// place and is recorded as the row's `last_error`. Keys and logins are used for this call only and never stored.
+    /// place and is recorded as the row's `last_error`. Keys and logins are used for this call only and never stored. Without
+    /// `api_key` the key the host handed over for the source is used (`Live::with_keys`).
     pub fn fetch(&self, req_json: &str, places: &dyn cache_tool::SavedPlaces) -> Result<String> {
         self.fetch_with(req_json, places, None)
     }
@@ -225,7 +226,12 @@ impl Live {
         let par = uparams::resolve(&l.def, r.params.as_ref())?;
         let place = uparams::row_place(&l.def, &place, &par);
         let c = self.db()?;
-        let secrets = secrets_of(&l.def, r.api_key.as_deref(), r.secrets.as_ref());
+        // The key: the request's own first (the key check of the setup page tries a key before it is saved); else the one the host
+        // handed over for this source (cs_live_set_key), so no caller has to remember to pass it. Like the request's, it is used
+        // for this call only: never stored, and scrubbed from every error and logged address (request.rs).
+        let given_key = r.api_key.as_deref().filter(|k| !k.is_empty());
+        let held_key = if given_key.is_none() { self.held_key(&l.def.id) } else { None };
+        let secrets = secrets_of(&l.def, given_key.or(held_key.as_deref()), r.secrets.as_ref());
         check_secrets(&l.def, &secrets)?;
         if !r.force {
             if let Some(v) = self.view(&c, &l, &place, now)? {

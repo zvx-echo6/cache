@@ -1,6 +1,7 @@
 // Web build: there is no llama.cpp in a browser. The model runs on the Cache server and this session talks to it over /api/llm v1
 // (server/docs/llm-protocol.md), same origin, with the page's cookies. Same public API as llama_session_io.dart. On the web the
 // `path` of [load] is the model id the server lists (GET /api/llm/models).
+import 'load_options.dart' show kDefaultPrereadMbps;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
@@ -8,7 +9,9 @@ import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 
 import 'llm_remote_events.dart';
+import 'llm_remote_unload.dart';
 import 'partial_message.dart';
+import 'warm_result.dart';
 
 class LlamaSession {
   LlamaSession();
@@ -24,8 +27,8 @@ class LlamaSession {
 
   /// Loads the model with this id on the server (replacing the one loaded before; the server has one for all browsers).
   /// Throws a [StateError] with the reason on failure.
-  /// [repackWeights] and [prefixDir] are the phone's (the server decides for its own model): not used here.
-  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir}) async {
+  /// [repackWeights], [prefixDir] and [prereadMbps] are the phone's (the server decides for its own model): not used here.
+  Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = kDefaultPrereadMbps, int nUbatch = 0}) async {
     _modelId = null;
     final r = await _post('/api/llm/load', {'v': 1, 'model': path, 'n_ctx': nCtx});
     final body = await _text(r);
@@ -52,6 +55,12 @@ class LlamaSession {
     unawaited(_pump(run, id, request, c));
     return c.stream;
   }
+
+  /// Reads the prompt start ahead on the phone (cl_warm). The server keeps its own prompt start, so here there is nothing to do.
+  Future<WarmResult> warm(Map<String, dynamic> request, {bool checkOnly = false}) async => const WarmResult(WarmOutcome.skipped);
+
+  /// Stops a read ahead (none here).
+  void cancelWarm() {}
 
   Future<void> _pump(_Run run, String id, Map<String, dynamic> request, StreamController<PartialMessage> c) async {
     void fail(Object e) {
@@ -85,9 +94,9 @@ class LlamaSession {
             _queue.add(null);
             c.add(message);
             ended = true;
-          case LlmError(:final message):
+          case LlmError():
             _queue.add(null);
-            fail(StateError(message));
+            fail(e.toException());
             ended = true;
         }
         if (ended) break;
@@ -135,9 +144,17 @@ class LlamaSession {
     run.abort.abort();
   }
 
-  /// Forgets the model here. The server keeps its model loaded (it is shared by every browser).
+  /// Nothing is freed here (the server frees its own model): always null.
+  String? get lastFreeReport => null;
+
+  /// Frees the model on the server (it is shared by every browser, so for all of them), then forgets it here. Throws a [StateError]
+  /// with the reason when the server could not do it; the model is then still loaded there, and this session keeps it.
   Future<void> unload() async {
     stop();
+    await unloadOnServer((path, body) async {
+      final r = await _post(path, body);
+      return LlmHttpReply(r.status, await _text(r));
+    });
     _modelId = null;
   }
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -36,12 +37,12 @@ List<Map<String, dynamic>> _library({int extra = 0}) => [
       for (var i = 0; i < extra; i++) savedManifest(uuid: 'x$i', title: 'Water filter part $i', channel: 'Medical Basics', at: '2026-09-0${i + 1}T10:00:00Z'),
     ];
 
-Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, bool captionFetchFails = false, Space? space, bool private = false}) async {
+Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {String? arrivalsFile, CaptionSearch? search, bool captionFetchFails = false, Space? space, bool private = false}) async {
   final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('video-ui')))!;
   addTearDown(() => dir.deleteSync(recursive: true));
   final v = VideoState(
     dirOverride: dir,
-    nativeFactory: seededVideoNative(saved, captionFetchFails: captionFetchFails, private: private),
+    nativeFactory: seededVideoNative(saved, arrivalsFile: arrivalsFile, captionFetchFails: captionFetchFails, private: private),
     tokens: MemoryTokenStore(),
     prefs: VideoPrefs(),
     captionSearch: search ?? const CaptionSearchMissing(),
@@ -101,6 +102,22 @@ void main() {
     });
     expect((r.first.uuid, r.first.hits.single.startS, r.first.hits.single.endS, r.first.isZim), ('knots', 12.0, 18.5, false));
     expect((r.last.isZim, r.last.uuid), (true, null));
+  });
+
+  testWidgets('A video a sync brings shows on the Videos page with no restart', timeout: const Timeout(Duration(seconds: 60)), (tester) async {
+    final f = File('${Directory.systemTemp.path}/videos-arrivals-${DateTime.now().microsecondsSinceEpoch}.json');
+    addTearDown(() {
+      if (f.existsSync()) f.deleteSync();
+    });
+    final v = await _state(tester, const [], arrivalsFile: f.path);
+    await _show(tester, VideosScreen(video: v));
+    expect(find.text('Nothing on this device yet. Find a video on a site and choose Download.'), findsOneWidget);
+    // The sync writes the video into the shared folder; the engine reports the videos share changed.
+    f.writeAsStringSync(jsonEncode([_library().first]));
+    await tester.runAsync(() => v.shareChanged({'videos'}));
+    await settle(tester);
+    expect(find.text('Nothing on this device yet. Find a video on a site and choose Download.'), findsNothing);
+    expect(find.text('Knots every camper should know'), findsOneWidget);
   });
 
   testWidgets('Empty: the line says how to get videos; Add a video site opens the site', timeout: const Timeout(Duration(seconds: 60)), (tester) async {

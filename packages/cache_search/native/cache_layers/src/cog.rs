@@ -403,8 +403,9 @@ impl CogSet {
                 *slot = Slot::Open(f.clone());
                 Ok(f)
             }
-            // a cell with no file (open sea) answers 404/403
-            Err(e) if e.code == "fetch_failed" && (e.message.contains("HTTP 404") || e.message.contains("HTTP 403")) => {
+            // A cell with no file (open sea) answers 404. A refusal (403) is not "no file": it is a failure like any other,
+            // so a refused cell is not drawn, or downloaded, as ground with no data.
+            Err(e) if e.code == "fetch_failed" && e.message.contains("HTTP 404") => {
                 *slot = Slot::Open(None);
                 Ok(None)
             }
@@ -674,6 +675,24 @@ mod tests {
         assert!(set.render_tile(6, 40, 23, 64).unwrap().is_none());
         assert_eq!(cell_name(14, -38, 3.0), ("N42".into(), "W114".into()));
         assert_eq!(cell_name(-1, 0, 3.0), ("S03".into(), "E000".into()));
+    }
+
+    /// A host that refuses the file.
+    struct Refused;
+    impl RangeSource for Refused {
+        fn read(&self, _o: u64, _l: u64) -> Result<Vec<u8>> {
+            Err(Error::fetch_failed("HTTP 403 from the file"))
+        }
+    }
+
+    #[test]
+    fn a_refused_file_is_a_failure_and_only_a_missing_one_is_no_data() {
+        // 403 was read as "no file here": the cell drew, and downloaded, as ground with no data
+        let refused = CogSet::new("mem://{lat}/{lon}", 3.0, crate::http::gate_for("test-cog-refused", 2)).with_opener(Box::new(|_| Box::new(Refused)));
+        assert_eq!(refused.render_tile(6, 12, 23, 16).unwrap_err().code, "fetch_failed");
+        // a cell with no file (404, open sea) is still no data, not a failure
+        let missing = CogSet::new("mem://{lat}/{lon}", 3.0, crate::http::gate_for("test-cog-missing", 2)).with_opener(Box::new(|_| Box::new(Missing)));
+        assert!(missing.render_tile(6, 12, 23, 16).unwrap().is_none());
     }
 
     /// A source that logs every read.

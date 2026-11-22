@@ -90,22 +90,59 @@ class SearchHit {
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
+
+  /// The hit as [SearchHit.fromJson] reads it. The worker sends its hits to the app with this, so the two sides share one
+  /// list of fields: a field added to the class goes here and in [SearchHit.fromJson], and nowhere else.
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'snippet': snippet,
+        'source_id': sourceId,
+        'source_kind': sourceKind,
+        'source_title': sourceTitle,
+        'page': page,
+        'pdf_page': ?pdfPage,
+        'link': ?link,
+        'time': ?time,
+        'time_end': ?timeEnd,
+        'lang': ?lang,
+        'quote': ?quote,
+      };
 }
 
 class SearchResponse {
-  const SearchResponse({required this.results, required this.totalEstimate, this.vectorSources = const [], this.keywordOnlySources = const []});
+  const SearchResponse({
+    required this.results,
+    required this.totalEstimate,
+    this.vectorSources = const [],
+    this.keywordOnlySources = const [],
+    this.meaningTimedOut = const [],
+  });
 
   factory SearchResponse.fromJson(Map<String, dynamic> j) => SearchResponse(
         results: [for (final r in (j['results'] as List? ?? const [])) SearchHit.fromJson((r as Map).cast<String, dynamic>())],
         totalEstimate: (j['total_estimate'] ?? 0) as int,
         vectorSources: ((j['vector_sources'] as List?) ?? const []).cast<String>(),
         keywordOnlySources: ((j['keyword_only_sources'] as List?) ?? const []).cast<String>(),
+        meaningTimedOut: ((j['meaning_timed_out'] as List?) ?? const []).cast<String>(),
       );
 
   final List<SearchHit> results;
   final int totalEstimate;
   final List<String> vectorSources;
   final List<String> keywordOnlySources;
+
+  /// Libraries whose meaning search passed its time limit (the search's meaningLimit): searched by their keywords only this time.
+  final List<String> meaningTimedOut;
+
+  /// The response as [SearchResponse.fromJson] reads it (what the worker sends to the app).
+  Map<String, dynamic> toJson() => {
+        'results': [for (final h in results) h.toJson()],
+        'total_estimate': totalEstimate,
+        'vector_sources': vectorSources,
+        'keyword_only_sources': keywordOnlySources,
+        'meaning_timed_out': meaningTimedOut,
+      };
 }
 
 /// A query embedding made by the caller; the core uses it only for libraries embedded with [model].
@@ -118,27 +155,112 @@ class QueryVector {
   Map<String, dynamic> toJson() => {'model': model, 'vector': vector};
 }
 
-/// What cs_read returns. [author], [page] and [sourceType] are only set for libraries.
+/// What cs_read returns. [author], [page], [pageLabel] and [sourceType] are only set for libraries and PDF pages.
 class ReadResult {
-  const ReadResult({required this.address, required this.title, required this.text, required this.truncated, this.author, this.page, this.sourceType});
+  const ReadResult({required this.address, required this.title, required this.text, required this.truncated, this.author, this.page, this.pageLabel, this.sourceType});
 
-  factory ReadResult.fromJson(Map<String, dynamic> j) => ReadResult(
-        address: j['address'] as String,
-        title: (j['title'] ?? '') as String,
-        text: (j['text'] ?? '') as String,
-        truncated: (j['truncated'] ?? false) as bool,
-        author: j['author'] as String?,
-        page: j['page'] as int?,
-        sourceType: j['source_type'] as String?,
-      );
+  factory ReadResult.fromJson(Map<String, dynamic> j) {
+    // The core sends a page as a number, or as its printed label when that is not a number ("iv", "A-3").
+    final p = j['page'];
+    final number = p is int ? p : (p is double && p.isFinite && p == p.truncateToDouble() ? p.toInt() : null);
+    return ReadResult(
+      address: j['address'] as String,
+      title: (j['title'] ?? '') as String,
+      text: (j['text'] ?? '') as String,
+      truncated: (j['truncated'] ?? false) as bool,
+      author: j['author'] as String?,
+      page: number,
+      pageLabel: number != null ? '$number' : (p is String && p.trim().isNotEmpty ? p : (p is num ? '$p' : null)),
+      sourceType: j['source_type'] as String?,
+    );
+  }
 
   final String address;
   final String title;
   final String text;
   final bool truncated;
   final String? author;
+
+  /// The page when it is a number; null for a page whose printed label is text (see [pageLabel]).
   final int? page;
+
+  /// The page as printed: "47", "iv", "A-3". Null when the text has no page.
+  final String? pageLabel;
   final String? sourceType;
+
+  /// The result as [ReadResult.fromJson] reads it (what the worker sends to the app): the page as a number when it is one,
+  /// else its label.
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'text': text,
+        'truncated': truncated,
+        'author': author,
+        'page': page ?? pageLabel,
+        'source_type': sourceType,
+      };
+}
+
+/// A page as the core prints it: a number, or its printed label when that is not a number ("iv", "A-3").
+({int? number, String? label}) _pageOf(Object? p) {
+  final number = p is int ? p : (p is double && p.isFinite && p == p.truncateToDouble() ? p.toInt() : null);
+  return (number: number, label: number != null ? '$number' : (p is String && p.trim().isNotEmpty ? p : (p is num ? '$p' : null)));
+}
+
+/// One page of a [LibraryDocument]: the text of its passages and their addresses. [page] is the page when it is a number,
+/// [pageLabel] the page as printed; both are null when the library has no page for it.
+class DocumentPage {
+  const DocumentPage({this.page, this.pageLabel, required this.text, required this.addresses});
+
+  factory DocumentPage.fromJson(Map<String, dynamic> j) {
+    final p = _pageOf(j['page']);
+    return DocumentPage(
+      page: p.number,
+      pageLabel: p.label,
+      text: (j['text'] ?? '') as String,
+      addresses: [for (final a in (j['addresses'] as List? ?? const [])) a as String],
+    );
+  }
+
+  final int? page;
+  final String? pageLabel;
+  final String text;
+  final List<String> addresses;
+
+  Map<String, dynamic> toJson() => {'page': page ?? pageLabel, 'text': text, 'addresses': addresses};
+}
+
+/// What cs_read_document returns: a library document's pages in order, [atPage] (the index of the page holding the opened
+/// passage) and whether the document goes on before and after them.
+class LibraryDocument {
+  const LibraryDocument({required this.address, required this.title, required this.pages, required this.atPage, required this.moreBefore, required this.moreAfter});
+
+  factory LibraryDocument.fromJson(Map<String, dynamic> j) => LibraryDocument(
+        address: (j['address'] ?? '') as String,
+        title: (j['title'] ?? '') as String,
+        pages: [for (final p in (j['pages'] as List? ?? const [])) DocumentPage.fromJson((p as Map).cast<String, dynamic>())],
+        atPage: ((j['at_page'] ?? 0) as num).toInt(),
+        moreBefore: (j['more_before'] ?? false) as bool,
+        moreAfter: (j['more_after'] ?? false) as bool,
+      );
+
+  final String address;
+  final String title;
+  final List<DocumentPage> pages;
+  final int atPage;
+
+  /// The document has passages before / after the pages shown (it is too long to show whole).
+  final bool moreBefore;
+  final bool moreAfter;
+
+  Map<String, dynamic> toJson() => {
+        'address': address,
+        'title': title,
+        'pages': [for (final p in pages) p.toJson()],
+        'at_page': atPage,
+        'more_before': moreBefore,
+        'more_after': moreAfter,
+      };
 }
 
 class Suggestion {
@@ -167,9 +289,11 @@ class SourceStatus {
     required this.docs,
     this.error,
     this.keywordSource,
+    this.keywordPending,
     this.embeddingModel,
     this.wholeLibraryOnly,
     this.sourceId,
+    this.settings,
     this.index,
     this.captionsIndex,
     this.epubIndex,
@@ -190,6 +314,8 @@ class SourceStatus {
       updating: (j['updating'] ?? false) as bool,
       docs: (j['docs'] ?? 0) as int,
       keywordSource: j['keyword_source'] as String?,
+      keywordPending: j['keyword_pending'] as bool?,
+      settings: j['settings'] is Map ? (j['settings'] as Map).cast<String, dynamic>() : null,
       embeddingModel: j['embedding_model'] as String?,
       wholeLibraryOnly: j['whole_library_only'] as bool?,
       sourceId: j['source_id'] as String?,
@@ -214,6 +340,14 @@ class SourceStatus {
   /// Where keyword search for this source comes from: "own" (the ZIM's built-in Xapian index, read through libzim), "device"
   /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
   final String? keywordSource;
+
+  /// A library that grows (one Add PDF writes to): true while its keyword index is behind its points (new points whose words are not
+  /// searchable yet, or a removed book's points the index still has), false when it is not; null for any other source, or one with no
+  /// keyword index to be behind.
+  final bool? keywordPending;
+
+  /// A library's resolved settings (the core's own JSON), to hand back to a job that builds or extends its index.
+  final Map<String, dynamic>? settings;
 
   /// The embedding model a library's settings name (its query vectors must come from it); null for a ZIM or a library
   /// that names none.
@@ -316,7 +450,7 @@ class ZimSubIndex {
 
 /// cs_status's `index` of a source: where its search index is and what it is.
 class SourceIndex {
-  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false});
+  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false, this.opening = false});
 
   factory SourceIndex.fromJson(Map<String, dynamic> j) => SourceIndex(
     location: (j['location'] ?? 'none') as String,
@@ -325,15 +459,20 @@ class SourceIndex {
     kind: j['kind'] as String?,
     dir: j['dir'] as String?,
     needsSeal: j['needs_seal'] == true,
+    opening: j['opening'] == true,
   );
 
-  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true};
+  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true, if (opening) 'opening': true};
 
   /// The folder of the index in use (a snapshot's, or the old index_dir), when there is one.
   final String? dir;
 
   /// Only an index in the old place exists and the indexes folder is set: an index_seal job moves it into a snapshot.
   final bool needsSeal;
+
+  /// The core is still picking this source's snapshot (on a background thread): what the status says about the index is not final, and
+  /// the status is read again until it is.
+  final bool opening;
 
   /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
   final String location;

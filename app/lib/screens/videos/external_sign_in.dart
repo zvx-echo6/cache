@@ -2,6 +2,8 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../../browse/web/reader_frame.dart' show openInNewTab;
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 
 /// How a sign-in with a site's external auth plugin ended (PeerTube's documented flow: the plugin's auth page ends on the
@@ -44,9 +46,77 @@ Future<ExternalSignIn?> Function(VideoExternalAuth auth)? externalSignInForTests
 /// the result, or null when the person closed it.
 Future<ExternalSignIn?> openExternalSignIn(BuildContext context, VideoExternalAuth auth, String returnPrefix) =>
     externalSignInForTests?.call(auth) ??
-    Navigator.of(context).push<ExternalSignIn>(
-      MaterialPageRoute(fullscreenDialog: true, builder: (_) => _ExternalSignInPage(auth: auth, returnPrefix: returnPrefix)),
+    (plat.isWeb
+        ? showDialog<ExternalSignIn>(context: context, builder: (_) => ExternalSignInPasteDialog(auth: auth, returnPrefix: returnPrefix, open: openInNewTab))
+        : Navigator.of(context).push<ExternalSignIn>(
+            MaterialPageRoute(fullscreenDialog: true, builder: (_) => _ExternalSignInPage(auth: auth, returnPrefix: returnPrefix)),
+          ));
+
+/// A browser cannot read the address a page in another tab ends on, so the sign-in opens in a new tab and the person pastes back
+/// the address of the site's /login page it ends on (the same address the phone's in-app browser watches for): [externalSignInResult]
+/// reads it. Pops with the [ExternalSignIn], or null on Cancel.
+class ExternalSignInPasteDialog extends StatefulWidget {
+  const ExternalSignInPasteDialog({super.key, required this.auth, required this.returnPrefix, required this.open});
+
+  final VideoExternalAuth auth;
+  final String returnPrefix;
+
+  /// Opens an address in a new tab.
+  final void Function(String url) open;
+
+  @override
+  State<ExternalSignInPasteDialog> createState() => _ExternalSignInPasteDialogState();
+}
+
+class _ExternalSignInPasteDialogState extends State<ExternalSignInPasteDialog> {
+  final TextEditingController _text = TextEditingController();
+  String? _problem;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _finish() {
+    final u = Uri.tryParse(_text.text.trim());
+    final r = u == null ? null : externalSignInResult(u, widget.returnPrefix);
+    if (r == null) {
+      setState(() => _problem = "That is not the address the site ends on. After you sign in, copy the whole address of the page you land on.");
+      return;
+    }
+    Navigator.of(context).pop(r);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Sign in with ${widget.auth.displayName}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('1. Open the sign-in page and sign in there.\n2. When you land on the site\'s login page, copy its address from the address bar.\n3. Paste it here.'),
+            const SizedBox(height: 8),
+            OutlinedButton(key: const ValueKey('external-open'), onPressed: () => widget.open(widget.auth.url), child: const Text('Open the sign-in page')),
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('external-paste'),
+              controller: _text,
+              decoration: InputDecoration(labelText: 'Address you landed on', errorText: _problem, errorMaxLines: 3),
+              onSubmitted: (_) => _finish(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        FilledButton(key: const ValueKey('external-done'), onPressed: _finish, child: const Text('Sign in')),
+      ],
     );
+  }
+}
 
 class _ExternalSignInPage extends StatefulWidget {
   const _ExternalSignInPage({required this.auth, required this.returnPrefix});

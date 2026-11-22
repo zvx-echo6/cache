@@ -672,7 +672,10 @@ impl Job {
         let filing: Option<Filing> = if is_copy { None } else { self.env.classifier.as_ref().and_then(|c| c.classify(&pack.pieces)) };
         if let Some(f) = &filing {
             if let Some(b) = pack.header.book.as_mut() {
-                b.suggested = Some(f.suggested.clone());
+                // the flag is the sorter's verdict, written with the guess: absent means "not confident" to every reader
+                let mut s = f.suggested.clone();
+                s.filed = Some(f.filed);
+                b.suggested = Some(s);
             }
         }
         let doc_id = pack.header.doc_id.clone();

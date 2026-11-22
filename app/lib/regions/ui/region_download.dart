@@ -8,12 +8,22 @@ import 'region_actions.dart';
 
 /// A region as one download (UX-downloads-29): the sum of its parts with one bar. Pause holds every region download (the running
 /// part stops, the others wait); Resume carries on in order.
+/// WORDING (cache-pm): what a row says while the person's Pause holds every region download.
+const String kHeldNote = 'all downloads paused';
+
+/// WORDING (cache-pm, approved): the row while Ask has the downloads held.
+const String kAskHoldLine = 'Paused while Ask answers';
+
 DlState regionDl(RegionsState regions, LocalRegion l) {
   final parts = l.parts;
   final done = parts.fold<int>(0, (s, p) => s + p.bytes);
   final total = regions.totalBytesOf(l) ?? 0;
   if (regions.pausing && l.phase != RegionPhase.ready) return DlState(DlPhase.pausing, done: done, total: total);
   if (regions.resuming && l.phase != RegionPhase.ready) return DlState(DlPhase.starting, done: done, total: total);
+  // The global Pause is on: nothing of the region reads as running, whatever its parts say (a map layer started while it was on
+  // still reads as downloading in the engine's list).
+  if (regions.askHolds && !regions.held && l.phase != RegionPhase.ready && l.phase != RegionPhase.failed) return DlState(DlPhase.paused, done: done, total: total, waitLine: kAskHoldLine);
+  if (regions.held && l.phase != RegionPhase.ready && l.phase != RegionPhase.failed) return DlState(DlPhase.paused, done: done, total: total, reasonText: kHeldNote);
   switch (l.phase) {
     case RegionPhase.ready:
       return DlState(DlPhase.done, done: l.bytes, total: l.bytes);
@@ -24,6 +34,7 @@ DlState regionDl(RegionsState regions, LocalRegion l) {
       return DlState(DlPhase.paused, done: done, total: total);
     case RegionPhase.paused:
       if (regions.held) return DlState(DlPhase.paused, done: done, total: total);
+      if (!regions.connectionKnown) return DlState(DlPhase.paused, done: done, total: total);
       if (regions.waitingForWifi) return DlState(DlPhase.waiting, done: done, total: total, waitLine: 'Waiting for Wi-Fi');
       // Paused by the engine (no connection it may use, too little space): it goes on by itself, and says why.
       return DlState(DlPhase.failed, done: done, total: total, reason: DlReason.of(regions.paused), part: l.parts.where((p) => !p.complete).firstOrNull?.name);
@@ -56,6 +67,8 @@ DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool ow
   final total = p.totalBytes ?? 0;
   if (regions.pausing && !p.complete && p.state == PartState.downloading) return DlState(DlPhase.pausing, done: p.bytes, total: total);
   if (regions.resuming && !p.complete && first) return DlState(DlPhase.starting, done: p.bytes, total: total);
+  if (regions.askHolds && !regions.held && !p.complete && p.state != PartState.failed) return DlState(DlPhase.paused, done: p.bytes, total: total, waitLine: kAskHoldLine);
+  if (regions.held && !p.complete && p.state != PartState.failed) return DlState(DlPhase.paused, done: p.bytes, total: total, reasonText: kHeldNote);
   DlState waitFor(RegionPartStatus? other) => other == null || other.kind == p.kind
       ? DlState(DlPhase.starting, done: p.bytes, total: total)
       : DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: other.name);
@@ -67,7 +80,7 @@ DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool ow
     PartState.stopped => first ? DlState(DlPhase.paused, done: p.bytes, total: total) : waitFor(firstOpen),
     PartState.paused => !first
         ? waitFor(firstOpen)
-        : regions.held
+        : regions.held || !regions.connectionKnown
             ? DlState(DlPhase.paused, done: p.bytes, total: total)
             : regions.waitingForWifi
                 ? DlState(DlPhase.waiting, done: p.bytes, total: total, waitLine: 'Waiting for Wi-Fi')
@@ -99,6 +112,6 @@ DlActions regionDlActions(BuildContext context, RegionsState regions, LocalRegio
 /// "Idaho · 41%": the region's summary above its parts.
 String regionSummary(LocalRegion l) => '${l.name} · ${(l.fraction * 100).clamp(0, 99).floor()}%';
 
-/// "On this device · 1.8 GB" for a region that is all here (with "Places not available yet" when nothing is published for it).
-String regionDoneLine(LocalRegion l, {required String placesNote}) =>
-    ['On this device', formatBytes(l.bytes), if (l.placesNotAvailable) placesNote].join(' · ');
+/// "On this device · 1.8 GB" for a region that is all here (with "Places not available yet", or the same of directions, when
+/// nothing is published for it).
+String regionDoneLine(LocalRegion l) => ['On this device', formatBytes(l.bytes), ...l.notAvailableNotes].join(' · ');

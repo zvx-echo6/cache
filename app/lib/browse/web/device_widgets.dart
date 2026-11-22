@@ -4,6 +4,7 @@ import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../settings/space.dart' show reserveFor;
 import '../../theme.dart';
 import '../../video/format.dart';
+import '../../downloads/download_row.dart' show DlActions, DlPhase, DlState, removeDownload, showDownloadMenu;
 import 'build_common.dart' show DashedBox;
 import 'build_list.dart';
 import 'device_api.dart';
@@ -15,7 +16,7 @@ const int _gb = 1 << 30;
 
 /// One card of the Library list, in the phone's transfer card shape: a title, a line, a progress bar, and actions.
 class TransferCard extends StatelessWidget {
-  const TransferCard({super.key, required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey});
+  const TransferCard({super.key, required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey, this.onLongPress});
 
   final String title;
   final String line;
@@ -24,6 +25,9 @@ class TransferCard extends StatelessWidget {
   final bool indeterminate;
   final List<Widget> actions;
   final Key? cardKey;
+
+  /// Press and hold on the card (a running or paused download opens the phone's Pause/Resume and Remove menu).
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +38,10 @@ class TransferCard extends StatelessWidget {
       child: Material(
         color: k.surface,
         borderRadius: BorderRadius.circular(14),
-        child: Padding(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onLongPress: onLongPress,
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -60,6 +67,7 @@ class TransferCard extends StatelessWidget {
                 ),
             ],
           ),
+          ),
         ),
       ),
     );
@@ -82,9 +90,13 @@ String _left(int seconds) {
 /// What sits above the Library list in a browser: the card for what happened while the tab was closed, the upload, the transfers the
 /// device is running, and library packages that wait to be added.
 class DeviceLibraryTop extends StatelessWidget {
-  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage, this.onOpenBuilt});
+  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage, this.onOpenBuilt, this.whileClosed = true});
 
   final DeviceLibrary device;
+
+  /// Whether the "While this tab was closed" card is drawn here, above the list. The Linux desktop draws it after the list instead
+  /// ([DeviceWhileClosedBelow]): it turns up once the page is open, and the rows under the pointer must not move.
+  final bool whileClosed;
 
   /// The person tapped a building library's card.
   final void Function(String libraryId)? onOpenBuilt;
@@ -99,7 +111,7 @@ class DeviceLibraryTop extends StatelessWidget {
       listenable: device,
       builder: (context, _) {
         final up = device.upload;
-        final shown = [for (final j in device.jobs) if (j.active || j.failed) j];
+        final shown = [for (final j in device.jobs) if (j.active || j.paused || j.failed) j];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -108,10 +120,15 @@ class DeviceLibraryTop extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                 child: Text(device.problem!, key: const ValueKey('device-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
               ),
-            if (device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false)) WhileClosedCard(device: device),
+            if (device.jobProblem != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                child: Text(device.jobProblem!, key: const ValueKey('job-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
+              ),
+            if (whileClosed && hasWhileClosed(device)) WhileClosedCard(device: device),
             if (up != null) _uploadCard(up),
             if (device.build != null) BuildListCards(ctl: device.build!, onOpen: onOpenBuilt),
-            for (final j in shown) _jobCard(j),
+            for (final j in shown) _jobCard(context, j),
             for (final j in device.readyPackages)
               TransferCard(
                 cardKey: ValueKey('package-${j.id}'),
@@ -160,7 +177,19 @@ class DeviceLibraryTop extends StatelessWidget {
     );
   }
 
-  Widget _jobCard(DeviceJob j) {
+  /// What the phone's Pause/Resume and Remove controls do for [j], so the buttons and the hold menu say and do the same.
+  DlActions _dlActions(BuildContext context, DeviceJob j) => DlActions(
+        pause: j.active ? () => device.pauseJob(j) : null,
+        resume: j.paused ? () => device.resumeJob(j) : null,
+        remove: () => device.cancelJob(j),
+      );
+
+  DlState _dlState(DeviceJob j) => DlState(j.paused ? DlPhase.paused : DlPhase.running, done: j.bytes, total: j.total);
+
+  /// Cancel or Remove: with saved bytes it asks the phone's question first ("Remove the 1.7 GB already downloaded?"; Keep or Remove).
+  Future<void> _remove(BuildContext context, DeviceJob j) => removeDownload(context, _dlState(j), () => device.cancelJob(j));
+
+  Widget _jobCard(BuildContext context, DeviceJob j) {
     final title = device.titleOfJob(j);
     if (j.failed) {
       return TransferCard(
@@ -174,6 +203,21 @@ class DeviceLibraryTop extends StatelessWidget {
         ],
       );
     }
+    if (j.paused) {
+      // Paused keeps its part file on the device: it stays on screen with a way on (Resume) and a way out (Remove, which cancels it
+      // on the device, where the part file is then deleted).
+      return TransferCard(
+        cardKey: ValueKey('job-${j.id}'),
+        title: title,
+        line: j.total > 0 ? 'Paused · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}' : 'Paused · ${formatBytes(j.bytes)}',
+        fraction: j.fraction,
+        onLongPress: () => showDownloadMenu(context, _dlState(j), _dlActions(context, j)),
+        actions: [
+          TextButton(key: ValueKey('resume-${j.id}'), onPressed: () => device.resumeJob(j), child: const Text('Resume')),
+          TextButton(key: ValueKey('remove-${j.id}'), onPressed: () => _remove(context, j), child: const Text('Remove')),
+        ],
+      );
+    }
     final waiting = j.state == 'queued';
     final since = j.createdAt == null ? '' : ' · started ${startedWords(j.createdAt!)}';
     return TransferCard(
@@ -182,7 +226,11 @@ class DeviceLibraryTop extends StatelessWidget {
       line: waiting ? 'Waiting its turn…' : (j.total > 0 ? 'Downloading · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}$since' : 'Downloading · ${formatBytes(j.bytes)}$since'),
       fraction: waiting ? null : j.fraction,
       indeterminate: waiting || j.total <= 0,
-      actions: [_cancel(ValueKey('cancel-${j.id}'), 'Cancel', () => device.cancelJob(j))],
+      onLongPress: () => showDownloadMenu(context, _dlState(j), _dlActions(context, j)),
+      actions: [
+        TextButton(key: ValueKey('pause-${j.id}'), onPressed: () => device.pauseJob(j), child: const Text('Pause')),
+        _cancel(ValueKey('cancel-${j.id}'), 'Cancel', () => _remove(context, j)),
+      ],
     );
   }
 }
@@ -202,6 +250,22 @@ String startedWords(DateTime t, {DateTime? now}) {
   if (days == 1) return 'yesterday ${clockTime(l)}';
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return '${l.day} ${months[l.month - 1]} ${clockTime(l)}';
+}
+
+/// Whether there is anything to say under "While this tab was closed".
+bool hasWhileClosed(DeviceLibrary device) => device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false);
+
+/// The "While this tab was closed" card after the Library list (the Linux desktop), so it never pushes the rows above it down.
+class DeviceWhileClosedBelow extends StatelessWidget {
+  const DeviceWhileClosedBelow({super.key, required this.device});
+
+  final DeviceLibrary device;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: device,
+        builder: (context, _) => hasWhileClosed(device) ? Padding(padding: const EdgeInsets.only(top: 16), child: WhileClosedCard(device: device)) : const SizedBox.shrink(),
+      );
 }
 
 /// "While this tab was closed": what finished, still runs or stopped since the tab was last open, with Dismiss.

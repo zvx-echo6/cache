@@ -33,6 +33,10 @@ abstract class ShelfSource implements Listenable {
   /// Every book the source has (shelved and unsorted).
   int get bookCount;
 
+  /// In a browser: fetches [book]'s PDF from the server (the whole file, for the reader to open from its bytes), or null when this
+  /// source has no such PDF to fetch (a phone has the file itself: [ShelfBook.pdfPath]).
+  Future<List<int>> Function()? pdfFetcher(ShelfBook book) => null;
+
   /// The books the person hid from Bookshelves (on all of their devices; no file is deleted), by title. Each keeps the shelf and
   /// number it had ([ShelfBook.shelf], [ShelfBook.callNumber]), as the logs now resolve them, so it shows where it would go back.
   List<ShelfBook> get hidden;
@@ -72,6 +76,40 @@ class ShelfGap {
   /// The library's name.
   final String library;
   final int books;
+}
+
+/// Where one document of a library stands on Bookshelves.
+enum DocPlace {
+  /// On a shelf (it has a call number).
+  shelved,
+
+  /// A book on Bookshelves that no shelf holds yet.
+  unsorted,
+
+  /// A book the person hid from Bookshelves.
+  hidden,
+
+  /// In the library, but Bookshelves resolves it to no book at all (no shelf, not Unsorted, not Hidden).
+  none,
+}
+
+/// One document of a library's catalogue (`documents.tsv`) joined with what Bookshelves makes of it.
+@immutable
+class LibraryDoc {
+  const LibraryDoc({required this.docId, required this.title, required this.place, required this.book, this.copies = 1});
+
+  final String docId;
+
+  /// The book's title as Bookshelves shows it (renamed or not); the catalogue's own title for a document on no shelf.
+  final String title;
+  final DocPlace place;
+
+  /// The Bookshelves book when [place] is not [DocPlace.none] (open it with its book page); otherwise the document's own file as a
+  /// book-shaped record (its PDF path or server route), for opening the PDF.
+  final ShelfBook book;
+
+  /// How many files the book has across the person's libraries and devices.
+  final int copies;
 }
 
 /// The person's corrections to which files are one book. Each one is kept on all of the person's own devices.
@@ -192,6 +230,8 @@ class ShelfBook {
     this.docId,
     this.originalTitle,
     this.pdfPath,
+    this.onServer = false,
+    this.libraryId,
     this.spares = const [],
     this.aka = const [],
     this.reading,
@@ -215,6 +255,13 @@ class ShelfBook {
 
   /// The book's PDF on this device (a file path), or null when it is not here. Open reads it in the PDF reader.
   final String? pdfPath;
+
+  /// In a browser: the book's PDF is kept on the device the browser is signed in to (Cache Server), so there is no file to open here
+  /// and nothing to download. False on a phone and on desktop.
+  final bool onServer;
+
+  /// In a browser: the id of the library on the server that holds the book (with [docId], what the server's PDF route takes).
+  final String? libraryId;
 
   /// Unique in its source.
   final String id;
@@ -276,6 +323,18 @@ abstract class ShelfPlacer {
 /// A placer that can put a book back in Unsorted (Add PDF's Undo after a book was filed: the book is kept, never deleted).
 abstract class ShelfUnsorter {
   Future<void> unsort(ShelfBook book);
+}
+
+/// A big placement that stopped part way: [placed] of [total] books were placed (they stay placed) before a request failed.
+class PartialPlacementException implements Exception {
+  const PartialPlacementException(this.placed, this.total, this.cause);
+
+  final int placed;
+  final int total;
+  final Object cause;
+
+  @override
+  String toString() => 'PartialPlacementException: $placed of $total placed: $cause';
 }
 
 /// What a placement did, for its Undo and its message.
@@ -354,6 +413,14 @@ abstract class BookFiles implements Listenable {
   /// Whether "Delete from all your devices" can be done here.
   bool get canDeleteEverywhere;
 
+  /// Whether [book] can be deleted from all the person's devices from here: it has a copy in one of their own libraries on this
+  /// device (a book of a downloaded or shared library is not theirs to delete).
+  bool canDeleteBook(ShelfBook book);
+
+  /// Whether [book] is synced with another device: its own library is in a share that is on, and a linked device takes it
+  /// ([SharingState.libraryTakenByAnotherDevice]). Then Delete says it deletes from all synced devices.
+  bool syncedWithOtherDevice(ShelfBook book);
+
   /// Deletes the book, its search index and its call number on every linked device.
   Future<void> deleteEverywhere(ShelfBook book);
 }
@@ -373,6 +440,10 @@ class BookFilesUnavailable extends ChangeNotifier implements BookFiles {
   @override
   bool get canDeleteEverywhere => false;
   @override
+  bool canDeleteBook(ShelfBook book) => false;
+  @override
+  bool syncedWithOtherDevice(ShelfBook book) => false;
+  @override
   Future<void> deleteEverywhere(ShelfBook book) => throw UnsupportedError('not on this device yet');
 }
 
@@ -383,4 +454,20 @@ abstract class OriginalFileProvider implements Listenable {
   bool available(ShelfBook book);
 
   Future<void> open(ShelfBook book);
+}
+
+/// A book page's lookup: the book [id] when it is on Bookshelves, else the one hidden from them (a hidden book still has its page,
+/// with Show on Bookshelves). Lists and search use [ShelfSource.book], which never finds a hidden book.
+extension ShelfBookPageLookup on ShelfSource {
+  ShelfBook? bookOrHidden(String id) {
+    final shown = book(id);
+    if (shown != null) return shown;
+    for (final b in hidden) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  /// True for a book that is hidden from Bookshelves (and so not found by [ShelfSource.book]).
+  bool isHidden(String id) => book(id) == null && bookOrHidden(id) != null;
 }

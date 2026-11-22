@@ -1,14 +1,18 @@
 import 'dart:async';
 
+import 'package:cache_search/cache_search.dart' show GeoPoint;
 import 'package:flutter/material.dart';
 
+import '../../maps/layers/layer_def.dart';
 import '../../maps/ui/format.dart';
 import '../../screens/download_confirm.dart';
 import '../../settings/data_policy.dart';
+import '../../theme.dart';
 import '../problem_words.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
 import 'region_page.dart';
+import 'regions_list_sheet.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// "Map, directions, places and off-road.": the parts a download brings, as one sentence.
@@ -21,6 +25,101 @@ String partsSentence({bool map = false, bool routing = false, bool places = fals
 
 /// The size words of a download: "1.0 GB", or "Size unknown" when the catalogue has none for it.
 String sizeWords(int? bytes) => bytes == null ? 'Size unknown' : formatBytes(bytes);
+
+/// WORDING (cache-pm, approved): with the core's plan, the size on the device and what is fetched; without one (offline), only
+/// the catalogue's download figure.
+String regionSizeLine({int? onDevice, int? download}) {
+  // WORDING (cache-pm, approved): "Takes" says it is what it will need, not what is already there.
+  if (onDevice != null && download != null) return 'Takes ${formatBytes(onDevice)} on this device (${formatBytes(download)} to download)';
+  if (download != null) return '${formatBytes(download)} to download';
+  return 'Size unknown';
+}
+
+/// How a layer is named in the pop-up's notes: the base map is "the map"; another layer by its own name without a trailing
+/// bracket ("Hillshade", "Contour lines").
+String _layerWords(LayerDef d) => d.isBase ? 'the map' : d.title.replaceFirst(RegExp(r'\s*\([^)]*\)\s*$'), '');
+
+/// "Hillshade and contour lines", "The map and hillshade": [names] as a sentence start (the first one capitalised, the others as
+/// written after "and").
+String _namesSentence(List<String> names) {
+  String low(String n) => n == 'the map' || n.isEmpty ? n : n[0].toLowerCase() + n.substring(1);
+  final parts = [for (var i = 0; i < names.length; i++) i == 0 ? names[i] : low(names[i])];
+  final joined = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
+  return joined[0].toUpperCase() + joined.substring(1);
+}
+
+/// The notes under a region's size in the download pop-up (at most two lines), from its plan's map layers:
+/// - a layer that is too big at every zoom tried is left out of the download: "Hillshade is left out: too big for one download.";
+/// - a layer that was stepped down to a lower top zoom to fit: "The map is less detailed at close zoom to fit one download.";
+/// - none when everything fits at full detail. Left out comes first. A layer that shares another layer's tiles (contour lines with
+///   hillshade) goes with it.
+List<String> regionMapNotes(RegionPlan p) {
+  final left = <LayerDef>[], less = <LayerDef>[];
+  for (final m in p.map) {
+    if (!m.estimate.allowed) {
+      left.add(m.def);
+    } else if (m.estimate.maxZoom < m.def.maxZoom) {
+      less.add(m.def);
+    }
+  }
+  for (final s in p.sharing) {
+    final owner = p.map.where((m) => m.def.id == s.ownerId).firstOrNull;
+    if (owner == null) continue;
+    if (!owner.estimate.allowed) {
+      left.add(s.def);
+    } else if (owner.estimate.maxZoom < owner.def.maxZoom) {
+      less.add(s.def);
+    }
+  }
+  return [
+    if (left.isNotEmpty) '${_namesSentence([for (final d in left) _layerWords(d)])} ${left.length == 1 ? 'is' : 'are'} left out: too big for one download.',
+    if (less.isNotEmpty) '${_namesSentence([for (final d in less) _layerWords(d)])} ${less.length == 1 ? 'is' : 'are'} less detailed at close zoom to fit one download.',
+  ];
+}
+
+/// What downloading [list] would put on the device and fetch, from the core's plan (routing and places as the core counts them, the
+/// map layers' estimates, the off-road packs); null when any plan cannot be made (offline, the index out of reach). It is asked in the
+/// background and never waited for by the pop-up: the dialog
+/// then shows the catalogue's download figure alone.
+Future<({int onDevice, int download, List<String> notes})?> planSizeOf(RegionsState regions, List<(RegionRecord, RegionOffer)> list) async {
+  var onDevice = 0, download = 0;
+  final notes = <String>[];
+  for (final (rec, o) in list) {
+    try {
+      final p = await regions.plan(rec);
+      if (o.routing) {
+        final r = p.routing;
+        if (r == null || p.routingProblem != null) return null;
+        onDevice += r.bytes;
+        download += r.downloadBytes;
+      }
+      if (o.places) {
+        final pl = p.places;
+        if (pl == null || p.placesProblem != null) return null;
+        onDevice += pl.bytes;
+        download += pl.downloadBytes;
+      }
+      if (o.map) {
+        // Every layer too big for one download (a country): the plan has no map figure, and the part is not planned.
+        if (p.mapAllowed.isEmpty) return null;
+        for (final n in regionMapNotes(p)) {
+          if (!notes.contains(n)) notes.add(n);
+        }
+        onDevice += p.mapBytes + p.mapBytesAlready;
+        download += p.mapBytes;
+      }
+      if (o.offroad && p.offroadAllowed) {
+        onDevice += p.offroad!.downloadBytes + p.offroad!.bytesAlready;
+        download += p.offroad!.downloadBytes;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+  // Nothing planned (a country whose roads are not published and whose map is too big): never "0 B"; the catalogue's figure stays.
+  if (onDevice <= 0) return null;
+  return (onDevice: onDevice, download: download, notes: notes);
+}
 
 /// Says [text] at the bottom of the screen, with [action] when given: a button's result is always shown at once.
 /// A screen that has closed meanwhile (the answer came after it went) is told nothing.
@@ -37,7 +136,18 @@ void tell(ScaffoldMessengerState m, String text, {SnackBarAction? action}) {
 Future<void> openRegionOffer(BuildContext context, RegionsState regions, RegionRecord rec, {Future<int?> Function()? drawnSize}) async {
   // The search field it was opened from would take the focus (and the keyboard) back when the pop-up closes.
   FocusManager.instance.primaryFocus?.unfocus();
-  final offer = regions.offer(rec);
+  var offer = regions.offer(rec);
+  // Add off-road where no pack covers the region: no offer to confirm, but never silent either: it says why (the same words as the
+  // greyed rows), whichever row or button asked.
+  if (offer.kind == RegionOfferKind.addParts && offer.offroad && !offer.places) {
+    final covered = await regions.offroadCoveredNow(rec.id);
+    if (!context.mounted) return;
+    if (covered == false) {
+      tell(ScaffoldMessenger.of(context), kNoOffroadLine);
+      return;
+    }
+  }
+  offer = regions.offer(rec);
   switch (offer.kind) {
     case RegionOfferKind.busy || RegionOfferKind.onPhone:
       await openRegionPage(context, regions, rec.id);
@@ -65,38 +175,113 @@ Future<int?> drawnSizeOf(BuildContext context, RegionsState regions, RegionRecor
   }
 }
 
+String _flags(List<(RegionRecord, RegionOffer)> l) => [for (final t in l) '${t.$2.map}${t.$2.routing}${t.$2.places}${t.$2.offroad}'].join(',');
+
+/// A catalogue region (not an area drawn on the map): the only kind whose parts line is checked against what is really there.
+bool _checked(RegionRecord r) => !r.isDrawn && r.kind != kAreaRegionKind;
+
+/// The parts the pop-up can say at once, from what is already known: a region the catalogue sizes has them in its sizes (directions
+/// only with routing data, off-road only with a pack over it); one it does not size has the map alone until the checks come back
+/// ([honestOffer]). Nothing is assumed to be there.
+RegionOffer knownOffer(RegionsState regions, RegionRecord rec, RegionOffer o) {
+  if (!_checked(rec) || o.kind != RegionOfferKind.download) return o;
+  final sizes = rec.sizes;
+  final covered = regions.offroadCovered(rec.id);
+  final routing = o.routing && sizes != null && (sizes.routing ?? 0) > 0;
+  final offroad = o.offroad && covered != false && (sizes != null ? sizes.hasOffroad : covered == true);
+  return _with(o, routing: routing, offroad: offroad);
+}
+
+/// [knownOffer] once the checks are in: directions only when the routing plan has data, off-road only when the off-road catalogue has
+/// a pack over the region (the rule that greys "Add off-road"). A check that cannot be made now (offline) leaves the part as it was
+/// known: it never blocks or fails the pop-up.
+Future<RegionOffer> honestOffer(RegionsState regions, RegionRecord rec, RegionOffer o) async {
+  if (!_checked(rec) || o.kind != RegionOfferKind.download) return o;
+  var routing = o.routing;
+  try {
+    final p = await regions.plan(rec);
+    final r = p.routing;
+    if (p.routingProblem == null) routing = r != null && (r.bytes > 0 || r.downloadBytes > 0);
+  } catch (_) {}
+  bool? covered;
+  try {
+    covered = await regions.offroadCoveredNow(rec.id);
+  } catch (_) {}
+  final offroad = covered ?? o.offroad;
+  return _with(o, routing: routing, offroad: offroad);
+}
+
+RegionOffer _with(RegionOffer o, {required bool routing, required bool offroad}) => RegionOffer(
+  o.kind,
+  routing: routing,
+  map: o.map,
+  places: o.places,
+  offroad: offroad,
+  bytes: o.bytes,
+  already: o.already,
+  addBytes: o.addBytes,
+  offroadShared: offroad && o.offroadShared,
+);
+
 /// The download pop-up for regions not on the phone, then each starts (now, or once on Wi-Fi). One region: "Download Jerome County?",
 /// "Map, directions, places and off-road." and its size; several: "Download 3 regions?" and their sizes in all.
 Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List<RegionRecord> list, {Future<int?> Function()? drawnSize}) async {
-  final offers = [for (final r in list) (r, regions.offer(r))];
-  final todo = [for (final o in offers) if (o.$2.kind == RegionOfferKind.download) o];
+  final offers = [for (final r in list) (r, knownOffer(regions, r, regions.offer(r)))];
+  var todo = [for (final o in offers) if (o.$2.kind == RegionOfferKind.download) o];
   if (todo.isEmpty) return;
   var bytes = todo.every((t) => t.$2.bytes != null) ? todo.fold<int>(0, (s, t) => s + t.$2.bytes!) : null;
   if (bytes == null && drawnSize != null && todo.length == 1) bytes = await drawnSize();
   final dir = await regions.supportDir();
   if (!context.mounted) return;
-  final one = todo.length == 1 ? todo.single : null;
-  final shared = todo.any((t) => t.$2.offroad && t.$2.offroadShared);
-  final summary = [
-    if (one != null)
-      partsSentence(map: one.$2.map, routing: one.$2.routing, places: one.$2.places, offroad: one.$2.offroad)
+  final one0 = todo.length == 1 ? todo.single : null;
+  // What the line says is what is downloaded: [todo] is what the checks have found so far, and the download below asks for exactly that.
+  List<String> summaryWith(String size, [List<String> notes = const []]) => [
+    if (todo.length == 1)
+      partsSentence(map: todo.single.$2.map, routing: todo.single.$2.routing, places: todo.single.$2.places, offroad: todo.single.$2.offroad)
     else
       [for (final t in todo) t.$1.name].join(', '),
-    if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
-    sizeWords(bytes),
+    if (todo.any((t) => t.$2.offroad && t.$2.offroadShared)) "Off-road data for the state is already on this device; only this area's terrain is new.",
+    size,
+    ...notes,
   ].where((l) => l.isNotEmpty).toList();
+  // The pop-up opens at once with the catalogue's figure, said to be the download (never room on the device). The core's plan is
+  // asked meanwhile, not waited for (1.0.27 worked the size out for up to a minute before it opened, and said "Can't be downloaded
+  // here" when that failed); when it arrives the pop-up changes in place to what the region takes on the device and what is
+  // fetched. Offline there is no plan and the line stays as it was.
+  final live = ValueNotifier<DownloadUpdate?>(null);
+  var closed = false;
+  final startFlags = _flags(todo);
+  unawaited(() async {
+    // The parts line first (the checks never hold the pop-up back), then the size of exactly those parts.
+    final checked = [for (final t in todo) (t.$1, await honestOffer(regions, t.$1, t.$2))];
+    if (closed) return;
+    todo = checked;
+    final planned = await planSizeOf(regions, todo);
+    if (closed) return;
+    // Without a plan (offline) the catalogue's figure stays only if the parts are what it counted.
+    final sameParts = _flags(todo) == startFlags;
+    live.value = (
+      summary: summaryWith(
+        planned != null ? regionSizeLine(onDevice: planned.onDevice, download: planned.download) : (bytes != null && sameParts ? regionSizeLine(download: bytes) : sizeWords(null)),
+        planned?.notes ?? const [],
+      ),
+      bytes: planned != null ? planned.onDevice : (sameParts ? bytes : null),
+    );
+  }());
   final m = ScaffoldMessenger.of(context);
   final choice = await askToDownload(
     context,
-    title: one != null ? 'Download ${one.$1.name}?' : 'Download ${todo.length} regions?',
-    summary: summary,
+    title: one0 != null ? 'Download ${one0.$1.name}?' : 'Download ${todo.length} regions?',
+    summary: summaryWith(bytes != null ? regionSizeLine(download: bytes) : sizeWords(null)),
     bytes: bytes,
-    name: one?.$1.name ?? '${todo.length} regions',
+    name: one0?.$1.name ?? '${todo.length} regions',
     dir: dir.path,
     policy: regions.policy,
+    updates: live,
   );
+  closed = true;
   if (choice == DownloadChoice.cancel) return;
-  final names = one?.$1.name ?? '${todo.length} regions';
+  final names = one0?.$1.name ?? '${todo.length} regions';
   tell(m, choice == DownloadChoice.now ? 'Downloading $names' : '$names will download on Wi-Fi');
   for (final (rec, o) in todo) {
     unawaited(_run(m, 'download ${rec.name}', () async {
@@ -105,7 +290,7 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
       } else {
         await regions.downloadOnWifi(rec, routing: o.routing, map: o.map, places: o.places, offroad: o.offroad);
       }
-    }, retry: () => askDownloadRegions(context, regions, [rec])));
+    }, retry: () => askDownloadRegions(context, regions, [rec]), resume: (e) => regions.resumeAndStart(e.region)));
   }
 }
 
@@ -129,7 +314,7 @@ Future<void> askCarryOn(BuildContext context, RegionsState regions, String id, {
     context,
     title: again ? 'Try again with $name?' : 'Carry on with $name?',
     summary: [
-      if (left != null) '${formatBytes(left)} to go.' else 'The size of what is left is not known.',
+      if (left != null) '${formatBytes(left)} to download.' else 'The size of what is left is not known.',
       if ((o?.already ?? 0) > 0) '${formatBytes(o!.already)} is already here.',
       if (addOffroad) "Off-road is not on this device yet${o!.addBytes > 0 ? ' (${formatBytes(o.addBytes)})' : ''}. Add it from $name's page.",
     ],
@@ -209,12 +394,59 @@ Future<void> askAddOffroad(BuildContext context, RegionsState regions, String id
   await _askAddParts(context, regions, rec, RegionOffer(RegionOfferKind.addParts, offroad: true, bytes: o.kind == RegionOfferKind.addParts ? o.bytes : regions.costOf(rec).offroad, offroadShared: o.offroadShared));
 }
 
+/// "Download this area" under a route that is outside the downloaded maps: of the route's places ([ends], where to first), the
+/// first that no region with directions on this phone holds; the catalogue's region there ([RegionCatalogue.regionAt], as Download
+/// this area from the map's search) gets the one download pop-up ([openRegionOffer]). Where the catalogue names none, the Regions
+/// sheet at that place, to choose from.
+Future<void> getRouteArea(BuildContext context, RegionsState regions, List<GeoPoint> ends) async {
+  if (ends.isEmpty) return;
+  final at = ends.where((p) => regions.regionHolding(p.lat, p.lon, routing: true) == null).firstOrNull ?? ends.first;
+  await _offerAt(context, regions, at);
+}
+
+/// "Add off-road data" under an off-road route with no off-road data: the region on this phone that holds the first of the route's
+/// places ([ends], where to first) and has no off-road yet gets Add off-road ([askAddOffroad]). With none on the phone there, as
+/// [getRouteArea] at where to: the catalogue's region there (its pop-up adds off-road, or downloads it with the rest), else the
+/// Regions sheet at that place.
+Future<void> addRouteOffroad(BuildContext context, RegionsState regions, List<GeoPoint> ends) async {
+  if (ends.isEmpty) return;
+  for (final p in ends) {
+    final l = regions.regionHolding(p.lat, p.lon, withoutOffroad: true);
+    if (l != null) return askAddOffroad(context, regions, l.id);
+  }
+  await _offerAt(context, regions, ends.first);
+}
+
+/// The catalogue's region at [at] in its download pop-up, or the Regions sheet at [at] when the catalogue cannot name one.
+Future<void> _offerAt(BuildContext context, RegionsState regions, GeoPoint at) async {
+  RegionRecord? rec;
+  try {
+    await regions.catalogue.readShardAt(at.lat, at.lon);
+    rec = regions.catalogue.regionAt(at.lat, at.lon);
+  } catch (_) {}
+  if (!context.mounted) return;
+  if (rec != null) return openRegionOffer(context, regions, rec);
+  await showRegionsSheet(context, regions, lat: at.lat, lon: at.lon);
+}
+
+/// Show on map for a region on this phone: the Maps tab with the map fitted to the region ([MapsState.showAreaOnMap]); false when
+/// its box is not known.
+bool showRegionOnMap(RegionsState regions, String id) {
+  final b = regions.boundsOf(id);
+  if (b == null) return false;
+  regions.maps.showAreaOnMap(b);
+  return true;
+}
+
 /// Runs a region action, and when it fails says what happened and the next step in plain words, with "Try again".
-Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function() f, {Future<void> Function()? retry}) async {
+Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function() f, {Future<void> Function()? retry, Future<void> Function(DownloadsPaused)? resume}) async {
   try {
     await f();
   } on MobileDataBlocked catch (e) {
     tell(m, e.message);
+  } on DownloadsPaused catch (e) {
+    // Paused: one tap on Resume clears the pause and starts the download.
+    tell(m, e.message, action: resume == null ? null : SnackBarAction(label: 'Resume', onPressed: () => unawaited(_run(m, 'start ${e.region.name}', () => resume(e)))));
   } catch (e) {
     tell(m, downloadProblemWords(e, what: what), action: retry == null ? null : SnackBarAction(label: 'Try again', onPressed: () => unawaited(retry())));
   }
@@ -245,7 +477,8 @@ Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegi
   if (choice == DownloadChoice.cancel) return;
   tell(m, 'Starting ${l.name} again');
   await _run(m, 'start ${l.name} again', () async {
-    await regions.remove(l.id);
+    // a repair on this device: it does not take the other devices' copies away
+    await regions.remove(l.id, everywhere: false);
     if (choice == DownloadChoice.now) {
       await regions.download(rec, routing: routing, map: map, places: places, offroad: offroad, anyway: true);
     } else {
@@ -254,14 +487,37 @@ Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegi
   });
 }
 
-/// Deletes a region after asking, with what it frees.
-Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRegion l) async {
-  final yes = await confirmDelete(
-    context,
-    name: l.name,
-    bytes: l.bytes,
-    again: l.isArea ? 'Its map is removed from this device.' : 'Its map, directions, places and off-road data are removed from this device. Parts another region uses stay.',
+// WORDING (for cache-pm): the region delete's confirmation, the same shape as deleting a book (owner's design, 2026-11-15): the question,
+// and under it, only when the delete reaches other devices (the Maps share is on and a device is linked), the line.
+const String kDeleteRegionQuestion = 'Delete this region?';
+const String kDeleteRegionSyncedLine = 'Deleting this will delete this from all synced devices.';
+
+/// Asks "Delete this region?" with Cancel and Delete, and, when [synced] (Maps shared with at least one linked device), the line
+/// "Deleting this will delete this from all synced devices.". True to delete.
+Future<bool> confirmDeleteRegion(BuildContext context, {required bool synced}) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('delete-region-confirm'),
+      title: const Text(kDeleteRegionQuestion),
+      content: synced ? const Text(kDeleteRegionSyncedLine, key: ValueKey('delete-region-synced-line')) : null,
+      actions: [
+        TextButton(key: const ValueKey('delete-region-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('delete-region-confirm-button'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
   );
+  return yes == true;
+}
+
+/// Deletes a region after asking. There is no delete for one device: with Maps synced the region goes from every linked device.
+Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRegion l) async {
+  final yes = await confirmDeleteRegion(context, synced: regions.deleteReachesOtherDevices);
   if (!yes || !context.mounted) return false;
   final m = ScaffoldMessenger.of(context);
   try {
@@ -292,12 +548,18 @@ Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, Local
   }
 }
 
-/// What can be done with a region on the phone, in the order the menu lists it.
-enum RegionAction { open, carryOn, tryAgain, addOffroad, update, delete }
+/// WORDING (owner, exact): where no off-road pack covers a region, Add off-road is greyed with this line (the region page, the
+/// Regions sheet and the region's menu).
+const String kNoOffroadLine = 'No off-road data is published for this area.';
 
-/// The actions for [l]: a stopped or failed region's fix first, then off-road when it has none, update when it is complete, delete.
+/// What can be done with a region on the phone, in the order the menu lists it.
+enum RegionAction { open, showOnMap, carryOn, tryAgain, addOffroad, update, delete }
+
+/// The actions for [l]: Show on map when its box is known, a stopped or failed region's fix, then off-road when it has none, update
+/// when it is complete, delete.
 List<RegionAction> regionActions(RegionsState regions, LocalRegion l, {bool open = true}) => [
   if (open) RegionAction.open,
+  if (regions.boundsOf(l.id) != null) RegionAction.showOnMap,
   if (l.phase == RegionPhase.stopped) RegionAction.carryOn,
   if (l.phase == RegionPhase.failed) RegionAction.tryAgain,
   if (!l.hasOffroad && !l.isArea && regions.offroadCatalogue != null) RegionAction.addOffroad,
@@ -307,6 +569,7 @@ List<RegionAction> regionActions(RegionsState regions, LocalRegion l, {bool open
 
 String regionActionLabel(RegionAction a) => switch (a) {
   RegionAction.open => 'Open',
+  RegionAction.showOnMap => 'Show on map',
   RegionAction.carryOn => 'Carry on',
   RegionAction.tryAgain => 'Try again',
   RegionAction.addOffroad => 'Add off-road',
@@ -316,6 +579,7 @@ String regionActionLabel(RegionAction a) => switch (a) {
 
 IconData regionActionIcon(RegionAction a) => switch (a) {
   RegionAction.open => Icons.open_in_new,
+  RegionAction.showOnMap => Icons.map_outlined,
   RegionAction.carryOn => Icons.play_arrow,
   RegionAction.tryAgain => Icons.refresh,
   RegionAction.addOffroad => Icons.terrain_outlined,
@@ -328,6 +592,8 @@ Future<void> runRegionAction(BuildContext context, RegionsState regions, LocalRe
   switch (a) {
     case RegionAction.open:
       await openRegionPage(context, regions, l.id);
+    case RegionAction.showOnMap:
+      showRegionOnMap(regions, l.id);
     case RegionAction.carryOn || RegionAction.tryAgain:
       await carryOnNow(ScaffoldMessenger.of(context), regions, l.id, name: l.name, again: a == RegionAction.tryAgain);
     case RegionAction.addOffroad:
@@ -354,12 +620,29 @@ Future<void> showRegionActions(BuildContext context, RegionsState regions, Local
             child: Text(l.name, style: Theme.of(ctx).textTheme.titleMedium),
           ),
           for (final a in regionActions(regions, l, open: open))
-            ListTile(
-              key: ValueKey('region-action-${a.name}'),
-              leading: Icon(regionActionIcon(a)),
-              title: Text(regionActionLabel(a)),
-              onTap: () => Navigator.pop(ctx, a),
-            ),
+            if (a == RegionAction.addOffroad)
+              // The same check as the region page: where no pack covers the region the item is greyed and says why.
+              ListenableBuilder(
+                listenable: regions,
+                builder: (_, _) {
+                  final none = regions.offroadCovered(l.id) == false;
+                  return ListTile(
+                    key: ValueKey('region-action-${a.name}'),
+                    leading: Icon(regionActionIcon(a)),
+                    title: Text(regionActionLabel(a)),
+                    subtitle: none ? const Text(kNoOffroadLine) : null,
+                    enabled: !none,
+                    onTap: none ? null : () => Navigator.pop(ctx, a),
+                  );
+                },
+              )
+            else
+              ListTile(
+                key: ValueKey('region-action-${a.name}'),
+                leading: Icon(regionActionIcon(a)),
+                title: Text(regionActionLabel(a)),
+                onTap: () => Navigator.pop(ctx, a),
+              ),
           const SizedBox(height: 8),
         ],
       ),

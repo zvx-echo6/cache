@@ -86,16 +86,41 @@ void main() {
     await tester.runAsync(sharing.setUp);
     // The engine is told at its start, before its first round, so nothing of an index goes out or comes in even once.
     // The same patterns cache_sync's tests check (packages/cache_search/native/cache_sync/tests/derived_folders.rs): fetched
-    // indexes, the viewed-tile cache and TileJSON, and SQLite's -shm and -journal; every downloaded part still syncs.
+    // indexes, the viewed-tile cache and TileJSON, SQLite's -shm and -journal, and the live databases (one writer each; every device
+    // shares a snapshot of its own instead: maps_two_writers.rs); the immutable downloaded parts still sync.
     expect(config?['exclude'], {
-      'libraries': ['*/index'],
-      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'],
-      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal'],
+      'libraries': ['*/index', '*/index-snapshots', 'my-books*/shard*', 'my-books*/copies.jsonl', 'my-books*/documents.tsv', 'my-books*/SHA256SUMS'],
+      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal', 'store/*.sqlite*', '**/* (conflict, *'],
+      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal', 'regions.sqlite*', 'places/*.sqlite*', 'places/*/common.sqlite*', 'places/CURRENT', '**/* (conflict, *'],
     });
     // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
     final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);
     expect(item.indexPath.substring(libs.path.length + 1).replaceAll(Platform.pathSeparator, '/'), 'first-aid/index');
     sharing.dispose();
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
+
+  testWidgets('the Mainline DHT is switched off on a phone only', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final configs = <bool, Map<String, Object?>>{};
+    for (final phone in [true, false]) {
+      final s = SharingState(
+        policy: r.policy,
+        supportDir: () async => r.dir,
+        kinds: const [],
+        phone: phone,
+        opener: (c) async {
+          configs[phone] = c;
+          return r.sync;
+        },
+      );
+      await tester.runAsync(s.setUp);
+      s.dispose();
+    }
+    expect(configs[true]!['dht'], false);
+    // Elsewhere there is no key: the engine's default (on) stands.
+    expect(configs[false]!.containsKey('dht'), false);
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });
@@ -148,6 +173,15 @@ void main() {
     expect((configs.last['only'] as Map)['indexes'], ['zim/A']);
     expect(r.sync.argsOf['share_add'], hasLength(1));
     again.dispose();
+
+    // An update moved the app's container: the share still holds the old path, and the start points it at the new one.
+    r.sync.shares.single['path'] = '/var/mobile/Containers/Data/Application/OLD/Library/Application Support/search-indexes';
+    final moved = make();
+    await tester.runAsync(moved.init);
+    expect(r.sync.argsOf['share_add'], hasLength(2));
+    expect(r.sync.argsOf['share_add']!.last, {'id': 'indexes', 'name': 'Search indexes', 'path': '${r.dir.path}/search-indexes'});
+    expect(r.sync.shares.single['path'], '${r.dir.path}/search-indexes');
+    moved.dispose();
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });

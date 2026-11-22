@@ -352,6 +352,13 @@ fn props_mark_a_place_and_take_it_off_the_map() {
     let c = call(&nb, "entry_save", json!({"id": b["id"], "notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "title": "Cache 2", "place": {"lat": 43.7, "lon": -116.2}}));
     assert!(c.get("props").is_none());
     assert_eq!(pins(json!({})).len(), 2);
+    // a place's own icon
+    let d = call(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:32:00-06:00", "title": "Cache 3",
+        "place": {"lat": 43.8, "lon": -116.3}, "props": {"icon": "water_2", "color": "blue", "on_map": true}}));
+    assert_eq!(d["props"], json!({"icon": "water_2", "color": "blue", "on_map": true}));
+    for bad in [json!({"icon": "Water"}), json!({"icon": ""}), json!({"icon": 3}), json!({"icon": "a".repeat(41)})] {
+        assert_eq!(err(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:32:00-06:00", "props": bad})).code, "bad_json");
+    }
     for bad in [json!({"color": "Red!"}), json!({"on_map": "no"}), json!({"size": 3}), json!([1])] {
         assert_eq!(err(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "props": bad})).code, "bad_json");
     }
@@ -394,4 +401,214 @@ fn a_version_1_database_gains_props() {
     let c = rusqlite::Connection::open(t.0.join("notebook.sqlite")).unwrap();
     let v: String = c.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, "2");
+}
+
+#[test]
+fn a_notebook_has_an_icon_and_a_colour_of_its_own() {
+    let (nb, _t) = notebook("icon_color");
+    // neither: as before, and neither key comes back
+    let a = call(&nb, "notebook_save", json!({"template": "places", "def": {"name": "Trail places", "fields": []}}));
+    assert!(a["def"].get("icon").is_none() && a["def"].get("color").is_none());
+    // both, kept and returned
+    let b = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Trail places", "icon": "trailhead", "color": "teal", "fields": []}}));
+    assert_eq!((b["def"]["icon"].clone(), b["def"]["color"].clone()), (json!("trailhead"), json!("teal")));
+    let again = call(&nb, "notebook", json!({"id": a["id"]}));
+    assert_eq!((again["def"]["icon"].clone(), again["def"]["color"].clone()), (json!("trailhead"), json!("teal")));
+    // taken off again
+    let c = call(&nb, "notebook_save", json!({"id": a["id"], "def": {"name": "Trail places", "fields": []}}));
+    assert!(c["def"].get("icon").is_none() && c["def"].get("color").is_none());
+    for bad in [json!({"icon": "Trail head"}), json!({"icon": 5}), json!({"color": "Teal"}), json!({"color": "#3fbfae"}), json!({"color": ""})] {
+        let mut def = json!({"name": "Trail places", "fields": []});
+        def.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert_eq!(err(&nb, "notebook_save", json!({"id": a["id"], "def": def})).code, "bad_json", "{bad}");
+    }
+}
+
+// ---- a notebook kept in step with a file (source_merge) ----
+
+const NOW: &str = "2026-11-14T10:00:00-07:00";
+
+fn list_def(name: &str) -> Value {
+    json!({"name": name, "due_every": null, "shape": {"sort": "distance"}, "fields": [{"label": "Frequency", "type": "text"}, {"label": "Town", "type": "text"}]})
+}
+
+/// A row of a file: key, callsign, position and the two fields (f1 Frequency, f2 Town).
+fn frow(key: &str, title: &str, lat: f64, freq: &str, town: &str) -> Value {
+    json!({"key": key, "title": title, "place": {"lat": lat, "lon": -114.0}, "values": {"f1": freq, "f2": town}, "source": format!("raw {key}")})
+}
+
+fn first_file() -> Vec<Value> {
+    vec![frow("a", "KX0AAA", 42.1, "146.940 MHz", "Burley"), frow("b", "KX0BBB", 42.2, "147.000 MHz", "Rupert"), frow("c", "KX0CCC", 42.3, "449.500 MHz", "Twin Falls")]
+}
+
+fn merge_new(nb: &Notebook, rows: Vec<Value>) -> Value {
+    call(nb, "source_merge", json!({"notebook": {"template": "repeaters", "def": list_def("Repeaters"), "map": true}, "now": NOW, "rows": rows}))
+}
+
+fn merge_into(nb: &Notebook, id: &str, rows: Vec<Value>) -> Value {
+    call(nb, "source_merge", json!({"notebook_id": id, "now": NOW, "rows": rows}))
+}
+
+fn entry_titled(nb: &Notebook, id: &str, title: &str) -> Value {
+    call(nb, "entries", json!({"notebook_id": id}))["entries"].as_array().unwrap().iter().find(|e| e["title"] == title).unwrap_or_else(|| panic!("no entry {title}")).clone()
+}
+
+#[test]
+fn a_first_file_makes_the_notebook_and_its_entries_in_one_step_or_none() {
+    let (nb, _t) = notebook("src-first");
+    let out = merge_new(&nb, first_file());
+    assert_eq!((out["added"].as_i64(), out["updated"].as_i64()), (Some(3), Some(0)));
+    let id = out["notebook"]["id"].as_str().unwrap().to_string();
+    assert_eq!(out["notebook"]["template"], "repeaters");
+    assert_eq!(out["notebook"]["entries"], 3);
+    let e = entry_titled(&nb, &id, "KX0BBB");
+    assert_eq!(e["values"], json!({"f1": "147.000 MHz", "f2": "Rupert"}));
+    assert_eq!(e["place"]["lat"], 42.2);
+    let led = call(&nb, "source_rows", json!({"notebook_id": id}));
+    assert_eq!(led["rows"].as_array().unwrap().len(), 3);
+    assert_eq!(led["rows"][1]["source"], "raw b", "the row as the file gave it is kept as it was");
+    // a bad row anywhere: nothing is made, not even the notebook
+    let before = names(&nb);
+    let mut rows = first_file();
+    rows.push(json!({"key": "d", "title": "X", "values": {"f9": "no such field"}}));
+    let e = nb.call("source_merge", Some(&json!({"notebook": {"template": "repeaters", "def": list_def("Other"), "map": true}, "now": NOW, "rows": rows}).to_string())).expect_err("bad row");
+    assert_eq!(e.code, "bad_json");
+    assert_eq!(names(&nb), before);
+    // two rows with one key are refused
+    let dup = nb.call("source_merge", Some(&json!({"notebook_id": id, "now": NOW, "rows": [frow("a", "A", 1.0, "1", "x"), frow("a", "B", 1.0, "1", "x")]}).to_string()));
+    assert_eq!(dup.expect_err("dup").code, "bad_json");
+}
+
+#[test]
+fn the_same_file_again_changes_nothing_and_writes_nothing() {
+    let (nb, _t) = notebook("src-again");
+    let id = merge_new(&nb, first_file())["notebook"]["id"].as_str().unwrap().to_string();
+    let revs: Vec<i64> = ["KX0AAA", "KX0BBB", "KX0CCC"].iter().map(|t| entry_titled(&nb, &id, t)["rev"].as_i64().unwrap()).collect();
+    let out = merge_into(&nb, &id, first_file());
+    assert_eq!((out["added"].as_i64(), out["updated"].as_i64(), out["unchanged"].as_i64(), out["kept_edits"].as_i64()), (Some(0), Some(0), Some(3), Some(0)));
+    let again: Vec<i64> = ["KX0AAA", "KX0BBB", "KX0CCC"].iter().map(|t| entry_titled(&nb, &id, t)["rev"].as_i64().unwrap()).collect();
+    assert_eq!(revs, again, "an entry that did not change is not saved again");
+    assert_eq!(call(&nb, "entries", json!({"notebook_id": id}))["entries"].as_array().unwrap().len(), 3, "nothing is duplicated");
+}
+
+#[test]
+fn an_update_follows_the_file_where_the_person_did_not_edit_and_keeps_what_they_did() {
+    let (nb, _t) = notebook("src-edits");
+    let id = merge_new(&nb, first_file())["notebook"]["id"].as_str().unwrap().to_string();
+    // the person edits KX0AAA's town, writes notes on it and adds their own repeater by hand
+    let a = entry_titled(&nb, &id, "KX0AAA");
+    call(&nb, "entry_save", json!({"id": a["id"], "notebook_id": id, "occurred_at": a["occurred_at"], "title": "KX0AAA", "body": "my notes", "values": {"f1": "146.940 MHz", "f2": "Burley (my town)"}, "place": a["place"]}));
+    call(&nb, "entry_save", json!({"notebook_id": id, "occurred_at": NOW, "title": "MINE", "values": {"f1": "146.520 MHz"}}));
+    // the new file moves KX0AAA's frequency and town, and KX0BBB's frequency, adds KX0DDD, and drops KX0CCC
+    let out = merge_into(&nb, &id, vec![
+        frow("a", "KX0AAA", 42.1, "146.945 MHz", "Burley"),
+        frow("b", "KX0BBB", 42.2, "147.060 MHz", "Rupert"),
+        frow("d", "KX0DDD", 42.4, "145.230 MHz", "Oakley"),
+    ]);
+    assert_eq!((out["added"].as_i64(), out["updated"].as_i64(), out["kept_edits"].as_i64(), out["not_in_file"].as_i64()), (Some(1), Some(2), Some(1), Some(1)));
+    let a = entry_titled(&nb, &id, "KX0AAA");
+    assert_eq!(a["values"], json!({"f1": "146.945 MHz", "f2": "Burley (my town)"}), "the frequency follows the file, the edited town stays");
+    assert_eq!(a["body"], "my notes");
+    assert_eq!(entry_titled(&nb, &id, "KX0BBB")["values"]["f1"], "147.060 MHz");
+    assert_eq!(entry_titled(&nb, &id, "KX0CCC")["values"]["f1"], "449.500 MHz", "a repeater the file dropped stays");
+    assert_eq!(entry_titled(&nb, &id, "MINE")["values"]["f1"], "146.520 MHz", "a hand-made repeater is never touched");
+    let led = call(&nb, "source_rows", json!({"notebook_id": id, "brief": true}));
+    let gone: Vec<&Value> = led["rows"].as_array().unwrap().iter().filter(|r| r["state"] == "gone").collect();
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0]["key"], "c", "marked: not in the latest file");
+    // a second update with the same file keeps the person's edit again (the edit is still not the file's)
+    let out = merge_into(&nb, &id, vec![frow("a", "KX0AAA", 42.1, "146.945 MHz", "Burley"), frow("b", "KX0BBB", 42.2, "147.060 MHz", "Rupert"), frow("d", "KX0DDD", 42.4, "145.230 MHz", "Oakley")]);
+    assert_eq!(out["updated"], 0);
+    assert_eq!(entry_titled(&nb, &id, "KX0AAA")["values"]["f2"], "Burley (my town)");
+    // the dropped one comes back in a later file: its mark goes
+    merge_into(&nb, &id, first_file());
+    let led = call(&nb, "source_rows", json!({"notebook_id": id, "brief": true}));
+    assert!(led["rows"].as_array().unwrap().iter().all(|r| r["state"] != "gone" || r["key"] == "d"));
+}
+
+#[test]
+fn a_repeater_the_person_deleted_stays_deleted_until_added_back() {
+    let (nb, _t) = notebook("src-deleted");
+    let id = merge_new(&nb, first_file())["notebook"]["id"].as_str().unwrap().to_string();
+    let b = entry_titled(&nb, &id, "KX0BBB");
+    call(&nb, "entry_delete", json!({"id": b["id"]}));
+    let out = merge_into(&nb, &id, first_file());
+    assert_eq!(out["added"], 0, "not made again");
+    assert_eq!(out["deleted"].as_array().unwrap().len(), 1);
+    assert_eq!(out["deleted"][0]["title"], "KX0BBB");
+    assert_eq!(call(&nb, "entries", json!({"notebook_id": id}))["entries"].as_array().unwrap().len(), 2);
+    let back = call(&nb, "source_add_back", json!({"notebook_id": id, "now": NOW}));
+    assert_eq!(back["added"], 1);
+    assert_eq!(entry_titled(&nb, &id, "KX0BBB")["values"], json!({"f1": "147.000 MHz", "f2": "Rupert"}));
+    assert_eq!(call(&nb, "source_add_back", json!({"notebook_id": id, "now": NOW}))["added"], 0);
+    assert_eq!(merge_into(&nb, &id, first_file())["deleted"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn an_entry_without_a_ledger_row_is_matched_by_claim_and_only_has_its_blanks_filled() {
+    let (nb, _t) = notebook("src-claims");
+    let id = call(&nb, "notebook_save", json!({"template": "repeaters", "def": list_def("Repeaters")}))["id"].as_str().unwrap().to_string();
+    // arrived from another device: no ledger here
+    let e = call(&nb, "entry_save", json!({"notebook_id": id, "occurred_at": NOW, "title": "KX0AAA", "values": {"f1": "146.940 MHz", "f2": "My town"}}));
+    let out = call(&nb, "source_merge", json!({"notebook_id": id, "now": NOW, "rows": first_file(), "claims": {"a": e["id"]}}));
+    assert_eq!(out["added"], 2, "the claimed row is not made again");
+    let a = entry_titled(&nb, &id, "KX0AAA");
+    assert_eq!(a["id"], e["id"]);
+    assert_eq!(a["values"]["f2"], "My town", "nothing is overwritten");
+    assert_eq!(a["place"]["lat"], 42.1, "a blank is filled");
+    assert_eq!(call(&nb, "entries", json!({"notebook_id": id}))["entries"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn deleting_the_notebook_takes_its_ledger_and_the_ledger_is_not_in_the_way_of_an_older_build() {
+    let (nb, _t) = notebook("src-delete");
+    let id = merge_new(&nb, first_file())["notebook"]["id"].as_str().unwrap().to_string();
+    call(&nb, "notebook_delete", json!({"id": id}));
+    assert_eq!(call(&nb, "source_rows", json!({"notebook_id": id}))["rows"].as_array().unwrap().len(), 0);
+    let schema: String = nb.with_conn(|c| Ok(c.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(schema, "2", "the schema version an older build checks is unchanged");
+}
+
+#[test]
+fn the_repeaters_template_in_the_app_is_the_one_the_core_makes() {
+    let doc: Value = serde_json::from_str(TEMPLATES).unwrap();
+    let t = doc["templates"].as_array().unwrap().iter().find(|t| t["id"] == "repeaters").expect("a repeaters template");
+    let labels: Vec<(String, String)> = t["fields"].as_array().unwrap().iter().map(|f| (f["label"].as_str().unwrap().into(), f["type"].as_str().unwrap().into())).collect();
+    assert_eq!(labels, [("Frequency", "text"), ("Offset", "text"), ("Tone", "text"), ("Mode", "text"), ("Town", "text"), ("On air", "yes_no"), ("Details link", "text")].map(|(a, b)| (a.to_string(), b.to_string())));
+    assert_eq!(t["icon"], "radio_tower");
+    assert_eq!(t["shape"]["sort"], "distance");
+}
+
+#[test]
+fn books_by_template_lists_entries_in_the_order_they_were_made() {
+    let (nb, _t) = notebook("src-books");
+    let id = merge_new(&nb, first_file())["notebook"]["id"].as_str().unwrap().to_string();
+    let books = nb.books_by_template("repeaters").unwrap();
+    assert_eq!(books.len(), 1);
+    assert_eq!(books[0]["id"], id.as_str());
+    let titles: Vec<&str> = books[0]["entries"].as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, ["KX0AAA", "KX0BBB", "KX0CCC"]);
+}
+
+#[test]
+fn a_notebook_remembers_the_list_it_came_from_in_the_same_step_and_forgets_it_with_the_notebook() {
+    let (nb, _t) = notebook("src-migrated");
+    let out = call(
+        &nb,
+        "source_merge",
+        json!({"notebook": {"template": "repeaters", "def": list_def("Repeaters"), "map": true, "template_ref": "templates/repeaters@1"}, "migrated_from": "l7", "now": NOW, "rows": first_file()}),
+    );
+    let id = out["notebook"]["id"].as_str().unwrap().to_string();
+    assert_eq!(out["notebook"]["template_ref"], "templates/repeaters@1");
+    assert_eq!(call(&nb, "source_migrated", json!({"from": "l7"}))["notebook_id"], id.as_str());
+    assert!(call(&nb, "source_migrated", json!({"from": "l8"}))["notebook_id"].is_null());
+    assert_eq!(nb.books_by_template("repeaters").unwrap()[0]["migrated"], json!(["l7"]));
+    // a step that fails records nothing
+    let mut rows = first_file();
+    rows.push(json!({"key": "z", "title": "X", "values": {"f9": "no such field"}}));
+    let e = nb.call("source_merge", Some(&json!({"notebook": {"template": "repeaters", "def": list_def("Other"), "map": true}, "migrated_from": "l9", "now": NOW, "rows": rows}).to_string()));
+    assert_eq!(e.expect_err("bad row").code, "bad_json");
+    assert!(call(&nb, "source_migrated", json!({"from": "l9"}))["notebook_id"].is_null());
+    call(&nb, "notebook_delete", json!({"id": id}));
+    assert!(call(&nb, "source_migrated", json!({"from": "l7"}))["notebook_id"].is_null(), "the note goes with the notebook");
 }

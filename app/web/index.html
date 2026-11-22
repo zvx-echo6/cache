@@ -30,6 +30,10 @@
 
   <title>Cache</title>
   <link rel="manifest" href="manifest.json">
+  <!-- MapLibre's own credit box, which the phone moves out of sight (attributionButtonMargins) and the web plugin cannot: Cache's
+       credits chip under every map gives the same OpenStreetMap and Protomaps credit. In the route mini map's swapped corner the
+       box covered most of the close-up. -->
+  <style>.maplibregl-ctrl-attrib { display: none !important; }</style>
 </head>
 <body>
   <!--

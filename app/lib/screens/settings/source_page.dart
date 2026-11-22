@@ -5,7 +5,7 @@ import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
 import 'deps.dart';
 import 'own_source_pages.dart';
-import 'weather_page.dart' show addKeyFor;
+import 'weather_page.dart' show addKeyFor, stateSentence;
 import 'widgets.dart';
 
 /// One data source: what it gives, who provides it, how often it updates, how old the copy on this phone is, and its switch (or the
@@ -45,7 +45,7 @@ class _SourcePageState extends State<SourcePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remove the key?'),
-        content: Text(users.isEmpty ? 'You can add a key again later.' : '${users.map((c) => c.title).join(' and ')} turns off. You can add a key again later.'),
+        content: Text(users.isEmpty ? 'You can add a key again later.' : '${users.map((c) => c.title).join(' and ')} ${users.length == 1 ? 'turns' : 'turn'} off. You can add a key again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(key: const ValueKey('confirm-remove-key'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
@@ -116,7 +116,7 @@ class _SourcePageState extends State<SourcePage> {
               rows: [
                 _fact('Last update', i == null ? '…' : (i.age == null ? 'Nothing downloaded yet' : i.age!)),
                 if (i?.age != null) _fact('Data', i!.expired ? 'Out of date' : 'Current', tone: i.expired ? Tone.warn : Tone.ok),
-                if (i?.lastError != null) _fact('Last problem', i!.lastError!, tone: Tone.warn),
+                if (stateSentence(w, c, w.rowStateOf(c)) case final why?) _fact('Last problem', why, tone: Tone.warn),
               ],
             ),
             if (c.docs != null)

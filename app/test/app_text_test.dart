@@ -13,6 +13,17 @@ void main() {
       expect(prettyModelName('qwen3 4B Q8_0'), 'Qwen 3 4B · Q8_0');
       expect(prettyModelName('llama 7B IQ4_XS - 4.25 bpw'), 'Llama 7B · IQ4_XS');
     });
+    test('the parts: the plain name and the label, which join into the same string', () {
+      expect(prettyModelParts('gemma4 E2B Q4_K - Medium'), (name: 'Gemma 4 E2B', label: 'Q4_K_M'));
+      expect(prettyModelParts('qwen3 4B Q8_0'), (name: 'Qwen 3 4B', label: 'Q8_0'));
+      expect(prettyModelParts('llama 7B IQ4_XS - 4.25 bpw'), (name: 'Llama 7B', label: 'IQ4_XS'));
+      expect(prettyModelParts('gemma4 E2B Q4_K - Medium (guessed)', fileName: 'x-UD-Q2_K_XL.gguf'), (name: 'Gemma 4 E2B', label: 'UD-Q2_K_XL'));
+      expect(prettyModelParts('llama 8B'), (name: 'Llama 8B', label: null));
+      expect(prettyModelParts('Q4_K - Medium'), (name: 'Q4_K - Medium', label: null));
+      expect(prettyModelParts(''), isNull);
+      expect(prettyModelName('gemma4 E2B Q4_K - Medium (guessed)', fileName: 'x-UD-Q2_K_XL.gguf'), 'Gemma 4 E2B · UD-Q2_K_XL');
+      expect(prettyModelName('llama 8B'), 'Llama 8B');
+    });
     test('unreadable input is kept as it came', () {
       expect(prettyModelName(''), '');
       expect(prettyModelName('Q4_K - Medium'), 'Q4_K - Medium');

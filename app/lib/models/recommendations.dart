@@ -216,6 +216,27 @@ class RecommendedModels extends ChangeNotifier {
   bool fromNetwork = false;
 
   Future<void>? _loading;
+  final Completer<void> _builtInRead = Completer<void>();
+
+  /// Starts the load if it has not started and completes once the built-in copy has been read (not waiting for the network), so a
+  /// caller that needs to know the list is not held up by a slow connection.
+  Future<void> ready() {
+    load();
+    return _builtInRead.future;
+  }
+
+  /// Reads the built-in copy only (no network), when nothing has been read yet: for a name to show before any screen asks for the list.
+  /// A later [load] still reads the published list.
+  Future<void> loadBuiltIn() async {
+    if (models.isNotEmpty || _loading != null) return;
+    try {
+      final b = parseRecommendations(await _builtIn());
+      if (b != null && models.isEmpty) {
+        models = b;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
 
   /// Reads the built-in copy, then the published list. Later calls wait for the first one.
   Future<void> load() => _loading ??= _load();
@@ -228,6 +249,7 @@ class RecommendedModels extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {}
+    if (!_builtInRead.isCompleted) _builtInRead.complete();
     try {
       final r = parseRecommendations(await _fetch());
       if (r != null) {
@@ -238,6 +260,23 @@ class RecommendedModels extends ChangeNotifier {
     } catch (_) {
       // Offline or not published: the built-in copy stays.
     }
+  }
+
+  /// Whether the list names the file [fileName]: true or false once the list is known, null while it is not (nothing read yet, or
+  /// the copy could not be read). Only the file name is compared: it is what the list is keyed on and is known at load; the size can
+  /// differ for an older download of the same file, and a hash would mean reading the whole model.
+  bool? isRecommendedFile(String fileName) {
+    if (models.isEmpty) return null;
+    return models.any((m) => m.file == fileName);
+  }
+
+  /// The name the list gives the file [fileName] ("Gemma 4 E2B · tuned for Cache"); null when the list does not name it, or while the
+  /// list is not known.
+  String? nameOfFile(String fileName) {
+    for (final m in models) {
+      if (m.file == fileName) return m.name;
+    }
+    return null;
   }
 
   /// No model tuned for Cache is in the list yet.

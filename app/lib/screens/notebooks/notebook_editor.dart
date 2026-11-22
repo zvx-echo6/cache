@@ -1,22 +1,29 @@
 import 'package:flutter/material.dart';
 
+import '../../notebook/map_icons.dart';
 import '../../notebook/notebook_model.dart';
+import '../../notebook/place_style.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
+import 'icon_picker.dart';
 
-/// Making a notebook from a template, or editing one (UX 3.4): Name; FIELDS with Add field (each: label, type, unit for a number,
-/// choices for a choice); "Due again" for a log; Private; "Show on map" once entries have places. Create is off until there is a
-/// name; a name another notebook has says so. Once there are entries a field's type is fixed, and taking out a field that holds
-/// values hides it (the store keeps them).
+/// Making a notebook from a template, or editing one (UX 3.4): Name; its FIELDS, shown read only; "Due again" for a log; Private;
+/// "Show on map" once entries have places. Create is off until there is a name; a name another notebook has says so.
+///
+/// A notebook keeps the fields it was made with (1.1, 2026-11-13: the field editor is gone, so a shared notebook's fields can no
+/// longer drift apart between devices). Fields taken out by an earlier build stay hidden, with their values.
 class NotebookEditor extends StatefulWidget {
-  const NotebookEditor({super.key, required this.notebook, this.existing, this.template}) : assert(existing != null || template != null);
+  const NotebookEditor({super.key, required this.notebook, this.existing, this.template, this.icons}) : assert(existing != null || template != null);
 
   final NotebookState notebook;
   final Notebook? existing;
   final NotebookTemplate? template;
+
+  /// Map icons: the "Map icon" row under the name. Null leaves it out.
+  final MapIconSetup? icons;
 
   @override
   State<NotebookEditor> createState() => _NotebookEditorState();
@@ -25,15 +32,14 @@ class NotebookEditor extends StatefulWidget {
 class _NotebookEditorState extends State<NotebookEditor> {
   late final NotebookDef _start = widget.existing?.def ?? widget.template!.def;
   late final TextEditingController _name = TextEditingController(text: widget.existing?.name ?? _freeName(widget.template!.name));
-  late List<LogField> _fields = [for (final f in _start.fields) if (!f.hidden) f];
   late String? _due = _start.dueEvery;
+  late String? _icon = _start.icon;
+  late String? _color = _start.color;
   late bool _private = widget.existing?.private ?? widget.template!.private;
   late bool _map = widget.existing?.map ?? widget.template!.map;
   late bool _shared = widget.existing == null ? false : widget.notebook.privateSharing?.included(widget.existing!.id) ?? false;
   bool _saving = false;
   String? _error;
-
-  bool get _hasEntries => (widget.existing?.entryCount ?? 0) > 0;
 
   /// "Journal", or "Journal 2" when that name is taken.
   String _freeName(String base) {
@@ -51,13 +57,30 @@ class _NotebookEditorState extends State<NotebookEditor> {
 
   bool get _taken => widget.notebook.nameTaken(_name.text, exceptId: widget.existing?.id);
 
+  /// The places of this notebook that hold a color of their own, when the color was changed (else none): the question is asked
+  /// about them.
+  Future<List<NbEntry>> _ownColored() async {
+    final e = widget.existing;
+    if (e == null || widget.icons == null || _color == null || _color == _start.color) return const [];
+    try {
+      return [for (final x in await widget.notebook.entries(e.id)) if (x.color != null) x];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> _save() async {
+    final own = await _ownColored();
+    if (!mounted) return;
+    // Asked once, before anything is saved: Change all lets those places follow the notebook again; anything else leaves them.
+    final changeAll = own.isNotEmpty && await askChangeAllPlaces(context, color: markerColor(_color).spoken, notebook: _name.text.trim(), places: own.length) == true;
+    if (!mounted) return;
     setState(() {
       _saving = true;
       _error = null;
     });
-    // Fields taken out are left out; the store keeps those with values, hidden.
-    final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null);
+    // The fields go back as they are, hidden ones included (the store also keeps an existing notebook's fields).
+    final def = _start.copyWith(name: _name.text.trim(), dueEvery: _due, clearDue: _due == null, icon: widget.icons == null ? null : _icon, clearIcon: widget.icons != null && _icon == null, color: widget.icons == null ? null : _color);
     try {
       final e = widget.existing;
       final saved = await widget.notebook.saveNotebook(
@@ -68,6 +91,23 @@ class _NotebookEditorState extends State<NotebookEditor> {
         map: _map,
         templateRef: e == null ? widget.template!.ref : null,
       );
+      if (changeAll) {
+        for (final x in own) {
+          await widget.notebook.saveEntry(
+            id: x.id,
+            notebookId: x.notebookId,
+            occurredAt: x.occurredAt,
+            title: x.title,
+            body: x.body,
+            values: x.values,
+            place: x.place,
+            photos: x.photos,
+            files: x.files,
+            private: x.private,
+            props: {...x.props}..remove('color'),
+          );
+        }
+      }
       final ps = widget.notebook.privateSharing;
       if (ps != null && ps.included(saved.id) != (_private && _shared)) await ps.setIncluded(saved.id, _private && _shared);
       if (mounted) Navigator.of(context).maybePop(true);
@@ -79,26 +119,6 @@ class _NotebookEditorState extends State<NotebookEditor> {
         });
       }
     }
-  }
-
-  Future<void> _editField(int? index) async {
-    final f = index == null ? null : _fields[index];
-    final out = await showModalBottomSheet<_FieldEdit>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => _FieldSheet(field: f, typeFixed: f?.fid != null && _hasEntries),
-    );
-    if (out == null) return;
-    setState(() {
-      if (out.remove) {
-        _fields = [..._fields]..removeAt(index!);
-      } else if (index == null) {
-        _fields = [..._fields, out.field!];
-      } else {
-        _fields = [..._fields]..[index] = out.field!;
-      }
-    });
   }
 
   Future<void> _pickDue() async {
@@ -191,35 +211,31 @@ class _NotebookEditorState extends State<NotebookEditor> {
             onChanged: (_) => setState(() {}),
           ),
           if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: TextStyle(color: k.emergency))),
-          const SizedBox(height: 20),
-          Text('FIELDS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
-          Text('When, text, place and photos are always there.', style: TextStyle(fontSize: 14, color: k.secondary)),
-          ReorderableListView(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            buildDefaultDragHandles: false,
-            onReorderItem: (from, to) => setState(() {
-              final f = [..._fields];
-              f.insert(to.clamp(0, f.length - 1), f.removeAt(from));
-              _fields = f;
-            }),
-            children: [
-              for (var i = 0; i < _fields.length; i++)
-                ListTile(
-                  key: ValueKey('field-row-$i-${_fields[i].fid ?? _fields[i].label}'),
-                  contentPadding: EdgeInsets.zero,
-                  leading: ReorderableDragStartListener(index: i, child: const Icon(Icons.drag_handle)),
-                  title: Text(_fields[i].label),
-                  subtitle: Text([_fields[i].type.label, ?_fields[i].unit].join(' · ')),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _editField(i),
-                ),
-            ],
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(key: const ValueKey('add-field'), onPressed: () => _editField(null), icon: const Icon(Icons.add), label: const Text('Add field')),
-          ),
+          if (widget.icons != null) ...[
+            const SizedBox(height: 8),
+            MapIconRow(
+              iconId: _icon,
+              defaultId: widget.existing != null ? defaultNotebookIcon(widget.existing!) : defaultIconFor(widget.template!.template, log: _start.quickAdd),
+              tint: iconTint(context, markerColor(_color).color),
+              recent: widget.icons!.recent(),
+              pinStyle: widget.icons!.pinStyle(),
+              onChanged: (id) => setState(() => _icon = id),
+            ),
+            NotebookColorRow(colorId: _color, onChanged: (c) => setState(() => _color = c)),
+          ],
+          if (_start.visible.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Text('FIELDS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary)),
+            Text('When, text, place and photos are always there.', style: TextStyle(fontSize: 14, color: k.secondary)),
+            // Read only: a notebook keeps the fields it was made with.
+            for (final f in _start.visible)
+              ListTile(
+                key: ValueKey('field-row-${f.fid ?? f.label}'),
+                contentPadding: EdgeInsets.zero,
+                title: Text(f.label),
+                subtitle: Text([f.type.label, ?f.unit].join(' · ')),
+              ),
+          ],
           if (quickAdd)
             ListTile(
               key: const ValueKey('due-again-row'),
@@ -263,117 +279,16 @@ class _NotebookEditorState extends State<NotebookEditor> {
   }
 }
 
-class _FieldEdit {
-  const _FieldEdit(this.field, {this.remove = false});
-
-  final LogField? field;
-  final bool remove;
-}
-
-/// The field editor: Label, Type (six), Unit (number), Choices (choice, one per line), and Remove (Hide field once entries hold
-/// values: the store keeps them).
-class _FieldSheet extends StatefulWidget {
-  const _FieldSheet({this.field, this.typeFixed = false});
-
-  final LogField? field;
-  final bool typeFixed;
-
-  @override
-  State<_FieldSheet> createState() => _FieldSheetState();
-}
-
-class _FieldSheetState extends State<_FieldSheet> {
-  late final TextEditingController _label = TextEditingController(text: widget.field?.label ?? '');
-  late final TextEditingController _unit = TextEditingController(text: widget.field?.unit ?? '');
-  late final TextEditingController _choices = TextEditingController(text: (widget.field?.choices ?? const []).join('\n'));
-  late FieldType _type = widget.field?.type ?? FieldType.text;
-
-  @override
-  void dispose() {
-    _label.dispose();
-    _unit.dispose();
-    _choices.dispose();
-    super.dispose();
-  }
-
-  List<String> get _choiceList {
-    final out = <String>[];
-    for (final l in _choices.text.split('\n')) {
-      final t = l.trim();
-      if (t.isNotEmpty && !out.contains(t)) out.add(t);
-    }
-    return out;
-  }
-
-  bool get _ok => _label.text.trim().isNotEmpty && (_type != FieldType.choice || _choiceList.isNotEmpty);
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    final f = widget.field;
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(20, 0, 20, 16 + MediaQuery.viewInsetsOf(context).bottom),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                key: const ValueKey('field-label'),
-                controller: _label,
-                autofocus: f == null,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(labelText: 'Label'),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 12),
-              Text('Type', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final t in FieldType.values)
-                    ChoiceChip(label: Text(t.label), selected: _type == t, onSelected: widget.typeFixed ? null : (_) => setState(() => _type = t)),
-                ],
-              ),
-              if (widget.typeFixed) Text("Can't change once entries exist. Add a new field instead.", style: TextStyle(fontSize: 14, color: k.secondary)),
-              if (_type == FieldType.number)
-                TextField(key: const ValueKey('field-unit'), controller: _unit, decoration: const InputDecoration(labelText: 'Unit', hintText: 'min, gal, jugs')),
-              if (_type == FieldType.choice)
-                TextField(
-                  key: const ValueKey('field-choices'),
-                  controller: _choices,
-                  minLines: 3,
-                  maxLines: 8,
-                  decoration: const InputDecoration(labelText: 'Choices', hintText: 'One per line. The first is the default.'),
-                  onChanged: (_) => setState(() {}),
-                ),
-              const SizedBox(height: 16),
-              FilledButton(
-                key: const ValueKey('field-done'),
-                onPressed: _ok
-                    ? () => Navigator.pop(
-                          context,
-                          _FieldEdit(LogField(
-                            fid: f?.fid,
-                            label: _label.text.trim(),
-                            type: _type,
-                            unit: _type == FieldType.number && _unit.text.trim().isNotEmpty ? _unit.text.trim() : null,
-                            choices: _type == FieldType.choice ? _choiceList : null,
-                          )),
-                        )
-                    : null,
-                child: const Text('Done'),
-              ),
-              if (f != null)
-                TextButton(
-                  key: const ValueKey('field-remove'),
-                  onPressed: () => Navigator.pop(context, const _FieldEdit(null, remove: true)),
-                  child: Text(widget.typeFixed ? 'Hide field' : 'Remove field', style: TextStyle(color: k.emergency)),
-                ),
-            ],
-          ),
-        ),
+/// Asked when a notebook's color is changed and some of its places hold a color of their own: true for Change all (they follow the
+/// notebook again), false or dismissed for Keep their colors (only the notebook changes).
+Future<bool?> askChangeAllPlaces(BuildContext context, {required String color, required String notebook, required int places}) => showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Change all its places to $color?'),
+        content: Text(places == 1 ? '1 place in $notebook has its own color.' : '$places places in $notebook have their own color.'),
+        actions: [
+          TextButton(key: const ValueKey('colour-ask-keep'), onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep their colors')),
+          TextButton(key: const ValueKey('colour-ask-change'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Change all')),
+        ],
       ),
     );
-  }
-}

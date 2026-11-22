@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../app_state.dart';
 import '../maps/layers/layer_engine.dart';
+import '../notebook/notebook_model.dart' show FieldType;
 import '../notebook/notebook_state.dart';
 import '../notebook/sync/sync_engine.dart' show NotebookSync;
 import '../regions/regions_state.dart';
@@ -39,12 +40,16 @@ ShareItem? libraryRemoteItem(String share, String path, int bytes) {
   return path.toLowerCase().endsWith('.zim') ? ShareItem.plain(share, path, bytes) : null;
 }
 
+/// What goes with a ZIM in the Library's shared folder without being an item: the icon saved beside it (`<zim>.icon.png`), so a
+/// ZIM that is switched off, or fetched on its own, takes its picture with it and leaves none behind.
+List<String> libraryAlongside(String share, String path) => share == 'library' && path.toLowerCase().endsWith('.zim') ? ['$path.icon.png'] : const [];
+
 /// The name of the regions' item: their road routing, places and off-road packs (kept together, shared by every region).
 const String kDirectionsItemName = 'Directions, places and off-road';
 
-/// Maps: each map layer with downloaded areas (its file in `maps/store/`, with SQLite's -wal beside it) and the regions'
-/// directions, places and off-road together (the `regions` folder: one database and tiles every region shares, so it cannot be
-/// split by region).
+/// Maps: each map layer with downloaded areas (this device's shared snapshot of its store, `maps/store-share/<layer>/<device>.sqlite`;
+/// the live store never syncs) and the regions' directions, places and off-road together (the `regions` folder: tiles every region
+/// shares, and each device's regions record, so it cannot be split by region).
 List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
   final byLayer = <String, int>{};
   for (final a in engine.allAreas) {
@@ -53,7 +58,7 @@ List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
   final local = regions.local;
   final rest = local.fold<int>(0, (n, r) => n + r.routingBytes + r.placesBytes + r.offroadBytes);
   return [
-    for (final e in byLayer.entries) ShareItem(share: 'maps', path: 'store/${e.key}.sqlite*', name: engine.layer(e.key)?.title ?? e.key, bytes: e.value),
+    for (final e in byLayer.entries) ShareItem(share: 'maps', path: 'store-share/${e.key}', name: engine.layer(e.key)?.title ?? e.key, bytes: e.value),
     if (local.any((r) => r.hasRouting || r.hasPlaces || r.hasOffroad)) ShareItem(share: 'regions', path: '**', name: kDirectionsItemName, bytes: rest),
   ];
 }
@@ -61,10 +66,10 @@ List<ShareItem> mapItems(LayerEngine engine, RegionsState regions) {
 /// A map layer's file, or the regions' folder, on a linked device; the layer engine's other files travel with the kind.
 ShareItem? mapRemoteItem(LayerEngine engine, String share, String path, int bytes) {
   if (share == 'regions') return ShareItem(share: share, path: '**', name: kDirectionsItemName, bytes: bytes);
-  final m = RegExp(r'^store/(.+?)\.sqlite').firstMatch(path);
+  final m = RegExp(r'^store-share/([^/]+)/[^/]+\.sqlite$').firstMatch(path);
   if (m == null) return null;
   final id = m.group(1)!;
-  return ShareItem(share: share, path: 'store/$id.sqlite*', name: engine.layer(id)?.title ?? id, bytes: bytes);
+  return ShareItem(share: share, path: 'store-share/$id', name: engine.layer(id)?.title ?? id, bytes: bytes);
 }
 
 /// Models: each chat model, and the search model.
@@ -88,6 +93,29 @@ List<ShareItem> notebookItems(NotebookState notebooks) => [
       on: n.private ? (notebooks.privateSharing?.included(n.id) ?? false) : null,
     ),
 ];
+
+/// The photos notebook sync may send: those an entry that goes out refers to. An entry goes out when its notebook is not
+/// switched off ([off]: the folder names the engine is given) and notebook sync writes it for sharing (not a draft; not private
+/// unless its notebook is included). A photo no such entry refers to stays on this device, whichever notebook holds it.
+Future<List<String>> notebookPhotosToSend(NotebookState notebooks, List<String> off) async {
+  final out = <String>{};
+  for (final n in notebooks.notebooks) {
+    if (off.contains(NotebookSync.folderNameOf(n))) continue;
+    final included = notebooks.privateSharing?.included(n.id) ?? false;
+    final photoFields = {for (final f in n.def.fields) if (f.type == FieldType.photo && f.fid != null) f.fid!};
+    for (final e in await notebooks.entries(n.id)) {
+      if (e.draft || (e.private && !included)) continue;
+      for (final p in e.photos) {
+        out.add(NotebookSync.photoPath(p.id));
+      }
+      for (final fid in photoFields) {
+        final v = e.values[fid];
+        if (v is List) out.addAll([for (final id in v.whereType<String>()) NotebookSync.photoPath(id)]);
+      }
+    }
+  }
+  return out.toList()..sort();
+}
 
 /// A notebook on a linked device only; the photos folder every notebook uses travels with the kind.
 ShareItem? notebookRemoteItem(String share, String path, int bytes) =>

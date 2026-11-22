@@ -135,10 +135,11 @@ by typing.
 | Outcome | System message content |
 |---|---|
 | ran | `{"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{...}}` |
-| user tapped Cancel or dismissed the card | `{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}` |
+| user tapped Cancel or dismissed the card | `{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save","note":"The person tapped Cancel. Nothing was done or saved."}` |
 | ran and failed | `{"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c1","action":"places.save","error":{"type":...,"detail":...}}` |
 
-A card that is still open when the conversation is closed is dropped without an outcome.
+A declined outcome ends with a `note` that says plainly that nothing was done or saved, because a small model reads `"ok":true` as
+success. `done` and `failed` carry no note. A card that is still open when the conversation is closed is dropped without an outcome.
 
 ### Cards (reserved)
 

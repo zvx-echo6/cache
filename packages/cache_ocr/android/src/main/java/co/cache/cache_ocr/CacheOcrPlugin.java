@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 
@@ -40,6 +41,7 @@ public class CacheOcrPlugin implements FlutterPlugin, MethodChannel.MethodCallHa
     static final String ENGINE = "mlkit";
     /** The ML Kit library version (android/build.gradle pins the same). */
     static final String VERSION = "16.0.1";
+    private static final String TAG = "CacheOcr";
 
     private MethodChannel channel;
     private ExecutorService worker;
@@ -96,6 +98,7 @@ public class CacheOcrPlugin implements FlutterPlugin, MethodChannel.MethodCallHa
     private void recognize(String path, MethodChannel.Result result) {
         try {
             if (path == null || !new File(path).isFile()) {
+                Log.e(TAG, "no_file: " + path);
                 fail(result, "no_file", "No image at " + path);
                 return;
             }
@@ -105,6 +108,7 @@ public class CacheOcrPlugin implements FlutterPlugin, MethodChannel.MethodCallHa
             o.inPreferredConfig = Bitmap.Config.ARGB_8888;
             Bitmap bitmap = BitmapFactory.decodeFile(path, o);
             if (bitmap == null) {
+                Log.e(TAG, "bad_image: " + path);
                 fail(result, "bad_image", "Not an image: " + path);
                 return;
             }
@@ -140,7 +144,8 @@ public class CacheOcrPlugin implements FlutterPlugin, MethodChannel.MethodCallHa
             out.put("stats", stats);
             main.post(() -> result.success(out));
         } catch (Throwable e) {
-            fail(result, "engine", String.valueOf(e));
+            Log.e(TAG, "recognize failed", e);
+            fail(result, "engine", e.getClass().getName() + ": " + e.getMessage());
         }
     }
 

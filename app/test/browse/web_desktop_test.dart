@@ -118,6 +118,14 @@ void main() {
       expect(find.text('Paused'), findsWidgets);
     });
 
+    testWidgets('the row says what deleting the library frees, the same figure as the card and the menu, not the search folder alone', (tester) async {
+      buildApi.libs = [BuildLibrary(id: 'lib1', title: 'Garden', books: 38, bytes: 70 << 20)];
+      api.itemList = [item('lib1', kind: 'library', bytes: 66 << 20)];
+      await show(tester);
+      expect(find.textContaining('Built from your PDFs · 38 books · 70.0 MB'), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('built-lib1')), matching: find.textContaining('66.0 MB')), findsNothing);
+    });
+
     testWidgets('a library that is done is a plain row; one with failures says how many', (tester) async {
       buildApi.libs = [BuildLibrary(id: 'lib1', title: 'Garden', books: 38), BuildLibrary(id: 'lib2', title: 'Trapping', books: 3)];
       buildApi.q = queueOf([qitem('f1', 'lib2', 'failed', error: 'x'), qitem('f2', 'lib2', 'failed', error: 'x'), qitem('d', 'lib2', 'done')]);

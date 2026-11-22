@@ -111,6 +111,12 @@ class FakeDiscoverDevice extends ChangeNotifier implements DiscoverDevice {
   @override
   int? freeBytes() => free;
 
+  /// What a download may use; the free space itself when not set.
+  int? usable;
+
+  @override
+  int? usableBytes() => usable ?? free;
+
   @override
   DlState progressOf(RecipeItem item) => downloads[item.key] ?? (present.contains(item.key) ? DlState(DlPhase.done, total: sizes[item.key] ?? item.approxBytes) : const DlState(DlPhase.idle));
 

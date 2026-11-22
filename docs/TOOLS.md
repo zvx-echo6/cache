@@ -78,6 +78,9 @@ unknown); reference article `<ZIM title>: <article title>`; video concept `<vide
 
 Nothing found: `No results found.`
 
+What it searches: every installed source except a saved video's captions, which the app's own search (Home, Videos)
+finds and the assistant does not (decided for 1.1). Captions inside a ZIM are searched.
+
 ### read
 
 ```json
@@ -487,6 +490,8 @@ Errors: `nearby_empty` (with `category` and `searched_within_km`), `no_location`
 matches `near`; `error` has `query`), and `bad_arguments` (no `category`, a category with no places of that kind
 installed, a `layer_...` category no longer on the phone, an empty `near`, or a `limit` outside 1 to 10).
 
+A `near` counts only when the places data finds a place the query actually names (the geocoder's own name-match bar); a weaker match, such as one shared word, is not used. When the phone's location is known, `nearby` then centres on it and `center` reads `current location (nothing found named "<near>")`; when it is not, the answer is `geocode_empty`. `locate` uses `near` only as a bias and falls back the same way.
+
 **The user's own points.** After the pack's categories the enum has `repeater` (described "repeater = amateur radio repeaters
 from the user's imported lists") while at least one imported repeater has a position, then one category per map layer with
 points, `layer_<slug of the layer name>` (the Notebook actions' slug, the whole id at most 32 characters, a repeated id
@@ -510,7 +515,12 @@ list's town), `distance_mi`, `direction`, then
 - `details`: `"full page on RepeaterBook (opens in the browser; needs a connection)"` when the pin had a details link. The
   link itself stays with the repeater and is opened by the app (map card, the answer's source row); the model never writes it.
 
-The address is `repeater:<list id>/<row>` (`repeater:l1/3`). A result with a repeater row ends with
+Since 1.1 a repeater list is a notebook of the Repeaters template (one entry per repeater, seven fixed text fields holding the words
+above), and `nearby` reads those notebooks: a row has the same keys, in the same order, with the same words as before. Exactly four
+things differ for a list that was converted: `list` is the notebook's name ("Repeaters"); the address is `repeater:<entry id>`;
+repeaters the person made or edited by hand appear (an edited setting is shown as written); and repeaters the latest file no longer
+lists ("Not in the latest file") still appear. A repeater list the app could not convert stays as it was and keeps the address
+`repeater:<list id>/<row>` (`repeater:l1/3`). A result with a repeater row ends with
 `"repeater_note": "From the user's imported repeater list; check the settings before transmitting."`. The model never fills
 in a missing offset or tone from band conventions; it says the list does not state it.
 
@@ -871,7 +881,7 @@ Results. The model only ever sees these:
 A `change` action never runs from the call: the result is a confirm card for the app to show, and the model tells the user what
 the card will do and that nothing happens until they tap it. What the tap came to arrives later as a system message
 (`{"host_event":"act_outcome","ok":true,"status":"done"|"declined"|"failed","confirm_id":"c1","action":"places.save",...}`),
-not as a tool result. A `read` or `open` action is run by the app and its result comes straight back as `status` `done`;
+not as a tool result. A `declined` outcome ends with `"note":"The person tapped Cancel. Nothing was done or saved."`. A `read` or `open` action is run by the app and its result comes straight back as `status` `done`;
 objects in `result` with an `address` carry `n` like any other tool result.
 
 Errors: `unknown_action`; `bad_arguments` with `field` and `reason` (`missing`, `unknown_field`, `wrong_type`, `not_allowed`,

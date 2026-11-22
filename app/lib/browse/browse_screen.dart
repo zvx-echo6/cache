@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart' show ZimSubIndex;
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart' show isLinuxDesktop;
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_state.dart' show PdfPart, PdfPartPhase, PdfPause;
 import '../pdf/index/pdf_index_ui.dart';
@@ -22,8 +23,11 @@ import '../library/cds_shelf_source.dart';
 import '../library/library_pages.dart';
 import '../library/library_panes.dart';
 import '../library/library_prefs.dart';
+import '../library/own_book_files.dart';
+import '../library/shelf_server.dart';
 import '../library/shelf_source.dart';
 import '../regions/regions_state.dart';
+import '../settings/hub.dart';
 import '../sharing/sharing_state.dart';
 import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
@@ -33,10 +37,11 @@ import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../video/format.dart';
-import 'catalogue_screen.dart' show AddToLibraryScreen;
+import 'catalogue_screen.dart' show AddToLibraryScreen, YourOwnGroup;
 import 'browse_state.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/discover_screen.dart';
+import 'free_space.dart' show freeBytesOnDisk;
 import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
@@ -56,7 +61,9 @@ import 'zim_urls.dart';
 /// The Library module (1.1, UX-library-11b): four rows, ZIM Collections, Bookshelves, Catalog and Cache Documentation, with the
 /// search progress above them and "Add to Library", the one way to add anything. ZIM Collections is the list people know (each ZIM
 /// with its icon, name, a short description and its size, and a badge only for an exception; tap opens it, press and hold opens
-/// its menu). In a browser (Cache for Linux) the Library is still the one list of everything, as the browser build has it.
+/// its menu). In a browser (Cache for Linux) it is the same Library over Cache Server's data: Bookshelves are the server's (its
+/// Bookshelves log, read and written through the server), and what only a browser has (uploads, downloads the server runs, libraries
+/// built from PDFs) sits with the rows.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({
     super.key,
@@ -69,9 +76,30 @@ class BrowseScreen extends StatefulWidget {
     this.files,
     this.originals,
     this.looks,
+    this.shelfServer,
+    this.structured,
   });
 
+  /// The Library as the app shows it, from every way in (its tab and Settings > Storage > Library): the regions and Sharing come
+  /// from the [hub], so Catalog shows the same places, routing and sync lines wherever it is opened from.
+  BrowseScreen.inHub({super.key, required this.browse, required this.active, this.layout, required SettingsHub hub})
+    : regions = hub.regions,
+      sharing = hub.sharing,
+      shelves = null,
+      files = null,
+      originals = null,
+      looks = null,
+      shelfServer = null,
+      structured = null;
+
   final BrowseState browse;
+
+  /// A browser: Cache Server's Bookshelves (the browser's own [HttpShelfServer] when null); a test gives its own.
+  final ShelfServer? shelfServer;
+
+  /// Whether this is the 1.1 Library with its four rows (null: it is, except for the old browser list in tests with a device; a
+  /// browser always has it).
+  final bool? structured;
 
   /// The regions, for Catalog's places and routing; null leaves them out.
   final RegionsState? regions;
@@ -108,12 +136,19 @@ class _BrowseScreenState extends State<BrowseScreen> {
   SourcesState get sources => b.sources;
   LibrariesState? get libs => b.libraries;
 
-  /// The 1.1 Library (a phone, a tablet, a computer's app); a browser keeps the one list.
-  bool get _structured => b.device == null;
+  /// The 1.1 Library (a phone, a tablet, a computer's app, and a browser).
+  bool get _structured => widget.structured ?? (b.device == null || plat.isWeb);
 
   CdsShelfSource? _ownShelves;
-  late final ShelfSource _shelves = widget.shelves ?? (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10)));
-  late final BookFiles _files = widget.files ?? BookFilesUnavailable();
+  late final ShelfSource _shelves = widget.shelves ??
+      (_ownShelves = CdsShelfSource(libs, pollEvery: const Duration(seconds: 10), server: b.device == null ? null : (widget.shelfServer ?? (plat.isWeb ? HttpShelfServer() : null))));
+  // On this device (not a browser on a Cache device): "Delete from all your devices" for books in the person's own libraries.
+  late final BookFiles _files = widget.files ?? _ownFiles();
+
+  BookFiles _ownFiles() {
+    final s = _shelves;
+    return s is CdsShelfSource && b.device == null && !plat.isWeb ? OwnBookFiles(s, sharing: widget.sharing) : BookFilesUnavailable();
+  }
   late final ShelfLookPrefs _looks = widget.looks ?? ShelfLookPrefs();
 
   /// The Library's root page's context in the panes (citations open from it).
@@ -138,7 +173,22 @@ class _BrowseScreenState extends State<BrowseScreen> {
       final CdsShelfSource c => c.holdsBooks(l),
       _ => false,
     },
-    rootTop: (ctx) => [if (libs?.task case final t?) _taskRow(ctx.t, t)],
+    booksIn: (l) => switch (_shelves) {
+      final CdsShelfSource c => c.booksIn(l),
+      _ => 0,
+    },
+    documentsIn: (l) => switch (_shelves) {
+      final CdsShelfSource c => c.documentsIn(l),
+      _ => const [],
+    },
+    rootTop: (ctx) => [
+      if (libs?.task case final t?) _taskRow(ctx.t, t),
+      // a browser: what the device is doing for this tab (uploads, downloads, a library being built)
+      if (b.device case final dv?) DeviceLibraryTop(device: dv, onAddPackage: _addPackage, onOpenBuilt: (id) => _openBuiltFrom(ctx, id), whileClosed: !isLinuxDesktop(ctx)),
+    ],
+    rootBottom: (ctx) => _builtRows(ctx.t, from: ctx, heading: true),
+    // The desktop draws "While this tab was closed" last, under the list, so a card that turns up never moves the rows above it.
+    rootEnd: (ctx) => [if (isLinuxDesktop(ctx) && b.device != null) DeviceWhileClosedBelow(device: b.device!)],
   );
 
   @override
@@ -262,7 +312,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
-  int? get _free => b.device != null ? b.device!.spaceForDialog.usable : b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
+  int? get _free => b.device != null ? b.device!.spaceForDialog.free : freeBytesOnDisk(sources.zimsDir?.path ?? '.');
 
   LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome, bool parts = true}) {
     final id = sources.idOf(z);
@@ -274,10 +324,20 @@ class _BrowseScreenState extends State<BrowseScreen> {
       checkUpdate: sources.originOf(z) == null
           ? null
           : () async {
-              await b.checkUpdates();
-              if (!mounted) return;
+              // The messenger is taken now: the words must reach the person even if this screen has moved on while the check ran.
+              final messenger = ScaffoldMessenger.maybeOf(context);
+              void say(String text) => messenger
+                ?..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(text)));
+              say('Checking ${sources.titleOf(z)} for updates…');
+              try {
+                await b.checkUpdates();
+              } catch (_) {
+                say('The library could not be read.');
+                return;
+              }
               final u = b.updates[z.path];
-              _say(b.updateError ?? (u == null ? '${sources.titleOf(z)} is up to date' : 'Update ready: ${u.release}, ${formatBytes(u.size)}'));
+              say(b.updateError ?? (u == null ? '${sources.titleOf(z)} is up to date' : 'Update ready: ${u.release}, ${formatBytes(u.size)}'));
             },
       // A picture is kept beside the file on the phone; the browser has no such file to change.
       changeIcon: b.device != null ? null : () async {
@@ -288,6 +348,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
         } else if (mounted) {
           _say('Choose a picture (PNG, JPEG, WebP or GIF).');
         }
+      },
+      getIcon: b.device != null ? null : () async {
+        _say('Getting icon…');
+        final got = await b.getIconFromSource(z);
+        await FileImage(File('${z.path}.icon.png')).evict();
+        await FileImage(File('${z.path}.illustration.png')).evict();
+        if (!mounted) return;
+        setState(() {});
+        _say(got ? 'Icon updated' : 'No icon found at the source');
       },
       addToHome: addToHome ??
           (layout == null || id == null
@@ -391,7 +460,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
     linkedFolders: b.device?.build?.linkedFolders == null || libs!.isGuide(l) ? null : () async {
       final controller = b.device!.build!.linkedFolders!;
-      openDetail(_pane ?? context, key: 'linked-folders:${l.folderName}', builder: (_) => LinkedFolderManagementPage(controller: controller, libraryId: l.folderName));
+      openDetail(_pane ?? context, key: 'linked-folders:${l.folderName}', builder: (_) => LinkedFolderManagementPage(controller: controller, libraryId: l.folderName, build: b.device!.build));
     },
   );
 
@@ -421,7 +490,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   /// name Add to Library; the catalogue's own page where the app has no Discover (tests).
   Widget _addPage() {
     final d = DiscoverState.shared;
-    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources);
+    return d == null ? AddToLibraryScreen(browse: b) : DiscoverScreen(discover: d, face: DiscoverFace.resources, yourOwn: YourOwnGroup.forBrowse(b));
   }
 
   /// The 1.1 Library's Add to Library: in the detail on a desktop window, else a page of its own.
@@ -440,6 +509,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'built:$id', builder: (_) => BuiltLibraryPage(build: bc, libraryId: id));
   }
 
+  /// A library built from PDFs (a browser), opened in the panes from the Library's own pages.
+  void _openBuiltFrom(BuildContext from, String id) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    LibraryNav.of(from).open(from, LibraryPageSpec('built:$id', (_) => BuiltLibraryPage(build: bc, libraryId: id), leaf: true));
+  }
+
   /// PDFs (or a folder of them) dropped anywhere on the Library: the build page holds them until the person says where they go.
   void _dropPdfs(List<LocalFile> files) {
     final bc = b.device?.build;
@@ -455,7 +531,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   @override
   Widget build(BuildContext context) {
     if (_structured) {
-      return LibraryPanes(
+      final panes = LibraryPanes(
         // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
         desktopInitial: widget.active ? (_) => _addPage() : null,
         root: (c) {
@@ -463,6 +539,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
           return LibraryRootPage(deps: _deps);
         },
       );
+      final dv = b.device;
+      // In a browser a file dropped anywhere on the Library is added from this computer; PDFs build a library.
+      return dv == null
+          ? panes
+          : DropOverlay(
+              onFile: (f) => addFromComputer(context, device: dv, libraries: libs, dropped: f),
+              onPdfs: dv.build == null ? null : _dropPdfs,
+              child: panes,
+            );
     }
     final pane = TwoPane(
       id: 'library',
@@ -523,7 +608,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                   child: Text(
-                    b.device?.activityHint ?? 'Icons come from each source\'s website; change one from the hold menu.',
+                    b.device?.activityHint ?? 'Icons come from each source; change one from the hold menu.',
                     style: TextStyle(fontSize: 12, color: k.secondary),
                   ),
                 ),
@@ -567,6 +652,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: libraryAppBar(context, title: 'ZIM Collections'),
+      bottomNavigationBar: b.device == null ? null : DeviceStorageFooter(device: b.device!),
       body: ListenableBuilder(
         listenable: Listenable.merge([b, sources, ?pdfIndexShared, ?indexSchedulerShared, ?coreIndexShared?.progress]),
         builder: (context, _) {
@@ -599,7 +685,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
               ] else
                 Padding(
                   padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
-                  child: Text("Each opens in the reader. Icons come from each source's website; change one from the hold menu.", style: TextStyle(fontSize: 13, color: k.secondary)),
+                  child: Text("Each opens in the reader. Icons come from each source; change one from the hold menu.", style: TextStyle(fontSize: 13, color: k.secondary)),
                 ),
               for (final t in transfers) _transferRow(k, t),
               for (final z in sources.zims) _zimRow(k, z, from: context),
@@ -644,6 +730,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     return LibraryRow(
       key: ValueKey('zim-${z.fileName}'),
       icon: sources.iconOf(z),
+      tintIcon: true,
       title: sources.titleOf(z),
       detail: [
         if (o != null && o.summary.isNotEmpty) o.summary,
@@ -668,22 +755,28 @@ class _BrowseScreenState extends State<BrowseScreen> {
     );
   }
 
-  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built.
-  List<Widget> _builtRows(CacheTokens k) {
+  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built. [from]: the
+  /// rows of the Library's own page (they open in its panes), with [heading] over them.
+  List<Widget> _builtRows(CacheTokens k, {BuildContext? from, bool heading = false}) {
     final bc = b.device?.build;
-    if (bc == null) return const [];
+    if (bc == null || (heading && bc.libraries.isEmpty)) return const [];
     return [
+      if (heading)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+          child: Text('Libraries built from your PDFs', style: TextStyle(fontSize: 13, color: k.secondary)),
+        ),
       for (final l in bc.libraries)
         LibraryRow(
           key: ValueKey('built-${l.id}'),
           title: l.title,
-          detail: builtLibraryLine(l, b.device!.items.where((i) => i.kind == 'library' && i.name == l.id).firstOrNull?.bytes),
+          detail: builtLibraryLine(l, bc.freesOf(l.id)),
           badge: switch (buildBadge(bc, l)) {
             final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
             _ => null,
           },
-          selected: isPaneSelected(context, 'built:${l.id}'),
-          onTap: () => _openBuilt(l.id),
+          selected: from != null ? LibraryNav.of(from).isOpen('built:${l.id}') : isPaneSelected(context, 'built:${l.id}'),
+          onTap: () => from != null ? _openBuiltFrom(from, l.id) : _openBuilt(l.id),
         ),
     ];
   }
@@ -737,7 +830,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 /// One row of the Library: the icon (the source's own, or a letter), the name on one line, the description and size on one line,
 /// and a badge for an exception. The size always stays visible; a long name ends in an ellipsis.
 class LibraryRow extends StatelessWidget {
-  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false, this.below});
+  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false, this.below, this.tintIcon = false});
 
   final String title;
   final String detail;
@@ -745,6 +838,10 @@ class LibraryRow extends StatelessWidget {
   /// A line under the detail with its own tap (ZIM Collections' search line).
   final Widget? below;
   final File? icon;
+
+  /// Draws the picture in the theme's single hue (Tactical) when the theme has one: a ZIM's icon, which is full colour art from
+  /// elsewhere. The letter stays in the theme's colours either way.
+  final bool tintIcon;
   final Widget? badge;
   final VoidCallback? onTap;
   final VoidCallback? onHold;
@@ -763,7 +860,7 @@ class LibraryRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
-                LetterIcon(title: title, file: icon),
+                LetterIcon(title: title, file: icon, tint: tintIcon),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -795,11 +892,14 @@ class LibraryRow extends StatelessWidget {
 
 /// A small square icon: the picture when there is one, else the first letter of the name.
 class LetterIcon extends StatelessWidget {
-  const LetterIcon({super.key, required this.title, this.file, this.size = 32});
+  const LetterIcon({super.key, required this.title, this.file, this.size = 32, this.tint = false});
 
   final String title;
   final File? file;
   final double size;
+
+  /// The picture goes through the theme's [CacheTokens.brandFilter] (null in the full-colour themes: no change).
+  final bool tint;
 
   @override
   Widget build(BuildContext context) {
@@ -812,7 +912,13 @@ class LetterIcon extends StatelessWidget {
         width: size,
         height: size,
         color: k.background,
-        child: file == null ? fallback : Image.file(file!, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback),
+        child: file == null
+            ? fallback
+            : () {
+                final picture = Image.file(file!, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback);
+                final f = tint ? k.brandFilter : null;
+                return f == null ? picture : ColorFiltered(colorFilter: f, child: picture);
+              }(),
       ),
     );
   }

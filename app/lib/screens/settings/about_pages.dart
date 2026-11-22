@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../browse/web/device_api.dart' show readServerVersion;
+import '../../linux_ui.dart';
+import '../../net/web_link.dart';
 import '../../pdf/index/pdf_index_app.dart';
 import '../../pdf/index/pdf_timing.dart' show kPdfTimingSwitch, kPdfTimingCount;
 import '../../pdf/index/pdf_timing_ui.dart';
@@ -22,16 +25,19 @@ const String kCreditsAsset = 'assets/credits.md';
 /// Library > Cache Documentation > Credits and licences: the version, the licence, the credits and the open-source licences.
 /// (What's new has its own row in Cache Documentation.)
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion, this.updates});
+  const AboutPage({super.key, this.openUrl, this.version = installedVersion, this.updates, this.serverVersion = readServerVersion});
 
   /// The iPhone's update check (the app's when null): the Version line says when a newer build is out, with Open TestFlight.
   final AppUpdates? updates;
 
   /// How a link is opened (the phone's browser; a test passes its own).
-  final UrlOpener openUrl;
+  final UrlOpener? openUrl;
 
   /// The installed version and build (read from the phone; a test passes its own).
   final Future<String> Function() version;
+
+  /// The server's version, asked only in the browser (Cache for Linux); a test passes its own.
+  final Future<String?> Function() serverVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -61,6 +67,12 @@ class AboutPage extends StatelessWidget {
                 );
               },
             ),
+            if (linuxUi)
+              SettingsRow(
+                key: const ValueKey('about-server-version'),
+                title: 'Server version',
+                statusWidget: _ServerVersionText(read: serverVersion),
+              ),
             SettingsRow(
               title: 'License',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
@@ -90,7 +102,8 @@ class AboutPage extends StatelessWidget {
                 context: context,
                 applicationName: 'Cache',
                 applicationVersion: kAppVersion,
-                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Library > Cache Documentation > Credits and licenses > Credits.',
+                // No pointer to Credits here: Flutter's licence page cannot hold a link, and Credits is the row above.
+                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId.',
               ),
             ),
           ],
@@ -135,6 +148,9 @@ class CreditsPage extends StatelessWidget {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           return Markdown(
             data: snap.data!,
+            onTapLink: (text, href, title) {
+              if (href != null) openWebLink(context, href);
+            },
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
               p: TextStyle(fontSize: 15, height: 1.45, color: k.text),
@@ -172,6 +188,26 @@ class _VersionTextState extends State<_VersionText> {
   );
 }
 
+/// The server's version; nothing while it is read or when it cannot be.
+class _ServerVersionText extends StatefulWidget {
+  const _ServerVersionText({required this.read});
+
+  final Future<String?> Function() read;
+
+  @override
+  State<_ServerVersionText> createState() => _ServerVersionTextState();
+}
+
+class _ServerVersionTextState extends State<_ServerVersionText> {
+  late final Future<String?> _read = widget.read();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String?>(
+    future: _read,
+    builder: (context, snap) => statusText(context, [Part(snap.data ?? (snap.connectionState == ConnectionState.done ? 'Unknown' : '…'))]),
+  );
+}
+
 /// The licence's permission in words for where this build came from: TestFlight on iOS, Google Play on Android.
 String sourceNoticeEnd(TargetPlatform platform) => switch (platform) {
   TargetPlatform.iOS => ', including builds you receive through TestFlight.',
@@ -183,14 +219,18 @@ String sourceNoticeEnd(TargetPlatform platform) => switch (platform) {
 class _SourceNotice extends StatefulWidget {
   const _SourceNotice({required this.openUrl});
 
-  final UrlOpener openUrl;
+  final UrlOpener? openUrl;
 
   @override
   State<_SourceNotice> createState() => _SourceNoticeState();
 }
 
 class _SourceNoticeState extends State<_SourceNotice> {
-  late final TapGestureRecognizer _tap = TapGestureRecognizer()..onTap = () => widget.openUrl(kSourceUrl);
+  late final TapGestureRecognizer _tap = TapGestureRecognizer()..onTap = () {
+    // No opener given (the app): the web-link rule, the browser online and "You're offline" offline (openWebLink).
+    final open = widget.openUrl;
+    open == null ? openWebLink(context, kSourceUrl) : open(kSourceUrl);
+  };
 
   @override
   void dispose() {

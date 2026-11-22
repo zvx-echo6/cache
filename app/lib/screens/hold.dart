@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 
+import '../desktop/desktop.dart';
 import '../theme.dart';
 
 /// A row or card that can be tapped and pressed and held. Press and hold always feels the same everywhere: a short vibration and a
@@ -45,6 +46,12 @@ class _HoldableState extends State<Holdable> {
     h();
   }
 
+  /// On the Linux desktop a right-click does what a press and hold does; elsewhere [row] is left as it is.
+  Widget _rightClick(BuildContext context, Widget row) {
+    if (widget.onHold == null || !isLinuxDesktop(context)) return row;
+    return GestureDetector(behavior: HitTestBehavior.translucent, onSecondaryTap: _hold, child: row);
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -59,7 +66,10 @@ class _HoldableState extends State<Holdable> {
           elevation: _lifted ? 6 : 0,
           borderRadius: widget.borderRadius,
           clipBehavior: Clip.antiAlias,
-          child: InkWell(onTap: widget.onTap, onLongPress: hold == null ? null : _hold, child: widget.child),
+          child: _rightClick(
+            context,
+            InkWell(onTap: widget.onTap, onLongPress: hold == null ? null : _hold, child: widget.child),
+          ),
         ),
       ),
     );

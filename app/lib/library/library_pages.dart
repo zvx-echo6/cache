@@ -15,9 +15,13 @@ import '../theme.dart';
 import '../update/update_ui.dart' show currentWhatsNew, showWhatsNew;
 import '../version.dart';
 import '../video/format.dart' show formatBytes;
+import '../background/fgs_add.dart' show fgsNoticeShared;
+import 'add_pdf/add_pdf_pages.dart' show openAddPdfProgress;
 import 'add_pdf/add_pdf_state.dart' show addPdfShared;
+import 'add_pdf/fgs_notice_card.dart';
 import 'book_pages.dart';
 import 'catalog_page.dart';
+import 'library_docs_page.dart';
 import 'library_panes.dart';
 import 'library_prefs.dart';
 import 'shelf_source.dart';
@@ -36,10 +40,14 @@ class LibraryDeps {
     required this.openGuide,
     required this.openOwnLibrary,
     required this.holdsBooks,
+    required this.booksIn,
+    this.documentsIn,
     this.originals,
     this.regions,
     this.sharing,
     this.rootTop,
+    this.rootBottom,
+    this.rootEnd,
     this.whatsNew = currentWhatsNew,
   });
 
@@ -64,8 +72,20 @@ class LibraryDeps {
   /// A library whose books are on Bookshelves (its search index is "Your books" in Catalog).
   final bool Function(LibraryItem item) holdsBooks;
 
+  /// How many books a library of books holds, shelved or not.
+  final int Function(LibraryItem item) booksIn;
+
+  /// A library of books' documents, each with where it stands on Bookshelves (null: this source cannot say).
+  final List<LibraryDoc> Function(LibraryItem item)? documentsIn;
+
   /// What shows above the four rows besides the search progress (a library being added).
   final List<Widget> Function(BuildContext context)? rootTop;
+
+  /// What shows under the four rows, above Add to Library (in a browser, the libraries built from PDFs).
+  final List<Widget> Function(BuildContext context)? rootBottom;
+
+  /// What shows last, under Add to Library: a notice that turns up while the page is open goes here, so no row above it moves.
+  final List<Widget> Function(BuildContext context)? rootEnd;
   final Future<List<String>> Function() whatsNew;
 
   /// Everything a Library page listens to.
@@ -81,6 +101,7 @@ LibraryPageSpec bookSpec(LibraryDeps d, String id) => LibraryPageSpec('book:$id'
 LibraryPageSpec unsortedSpec(LibraryDeps d) => LibraryPageSpec('unsorted', (_) => UnsortedPage(deps: d));
 LibraryPageSpec hiddenSpec(LibraryDeps d) => LibraryPageSpec('hidden', (_) => HiddenBooksPage(deps: d), leaf: true);
 LibraryPageSpec catalogSpec(LibraryDeps d, {String? focus}) => LibraryPageSpec('catalog', (_) => CatalogPage(deps: d, focus: focus), leaf: true);
+LibraryPageSpec libraryDocsSpec(LibraryDeps d, LibraryItem l) => LibraryPageSpec('library-docs:${l.folderName}', (_) => LibraryDocsPage(deps: d, library: l), leaf: true);
 LibraryPageSpec docsSpec(LibraryDeps d) => LibraryPageSpec('docs', (_) => DocsPage(deps: d), leaf: true);
 LibraryPageSpec creditsSpec() => LibraryPageSpec('credits', (_) => const AboutPage(), leaf: true);
 
@@ -117,6 +138,21 @@ extension on String {
 /// "1 book", "14 books".
 String booksWord(int n) => n == 1 ? '1 book' : '$n books';
 
+/// Runs an Undo and says so when it could not be saved (an Undo that failed silently left the person thinking it had worked).
+/// [messenger] is the one captured before any await. A big undo goes in batches: if some went through, it says how many.
+Future<void> undoAndSay(ScaffoldMessengerState messenger, Future<void> Function() undo) async {
+  try {
+    await undo();
+  } catch (e) {
+    final text = e is PartialPlacementException
+        ? 'Only ${e.placed} of ${booksWord(e.total)} put back. The rest could not be saved. Try again.'
+        : 'That could not be saved. Try again.';
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+}
+
 /// An icon on a tile, as the Library's rows show it.
 class IconTile extends StatelessWidget {
   const IconTile(this.icon, {super.key, this.size = 40});
@@ -138,14 +174,17 @@ class IconTile extends StatelessWidget {
 
 /// The two short lines under a Library row's name: what it holds, and a fix in the accent ("Update ready for 1", "9 unsorted"),
 /// never an alarm.
-Widget libraryLines(BuildContext context, String line, String? fix) {
+Widget libraryLines(BuildContext context, String line, String? fix, {Widget? fixWidget}) {
   final k = context.t;
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
     children: [
       Text(line, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary)),
-      if (fix != null) Text(fix, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: k.accent)),
+      if (fixWidget != null)
+        fixWidget
+      else if (fix != null)
+        Text(fix, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: k.accent)),
     ],
   );
 }
@@ -185,6 +224,7 @@ class LibraryRootPage extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
+              if (fgsNoticeShared case final n?) FgsAddNoticeCard(state: n),
               if (indexSchedulerShared case final s?) IndexOverviewLine(scheduler: s),
               ...?d.rootTop?.call(context),
               SettingsGroup(
@@ -211,6 +251,26 @@ class LibraryRootPage extends StatelessWidget {
                       context,
                       books == 0 ? 'No books yet' : '${booksWord(books)}, shelved by the ${shelves.shortName ?? 'shelves'}',
                       [if (unsorted > 0) '$unsorted unsorted', if ((addPdfShared?.adding ?? 0) > 0) '${addPdfShared!.adding} being added'].join(' · ').emptyToNullWords,
+                      // "N being added" opens the progress page; the rest of the row opens Bookshelves
+                      fixWidget: (addPdfShared?.adding ?? 0) > 0
+                          ? Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                if (unsorted > 0) Text('$unsorted unsorted · ', style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: context.t.accent)),
+                                Semantics(
+                                  button: true,
+                                  child: InkWell(
+                                    key: const ValueKey('library-being-added'),
+                                    onTap: () => openAddPdfProgress(context),
+                                    child: Text(
+                                      '${addPdfShared!.adding} being added',
+                                      style: TextStyle(fontSize: 13, height: 1.35, fontWeight: FontWeight.w500, color: context.t.accent, decoration: TextDecoration.underline, decorationColor: context.t.accent),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
                     selected: nav.isOpen('bookshelves'),
                     onTap: () => nav.open(context, bookshelvesSpec(d)),
@@ -240,6 +300,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                 ],
               ),
+              if (d.rootBottom?.call(context) case final below? when below.isNotEmpty) ...[const SizedBox(height: 16), ...below],
               if (!addBeside) ...[
                 const SizedBox(height: 16),
                 Align(
@@ -252,6 +313,7 @@ class LibraryRootPage extends StatelessWidget {
                   ),
                 ),
               ],
+              ...?d.rootEnd?.call(context),
             ],
           );
           });

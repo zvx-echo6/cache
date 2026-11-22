@@ -17,6 +17,7 @@ import '../regions/regions_state.dart';
 import '../search/index_scheduler.dart';
 import '../search/index_status.dart' show indexRowWords, zimIndexKeys;
 import '../settings/app_settings.dart';
+import '../settings/space.dart' show Space;
 import '../sources/sources_state.dart';
 import '../weather/weather_state.dart';
 import 'discover_state.dart';
@@ -97,6 +98,10 @@ class AppDiscoverDevice implements DiscoverDevice {
     for (final t in browse.transfers.values) {
       if (_libKey(t.entry.name, t.entry.flavour) == i.key) return t;
     }
+    // A browser holds no transfer of its own: the server downloads, and its running job is the transfer (so the card is past Get).
+    final e = _entries[i.key];
+    final j = e == null ? null : browse.device?.jobForUrl(e.downloadUrl.toString());
+    if (e != null && j != null && j.active) return browse.deviceTransfer(e);
     return null;
   }
 
@@ -322,6 +327,12 @@ class AppDiscoverDevice implements DiscoverDevice {
   }
 
   @override
+  int? usableBytes() {
+    final dir = sources.zimsDir;
+    return dir == null ? null : Space.of(dir.path).usable;
+  }
+
+  @override
   DlState progressOf(RecipeItem i) {
     switch (i.kind) {
       case ItemKind.library:
@@ -335,7 +346,9 @@ class AppDiscoverDevice implements DiscoverDevice {
         if (l == null) return const DlState(DlPhase.waiting, waitLine: 'Waits for your place');
         return switch (l.phase) {
           RegionPhase.ready => DlState(DlPhase.done, total: l.bytes),
-          RegionPhase.downloading => DlState(DlPhase.running, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
+          RegionPhase.downloading => regions!.held
+              ? DlState(DlPhase.paused, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0, reasonText: 'all downloads paused')
+              : DlState(DlPhase.running, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
           RegionPhase.paused => DlState(DlPhase.paused, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0),
           RegionPhase.stopped || RegionPhase.failed => DlState(DlPhase.failed, done: l.bytes, total: regions!.totalBytesOf(l) ?? 0, reasonText: l.error),
         };

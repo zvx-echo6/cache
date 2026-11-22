@@ -17,6 +17,7 @@ class GetSheetData {
     required this.title,
     required this.bytes,
     required this.free,
+    this.usable,
     this.connects = const [],
     this.changes = const [],
     this.downloads = const [],
@@ -30,6 +31,9 @@ class GetSheetData {
   final String title;
   final int bytes;
   final int? free;
+
+  /// What may be used (the allowance less the reserve); the free space when null.
+  final int? usable;
 
   /// Who it connects to, and what for.
   final List<(String, String)> connects;
@@ -46,7 +50,7 @@ class GetSheetData {
   /// The button: Get, or Update.
   final String verb;
 
-  bool get tooBig => free != null && bytes > free!;
+  bool get tooBig => (usable ?? free) != null && bytes > (usable ?? free)!;
 }
 
 /// The Get sheet for [a] with the person's Customize choices.
@@ -57,6 +61,7 @@ Future<GetSheetData> activitySheetData(DiscoverState d, Activity a, {String verb
     title: '${verb == 'Get' ? 'Add' : 'Update'} ${a.title}',
     bytes: d.addsBytes(p),
     free: d.device.freeBytes(),
+    usable: d.device.usableBytes(),
     connects: d.connectsTo([for (final x in p.items) if (x.item.kind == ItemKind.liveSource ? x.isNew || x.already : x.isNew) x.item]),
     changes: p.changes,
     downloads: planDownloadLines(d, p),
@@ -73,6 +78,7 @@ Future<GetSheetData> itemsSheetData(DiscoverState d, {required String title, req
     title: 'Add $title',
     bytes: missing.fold(0, (s, i) => s + d.bytesOf(i)),
     free: d.device.freeBytes(),
+    usable: d.device.usableBytes(),
     connects: d.connectsTo(missing),
     downloads: [for (final i in missing) [itemTitle(d, i), ?itemSize(d, i)].join(' · ')],
   );
@@ -118,7 +124,7 @@ class _GetSheetState extends State<GetSheet> {
               icon: d.icon,
               title: d.title,
               line: [formatBytes(d.bytes), if (free != null) '${formatBytes(free)} free'].join(' · '),
-              lineWarn: d.tooBig ? 'Needs ${formatBytes(d.bytes - free!)} more free space' : null,
+              lineWarn: d.tooBig ? 'Needs ${formatBytes(d.bytes - (d.usable ?? free)!)} more free space' : null,
             ),
             if (d.connects.isNotEmpty) ...[
               const SizedBox(height: 10),

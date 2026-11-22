@@ -3,7 +3,7 @@
 //! `shelvesResolve` and `shelvesImport`. See cache_search.h for the signatures.
 
 use crate::error::{Error, Result};
-use crate::events::Event;
+use crate::events::{By, Event, Kind};
 use crate::batch::find_pairs;
 use crate::import::import_own;
 use crate::library::{load_library, HeaderReader, LibraryInput, LibraryRef};
@@ -13,6 +13,9 @@ use crate::view::{build_view, write_view};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+/// The one migration that may write events with the `at` it is given (see [`append`]).
+pub const MIGRATION_UNCONFIDENT_RETURN: &str = "unconfident-return";
 
 fn parse(args: &str) -> Result<Value> {
     serde_json::from_str(args).map_err(|e| Error::ctx("the request is not JSON", e))
@@ -81,6 +84,12 @@ pub fn detect_batch(v: &Value, read_header: HeaderReader) -> Result<Value> {
 /// `shelvesAppend`: `{"dir": <bookshelves folder>, "dev", "events": [event]}` to `{"written": n, "last_at": ms}`. An event is
 /// a log line's object; `v`, `at` and `dev` may be left out (`at` is then now, and `dev` is the request's). The writer holds a
 /// clock set back at the device's last `at`.
+///
+/// One request key lifts the clock hold: `"migration": "unconfident-return"`. It is for the one-time return to Unsorted of the books an
+/// earlier build shelved with no confidence, which must stamp its `unsort` (`by` auto) and `retire` just after the `place` they
+/// replace, however late this device last wrote, so a person's move made on another device in between still outranks them. The
+/// resolver orders by (`at`, `dev`, position) and nothing reads a log as monotonic. Only those two events may be written this way
+/// (anything else with the key is refused, and nothing is written); every other request keeps the held clock.
 pub fn append(args: &str) -> Result<String> {
     let v = parse(args)?;
     let (dir, dev) = (text(&v, "dir")?, text(&v, "dev")?);
@@ -94,7 +103,17 @@ pub fn append(args: &str) -> Result<String> {
         o.entry("dev").or_insert(json!(dev));
         events.push(Event::from_value(&Value::Object(o)).ok_or_else(|| Error::new(format!("event {i} is not a Bookshelves event")))?);
     }
-    let written = LogWriter::open(&Path::new(dir).join(LOG_DIR), dev)?.append(&events)?;
+    let writer = LogWriter::open(&Path::new(dir).join(LOG_DIR), dev)?;
+    let written = match v.get("migration") {
+        None | Some(Value::Null) => writer.append(&events)?,
+        Some(Value::String(m)) if m == MIGRATION_UNCONFIDENT_RETURN => {
+            if let Some(i) = events.iter().position(|e| !matches!(e.kind, Kind::Unsort { by: By::Auto, .. } | Kind::Retire { .. })) {
+                return Err(Error::new(format!("event {i}: the \"{MIGRATION_UNCONFIDENT_RETURN}\" migration writes only unsort (by auto) and retire events")));
+            }
+            writer.append_unclamped(&events)?
+        }
+        Some(_) => return Err(Error::new("\"migration\" is not a migration this core knows")),
+    };
     Ok(json!({"written": written.len(), "last_at": written.last().map(|e| e.at)}).to_string())
 }
 

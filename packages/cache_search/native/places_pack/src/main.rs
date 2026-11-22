@@ -12,9 +12,11 @@
 //!   places_pack harvest --out harvest.sqlite [--overture-csv places.csv] [--osm-pbf area.osm.pbf] [--rules categories.json] [--no-general]
 //!   places_pack blocks --harvest harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox W,S,E,N] [--halo 0.25] [--jobs 4]
 //!   places_pack addresses --csv addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite [--bbox W,S,E,N]
+//!   places_pack summarize --blocks work/blocks --out summaries/N.sqlite   (what `common` reads from blocks, kept after the blocks go)
+//!   places_pack oa-merge --overture-csv addresses.csv --sources oa-sources.tsv --out addresses-oa.csv --provenance oa-provenance.tsv --attribution oa-attribution.json [--dist 30] [--bbox W,S,E,N] [--spool DIR]
 //!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
-//!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--rules categories.json]
+//!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--oa-attribution oa-attribution.json] [--rules categories.json]
 //!   places_pack wiki --packs work/blocks (the wiki flags above) --cache wiki-cache.sqlite
 //!   places_pack embed --packs work/blocks [--common out/NAME/common.sqlite] --embed-cache embed-cache.sqlite --embed-lib libcache_llama.so
 //!       --embed-model bge-m3-Q8_0.gguf [--embed-sha256 HEX] [--embed-threads 4]
@@ -32,6 +34,7 @@ mod embed;
 mod harvest;
 mod lead;
 mod model;
+mod openaddresses;
 mod osm;
 mod overture;
 #[cfg(test)]
@@ -143,8 +146,12 @@ fn run() -> Result<(), String> {
             let a = parse_args(&argv[1..])?;
             let (rules, rules_json) = load_rules(&a)?;
             let mut sources: Vec<Box<dyn PlaceSource>> = Vec::new();
+            // --osm-pbf takes several extracts, comma-separated (neighbouring Geofabrik extracts overlap at their edges: an
+            // OSM element read twice is kept once).
             if let Some(p) = a.get("osm-pbf") {
-                sources.push(Box::new(osm::OsmPbf { path: PathBuf::from(p) }));
+                for f in p.split(',').filter(|f| !f.is_empty()) {
+                    sources.push(Box::new(osm::OsmPbf { path: PathBuf::from(f) }));
+                }
             }
             if let Some(p) = a.get("overture-csv") {
                 sources.push(Box::new(overture::OvertureCsv { path: PathBuf::from(p) }));
@@ -197,6 +204,33 @@ fn run() -> Result<(), String> {
             println!("size {} bytes", std::fs::metadata(&cfg.out).map(|m| m.len()).unwrap_or(0));
             Ok(())
         }
+        Some("summarize") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let (kinds, states) = common::summarize(&need("blocks")?, &need("out")?)?;
+            println!("summary: {kinds} kind and raw type pairs, {states} states; in {}", took());
+            Ok(())
+        }
+        Some("oa-merge") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let cfg = openaddresses::OaCfg {
+                overture_csv: need("overture-csv")?,
+                sources: need("sources")?,
+                out: need("out")?,
+                provenance: need("provenance")?,
+                attribution: need("attribution")?,
+                dist_m: num(&a, "dist", openaddresses::DEFAULT_DIST_M)?,
+                bbox: a.get("bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+                spool: a.get("spool").map(PathBuf::from),
+            };
+            let r = openaddresses::oa_merge(&cfg)?;
+            println!("{} Overture addresses; {} tiles gained OpenAddresses rows; in {}", r.overture_rows, r.tiles_with_additions, took());
+            for (s, st) in &r.per_source {
+                println!("{s}: {} read, {} skipped, {} added; duplicates: {} near, {} same town, {} same number nearby", st.read, st.skipped, st.added, st.dup_near, st.dup_town, st.dup_number);
+            }
+            Ok(())
+        }
         Some("cut") => {
             let a = parse_args(&argv[1..])?;
             let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
@@ -232,6 +266,7 @@ fn run() -> Result<(), String> {
                 described: a.get("kinds-described").map(PathBuf::from),
                 overture_release: a.get("overture-release").cloned().unwrap_or_default(),
                 osm_source: a.get("osm-source").cloned().unwrap_or_default(),
+                oa_attribution: a.get("oa-attribution").map(PathBuf::from),
             };
             let r = common::common(&cfg, &rules, &rules_json)?;
             println!(

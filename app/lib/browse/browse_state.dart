@@ -16,6 +16,7 @@ import 'web/device_library.dart';
 import 'zim_download.dart';
 import '../net/fetch.dart';
 import '../platform/app_log.dart';
+import '../platform/byte_units.dart';
 
 enum TransferPhase {
   /// Waiting for Wi-Fi: the phone is on mobile data and mobile data downloads are off. It starts by itself on Wi-Fi.
@@ -85,7 +86,7 @@ class BrowseState extends ChangeNotifier {
     return ZimTransfer(e)
       ..done = j.bytes
       ..total = j.total > 0 ? j.total : e.size
-      ..phase = j.failed ? TransferPhase.failed : (j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
+      ..phase = j.failed ? TransferPhase.failed : (j.paused ? TransferPhase.paused : j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
       ..error = j.failed ? deviceJobWords(j) : null;
   }
 
@@ -342,10 +343,52 @@ class BrowseState extends ChangeNotifier {
 
   DateTime? lastUpdateCheck;
 
+  /// Get icon from source: the catalogue's picture for [z] again (its catalogue entry is found by the saved record, then fetched and
+  /// saved as `.icon.png`); else, or if that fails, the ZIM's own icon is read again. A picture the person chose is replaced only by
+  /// the catalogue's, never by the ZIM's own. True when the row now shows a picture that came from the source; false keeps what it had
+  /// (a letter, or the saved picture).
+  Future<bool> getIconFromSource(ZimFile z) async {
+    final o = sources.originOf(z);
+    if (o != null) {
+      try {
+        final list = (await catalog.entries(name: o.name, count: 30)).entries;
+        CatalogEntry? entry;
+        for (final e in list) {
+          if (o.catalogId.isNotEmpty && e.id == o.catalogId) {
+            entry = e;
+            break;
+          }
+        }
+        entry ??= list.where((e) => e.flavour == o.flavour && e.release == o.release).firstOrNull;
+        entry ??= list.where((e) => e.flavour == o.flavour).firstOrNull;
+        final url = entry?.iconUrl;
+        if (url != null) {
+          final png = await _iconFetch(url);
+          if (png != null && png.isNotEmpty) {
+            await sources.saveIcon(z, png);
+            return true;
+          }
+        }
+      } on CatalogException catch (e) {
+        logInfo('Get icon: catalogue not reached (${e.message})', detail: z.path);
+      } catch (e) {
+        logError('Get icon', error: e);
+      }
+    }
+    final own = await sources.refreshIllustration(z);
+    return own && !sources.hasSavedIcon(z);
+  }
+
   /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant). An update check is small
   /// and uses any connection.
-  Future<void> checkUpdates() async {
-    if (checkingUpdates) return;
+  Future<void> checkUpdates() => _updateCheck ??= _checkUpdates().whenComplete(() => _updateCheck = null);
+
+  Future<void>? _updateCheck;
+
+  /// The longest one question to the catalogue may take before the check says so.
+  static const Duration _updateCheckTimeout = Duration(seconds: 25);
+
+  Future<void> _checkUpdates() async {
     checkingUpdates = true;
     updateError = null;
     notifyListeners();
@@ -355,10 +398,9 @@ class BrowseState extends ChangeNotifier {
       for (final z in sources.zims) {
         final o = sources.originOf(z);
         if (o == null) continue;
-        final list = seen[o.name] ??= (await catalog.entries(
-          name: o.name,
-          count: 20,
-        )).entries;
+        final list = seen[o.name] ??= (await catalog
+            .entries(name: o.name, count: 20)
+            .timeout(_updateCheckTimeout, onTimeout: () => throw const CatalogException('The Kiwix library took too long to answer.'))).entries;
         CatalogEntry? best;
         for (final e in list) {
           if (o.isOlderThan(e) &&
@@ -374,6 +416,10 @@ class BrowseState extends ChangeNotifier {
       lastUpdateCheck = DateTime.now();
     } on CatalogException catch (e) {
       updateError = e.message;
+    } catch (e) {
+      // Anything else still ends in words for the person, never in silence.
+      logError('Check for updates', error: e);
+      updateError = 'The library could not be read.';
     } finally {
       checkingUpdates = false;
       notifyListeners();
@@ -479,7 +525,7 @@ class BrowseState extends ChangeNotifier {
           ..done = f.lengthSync()
           ..total = e.size;
         _remember(e, installed);
-        logInfo('Adopted the partial download ${e.title}: ${f.lengthSync() >> 20} of ${e.size >> 20} MB');
+        logInfo('Adopted the partial download ${e.title}: ${mbOf(f.lengthSync())} of ${mbOf(e.size)} MB');
       } on CatalogException catch (e) {
         logInfo('A partial download is not matched yet (catalog: ${e.message}); kept', detail: fileName);
       } catch (e) {
@@ -562,7 +608,7 @@ class BrowseState extends ChangeNotifier {
     final part = File('${sources.partialDir.path}/${entry.fileName}.part');
     final from = part.existsSync() ? part.lengthSync() : 0;
     final started = DateTime.now();
-    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${from >> 20} of ${entry.size >> 20} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
+    logInfo('Download ${from > 0 ? 'resumes' : 'starts'}: ${entry.title} (${mbOf(from)} of ${mbOf(entry.size)} MB)', detail: entry.downloadUrl.toString(), job: 'download/${entry.id}');
     final previous = _loops[entry.id];
     final loop = Completer<void>();
     _loops[entry.id] = t.loop = loop.future;
@@ -608,7 +654,7 @@ class BrowseState extends ChangeNotifier {
       );
       if (transfers[entry.id] == t) transfers.remove(entry.id);
       final secs = DateTime.now().difference(started).inSeconds;
-      logInfo('Download done: ${entry.title} (${entry.size >> 20} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
+      logInfo('Download done: ${entry.title} (${mbOf(entry.size)} MB in $secs s${secs > 0 ? ', ${((entry.size - from) / secs / (1 << 20)).toStringAsFixed(1)} MB/s' : ''})', job: 'download/${entry.id}');
       final forgotten = _forget(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
@@ -622,7 +668,7 @@ class BrowseState extends ChangeNotifier {
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
-        logError('Download failed: ${entry.title} (${e.code}, at ${t.done >> 20} MB)', error: e.message, job: 'download/${entry.id}');
+        logError('Download failed: ${entry.title} (${e.code}, at ${mbOf(t.done)} MB)', error: e.message, job: 'download/${entry.id}');
       }
       notifyListeners();
     } catch (e) {
@@ -638,10 +684,17 @@ class BrowseState extends ChangeNotifier {
 
   /// Pauses a download: it stops and keeps the partly downloaded file; [resume] continues it.
   void pause(CatalogEntry entry) {
+    final onDevice = device;
+    if (onDevice != null) {
+      // In a browser the device runs the download; it keeps the part and Resume continues it.
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null && j.active) unawaited(onDevice.pauseJob(j));
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
     t.phase = TransferPhase.paused;
-    logInfo('Download paused: ${entry.title} at ${t.done >> 20} of ${t.total >> 20} MB', job: 'download/${entry.id}');
+    logInfo('Download paused: ${entry.title} at ${mbOf(t.done)} of ${mbOf(t.total)} MB', job: 'download/${entry.id}');
     // resumed later, the speed is measured afresh (not across the pause)
     DlMeter.reset('zim:${entry.id}');
     t.token?.cancel();
@@ -650,6 +703,12 @@ class BrowseState extends ChangeNotifier {
 
   /// Continues a paused download from where it stopped.
   Future<void> resume(CatalogEntry entry) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null && j.paused) await onDevice.resumeJob(j);
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null || t.phase != TransferPhase.paused) return;
     // The paused loop closes the file first; the new one waits for it and continues the file (on mobile data with mobile data
@@ -659,6 +718,12 @@ class BrowseState extends ChangeNotifier {
 
   /// Stops a download and throws away the partly downloaded file.
   Future<void> cancel(CatalogEntry entry) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      final j = onDevice.jobForUrl(entry.downloadUrl.toString());
+      if (j != null) await onDevice.cancelJob(j);
+      return;
+    }
     final t = transfers[entry.id];
     if (t == null) return;
     t.token?.cancel();
@@ -745,7 +810,7 @@ class BrowseState extends ChangeNotifier {
 
 Future<Uint8List?> _fetchIcon(Uri url) async {
   try {
-    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15)));
+    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15), scope: FetchScope.user));
   } catch (_) {
     return null;
   }

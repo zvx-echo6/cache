@@ -169,7 +169,7 @@ Future<void> hideBook(BuildContext context, LibraryDeps d, ShelfBook b) async {
       SnackBar(
         key: const ValueKey('hidden-snack'),
         content: const Text('Hidden on all your devices. No file was deleted.'),
-        action: SnackBarAction(key: const ValueKey('hidden-undo'), label: 'Undo', onPressed: () => copies.hide(b, hidden: false)),
+        action: SnackBarAction(key: const ValueKey('hidden-undo'), label: 'Undo', onPressed: () => undoAndSay(messenger, () => copies.hide(b, hidden: false))),
       ),
     );
   if (context.mounted) nav.goTo(context, back);

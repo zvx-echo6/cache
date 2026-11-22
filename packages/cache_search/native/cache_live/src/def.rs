@@ -23,6 +23,10 @@ pub const MAX_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_PAGES: u32 = 50;
 pub const MAX_FAN_OUT: u32 = 50;
 pub const MAX_STEPS: usize = 6;
+/// An item's values for the app alone (`app`): how many, and how large each may be as JSON.
+pub const MAX_APP_VALUES: usize = 8;
+pub const MAX_APP_BYTES: usize = 8 * 1024;
+
 /// The longest a fetched document may be reused (`cache_hours`): a week.
 pub const MAX_CACHE_HOURS: f64 = 168.0;
 
@@ -300,6 +304,12 @@ pub struct ItemDef {
     /// `match_place` the item is kept only when its area reaches the place.
     #[serde(default)]
     pub cap_area: Option<CapAreaDef>,
+    /// Values for the app alone, by name: each is a path, and the response's value there (text, a number, a list or an object,
+    /// as it is) goes with the item to the app (`cs_live_get`: the item's `app`). The `live_data` tool never includes them, so
+    /// nothing the model reads changes. An alert's message type, references and VTEC go here, for the app to tell an update of
+    /// an alert from another alert. At most 8 names (letters, digits and `_`); a value larger than 8 kB as JSON is left out.
+    #[serde(default)]
+    pub app: BTreeMap<String, String>,
     /// One item for a part of the day ahead (the night, the daytime) instead of one per element: values are read over the
     /// elements of a time series that fall in it, with `agg`. The item's time and end are the period's unless given.
     #[serde(default)]
@@ -869,6 +879,17 @@ impl ItemDef {
         }
         self.key.validate(&format!("{at}.key"), params, errs, id);
         self.label.validate(&format!("{at}.label"), params, errs, id);
+        if self.app.len() > MAX_APP_VALUES {
+            errs.push(format!("source {id:?}: {at}.app: at most {MAX_APP_VALUES} values"));
+        }
+        for (name, path) in &self.app {
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                errs.push(format!("source {id:?}: {at}.app: the name {name:?} must be letters, digits and _"));
+            }
+            if path.trim().is_empty() {
+                errs.push(format!("source {id:?}: {at}.app.{name}: a path is required"));
+            }
+        }
         if let Some(s) = &self.time {
             s.validate(&format!("{at}.time"), params, errs, id);
         }

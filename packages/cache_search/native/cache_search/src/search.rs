@@ -9,12 +9,13 @@ use crate::pdfindex::{self, PdfHit};
 use crate::html;
 use crate::zimsrc;
 use crate::index;
+use crate::qbuild;
 use crate::zimx::{clean_snippet, XHit};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{Query, QueryParser};
+use tantivy::query::Query;
 use tantivy::schema::{Field, IndexRecordOption, Value as _};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
@@ -64,6 +65,10 @@ struct Opts {
     /// Used only by libraries whose settings `embedding.model` equals `model`; other sources are keyword-only.
     #[serde(default)]
     query_vector: Option<QueryVec>,
+    /// A time limit on each library's meaning (vector) search, in milliseconds: a library not searched in time is searched by its
+    /// keywords only for this query and named in the response's `meaning_timed_out`. No limit when absent (Ask's tool calls).
+    #[serde(default)]
+    meaning_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +169,8 @@ struct Hit {
     /// Fraction of the query terms in the title (Xapian hits; a Tantivy hit's title is already boosted in its score, so
     /// it carries its coverage here).
     title_cov: f32,
+    /// The title is the query itself (Xapian hits; see `xapian_coverage`): such a hit is listed first.
+    exact_title: bool,
 }
 
 /// What produced a ZIM source's keyword list.
@@ -211,18 +218,20 @@ pub(crate) fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[Stri
     let invs: Vec<_> = fields.iter().filter_map(|f| seg.inverted_index(*f).ok().map(|i| (*f, i))).collect();
     let mut matched = 0usize;
     for t in terms {
-        let hit = invs.iter().any(|(f, inv)| {
-            let term = Term::from_field_text(*f, t);
-            match inv.read_postings(&term, IndexRecordOption::Basic) {
-                Ok(Some(mut p)) => p.doc() <= addr.doc_id && (p.doc() == addr.doc_id || p.seek(addr.doc_id) == addr.doc_id),
-                _ => false,
-            }
-        });
-        if hit {
+        if invs.iter().any(|(f, inv)| has_term(inv, *f, t, addr.doc_id)) {
             matched += 1;
         }
     }
     matched as f32 / terms.len() as f32
+}
+
+/// Whether the term `text` of field `f` occurs in the document `doc_id` of a segment (`inv` is that field's index there).
+pub(crate) fn has_term(inv: &tantivy::InvertedIndexReader, f: Field, text: &str, doc_id: tantivy::DocId) -> bool {
+    let term = Term::from_field_text(f, text);
+    match inv.read_postings(&term, IndexRecordOption::Basic) {
+        Ok(Some(mut p)) => p.doc() <= doc_id && (p.doc() == doc_id || p.seek(doc_id) == doc_id),
+        _ => false,
+    }
 }
 
 /// A hit chosen for the merged list: (source index, hit index, merge score, passed the coverage test).
@@ -233,6 +242,8 @@ struct Merged {
     score: f64,
     raw: f32,
     pass: bool,
+    /// The hit's title is the query itself ([`KwItem::exact_title`]): it is listed before the others.
+    exact_title: bool,
 }
 
 /// Share of a hit's score factor that comes from its title coverage (the rest from its overall coverage).
@@ -245,14 +256,18 @@ struct KwItem {
     raw: f32,
     coverage: f32,
     title_cov: f32,
+    /// The title is the whole query (an article named exactly what was searched, such as "Ray Charles" for "Ray Charles"):
+    /// listed before every other hit and never dropped as weak. Only a ZIM's Xapian hits carry it (see `xapian_coverage`).
+    exact_title: bool,
 }
 
 /// Merge keyword hits across sources; `lists[source][rank]` (best first within a source). A hit's relevance `rel` is
 /// its raw score over the best raw score of its source (for a Xapian source the raw score is libzim's percentage, which
 /// is 100 for the source's best hit, so it is relative too). Its score is `rel * (coverage + title_cov) / 2`. A hit counts as good only when its coverage is at
 /// least `min_cov` and its `rel` at least `min_rel`; the others are dropped unless fewer than `need` good hits would
-/// remain, in which case the best of the dropped ones fill up to `need` (after all the good ones). Ties on score go
-/// to the higher raw score, then the smaller address.
+/// remain, in which case the best of the dropped ones fill up to `need` (after all the good ones). A hit whose title is
+/// the query itself (`exact_title`) is always good and comes before the others. Ties on score go to the higher raw score,
+/// then the smaller address.
 #[cfg(test)]
 fn merge_keyword(lists: &[Vec<KwItem>], min_cov: f32, min_rel: f32, need: usize) -> Vec<Merged> {
     let own: Vec<usize> = (0..lists.len()).collect();
@@ -279,13 +294,15 @@ fn merge_keyword_grouped(lists: &[Vec<KwItem>], group: &[usize], min_cov: f32, m
                 addr: h.addr.clone(),
                 score: rel * factor,
                 raw: h.raw,
-                pass: h.coverage >= min_cov && rel >= min_rel as f64,
+                pass: h.exact_title || (h.coverage >= min_cov && rel >= min_rel as f64),
+                exact_title: h.exact_title,
             });
         }
     }
     let cmp = |a: &Merged, b: &Merged| {
-        b.score
-            .total_cmp(&a.score)
+        b.exact_title
+            .cmp(&a.exact_title)
+            .then(b.score.total_cmp(&a.score))
             .then(b.raw.total_cmp(&a.raw))
             .then_with(|| a.addr.cmp(&b.addr))
     };
@@ -443,8 +460,10 @@ const COVERAGE_READ_BYTES: usize = 300_000;
 /// Term coverage of a source's Xapian hits, which libzim does not report (it gives no list of matched terms, and the
 /// words it marks in snippets did not appear on the real ZIMs tried). For each hit the article is read and tokenised with
 /// the source's own analyzer: `coverage` is the fraction of the query words (compared after stemming) found in its title
-/// or text, `title_cov` the fraction found in its title. Only the first `keep` hits are read and kept. A hit that cannot be
-/// read as text is judged by its title alone. With no query words every hit counts as fully covered.
+/// or text, `title_cov` the fraction found in its title, and `exact_title` whether the title is the query itself: its words,
+/// stemmed, are the query's in the same order, after a trailing "(...)" (Wikipedia's "(album)", "(film)") is left off. Only the
+/// first `keep` hits are read and kept. A hit that cannot be read as text is judged by its title alone. With no query words every
+/// hit counts as fully covered.
 fn xapian_coverage(src: &zimsrc::ZimSource, an: &mut TextAnalyzer, words: &[String], hits: &mut Vec<Hit>, xhits: &mut Vec<XHit>, keep: usize) {
     hits.truncate(keep);
     xhits.truncate(keep);
@@ -469,7 +488,22 @@ fn xapian_coverage(src: &zimsrc::ZimSource, an: &mut TextAnalyzer, words: &[Stri
         let in_any = stems.iter().filter(|s| title.contains(*s) || body.contains(*s)).count() as f32;
         h.coverage = in_any / n;
         h.title_cov = in_title / n;
+        h.exact_title = analyzed(an, title_without_note(&x.title)) == stems;
     }
+}
+
+/// A title without a trailing note in parentheses ("Ray Charles (album)" is "Ray Charles"); the title itself otherwise.
+fn title_without_note(title: &str) -> &str {
+    let t = title.trim();
+    if t.ends_with(')') {
+        if let Some(pos) = t.rfind('(') {
+            let head = t[..pos].trim_end();
+            if !head.is_empty() {
+                return head;
+            }
+        }
+    }
+    t
 }
 
 /// The top `candidates` hits of a ZIM's Xapian index for `query`: the ranked list for the merge (libzim's percentage as
@@ -497,6 +531,7 @@ fn xapian_list(x: &crate::zimx::Zimx, query: &str, candidates: usize) -> Option<
             raw: h.score as f32,
             coverage: 1.0,
             title_cov: 1.0,
+            exact_title: false,
         });
         xhits.push(h);
     }
@@ -597,19 +632,19 @@ impl Handle {
             // Sources that are not `done`, or whose index cannot be opened, are skipped (cs_status reports them).
             let Ok(Some(oi)) = z.searchable() else { continue };
             let searcher = oi.reader.searcher();
-            let mut qp = QueryParser::for_index(&oi.index, vec![oi.fields.title, oi.fields.lead, oi.fields.body]);
-            qp.set_field_boost(oi.fields.title, 2.0);
-            let (q, _errors) = qp.parse_query_lenient(query);
-            let Ok((top, count)) = top_deterministic(&searcher, &*q, candidates, oi.fields.path) else {
+            // The query is built by `qbuild` (words with hyphens, apostrophes or dots search the body too).
+            let qf = [(oi.fields.title, 2.0), (oi.fields.lead, 1.0), (oi.fields.body, 1.0)];
+            let Ok(plan) = qbuild::build(&oi.index, &qf, query) else { continue };
+            let Ok((top, count)) = top_deterministic(&searcher, &*plan.query, candidates, oi.fields.path) else {
                 continue;
             };
-            let terms = query_term_texts(&*q);
             let fields = [oi.fields.title, oi.fields.lead, oi.fields.body];
             let mut hits = Vec::with_capacity(top.len());
             for (raw, addr, path) in top {
-                let coverage = term_coverage(&searcher, addr, &terms, &fields);
-                hits.push(Hit { path, addr: Some(addr), raw, coverage, title_cov: coverage });
+                let coverage = plan.coverage(&searcher, addr, &fields);
+                hits.push(Hit { path, addr: Some(addr), raw, coverage, title_cov: coverage, exact_title: false });
             }
+            let q = plan.query;
             per.push(SrcHits {
                 id,
                 title,
@@ -684,6 +719,7 @@ impl Handle {
                         raw: h.raw,
                         coverage: h.coverage,
                         title_cov: h.title_cov,
+                        exact_title: h.exact_title,
                     })
                     .collect()
             })
@@ -691,7 +727,7 @@ impl Handle {
         lists.extend(lib_kw.iter().map(|k| {
             k.hits
                 .iter()
-                .map(|h| KwItem { addr: h.address.clone(), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .map(|h| KwItem { addr: h.address.clone(), raw: h.raw, coverage: h.coverage, title_cov: h.coverage, exact_title: false })
                 .collect()
         }));
         lists.extend(pdf_kw.iter().map(|k| {
@@ -702,13 +738,14 @@ impl Handle {
                     raw: h.raw,
                     coverage: h.coverage,
                     title_cov: h.coverage,
+                    exact_title: false,
                 })
                 .collect()
         }));
         lists.extend(kw_kw.iter().map(|k| {
             k.hits
                 .iter()
-                .map(|h| KwItem { addr: kwindex::address_of(k.kind, &k.source_id, &h.piece.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .map(|h| KwItem { addr: kwindex::address_of(k.kind, &k.source_id, &h.piece.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage, exact_title: false })
                 .collect()
         }));
         let need = opts.offset + opts.k;
@@ -736,6 +773,8 @@ impl Handle {
         // Libraries: a vector list for each library whose embedding model matches the query vector.
         let mut keyword_only: Vec<String> = per.iter().map(|p| p.id.clone()).collect();
         let mut vector_sources: Vec<String> = Vec::new();
+        let mut meaning_timed_out: Vec<String> = Vec::new();
+        let meaning_limit = opts.meaning_ms.map(std::time::Duration::from_millis);
         let mut libs: Vec<(usize, Vec<LibHit>)> = Vec::new();
         let base = self.candidates_per_list.max(1) as usize + opts.offset;
         for (src_i, s) in self.sources.iter().enumerate() {
@@ -747,7 +786,15 @@ impl Handle {
             }
             let used = match &opts.query_vector {
                 Some(q) if l.accepts_vector(&q.model, q.vector.len()) => {
-                    l.dense_search(&q.vector, need, base, snippet_chars).ok()
+                    match l.dense_search_within(&q.vector, need, base, snippet_chars, meaning_limit) {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            if e.code == crate::error::ErrorCode::Cancelled {
+                                meaning_timed_out.push(l.id().to_string());
+                            }
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -930,7 +977,7 @@ impl Handle {
                     }
                     Shown::Kw(ki, hi) => {
                         let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
-                        let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
+                        let (address, cite, title) = kw_result(self, k.kind, &k.source_id, &h.piece);
                         let mut r = json!({
                             "address": address.clone(),
                             "title": title,
@@ -1052,6 +1099,7 @@ impl Handle {
                 + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
             "vector_sources": vector_sources,
             "keyword_only_sources": keyword_only,
+            "meaning_timed_out": meaning_timed_out,
         })
         .to_string())
     }
@@ -1087,6 +1135,44 @@ impl Handle {
         main_snippet(&main, an, stems, max)
     }
 
+    /// The open library source `lib_id`; `busy` while it opens or updates, `not_found` otherwise.
+    fn find_library(&self, lib_id: &str) -> Result<&library::LibSlot> {
+        self.sources
+            .iter()
+            .find_map(|s| match s {
+                Source::Library(l) if l.id() == lib_id => Some(l),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
+                    Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
+                } else if self.sources.iter().any(|s| matches!(s, Source::Updating(o) if o.id == lib_id)) {
+                    Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is being updated"))
+                } else {
+                    Error::not_found(format!("no library source {lib_id:?}"))
+                }
+            })
+    }
+
+    /// A library document read whole, as JSON: `{"address","title","pages":[{"page","text","addresses"}],"at_page","truncated"}`.
+    /// Only `lib:` addresses; any other is `bad_json`.
+    pub fn read_document(&mut self, address: &str, max_chars: i32) -> Result<String> {
+        self.poll_opening();
+        if !address.starts_with("lib:") {
+            return Err(Error::bad_json(format!("not a library address: {address:?}")));
+        }
+        if max_chars <= 0 {
+            return Err(Error::bad_json("max_chars must be positive"));
+        }
+        let (lib_id, point_id) = library::parse_lib_address(address)?;
+        let d = self.find_library(lib_id)?.read_document(point_id, max_chars as usize)?;
+        Ok(json!({
+            "address": address, "title": d.title, "at_page": d.at_page, "more_before": d.more_before, "more_after": d.more_after,
+            "pages": d.pages.iter().map(|p| json!({"page": p.page, "text": p.text, "addresses": p.addresses})).collect::<Vec<_>>(),
+        })
+        .to_string())
+    }
+
     /// Plain text of an address, cut to `max_chars` at a paragraph end.
     pub fn read(&mut self, address: &str, max_chars: i32) -> Result<String> {
         self.poll_opening();
@@ -1098,22 +1184,7 @@ impl Handle {
         }
         if address.starts_with("lib:") {
             let (lib_id, point_id) = library::parse_lib_address(address)?;
-            let l = self
-                .sources
-                .iter()
-                .find_map(|s| match s {
-                    Source::Library(l) if l.id() == lib_id => Some(l),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
-                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
-                    } else if self.sources.iter().any(|s| matches!(s, Source::Updating(o) if o.id == lib_id)) {
-                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is being updated"))
-                    } else {
-                        Error::not_found(format!("no library source {lib_id:?}"))
-                    }
-                })?;
+            let l = self.find_library(lib_id)?;
             let (r, truncated) = l.read_point(point_id, max_chars as usize)?;
             return Ok(json!({
                 "address": address, "title": r.title, "text": r.text, "truncated": truncated,
@@ -1133,12 +1204,12 @@ impl Handle {
 }
 
 /// A caption or EPUB hit as a result: its address, where its citation opens, and the title the model sees.
-fn kw_result(kind: &str, source_id: &str, p: &kwindex::StoredPiece) -> (String, Cite, String) {
+fn kw_result(h: &Handle, kind: &str, source_id: &str, p: &kwindex::StoredPiece) -> (String, Cite, String) {
     let address = kwindex::address_of(kind, source_id, &p.pid);
     let quote = Some(kwindex::first_words(&p.text, kwindex::QUOTE_WORDS));
     if kind == kwindex::ZIM_EPUB {
         let link = format!("{}#cache-b{}", zimsrc::format_address(source_id, &format!("{}!/{}", p.item, p.chapter)), p.block);
-        return (address, Cite { link: Some(link), quote, ..Default::default() }, crate::kwslot::epub_title(p));
+        return (address, Cite { link: Some(link), quote, ..Default::default() }, h.epub_hit_title(source_id, p));
     }
     let link = if kind == kwindex::CAPTIONS {
         kwindex::watch_link(source_id)
@@ -1218,6 +1289,7 @@ pub fn read_zim_entry(address: &str, e: &zimsrc::RawEntry, max_chars: i32) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tantivy::query::QueryParser;
 
     fn l(v: &[&str]) -> Vec<(String, f32)> {
         v.iter().enumerate().map(|(i, s)| (s.to_string(), 10.0 - i as f32)).collect()
@@ -1337,7 +1409,7 @@ mod tests {
 
     /// Give each hit an address that sorts in (source, rank) order.
     fn item(raw: f32, coverage: f32, addr: String) -> KwItem {
-        KwItem { addr, raw, coverage, title_cov: coverage }
+        KwItem { addr, raw, coverage, title_cov: coverage, exact_title: false }
     }
 
     fn addr(lists: &[Vec<(f32, f32)>]) -> Vec<Vec<KwItem>> {
@@ -1471,7 +1543,51 @@ mod tests {
     }
 
     fn xitem(addr: &str, rel: f32, coverage: f32, title_cov: f32) -> KwItem {
-        KwItem { addr: addr.into(), raw: rel * 100.0, coverage, title_cov }
+        KwItem { addr: addr.into(), raw: rel * 100.0, coverage, title_cov, exact_title: false }
+    }
+
+    /// "Ray Charles": the article named exactly that ranked below its discography and an album (higher BM25 for the repeated
+    /// name). An exact-title hit goes first, whatever its score, and the others keep their order.
+    #[test]
+    fn merge_keyword_puts_an_exact_title_first() {
+        let mut exact = xitem("wikipedia/A/Ray_Charles", 0.55, 1.0, 1.0);
+        exact.exact_title = true;
+        let lists = vec![vec![
+            xitem("wikipedia/A/Ray_Charles_discography", 1.0, 1.0, 1.0),
+            xitem("wikipedia/A/Anthology_(Ray_Charles_album)", 0.9, 1.0, 1.0),
+            exact,
+        ]];
+        let m = merge_keyword(&lists, 0.5, 0.0, 3);
+        assert_eq!(order(&m), vec![(0, 2), (0, 0), (0, 1)]);
+        assert!(m[0].exact_title && !m[1].exact_title);
+    }
+
+    /// An exact-title hit is never dropped as weak, even below the relevance and coverage bars the others must pass.
+    #[test]
+    fn merge_keyword_keeps_an_exact_title_below_the_bars() {
+        let mut exact = xitem("z/A/Exact", 0.05, 0.2, 0.2);
+        exact.exact_title = true;
+        let lists = vec![vec![xitem("z/A/Strong", 1.0, 1.0, 1.0), xitem("z/A/Weak", 0.05, 0.2, 0.2), exact]];
+        let m = merge_keyword(&lists, 0.5, 0.3, 1);
+        assert_eq!(order(&m), vec![(0, 2), (0, 0)], "the exact title first, the strong one kept, the weak one dropped");
+    }
+
+    /// Without an exact title the merge is what it was.
+    #[test]
+    fn merge_keyword_without_an_exact_title_is_unchanged() {
+        let lists = vec![vec![xitem("a", 1.0, 1.0, 1.0), xitem("b", 0.9, 1.0, 0.5)], vec![xitem("c", 0.95, 1.0, 1.0)]];
+        let m = merge_keyword(&lists, 0.5, 0.0, 3);
+        assert_eq!(order(&m), vec![(0, 0), (1, 0), (0, 1)]);
+        assert!(m.iter().all(|x| !x.exact_title));
+    }
+
+    #[test]
+    fn title_without_note_drops_a_trailing_parenthesis_only() {
+        assert_eq!(title_without_note("Ray Charles (album)"), "Ray Charles");
+        assert_eq!(title_without_note("  Grim & Evil  "), "Grim & Evil");
+        assert_eq!(title_without_note("The 11th Hour (2007 film)"), "The 11th Hour");
+        assert_eq!(title_without_note("(Untitled)"), "(Untitled)", "nothing left before it: the title stays");
+        assert_eq!(title_without_note("Cartoon Network (Portugal) Logos"), "Cartoon Network (Portugal) Logos");
     }
 
     #[test]

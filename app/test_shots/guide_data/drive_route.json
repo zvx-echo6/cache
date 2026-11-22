@@ -1,0 +1,106 @@
+{
+ "_comment": "The guide pictures' drive in Arches National Park: east on Main Park Road, then left onto Delicate Arch Road to the trail's parking. Traced by hand along the road lines of the app's own base map tiles (zoom 14, protomaps-planet-20261103), in the shape of a cs_map_route answer; times are worked out from the lengths. It stays the guide's drive: an answer recorded from the core is not needed for these pictures (one would replace this file as it is).",
+ "ok": true,
+ "route_id": "guide-drive",
+ "mode": "drive",
+ "land_access": "pragmatic",
+ "routing": "road",
+ "from": {
+  "id": null,
+  "name": "Your location",
+  "lat": 38.732477,
+  "lon": -109.552016,
+  "snap_distance_m": 0
+ },
+ "via": [],
+ "to": {
+  "id": "notebook:trailhead",
+  "name": "Trailhead",
+  "lat": 38.73562,
+  "lon": -109.52059,
+  "snap_distance_m": 62
+ },
+ "distance_m": 3212.8,
+ "duration_s": 220,
+ "totals": {
+  "distance_m": 3212.8,
+  "duration_s": 220,
+  "road_m": 3212.8,
+  "offroad_m": 0.0,
+  "ascent_m": 0,
+  "descent_m": 0
+ },
+ "geometry": "yj`{hA~wo}oENaOrA{]|Bc[bBmN|BwM|TcgAhEcXzAaO`@cNGyXgIaeAcBoYi@cXPcStCqc@nDyVjHy\\jGcRjGwO~IcRbGuIvUeXlNkLle@{ZdNaKlOkMrRyQxPmTvU{]`Ua_@iZs^gDuFcHcRgJyZqEwIgVy[sFmMy@aFq@uFOaKVmKxKkeAp@wLPwLq@qf@sAgf@wDyb@{AoRmBkLsBwIuBwHcSef@aWsq@{GwOkGmKkLwMiRwPqJwN}CwJa]cqAyEcMoDuH}NyWy\\}g@aFaKwCaJ_EwNiLgl@}Msm@kBwLYwO`@wIvI{g@^aIOwHq@kHkAkF{AkDsvAoqCqA_EuBcN",
+ "point_count": 82,
+ "segments": [
+  {
+   "kind": "road",
+   "travel": "drive",
+   "start_index": 0,
+   "end_index": 81,
+   "distance_m": 3212.8
+  }
+ ],
+ "maneuvers": [
+  {
+   "index": 0,
+   "kind": "road",
+   "type": "start",
+   "instruction": "Drive east on Main Park Road.",
+   "street_names": [
+    "Main Park Road"
+   ],
+   "distance_m": 1250.8,
+   "duration_s": 69,
+   "lat": 38.732477,
+   "lon": -109.552016,
+   "begin_index": 0,
+   "end_index": 30,
+   "bearing_deg": 92,
+   "cardinal": "E",
+   "travel": "drive"
+  },
+  {
+   "index": 1,
+   "kind": "road",
+   "type": "left",
+   "instruction": "Turn left onto Delicate Arch Road.",
+   "street_names": [
+    "Delicate Arch Road"
+   ],
+   "distance_m": 1962.0,
+   "duration_s": 151,
+   "lat": 38.728031,
+   "lon": -109.539964,
+   "begin_index": 30,
+   "end_index": 81,
+   "bearing_deg": 42,
+   "cardinal": "NE",
+   "travel": "drive"
+  },
+  {
+   "index": 2,
+   "kind": "road",
+   "type": "destination",
+   "instruction": "You have arrived at your destination.",
+   "street_names": [],
+   "distance_m": 0.0,
+   "duration_s": 0,
+   "lat": 38.735063,
+   "lon": -109.520468,
+   "begin_index": 81,
+   "end_index": 81,
+   "bearing_deg": 42,
+   "cardinal": "NE",
+   "travel": "drive"
+  }
+ ],
+ "major_roads": [
+  {
+   "name": "Main Park Road",
+   "distance_km": 1.25
+  }
+ ],
+ "warnings": [],
+ "alternatives": []
+}

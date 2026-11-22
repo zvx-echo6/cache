@@ -4,7 +4,12 @@ import 'package:cache_search/cache_search.dart' show CacheSearchException, Searc
 import 'package:flutter/foundation.dart';
 
 import 'notebook_model.dart';
+import '../app_fs.dart';
+import '../platform.dart' as plat;
 import '../platform/app_log.dart';
+
+/// A limit no notebook reaches: `entries` with it answers every entry.
+const int kAllEntries = 100000000;
 
 /// The core's Notebook calls (cs_notebook): one op with its arguments, the answer as JSON. Tests use an in-memory one.
 abstract class NotebookBackend {
@@ -23,6 +28,43 @@ class CoreNotebookBackend implements NotebookBackend {
     final c = await core();
     if (c == null) throw const CacheSearchException('not_configured', 'The search core is not available');
     return c.notebook(op, args);
+  }
+}
+
+/// What reading a repeater file into a notebook did: how many repeaters were added, followed the file, were left as they were
+/// ([unchanged]), kept a hand edit ([keptEdits]) or are no longer in the file ([notInFile], they stay), and which ones the person had
+/// deleted ([deleted] titles: not made again; "Add them back").
+class RepeaterUpdate {
+  const RepeaterUpdate({
+    required this.notebookId,
+    this.added = 0,
+    this.updated = 0,
+    this.unchanged = 0,
+    this.keptEdits = 0,
+    this.notInFile = 0,
+    this.deleted = const [],
+    this.repeaters = 0,
+    this.withoutPosition = 0,
+  });
+
+  final String notebookId;
+  final int added, updated, unchanged, keptEdits, notInFile;
+  final List<String> deleted;
+  final int repeaters, withoutPosition;
+
+  static RepeaterUpdate fromJson(Map j) {
+    int n(String k) => (j[k] as num?)?.toInt() ?? 0;
+    return RepeaterUpdate(
+      notebookId: '${(j['notebook'] as Map?)?['id']}',
+      added: n('added'),
+      updated: n('updated'),
+      unchanged: n('unchanged'),
+      keptEdits: n('kept_edits'),
+      notInFile: n('not_in_file'),
+      deleted: [for (final d in (j['deleted'] as List? ?? const [])) '${(d as Map)['title'] ?? ''}'],
+      repeaters: n('repeaters'),
+      withoutPosition: n('without_position'),
+    );
   }
 }
 
@@ -45,7 +87,12 @@ abstract class PrivateSharing {
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
 /// read again; [revision] counts the changes (an open notebook reads its entries again), and [onChanged] runs after each one.
 class NotebookState extends ChangeNotifier {
-  NotebookState({required this.backend, required this.mediaDir});
+  NotebookState({required this.backend, required this.mediaDir, AppFs? fs}) : _fsOverride = fs;
+
+  final AppFs? _fsOverride;
+
+  /// How a browser reaches the media folder on Cache Server (`<support>/notebook`, the same folder the core and sync use).
+  late final AppFs webFs = _fsOverride ?? createAppFs();
 
   final NotebookBackend backend;
 
@@ -141,16 +188,34 @@ class NotebookState extends ChangeNotifier {
 
   // ---- notebooks ----
 
-  /// Makes a notebook (no [id]) or replaces its definition and switches. A name another notebook has is refused by the core.
+  /// Makes a notebook (no [id], or an id not used here yet) or replaces its definition and switches. A name another notebook has
+  /// is refused by the core.
+  ///
+  /// A notebook's fields are fixed once it exists (1.1: there is no field editor, 2026-11-13): saving one that exists keeps the
+  /// fields it has, hidden ones included, whatever [def] lists. Its name, icon, color, Due again and switches still change. A new
+  /// notebook gets [def]'s fields.
   Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef}) =>
-      _change(() async => Notebook.fromJson(await backend.call('notebook_save', {
-            'id': ?id,
-            'template': ?template,
-            'def': def.toJson(),
-            'private': ?private,
-            'map': ?map,
-            'template_ref': ?templateRef,
-          })));
+      _change(() async {
+        final have = id == null ? null : await _stored(id);
+        return Notebook.fromJson(await backend.call('notebook_save', {
+          'id': ?id,
+          'template': ?template,
+          'def': (have == null ? def : def.copyWith(fields: have.def.fields)).toJson(),
+          'private': ?private,
+          'map': ?map,
+          'template_ref': ?templateRef,
+        }));
+      });
+
+  /// Notebook [id] as the store has it now; null when there is none.
+  Future<Notebook?> _stored(String id) async {
+    try {
+      return Notebook.fromJson(await backend.call('notebook', {'id': id}));
+    } on CacheSearchException catch (e) {
+      if (e.code == 'not_found') return null;
+      rethrow;
+    }
+  }
 
   Future<void> deleteNotebook(String id) => _change(() => backend.call('notebook_delete', {'id': id}));
 
@@ -165,9 +230,10 @@ class NotebookState extends ChangeNotifier {
 
   // ---- entries ----
 
-  /// A notebook's entries, newest first, drafts included.
+  /// A notebook's entries, newest first, drafts included: all of them. (The core answers 1000 when a call gives no limit, and
+  /// notebook sync takes an entry it did not read for a deleted one, so the app always asks for every entry.)
   Future<List<NbEntry>> entries(String notebookId) async =>
-      [for (final e in (await backend.call('entries', {'notebook_id': notebookId}))['entries'] as List) NbEntry.fromJson(e as Map)];
+      [for (final e in (await backend.call('entries', {'notebook_id': notebookId, 'limit': kAllEntries}))['entries'] as List) NbEntry.fromJson(e as Map)];
 
   Future<NbEntry?> entry(String id) async {
     try {
@@ -223,6 +289,28 @@ class NotebookState extends ChangeNotifier {
 
   Future<void> deleteEntry(String id) => _change(() => backend.call('entry_delete', {'id': id}));
 
+
+  // ---- repeater lists ----
+
+  /// A RepeaterBook KML and/or a CHIRP CSV into a new Repeaters notebook, or (with [notebookId]) as an update of that one: the file's
+  /// changes arrive, what the person changed stays (see RepeaterUpdate).
+  Future<RepeaterUpdate> importRepeaters(List<String> paths, {String? notebookId, required String now}) =>
+      _change(() async => RepeaterUpdate.fromJson(await backend.call('repeaters_import', {'paths': paths, 'notebook_id': ?notebookId, 'now': now})));
+
+  /// The repeaters the person deleted that the file still has, made again; returns how many.
+  Future<int> addBackRepeaters(String notebookId, {required String now}) =>
+      _change(() async => ((await backend.call('repeaters_add_back', {'notebook_id': notebookId, 'now': now}))['added'] as num?)?.toInt() ?? 0);
+
+  /// The entries of [notebookId] the latest file no longer lists ("Not in the latest file"), kept on this device only.
+  Future<Set<String>> notInLatestFile(String notebookId) async {
+    try {
+      final r = await backend.call('source_rows', {'notebook_id': notebookId, 'brief': true});
+      return {for (final x in (r['rows'] as List? ?? const [])) if ((x as Map)['state'] == 'gone' && x['entry_id'] is String) x['entry_id'] as String};
+    } catch (_) {
+      return const {};
+    }
+  }
+
   // ---- search and map ----
 
   Future<List<NbHit>> search(String query, {String? notebookId}) async {
@@ -240,6 +328,34 @@ class NotebookState extends ChangeNotifier {
   // ---- photos and files ----
 
   Future<File> photoFile(String id) async => File('${(await mediaDir()).path}/photos/$id.jpg');
+  /// The ~1600 px local preview of a photo (kept on this device only; a photo may not have one).
+  Future<File> previewFile(String id) async => File('${(await mediaDir()).path}/previews/$id.jpg');
   Future<File> thumbFile(String id) async => File('${(await mediaDir()).path}/thumbs/$id.jpg');
   Future<File> attachedFile(String id) async => File('${(await mediaDir()).path}/files/$id');
+
+  // A browser cannot open a File of the server; it reads the same media folder (`notebook/` under the support root) as bytes.
+  static String photoRel(String id) => 'notebook/photos/$id.jpg';
+  static String thumbRel(String id) => 'notebook/thumbs/$id.jpg';
+  static String attachedRel(String id) => 'notebook/files/$id';
+
+  /// A photo's thumbnail bytes, null when it is not there. Phone: the file; browser: the server's media folder.
+  Future<Uint8List?> thumbBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, thumbRel(id));
+    final f = await thumbFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
+
+  /// A photo's full-size bytes, null when it is not there. Phone: the file; browser: the server's media folder.
+  Future<Uint8List?> photoBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, photoRel(id));
+    final f = await photoFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
+
+  /// An attached file's bytes, null when it is not there.
+  Future<Uint8List?> attachedBytes(String id) async {
+    if (plat.isWeb) return webFs.readBytes(AppRoot.support, attachedRel(id));
+    final f = await attachedFile(id);
+    return f.existsSync() ? f.readAsBytes() : null;
+  }
 }

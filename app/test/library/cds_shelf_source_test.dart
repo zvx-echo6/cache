@@ -34,24 +34,33 @@ void main() {
 
   Directory shelvesDir([String name = 'bookshelves']) => Directory('${tmp.path}/$name');
 
-  Future<CdsShelfSource> open(FakeShelvesCalls calls, {String dir = 'bookshelves', List<String> ownIds = const [], Duration? poll}) async {
+  Future<CdsShelfSource> open(FakeShelvesCalls calls,
+      {String dir = 'bookshelves', List<String> ownIds = const [], Duration? poll, String dev = 'phone-test', int clock = 5000, void Function(String)? log}) async {
     final s = CdsShelfSource(
       libs,
       calls: calls,
       bookshelvesDir: () async => shelvesDir(dir),
-      deviceId: () async => 'phone-test',
+      deviceId: () async => dev,
       ownIds: () async => ownIds,
       pollEvery: poll,
-      clock: () => 5000,
+      clock: () => clock,
+      log: log ?? (_) {},
     );
     made.add(s);
     await s.whenRead();
     return s;
   }
 
-  Future<void> library(String name, List<SampleBook> books, {Map<String, Map<String, dynamic>> extra = const {}, Map<String, Map<String, dynamic>> samebook = const {}, String? oldLog, String oldDev = 'phone-test'}) async {
+  Future<void> library(String name, List<SampleBook> books,
+      {Map<String, Map<String, dynamic>> extra = const {},
+      Map<String, Map<String, dynamic>> samebook = const {},
+      String? oldLog,
+      String oldDev = 'phone-test',
+      bool own = false,
+      Set<String> unsure = const {},
+      Set<String> noFlag = const {}}) async {
     final d = writeBookLibrary(Directory('${tmp.path}/libraries'), name, books,
-        extra: extra, samebook: samebook, compression: {'original_size': 58000000, 'stored_size': 41000000, 'level': 'smaller_scans', 'preset': 'balanced', 'kept_original': false});
+        extra: extra, samebook: samebook, own: own, unsure: unsure, noFlag: noFlag, compression: {'original_size': 58000000, 'stored_size': 41000000, 'level': 'smaller_scans', 'preset': 'balanced', 'kept_original': false});
     if (oldLog != null) {
       File('${d.path}/log/$oldDev.jsonl')
         ..createSync(recursive: true)
@@ -164,7 +173,7 @@ void main() {
     final s = await open(f);
     expect([for (final b in s.booksOn('210')) b.callNumber], ['CDS 210-001', 'CDS 210-002']);
     expect(s.unsorted.map((b) => b.title), ['Keeping bees in cold climates', 'Small engine repair', 'Stone']);
-    expect(s.unsorted.first.suggestions, ['350', '190']);
+    expect(s.unsorted.first.suggestions, ['350', '190', '120'], reason: 'the pack keeps the sorter\'s three');
 
     final bees = s.book('bees')!;
     expect(s.nextNumberFor(bees, '350'), 'CDS 350-001');
@@ -243,6 +252,308 @@ void main() {
     expect(f2.detectCalls, 1);
     expect(f2.detected, ['water'], reason: 'only the new copy is checked; the others are known');
     expect(again.booksOn('530').single.callNumber, 'CDS 530-001');
+  });
+
+
+  group('a book the sorter is not confident about stays in Unsorted', () {
+    const books = <SampleBook>[
+      ('aid', 'Wilderness first aid', '210', '220'),
+      ('bees', 'Keeping bees in cold climates', '350', '190'),
+      ('engines', 'Small engine repair', '670', '690'),
+    ];
+
+    test('an unconfident add stays in Unsorted with the sorter\'s three; a confident add is shelved; the counts agree', () async {
+      await library('field', books, unsure: const {'bees'});
+      await start();
+      final f = FakeShelvesCalls();
+      final s = await open(f);
+      expect(s.booksOn('210').map((b) => b.id), ['aid'], reason: 'confident: shelved in its division');
+      expect(s.booksOn('670').map((b) => b.id), ['engines']);
+      final bees = s.book('bees')!;
+      expect([bees.shelf, bees.unsorted], [null, true], reason: 'not confident: left in Unsorted');
+      expect(bees.suggestions, ['350', '190', '120'], reason: 'with the top three offered');
+      expect(_mine(f).where((e) => e['copy'] == 'bees'), isEmpty, reason: 'nothing is written for it: no place, no number');
+      expect([for (final e in _mine(f)) if (e['ev'] == 'place') e['copy']], ['engines', 'aid'], reason: 'in (title, copy) order');
+      var shelved = 0;
+      for (final sh in s.shelves) {
+        shelved += s.countUnder(sh);
+      }
+      expect((shelved, s.unsorted.length, s.bookCount), (2, 1, 3), reason: 'shelved + Unsorted = every book');
+      // and it stays there on the next start
+      s.dispose();
+      made.remove(s);
+      final f2 = FakeShelvesCalls();
+      final again = await open(f2);
+      expect(again.book('bees')!.unsorted, isTrue);
+      expect(f2.appended, isEmpty);
+    });
+
+    test('a pack from before the flag has none: the book stays in Unsorted, offering its division and the second', () async {
+      await library('field', books, noFlag: const {'aid'});
+      await start();
+      final f = FakeShelvesCalls();
+      final s = await open(f);
+      final aid = s.book('aid')!;
+      expect([aid.shelf, aid.unsorted, aid.suggestions], [null, true, ['210', '220']]);
+      expect(_mine(f).where((e) => e['copy'] == 'aid'), isEmpty);
+      expect(s.book('bees')!.shelf, '350', reason: 'a pack that says filed is still shelved');
+    });
+
+    test('the pack header\'s flag and the three are read; no flag is null', () async {
+      await start();
+      final h = {
+        'book': {
+          'suggested': {
+            'div': '210', 'second_div': '220', 'filed': false,
+            'suggestions': [{'div': '210'}, {'div': '220'}, {'div': '350'}, {'div': '670'}],
+          },
+        },
+      };
+      final f = PackFacts.fromHeader(h);
+      expect([f.filed, f.suggested], [false, ['210', '220', '350']], reason: 'up to three');
+      expect(PackFacts.fromHeader({'book': {'suggested': {'div': '210', 'second_div': '220'}}}).filed, isNull);
+      expect(PackFacts.fromHeader({'book': {'suggested': {'div': '210', 'second_div': '220'}}}).suggested, ['210', '220']);
+      expect(PackFacts.fromHeader({'book': {'suggested': {'div': '210', 'filed': true}}}).filed, isTrue);
+    });
+
+    test('with no pack on this device the synced view\'s stored suggestions are offered (its three), else the one it has', () async {
+      await library('field', books);
+      Directory('${tmp.path}/libraries/field/packs').deleteSync(recursive: true);
+      await start();
+      Map<String, dynamic> book(String copy, Map<String, dynamic> suggested) => {
+            'title': copy, 'title_from': 'pack', 'aka': [], 'reading': copy,
+            'copies': [{'copy': copy, 'locs': ['field/$copy'], 'available': true, 'title': copy, 'own_call': null, 'locations': []}],
+            'shelf': null, 'shelved': false, 'by': null, 'call': null, 'removed': false, 'author': null, 'edition': null, 'year': null, 'suggested': suggested,
+          };
+      final view = {
+        'format': 1,
+        'built_from': {'libraries': {}, 'logs': {}},
+        'books': {
+          'aid': book('aid', {'div': '210', 'label': null, 'from': 'pack', 'filed': false, 'suggestions': [{'div': '210'}, {'div': '220'}, {'div': '350'}]}),
+          'bees': book('bees', {'div': '350', 'label': null, 'from': 'pack', 'filed': false}),
+        },
+        'retired': {}, 'next': {}, 'folders': [],
+      };
+      writeShelves(shelvesDir(), checked: const ['aid', 'bees']);
+      final s = await open(FakeShelvesCalls()..canned = view);
+      expect(s.book('aid')!.suggestions, ['210', '220', '350'], reason: 'the three the view stored');
+      expect(s.book('bees')!.suggestions, ['350'], reason: 'an older pack: the view only has the one, and the page offers only that');
+    });
+  });
+
+  group('the one-time return to Unsorted', () {
+    // an app-built library ("mine", own) and a published one ("pub"), each shelved by an earlier build with `place ... by: auto` and a loc
+    const mine = <SampleBook>[
+      ('a1', 'Alpha 1', '210', '220'),
+      ('a2', 'Alpha 2', '350', '190'),
+      ('a3', 'Alpha 3', '670', '690'),
+      ('moved', 'Moved by a person', '210', '220'),
+      ('addtime', 'Placed when added', '350', '190'),
+      ('sure', 'Pack says filed', '670', '690'),
+      ('byuser', 'Placed by a person', '210', '220'),
+      ('byother', 'Placed by another device', '350', '190'),
+      ('cu1', 'Copy one, placed by a person', '210', '220'),
+      ('cu2', 'Copy two, placed by auto', '210', '220'),
+      ('nl1', 'Copy one, placed when added', '350', '190'),
+      ('nl2', 'Copy two, placed with a loc', '350', '190'),
+    ];
+    const pub = <SampleBook>[('p1', 'Published one', '530', '540')];
+
+    Map<String, dynamic> ev(int at, String ev, String copy, {String? div, String? by, int? seq, String? loc, String? other, String dev = 'phone-test'}) =>
+        {'v': 1, 'at': at, 'dev': dev, 'ev': ev, 'copy': copy, 'div': ?div, 'by': ?by, 'seq': ?seq, 'loc': ?loc, 'with': ?other, 'how': ?(other == null ? null : 'text')};
+
+    /// What the earlier build wrote on THIS device: each placed by auto with a loc, but `addtime` (no loc), `byuser` (by user), `moved`
+    /// (a person moved it after), `sure` (its pack says filed), `byother` (another device wrote it), `cu1`/`cu2` (a person placed
+    /// one copy of the book), `nl1`/`nl2` (one copy has the add-time place). A later event of this device's own (t=9000) follows.
+    List<Map<String, dynamic>> oldEvents() => [
+          ev(1000, 'place', 'a1', div: '210', by: 'auto', loc: 'mine/a1'), ev(1000, 'assign', 'a1', div: '210', seq: 1),
+          ev(1001, 'place', 'a2', div: '350', by: 'auto', loc: 'mine/a2'), ev(1001, 'assign', 'a2', div: '350', seq: 1),
+          ev(1002, 'place', 'a3', div: '670', by: 'auto', loc: 'mine/a3'), ev(1002, 'assign', 'a3', div: '670', seq: 1),
+          ev(1003, 'place', 'moved', div: '210', by: 'auto', loc: 'mine/moved'), ev(1003, 'assign', 'moved', div: '210', seq: 2),
+          ev(1500, 'place', 'moved', div: '220', by: 'user'), ev(1500, 'retire', 'moved', div: '210', seq: 2), ev(1500, 'assign', 'moved', div: '220', seq: 1),
+          ev(1004, 'place', 'addtime', div: '350', by: 'auto'), ev(1004, 'assign', 'addtime', div: '350', seq: 2),
+          ev(1005, 'place', 'sure', div: '670', by: 'auto', loc: 'mine/sure'), ev(1005, 'assign', 'sure', div: '670', seq: 2),
+          ev(1006, 'place', 'byuser', div: '210', by: 'user', loc: 'mine/byuser'), ev(1006, 'assign', 'byuser', div: '210', seq: 3),
+          ev(1007, 'place', 'p1', div: '530', by: 'auto', loc: 'pub/p1'), ev(1007, 'assign', 'p1', div: '530', seq: 1),
+          ev(1008, 'place', 'byother', div: '350', by: 'auto', loc: 'mine/byother', dev: 'tablet'), ev(1008, 'assign', 'byother', div: '350', seq: 3, dev: 'tablet'),
+          // one book of two copies; a person placed the first, the second got an auto place with a loc after
+          ev(900, 'place', 'cu1', div: '210', by: 'user'), ev(900, 'assign', 'cu1', div: '210', seq: 4),
+          ev(950, 'same', 'cu2', other: 'cu1', by: 'auto'),
+          ev(1010, 'place', 'cu2', div: '210', by: 'auto', loc: 'mine/cu2'),
+          // one book of two copies; the first has the add-time place (no loc), the second an auto place with a loc after
+          ev(1011, 'place', 'nl1', div: '350', by: 'auto'), ev(1011, 'assign', 'nl1', div: '350', seq: 4),
+          ev(1012, 'same', 'nl2', other: 'nl1', by: 'auto'),
+          ev(1013, 'place', 'nl2', div: '350', by: 'auto', loc: 'mine/nl2'),
+          // this device wrote something much later: the core's held clock would lift a late unsort to here
+          {'v': 1, 'at': 9000, 'dev': 'phone-test', 'ev': 'title', 'copy': 'p1', 'title': 'Published one'},
+        ];
+
+    void writeLog(String dir, String dev, List<Map<String, dynamic>> events) {
+      File('${shelvesDir(dir).path}/log/$dev.jsonl')
+        ..createSync(recursive: true)
+        ..writeAsStringSync([for (final e in events) '${jsonEncode({...e, 'dev': dev})}\n'].join(), mode: FileMode.append);
+    }
+
+    Future<void> setUpLibraries() async {
+      // everything but `sure` is a book the sorter was not sure of
+      await library('mine', mine, own: true, unsure: {for (final b in mine) if (b.$1 != 'sure') b.$1});
+      await library('pub', pub, unsure: const {'p1'});
+      await start();
+    }
+
+    void checkedAll(String dir) => File('${shelvesDir(dir).path}/.local/detected.json')
+      ..createSync(recursive: true)
+      ..writeAsStringSync(jsonEncode({'format': 1, 'copies': [...mine.map((b) => b.$1), 'p1']..sort()}));
+
+    /// Writes [events] into the folder of a device, each in its own device's file.
+    void writeEvents(String dir, List<Map<String, dynamic>> events) {
+      for (final dev in {for (final e in events) e['dev'] as String}) {
+        writeLog(dir, dev, [for (final e in events) if (e['dev'] == dev) e]);
+      }
+    }
+
+    test('it returns only what this device shelved with a loc in a library built on a device, with the sorter unsure; a person\'s own choice is left', () async {
+      await setUpLibraries();
+      writeEvents('bookshelves', oldEvents());
+      checkedAll('bookshelves');
+      final lines = <String>[];
+      final f = FakeShelvesCalls();
+      final s = await open(f, log: lines.add);
+      // three books come back: a1, a2, a3
+      expect([for (final b in s.unsorted) b.id], ['a1', 'a2', 'a3']);
+      expect(s.unsorted.map((b) => b.suggestions), [['210', '220', '120'], ['350', '190', '120'], ['670', '690', '120']], reason: 'with their suggestions');
+      // one unsort and one retire each, one millisecond after the place (not at this device's last `at`, 9000, which the core's held
+      // clock would have used), so a person's later move always wins
+      expect(_mine(f), [
+        for (final (i, c) in [('a1', '210'), ('a2', '350'), ('a3', '670')].indexed) ...[
+          {'at': 1001 + i, 'ev': 'unsort', 'copy': c.$1, 'by': 'auto'},
+          {'at': 1001 + i, 'ev': 'retire', 'copy': c.$1, 'div': c.$2, 'seq': 1},
+        ],
+      ]);
+      expect(lines, hasLength(3), reason: 'one log line per book');
+      expect(lines.first, allOf(contains('Alpha 1'), contains('a1'), contains('Unsorted')));
+      // everything else is as it was
+      expect(s.book('moved')!.shelf, '220', reason: 'the latest event is a person\'s');
+      expect(s.book('byuser')!.shelf, '210');
+      expect(s.book('addtime')!.shelf, '350', reason: 'the add-time place has no loc');
+      expect(s.book('sure')!.shelf, '670', reason: 'its pack says the sorter was confident');
+      expect(s.book('p1')!.shelf, '530', reason: 'a published library is never touched');
+      expect(s.book('byother')!.shelf, '350', reason: 'another device wrote that place; that device returns it');
+      expect(s.book('cu2')!.shelf, '210', reason: 'a person placed the other copy of the book');
+      expect(s.book('cu1')!.id, s.book('cu2')!.id);
+      expect(s.book('nl2')!.shelf, '350', reason: 'the other copy has the add-time place');
+      expect(s.nextNumber('210'), 'CDS 210-005', reason: 'the returned number is retired, not reused');
+      expect(s.book('byuser')!.shelvedBy, ShelvedBy.person);
+    });
+
+    test('it runs once: a restart does nothing, and a device that syncs in later with old events is left alone', () async {
+      await setUpLibraries();
+      writeEvents('bookshelves', oldEvents());
+      checkedAll('bookshelves');
+      final f = FakeShelvesCalls();
+      final s = await open(f);
+      expect(s.unsorted, hasLength(3));
+      final marker = jsonDecode(File('${shelvesDir().path}/.local/unconfident-return.json').readAsStringSync()) as Map;
+      expect((marker['done'], marker['first_run_at'], marker['returned']), (true, 5000, 3));
+      // a restart
+      s.dispose();
+      made.remove(s);
+      final f2 = FakeShelvesCalls();
+      final again = await open(f2, clock: 9000);
+      expect(f2.appended, isEmpty);
+      expect(again.unsorted, hasLength(3));
+      // this device's own old events arrive again (a restored log) for a book of a library that came later: not acted on
+      writeLog('bookshelves', 'phone-test', [
+        ev(1100, 'place', 'moved2', div: '350', by: 'auto', loc: 'mine2/moved2'),
+      ]);
+      await library('mine2', const [('moved2', 'Late old placement', '350', '190')], own: true, unsure: const {'moved2'});
+      await libs.rescan();
+      await again.whenRead();
+      expect(f2.appended, isEmpty, reason: 'nothing runs after done');
+      expect(again.book('moved2')!.shelf, '350');
+    });
+
+    test('two devices: each returns only the places it wrote, and a person\'s move on the other device, not yet synced, wins on both', () async {
+      await setUpLibraries();
+      // the phone placed a1 at t=1000, and wrote something much later (t=9000); the tablet, not yet synced, has a person's move of a1 to
+      // 220 at t=2000 and its own auto place of a3
+      writeEvents('phone', [
+        ev(1000, 'place', 'a1', div: '210', by: 'auto', loc: 'mine/a1'), ev(1000, 'assign', 'a1', div: '210', seq: 1),
+        {'v': 1, 'at': 9000, 'dev': 'phone-test', 'ev': 'title', 'copy': 'p1', 'title': 'Published one'},
+      ]);
+      writeEvents('tablet', [
+        ev(1000, 'place', 'a1', div: '210', by: 'auto', loc: 'mine/a1', dev: 'phone-test'), ev(1000, 'assign', 'a1', div: '210', seq: 1, dev: 'phone-test'),
+        ev(2000, 'place', 'a1', div: '220', by: 'user', dev: 'tablet'), ev(2000, 'assign', 'a1', div: '220', seq: 1, dev: 'tablet'),
+        ev(1002, 'place', 'a3', div: '670', by: 'auto', loc: 'mine/a3', dev: 'tablet'), ev(1002, 'assign', 'a3', div: '670', seq: 1, dev: 'tablet'),
+      ]);
+      checkedAll('phone');
+      checkedAll('tablet');
+      final fp = FakeShelvesCalls(), ft = FakeShelvesCalls();
+      final onPhone = await open(fp, dir: 'phone', dev: 'phone-test', clock: 5000);
+      final onTablet = await open(ft, dir: 'tablet', dev: 'tablet', clock: 8000);
+      // the phone returned a1 (its own place; it has not seen the person's move) and stamped it t=1001, not t=9000
+      expect([for (final e in fp.appended) (e['ev'], e['copy'], e['at'])], [('unsort', 'a1', 1001), ('retire', 'a1', 1001)]);
+      // the tablet returned a3 (its own place); a1 has a person's move, and the phone's place is not its to return
+      expect([for (final e in ft.appended) (e['ev'], e['copy'], e['at'])], [('unsort', 'a3', 1003), ('retire', 'a3', 1003)]);
+      onPhone.dispose();
+      onTablet.dispose();
+      made
+        ..remove(onPhone)
+        ..remove(onTablet);
+      // sync: each device's files reach the other
+      for (final (from, to) in [('phone', 'tablet'), ('tablet', 'phone')]) {
+        for (final f in Directory('${shelvesDir(from).path}/log').listSync().whereType<File>()) {
+          final name = f.uri.pathSegments.last;
+          if (from == 'tablet' && name == 'phone-test.jsonl') continue; // the tablet's copy of the phone's file is the phone's
+          File('${shelvesDir(to).path}/log/$name')
+            ..createSync(recursive: true)
+            ..writeAsStringSync(f.readAsStringSync());
+        }
+      }
+      final p2 = await open(FakeShelvesCalls(), dir: 'phone', dev: 'phone-test');
+      final t2 = await open(FakeShelvesCalls(), dir: 'tablet', dev: 'tablet');
+      for (final s in [p2, t2]) {
+        expect((s.book('a1')!.shelf, s.book('a1')!.shelvedBy), ('220', ShelvedBy.person), reason: 'the person\'s move wins, whichever device reads it');
+        expect(s.book('a3')!.shelf, isNull);
+      }
+      expect([for (final b in p2.unsorted) b.id], [for (final b in t2.unsorted) b.id]);
+    });
+
+    test('a device returns only the places it wrote itself, never the ones another device wrote', () async {
+      await setUpLibraries();
+      writeEvents('bookshelves', oldEvents());
+      checkedAll('bookshelves');
+      final first = await open(FakeShelvesCalls(), dev: 'phone-test');
+      expect(first.unsorted, hasLength(3));
+      first.dispose();
+      made.remove(first);
+      // the tablet has the phone's log already, and has never run the fix
+      Directory('${tmp.path}/tablet').createSync();
+      for (final f in Directory('${shelvesDir().path}/log').listSync().whereType<File>()) {
+        File('${shelvesDir('tablet').path}/log/${f.uri.pathSegments.last}')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(f.readAsStringSync());
+      }
+      checkedAll('tablet');
+      final ft = FakeShelvesCalls();
+      final second = await open(ft, dir: 'tablet', dev: 'tablet', clock: 9000);
+      // it returns only what it wrote itself (`byother` was written by the tablet's own id); the phone's places are not its to return
+      expect([for (final e in ft.appended) (e['ev'], e['copy'])], [('unsort', 'byother'), ('retire', 'byother')]);
+      expect(second.unsorted.map((b) => b.id), ['a1', 'a2', 'a3', 'byother']);
+      expect(File('${shelvesDir('tablet').path}/.local/unconfident-return.json').existsSync(), isTrue, reason: 'it too has run, and will not again');
+    });
+
+    test('a device with no library of its own books yet keeps its one run for when there is one', () async {
+      await library('pub', pub, unsure: const {'p1'});
+      await start();
+      writeLog('bookshelves', 'phone-test', [ev(1007, 'place', 'p1', div: '530', by: 'auto', loc: 'pub/p1'), ev(1007, 'assign', 'p1', div: '530', seq: 1)]);
+      checkedAll('bookshelves');
+      final f = FakeShelvesCalls();
+      final s = await open(f);
+      expect(f.appended, isEmpty);
+      expect(s.book('p1')!.shelf, '530');
+      expect(File('${shelvesDir().path}/.local/unconfident-return.json').existsSync(), isFalse);
+    });
   });
 
   test('Read this copy instead, Not the same book, Same book as and its Undo write the person\'s choice', () async {

@@ -7,8 +7,11 @@ import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
-import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow;
+import '../library/add_pdf/add_pdf_pages.dart' show AddPdfFolderRow, AddPdfRow, FileTile, WatchFolderRow, WatchedFoldersPage;
+import '../library/add_pdf/watch_folders.dart' show watchFoldersShared;
 import '../library/add_pdf/add_pdf_state.dart' show addPdfShared;
+import '../sources/libraries_state.dart' show LibrariesState;
+import '../discover/ui/kit.dart' show SectionHead;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'zim_dl.dart';
@@ -59,6 +62,9 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
   Timer? _debounce;
+
+  /// A wide window shows the Watched folders list in the right column (in the catalogue's place) while this is on.
+  bool _watched = false;
 
   BrowseState get b => widget.browse;
 
@@ -130,10 +136,13 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
     final k = context.t;
     return Scaffold(
       appBar: AppBar(title: const Text('Add to Library')),
-      body: ListenableBuilder(
+      body: LayoutBuilder(
+        builder: (context, cs) => ListenableBuilder(
         listenable: b,
         builder: (context, _) {
-          final own = _own(k);
+          final wide = TwoColumn.fits(context, cs.maxWidth);
+          final watch = watchFoldersShared;
+          final own = _own(k, wide: wide);
           final narrow = Column(
             children: [
               _searchRow(k),
@@ -146,7 +155,9 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
           return TwoColumn(
             narrow: narrow,
             left: ListView(key: const ValueKey('add-left'), padding: const EdgeInsets.fromLTRB(12, 4, 0, 24), children: own),
-            right: Column(
+            right: _watched && watch != null
+                ? WatchedFoldersPage(key: const ValueKey('add-watched'), watch: watch, pane: true)
+                : Column(
               children: [
                 Padding(padding: const EdgeInsets.only(right: 12), child: Align(alignment: Alignment.centerLeft, child: _readyLabel)),
                 _searchRow(k),
@@ -158,6 +169,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             ),
           );
         },
+      ),
       ),
     );
   }
@@ -247,49 +259,20 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   );
 
   /// "Your own library" (nothing when the libraries are not set up).
-  List<Widget> _own(CacheTokens k) {
+  List<Widget> _own(CacheTokens k, {bool wide = false}) {
     final libraries = b.libraries;
     final pdf = addPdfShared != null && b.device == null;
     return [
       // In a browser the first section is the computer the browser is on.
       if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
-      if (libraries != null) ...[
-        const GroupLabel('Your own'),
-        Material(
-          color: k.surface,
-          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
-          child: InkWell(
-            key: const ValueKey('add-own-library'),
-            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 52),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.library_add_outlined, size: 22, color: k.text),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Your own library', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                          Text('From a file or a download link', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: k.secondary),
-                  ],
-                ),
-              ),
-            ),
-          ),
+      if (libraries != null)
+        YourOwnGroup(
+          libraries: libraries,
+          pdf: pdf,
+          // on a wide window the Watched folders list opens in the right column, in the catalogue's place
+          watchSelected: wide && _watched,
+          onOpenWatched: wide ? () => setState(() => _watched = !_watched) : null,
         ),
-        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
-        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), const AddPdfFolderRow()],
-        const SizedBox(height: 6),
-      ],
       // In a browser, building a library from PDFs and the drop folder.
       if (b.device != null) ...buildAddRows(context, b.device!),
     ];
@@ -436,6 +419,82 @@ class EntryTile extends StatelessWidget {
             ? letter
             : Image.network(plat.isWeb ? '/api/fetch?url=${Uri.encodeComponent(url.toString())}' : url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
       ),
+    );
+  }
+}
+
+/// The YOUR OWN group of Add to Library: the label, Your own library (from a file or a download link), and on a phone Add a PDF and
+/// Add a folder under it. Shown in Add to Library's own list and at the top of Discover when Add to Library opens it.
+class YourOwnGroup extends StatelessWidget {
+  const YourOwnGroup({super.key, required this.libraries, required this.pdf, this.sectionHeading = false, this.watchSelected = false, this.onOpenWatched});
+
+  final LibrariesState libraries;
+
+  /// Add a PDF and Add a folder go under Your own library (a phone; not a browser).
+  final bool pdf;
+
+  /// The label is a section heading like Discover's (Collections, Libraries); else the catalogue screen's small label.
+  final bool sectionHeading;
+
+  /// Watch a folder's row: shown beside the list on a wide window ([onOpenWatched] opens it there; null: its own page).
+  final bool watchSelected;
+  final VoidCallback? onOpenWatched;
+
+  /// The group for the app's own state: null when the libraries are not set up.
+  static Widget? forBrowse(BrowseState b) {
+    final libraries = b.libraries;
+    if (libraries == null) return null;
+    return YourOwnGroup(libraries: libraries, pdf: addPdfShared != null && b.device == null, sectionHeading: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final watch = pdf ? watchFoldersShared : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (sectionHeading) const SectionHead(title: 'Your own') else const GroupLabel('Your own'),
+        Material(
+          color: k.surface,
+          borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
+          child: InkWell(
+            key: const ValueKey('add-own-library'),
+            borderRadius: pdf ? const BorderRadius.vertical(top: Radius.circular(14), bottom: Radius.circular(4)) : BorderRadius.circular(14),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 52),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    const FileTile(icon: Icons.library_add_outlined),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Your own library', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                          Text('From a file or a download link', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: k.secondary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Add PDF on a phone: one PDF becomes a book in the person's own library (My books)
+        if (pdf) ...[const SizedBox(height: 2), const AddPdfRow(), const SizedBox(height: 2), AddPdfFolderRow(last: watch == null)],
+        // Watch a folder: new PDFs in a folder are added on their own (Watched folders once one is watched)
+        if (watch != null) ...[
+          const SizedBox(height: 2),
+          WatchFolderRow(watch: watch, selected: watchSelected, onOpenList: onOpenWatched),
+        ],
+        const SizedBox(height: 6),
+      ],
     );
   }
 }

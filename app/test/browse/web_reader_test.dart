@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cache/browse/reader_screen.dart';
 import 'package:cache/browse/web/reader_frame.dart';
 import 'package:cache/browse/web/zim_token.dart';
 import 'package:cache/browse/zim_urls.dart';
+import 'package:cache/layout/modal_watch.dart';
 import 'package:cache/sources/sources_state.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
@@ -39,6 +41,7 @@ class _Tokens extends ZimTokens {
 class _Frame implements ZimFrameHandle {
   final loads = <String>[];
   int backs = 0, forwards = 0;
+  final ignored = <bool>[];
 
   @override
   void load(String url) => loads.add(url);
@@ -46,6 +49,8 @@ class _Frame implements ZimFrameHandle {
   void back() => backs++;
   @override
   void forward() => forwards++;
+  @override
+  void ignorePointer(bool ignore) => ignored.add(ignore);
 }
 
 void main() {
@@ -184,6 +189,24 @@ void main() {
       expect(frame.forwards, 1);
     });
 
+    testWidgets("on the ZIM's main page the bar shows the library title, on other pages the page's own", (tester) async {
+      await tester.pumpWidget(reader(address: null));
+      await tester.pump();
+      await tester.pump();
+      final library = sources.titleOf(ZimFile(path: '/z/wiki.zim', size: 1));
+      gotPage('/zim/TOKEN/$id/A/Main_Page', 'Wikipedia');
+      await tester.pump();
+      expect(find.text('Wikipedia'), findsNothing, reason: "the main page's own HTML title is not shown");
+      expect(find.text(library), findsWidgets);
+      gotPage('/zim/TOKEN/$id/A/Atlanta', 'Atlanta');
+      await tester.pump();
+      expect(find.text('Atlanta'), findsOneWidget);
+      gotPage('/zim/TOKEN/$id/A/Main_Page', 'Wikipedia');
+      await tester.pump();
+      expect(find.text('Wikipedia'), findsNothing);
+      expect(find.text('Atlanta'), findsNothing);
+    });
+
     testWidgets('Main page and a search suggestion load their page in the frame', (tester) async {
       await tester.pumpWidget(reader());
       await tester.pump();
@@ -211,6 +234,85 @@ void main() {
       await tester.pumpWidget(reader(tokens: _Tokens(fail: 'Sign in again to read this.')));
       await tester.pump();
       expect(find.text('Sign in again to read this.'), findsOneWidget);
+    });
+  });
+
+  group('the frame lets pointer events through while a sheet, dialog or menu is open over it', () {
+    late _Frame frame;
+
+    // [itemMenu] is the reader's own more-menu; [nested] puts the reader in a pane's own Navigator, as the Library does.
+    Widget app({bool nested = false, Future<void> Function(BuildContext, VoidCallback?)? itemMenu}) {
+      frame = _Frame();
+      Widget reader(BuildContext _) => ZimReaderScreen(
+        sources: _Src(),
+        zim: ZimFile(path: '/z/wiki.zim', size: 1),
+        address: 'zim:$id/A/Georgia',
+        debugWeb: true,
+        zimTokens: _Tokens(),
+        itemMenu: itemMenu,
+        frameBuilder: ({key, required initialUrl, required onCreated, required onPage, required onExternal}) {
+          onCreated(frame);
+          return SizedBox.expand(key: key, child: const Text('the frame'));
+        },
+      );
+      return MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        navigatorObservers: [ModalWatchObserver()],
+        home: nested ? ModalWatchedNavigator(onGenerateRoute: (_) => MaterialPageRoute<void>(builder: reader)) : Builder(builder: reader),
+      );
+    }
+
+    setUp(modalWatch.reset);
+
+    testWidgets("a dialog from outside the reader's Navigator: the frame ignores pointer events, then takes them back", (tester) async {
+      await tester.pumpWidget(app(nested: true));
+      await tester.pump();
+      expect(frame.ignored.isEmpty || frame.ignored.last == false, isTrue);
+      final root = tester.element(find.byType(ModalWatchedNavigator));
+      final closed = showDialog<void>(context: root, builder: (_) => const AlertDialog(title: Text('Delete it?')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete it?'), findsOneWidget);
+      expect(frame.ignored.last, isTrue);
+      Navigator.of(tester.element(find.text('Delete it?'))).pop();
+      await closed;
+      await tester.pumpAndSettle();
+      expect(frame.ignored.last, isFalse);
+    });
+
+    testWidgets("the reader's own more-menu sheet: ignored while it is open, taken back when it closes", (tester) async {
+      await tester.pumpWidget(app(
+        nested: true,
+        itemMenu: (ctx, _) => showModalBottomSheet<void>(context: ctx, builder: (_) => const SizedBox(height: 120, child: Text('the menu'))),
+      ));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      expect(find.text('the menu'), findsOneWidget);
+      expect(frame.ignored.last, isTrue);
+      await tester.tapAt(const Offset(10, 10)); // the scrim
+      await tester.pumpAndSettle();
+      expect(find.text('the menu'), findsNothing);
+      expect(frame.ignored.last, isFalse);
+    });
+
+    testWidgets('a frame made while a dialog is already open starts out ignoring pointer events', (tester) async {
+      modalWatch.pushed(RawDialogRoute<void>(pageBuilder: (_, _, _) => const SizedBox()));
+      await tester.pumpWidget(app());
+      await tester.pump();
+      expect(frame.ignored, isNotEmpty);
+      expect(frame.ignored.last, isTrue);
+    });
+
+    testWidgets('a page pushed over the reader is not a sheet, dialog or menu: the frame is left alone', (tester) async {
+      await tester.pumpWidget(app());
+      await tester.pump();
+      final before = frame.ignored.length;
+      unawaited(Navigator.of(tester.element(find.byType(Scaffold).first)).push(MaterialPageRoute<void>(builder: (_) => const Scaffold(body: Text('a page')))));
+      await tester.pumpAndSettle();
+      expect(find.text('a page'), findsOneWidget);
+      expect(modalWatch.isOpen, isFalse);
+      expect(frame.ignored.length, before);
     });
   });
 }

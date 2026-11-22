@@ -155,6 +155,7 @@ You can plug in any web service that answers with data in JSON, such as a sensor
 2. At the bottom, tap "Add your own source".
 3. Type a "Name" and the "Web address" of the service.
 4. If the service answers for a location, put the place in the address: tap "Latitude" and "Longitude" where the address needs them. It then works for every place weather watches.
+   For example, this address gives the temperature for each place weather watches: `https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}`
 5. If the service needs a key, type it under "Key (if the service needs one)", and put it in the address where the service asks for it.
 6. Choose "Check every": 15 minutes, 30 minutes, 1 hour or 6 hours.
 7. Tap "Try it". Cache calls the address once. Nothing is saved yet.
@@ -332,12 +333,13 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 3. On the first device, tap "Show my link code". It works once, for 15 minutes.
 4. Tap "Copy code" and get the text to the other device.
 5. On the other device, tap "Enter a link code", then "Paste", then "Link".
-6. Each device then asks once, for example "Sync Cache settings with Desk?". Choose:
-   - "Match": "Changes on either device go to both.";
-   - "Send mine": for example "Desk follows my settings.";
+6. Each device then asks once, for example "Sync Cache settings with Desk?". It is one question for the pair, and the first answer from either device sets both. Choose:
+   - "Match both ways": "Changes on either device go to both.";
+   - send mine to the other device, for example "Desk follows my settings.";
+   - take the other device's settings, for example "This device follows Desk.";
    - "Off": for example "Each keeps its own. You can change this on Desk's page."
 
-Closing the question is the same as "Off", except that it keeps the other device's answer if that device has already answered. Until one device answers, no settings go between the two.
+When one device has answered, the other device's question becomes a short notice of what was chosen, with "OK". A later answer there does not change it. Closing the question is the same as "Off", except that it keeps the other device's answer if that device has already answered. Until one device answers, no settings go between the two.
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
@@ -394,11 +396,12 @@ Your linked devices can keep their settings the same. Each device's page has a "
 
 1. Go to ["Settings" > "Sharing and sync"](cache://settings/sharing) and tap a device under "Linked devices".
 2. Under "Settings", choose:
-   - "Match": "Changes on either device go to both."
-   - "Send mine": for example "Desk follows my settings. Its own changes stay on Desk."
+   - "Match both ways": "Changes on either device go to both."
+   - send mine to the other device, for example "Desk follows my settings. Its own changes stay on Desk."
+   - take the other device's settings, for example "Changes on Desk come here. Changes you make here stay here."
    - "Off": "Each keeps its own."
 
-The device you choose it on is where the settings come from. On the other device the choice says, for example, "Follows Desk's settings". A device linked before this version starts on "Match". A device linked since starts on "Off" until you answer the question after linking.
+One choice sets both devices: when you send yours, the other device is set to take them. A device linked before this version starts on "Match both ways". A device linked since starts on "Off" until you answer the question after linking.
 
 "What's included" has six groups. Each has its own switch, and each opens a page where you tick single settings:
 - "Appearance": the theme, module icons and dark PDF pages;
@@ -410,15 +413,15 @@ The device you choose it on is where the settings come from. On the other device
 
 "Never synced" lists what always stays on each device: its name, mobile data downloads, indexing speed, the space kept free, the log level, Obsidian and Logseq connections, and the permissions each device asks for itself.
 
-"API keys" lists each key saved on this device, each with its own switch. All start off. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match", from you only with "Send mine".
+"API keys" lists each key saved on this device, each with its own switch. All start off. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match both ways", from you only when you send yours.
 
 A setting changes on the other device at once. Nothing restarts.
 
 - Each setting goes on its own. If both devices change the same setting, the later change wins.
-- With "Send mine", a change made on the other device stays there until you change that setting again.
+- When settings go one way, a change made on the other device stays there until you change that setting again.
 - If the other device uses a model this one doesn't have, "Model" says, for example, "Uses Gemma 4 E4B · Q4_K_M, not downloaded here". Tap "Download" to get it. Cache never downloads it on its own.
 - A watched place that hasn't come to this device yet says "waiting for this place" under "What weather watches". It comes with the notebooks.
-- Your Bookshelves are kept the same only with devices set to "Match".
+- Your Bookshelves are kept the same only with devices set to "Match both ways".
 
 ## Search indexes on linked devices
 

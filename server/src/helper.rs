@@ -27,9 +27,19 @@ pub struct HelperConfig {
     /// The app's support and documents folders on the server (`<data>/app/support`, `<data>/app/docs`), handed to the helper as
     /// `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`. The helper builds the core's whole config on them and serves `fs.*` from them.
     pub app_dirs: Option<(PathBuf, PathBuf)>,
+    /// The server's data folder, handed to the helper as `CACHE_DATA`: the helper's sharing host keeps the sync engine's identity
+    /// (`<data>/sync`) and shares the Bookshelves log (`<data>/bookshelves`) there. Without it the helper runs no sharing host.
+    pub data_dir: Option<PathBuf>,
     /// The Valhalla shim (`libvalhalla_shim.so`), handed to the helper as `CACHE_VALHALLA_SHIM`: the full path the core's road
     /// router opens (the core checks it with a plain file test, so a bare library name never routes). Default: [default_shim].
     pub shim: PathBuf,
+    /// The setup guide library the app bundles (`<web>/assets/assets/guide/cache-guide.cache-library` in the web build), handed to the
+    /// helper as `CACHE_GUIDE_LIBRARY` when the file is there; the helper installs it so guide search has something to search.
+    pub guide_package: Option<PathBuf>,
+    /// The starter map layer definitions the app bundles (`<web>/assets/packages/cache_search/layers` in the web build: hillshade,
+    /// contours, the elevation layer, imagery), handed to the helper as `CACHE_STARTER_LAYERS` when the folder is there; the helper
+    /// puts them in the core's definition folder before the core opens, as the phone does at every start.
+    pub starter_layers: Option<PathBuf>,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -48,6 +58,9 @@ impl HelperConfig {
             core_lib,
             sources_file,
             app_dirs: None,
+            data_dir: None,
+            guide_package: None,
+            starter_layers: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -121,6 +134,8 @@ pub struct Helper {
     state: Mutex<State>,
     next_id: AtomicU64,
     stopping: AtomicBool,
+    /// The port of the core's tile server, once asked for (see `tiles`).
+    tile_port: std::sync::Mutex<Option<u16>>,
 }
 
 fn unavailable(why: impl std::fmt::Display) -> String {
@@ -135,6 +150,7 @@ impl Helper {
             state: Mutex::new(State { run: None, failures: 0, restarting: false, reason: String::new() }),
             next_id: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
+            tile_port: std::sync::Mutex::new(None),
         });
         let mut st = h.state.lock().await;
         match h.launch().await {
@@ -148,6 +164,24 @@ impl Helper {
         }
         drop(st);
         h
+    }
+
+    /// The port the core's tile server listens on (127.0.0.1). Kept after the first answer; [fresh] asks the core again (the helper
+    /// may have restarted, which starts a new tile server on another port). The core's `layers server` call starts the server once
+    /// and returns its port; it is made here without an `online` option, so the connection setting is not touched.
+    pub async fn tile_port(self: &Arc<Self>, fresh: bool) -> Result<u16, String> {
+        if !fresh {
+            if let Some(p) = *self.tile_port.lock().unwrap() {
+                return Ok(p);
+            }
+        }
+        let reply = self.call("layers", json!({"op": "server", "arg": null})).await?;
+        if reply["ok"] != json!(true) {
+            return Err(unavailable(reply["error"]["message"].as_str().unwrap_or("the layer engine did not start")));
+        }
+        let port = reply["result"]["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p != 0).ok_or_else(|| unavailable("the layer engine gave no tile port"))?;
+        *self.tile_port.lock().unwrap() = Some(port);
+        Ok(port)
     }
 
     /// Run one op. `Ok` is the helper's whole reply object (`{"id","ok",...}`); `Err` says why the core is unavailable.
@@ -215,8 +249,28 @@ impl Helper {
         let sources = read_sources(&self.cfg.sources_file)?;
         let mut cmd = Command::new(&self.cfg.exe);
         cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib).env("CACHE_VALHALLA_SHIM", &self.cfg.shim);
+        // This program, which the helper re-runs as `pdf-text` to read the PDFs inside ZIMs for indexing (MuPDF is here, not in Dart).
+        if let Ok(me) = std::env::current_exe() {
+            cmd.env("CACHE_PDF_TEXT_EXE", me);
+        }
+        if let Some(guide) = self.cfg.guide_package.as_ref().filter(|g| g.is_file()) {
+            cmd.env("CACHE_GUIDE_LIBRARY", guide);
+        }
+        if let Some(layers) = self.cfg.starter_layers.as_ref().filter(|d| d.is_dir()) {
+            cmd.env("CACHE_STARTER_LAYERS", layers);
+        }
+        // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
+        // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.
+        cmd.env(cache_netguard::ENV_VAR, cache_netguard::ENV_VALUE);
         if let Some((support, docs)) = &self.cfg.app_dirs {
             cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
+            // The keystore (`<data>/keystore.json`, owner only) sits outside the folders the browser's `fs.*` ops reach.
+            if let Some(data) = support.parent().and_then(|p| p.parent()) {
+                cmd.env("CACHE_KEYSTORE", data.join("keystore.json"));
+            }
+        }
+        if let Some(data) = &self.cfg.data_dir {
+            cmd.env("CACHE_DATA", data);
         }
         let mut child = cmd
             .stdin(Stdio::piped())

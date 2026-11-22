@@ -51,13 +51,17 @@ Future<void> openDiscover(BuildContext context, DiscoverState d, {DiscoverFace f
 /// Discover, laid out like an app store: search, a featured card (the first activity not added yet), and rows of tiles with Get,
 /// Added or Update. A wide window shows the rows as a grid. While first run is not done the store's first screen is the wizard.
 class DiscoverScreen extends StatefulWidget {
-  const DiscoverScreen({super.key, required this.discover, this.face = DiscoverFace.store, this.links});
+  const DiscoverScreen({super.key, required this.discover, this.face = DiscoverFace.store, this.links, this.yourOwn});
 
   final DiscoverState discover;
   final DiscoverFace face;
 
   /// The links; [discoverLinks] when null.
   final DiscoverLinks? links;
+
+  /// The YOUR OWN group (Your own library, Add a PDF and the rest), shown at the top when Add to Library opens Discover's
+  /// Resources; null in Discover opened any other way.
+  final Widget? yourOwn;
 
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
@@ -98,6 +102,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           if (_query.text.trim().isNotEmpty)
             ..._results(context)
           else ...[
+            if (resources && widget.yourOwn != null) widget.yourOwn!,
             if (!resources) ..._updates(context),
             const SizedBox(height: 8),
             if (!resources && d.featured != null) _featured(context, d.featured!),
@@ -157,6 +162,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             if (searching)
               Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 760), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _results(context))))
             else ...[
+              if (resources && widget.yourOwn != null) Align(alignment: Alignment.centerLeft, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 560), child: widget.yourOwn!)),
               if (!resources) ..._updates(context),
               if (featured != null) Align(alignment: Alignment.centerLeft, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 760), child: _featured(context, featured))),
               if (!resources) ...[

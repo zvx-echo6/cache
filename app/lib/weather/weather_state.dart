@@ -7,7 +7,6 @@ import 'package:flutter/foundation.dart';
 
 import '../actions/setup_status.dart' show setupAge;
 import '../chat/system_prompt.dart' show isoWithOffset;
-import '../files.dart';
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
 import '../settings/web_search_setup.dart' show KeyCheck;
@@ -23,9 +22,15 @@ import 'alert_watch.dart';
 import 'live_view.dart';
 import 'own_source.dart';
 import 'place_alerts.dart';
+import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
 import 'places.dart';
+import 'source_health.dart';
+import '../notebook/places.dart' show distanceM;
+import 'weather_files.dart';
 import 'words.dart';
 import '../platform/app_log.dart';
+
+export 'source_health.dart';
 
 /// Where the phone is, as far as weather is concerned.
 typedef Position = ({double lat, double lon});
@@ -43,6 +48,9 @@ enum StatusTone { ok, warn, quiet }
 
 /// Home's Weather and alerts card while the weather part is starting and sources are on (the same placeholder Home shows while it
 /// reads the card).
+/// What Home and the Weather screen say in the one state where weather does not work ([WeatherState.nothingWatched]).
+const String kWeatherHereOff = "Weather is off: your location isn't watched";
+
 const String kWeatherStarting = '…';
 
 /// What the Weather and alerts card on Home shows (see [WeatherState.homeCard]).
@@ -50,9 +58,11 @@ class HomeWeather {
   const HomeWeather({
     this.message,
     this.off = false,
+    this.hereOff = false,
     this.place = '',
     this.temperature,
     this.conditions,
+    this.period,
     this.high,
     this.low,
     this.age,
@@ -62,18 +72,32 @@ class HomeWeather {
     this.alertsKnown = false,
     this.alertsExpired = false,
     this.checked,
+    this.answer,
   });
 
-  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
+  /// What the card was worked out from, so that it can be worked out again for a later moment
+  /// ([WeatherState.homeCardAsOfNow]); null for words in place of a card.
+  final HomeAnswer? answer;
+
+  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Weather is off: your location isn't watched".
   final String? message;
 
   /// Weather was on and every source is off now: the card says "Weather is off" with Turn on (Settings > Weather and alerts).
   final bool off;
+
+  /// Weather is off because nothing is watched: "Your location" was switched off and no other place is watched. The card offers to
+  /// watch the location again with one tap.
+  final bool hereOff;
   final String place;
 
   /// "45 °F" and "clear sky", as the forecast source writes them.
   final String? temperature;
   final String? conditions;
+
+  /// The label of the forecast period [conditions], [high] and [low] are for ("Wed Nov 11"), when they are not a reading taken
+  /// now: the source's "Now" has ended and this is its forecast for the period that covers now. Home writes it before them, as
+  /// the Weather screen lists a period under its label. Null for a reading.
+  final String? period;
   final String? high;
   final String? low;
 
@@ -95,6 +119,18 @@ class HomeWeather {
 
   /// How old the alert data is ("20 minutes old").
   final String? checked;
+}
+
+/// What a Home card was worked out from: the place Home talks about and what each source that is on answered for it, as the
+/// core gave it. Home keeps its last card while the next one is awaited, and that can be hours later (the app left in memory
+/// overnight), so the card is worked out again from this for the moment it is shown ([WeatherState.homeCardAsOfNow]).
+class HomeAnswer {
+  const HomeAnswer._(this.place, this._answers);
+
+  final WatchPlace place;
+
+  /// Each source's view as it was when the core answered, and the answer it was made from (null where the source holds nothing).
+  final List<(SourceView, Map<String, dynamic>?)> _answers;
 }
 
 /// One warning or fire on the Home card: its name and one line of detail.
@@ -154,8 +190,11 @@ class WeatherState extends ChangeNotifier {
     required this.policy,
     required this.core,
     required this.secrets,
-    required this.catalogueDir,
-    required this.liveDir,
+    this.catalogueDir,
+    this.liveDir,
+    this.catalogueFiles,
+    this.liveFiles,
+    this.onPlan,
     required this.builtIns,
     this.position,
     this.regions,
@@ -166,23 +205,53 @@ class WeatherState extends ChangeNotifier {
     OwnFetch? ownFetch,
     this.ownTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
+    this.hereSettle = const Duration(seconds: 45),
+    this.hereGap = const Duration(minutes: 15),
+    this.hereMaxWait = const Duration(minutes: 5),
+    this.townOf,
+    Timer Function(Duration, void Function())? timer,
   }) : _fetch = fetch ?? fetchBytes,
+       _makeTimer = timer ?? Timer.new,
        _ownFetch = ownFetch ?? fetchOwnAddress,
        _now = clock ?? DateTime.now;
 
   final AppSettings settings;
   final DataPolicy policy;
   final LiveCore core;
+
+  /// How long "Where I am" must stay at its key before its sources are fetched ([positionChanged]).
+  final Duration hereSettle;
+
+  /// The least time between two fetches for "Where I am" that [positionChanged] starts.
+  final Duration hereGap;
+
+  /// The longest a fetch for "Where I am" is put off by it moving: each move restarts the [hereSettle] wait, and in a moving car the
+  /// key never settles, so this long after the first unsettled move its sources are fetched wherever it is ([positionChanged]).
+  final Duration hereMaxWait;
+
+  /// The nearest town to a position, as the places tools name it ("Burley, ID"), from the offline places data; null when there is
+  /// none or the places data is not there. "Where I am" is named after it ([hereName]).
+  final Future<String?> Function(double lat, double lon)? townOf;
+  final Timer Function(Duration, void Function()) _makeTimer;
   final TokenStore secrets;
 
   /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
   final void Function()? onPlacesChanged;
 
-  /// Where downloaded catalogues are kept.
-  final Future<Directory> Function() catalogueDir;
+  /// Where downloaded catalogues are kept (a phone: a folder; give [catalogueFiles] instead in a browser).
+  final Future<Directory> Function()? catalogueDir;
 
-  /// The core's source folder, or null when there is no core.
-  final Future<Directory?> Function() liveDir;
+  /// The core's source folder, or null when there is no core (a phone; give [liveFiles] instead in a browser).
+  final Future<Directory?> Function()? liveDir;
+
+  /// The same two folders in a browser, where they are on Cache Server (the catalogues in the support folder, the core's source
+  /// folder in the documents folder). They are used when given.
+  final Future<WeatherFiles> Function()? catalogueFiles;
+  final Future<WeatherFiles?> Function()? liveFiles;
+
+  /// Told what the server's own timer should keep fetching when no tab is open (see [watchPlan]); null on a phone, whose
+  /// background run reads the settings and the last place itself.
+  final Future<void> Function(Map<String, dynamic> plan)? onPlan;
 
   /// The text of each built-in definition.
   final Future<List<String>> Function() builtIns;
@@ -221,6 +290,7 @@ class WeatherState extends ChangeNotifier {
   bool _refreshing = false;
   final Map<String, String> _catalogueErrors = {};
   final Map<String, String> _sourceErrors = {};
+  final Map<String, SourceHealth> _health = {};
   DateTime? _lastOkAt;
   DateTime? _lastRunAt;
   DateTime? _lastOnlineAt;
@@ -240,6 +310,132 @@ class WeatherState extends ChangeNotifier {
 
   /// The last failure of each source in the last update, by source id.
   Map<String, String> get sourceErrors => Map.unmodifiable(_sourceErrors);
+
+  /// What is known about [c]'s downloads; null before any try (and for a file written before this record existed).
+  SourceHealth? healthOf(Connector c) => _health[c.id];
+
+  /// There is no connection: one notice for the whole list, not a state of any row.
+  bool get noNetwork => _kind == ConnectionKind.none || _coreOffline;
+
+  /// The core answered a download with "offline" (its own policy says so) in the last update.
+  bool _coreOffline = false;
+
+  /// What Settings says about [c]: Updating while it is being updated, else [lastStatusOf].
+  SourceRowState statusOf(Connector c) {
+    final s = lastStatusOf(c);
+    final busy = _updating || _updatingIds.contains(c.id);
+    return busy && s != SourceRowState.off && s != SourceRowState.needsKey ? SourceRowState.updating : s;
+  }
+
+  /// What is known of [c] without a refresh that is running: its last state. A failed update alone changes nothing the person sees
+  /// while the saved copy is still current (the core's `expired` flag, as of the last try); only an out-of-date copy turns the
+  /// failure into the row's state.
+  SourceRowState lastStatusOf(Connector c) {
+    if (!isOn(c.id)) return SourceRowState.off;
+    if (!keyReady(c)) return SourceRowState.needsKey;
+    final h = _health[c.id];
+    if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
+    // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
+    if (h.failure != SourceFailure.keyRejected && h.failure != SourceFailure.keyMissing && h.copyCurrent) return SourceRowState.working;
+    return switch (h.failure) {
+      SourceFailure.keyRejected => SourceRowState.keyRejected,
+      SourceFailure.limit => SourceRowState.limitReached,
+      SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
+      SourceFailure.keyMissing => SourceRowState.needsKey,
+      SourceFailure.none => SourceRowState.working,
+    };
+  }
+
+  /// With no connection a failed download is not shown as a fault (the one "No connection" notice says it): a row whose saved copy
+  /// is out of date says it is waiting for a connection (quietly, no button, not counted); one with a current copy is Working anyway.
+  SourceRowState _offlineAware(SourceRowState s) => noNetwork && s == SourceRowState.notAnswering ? SourceRowState.waitingForConnection : s;
+
+  /// What Settings shows on [c]'s row: [statusOf] with the no-connection rule.
+  SourceRowState rowStateOf(Connector c) => _offlineAware(statusOf(c));
+
+  /// The state [c] counts and is grouped by: its last state, so a refresh that has started does not turn every row Updating (and the
+  /// summary all-good) before it has an answer.
+  SourceRowState lastRowStateOf(Connector c) => _offlineAware(lastStatusOf(c));
+
+  /// A state that needs the person to do something (counted in "N need attention"). Limit reached does not.
+  static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
+
+  /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on, your own
+  /// included (a source that is off and not featured is under More sources).
+  List<Connector> get listedSources => [for (final c in sources) if (c.featured || isOn(c.id)) c];
+
+  /// How many listed sources are on and fine, how many are on and need attention, and how many are off.
+  ({int working, int attention, int off}) get sourceCounts {
+    var working = 0, attention = 0, off = 0;
+    for (final c in listedSources) {
+      final s = lastRowStateOf(c);
+      if (s == SourceRowState.off) {
+        off++;
+      } else if (needsAttention(s)) {
+        attention++;
+      } else {
+        working++;
+      }
+    }
+    return (working: working, attention: attention, off: off);
+  }
+
+  /// When the last update ran (whether or not it got something); null before any.
+  DateTime? get lastCheckedAt => _lastRunAt ?? _lastOkAt;
+
+  /// The kind of a failed download, from the core's error code and the HTTP status in its message.
+  static SourceFailure failureKind(CacheSearchException e, {required bool needsKey, required bool hasKey}) {
+    switch (e.code) {
+      case 'quota':
+        return SourceFailure.limit;
+      case 'key_missing':
+        return SourceFailure.keyMissing;
+      case 'bad_response' || 'bad_json':
+        return SourceFailure.unreadable;
+      case 'busy' || 'internal':
+        return SourceFailure.providerError;
+      case 'not_configured':
+        return needsKey && !hasKey ? SourceFailure.keyMissing : SourceFailure.providerError;
+      case 'fetch_failed':
+        final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
+        if (m == null) return SourceFailure.unreachable;
+        final code = int.parse(m.group(1)!);
+        if (code == 401 || code == 403) {
+          if (!needsKey) return SourceFailure.providerError;
+          return hasKey ? SourceFailure.keyRejected : SourceFailure.keyMissing;
+        }
+        return code == 429 ? SourceFailure.limit : SourceFailure.providerError;
+      default:
+        return SourceFailure.unreachable;
+    }
+  }
+
+  SourceFailure _failureOf(Connector c, Object e) => e is CacheSearchException
+      ? failureKind(e, needsKey: c.needsKey, hasKey: !c.needsKey || hasKey(c.keyAlias!))
+      : SourceFailure.unreachable;
+
+  /// Notes the outcome of a try for [c]: a success clears the failure; a failure keeps the time it began, and whether the core
+  /// still holds a current copy (read now, so [statusOf] needs no read).
+  Future<void> _noteOutcome(Connector c, SourceFailure failure) async {
+    final now = _now();
+    final before = _health[c.id];
+    if (failure == SourceFailure.none) {
+      _health[c.id] = SourceHealth(lastOkAt: now, lastAttemptAt: now);
+      return;
+    }
+    var current = false;
+    try {
+      final i = await infoFor(c);
+      current = i.age != null && !i.expired;
+    } catch (_) {}
+    _health[c.id] = SourceHealth(
+      lastOkAt: before?.lastOkAt,
+      lastAttemptAt: now,
+      failure: failure,
+      failureSince: before != null && before.failure != SourceFailure.none ? (before.failureSince ?? now) : now,
+      copyCurrent: current,
+    );
+  }
 
   /// The address of the main source list (Settings > Storage > Advanced > Source list address can change it).
   String get catalogueUrl => settings.catalogueUrl ?? kDefaultCatalogueUrl;
@@ -289,6 +485,12 @@ class WeatherState extends ChangeNotifier {
 
   bool isOn(String id) => _same(id).any(settings.liveSourcesOn.contains);
 
+  /// For the log: how many sources the settings have on, how many of them the app recognises as on (catalogue loaded), how many the
+  /// catalogues offer, and how many places are watched. Settings on with none recognised means the catalogue, not the switches.
+  String sourcesLine() =>
+      'weather sources: ${settings.liveSourcesOn.length} on in settings, ${enabledSources.length} recognised as on, '
+      '${sources.length} in the catalogues, started $_started; ${settings.watchedPlaces.length} places watched';
+
   /// The sources that are on and can be used.
   List<Connector> get enabledSources => [for (final c in sources) if (isOn(c.id)) c];
 
@@ -306,6 +508,38 @@ class WeatherState extends ChangeNotifier {
 
   bool rowIsOn(CuratedRow r) => rowSources(r).any((c) => isOn(c.id));
 
+  /// The one time weather does not work (owner, 2026-11-15): the person switched off watching "Your location" and watches no
+  /// other place.
+  bool get nothingWatched => !settings.watchedPlaces.contains(kWatchHere) && watchedPlacesNow().isEmpty;
+
+  /// Watching "Your location" again, from the one tap Home and the Weather screen offer when [nothingWatched].
+  Future<void> watchHereAgain() async {
+    logInfo('Weather: Watch my location tapped');
+    settings.setWatched(kWatchHere, true);
+    positionChanged();
+    await updateNow();
+  }
+
+  /// The default switches: what "Turn on weather" turns on, and what comes back by itself whenever no source would be on.
+  static List<CuratedRow> get defaultRows => [
+    for (final title in const ['Weather forecast', 'Weather alerts', 'Wildfires']) kCurated.firstWhere((r) => r.title == title),
+  ];
+
+  /// Weather always works (owner, 2026-11-15): whenever no source would be on (at start, after a settings sync from a linked
+  /// device, after a switch), the default sources come back on by themselves, with no message. Only once the catalogues are there
+  /// (before, no source can be recognised as on). Writes the setting directly, not through [setSourcesOn], so it never loops.
+  Future<bool> _keepDefaultsOn() async {
+    // The catalogues must be there, not only the built-in sources: the built-ins stand in for forecast and alerts but not for Wildfires,
+    // so switching on before the catalogue came left Wildfires off for good. A first start waits for the catalogue.
+    if (!_started || _catalogues.isEmpty || sources.isEmpty || enabledSources.isNotEmpty) return false;
+    final ids = <String>{for (final r in defaultRows) for (final c in rowSources(r)) ..._same(c.id)};
+    if (ids.isEmpty) return false;
+    settings.setLiveSourcesOn(ids, true);
+    logInfo('Weather: no source was on; the default sources are on again; ${sourcesLine()}');
+    await applyAlertDefaults(force: true);
+    return true;
+  }
+
   /// A switch: all of the sources behind it.
   Future<void> setRowOn(CuratedRow r, bool on) => setSourcesOn(rowSources(r), on);
 
@@ -313,6 +547,7 @@ class WeatherState extends ChangeNotifier {
     final ids = <String>{for (final c in list) ..._same(c.id)};
     if (ids.isEmpty) return;
     settings.setLiveSourcesOn(ids, on);
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -348,6 +583,10 @@ class WeatherState extends ChangeNotifier {
       return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _keys.add(alias);
+    for (final u in sourcesUsingKey(alias)) {
+      final h = _health[u.id];
+      if (h != null && (h.failure == SourceFailure.keyRejected || h.failure == SourceFailure.keyMissing)) _health.remove(u.id);
+    }
     if (switchOn) settings.setLiveSourcesOn({..._same(forSource.id)}, true);
     notifyListeners();
     await _applyAll();
@@ -388,8 +627,8 @@ class WeatherState extends ChangeNotifier {
       if (m == null) return "Couldn't reach $who. Check your connection.";
       final code = int.parse(m.group(1)!);
       if (code == 401 || code == 403) return "$who didn't accept this key. Check you copied all of it.";
-      if (code >= 500) return '$who had a problem (HTTP $code). Try again in a moment.';
-      return '$who answered with an error (HTTP $code).';
+      if (code >= 500) return '$who had a problem. Try again in a moment.';
+      return '$who answered with an error.';
     }
     if (e.code == 'bad_response') return "$who answered with something Cache couldn't read. Try again later.";
     return "Couldn't check the key. Try again.";
@@ -421,7 +660,7 @@ class WeatherState extends ChangeNotifier {
   /// Called once the core has opened.
   Future<void> start() async {
     if (_started) return;
-    _store = CatalogueStore(await catalogueDir());
+    _store = catalogueFiles != null ? CatalogueStore.files(await catalogueFiles!()) : CatalogueStore((await catalogueDir!()));
     try {
       _builtIn = [for (final t in await builtIns()) Connector.parse(t)];
     } catch (e) {
@@ -431,6 +670,7 @@ class WeatherState extends ChangeNotifier {
     _moveLinkedLists();
     _readStatus();
     _readShown();
+    _readHereData();
     _readSaved();
     await _readKeys();
     _kind = await policy.probe.current();
@@ -443,6 +683,7 @@ class WeatherState extends ChangeNotifier {
     // What is kept on the phone (the sources that are on, the last data shown, the saved places) shows from here, before the core
     // has answered anything: the rest of start waits for the core.
     notifyListeners();
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
     if (_catalogueDue) {
@@ -486,6 +727,7 @@ class WeatherState extends ChangeNotifier {
 
   void _onSettings() {
     unawaited(pushPolicy());
+    unawaited(publishPlan());
     notifyListeners();
   }
 
@@ -527,15 +769,26 @@ class WeatherState extends ChangeNotifier {
 
   Future<void> _syncFolder() async {
     try {
-      final dir = await liveDir();
-      if (dir == null) return;
-      _folder ??= LiveFolder(dir);
+      if (_folder == null) {
+        if (liveFiles != null) {
+          final files = await liveFiles!();
+          if (files == null) return;
+          _folder = LiveFolder.files(files);
+        } else {
+          final dir = await liveDir!();
+          if (dir == null) return;
+          _folder = LiveFolder(dir);
+        }
+      }
       _folder!.apply(
         {for (final c in enabledSources) c.id: c.defText},
         formerly: [for (final c in _builtIn) c.id],
       );
+      // A browser's writes are queued: the core reads the folder itself, so they are waited for. A phone's are done already.
+      if (liveFiles != null) await _folder!.files.flush();
       final listed = await core.sources();
       _registered = {for (final s in (listed['sources'] as List? ?? const [])) (s as Map)['id'] as String};
+      unawaited(publishPlan());
     } catch (e) {
       logError('Live sources folder', error: e);
     }
@@ -565,6 +818,50 @@ class WeatherState extends ChangeNotifier {
         return;
       }
     }
+  }
+
+  String _lastPlan = '';
+
+  /// What the server's own timer keeps fetching with no tab open (a browser; see [onPlan]): the sources that are on and ready, and the
+  /// watched places with the request the core takes for each. Sent only when it changed.
+  Future<void> publishPlan() async {
+    final send = onPlan;
+    if (send == null || !_started) return;
+    try {
+      final places = await watchedPlaces();
+      final plan = <String, dynamic>{
+        'sources': [
+          for (final c in enabledSources)
+            if (keyReady(c)) {'id': c.id, 'title': c.title, 'alerts': c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts'},
+        ],
+        'places': [for (final p in places) {'id': p.id, 'name': p.name, 'request': placeRequest(p)}],
+      };
+      final text = jsonEncode(plan);
+      if (text == _lastPlan) return;
+      await send(plan);
+      _lastPlan = text;
+    } catch (e) {
+      logError('Live plan for the server', error: e);
+    }
+  }
+
+  Timer? _openWatch;
+
+  /// While a tab is open (a browser): now, then every [every], an update that is [due] runs, or else the alerts are checked, so what
+  /// the server's timer fetched while no tab was open pops up as a notification, once, by the told list.
+  void watchWhileOpen({required Duration every, required Duration due}) {
+    _openWatch?.cancel();
+    Future<void> pass() async {
+      if (!_started || _updating || enabledSources.isEmpty) return;
+      try {
+        if (await updateIfDue(due) == null) await checkAlerts();
+      } catch (e) {
+        logError('Weather check', error: e);
+      }
+    }
+
+    unawaited(pass());
+    _openWatch = Timer.periodic(every, (_) => unawaited(pass()));
   }
 
   /// cs_live_set_fetch_policy: online, metered, mobile data allowed (updates always use any connection), and the sources that are on.
@@ -614,6 +911,7 @@ class WeatherState extends ChangeNotifier {
     }
     _moveLinkedLists();
     await _readKeys();
+    await _keepDefaultsOn();
     await _applyAll();
   }
 
@@ -662,6 +960,18 @@ class WeatherState extends ChangeNotifier {
     ];
   }
 
+  /// Reads the own sources from the files again (a change from a linked device was applied to them on the server), takes them into
+  /// the core's view and tells listeners. Nothing is written. The other catalogues stay as they are in memory.
+  Future<void> reloadOwn() async {
+    final store = _store;
+    if (store == null) return;
+    final fresh = store.loadAll().where((c) => c.url == ownListUrl).firstOrNull;
+    _catalogues = [for (final c in _catalogues) if (c.url != ownListUrl) c, ?fresh];
+    await _readKeys();
+    await _applyAll();
+    notifyListeners();
+  }
+
   /// The sources of your own exactly as a linked device has them ([ownSourcesJson]); each definition is checked by the core as
   /// any other, and one that fails is left out. Applied at once.
   Future<void> replaceOwnSources(Object? list) async {
@@ -686,6 +996,7 @@ class WeatherState extends ChangeNotifier {
 
   /// The live sources switched on changed from outside this page (a linked device's settings): the core is told at once.
   Future<void> sourcesChanged() async {
+    await _keepDefaultsOn();
     await _applyAll();
     notifyListeners();
   }
@@ -819,7 +1130,9 @@ class WeatherState extends ChangeNotifier {
     }
     final url = Uri.tryParse(fillAddress(d.keptAddress, lat: at.lat, lon: at.lon, key: key));
     if (url == null || !isAllowedAddress(url)) return OwnTry.failed(host, OwnTryFailure.notAllowed);
-    return tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout);
+    final t = await tryOwnAddress(url, fetch: _ownFetch, timeout: ownTimeout, place: at);
+    logInfo(ownTryLogLine(ownAddressForLog(d.keptAddress, lat: at.lat, lon: at.lon, key: key), at.lat, at.lon, t));
+    return t;
   }
 
   /// Saves the source [d] makes with the values [picks] (a new one, or the one being edited, [OwnDraft.id]): its definition is
@@ -989,6 +1302,21 @@ class WeatherState extends ChangeNotifier {
   /// seconds; the Weather screen and Home show "Where I am" and the kept places meanwhile.
   List<WatchPlace> placeChoicesNow() => _choices(_savedKept ?? const []);
 
+  /// The saved places may have changed under the watches: a notebook came in (Notebooks sharing was switched on), so a place a linked
+  /// device watches is here now. A watch whose place is not on this device stays in the setting, is not listed and is not fetched; the
+  /// moment its place is here it is listed (the screens hear this) and its weather is fetched, with no tap and no restart.
+  Future<void> savedPlacesChanged() async {
+    if (_disposed) return;
+    final before = {for (final s in _savedKept ?? const <SavedPlaceRecord>[]) s.key};
+    await placeChoices();
+    final w = settings.watchedPlaces;
+    final after = {for (final s in _savedKept ?? const <SavedPlaceRecord>[]) s.key};
+    if (after.length == before.length && after.containsAll(before)) return;
+    notifyListeners();
+    onPlacesChanged?.call();
+    if (after.difference(before).any((k) => w.contains('place:$k'))) unawaited(updateNow());
+  }
+
   /// [watchedPlaces] at once, without the core (see [placeChoicesNow]).
   List<WatchPlace> watchedPlacesNow() => _watched(placeChoicesNow());
 
@@ -998,7 +1326,7 @@ class WeatherState extends ChangeNotifier {
       WatchPlace(
         id: kWatchHere,
         kind: PlaceKind.here,
-        name: 'Where I am',
+        name: hereName,
         subtitle: p == null ? 'Follows this device · position not known yet' : 'Follows this device',
         lat: p?.lat,
         lon: p?.lon,
@@ -1041,7 +1369,113 @@ class WeatherState extends ChangeNotifier {
     final key = p == null ? null : _hereKey(p.lat, p.lon);
     if (key == _hereSeen) return;
     _hereSeen = key;
+    unawaited(publishPlan());
     notifyListeners();
+    if (key != null) {
+      unawaited(_lookUpHereName());
+      // Each move restarts the settle wait; in a moving car that never ends, so the wait is cut short once [hereMaxWait] has passed
+      // since the first move that did not settle.
+      final now = _now();
+      final since = _hereMovingSince ??= now;
+      final left = hereMaxWait - now.difference(since);
+      final wait = left < hereSettle ? (left.isNegative ? Duration.zero : left) : hereSettle;
+      _scheduleHereFetch(wait);
+    }
+  }
+
+  /// When "Where I am" first moved without settling since the last fetch for it; null while it is still or after a fetch.
+  DateTime? _hereMovingSince;
+
+  /// The town "Where I am" is in, by its key, as [townOf] gave it (kept so it is not looked up at every build).
+  final Map<String, String> _hereTowns = {};
+  bool _townLooking = false;
+
+  /// The name of "Where I am": the nearest town when it is known, else "Current location".
+  String get hereName {
+    final p = position?.call();
+    final t = p == null ? null : _hereTowns[_hereKey(p.lat, p.lon)];
+    return t ?? kCurrentLocation;
+  }
+
+  /// Looks up the town for the key "Where I am" is at, once per key and one lookup at a time (a moving car changes its key every
+  /// kilometre; a lookup that finishes after it moved on is kept for its own key and the next one is started).
+  Future<void> _lookUpHereName() async {
+    final lookup = townOf;
+    if (lookup == null || _townLooking || _disposed) return;
+    final p = position?.call();
+    if (p == null) return;
+    final key = _hereKey(p.lat, p.lon);
+    if (_hereTowns.containsKey(key)) return;
+    _townLooking = true;
+    String? town;
+    try {
+      town = await lookup(p.lat, p.lon);
+    } catch (_) {}
+    _townLooking = false;
+    if (_disposed) return;
+    if (town != null && town.isNotEmpty) {
+      if (_hereTowns.length > 20) _hereTowns.clear();
+      _hereTowns[key] = town;
+      notifyListeners();
+    }
+    final now = position?.call();
+    if (now != null && _hereTown(now) == null && _hereKey(now.lat, now.lon) != key) unawaited(_lookUpHereName());
+  }
+
+  String? _hereTown(Position p) => _hereTowns[_hereKey(p.lat, p.lon)];
+
+  Timer? _hereTimer;
+  DateTime? _hereFetchedAt;
+
+  /// When the sources were last fetched for "Where I am" alone, after it moved ([positionChanged]). That fetch changes no
+  /// update time, so the Weather screen reads this to know there is something new to show for the place.
+  DateTime? get hereFetchedAt => _hereFetchedAt;
+
+  /// "Where I am" moved to a place nothing was downloaded for, so Home said "no forecast yet" until the next scheduled update
+  /// (build 48). Once the key has settled ([hereSettle], restarted by each move) its sources are fetched for that place alone, at
+  /// most once per [hereGap]. Like every update it uses any connection (mobile data too) and none while offline; the core's own
+  /// refresh intervals and quotas still apply, so a fresh copy is not downloaded again.
+  void _scheduleHereFetch(Duration after) {
+    _hereTimer?.cancel();
+    if (_disposed || !_started) return;
+    _hereTimer = _makeTimer(after, () async {
+      final last = _hereFetchedAt;
+      if (last != null && _now().difference(last) < hereGap) {
+        _scheduleHereFetch(hereGap - _now().difference(last));
+        return;
+      }
+      _hereMovingSince = null;
+      await _fetchHere();
+    });
+  }
+
+  Future<void> _fetchHere() async {
+    if (_disposed || _updating || _updateRunning) return;
+    final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
+    final here = [for (final p in await watchedPlaces()) if (p.kind == PlaceKind.here) p];
+    unawaited(_lookUpHereName());
+    if (srcs.isEmpty || here.isEmpty) return;
+    if (await policy.probe.current() == ConnectionKind.none) return;
+    _hereFetchedAt = _now();
+    await _syncFolder();
+    await pushPolicy();
+    await Future.wait([
+      for (final c in srcs)
+        () async {
+          try {
+            await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+            _noteHere(c, here.first);
+            _coreOffline = false;
+            await _noteOutcome(c, SourceFailure.none);
+          } catch (e) {
+            logInfo('Live update for where I am, ${c.id}: failed');
+            if (e is CacheSearchException && e.code == 'offline') _coreOffline = true;
+            await _noteOutcome(c, _failureOf(c, e));
+          }
+        }(),
+    ]);
+    notifyListeners();
+    await checkAlerts();
   }
 
   /// "Where I am" is ticked and its position is not known yet: the place is waiting, not missing.
@@ -1089,18 +1523,15 @@ class WeatherState extends ChangeNotifier {
   /// The saved places the core last gave, also kept in a file (read at start, before the core opens).
   List<SavedPlaceRecord>? _savedKept;
 
-  File? get _savedFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/saved-places.json');
-  }
+  static const String _savedFile = 'saved-places.json';
 
   static Map<String, dynamic> _savedJson(SavedPlaceRecord s) => {'key': s.key, 'name': s.name, 'lat': s.lat, 'lon': s.lon, 'label': ?s.label};
 
   void _readSaved() {
     try {
-      final f = _savedFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_savedFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! List) return;
       _savedKept ??= [for (final e in j) if (e is Map) SavedPlaceRecord.fromJson(e.cast<String, dynamic>())];
     } catch (_) {}
@@ -1112,10 +1543,7 @@ class WeatherState extends ChangeNotifier {
     _savedKept = saved;
     if (text == before) return;
     try {
-      final f = _savedFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, text);
+      _store?.files.write(_savedFile, text);
     } catch (_) {}
   }
 
@@ -1137,7 +1565,22 @@ class WeatherState extends ChangeNotifier {
   /// too. [force] is a person's refresh: every source is downloaded again even when its copy is younger than its refresh interval (a
   /// forecast is kept for 3 hours), still within the core's quotas.
   Future<UpdateReport> updateNow({bool force = false}) async {
-    if (_updating) return const UpdateReport(nothingToDo: 'Already updating');
+    // One update at a time, from its first step to its alert check. [_updating] alone did not do it: it is set only once the
+    // places and the connection are known, so two calls in the same moment (back on the screen and a tap on Update now) both
+    // passed, downloaded everything twice and checked for alerts twice.
+    if (_updating || _updateRunning) return const UpdateReport(nothingToDo: 'Already updating');
+    _updateRunning = true;
+    try {
+      return await _update(force);
+    } finally {
+      _updateRunning = false;
+    }
+  }
+
+  /// An [updateNow] is under way, from before its first wait.
+  bool _updateRunning = false;
+
+  Future<UpdateReport> _update(bool force) async {
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
     final places = await watchedPlaces();
@@ -1152,6 +1595,8 @@ class WeatherState extends ChangeNotifier {
     _lastOnlineAt = _now();
     _updating = true;
     _sourceErrors.clear();
+    final kinds = <String, SourceFailure>{};
+    _coreOffline = false;
     notifyListeners();
     // The core reads its definitions from the folder: write it from what is on now, whichever way a source was switched on (a
     // switch, Turn on weather, a catalogue's default), so no source that is on is missing there ("no live source").
@@ -1163,32 +1608,17 @@ class WeatherState extends ChangeNotifier {
     // for another's network and the core's worker stays free for searches and the stored data meanwhile. Failures are listed in
     // the order of the sources and places, as before.
     final all = Stopwatch()..start();
-    Future<(bool, String?)> one(Connector c, WatchPlace p) async {
-      final took = Stopwatch()..start();
-      try {
-        final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
-        final got = r['fetched'] == true;
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
-        return (got, null);
-      } on CacheSearchException catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
-        logError('Live update failed (${e.code})', error: e.message, detail: c.id);
-        final who = c.provider.isEmpty ? c.title : c.provider;
-        _sourceErrors[c.id] = _fetchFailureWords(e);
-        return (false, '$who for ${p.name} failed: ${_fetchFailureWords(e)}');
-      } catch (e) {
-        logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
-        logError('Live update failed', error: e, detail: c.id);
-        _sourceErrors[c.id] = "Couldn't update.";
-        return (false, '${c.title} for ${p.name} failed');
-      }
-    }
+    Future<(bool, String?)> one(Connector c, WatchPlace p) => _fetchOne(c, p, force, kinds);
 
     final List<(bool, String?)> outcomes;
     try {
       outcomes = await Future.wait([for (final c in srcs) for (final p in places) one(c, p)]);
     } finally {
       _updating = false;
+    }
+    // One note per source for the whole update: a place that failed counts, whatever order the places answered in.
+    for (final c in srcs) {
+      await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
     }
     final failures = <String>[];
     for (final (got, failure) in outcomes) {
@@ -1211,50 +1641,149 @@ class WeatherState extends ChangeNotifier {
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
+  /// One download of [c] for [p]; the kind of a failure goes into [kinds], its words into [sourceErrors].
+  Future<(bool, String?)> _fetchOne(Connector c, WatchPlace p, bool force, Map<String, SourceFailure> kinds) async {
+    final took = Stopwatch()..start();
+    try {
+      final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+      final got = r['fetched'] == true;
+      _noteHere(c, p);
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
+      return (got, null);
+    } on CacheSearchException catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
+      logError('Live update failed (${e.code})', error: e.message, detail: c.id);
+      final who = c.provider.isEmpty ? c.title : c.provider;
+      _sourceErrors[c.id] = _fetchFailureWords(c, e);
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      if (e.code == 'offline') _coreOffline = true;
+      return (false, '$who for ${p.name} failed: ${_fetchFailureWords(c, e)}');
+    } catch (e) {
+      logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed');
+      logError('Live update failed', error: e, detail: c.id);
+      _sourceErrors[c.id] = "Couldn't update.";
+      kinds.putIfAbsent(c.id, () => _failureOf(c, e));
+      return (false, '${c.title} for ${p.name} failed');
+    }
+  }
+
+  /// Sources being updated one by one ([updateSource]); a row of such a source says Updating.
+  final Set<String> _updatingIds = {};
+  Set<String> get updatingIds => Set.unmodifiable(_updatingIds);
+
+  /// "Try again" on one source: downloads just [c], for the watched places, whatever its copy's age; the others are left alone. Its
+  /// row says Updating while it runs and its state afterwards.
+  Future<UpdateReport> updateSource(Connector c) async {
+    if (_updating || _updateRunning || _updatingIds.contains(c.id)) return const UpdateReport(nothingToDo: 'Already updating');
+    if (!isOn(c.id) || !keyReady(c)) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
+    final places = await watchedPlaces();
+    if (places.isEmpty) {
+      return UpdateReport(nothingToDo: waitingForPosition ? 'Waiting for your position.' : 'No place is being watched. Choose one under Places.');
+    }
+    _kind = await policy.probe.current();
+    if (_kind == ConnectionKind.none) {
+      notifyListeners();
+      return const UpdateReport(offline: true);
+    }
+    _updatingIds.add(c.id);
+    _sourceErrors.remove(c.id);
+    _coreOffline = false;
+    notifyListeners();
+    final kinds = <String, SourceFailure>{};
+    final List<(bool, String?)> outcomes;
+    try {
+      await _syncFolder();
+      await pushPolicy();
+      logInfo('Live update of ${c.id} alone for ${places.length} places');
+      outcomes = await Future.wait([for (final p in places) _fetchOne(c, p, true, kinds)]);
+    } finally {
+      _updatingIds.remove(c.id);
+    }
+    await _noteOutcome(c, kinds[c.id] ?? SourceFailure.none);
+    var fetched = 0, fresh = 0;
+    final failures = <String>[];
+    for (final (got, failure) in outcomes) {
+      if (failure != null) {
+        failures.add(failure);
+      } else {
+        got ? fetched++ : fresh++;
+      }
+    }
+    _lastRunAt = _now();
+    if (fetched + fresh > 0) _lastOkAt = _lastRunAt;
+    _saveStatus();
+    notifyListeners();
+    await checkAlerts();
+    return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
+  }
+
   /// When the app starts or comes back to the screen: the scheduled background run may not have come (iOS decides when, and
   /// may not run it for hours), so an update that is due ([every] since the last run) runs now. What a background run wrote is
   /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
   Future<UpdateReport?> updateIfDue(Duration every) async {
-    if (!_started || _updating || enabledSources.isEmpty) return null;
+    if (!_started || _updating || _updateRunning || enabledSources.isEmpty) return null;
+    // The server's own timer writes this file too (a browser); a phone has nothing to read again.
+    if (catalogueFiles != null) await _store?.files.reload(_statusFile);
     _readStatus();
     notifyListeners();
-    final last = _lastRunAt;
+    // Only a run that got something counts as recent: a run where every fetch failed must not hold the next one back.
+    final last = _lastOkAt;
     if (last != null && _now().difference(last) < every) return null;
     return updateNow();
   }
 
-  String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
-    'quota' => 'reached its limit for now',
-    'key_missing' => 'needs a key',
-    'bad_response' => 'sent something Cache could not read',
-    'fetch_failed' => _httpWords(e.message),
-    _ => "couldn't update",
-  };
+  /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
+  static const String _needsKeyWords = 'needs a key';
 
-  String _httpWords(String m) {
-    final h = RegExp(r'HTTP (\d{3})').firstMatch(m);
-    if (h != null) return 'the service answered HTTP ${h.group(1)}';
-    return "couldn't be reached";
-  }
+  /// A failed download as the person reads it (after "… failed:" for an update, after "Not downloaded:" on the Weather screen): from
+  /// the failure kind, never the HTTP status or the core's own words (those are in the log).
+  String _fetchFailureWords(Connector c, CacheSearchException e) => _failureWords(_failureOf(c, e));
+
+  static String _failureWords(SourceFailure k) => switch (k) {
+    SourceFailure.limit => 'reached its limit for now',
+    SourceFailure.keyMissing => _needsKeyWords,
+    SourceFailure.keyRejected => 'no longer accepts the saved key',
+    SourceFailure.unreadable => 'sent something Cache could not read',
+    SourceFailure.providerError => 'the service had a problem',
+    SourceFailure.unreachable => "couldn't be reached",
+    SourceFailure.none => "couldn't update",
+  };
 
   // ---------------------------------------------------------------- the status line
 
-  /// The age of the data, and why when it is old (see [WeatherStatus]).
+  /// The status line of Settings > Weather and alerts and of the Weather screen's whole-page states: the Weather screen's
+  /// own line ([freshness], the age and the connection) and, beside it, why the last update failed. These two places show
+  /// nothing else of the data, so here the line (and the whole-page states' dot) also says when the data is old: fresh for as
+  /// long as a reading stands ([kReadingLasts], the one limit for what speaks for now), a warning after that. It used to warn
+  /// once the data was older than the shortest refresh interval (15 minutes for alerts), which between two updates is most
+  /// of the time.
   WeatherStatus status() {
-    final on = enabledSources;
-    if (on.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
+    final fresh = freshness();
+    final ok = _lastOkAt;
+    // nothing on, never updated, or no connection (then that is the reason): the freshness line as it is
+    if (enabledSources.isEmpty || ok == null || _kind == ConnectionKind.none) return fresh;
+    final failed = _lastFailure != null && _lastRunAt != null && !_lastRunAt!.isBefore(ok);
+    if (failed) return WeatherStatus(headline: '${fresh.headline} · ${_lastFailure!}', tone: StatusTone.warn);
+    final old = _now().difference(ok) > kReadingLasts;
+    return old ? WeatherStatus(headline: fresh.headline, tone: StatusTone.warn) : fresh;
+  }
+
+  /// The Weather screen's own freshness line: the age and, as its only reason, the connection. A source that failed is named by
+  /// the screen's one plain line and explained in Settings, and age alone is not a warning: updates come about every half hour,
+  /// and the screen shows old data in its own ways (no reading after [kReadingLasts], "Last checked").
+  WeatherStatus freshness() {
+    if (nothingWatched) return const WeatherStatus(headline: kWeatherHereOff, tone: StatusTone.warn);
+    if (enabledSources.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
     final now = _now();
     final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
     final ok = _lastOkAt;
     if (ok == null) return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', tone: StatusTone.warn);
-    final age = now.difference(ok);
-    final stale = age.inMinutes > on.map((c) => c.refreshMinutes).reduce((a, b) => a < b ? a : b);
-    final failed = _lastFailure != null && _lastRunAt != null && !_lastRunAt!.isBefore(ok);
-    final head = 'Updated ${agoWords(age)}';
-    if (!stale && !failed && reason == null) return WeatherStatus(headline: head, tone: StatusTone.ok);
-    final why = reason ?? (failed ? _lastFailure! : null);
-    return WeatherStatus(headline: why == null ? head : '$head · $why', tone: StatusTone.warn);
+    final head = 'Updated ${agoWords(now.difference(ok))}';
+    return reason == null ? WeatherStatus(headline: head, tone: StatusTone.ok) : WeatherStatus(headline: '$head · $reason', tone: StatusTone.warn);
   }
+
+  /// The time the weather part goes by (tests set it): the Weather screen works out ages and "today" from it.
+  DateTime get clockNow => _now();
 
   /// "3 on · Updated 12 min ago": the line under the Weather and alerts row of Settings.
   String settingsLine() {
@@ -1298,41 +1827,149 @@ class WeatherState extends ChangeNotifier {
 
   /// What every switched-on source holds for [p], as stored (expired data is included and flagged). Read from the core, so it
   /// is exactly what the assistant would get.
-  Future<List<SourceView>> viewFor(WatchPlace p) async {
+  Future<List<SourceView>> viewFor(WatchPlace p) async => [for (final (v, _) in await _answersFor(p)) v];
+
+  /// [viewFor], with each source's answer as the core gave it beside its view (null where the source holds nothing). Home's
+  /// card keeps the answers, to be worked out again at a later moment ([homeCardAsOfNow]).
+  Future<List<(SourceView, Map<String, dynamic>?)>> _answersFor(WatchPlace p) async {
     var kept = false;
+    Future<(SourceView, Map<String, dynamic>?)> one(Connector c) async {
+      try {
+        final g = await _getFor(c, p);
+        // A forecast's answer with no items must not wipe the last good one kept for Home at start. For everything that is
+        // happening (warnings, fires and the rest) no items is the answer: the core leaves out what has ended and gives an
+        // empty list when nothing is active (the "none active" entry is the assistant's tool's, not this call's), so it
+        // replaces what was kept; else a warning that ended came back at every start until the core answered.
+        final key = '${c.id} ${p.id}';
+        final had = (_shown[key]?['items'] as List?)?.isNotEmpty ?? false;
+        if (!had || (g['items'] as List?)?.isNotEmpty == true || groupOf(c) == LiveGroup.alerts) {
+          _shown[key] = g;
+          kept = true;
+        }
+        return (_viewOf(c, p, g), g);
+      } on CacheSearchException catch (e) {
+        // Nothing downloaded for a source that is on without its key: an update skips it, so "Update now to get it" could
+        // never come true. It says why instead, in the words a failed update has for it.
+        // Nothing downloaded because the last update failed for it: it says why, in that update's words, not that an update
+        // will get it.
+        return (SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? _sourceErrors[c.id] : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message)), null);
+      } catch (_) {
+        return (SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id] ?? (keyReady(c) ? null : _needsKeyWords)), null);
+      }
+    }
+
     // asked all at once (the core answers them one after another, without a round trip between)
-    final out = await Future.wait([
-      for (final c in enabledSources)
-        () async {
-          try {
-            final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-            _shown['${c.id} ${p.id}'] = g;
-            kept = true;
-            return _viewOf(c, p, g);
-          } on CacheSearchException catch (e) {
-            return SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message));
-          } catch (_) {
-            return SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]);
-          }
-        }(),
-    ]);
+    final out = await Future.wait([for (final c in enabledSources) one(c)]);
     if (kept) _saveShown();
     return out;
+  }
+
+  /// The farthest "Where I am" borrows another key's data from, when its own key has none (metres).
+  static const double kHereBorrowM = 25000;
+
+  /// Keys "Where I am" has had data for, by source: [_noteHere] adds one when a fetch or a read finds data under it.
+  final Map<String, Set<String>> _hereData = {};
+  static const String _hereDataFile = 'here-keys.json';
+
+  void _noteHere(Connector c, WatchPlace p) {
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return;
+    final keys = _hereData.putIfAbsent(c.id, () => <String>{});
+    if (!keys.add(key)) return;
+    // only the nearest few are worth keeping
+    if (keys.length > 200) keys.remove(keys.first);
+    _saveHereData();
+  }
+
+  void _readHereData() {
+    try {
+      final text = _store?.files.read(_hereDataFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
+      if (j is! Map) return;
+      for (final e in j.entries) {
+        if (e.value is List) _hereData.putIfAbsent(e.key as String, () => {for (final k in e.value as List) '$k'});
+      }
+    } catch (_) {}
+  }
+
+  void _saveHereData() {
+    try {
+      _store?.files.write(_hereDataFile, jsonEncode({for (final e in _hereData.entries) e.key: e.value.toList()}));
+    } catch (_) {}
+  }
+
+  /// The position in a "Where I am" key (`at:42.55,-113.79`), or null.
+  static ({double lat, double lon})? _keyPosition(String key) {
+    final m = RegExp(r'^at:(-?[\d.]+),(-?[\d.]+)$').firstMatch(key);
+    final lat = double.tryParse(m?.group(1) ?? ''), lon = double.tryParse(m?.group(2) ?? '');
+    return lat == null || lon == null ? null : (lat: lat, lon: lon);
+  }
+
+  static double _metresBetweenKeys(String a, String b) {
+    final x = _keyPosition(a), y = _keyPosition(b);
+    return x == null || y == null ? double.infinity : distanceM(x.lat, x.lon, y.lat, y.lon);
+  }
+
+  /// [c]'s stored data for [p]; for "Where I am", whose own key has none, the nearest key within [kHereBorrowM] that has some. A
+  /// car moves a kilometre in a minute and its key never settles long enough to be fetched, but the weather is the same a few
+  /// kilometres on. The answer's own age says how old it is. The answer carries `_at`, the key it is from.
+  Future<Map<String, dynamic>> _getFor(Connector c, WatchPlace p) async {
+    Map<String, dynamic> ask(WatchPlace q) => {'source': c.id, 'place': placeRequest(q), 'now': isoWithOffset(_now())};
+    final key = p.key;
+    if (p.kind != PlaceKind.here || key == null) return core.get(ask(p));
+    try {
+      final g = await core.get(ask(p));
+      _noteHere(c, p);
+      return {...g, '_at': key};
+    } on CacheSearchException catch (e) {
+      if (e.code != 'not_found') rethrow;
+      final near = [
+        for (final k in _hereData[c.id] ?? const <String>{})
+          if (k != key && _metresBetweenKeys(k, key) <= kHereBorrowM) k,
+      ]..sort((a, b) => _metresBetweenKeys(a, key).compareTo(_metresBetweenKeys(b, key)));
+      for (final k in near) {
+        final at = _keyPosition(k)!;
+        try {
+          final g = await core.get(ask(WatchPlace(id: p.id, kind: p.kind, name: p.name, subtitle: p.subtitle, lat: at.lat, lon: at.lon, key: k)));
+          return {...g, '_at': k};
+        } on CacheSearchException catch (e2) {
+          if (e2.code == 'not_found') _hereData[c.id]?.remove(k);
+        }
+      }
+      rethrow;
+    }
   }
 
   SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
     final le = g['last_error'];
     final fetched = DateTime.tryParse('${g['fetched_at']}');
+    // A kept answer's "expired" is as of when the core gave it: it is worked out again from the time the data runs to.
+    final until = DateTime.tryParse('${g['valid_until']}');
     return SourceView(
       source: c,
       place: p,
-      items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
+      // A kept answer's items are as the core gave them then: an alert whose own "Expires" has passed since is left out (the
+      // core would leave it out now; nothing else in a kept item says when it ends).
+      // What was taken back is not something happening: a cancel message and the alert it references are left out of the
+      // app's lists and pop-ups (see [withoutCancelled]).
+      items: [
+        for (final i in withoutCancelled([for (final j in (g['items'] as List? ?? const [])) if (j is Map) LiveItem.fromJson(j.cast<String, dynamic>())]))
+          if (!(kept && _pastItsExpires(i))) i,
+      ],
       // A kept answer's age is worked out again: it is older now than when the core said it.
       age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
       fetchedAt: g['fetched_at'] as String?,
-      expired: g['expired'] == true,
-      error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
+      expired: g['expired'] == true || (kept && until != null && _now().isAfter(until)),
+      error: le is Map ? _fetchFailureWords(c, CacheSearchException('${le['code'] ?? 'fetch_failed'}', '${le['message']}')) : _sourceErrors[c.id],
     );
+  }
+
+  /// Whether [i] says when it expires ("Expires", as alerts do) and that time has passed.
+  bool _pastItsExpires(LiveItem i) {
+    if (!RegExp(r'^\d{4}-\d\d-\d\d[ T]\d\d:\d\d').hasMatch(i.fields['Expires'] ?? '')) return false;
+    final span = alertSpan(i);
+    return span != null && _now().isAfter(span.to);
   }
 
   /// The last answer the core gave for each source and place, also kept in a file: the core answers one call at a time, and while
@@ -1343,21 +1980,25 @@ class WeatherState extends ChangeNotifier {
   List<SourceView>? keptViewFor(WatchPlace p) {
     final out = [
       for (final c in enabledSources)
-        if (_shown['${c.id} ${p.id}'] case final g?) _viewOf(c, p, g, kept: true),
+        if (_shown['${c.id} ${p.id}'] case final g? when _keptFits(g, p)) _viewOf(c, p, g, kept: true),
     ];
     return out.isEmpty ? null : out;
   }
 
-  File? get _shownFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/last-shown.json');
+  /// A kept answer for "Where I am" is from the key it was read at: it stands for the place now only within [kHereBorrowM] of it.
+  static bool _keptFits(Map<String, dynamic> g, WatchPlace p) {
+    final at = g['_at'], key = p.key;
+    if (p.kind != PlaceKind.here || at is! String || key == null) return true;
+    return _metresBetweenKeys(at, key) <= kHereBorrowM;
   }
+
+  static const String _shownFile = 'last-shown.json';
 
   void _readShown() {
     try {
-      final f = _shownFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = _store?.files.read(_shownFile);
+      if (text == null) return;
+      final j = jsonDecode(text);
       if (j is! Map) return;
       for (final e in j.entries) {
         if (e.value is Map) _shown.putIfAbsent(e.key as String, () => (e.value as Map).cast<String, dynamic>());
@@ -1367,17 +2008,33 @@ class WeatherState extends ChangeNotifier {
 
   void _saveShown() {
     try {
-      final f = _shownFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode(_shown));
+      _store?.files.write(_shownFile, jsonEncode(_shown));
     } catch (_) {}
   }
 
   /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's "Pop up for" says, silent in
   /// quiet hours unless it is serious. Everything checked is remembered as told, shown or not, so choosing more pop-ups later does not
   /// bring back old alerts. Returns how many were shown.
-  Future<int> checkAlerts() async {
+  ///
+  /// One check at a time: a check reads what was told, shows, then writes, so two at once (the update's and the one after
+  /// "Where I am" moved) both saw the same alert as new and it sounded twice. A second check waits for the first, then sees what
+  /// the first told.
+  Future<int> checkAlerts() {
+    // Only a check that is still running is waited for. A future that is already complete is never chained on: its listeners
+    // are told in the zone it was made in, which need not be the caller's (a widget test makes this object in its fake-time
+    // zone and updates in real time, and an update waiting on such a future never came back).
+    final before = _alertChecksOpen > 0 ? _alertChecks : null;
+    final run = before == null ? _checkAlerts() : before.then((_) => _checkAlerts());
+    _alertChecksOpen++;
+    _alertChecks = run.then<void>((_) {}, onError: (_) {}).whenComplete(() => _alertChecksOpen--);
+    return run;
+  }
+
+  /// The last alert check asked for, and how many have not finished.
+  Future<void>? _alertChecks;
+  int _alertChecksOpen = 0;
+
+  Future<int> _checkAlerts() async {
     final n = notifier, t = told;
     if (n == null || t == null) return 0;
     final byPlace = <WatchPlace, List<SourceView>>{};
@@ -1385,13 +2042,18 @@ class WeatherState extends ChangeNotifier {
       byPlace[p] = await viewFor(p);
     }
     await placeAlerts?.load();
-    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor, toldAlerts: await t.readAlerts());
+    final before = await t.load();
+    // The told list and the copy beside it are both there and neither can be read (rare, with the copy): nothing is known of
+    // what was told. These are safety alerts, and missing a new warning is worse than repeating one: it is taken as nothing
+    // told, so what is in force pops up once, the log says so, and the list is written again below.
+    if (!before.known) logError('Alerts: the told list and its copy could not be read; what is in force is told again');
+    final fresh = pickNewAlerts(byPlace, before.addresses, rules: placeAlerts?.ruleFor, toldAlerts: before.alerts);
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {
       if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
     }
-    await t.add([for (final a in fresh) ...a.allAddresses], alerts: [for (final a in fresh) ...a.told]);
+    await t.add([for (final a in fresh) ...a.allAddresses, for (final a in fresh) ...a.marks], alerts: [for (final a in fresh) ...a.told]);
     return shown;
   }
 
@@ -1425,14 +2087,28 @@ class WeatherState extends ChangeNotifier {
 
   /// The Weather and alerts card on Home, for the place Home talks about ([homePlace]): the forecast now (temperature, conditions,
   /// the day's high and low), and the warnings in force and fires near it. Other watched places are on the Weather screen; so are
-  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
-  /// listed are those of the one fire source that reports the most.
+  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters): a fire two
+  /// of them name is listed once, and every source's fires are listed ([firesOnce]).
   Future<HomeWeather> homeCard() async {
     final early = _homeEarly();
     if (early != null) return early;
     final p = await homePlace();
     if (p == null) return HomeWeather(message: _noPlaceWords);
-    return _homeFrom(p, await viewFor(p));
+    final answers = await _answersFor(p);
+    return _homeFrom(p, [for (final (v, _) in answers) v], answer: HomeAnswer._(p, answers));
+  }
+
+  /// [h], a card [homeCard] gave at an earlier moment, as it is to be shown now. Home keeps its last card while the next one
+  /// is awaited; after a night in memory that card is hours old, and what it said was the weather now is not. It is worked
+  /// out again from the answers it was made from ([HomeWeather.answer]), as a copy the app kept is: each source's age,
+  /// whether it has expired and which alerts have ended as of now, and the reading and the periods by the rule that says
+  /// what stands for now ([readingOf]). A card of words alone is returned as it is.
+  HomeWeather homeCardAsOfNow(HomeWeather h) {
+    final a = h.answer;
+    if (a == null) return h;
+    final early = _homeEarly();
+    if (early != null) return early;
+    return _homeFrom(a.place, [for (final (v, g) in a._answers) g == null ? v : _viewOf(v.source, a.place, g, kept: true)], answer: a);
   }
 
   /// [homeCard] at once, without the core: what was last shown for the place Home talks about, with its age as of now; null while
@@ -1452,6 +2128,7 @@ class WeatherState extends ChangeNotifier {
     // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
     // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
+    if (nothingWatched) return const HomeWeather(message: kWeatherHereOff, off: true, hereOff: true);
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".
@@ -1460,28 +2137,93 @@ class WeatherState extends ChangeNotifier {
     return null;
   }
 
-  HomeWeather _homeFrom(WatchPlace p, List<SourceView> views) {
+  HomeWeather _homeFrom(WatchPlace p, List<SourceView> views, {HomeAnswer? answer}) {
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     String? temperature, conditions, high, low, age;
     var forecastExpired = false;
+    // Each forecast source gives its reading by the rule the Weather screen goes by ([readingOf]): a forecast's own /now item,
+    // else (a weather station list, as NWS current conditions) the nearest station that reports a temperature. A source that
+    // lists no temperature (a station with only wind and pressure) must not hide the one after it, so every source is scanned
+    // and temperature and conditions each come from the best source that has them. Forecast /now items rank before station
+    // lists.
+    // A source can hold no reading: its "Now" has ended (three hours after it was taken, in the core's answer and in a copy
+    // the app kept alike, so last night's temperature is never this morning's), or it is a forecast written in periods, whose
+    // temperatures are forecasts (NWS by point: tonight's low is not the temperature now). It still gives the source's age.
+    final now = _now();
+    final nows = <(LiveItem?, SourceView)>[];
+    final stations = <(LiveItem?, SourceView)>[];
     for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
-      final now = v.items.firstWhere((i) => i.address.endsWith('/now'), orElse: () => v.items.first);
-      final day = v.items.firstWhere((i) => !i.address.endsWith('/now'), orElse: () => now);
-      temperature = now.fields['Temperature'];
-      conditions = now.fields['Conditions'];
-      // the names before "Daytime high" and "Low (early morning)" too, for a definition not updated yet
-      high = day.fields['Daytime high'] ?? day.fields['High'];
-      low = day.fields['Low (early morning)'] ?? day.fields['Low'];
-      age = v.age;
-      forecastExpired = v.expired;
-      break;
+      final reading = readingOf(v, now).reading;
+      (v.items.any((i) => i.address.endsWith('/now')) ? nows : stations).add((reading, v));
     }
+    final ranked = [...nows, ...stations];
+    for (final (i, v) in ranked) {
+      if (i == null) continue;
+      if (temperature == null && i.fields['Temperature'] != null) {
+        temperature = i.fields['Temperature'];
+        age = v.age;
+        forecastExpired = v.expired;
+      }
+      conditions ??= i.fields['Conditions'];
+    }
+    // A source's periods that have not passed, by the Weather screen's rule: in a copy the app kept, yesterday's day is still
+    // listed, and its high and low are not today's. A list of stations has no periods.
+    List<LiveItem> periodsOf(SourceView v) => periodsNotPassed(readingOf(v, now).periods, now, placeToday(now, v.fetchedAt));
+    // No reading: "Now" has ended (a forecast's own lasts 3 hours, and the next download can be hours away) or was never
+    // given, and no station reports. The forecast period that covers now stands in, under its own label and with its source's
+    // age, as the Weather screen lists it. It is a forecast, not a reading, so no temperature stands in for the one that ended.
+    // A period's conditions are read as the Weather screen reads them ([conditionsOf]): a forecast written in named periods
+    // calls them "Summary" (NWS by point), and without that Home said "no forecast yet" with a week of forecast stored.
+    String? period;
+    var ranOut = false;
+    if (temperature == null && conditions == null) {
+      for (final v in views) {
+        if (v.group != LiveGroup.forecast) continue;
+        final found = _periodNow(v, periodsOf(v));
+        ranOut = ranOut || found.ranOut;
+        final i = found.period;
+        if (i == null) continue;
+        period = i.label;
+        conditions = conditionsOf(i);
+        // the high and low of that same period, never another day's under its label
+        high = i.fields['Daytime high'] ?? i.fields['High'];
+        low = i.fields['Low (early morning)'] ?? i.fields['Low'];
+        age = v.age;
+        forecastExpired = v.expired;
+        break;
+      }
+    }
+    // the day's high and low from the first source that has them; the names before "Daytime high" and "Low (early morning)" too,
+    // for a definition not updated yet
+    for (final v in views) {
+      if (period != null) break;
+      if (v.group != LiveGroup.forecast) continue;
+      for (final i in periodsOf(v)) {
+        final h = i.fields['Daytime high'] ?? i.fields['High'];
+        final l = i.fields['Low (early morning)'] ?? i.fields['Low'];
+        if (h == null && l == null) continue;
+        high = h;
+        low = l;
+        break;
+      }
+      if (high != null || low != null) break;
+    }
+    age ??= [for (final (_, v) in ranked) v.age].firstOrNull;
+    if (period == null) forecastExpired = temperature == null && ranked.isNotEmpty ? ranked.first.$2.expired : forecastExpired;
+    // A forecast in named periods whose copy is older than one period, and nothing else to show: the stored forecast has run
+    // out, as when every stored day has passed ("forecast expired, needs a connection").
+    if (ranOut && temperature == null && conditions == null && high == null && low == null) forecastExpired = true;
     final warnings = <HomeAlert>[];
+    HomeAlert line(LiveItem i, SourceView v) => HomeAlert(
+      fire: v.source.category == 'fire',
+      label: i.label,
+      detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (v.source.provider.isNotEmpty) v.source.provider].join(' · '),
+    );
     // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
     final listed = <(LiveItem, String)>[];
-    var fires = <HomeAlert>[];
+    final fireViews = <SourceView>[];
     var anyAlerts = false, alertsExpired = false;
     String? checked;
     for (final v in views) {
@@ -1489,70 +2231,117 @@ class WeatherState extends ChangeNotifier {
       anyAlerts = true;
       alertsExpired = alertsExpired || v.expired;
       checked ??= v.age;
-      final who = v.source.provider;
-      final fire = v.source.category == 'fire';
-      final items = [
-        for (final i in v.active)
-          if (fire || !listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id)))
-          HomeAlert(
-            fire: v.source.category == 'fire',
-            label: i.label,
-            detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (who.isNotEmpty) who].join(' · '),
-          ),
-      ];
-      if (fire) {
-        if (items.length > fires.length) fires = items;
-      } else {
-        warnings.addAll(items);
-        listed.addAll([for (final i in v.active) (i, v.source.id)]);
+      if (v.source.category == 'fire') {
+        fireViews.add(v);
+        continue;
       }
+      warnings.addAll([
+        for (final i in v.active)
+          if (!listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id))) line(i, v),
+      ]);
+      listed.addAll([for (final i in v.active) (i, v.source.id)]);
     }
+    // every fire source's fires, a fire two of them name listed once, the sources in turn (see firesOnce)
+    final fires = [for (final (i, v) in firesOnce(fireViews)) line(i, v)];
     return HomeWeather(
       place: p.name,
       temperature: temperature,
       conditions: conditions,
+      period: period,
       high: high,
       low: low,
       age: age,
       expired: forecastExpired,
-      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null,
+      // "no forecast yet" only when there is nothing to show: never beside a high and low
+      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null && high == null && low == null,
       alerts: [...warnings, ...fires],
       alertsKnown: anyAlerts,
       alertsExpired: alertsExpired,
       checked: checked,
+      answer: answer,
     );
+  }
+
+  /// The forecast period of [v] that covers now, for Home when there is no reading: of its [periods] (its items but the "Now"
+  /// item; none for a list of stations, see [readingOf]) that give conditions ([conditionsOf]), the one that started last. A
+  /// day ("2026-11-11") covers that date at the place and no other, so a day that has passed is never shown as today. A named
+  /// period (one with a start time) covers from then on, and carries no end to check here: the core leaves out the periods
+  /// that have ended, but a copy the app kept is as the core gave it then, so a named period is taken only from a copy no
+  /// older than one period ([kNamedPeriodLasts]). `period` is null when no item is known to cover now; `ranOut` says that
+  /// was because the copy is too old for its named periods.
+  ({LiveItem? period, bool ranOut}) _periodNow(SourceView v, List<LiveItem> periods) {
+    final now = _now();
+    final fetched = DateTime.tryParse(v.fetchedAt?.trim() ?? '');
+    final oldCopy = fetched != null && now.difference(fetched) > kNamedPeriodLasts;
+    var withheld = false;
+    // the place's clock: the offset the core writes this source's times in, else the device's
+    final stamp = RegExp(r'([+-])(\d\d):(\d\d)$').firstMatch(v.fetchedAt?.trim() ?? '');
+    final offset = stamp == null
+        ? now.timeZoneOffset.inMinutes
+        : (stamp.group(1) == '-' ? -1 : 1) * (int.parse(stamp.group(2)!) * 60 + int.parse(stamp.group(3)!));
+    final there = now.toUtc().add(Duration(minutes: offset));
+    LiveItem? pick;
+    DateTime? best;
+    for (final i in periods) {
+      if (conditionsOf(i) == null) continue;
+      final t = i.time?.trim();
+      if (t == null) continue;
+      final DateTime from;
+      final day = RegExp(r'^(\d{4})-(\d\d)-(\d\d)$').firstMatch(t);
+      if (day != null) {
+        final y = int.parse(day.group(1)!), m = int.parse(day.group(2)!), d = int.parse(day.group(3)!);
+        if (y != there.year || m != there.month || d != there.day) continue;
+        from = DateTime.utc(y, m, d).subtract(Duration(minutes: offset));
+      } else {
+        final at = DateTime.tryParse(t);
+        if (at == null || at.isAfter(now)) continue;
+        if (oldCopy) {
+          withheld = true;
+          continue;
+        }
+        from = at.toUtc();
+      }
+      if (best == null || from.isAfter(best)) {
+        pick = i;
+        best = from;
+      }
+    }
+    return (period: pick, ranOut: pick == null && withheld);
   }
 
   // ---------------------------------------------------------------- what is remembered between starts
 
-  File? get _statusFile {
-    final d = _store?.root;
-    return d == null ? null : File('${d.path}/status.json');
-  }
+  static const String _statusFile = 'status.json';
 
   void _readStatus() {
     try {
-      final f = _statusFile;
-      if (f == null || !f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = _store?.files.read(_statusFile);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       DateTime? t(Object? v) => v is int ? DateTime.fromMillisecondsSinceEpoch(v) : null;
       _lastOkAt = t(j['ok']);
       _lastRunAt = t(j['run']);
       _lastOnlineAt = t(j['online']);
       _lastFailure = j['failure'] as String?;
+      final src = j['sources'];
+      if (src is Map) {
+        _health.clear();
+        for (final e in src.entries) {
+          final h = SourceHealth.fromJson(e.value);
+          if (h != null) _health['${e.key}'] = h;
+        }
+      }
     } catch (_) {}
   }
 
   void _saveStatus() {
     try {
-      final f = _statusFile;
-      if (f == null) return;
-      f.parent.createSync(recursive: true);
-      writeStringAtomicSync(f, jsonEncode({
+      _store?.files.write(_statusFile, jsonEncode({
         'ok': _lastOkAt?.millisecondsSinceEpoch,
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,
         'failure': _lastFailure,
+        'sources': {for (final e in _health.entries) e.key: e.value.toJson()},
       }));
     } catch (_) {}
   }
@@ -1567,6 +2356,8 @@ class WeatherState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _openWatch?.cancel();
+    _hereTimer?.cancel();
     settings.removeListener(_onSettings);
     _sub?.cancel();
     super.dispose();

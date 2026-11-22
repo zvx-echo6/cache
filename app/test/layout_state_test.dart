@@ -60,6 +60,17 @@ void main() {
     expect(layout.pin(ModuleId.settings), isFalse, reason: 'already pinned');
   });
 
+  test('a layout saved by an older build (no Discover) loads, with Discover unpinned and pinnable', () async {
+    File('${dir.path}/layout.json').writeAsStringSync('{"pinned":["ask","maps","library"],"blocks":["setup","ask","weather","shortcuts"],"off":[],"shortcuts":[]}');
+    final old = await open();
+    expect(old.pinned, [ModuleId.ask, ModuleId.maps, ModuleId.library]);
+    expect(old.isPinned(ModuleId.discover), isFalse);
+    old.unpin(ModuleId.library);
+    expect(old.pin(ModuleId.discover), isTrue);
+    expect((await open()).pinned, [ModuleId.ask, ModuleId.maps, ModuleId.discover]);
+    old.dispose();
+  });
+
   test('the bar, the Home blocks and the shortcuts survive a restart', () async {
     layout.replace(ModuleId.library, ModuleId.videos);
     layout.setBlockOn(HomeBlock.weather, false);

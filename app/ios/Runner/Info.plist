@@ -26,6 +26,10 @@
 	<string>Cache uses the camera to add photos to your notebook entries.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Cache adds the photos you choose to your notebook entries.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cache listens only while you search by voice on the car screen.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Your words are turned into text on this iPhone to search for a place.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -35,12 +39,15 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.happylittle.cache.live-update</string>
+		<string>com.happylittle.cache.sync-refresh</string>
+		<string>com.happylittle.cache.sync-processing</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>processing</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
@@ -61,6 +68,11 @@
 	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Whether this build has the car screen (CarPlay): always on (CACHE_CARPLAY=YES in every configuration), which also picks the
+	     entitlements file with the CarPlay entitlement. Read by CarPlayBuild (Runner/CarPlay). The CarPlay scene itself is
+	     declared in code, not in the manifest below. -->
+	<key>CacheCarPlay</key>
+	<string>$(CACHE_CARPLAY)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -76,8 +88,6 @@
 					<string>flutter</string>
 					<key>UISceneDelegateClassName</key>
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
 				</dict>
 			</array>
 		</dict>
@@ -86,8 +96,6 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -100,6 +108,24 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- The cachelink: scheme is registered so the system camera can hand a cachelink: QR link to Cache. SceneDelegate reads the
+	     link itself and passes it to Dart on the co.cache/link channel; Flutter deep linking is off, so the link never becomes a
+	     Flutter route. -->
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.happylittlellc.cache.link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cachelink</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

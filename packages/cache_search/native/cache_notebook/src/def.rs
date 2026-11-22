@@ -53,6 +53,21 @@ pub struct NotebookDef {
     /// (both optional). Data, so a new kind of notebook is a new template and no new code.
     pub shape: Map<String, Value>,
     pub fields: Vec<Field>,
+    /// The notebook's map icon (an id the app knows: lower-case letters, digits and `_`) and its colour (a marker colour's name,
+    /// lower-case letters). Both optional; the app picks the default for a template, and an entry's own `props.icon` and
+    /// `props.color` win.
+    pub icon: Option<String>,
+    pub color: Option<String>,
+}
+
+/// An icon id: 1 to 40 of `a-z`, `0-9`, `_`.
+pub fn valid_icon(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// A marker colour's name: 1 to 20 lower-case letters.
+pub fn valid_color(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_lowercase())
 }
 
 /// The `shape` of a definition: `sort` (date: newest first; recent: last changed first; distance: nearest first) and
@@ -117,7 +132,17 @@ impl NotebookDef {
         for f in o.get("fields").and_then(Value::as_array).ok_or_else(|| Error::bad("def.fields must be a list"))? {
             fields.push(parse_field(f)?);
         }
-        Ok(NotebookDef { meta, name, due_every, shape, fields })
+        let icon = match o.get("icon") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if valid_icon(s) => Some(s.clone()),
+            Some(d) => return Err(Error::bad(format!("def.icon {d} is not an icon id"))),
+        };
+        let color = match o.get("color") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if valid_color(s) => Some(s.clone()),
+            Some(d) => return Err(Error::bad(format!("def.color {d} is not a colour name"))),
+        };
+        Ok(NotebookDef { meta, name, due_every, shape, fields, icon, color })
     }
 
     /// A definition as the store keeps it (every field has its `fid`).
@@ -136,6 +161,12 @@ impl NotebookDef {
         }
         m.insert("name".into(), json!(self.name));
         m.insert("due_every".into(), json!(self.due_every));
+        if let Some(i) = &self.icon {
+            m.insert("icon".into(), json!(i));
+        }
+        if let Some(c) = &self.color {
+            m.insert("color".into(), json!(c));
+        }
         if !self.shape.is_empty() {
             m.insert("shape".into(), Value::Object(self.shape.clone()));
         }

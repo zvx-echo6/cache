@@ -1,0 +1,5 @@
+[
+  {"id": "poi:1", "name": "Coffee House", "address": "200 Sample St", "lat": 10.51, "lon": 20.21, "distanceM": 1250.0},
+  {"id": "poi:2", "name": "Corner Market", "address": "Grocery", "lat": 10.52, "lon": 20.22, "distanceM": 3400.0},
+  {"id": "poi:3", "name": "County Library", "address": "45 Sample Blvd", "lat": 10.55, "lon": 20.25, "distanceM": 9100.0}
+]

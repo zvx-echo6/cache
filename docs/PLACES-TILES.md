@@ -71,6 +71,9 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
   suffix is stored in the table's form with a capital first letter ("W MALBAR ST" is "W Malbar St"), and the written-out
   words of `street_expanded` have a capital first letter ("West Malbar Street"). The expansion is
   applied to the data when it is built, never to what a person types. `uid` is stable across builds of the same data.
+  `source` is NULL for Overture rows and `oa:<OpenAddresses source>` (for example `oa:us/id/canyon`, comma-joined when several)
+  for a row holding numbers added from OpenAddresses; tiles cut before that have no such column, and the phone's merge does
+  not read it (it names the columns it copies), so a tile with it reads on a phone without it.
   `numbers` holds every house number of the row with its point (`cache_places::addr`):
 
   ```

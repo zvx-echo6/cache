@@ -35,6 +35,14 @@ void main() {
     expect(v['shim'], '/lib/libvalhalla_shim.so');
   });
 
+  test('the core is given the saved videos\' folder, so it attaches and searches their caption indexes', () {
+    // kwslot attach_kw_indexes reads a saved video's captions index only when the core has a `video` section; without it caption
+    // search (Home and Videos) never finds a saved video. The folder is the one VideoState keeps them in: <files>/videos.
+    final files = Directory('/f'), support = Directory('/s');
+    final extras = buildCoreExtras(filesDir: files, supportDir: support, shim: 'x.so');
+    expect(extras['video'], {'dir': '/f/videos'});
+  });
+
   test('linked routing does not need a dynamic library path', () {
     final files = Directory.systemTemp.createTempSync('linked-files_');
     final support = Directory.systemTemp.createTempSync('linked-support_');

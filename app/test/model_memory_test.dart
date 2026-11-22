@@ -49,4 +49,46 @@ void main() {
     expect(releaseModelOn(40, const MemoryReading(avail: 3 * _gb, total: 8 * _gb, low: true)), isTrue, reason: "the system's own low");
     expect(releaseModelOn(5, tight), isFalse, reason: 'running moderate: not yet');
   });
+
+  group('wake', () {
+    Future<AppState> resting(int availBytes) async {
+      final app = AppState(
+        settingsDirOverride: dir,
+        modelsDirOverride: Directory('${dir.path}/models'),
+        memory: () async => MemoryReading(avail: availBytes, total: 8 * _gb, threshold: 200 << 20),
+      );
+      app.models = [ModelEntry(path: '${dir.path}/models/chat-Q6_K.gguf', size: 16)];
+      app.resting = app.models.first;
+      return app;
+    }
+
+    test('gated: it needs more than the memory free now, so it stays resting and nothing loads', () async {
+      final app = await resting(900 << 20); // the working memory alone is more
+      await app.wake();
+      expect(app.resting?.fileName, 'chat-Q6_K.gguf', reason: 'still the chosen one; Ask shows its Load button');
+      expect(app.active, isNull);
+      expect(app.loading, isNull);
+      expect(app.loadError, isNull, reason: 'it was not tried');
+    });
+
+    test('gated, then the person taps Load: forced, it is tried whatever the room', () async {
+      final app = await resting(900 << 20);
+      await app.wake(force: true);
+      expect(app.resting, isNull, reason: 'the load was begun (the test file is not a model, so it then fails)');
+    });
+
+    test('not gated: with the room, the load is tried', () async {
+      final app = await resting(6 * _gb);
+      await app.wake();
+      expect(app.resting, isNull, reason: 'the load was begun (the test file is not a model, so it then fails)');
+    });
+
+    test('unknown memory does not gate', () async {
+      final app = AppState(settingsDirOverride: dir, modelsDirOverride: Directory('${dir.path}/models'), memory: () async => null);
+      app.models = [ModelEntry(path: '${dir.path}/models/chat-Q6_K.gguf', size: 16)];
+      app.resting = app.models.first;
+      await app.wake();
+      expect(app.resting, isNull);
+    });
+  });
 }

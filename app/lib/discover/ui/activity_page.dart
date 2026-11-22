@@ -171,7 +171,7 @@ class CustomizePage extends StatelessWidget {
             bottomNavigationBar: Dock(
               maxWidth: 560,
               children: [
-                SpaceLine(label: (s) => 'Adds $s', bytes: adds, free: d.device.freeBytes()),
+                SpaceLine(label: (s) => 'Adds $s', bytes: adds, free: d.device.freeBytes(), usable: d.device.usableBytes()),
                 PillButton(
                   key: const ValueKey('customize-done'),
                   label: 'Done',

@@ -115,7 +115,7 @@ A log is JSON Lines: one event per line, UTF-8, `\n` after every line, never edi
 | `folder`, `locate`, `unlocate` | as below | Linked-folder locations. |
 
 ```json
-{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"<blake3 A>","div":"210","by":"auto","loc":"recon/b3f1"}
+{"v":1,"at":1793600000000,"dev":"phone-7","ev":"place","copy":"<blake3 A>","div":"210","by":"auto","loc":"field/b3f1"}
 {"v":1,"at":1793600000001,"dev":"phone-7","ev":"assign","copy":"<blake3 A>","div":"210","seq":1}
 {"v":1,"at":1793600000002,"dev":"phone-7","ev":"same","copy":"<blake3 B>","with":"<blake3 A>","by":"auto","how":"text","score":0.921875}
 {"v":1,"at":1793600100000,"dev":"phone-7","ev":"notsame","copy":"<blake3 B>","with":"<blake3 A>","by":"user"}
@@ -130,7 +130,7 @@ division), `retire` (old number), `assign` (new number), all against the book's 
 ### Book facts (`facts`)
 
 ```json
-{"v":1,"at":1793600000000,"dev":"phone-7","ev":"facts","copy":"<blake3 A>","loc":"recon/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+{"v":1,"at":1793600000000,"dev":"phone-7","ev":"facts","copy":"<blake3 A>","loc":"field/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
 ```
 
 - Checks (the same as the titles file): `author` is 1 to 200 characters after trimming, `edition` 1 to 60 after trimming, `year` a JSON integer from 1400 to 2100. A field that fails its check is **dropped on its own** (a reader keeps the valid fields); an event left with no valid field is skipped, and the writer refuses it. Values are stored trimmed.
@@ -187,7 +187,7 @@ person decides, and a person's choice is a `same` with `by: user`. A copy too sh
 A library arriving can hold thousands of copies, so `shelvesDetect` has a batch form (the request has `libraries`) that reads the features itself:
 
 ```json
-{"libraries":[{"library_id":"recon","dir":"/data/recon"}],"copies":["<key>"],"known":["<key>"],"tuning":{}}
+{"libraries":[{"library_id":"field","dir":"/data/field"}],"copies":["<key>"],"known":["<key>"],"tuning":{}}
 ```
 
 - `libraries`: where the copies are (each library's `copies.jsonl`, else its packs). All their copies are the **visible** copies; a copy in two libraries is one.
@@ -213,7 +213,7 @@ copies is in a library given to the resolver; events about other copies still co
 4. **Title.** The latest `title` over the book's copies, else the publisher's seed-log `title` for the reading copy, else the reading copy's pack title. Other copies' pack titles that differ from the shown title are listed as `aka`.
 5. **Removed.** The latest `remove` or `restore` over the book's copies. Hiding is per person; a publisher removes a book by publishing a new library version without it.
 6. **Facts.** Per field (`author`, `edition`, `year`): the person's own latest `facts` over the book's copies, else the seed log's `facts` for the reading copy, else the reading copy's pack `book` block, else `null`.
-7. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book.
+7. **Suggestion.** For the reading copy (then the others): the seed log's `place` division, else the pack's `book.suggested` (revision 3's `division` is mapped). Shown until the person shelves the book. The view carries `filed` (true for a seed `place`; for a pack, its `book.suggested.filed`, false when absent) and the pack's `suggestions` (top three) when it has them.
 
 ### Worked example: a clash
 
@@ -259,11 +259,11 @@ If `A`, `B` and `C` are linked `A-B` (0.90) and `B-C` (0.95), a user `notsame` b
 
 ## Arriving libraries and existing logs
 
-- **A library arrives** (downloaded, given, or built): for each copy, run detection and write `same` where it matches. Copies matching nothing are new books: `place` in the suggested division (the seed log's `place`, else `book.suggested`, else Unsorted) and `assign` the next free number, in (title, copy) order, so two devices that shelve the same library offline make the same choices except for clashes.
+- **A library arrives** (downloaded, given, or built): for each copy, run detection and write `same` where it matches. Copies matching nothing are new books. A book is shelved only when it was filed with confidence: `place` in the seed log's `place` division (the publisher placed it), else in `book.suggested.div` when the pack says the sorter was confident (`book.suggested.filed` is `true`; a pack without the flag is not confident); either way `assign` the next free number, in (title, copy) order. A book the sorter was not confident about (`filed` false or absent) is not placed: it stays in Unsorted, offering `book.suggested.suggestions` (the sorter's top three; an older pack has only `div` and `second_div`). Two devices that shelve the same library offline make the same choices except for clashes.
 - **Existing per-device library logs** (only test devices and the build service have any; 1.1 has not shipped): on first run each device imports its OWN events from every library's `log/<own id>.jsonl` into its Bookshelves log (`cache_shelves::import`, core op `shelvesImport`). Each `doc` is mapped to the copy key through that library's copies file, else its live packs; the event keeps its `at` and gets `loc` = `<library_id>/<doc_id>`; an `assign` or `retire` about a `doc` with no pack in that library (a deleted book) is written as a `retire` of that division and number, with `copy` = the `doc_id` (the copy key of a pack with no `original_blake3`), the `loc` and the original `at`, and is counted as `reserved`: no book appears for it, but the number counts toward next free and is never given out again; any other event about such a `doc` is not imported and is counted as `unmapped`. Events are appended oldest first **with their original `at`** (the import does not raise them to the device's last `at`, so an old `place` never overrides a newer move), and an event already present in the device's Bookshelves log is not written again, so a crash between the append and the record cannot duplicate events. A file with no `unmapped` events is recorded in `.local/migrated.json`; a file with unmapped events is not recorded, so a later import maps them once their pack is here:
 
   ```json
-  {"format":1,"files":{"recon/phone-7.jsonl":{"size":4120,"events":31,"unmapped":0,"reserved":2}}}
+  {"format":1,"files":{"field/phone-7.jsonl":{"size":4120,"events":31,"unmapped":0,"reserved":2}}}
   ```
 
   A file recorded there is not imported again; one that is not recorded can be imported again safely. Other devices' library logs are ignored (they import their own), and so is the seed log. After the import, library logs are not written again.
@@ -277,7 +277,7 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
 ```json
 {
   "format": 1,
-  "built_from": {"libraries": {"recon": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
+  "built_from": {"libraries": {"field": {"packs": 2, "unreadable": 0}}, "logs": {"phone-7.jsonl": 812}},
   "books": {
     "A": {
       "title": "Wilderness Medicine Handbook",
@@ -285,9 +285,9 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
       "aka": ["Wilderness Medicine"],
       "reading": "B",
       "copies": [
-        {"copy": "A", "locs": ["recon/wm"], "available": true, "title": "Wilderness Medicine",
+        {"copy": "A", "locs": ["field/wm"], "available": true, "title": "Wilderness Medicine",
          "own_call": {"div": "210", "seq": 1, "suffix": 0, "text": "CDS 210-001"}, "locations": []},
-        {"copy": "B", "locs": ["recon/wm2"], "available": true, "title": "Wilderness Medicine, 7th ed",
+        {"copy": "B", "locs": ["field/wm2"], "available": true, "title": "Wilderness Medicine, 7th ed",
          "own_call": {"div": "210", "seq": 2, "suffix": 0, "text": "CDS 210-002"},
          "locations": [{"dev": "linux-a", "folder_id": "books", "relpath": "Medicine/wm.pdf", "version": null, "source_blake3": null}]}
       ],
@@ -295,7 +295,8 @@ books in `id` order, and the same bytes whatever order the log files, or the lib
       "call": {"div": "210", "seq": 1, "suffix": 0, "text": "CDS 210-001"},
       "removed": false,
       "author": "A. Writer", "edition": "7th edition", "year": 2018,
-      "suggested": {"div": "610", "label": "Medicine", "from": "pack"}
+      "suggested": {"div": "610", "label": "Medicine", "from": "pack", "filed": false,
+                "suggestions": [{"div": "610", "label": "Medicine", "score": 0.41}, {"div": "620", "label": "Engineering", "score": 0.3}, {"div": "570", "label": "Life sciences", "score": 0.2}]}
     }
   },
   "retired": {"210": [5]},
@@ -329,14 +330,14 @@ events), and its `assign` numbers are **never** call numbers and never count tow
 - When `--titles` lines carry `author`, `edition` or `year` (checked as above, invalid fields dropped), a `facts` event follows for each such book, after all the title events, in `doc_id` order. This is the one addition to the seed log; older readers skip the unknown event. The event has `doc`, the book's `copy` (its `original_blake3`) and `loc` (`<library_id>/<doc_id>`) for readability, and only the fields the titles file gave:
 
   ```json
-  {"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"facts","doc":"b3f1","copy":"b3f1","loc":"recon-library/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
+  {"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"facts","doc":"b3f1","copy":"b3f1","loc":"field-library/b3f1","author":"A. Writer","edition":"7th edition","year":2018}
   ```
-- Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). The recon build passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
+- Every event has `at` = `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default now). A rebuild passes a fixed value, so **the same inputs give byte-identical seed logs and views**.
 - Divisions are written in number order; within a division, books in number order, each as `place` then `assign`.
 
 ```json
-{"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"place","doc":"b3f1","div":"210","by":"auto"}
-{"v":1,"at":1793491200000,"dev":"builder-recon-library","ev":"assign","doc":"b3f1","div":"210","seq":1}
+{"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"place","doc":"b3f1","div":"210","by":"auto"}
+{"v":1,"at":1793491200000,"dev":"builder-field-library","ev":"assign","doc":"b3f1","div":"210","seq":1}
 ```
 
 ### The library's local view (`.local/docs.json`, format 2)
@@ -368,6 +369,10 @@ library folder in `<data>/app/docs/libraries`: the ones it builds and the ones t
 - **Publishing** makes `copies.jsonl` again from the packs, shelves books no event has shelved, refreshes the call numbers it keeps with each book
   (`call_text` in `build/libs/<id>.json`, which file names and lists use), and writes the view. The view is also written after a placement, a rename
   and a delete.
+- **The browser's Library.** A browser has no log of its own. It reads the view from the service and the service writes what a book page changes
+  (`GET /api/build/bookshelves`, `POST /api/build/bookshelves/events`; server/BUILD-API.md "Bookshelves in the browser"), always as this device,
+  so the log keeps one writer. A move or a first placement of a book built here goes through the service's own filing (the files move, and the
+  number is the service's next free one); hiding, showing, "same book" corrections and the preferred copy are appended as they came.
 - The service writes no `SHA256SUMS` and no `.cache-library` archive for the libraries it builds, so `copies.jsonl` is in neither there.
 - Call numbers count across the whole Bookshelves, so two built libraries that each had `210-001` in their own logs show the later claim as
   `210-001.1` after the import.

@@ -11,6 +11,7 @@ import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../library/fake_shelf_server.dart';
 import 'fakes.dart';
 import 'web_fakes.dart';
 
@@ -71,6 +72,49 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  group('the Library in a browser has the four rows, over the server\'s shelves', () {
+    Future<void> showStructured(WidgetTester tester) async {
+      wide(tester);
+      await tester.runAsync(() async {
+        await browse.init();
+        await device.refresh();
+      });
+      await tester.pumpWidget(screen(BrowseScreen(browse: browse, active: true, structured: true, shelfServer: FakeShelfServer())));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the four rows, what the device is doing above them, and Add to Library', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await showStructured(tester);
+      for (final key in ['library-zims', 'library-bookshelves', 'library-catalog', 'library-docs']) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+      }
+      expect(find.text('No books yet'), findsOneWidget, reason: 'the server has no books');
+      expect(find.text('wiki.zim'), findsOneWidget, reason: 'the transfer the device runs is a card above the rows');
+      expect(find.byKey(const ValueKey('cancel-j1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('add-to-library')), findsOneWidget);
+    });
+
+    testWidgets('Cache Documentation and Catalog open from the rows', (tester) async {
+      await showStructured(tester);
+      await tester.tap(find.byKey(const ValueKey('library-docs')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('docs-guide')), findsOneWidget);
+      expect(find.byKey(const ValueKey('docs-credits')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('library-catalog')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('catalog-empty')), findsOneWidget);
+    });
+
+    testWidgets('ZIM Collections keeps the storage footer of the device', (tester) async {
+      api.spaceInfo = const DeviceSpaceInfo(free: 50 << 30, total: 500 << 30);
+      await showStructured(tester);
+      await tester.tap(find.byKey(const ValueKey('library-zims')));
+      await tester.pumpAndSettle();
+      expect(find.text('Device storage'), findsOneWidget);
+    });
+  });
+
   group('the Library list in a browser', () {
     testWidgets('nothing yet: the empty words say "this device", and the storage footer is always there', (tester) async {
       api.spaceInfo = const DeviceSpaceInfo(free: 50 << 30, total: 500 << 30);
@@ -92,10 +136,76 @@ void main() {
       expect(find.text('Downloads keep going if you close this tab.'), findsOneWidget);
       expect(find.text('wiki.zim'), findsOneWidget);
       expect(find.text('Downloading · 1.0 GB of 5.0 GB'), findsOneWidget);
-      expect(find.byTooltip('Pause'), findsNothing, reason: 'there is no pause in a browser');
       await tester.tap(find.byKey(const ValueKey('cancel-j1')));
       await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('remove-download-confirm')), findsOneWidget, reason: 'the cancel asks, as on the phone');
+      await tester.tap(find.byKey(const ValueKey('remove-download-yes')));
+      await tester.pumpAndSettle();
       expect(api.cancelled, contains('j1'));
+    });
+
+    testWidgets('a running download has Pause: it pauses on the device and the row says Paused with Resume', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.byKey(const ValueKey('pause-j1')), findsOneWidget);
+      expect(find.text('Pause'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('pause-j1')));
+      await tester.pumpAndSettle();
+      expect(api.paused, ['j1']);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      expect(find.byKey(const ValueKey('resume-j1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('pause-j1')), findsNothing);
+    });
+
+    testWidgets('Resume on a paused download calls resume and the row goes back to running', (tester) async {
+      api.jobList = [job('j1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('resume-j1')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100)); // the queued row has a bar that never stops moving, so no settle
+      expect(api.resumed, ['j1']);
+      expect(find.byKey(const ValueKey('resume-j1')), findsNothing);
+      expect(find.text('Waiting its turn…'), findsOneWidget, reason: 'queued again');
+    });
+
+    testWidgets('the cancel asks first, and Keep leaves the download running', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('cancel-j1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove the 1.0 GB already downloaded?'), findsOneWidget);
+      expect(api.cancelled, isEmpty, reason: 'nothing is cancelled before the answer');
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, isEmpty);
+      expect(find.byKey(const ValueKey('cancel-j1')), findsOneWidget);
+      expect(find.text('Downloading · 1.0 GB of 5.0 GB'), findsOneWidget);
+    });
+
+    testWidgets('Remove on a paused download asks first too', (tester) async {
+      api.jobList = [job('j1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('remove-j1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('remove-download-confirm')), findsOneWidget);
+      expect(api.cancelled, isEmpty);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, isEmpty);
+      expect(find.byKey(const ValueKey('resume-j1')), findsOneWidget);
+    });
+
+    testWidgets('holding a download row opens the phone\'s menu: Pause and Remove download', (tester) async {
+      api.jobList = [job('j1', 'running', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.longPress(find.byKey(const ValueKey('job-j1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('download-menu')), findsOneWidget);
+      expect(find.text('Remove download'), findsOneWidget);
+      await tester.tap(find.widgetWithText(ListTile, 'Pause'));
+      await tester.pumpAndSettle();
+      expect(api.paused, ['j1']);
     });
 
     testWidgets('a transfer that stopped has Try again and Dismiss, in words that do not name the machine', (tester) async {
@@ -107,6 +217,29 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(api.downloads.single['url'], 'https://dl.example/f1.zim');
+    });
+
+    testWidgets('a paused transfer is a card with its bytes, Resume and Remove; Resume asks the device to go on', (tester) async {
+      api.jobList = [job('p1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      expect(find.byKey(const ValueKey('job-p1')), findsOneWidget);
+      expect(find.text('Paused · 1.0 GB of 5.0 GB'), findsOneWidget);
+      expect(find.byKey(const ValueKey('remove-p1')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('resume-p1')));
+      await tester.pump();
+      await tester.pump();
+      expect(api.resumed, ['p1']);
+    });
+
+    testWidgets('Remove on a paused transfer cancels it on the device (which deletes the part file) and takes it off the list', (tester) async {
+      api.jobList = [job('p1', 'paused', bytes: 1 << 30, total: 5 << 30, name: 'wiki.zim')];
+      await show(tester);
+      await tester.tap(find.byKey(const ValueKey('remove-p1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('remove-download-yes')));
+      await tester.pumpAndSettle();
+      expect(api.cancelled, ['p1', 'p1']);
+      expect(find.byKey(const ValueKey('job-p1')), findsNothing);
     });
 
     testWidgets('"While this tab was closed" lists what finished, still runs or stopped, and Dismiss clears it', (tester) async {
@@ -238,7 +371,7 @@ void main() {
       await tester.tap(find.textContaining('Delete · frees'));
       await tester.pumpAndSettle();
       expect(find.text('You uploaded this file. To get it back, upload it again.'), findsOneWidget);
-      expect(find.textContaining('80.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
+      expect(find.textContaining('100.0 GB free now'), findsOneWidget, reason: 'the confirm shows the device\'s storage, as on a phone');
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.longPress(find.text('Downloaded one'));

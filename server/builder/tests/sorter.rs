@@ -52,7 +52,7 @@ fn pack(id: &str, title: &str, text: &str, vector: Vec<f32>, label: Option<&str>
     let pieces: Vec<PackPiece> = (0..2u32)
         .map(|i| PackPiece { index: i, text: format!("{text} {i}"), page: "1".into(), pdf_page: Some(1), page_end: None, pdf_page_end: None, heading_path: vec![], vector: vector.clone() })
         .collect();
-    let suggested = label.map(|d| Suggested { div: d.into(), label: "Labelled".into(), score: None, classifier_version: None, source: "label".into(), second_div: None });
+    let suggested = label.map(|d| Suggested { div: d.into(), label: "Labelled".into(), score: None, classifier_version: None, source: "label".into(), second_div: None, filed: None, suggestions: vec![] });
     Pack {
         header: Header {
             cdoc: PACK_FORMAT,

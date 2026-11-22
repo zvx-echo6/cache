@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../net/web_link.dart';
 import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton, ContentWidth;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
+import '../layout/modal_watch.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
@@ -214,10 +216,42 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   String? get _zimId => widget.sources.idOf(widget.zim);
 
+  /// The ZIM's main page, once known, to tell it from the other pages.
+  String? _mainAddress;
+
+  static String _bare(String a) {
+    final cut = a.indexOf(RegExp('[#?]'));
+    return (cut < 0 ? a : a.substring(0, cut)).toLowerCase();
+  }
+
+  /// True while the page on screen is the ZIM's main page (the page that opens with no address given counts as it).
+  bool get _onMain {
+    final here = _currentAddress ?? widget.address;
+    if (here == null) return true;
+    final main = _mainAddress;
+    return main != null && _bare(here) == _bare(main);
+  }
+
+  /// What the bar and a Home shortcut call the page: on the main page the library's title (a ZIM's main page often carries a
+  /// title that names something else, such as "Wikipedia"); on every other page the page's own title.
+  String _shownTitle(String library) => _onMain || _pageTitle.isEmpty ? library : _pageTitle;
+
+  Future<void> _learnMain() async {
+    final id = _zimId;
+    if (id == null) return;
+    try {
+      final m = await widget.sources.zimMainPage(id);
+      if (mounted) setState(() => _mainAddress = m);
+    } catch (_) {}
+  }
+
   @override
   void initState() {
     super.initState();
+    unawaited(zimStorageScript());
+    if (_isWeb) modalWatch.addListener(_letPointerThrough);
     _resolveStart();
+    _learnMain();
   }
 
   Future<void> _resolveStart() async {
@@ -274,8 +308,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     }
   }
 
+  /// A sheet, dialog or menu opened or closed: the browser's frame takes every pointer event in its area, so while one is open over
+  /// it the frame lets them through (the sheet's items and scrim get their clicks), and takes them back after.
+  void _letPointerThrough() => _frame?.ignorePointer(modalWatch.isOpen);
+
   @override
   void dispose() {
+    if (_isWeb) modalWatch.removeListener(_letPointerThrough);
     _debounce?.cancel();
     _settle?.cancel();
     _query.dispose();
@@ -439,7 +478,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       layout,
       Shortcut.page(
         address: address,
-        title: _pageTitle.isEmpty ? lib : _pageTitle,
+        title: _shownTitle(lib),
         library: lib,
       ),
     );
@@ -557,7 +596,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                   onSubmitted: (_) => _fullText(),
                 )
               : Text(
-                  _pageTitle.isEmpty ? title : _pageTitle,
+                  _shownTitle(title),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 18),
@@ -695,7 +734,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       return (widget.frameBuilder ?? buildZimFrame)(
         key: ValueKey('reader-frame-$_webGeneration'),
         initialUrl: start.toString(),
-        onCreated: (h) => _frame = h,
+        onCreated: (h) {
+          _frame = h;
+          h.ignorePointer(modalWatch.isOpen);
+        },
         onPage: _onFramePage,
         onExternal: openInNewTab,
       );
@@ -712,8 +754,8 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       initialSettings: readerSettings(customScheme: _customScheme),
       findInteractionController: _findController,
       onWebViewCreated: (c) => _web = c,
-      onLoadResourceWithCustomScheme: (controller, request) =>
-          serveCustomZimResource(_server, request.url.uriValue),
+      onLoadResourceWithCustomScheme: (controller, request) async =>
+          serveCustomZimResource(_server, request.url.uriValue, storageScript: await zimStorageScript()),
       shouldInterceptRequest: (controller, request) async {
         var r = await _server.serve(request.url.uriValue);
         // A PDF entry the page opened (a link whose path does not end in .pdf): the PDF reader shows it; the page stays.
@@ -729,7 +771,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           return WebResourceResponse(contentType: 'text/plain', statusCode: 204, reasonPhrase: 'No Content', data: Uint8List(0));
         }
         if (r.status == 200 && r.mime.split(';').first.trim() == 'text/html') {
-          r = ServedEntry(200, r.mime, utf8.encode(withoutPicturePlaceholders(utf8.decode(r.bytes, allowMalformed: true))));
+          r = ServedEntry(200, r.mime, utf8.encode(androidReaderHtml(utf8.decode(r.bytes, allowMalformed: true), await zimStorageScript())));
         }
         final text =
             r.mime.startsWith('text/') ||
@@ -772,7 +814,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           }
           return NavigationActionPolicy.ALLOW;
         }
-        if (mounted) {
+        // A web link: the phone's browser online; offline "You're offline" with Copy link (net/web_link.dart).
+        if (u != null && isWebLink(u)) {
+          if (mounted) unawaited(openWebLink(context, u.toString()));
+        } else if (mounted) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
             ..showSnackBar(

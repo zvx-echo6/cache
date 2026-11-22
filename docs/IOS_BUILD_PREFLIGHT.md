@@ -103,7 +103,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
   xcrun nm -gU "$BIN" > "$CHECK_DIR/app-symbols.txt"
   for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress \
     _cs_conversation_export _cs_conversation_import _cl_load _cl_next \
-    _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk; do
+    _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk _cache_free_now_bytes_on_disk; do
     grep -Eq " ${symbol}$" "$CHECK_DIR/app-symbols.txt" || exit 1
   done
   codesign --verify --deep --strict "$APP"
@@ -112,6 +112,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
   ```
 
 - [ ] Automated signed-archive gate (verified for the baseline in run `40447614611`; recheck each candidate): require arm64, `MinimumOSVersion` exactly `16.3`, the expected `application-identifier` (team plus bundle), and successful `codesign --verify`. Require **all three** entitlement values to be true: `com.apple.developer.kernel.increased-memory-limit`, `com.apple.developer.kernel.extended-virtual-addressing`, and `com.apple.developer.usernotifications.time-sensitive`. The earlier alternation grep only proved that any one name appeared and is insufficient. Verify expected bundle/version/build identity and distribution profile as well. The workflow now runs `packages/cache_search/ios/check-app.sh` on both the archive and exported IPA: arm64, minimum16.3, bundle/version/build, FFI symbols, signature, signed application identity and ALL three required entitlements. Check usage descriptions, document sharing, background audio and notification configuration. Keep signing material/private identifiers out of public logs/docs. After IPA export, repeat architecture, export-symbol and signature checks on the exported payload; successful archive signing alone does not validate the final exported artifact.
+- [ ] Any change under app/ios needs an iOS archive (ios-testflight.yml with stage=all, upload=false) before release.
 
 ## TestFlight processing
 

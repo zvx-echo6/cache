@@ -8,6 +8,7 @@ import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/settings/hub.dart';
+import 'package:cache/settings/space.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -155,6 +156,8 @@ class OwnerState {
         opener: (_) async => o.core,
         offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${o.s.dir.path}/region-catalogue'), fetch: o.offroadWeb.fetch),
         packDownloader: WaitingPacks(),
+        // A fixed storage for the region's space check (the picture tests have no test configuration that sets one).
+        spaceOf: (_) => const Space(free: 200 << 30, reserve: 20 << 30),
       );
       // Settings reads the regions from the hub.
       o.s.hub = SettingsHub(

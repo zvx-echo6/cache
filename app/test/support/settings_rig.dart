@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache/app_state.dart';
 import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/browse_state.dart';
+import 'package:cache/car/car_voice_access.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/history/conversation_store.dart';
 import 'package:cache/location/location_service.dart';
@@ -64,8 +65,14 @@ class RigPositionSource implements PositionSource {
 
   @override
   Future<bool> serviceEnabled() async => true;
+  /// Called when the phone is asked for a position (a test moves the weather part's position here).
+  void Function()? onCurrent;
+
   @override
-  Future<Fix> current() async => fixAt(42.5, -113.8);
+  Future<Fix> current() async {
+    onCurrent?.call();
+    return fixAt(42.5, -113.8);
+  }
   @override
   Stream<Fix> stream() => const Stream.empty();
   @override
@@ -128,6 +135,9 @@ class SettingsRig {
   late Directory modelsDir;
   late Directory videosDir;
 
+  /// Voice search from the car, for the Settings row (null: no row).
+  CarVoiceAccess? carVoice;
+
   SettingsDeps get deps => SettingsDeps(
     app: app,
     chat: chat,
@@ -138,6 +148,7 @@ class SettingsRig {
     location: location,
     hub: hub,
     onOpenAsk: () => opened.add('ask'),
+    carVoice: carVoice,
   );
 
   static Future<SettingsRig> create(
@@ -145,6 +156,9 @@ class SettingsRig {
     ConnectionKind connection = ConnectionKind.wifi,
     LocationAccess locationAccess = LocationAccess.always,
     LocationPermissionState permission = LocationPermissionState.granted,
+    // Layer definitions as the published catalogue brings them, on top of the test catalogue (see TestLayerEngine.published).
+    List<Map<String, dynamic>> publishedLayers = const [],
+    AppState Function(Directory settingsDir, Directory modelsDir)? appFactory,
   }) async {
     tester.view.physicalSize = const Size(1080, 5400);
     tester.view.devicePixelRatio = 3;
@@ -192,10 +206,10 @@ class SettingsRig {
     );
     r.access = FakeAccess(locationAccess);
     r.position = RigPositionSource(permissionState: permission);
-    r.app = AppState(settingsDirOverride: r.dir, modelsDirOverride: r.modelsDir);
+    r.app = appFactory?.call(r.dir, r.modelsDir) ?? AppState(settingsDirOverride: r.dir, modelsDirOverride: r.modelsDir);
     r.store = ConversationStore.memory();
     r.chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(r.store);
-    r.engine = TestLayerEngine(policy: r.policy);
+    r.engine = TestLayerEngine(policy: r.policy, published: publishedLayers);
     r.browse = BrowseState(sources: r.sources, policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     r.video = VideoState(
       dirOverride: r.videosDir,

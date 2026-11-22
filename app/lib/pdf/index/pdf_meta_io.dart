@@ -41,11 +41,12 @@ pdfium_bindings.PDFium _lib(String? modulePath) => _pdfium ??= pdfium_bindings.g
 
 /// A PDFium call that fills a UTF-16LE buffer and answers its length in bytes with the closing 0 (asked first with no buffer).
 String? _utf16(int Function(Pointer<Void> buffer, int length) call) {
-  final n = call(nullptr, 0);
+  // each PDFium call holds the process's one PDFium lock (pdfrx's worker has the core's, set before it started), and no more than one
+  final n = PdfiumLock.hold(() => call(nullptr, 0));
   if (n <= 2) return null;
   final buf = calloc<Uint8>(n);
   try {
-    final got = call(buf.cast<Void>(), n);
+    final got = PdfiumLock.hold(() => call(buf.cast<Void>(), n));
     if (got <= 2) return null;
     final s = String.fromCharCodes(buf.cast<Uint16>().asTypedList((got < n ? got : n) ~/ 2 - 1));
     return s.trim().isEmpty ? null : s;

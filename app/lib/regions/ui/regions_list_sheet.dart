@@ -167,6 +167,8 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     final o = r.offer(rec);
     final l = r.regionOf(rec.id);
     final waiting = r.waitingIds.contains(rec.id);
+    // Add off-road where no pack covers the region (the plan's check): greyed, with the reason, and the row does not open the offer.
+    final noPack = o.kind == RegionOfferKind.addParts && o.offroad && !o.places && r.offroadCovered(rec.id) == false;
     final pickable = o.kind == RegionOfferKind.download;
     // A region on its way is one download row's worth: its line, its bar and its Pause or Resume.
     final dl = l == null ? null : regionDl(r, l);
@@ -197,22 +199,24 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
         RegionOfferKind.download || RegionOfferKind.addParts => IconButton(
           key: ValueKey('region-download-${rec.id}'),
           tooltip: o.kind == RegionOfferKind.download ? 'Download ${rec.name}' : 'Add off-road to ${rec.name}',
-          onPressed: () => openRegionOffer(context, r, rec),
+          onPressed: noPack ? null : () => openRegionOffer(context, r, rec),
           icon: Container(
             width: 32,
             height: 32,
-            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: k.accent, width: 1.5)),
-            child: Icon(Icons.download, size: 18, color: k.accent),
+            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: noPack ? k.secondary.withValues(alpha: 0.4) : k.accent, width: 1.5)),
+            child: Icon(Icons.download, size: 18, color: noPack ? k.secondary.withValues(alpha: 0.4) : k.accent),
           ),
         ),
       };
     }
-    final line = l != null && (o.kind == RegionOfferKind.busy)
+    final line = noPack
+        ? kNoOffroadLine
+        : l != null && (o.kind == RegionOfferKind.busy)
         ? '${regionKindLabel(rec.kind, country: rec.country)} · ${l.partsLine.isEmpty ? formatBytes(l.bytes) : l.partsLine}'
         : [
             offerLine(rec, o, offroadFrom: r.offroadSharedWith(rec)),
-            // On the phone with its places not published for the area: said here too, as on its row in Regions.
-            if (o.kind == RegionOfferKind.onPhone && (l?.placesNotAvailable ?? false)) kPlacesNotAvailableShort,
+            // On the phone with a part not published for the area (places, or directions): said here too, as on its row in Regions.
+            if (o.kind == RegionOfferKind.onPhone) ...?l?.notAvailableNotes,
           ].join(' · ');
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -221,7 +225,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
         holdLabel: l != null ? 'Region options' : 'Select',
         onTap: _selecting
             ? (pickable ? () => setState(() => _picked.contains(rec.id) ? _picked.remove(rec.id) : _picked.add(rec.id)) : null)
-            : () => openRegionOffer(context, r, rec),
+            : (noPack ? null : () => openRegionOffer(context, r, rec)),
         onHold: _selecting
             ? null
             : l != null

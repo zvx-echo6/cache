@@ -55,10 +55,22 @@ impl LibraryRef {
 }
 
 /// The division a pack suggests for a book (`book.suggested`, else revision 3's `division`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SuggestedDiv {
     pub div: String,
     pub label: String,
+    /// `book.suggested.filed`: the sorter was confident, so the book is shelved in `div`. `None` (an older pack): not confident.
+    pub filed: Option<bool>,
+    /// `book.suggested.suggestions`: the sorter's top three, best first. Empty for an older pack (which has only `div`).
+    pub suggestions: Vec<SuggestedShelf>,
+}
+
+/// One of the sorter's top divisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuggestedShelf {
+    pub div: String,
+    pub label: String,
+    pub score: Option<f32>,
 }
 
 /// What a pack header (or a line of `copies.jsonl`) says about one copy.
@@ -98,7 +110,23 @@ pub struct SameInfo {
 
 fn suggested_of(s: &Value, div_key: &str) -> Option<SuggestedDiv> {
     let text = |k: &str| s.get(k).and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string);
-    Some(SuggestedDiv { div: text(div_key)?, label: text("label").unwrap_or_default() })
+    let suggestions = s
+        .get("suggestions")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let div = x.get("div").and_then(Value::as_str).filter(|t| !t.is_empty())?.to_string();
+                    Some(SuggestedShelf {
+                        div,
+                        label: x.get("label").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        score: x.get("score").and_then(Value::as_f64).map(|n| n as f32),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SuggestedDiv { div: text(div_key)?, label: text("label").unwrap_or_default(), filed: s.get("filed").and_then(Value::as_bool), suggestions })
 }
 
 fn same_of(s: &Value) -> Result<SameInfo> {
@@ -171,7 +199,16 @@ impl PackFacts {
         }
         o.insert("title".into(), json!(self.title));
         if let Some(s) = &self.suggested {
-            o.insert("suggested".into(), json!({"div": s.div, "label": s.label}));
+            let mut g = serde_json::Map::new();
+            g.insert("div".into(), json!(s.div));
+            g.insert("label".into(), json!(s.label));
+            if let Some(f) = s.filed {
+                g.insert("filed".into(), json!(f));
+            }
+            if !s.suggestions.is_empty() {
+                g.insert("suggestions".into(), Value::Array(s.suggestions.iter().map(|x| json!({"div": x.div, "label": x.label, "score": x.score})).collect()));
+            }
+            o.insert("suggested".into(), Value::Object(g));
         }
         if let Some(a) = &self.fields.author {
             o.insert("author".into(), json!(a));
@@ -359,7 +396,7 @@ mod tests {
         let line = r#"{"cdoc":1,"doc_id":"wm","doc_version":2,"title":"Old","source":{"blake3":"srcsrc"},"book":{"title":"Wilderness Medicine","original_blake3":"orig","suggested":{"div":"610","label":"Medicine","source":"classifier"}},"samebook":{"minhash":[1,2],"mean_vector":"ADwAOA==","text_pages":300,"pages":310,"ppi":150,"source_size":999}}"#;
         let f = PackFacts::from_header_line(line).unwrap();
         assert_eq!((f.copy.as_str(), f.doc_id.as_str(), f.version, f.title.as_str(), f.blake3.as_deref()), ("orig", "wm", 2, "Wilderness Medicine", Some("orig")));
-        assert_eq!(f.suggested, Some(SuggestedDiv { div: "610".into(), label: "Medicine".into() }));
+        assert_eq!(f.suggested, Some(SuggestedDiv { div: "610".into(), label: "Medicine".into(), ..Default::default() }));
         let q = f.quality().unwrap();
         assert_eq!((q.doc_id.as_str(), q.text_pages, q.pages, q.ppi, q.size), ("orig", 300, 310, Some(150), 999));
         assert_eq!(f.detect_facts().mean_vector, vec![1.0, 0.5]);

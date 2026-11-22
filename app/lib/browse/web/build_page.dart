@@ -140,7 +140,7 @@ class _BuildPageState extends State<BuildPage> {
         _active = u;
       });
       if (u == null) return;
-      say(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.');
+      sayUntil(context, 'Uploading ${u.count} ${u.count == 1 ? 'PDF' : 'PDFs'}. Keep this tab open.', u.done);
       await u.done;
       if (!mounted) return;
       if (u.failed.isEmpty && u.stopped == null) openBuiltLibrary(context, c, u.libraryId, replace: true);

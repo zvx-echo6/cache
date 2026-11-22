@@ -114,4 +114,24 @@ void main() {
     expect(llmErrorMessage('{"ok":false,"error":{"code":"no_model","message":"No model is loaded"}}', 'x'), 'No model is loaded');
     expect(llmErrorMessage('<html>', 'HTTP 502'), 'HTTP 502');
   });
+
+  test('a context_full error event becomes ContextFullException, by its code only', () async {
+    final events = await parseLlmEvents(_chunked(_ndjson([
+      {'type': 'error', 'code': 'context_full', 'message': 'any text at all'},
+    ]), 7)).toList();
+    expect((events.single as LlmError).toException(), isA<ContextFullException>());
+    // the same words under another code stay a plain failure; a context_full code with other words is still the chat being full
+    expect(const LlmError('start_failed', 'The chat is full').toException(), isA<StateError>());
+    expect(const LlmError('context_full', '').toException(), isA<ContextFullException>());
+    expect(const LlmError('generation_failed', 'x').toException(), isA<StateError>());
+  });
+
+  test('a done event with stop context marks the answer as cut off (as the phone does)', () async {
+    final events = await parseLlmEvents(_chunked(_ndjson([
+      {'type': 'done', 'role': 'assistant', 'content': 'half an answ', 'tool_calls': [], 'stop': 'context', 'prompt_tokens': 7, 'generated_tokens': 3},
+      {'type': 'done', 'role': 'assistant', 'content': 'whole', 'tool_calls': [], 'prompt_tokens': 7, 'generated_tokens': 3},
+    ]), 11)).toList();
+    expect((events[0] as LlmDone).message.cutByContext, isTrue);
+    expect((events[1] as LlmDone).message.cutByContext, isFalse);
+  });
 }

@@ -39,6 +39,10 @@ class LlmError extends LlmRemoteEvent {
   const LlmError(this.code, this.message);
   final String code;
   final String message;
+
+  /// What the session throws for this error: the chat is full (the server's machine code `context_full`, never its text) is the
+  /// phone's [ContextFullException]; any other is a [StateError] with the server's reason.
+  Object toException() => code == 'context_full' ? ContextFullException(message) : StateError(message);
 }
 
 /// Parses one NDJSON line. Null for a blank line or an event type this version does not know (ignored, as a newer server may add some).

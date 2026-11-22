@@ -57,6 +57,9 @@ pub fn take_pending(state: &mut ConvState, run_id: &str) -> Result<String, (&'st
 
 pub const OUTCOME_STATUSES: [&str; 3] = ["done", "declined", "failed"];
 
+/// The last key of a declined outcome: said plainly, because a small model reads `"ok":true` as success.
+pub const DECLINED_NOTE: &str = "The person tapped Cancel. Nothing was done or saved.";
+
 /// A tap's outcome as the host reports it.
 pub struct Outcome {
     pub status: String,
@@ -94,7 +97,7 @@ pub fn parse_outcome(v: &Value) -> Result<Outcome, String> {
 
 impl Outcome {
     /// The system message content, keys in this order: `host_event`, `ok`, `status`, `confirm_id`, `action`, then `result` or
-    /// `error`. `result` is the (already numbered) result.
+    /// `error`; a declined outcome ends with `note`. `result` is the (already numbered) result.
     pub fn to_json(&self, result: Option<Value>) -> Value {
         let mut m = Map::new();
         m.insert("host_event".into(), json!("act_outcome"));
@@ -112,6 +115,9 @@ impl Outcome {
                 err.insert("detail".into(), json!(e.detail));
             }
             m.insert("error".into(), Value::Object(err));
+        }
+        if self.status == "declined" {
+            m.insert("note".into(), json!(DECLINED_NOTE));
         }
         Value::Object(m)
     }

@@ -141,6 +141,58 @@ void main() {
         expect(find.text('Pharmacy'), findsNothing, reason: 'the list is gone; the field shows the choice');
       });
 
+      // After a place was chosen the box shows its name. Tapping the box again left the cursor after the name, so what was
+      // typed next was added to it (the name, then "b": a search for "Cassia Regional Hospitalb").
+      testWidgets('search: entering the box again selects the chosen place\'s name, so typing replaces it', (tester) async {
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [hospital]);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        final field = find.byKey(const ValueKey('map-search-field'));
+        TextEditingController box() => tester.widget<TextField>(field).controller!;
+        // What the keyboard does when a letter is typed: it goes in place of the selection (at the cursor when nothing is selected).
+        Future<void> type(String letter) async {
+          tester.testTextInput.updateEditingValue(box().value.replaced(box().selection, letter));
+          await tester.pump();
+        }
+
+        // Words the person typed are theirs: leaving the box and entering it again selects nothing, and typing adds to them.
+        await tester.enterText(field, 'hosp');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pump();
+        await tester.tap(field);
+        await tester.pump();
+        expect(box().selection.isCollapsed, isTrue, reason: 'typed words were selected');
+        box().selection = const TextSelection.collapsed(offset: 4);
+        await type('i');
+        expect(nav.query, 'hospi');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+
+        // A place is chosen: the box shows its name and the search is closed.
+        await tester.tap(find.text(hospital.name));
+        await tester.pump();
+        expect(nav.selected!.id, hospital.id);
+        expect(nav.searchOpen, isFalse);
+        expect(box().text, hospital.name);
+        // Long enough after the last tap that the next one is a tap of its own, not the second of a double tap.
+        await tester.pump(const Duration(seconds: 1));
+
+        // The box is entered again: the search opens with the whole name selected, and a letter typed takes its place.
+        await tester.tap(field);
+        await tester.pump();
+        expect(nav.searchOpen, isTrue);
+        expect(box().text, hospital.name);
+        expect(box().selection, TextSelection(baseOffset: 0, extentOffset: hospital.name.length), reason: 'the chosen place\'s name is not selected');
+        await type('b');
+        expect(box().text, 'b');
+        expect(nav.query, 'b', reason: 'what was typed was added to the chosen place\'s name');
+        // the search for it runs
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('search: nothing found, a note about words only, and the clear and back buttons', (tester) async {
         backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'no_embedder', results: const []);
         await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
@@ -309,7 +361,15 @@ void main() {
         expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
         expect(find.textContaining('off-road'), findsWidgets);
         expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
-        expect(find.textContaining('shown dashed'), findsOneWidget);
+        // The note says "off-road" (a part that follows a trail is off-road too, not "open ground"), then the climb and descent.
+        final totals = nav.route!.totals;
+        expect(
+          tester.widget<Text>(find.byKey(const ValueKey('offroad-note'))).data,
+          'Part of this route is off-road: ${fmt.distance(totals.offroadM)}, shown dashed. Climb ${fmt.height(totals.ascentM)}, descent ${fmt.height(totals.descentM)}.',
+        );
+        expect(fmt.distance(totals.offroadM), '3.8 mi');
+        expect(find.textContaining('no road'), findsNothing);
+        expect(find.textContaining('open ground'), findsNothing);
         expect(find.text('Start'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('route-card-1')));
         await tester.pump();
@@ -384,6 +444,42 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('directions: a bar beside the choices shows while there is more of them than fits, and only then', (tester) async {
+        // A phone's width, so the off-road choices take the rows they take on a phone.
+        tester.view.physicalSize = const Size(360, 700);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final color = routeChoicesBarColor(cacheTokens[theme]!).toARGB32();
+        bool bar(Symbol method, List<dynamic> args) => method == #drawRRect && args.length == 2 && args[1] is Paint && (args[1] as Paint).color.toARGB32() == color;
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: mode.startsWith('offroad'), mode: mode));
+        await nav.openDirections(hospital);
+        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
+        Future<void> settle() async {
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 400));
+          await tester.pump(const Duration(milliseconds: 400));
+        }
+
+        final choices = find.byKey(const ValueKey('route-choices-bar'));
+        ScrollPosition position() => Scrollable.of(tester.element(find.byKey(const ValueKey('mode-drive')))).position;
+        // Drive, one route: everything fits, and no bar is drawn.
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
+        // Off-road: its choices and the off-road note are more than half the window holds.
+        await nav.setMode('offroad_foot');
+        await settle();
+        expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
+        expect(position().maxScrollExtent, greaterThan(0));
+        expect(choices, paints..something(bar));
+        // Back to what fits: the bar goes.
+        await nav.setMode('drive');
+        await settle();
+        expect(position().maxScrollExtent, 0);
+        expect(choices, isNot(paints..something(bar)));
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('directions: finding the way, and an error with Start switched off', (tester) async {
         nav.routing = true;
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
@@ -415,6 +511,19 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('guidance-voice')));
         await tester.pump();
         expect(find.byTooltip('Turn the voice on'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('guidance banner: a street with a name and a route number shows the name first, the number after it', (tester) async {
+        final route = namedRoadsRouteJson();
+        await _startGuiding(nav, backend, route);
+        nav.progress = MapProgress.fromJson(fakeProgressJson(route, 0.3));
+        nav.poke();
+        await tester.pumpWidget(host(theme, live(nav, () => GuidanceBanner(nav: nav, fmt: fmt))));
+        final spans = (tester.widget<Text>(find.byKey(const ValueKey('banner-distance'))).textSpan! as TextSpan).children!.cast<TextSpan>();
+        expect(spans.last.text, ' · Turn left onto Lakeside Boulevard (US 99 Bus)');
+        // A highway with only a number keeps the number.
+        expect(tester.widget<Text>(find.byKey(const ValueKey('banner-then'))).data, 'Then turn right onto SH 99');
         expect(tester.takeException(), isNull);
       });
 
@@ -525,6 +634,45 @@ void main() {
       });
     });
   }
+
+  // Link audit, batch 2: a route error that names missing data has the button that gets it.
+  testWidgets('outside the downloaded maps: Download this area; no off-road data: Add off-road data, with Walk and Drive', (tester) async {
+    const theme = CacheThemeId.dark;
+    var area = 0, offroad = 0;
+    Widget panel({bool buttons = true}) => host(
+        theme,
+        live(nav, () => RoutePanel(nav: nav, fmt: fmt, onDownloadArea: buttons ? () => area++ : null, onAddOffroad: buttons ? () => offroad++ : null)));
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'out_of_coverage', 'message': 'outside'}]});
+    await nav.openDirections(hospital);
+    expect(nav.outsideMaps, isTrue);
+    expect(nav.offroadDataMissing, isFalse);
+    expect(nav.routeEnds.first, hospital.point, reason: 'where to is looked at first');
+    await tester.pumpWidget(panel());
+    expect(find.text('One of these places is outside the downloaded maps'), findsOneWidget);
+    expect(find.text('Download this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-add-offroad')), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('route-download-area')));
+    await tester.tap(find.byKey(const ValueKey('route-download-area')));
+    expect(area, 1);
+    // With nowhere to download from (no regions), no button.
+    await tester.pumpWidget(panel(buttons: false));
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    // Off-road with no off-road data for the area.
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'not_set_up', 'message': 'no data'}]});
+    await nav.setMode('offroad_foot');
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    expect(nav.outsideMaps, isFalse);
+    expect(find.text('Off-road needs off-road data for this area'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-download-area')), findsNothing);
+    expect(find.text('Add off-road data'), findsOneWidget);
+    expect(find.byKey(const ValueKey('offroad-instead-walk')), findsOneWidget, reason: 'the road modes are still offered');
+    await tester.ensureVisible(find.byKey(const ValueKey('route-add-offroad')));
+    await tester.tap(find.byKey(const ValueKey('route-add-offroad')));
+    expect(offroad, 1);
+    expect(area, 1);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _startGuiding(TestNav nav, FakeBackend backend, Map<String, dynamic> route) async {

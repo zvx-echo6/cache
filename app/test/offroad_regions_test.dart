@@ -3,11 +3,13 @@ import 'dart:io';
 
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/maps/geo.dart';
-import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/regions/problem_words.dart';
 import 'package:cache/regions/ui/region_actions.dart';
+import 'package:cache/regions/ui/region_page.dart';
+import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +48,8 @@ String _catalogue(List<Map<String, dynamic>> packs) => jsonEncode({
 
 final _idaho = _pack('idaho', 'Idaho', [-118.0, 41.5, -110.3, 49.5], 300 << 20);
 final _utah = _pack('utah', 'Utah', [-114.8, 36.5, -108.3, 42.5], 200 << 20);
+/// A pack nowhere near Idaho: no pack covers (or even meets) Twin Falls County.
+final _maine = _pack('maine', 'Maine', [-71.2, 43.0, -66.9, 47.5], 150 << 20);
 final _nevada = _pack('nevada', 'Nevada', [-120.7, 34.5, -113.3, 42.5], 250 << 20);
 
 /// The download of a pack: the bytes written to the hidden file, its URL and checksum noted.
@@ -91,16 +95,99 @@ void main() {
       expect(() => parseOffroadCatalogue('{"component":"routing"}'), throwsFormatException);
     });
 
-    test('the smallest pack that holds the region; across a border, every pack it meets; none near, none', () {
+    test('a box alone (no state known): the pack that holds it; across a border, every pack it meets; none near, none', () {
       List<String> ids(GeoBounds b) => [for (final p in packsCovering(packs, b)) p.id];
-      // Twin Falls County: inside Idaho's box, and inside Nevada's and Utah's (their boxes reach 42.5): the smallest holds it
+      // Twin Falls County: Idaho's box holds all of it; Utah's and Nevada's reach only its south (they end at 42.5)
       expect(ids(const GeoBounds(south: 41.99, west: -115.04, north: 42.92, east: -114.0)), ['idaho']);
-      // Utah and Nevada both hold this box; Utah's is smaller
+      // Utah's and Nevada's boxes both hold this box in western Utah: it lies deeper in Utah's (Nevada's edge is 0.2 degrees off)
       expect(ids(const GeoBounds(south: 40.0, west: -114.0, north: 41.0, east: -113.5)), ['utah']);
       // the Pacific Northwest: no pack holds it, so the packs it meets
       expect(ids(const GeoBounds(south: 42.0, west: -125.0, north: 49.0, east: -111.0)), ['idaho', 'utah', 'nevada']);
       expect(ids(const GeoBounds(south: 25.0, west: -82.0, north: 31.0, east: -80.0)), isEmpty);
     });
+
+    test('a county on a state line gets its own state\'s pack, not the neighbour whose box also holds it', () {
+      // The published boxes of two neighbouring states. Each is the state plus about 50 km, so Oregon's reaches into Idaho.
+      final line = parseOffroadCatalogue(_catalogue([
+        _pack('idaho', 'Idaho', [-118.0, 41.5, -110.3, 49.5], 300 << 20),
+        _pack('oregon', 'Oregon', [-125.3, 41.5, -115.8, 46.8], 250 << 20),
+      ]));
+      // An Idaho county by the Oregon line. Both boxes hold all of it and Oregon's is the smaller box, so the smallest box that
+      // held a region gave it Oregon's pack (the region list was sized by the same rule and still names Oregon's for it).
+      const county = GeoBounds(south: 43.11, west: -116.51, north: 43.81, east: -115.97);
+      const idaho = RegionRecord(id: 'us-id', name: 'Idaho', kind: 'region', country: 'US');
+      const oregon = RegionRecord(id: 'us-or', name: 'Oregon', kind: 'region', country: 'US');
+      List<String> ids(GeoBounds b, [List<RegionRecord> states = const []]) => [for (final p in packsCovering(line, b, states: states)) p.id];
+      expect(ids(county, [idaho]), ['idaho'], reason: 'the state the region list says it is in');
+      expect(ids(county), ['idaho'], reason: 'with no state known, the box it lies deepest in');
+      // a county on the Oregon side of the line, in both boxes too, gets Oregon's
+      const across = GeoBounds(south: 43.6, west: -117.6, north: 44.3, east: -117.0);
+      expect(ids(across, [oregon]), ['oregon']);
+      expect(ids(across), ['oregon']);
+      // a metro area across the line is in both states: one pack each
+      expect(ids(const GeoBounds(south: 43.6, west: -117.3, north: 44.2, east: -116.6), [idaho, oregon]), ['idaho', 'oregon']);
+      // a state with no pack of its own: by the boxes
+      const other = RegionRecord(id: 'us-xx', name: 'Elsewhere', kind: 'region', country: 'US');
+      expect(ids(county, [other]), ['idaho']);
+      // a state of the same name in another country is not this pack's
+      const abroad = RegionRecord(id: 'xx-id', name: 'Idaho', kind: 'region', country: 'XX');
+      expect(ids(across, [abroad]), ['oregon']);
+    });
+
+    test('the region list says which state a region is in', () {
+      final us = RegionShard.parse('us', File('test/fixtures/regions_us.json').readAsStringSync()).records;
+      List<String> states(String id) => [for (final r in statesIn(us, id)) r.id];
+      expect(states('us-id'), ['us-id'], reason: 'a state is its own');
+      expect(states('us-id-twin-falls-county'), ['us-id'], reason: 'a county, through its parents');
+      expect(states('us-id-twin-falls'), ['us-id'], reason: 'a city, through its county');
+      expect(states('us-metro-twin-falls-id'), ['us-id']);
+      expect(states('us-id-magic-valley'), ['us-id']);
+      // a region larger than a state is in none: its packs go by their boxes, as they did
+      expect(states('us-pacific-northwest'), isEmpty);
+      expect(states('us-intermountain-west'), isEmpty);
+      expect(states('us'), isEmpty);
+      expect(states('nowhere'), isEmpty);
+    });
+  });
+
+  testWidgets('a region near a state line is planned with its own state\'s pack, not the smaller neighbouring box that also holds it', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    // A neighbouring state's pack whose box (the state plus its margin) also holds Twin Falls County and is smaller than Idaho's:
+    // what Oregon's published box is to the Idaho counties on its line.
+    final neighbour = _pack('utah', 'Utah', [-115.2, 36.5, -108.3, 43.0], 200 << 20);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho, neighbour]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: _Packs(),
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    // The case is the one that went wrong: both boxes hold the county, and the neighbour's is the smaller.
+    final both = parseOffroadCatalogue(_catalogue([_idaho, neighbour]));
+    final b = county.bounds!;
+    expect(both.every((p) => p.bbox[0] <= b.west && p.bbox[1] <= b.south && p.bbox[2] >= b.east && p.bbox[3] >= b.north), isTrue);
+    double area(OffroadPack p) => (p.bbox[2] - p.bbox[0]) * (p.bbox[3] - p.bbox[1]);
+    expect(area(both.last), lessThan(area(both.first)), reason: 'the smallest box that holds it is the neighbour\'s: what was picked');
+    final states = (await tester.runAsync(() => regions.statesOf(county)))!;
+    expect(states.map((r) => r.id), ['us-id'], reason: 'the region list says the county is in Idaho');
+    final plan = (await tester.runAsync(() => regions.plan(county)))!;
+    expect(plan.offroad!.packs.map((p) => p.pack.id), ['idaho']);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
   });
 
   testWidgets('a region download includes its off-road pack (checked) and terrain heights; the row is there only when a pack covers it', (tester) async {
@@ -148,13 +235,14 @@ void main() {
     await _settleUntil(tester, () => find.byKey(const ValueKey('hit-$_county')).evaluate().isNotEmpty);
     await tester.tap(find.byKey(const ValueKey('hit-$_county')));
     await _settleUntil(tester, () => find.text('Download Twin Falls County?').evaluate().isNotEmpty && find.textContaining('off-road').evaluate().isNotEmpty);
-    // One pop-up: the parts, with off-road among them, and the size from the catalogue (nothing worked out on the phone).
+    // One pop-up: the parts, with off-road among them, and the size from the core's plan.
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
     expect(find.textContaining('off-road'), findsOneWidget);
     final offer = regions.offer(county);
     expect(offer.offroad, isTrue);
     expect(offer.bytes, isNotNull);
-    expect(find.text(formatBytes(offer.bytes!)), findsOneWidget);
+    await _settleUntil(tester, () => find.textContaining('Takes ', findRichText: true).evaluate().isNotEmpty);
+    expect(find.textContaining('Takes ', findRichText: true), findsOneWidget, reason: 'the core\'s plan: on the device, and what is fetched');
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();
 
@@ -207,6 +295,23 @@ void main() {
     await tester.pump();
     expect(find.text('OFF-ROAD DATA'), findsOneWidget, reason: 'the group, under the regions');
     expect(find.descendant(of: find.byKey(const ValueKey('offroad-pack-Idaho')), matching: find.textContaining('used by ', findRichText: true)), findsOneWidget);
+    // Link audit: the pack's row opens the regions that use it. Two use it: they are listed as the Local tab lists them, and a
+    // row opens its region's page.
+    expect(regions.offroadPacks.single.usedByIds, unorderedEquals([_county, 'us-id']));
+    await tester.tap(find.byKey(const ValueKey('offroad-pack-Idaho')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final sheet = find.byType(BottomSheet);
+    expect(sheet, findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-us-id'))), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-$_county'))), findsOneWidget);
+    await tester.tap(find.descendant(of: sheet, matching: find.byKey(const ValueKey('local-us-id'))));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(RegionPage), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
     // removing one keeps what the other uses; removing both removes the pack
     await tester.runAsync(() => regions.remove(_county));
     expect(file.existsSync(), isTrue, reason: 'Idaho still uses the pack');
@@ -229,6 +334,267 @@ void main() {
     expect((p.offroad, p.offroadProblem), (null, null));
     none.dispose();
 
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('a new region download while paused says so with the region\'s name, and Resume unpauses and starts it (web-region-progress)', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final packs = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: packs,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    Object? error;
+    await tester.runAsync(() async {
+      await regions.pauseAll();
+      try {
+        await regions.download(county, routing: true, map: false, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<DownloadsPaused>(), reason: 'before: a StateError with the off-road words');
+    expect(downloadProblemWords(error!, what: 'download ${county.name}'), 'Downloads are paused. Tap Resume to start ${county.name}.');
+    expect(packs.fetched, isEmpty, reason: 'nothing of the off-road data runs while paused');
+    expect(regions.held, isTrue);
+    // Resume on that message: the pause is cleared and the download starts
+    await tester.runAsync(() async {
+      await regions.resumeAndStart(county);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    expect(regions.held, isFalse);
+    expect(packs.fetched, hasLength(1), reason: 'the off-road pack that waited has started');
+    expect(regions.regionOf(_county)?.hasOffroad, isTrue);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('Add off-road never ends in silence: a size estimate that fails says why, and starts nothing (web-offroad-stuck)', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue([_idaho]));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final packs = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: packs,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      // The elevation layer's size cannot be worked out (the estimate says it cannot be downloaded).
+      final def = (jsonDecode(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync()) as Map<String, dynamic>)..['fake_unavailable'] = true;
+      await s.engine.saveDefinition(jsonEncode(def));
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+    });
+    Object? error;
+    await tester.runAsync(() async {
+      try {
+        await regions.addParts(county, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<StateError>(), reason: 'before: download() returned as if it had worked, no message, no job');
+    expect(downloadProblemWords(error!, what: 'add off-road to County'), contains('terrain'));
+    expect(packs.fetched, isEmpty);
+    expect(regions.regionOf(_county)?.hasOffroad ?? false, isFalse);
+
+    // Paused: the same request says so, and no pack is asked for.
+    await tester.runAsync(() async {
+      await regions.pauseAll();
+      error = null;
+      try {
+        await regions.addParts(county, offroad: true, anyway: true);
+      } catch (e) {
+        error = e;
+      }
+    });
+    expect(error, isA<StateError>());
+    expect(downloadProblemWords(error!, what: 'add off-road to County'), contains('paused'));
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  Future<(RegionsState, RegionRecord, _Packs, FakeRegions)> boot(WidgetTester tester, SettingsRig s, List<Map<String, dynamic>> packs) async {
+    final core = FakeRegions(tileDir: '${s.dir.path}/regions/tiles/2026-10');
+    Directory(core.tileDir).createSync(recursive: true);
+    final offroadWeb = FakeWeb()..files['${kOffroadBaseUrl}current.json'] = utf8.encode(_catalogue(packs));
+    final catalogue = RegionCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+    final pk = _Packs();
+    final regions = RegionsState(
+      policy: s.policy,
+      supportDir: () async => s.dir,
+      catalogue: catalogue,
+      maps: s.maps,
+      opener: (_) async => core,
+      offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
+      packDownloader: pk,
+    );
+    late RegionRecord county;
+    await tester.runAsync(() async {
+      await regions.init();
+      county = (await catalogue.shard('us'))[_county]!;
+      await catalogue.geometry(county);
+      await regions.download(county, routing: true, map: false, anyway: true);
+      core.finish(_county);
+      await regions.refresh();
+    });
+    return (regions, county, pk, core);
+  }
+
+  testWidgets('region page: no pack over the region greys the Off-road row with the owner\'s line, and a tap does nothing', (tester) async {
+    final s = await SettingsRig.create(tester);
+    // Maine's pack is nowhere near Twin Falls County (Utah's and Nevada's reach its south edge, so they would count as meeting it).
+    final (regions, _, packs, _) = await boot(tester, s, [_maine]);
+    await s.show(tester, RegionPage(regions: regions, id: _county));
+    await _settleUntil(tester, () => find.text('No off-road data is published for this area.').evaluate().isNotEmpty);
+    expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: the row offered Add and did nothing');
+    final button = tester.widget<OutlinedButton>(find.descendant(of: find.byKey(const ValueKey('add-offroad-disabled')), matching: find.byType(OutlinedButton)));
+    expect(button.onPressed, isNull, reason: 'greyed, not tappable');
+    await tester.tap(find.byKey(const ValueKey('add-offroad-disabled')), warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(packs.fetched, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('region page: a pack over the region keeps the normal Add off-road offer', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final (regions, _, _, _) = await boot(tester, s, [_idaho]);
+    await s.show(tester, RegionPage(regions: regions, id: _county));
+    await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(regions.offroadCovered(_county), isTrue);
+    expect(find.text('No off-road data is published for this area.'), findsNothing);
+    final add = find.byKey(const ValueKey('add-offroad'));
+    expect(add, findsOneWidget);
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty);
+    expect(find.byType(AlertDialog), findsOneWidget, reason: 'the offer opens as before');
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    regions.dispose();
+    await s.dispose(tester);
+  });
+
+  testWidgets('Regions sheet: Add off-road where no pack covers the region is greyed with the line and the row does not open the offer; with a pack it opens', (tester) async {
+    for (final covered in [false, true]) {
+      final s = await SettingsRig.create(tester);
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
+      await s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
+      await tester.tap(find.text('open'));
+      await _settleUntil(tester, () => find.byKey(const ValueKey('region-download-$_county')).evaluate().isNotEmpty);
+      await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+      await tester.pump(const Duration(milliseconds: 300));
+      final button = tester.widget<IconButton>(find.byKey(const ValueKey('region-download-$_county')));
+      if (!covered) {
+        expect(button.onPressed, isNull, reason: 'greyed: no pack covers the region');
+        expect(find.text('No off-road data is published for this area.'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('region-$_county')), warnIfMissed: false);
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.byType(AlertDialog), findsNothing, reason: 'the row does not open the offer');
+      } else {
+        expect(button.onPressed, isNotNull);
+        expect(find.text('No off-road data is published for this area.'), findsNothing);
+      }
+      await tester.pumpWidget(const SizedBox());
+      regions.dispose();
+      await s.dispose(tester);
+    }
+  });
+
+  testWidgets('the region menu: Add off-road is greyed with the line as its subtitle where no pack covers the region', (tester) async {
+    for (final covered in [false, true]) {
+      final s = await SettingsRig.create(tester);
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
+      final l = regions.regionOf(_county)!;
+      await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showRegionActions(c, regions, l), child: const Text('menu')))));
+      await tester.tap(find.text('menu'));
+      await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+      await tester.pump(const Duration(milliseconds: 400));
+      final tile = tester.widget<ListTile>(find.byKey(const ValueKey('region-action-addOffroad')));
+      if (!covered) {
+        expect(tile.enabled, isFalse, reason: 'before: the menu offered it and the tap did nothing');
+        expect(find.descendant(of: find.byKey(const ValueKey('region-action-addOffroad')), matching: find.text('No off-road data is published for this area.')), findsOneWidget);
+      } else {
+        expect(tile.enabled, isTrue);
+        expect(find.text('No off-road data is published for this area.'), findsNothing);
+      }
+      await tester.pumpWidget(const SizedBox());
+      regions.dispose();
+      await s.dispose(tester);
+    }
+  });
+
+  testWidgets('Regions > Downloads tab: a region on the phone that only lacks off-road, with no pack over it, is greyed with the line and its row opens nothing', (tester) async {
+    for (final covered in [false, true]) {
+      final s = await SettingsRig.create(tester);
+      final (regions, _, _, _) = await boot(tester, s, covered ? [_idaho] : [_maine]);
+      await s.show(tester, RegionsScreen(regions: regions));
+      await tester.runAsync(() async {
+        await tester.enterText(find.byKey(const ValueKey('region-search')), 'twin falls county');
+      });
+      await _settleUntil(tester, () => find.byKey(const ValueKey('hit-$_county')).evaluate().isNotEmpty);
+      await _settleUntil(tester, () => regions.offroadCovered(_county) != null);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const ValueKey('hit-$_county')), warnIfMissed: false);
+      await _settleUntil(tester, () => find.byType(AlertDialog).evaluate().isNotEmpty, turns: 12);
+      if (!covered) {
+        expect(find.textContaining('No off-road data is published for this area.', findRichText: true), findsOneWidget, reason: 'before: the row offered Add off-road');
+        expect(find.byType(AlertDialog), findsNothing, reason: 'the greyed row has no tap');
+      } else {
+        expect(find.textContaining('No off-road data is published for this area.', findRichText: true), findsNothing);
+        expect(find.byType(AlertDialog), findsOneWidget, reason: 'a pack covers it: the normal offer');
+        await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+        await tester.pump();
+      }
+      await tester.pumpWidget(const SizedBox());
+      regions.dispose();
+      await s.dispose(tester);
+    }
+  });
+
+  testWidgets('an offer that is asked for anyway where no pack covers the region says why, instead of opening nothing', (tester) async {
+    final s = await SettingsRig.create(tester);
+    final (regions, county, packs, _) = await boot(tester, s, [_maine]);
+    await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => openRegionOffer(c, regions, county), child: const Text('offer')))));
+    await tester.tap(find.text('offer'));
+    await _settleUntil(tester, () => find.text('No off-road data is published for this area.').evaluate().isNotEmpty);
+    expect(find.text('No off-road data is published for this area.'), findsOneWidget, reason: 'before: nothing at all');
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(packs.fetched, isEmpty);
     await tester.pumpWidget(const SizedBox());
     regions.dispose();
     await s.dispose(tester);

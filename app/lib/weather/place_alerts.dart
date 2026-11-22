@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../app_fs.dart';
 import '../files.dart';
 import '../platform/app_log.dart';
 
@@ -67,10 +68,16 @@ class PlaceAlertRule {
 /// The places' alert rules, by watched-place id (`here`, `place:<key>`), kept in a small file. A place without one follows the
 /// alert setting.
 class PlaceAlerts extends ChangeNotifier {
-  PlaceAlerts(Future<File> Function() file) : _file = file;
+  PlaceAlerts(Future<File> Function() file) : _file = file, _fs = null, _path = '';
+
+  /// A browser: the file is in the support folder on Cache Server, reached through [AppFs].
+  PlaceAlerts.appFs(AppFs fs, [this._path = kPlaceAlertsFile]) : _file = null, _fs = fs;
 
   /// Rules kept in memory only (tests).
-  PlaceAlerts.memory() : _file = null;
+  PlaceAlerts.memory() : _file = null, _fs = null, _path = '';
+
+  final AppFs? _fs;
+  final String _path;
 
   final Future<File> Function()? _file;
   Map<String, PlaceAlertRule> _rules = {};
@@ -82,11 +89,18 @@ class PlaceAlerts extends ChangeNotifier {
     if (_read) return;
     _read = true;
     final file = _file;
-    if (file == null) return;
+    if (file == null && _fs == null) return;
     try {
-      final f = await file();
-      if (!await f.exists()) return;
-      final j = jsonDecode(await f.readAsString());
+      final String text;
+      if (_fs != null) {
+        text = await _fs.readString(AppRoot.support, _path) ?? '';
+        if (text.isEmpty) return;
+      } else {
+        final f = await file!();
+        if (!await f.exists()) return;
+        text = await f.readAsString();
+      }
+      final j = jsonDecode(text);
       if (j is Map) _rules = {for (final e in j.entries) '${e.key}': PlaceAlertRule.fromJson(e.value)};
       notifyListeners();
     } catch (e) {
@@ -103,10 +117,15 @@ class PlaceAlerts extends ChangeNotifier {
     }
     notifyListeners();
     final file = _file;
+    final text = jsonEncode({for (final e in _rules.entries) e.key: e.value.toJson()});
+    if (_fs != null) {
+      await _fs.writeStringAtomic(AppRoot.support, _path, text);
+      return;
+    }
     if (file == null) return;
     final f = await file();
     await f.parent.create(recursive: true);
-    await writeStringAtomic(f, jsonEncode({for (final e in _rules.entries) e.key: e.value.toJson()}));
+    await writeStringAtomic(f, text);
   }
 
   /// A place that is gone takes its rule along.

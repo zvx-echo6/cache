@@ -42,13 +42,17 @@ pub fn config_for_tiles(tile_extract: &Path) -> String {
 
 /// Valhalla config for a folder of tiles laid out `<level>/<aaa>/<bbb>/<ccc>.gph` (`mjolnir.tile_dir`): the downloaded
 /// regions. There is no tile_extract, so Valhalla reads each tile from the folder when a route first needs it, and a tile
-/// that arrives later can be read by a later route.
+/// that arrives later can be read by a later route. `loki.use_connectivity` is off: Valhalla builds its connectivity map once,
+/// when the router starts, from the tiles then present, and it also colours by tile adjacency, so with it on a route between
+/// tiles fetched later, or between two separate islands of tiles, fails with 170 before any search. The search itself reads
+/// tiles from the folder on each miss and needs no such pre-check.
 pub fn config_for_tile_dir(tile_dir: &Path) -> String {
     let mut c: Value = serde_json::from_str(include_str!("valhalla_config.json")).expect("config template");
     if let Some(m) = c["mjolnir"].as_object_mut() {
         m.remove("tile_extract");
     }
     c["mjolnir"]["tile_dir"] = Value::String(tile_dir.to_string_lossy().into_owned());
+    c["loki"]["use_connectivity"] = Value::Bool(false);
     c.to_string()
 }
 
@@ -186,7 +190,7 @@ impl Valhalla for ShimValhalla {
     }
 
     fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
-        let r = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"}))?;
+        let r = self.call(self.route, &route_request(from, to, costing, None))?;
         let trip = r.get("trip").ok_or_else(|| ValhallaError::msg("no trip in reply"))?;
         parse_trip(trip)
     }
@@ -196,7 +200,7 @@ impl Valhalla for ShimValhalla {
     }
 
     fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
-        let Ok(r) = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km", "alternates": count})) else {
+        let Ok(r) = self.call(self.route, &route_request(from, to, costing, Some(count))) else {
             return Vec::new();
         };
         r.get("alternates")
@@ -233,6 +237,21 @@ impl Valhalla for ShimValhalla {
     }
 }
 
+/// The `/route` request. Driving asks for turn lanes (`turn_lanes`, off by default in Valhalla); walking and cycling have none.
+fn route_request(from: &RouteEnd, to: &RouteEnd, costing: &str, alternates: Option<usize>) -> Value {
+    let mut r = json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"});
+    if let Some(n) = alternates {
+        r["alternates"] = json!(n);
+    }
+    if costing == "auto" {
+        r["turn_lanes"] = json!(true);
+    }
+    r
+}
+
+/// How far from the vehicle's heading an edge's direction may be for the start to snap to it (Valhalla's default is 60).
+const HEADING_TOLERANCE_DEG: u32 = 60;
+
 /// A Valhalla location: the point and its snapping options.
 fn location(e: &RouteEnd) -> Value {
     let mut l = json!({"lat": e.lat, "lon": e.lon});
@@ -242,7 +261,40 @@ fn location(e: &RouteEnd) -> Value {
     if let Some(r) = e.opts.radius_m {
         l["radius"] = json!(r);
     }
+    if let Some(h) = e.opts.heading_deg {
+        l["heading"] = json!((h.rem_euclid(360.0).round() as u32) % 360);
+        l["heading_tolerance"] = json!(HEADING_TOLERANCE_DEG);
+    }
     l
+}
+
+/// The `lanes` of a maneuver; missing, or not an array, is none.
+fn parse_lanes(m: &Value) -> Vec<Lane> {
+    let bit = |l: &Value, k: &str| l.get(k).and_then(|v| v.as_u64()).and_then(|v| u16::try_from(v).ok());
+    m.get("lanes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().map(|l| Lane { directions: bit(l, "directions").unwrap_or(0), active: bit(l, "active"), valid: bit(l, "valid") }).collect())
+        .unwrap_or_default()
+}
+
+/// A maneuver's names (`names`, Valhalla's array of strings) with the flag the shim adds beside it (`flags`, one bool per name:
+/// Valhalla's `StreetName.is_route_number`, which its JSON leaves out). A name with no flag (a reply from a shim without the
+/// flags) is taken as a name, so the first name leads as it did before.
+fn parse_streets(m: &Value, names: &str, flags: &str) -> Vec<StreetName> {
+    let flags = m.get(flags).and_then(|v| v.as_array());
+    m.get(names)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .enumerate()
+                .filter_map(|(i, v)| {
+                    let text = s(v)?;
+                    let is_route_number = flags.and_then(|f| f.get(i)).and_then(|f| f.as_bool()).unwrap_or(false);
+                    Some(StreetName { text, is_route_number })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A Valhalla `trip` object (first leg) as a [`Trip`].
@@ -261,10 +313,13 @@ fn parse_trip(trip: &Value) -> Result<Trip, ValhallaError> {
                     length_km: f(m, "length").unwrap_or(0.0),
                     time_s: f(m, "time").unwrap_or(0.0),
                     street_names: m.get("street_names").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(s).collect()).unwrap_or_default(),
+                    streets: parse_streets(m, "street_names", "street_name_is_route_number"),
+                    begin_streets: parse_streets(m, "begin_street_names", "begin_street_name_is_route_number"),
                     begin_shape_index: m.get("begin_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
                     end_shape_index: m.get("end_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
                     bearing_after: f(m, "bearing_after"),
                     bearing_before: f(m, "bearing_before"),
+                    lanes: parse_lanes(m),
                 })
                 .collect()
         })
@@ -277,4 +332,73 @@ fn parse_trip(trip: &Value) -> Result<Trip, ValhallaError> {
         length_km: sum.and_then(|x| f(x, "length")).unwrap_or(0.0),
         time_s: sum.and_then(|x| f(x, "time")).unwrap_or(0.0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn end(lat: f64, lon: f64) -> RouteEnd {
+        RouteEnd::at((lat, lon))
+    }
+
+    #[test]
+    fn only_driving_asks_for_turn_lanes() {
+        let (a, b) = (end(42.5, -113.8), end(42.6, -113.7));
+        let auto = route_request(&a, &b, "auto", None);
+        assert_eq!(auto["turn_lanes"], json!(true));
+        assert_eq!(auto["costing"], "auto");
+        assert_eq!(route_request(&a, &b, "auto", Some(2))["turn_lanes"], json!(true));
+        assert_eq!(route_request(&a, &b, "auto", Some(2))["alternates"], 2);
+        for c in ["pedestrian", "bicycle"] {
+            assert!(route_request(&a, &b, c, None).get("turn_lanes").is_none(), "{c}");
+        }
+        assert!(route_request(&a, &b, "auto", None).get("alternates").is_none());
+    }
+
+    #[test]
+    fn street_names_carry_the_route_number_flag_the_shim_adds() {
+        let trip = json!({"legs": [{"shape": "", "maneuvers": [
+            {"type": 15, "street_names": ["US 99 Bus", "Lakeside Boulevard"], "street_name_is_route_number": [true, false],
+             "begin_street_names": ["SH 99"], "begin_street_name_is_route_number": [true]},
+            {"type": 15, "street_names": ["Lakeside Boulevard"]},
+            {"type": 4}
+        ]}], "summary": {"length": 1.0, "time": 1.0}});
+        let m = parse_trip(&trip).unwrap().maneuvers;
+        assert_eq!(m[0].streets, vec![StreetName::route_number("US 99 Bus"), StreetName::name("Lakeside Boulevard")]);
+        assert_eq!(m[0].begin_streets, vec![StreetName::route_number("SH 99")]);
+        assert_eq!(m[0].street_names, vec!["US 99 Bus".to_string(), "Lakeside Boulevard".to_string()]);
+        // No flags in the reply: names, in the map's order.
+        assert_eq!(m[1].streets, vec![StreetName::name("Lakeside Boulevard")]);
+        assert!(m[2].streets.is_empty() && m[2].begin_streets.is_empty());
+        assert_eq!(StreetName::list_json(&m[0].begin_streets), json!([{"text": "SH 99", "is_route_number": true}]));
+    }
+
+    #[test]
+    fn lanes_parse_from_the_live_samples_and_missing_means_none() {
+        let trip = json!({"legs": [{"shape": "", "maneuvers": [
+            {"type": 9, "lanes": [{"directions": 8, "active": 8}, {"directions": 2}, {"directions": 66}]},
+            {"type": 10, "lanes": [{"directions": 16}, {"directions": 48, "active": 32}, {"directions": 32, "valid": 32}]},
+            {"type": 4},
+            {"type": 4, "lanes": "x"}
+        ]}], "summary": {"length": 1.0, "time": 1.0}});
+        let m = parse_trip(&trip).unwrap().maneuvers;
+        assert_eq!(m[0].lanes, vec![Lane { directions: 8, active: Some(8), valid: None }, Lane { directions: 2, active: None, valid: None }, Lane { directions: 66, active: None, valid: None }]);
+        assert_eq!(m[1].lanes[1], Lane { directions: 48, active: Some(32), valid: None });
+        assert_eq!(m[1].lanes[2], Lane { directions: 32, active: None, valid: Some(32) });
+        assert!(m[2].lanes.is_empty() && m[3].lanes.is_empty());
+        assert_eq!(m[1].lanes[2].to_json(), json!({"directions": 32, "valid": 32}));
+        assert_eq!(m[0].lanes[1].to_json(), json!({"directions": 2}));
+    }
+
+    #[test]
+    fn a_start_with_a_heading_asks_valhalla_for_the_edge_that_goes_that_way() {
+        let mut a = end(42.5, -113.8);
+        a.opts.heading_deg = Some(370.4);
+        let r = route_request(&a, &end(42.6, -113.7), "auto", None);
+        assert_eq!(r["locations"][0]["heading"], json!(10));
+        assert_eq!(r["locations"][0]["heading_tolerance"], json!(HEADING_TOLERANCE_DEG));
+        assert!(r["locations"][1].get("heading").is_none(), "the end has none");
+        assert!(route_request(&end(42.5, -113.8), &end(42.6, -113.7), "auto", None)["locations"][0].get("heading").is_none());
+    }
 }

@@ -17,7 +17,7 @@ import '../layout/adaptive.dart' show showFittedSheet;
 /// What the Library's hold menu (and the "..." of an opened item) offers for one item. An action that does not apply is null and
 /// is left out of the menu.
 class LibraryActions {
-  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free, this.again, this.parts, this.linkedFolders});
+  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.getIcon, this.addToHome, this.free, this.again, this.parts, this.linkedFolders});
 
   /// The last line of the delete confirm; null: "You can download it again later."
   final String? again;
@@ -29,6 +29,9 @@ class LibraryActions {
   final int? free;
   final Future<void> Function()? checkUpdate;
   final Future<void> Function()? changeIcon;
+
+  /// "Get icon from source", after Change icon. Null in the app (nothing offers it yet); only the review renders give it one.
+  final Future<void> Function()? getIcon;
   final VoidCallback? addToHome;
   /// Null for an item that cannot be deleted (the guide that ships in the app).
   final Future<void> Function()? delete;
@@ -40,7 +43,7 @@ class LibraryActions {
   final Future<void> Function()? linkedFolders;
 }
 
-/// The one menu: Check for update, Change icon, Add to Home, Delete (which confirms first).
+/// The one menu: Check for update, Change icon, (Get icon from source, when given), Add to Home, Delete (which confirms first).
 Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
   final choice = await showFittedSheet<String>(
     context: context,
@@ -66,6 +69,7 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
             if (a.parts != null) Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: a.parts!(ctx)),
             if (a.checkUpdate != null) item('update', Icons.system_update_alt, 'Check for update'),
             if (a.changeIcon != null) item('icon', Icons.image_outlined, 'Change icon'),
+            if (a.getIcon != null) item('get-icon', Icons.refresh, 'Get icon from source'),
             if (a.addToHome != null) item('home', Icons.add_to_home_screen, 'Add to Home'),
             if (a.linkedFolders != null) item('linked-folders', Icons.link, 'Linked folders'),
             if (a.delete != null) item('delete', Icons.delete_outline, 'Delete · frees ${formatBytes(a.bytes)}', danger: true),
@@ -81,6 +85,8 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
       await a.checkUpdate!();
     case 'icon':
       await a.changeIcon!();
+    case 'get-icon':
+      await a.getIcon!();
     case 'home':
       a.addToHome!();
     case 'linked-folders':

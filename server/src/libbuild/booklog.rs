@@ -112,7 +112,7 @@ impl BuildService {
     }
 
     /// Every library folder in `<data>/app/docs/libraries` (names starting with a dot are a swap or a delete in progress).
-    fn library_refs(&self) -> Vec<LibraryRef> {
+    pub(crate) fn library_refs(&self) -> Vec<LibraryRef> {
         let mut out: Vec<LibraryRef> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(self.libs_dir()) {
             for e in rd.flatten() {
@@ -184,7 +184,26 @@ impl BuildService {
         let input = load_library(&r, &header_line).map_err(|e| e.to_string())?;
         let live = self.live_dir(lib);
         std::fs::create_dir_all(&live).map_err(|e| format!("making {}: {e}", live.display()))?;
-        write_bytes_atomic(&live.join(COPIES_FILE), cache_builder::library::copies_text(&input.copies).as_bytes()).map_err(|e| format!("writing {COPIES_FILE}: {e}"))
+        write_bytes_atomic(&live.join(COPIES_FILE), cache_builder::library::copies_text(&input.copies).as_bytes()).map_err(|e| format!("writing {COPIES_FILE}: {e}"))?;
+        self.write_catalogue(lib)
+    }
+
+    /// The library's catalogue and local view, made from its packs the way the one-shot builder makes them: `documents.tsv` (what a
+    /// browser or a phone lists a library's books from; without it the library shows no books) and `.local/docs.json`, format 2
+    /// (the book facts, compression and OCR among them).
+    fn write_catalogue(&self, lib: &str) -> Result<(), String> {
+        let (live, packs) = (self.live_dir(lib), self.packs_dir(lib));
+        let headers = if packs.is_dir() { cache_builder::view::live_headers(&packs).map_err(|e| e.to_string())? } else { Default::default() };
+        let mut tsv = String::from("doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n");
+        for h in headers.values() {
+            let title: String = h.title.chars().map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c }).collect();
+            tsv.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}\n", h.doc_id, h.doc_version, title, h.source.blake3, h.pieces, h.page_count));
+        }
+        write_bytes_atomic(&live.join(cache_builder::library::DOCUMENTS_FILE), tsv.as_bytes()).map_err(|e| format!("writing documents.tsv: {e}"))?;
+        if !headers.is_empty() {
+            cache_builder::view::rebuild_view(&live, &packs).map_err(|e| format!("writing .local/docs.json: {e}"))?;
+        }
+        Ok(())
     }
 
     /// Changes one book's line of `<library>/copies.jsonl`: its other versions' lines go, and the line of `version` (read from its
@@ -385,7 +404,7 @@ impl BuildService {
 
     /// Sets each book's `call_text` from the Bookshelves log; saves the library when any changed. A book whose copy no library
     /// lists keeps what it has.
-    fn refresh_calls(&self, lib: &str) -> Result<(), String> {
+    pub(crate) fn refresh_calls(&self, lib: &str) -> Result<(), String> {
         let s = self.shelves()?;
         let dir = self.live_dir(lib);
         let mut st = lock(&self.st);

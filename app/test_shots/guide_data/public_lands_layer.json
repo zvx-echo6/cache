@@ -1,0 +1,51 @@
+{
+ "format": 1,
+ "id": "public-lands",
+ "title": "Public lands (PAD-US)",
+ "description": "Public land ownership, managers and designations from USGS PAD-US 4.1.",
+ "kind": "vector",
+ "transform": "as_is",
+ "source": {
+  "type": "pmtiles",
+  "url": "https://cache.echo6.co/public-lands/public-lands.pmtiles",
+  "minzoom": 4,
+  "maxzoom": 12,
+  "tile_format": "mvt"
+ },
+ "attribution": "USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS)",
+ "license": "Public domain (US Government data)",
+ "coverage": {
+  "bbox": [
+   -180.0,
+   -14.6,
+   180.0,
+   71.5
+  ]
+ },
+ "offline": {
+  "allowed": true
+ },
+ "update": {
+  "version": "2026-10-25",
+  "interval_days": 90
+ },
+ "style_hints": {
+  "layers": [
+   {
+    "name": "public_lands",
+    "attributes": [
+     "Mang_Name",
+     "Mang_Type",
+     "Own_Type",
+     "Des_Tp",
+     "GAP_Sts",
+     "Pub_Access",
+     "Unit_Nm",
+     "GIS_Acres"
+    ]
+   }
+  ],
+  "role": "public_lands"
+ },
+ "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/public-lands.md"
+}

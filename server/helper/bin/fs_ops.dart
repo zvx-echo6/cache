@@ -21,7 +21,10 @@ import 'line_protocol.dart';
 /// A write goes to a temp file beside the target and is renamed over it, and makes missing parent folders. Errors: not_found,
 /// bad_path, io_error.
 class FsOps implements OpHandler {
-  FsOps({required this.support, required this.docs});
+  FsOps({required this.support, required this.docs, this.onWritten});
+
+  /// Told the path under `support` (with "/") of a file a successful fs.write or fs.rename put in place (the settings sync).
+  final void Function(String path)? onWritten;
 
   final Directory support;
   final Directory docs;
@@ -82,6 +85,7 @@ class FsOps implements OpHandler {
             rethrow;
           }
         });
+        if (identical(root, support)) onWritten?.call(rel.join('/'));
         return null;
       case 'fs.list':
         final d = _dirTarget(root, rel);
@@ -165,6 +169,7 @@ class FsOps implements OpHandler {
         File(src).renameSync(dst);
       }
     });
+    if (identical(root, support)) onWritten?.call(to.join('/'));
     return null;
   }
 

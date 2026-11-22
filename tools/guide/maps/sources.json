@@ -1,0 +1,10 @@
+{
+  "catalogue": "https://data.cached.info/catalogue.json",
+  "layers": {
+    "basemap": { "from": "catalogue" },
+    "public-lands": { "from": "catalogue" },
+    "hillshade": { "from": "tiles", "url": "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp", "elevation": true }
+  },
+  "hosts": ["data.cached.info", "cache.echo6.co", "tiles.mapterhorn.com"],
+  "limits": { "total": 250, "elevation": 60 }
+}

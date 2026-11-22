@@ -1,0 +1,88 @@
+{
+ "_comment": "The guide pictures' off-road route: on foot along the Double Arch Trail, from its start at the Windows parking to the arch. Its line is the trail's own line in the app's base map tiles (zoom 14, tile 3206/6279, protomaps-planet-20261103), put by hand into the shape of a cs_map_route answer of the off-road router (one stretch that follows a mapped trail); the climb is counted from the heights in offroad_elevation.json and the time is worked out from the length and the climb. Not recorded from the core.",
+ "ok": true,
+ "route_id": "guide-offroad",
+ "mode": "offroad_foot",
+ "land_access": "pragmatic",
+ "routing": "offroad",
+ "from": {
+  "id": null,
+  "name": "Your location",
+  "lat": 38.688273,
+  "lon": -109.538332,
+  "snap_distance_m": 0
+ },
+ "via": [],
+ "to": {
+  "id": "place:osm:w11",
+  "name": "Double Arch",
+  "lat": 38.69181,
+  "lon": -109.54063,
+  "snap_distance_m": 0
+ },
+ "distance_m": 473.3,
+ "duration_s": 534,
+ "totals": {
+  "distance_m": 473.3,
+  "duration_s": 534,
+  "road_m": 0.0,
+  "offroad_m": 473.3,
+  "ascent_m": 18,
+  "descent_m": 0
+ },
+ "geometry": "a`jxhAv`u|oEsA~@cGaDkMuD}BU}B?eHvCaFHy@^qEtEaFtBgEjDoItCaA`Ca@`JyKtKc]bLwD~BeN`GkGjDoEjE}MvTiFjC_EjCeBhBaL`HeIjHeBvH",
+ "point_count": 28,
+ "segments": [
+  {
+   "kind": "follow",
+   "travel": "foot",
+   "start_index": 0,
+   "end_index": 27,
+   "distance_m": 473.3
+  }
+ ],
+ "maneuvers": [
+  {
+   "index": 0,
+   "kind": "offroad_follow",
+   "type": "offroad_follow",
+   "instruction": "Follow Double Arch Trail NW 0.29 mi, flat (+18 m)",
+   "street_names": [],
+   "distance_m": 473.3,
+   "duration_s": 534,
+   "lat": 38.688273,
+   "lon": -109.538332,
+   "begin_index": 0,
+   "end_index": 27,
+   "bearing_deg": 333,
+   "cardinal": "NW",
+   "travel": "foot",
+   "grade_class": "flat",
+   "elev_gain_m": 18,
+   "elev_loss_m": 0,
+   "follow": {
+    "name": "Double Arch Trail",
+    "trail_kind": "trail"
+   }
+  },
+  {
+   "index": 1,
+   "kind": "road",
+   "type": "destination",
+   "instruction": "You have arrived at your destination.",
+   "street_names": [],
+   "distance_m": 0.0,
+   "duration_s": 0,
+   "lat": 38.691812,
+   "lon": -109.540633,
+   "begin_index": 27,
+   "end_index": 27,
+   "bearing_deg": 333,
+   "cardinal": "NW",
+   "travel": "offroad_foot"
+  }
+ ],
+ "major_roads": [],
+ "warnings": [],
+ "alternatives": []
+}

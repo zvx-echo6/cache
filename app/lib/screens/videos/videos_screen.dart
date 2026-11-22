@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
+import '../../desktop/desktop.dart';
 import '../../downloads/download_row.dart';
 import '../../theme.dart';
 import '../../video/caption_search.dart';
@@ -124,11 +125,14 @@ class _VideosScreenState extends State<VideosScreen> {
           if (video.unavailable != null) return Notice(video.unavailable!);
           final width = MediaQuery.sizeOf(context).width;
           final twoAcross = width >= kVideoTwoAcrossWidth;
-          return Center(
+          // The Linux desktop lines the list up with the page bar's title, on the page gutter, instead of centring it.
+          final desktop = DesktopMetrics.of(context);
+          return Align(
+            alignment: desktop == null ? Alignment.center : Alignment.topLeft,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: twoAcross ? kVideoListMaxWidth * 2 : kVideoListMaxWidth),
               child: ListView(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + MediaQuery.paddingOf(context).bottom),
+                padding: EdgeInsets.fromLTRB(desktop?.gutter ?? 16, 8, desktop?.gutter ?? 16, 24 + MediaQuery.paddingOf(context).bottom),
                 children: _searched.isNotEmpty ? [_searchField(context), ..._results(context)] : _list(context, twoAcross),
               ),
             ),
@@ -174,17 +178,17 @@ class _VideosScreenState extends State<VideosScreen> {
       ),
       if (video.saved.isEmpty)
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 4, 4, 8),
           child: Text(
             'Nothing on this device yet. Find a video on a site and choose Download.',
             key: const ValueKey('videos-empty'),
-            style: TextStyle(fontSize: 16, color: k.secondary),
+            style: TextStyle(fontSize: isLinuxDesktop(context) ? 15 : 16, color: k.secondary),
           ),
         ),
       for (final g in groups) ...[
         if (g.heading != null)
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 10, 4, 2),
+            padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 10, 4, 2),
             child: Semantics(header: true, child: Text(g.heading!, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text))),
           ),
         if (twoAcross) ..._pairs([for (final d in g.videos) _savedRow(context, d)]) else for (final d in g.videos) _savedRow(context, d),
@@ -204,7 +208,7 @@ class _VideosScreenState extends State<VideosScreen> {
                 ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 0, 4, 6),
           child: Text('Find videos on a site', style: TextStyle(fontSize: 15, color: k.secondary)),
         ),
         for (final i in video.instances)
@@ -350,7 +354,7 @@ class _VideosScreenState extends State<VideosScreen> {
     if (rows.isEmpty) {
       return [
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
+          padding: EdgeInsets.fromLTRB(isLinuxDesktop(context) ? 0 : 4, 16, 4, 0),
           child: Text('No saved video matches "$_searched".', style: TextStyle(fontSize: 16, color: k.secondary)),
         ),
       ];

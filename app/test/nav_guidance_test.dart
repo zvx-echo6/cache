@@ -1,4 +1,5 @@
 import 'package:cache/nav/guidance.dart';
+import 'package:cache/nav/ui/drive_screen.dart' show DriveRow;
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,26 @@ void main() {
 
   MapProgress at(Map<String, dynamic> r, double f, {bool arrived = false, double offset = 0, bool offRoute = false}) =>
       MapProgress.fromJson(fakeProgressJson(r, f, arrived: arrived, offset: offset, offRoute: offRoute));
+
+  group('lanes', () {
+    test('lanes on the next maneuver change no prompt and are readable on it', () {
+      final total = (route['distance_m'] as num).toDouble();
+      final fractions = [0.0, 13 / 40 - 700 / total, 13 / 40 - 250 / total, 13 / 40 - 60 / total];
+      final plain = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      final laned = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      for (final f in fractions) {
+        final j = fakeProgressJson(route, f);
+        final withLanes = {
+          ...j,
+          'next': {...(j['next'] as Map<String, dynamic>), 'lanes': [{'directions': 8, 'active': 8}, {'directions': 2}]},
+        };
+        final p = MapProgress.fromJson(withLanes);
+        expect(p.next!.lanes, hasLength(2));
+        expect(MapProgress.fromJson(j).next!.lanes, isEmpty);
+        expect(laned.update(p), plain.update(MapProgress.fromJson(j)));
+      }
+    });
+  });
 
   group('prompts', () {
     test('a turn is announced at three stages, each once, nearest last', () {
@@ -101,6 +122,41 @@ void main() {
       final r = MapRoute.fromJson(route);
       final said = g.opening(r, at(route, 0).current);
       expect(said, 'Starting navigation to Cassia Regional Hospital. 21 minutes, 15 miles. Drive east on Main Street.');
+    });
+  });
+
+  group('street names', () {
+    final named = namedRoadsRouteJson();
+    final total = (named['distance_m'] as num).toDouble();
+
+    test('the voice says the street\'s name when it has one, and the number only for a road with only a number', () {
+      final g = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      double before(int cut, double m) => cut / 40 - m / total;
+      expect(g.update(at(named, 0.0)), isEmpty);
+      expect(g.update(at(named, before(13, 700))).single, contains('turn left onto Lakeside Boulevard.'));
+      expect(g.update(at(named, before(13, 250))).single, 'In 800 feet, turn left onto Lakeside Boulevard.');
+      expect(g.update(at(named, before(13, 60))).single, 'Turn left onto Lakeside Boulevard.');
+      expect(g.update(at(named, before(27, 60))).single, 'Turn right onto SH 99.');
+      // A street with two names: its first, as the screens show it.
+      final said = g.opening(MapRoute.fromJson(named), at(named, 0).current);
+      expect(said, endsWith(' Drive east on Lakeside Boulevard.'));
+    });
+
+    test('the turn list shows the name first and the number after it, and a numbered highway by its number', () {
+      final mans = MapRoute.fromJson(named).maneuvers;
+      String row(int i) => DriveRow(maneuver: mans[i], distanceM: mans[i].distanceM).text(fmt);
+      expect(row(0), 'Drive east on Lakeside Boulevard');
+      expect(row(1), 'Turn left onto Lakeside Boulevard (US 99 Bus)');
+      expect(row(2), 'Turn right onto SH 99');
+      expect(row(3), 'You have arrived at your destination');
+    });
+
+    test('a street with only a name reads as before', () {
+      final g = GuidanceEngine(fmt: fmt, mode: 'drive', destination: 'X');
+      final at60 = at(route, 13 / 40 - 60 / (route['distance_m'] as num).toDouble());
+      g.update(at(route, 0.0));
+      expect(g.update(at60).single, 'Turn left onto Road 1.');
+      expect(DriveRow(maneuver: MapRoute.fromJson(route).maneuvers[1], distanceM: 0).text(fmt), 'Turn left onto Road 1');
     });
   });
 

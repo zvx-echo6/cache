@@ -55,6 +55,8 @@ void main() {
   late LibrariesState libs;
   late CdsShelfSource shelves;
   late BrowseState browse;
+  late FakeShelvesCalls calls;
+  late Directory shelvesDir0;
   var made = false;
 
   Future<void> setUpAll0({bool books = true, Set<String> pdfs = const {}, Map<String, Map<String, dynamic>> extra = const {}}) async {
@@ -73,7 +75,9 @@ void main() {
     libs = await librariesAt(Directory('${tmp.path}/libraries'), sources);
     final shelvesDir = writeShelves(Directory('${tmp.path}/bookshelves'),
         placed: books ? const [('aid', '210', 1), ('surgery', '210', 2)] : const [], checked: const ['aid', 'surgery', 'bees', 'engines', 'stone']);
-    shelves = CdsShelfSource(libs, calls: FakeShelvesCalls(), bookshelvesDir: () async => shelvesDir, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+    calls = FakeShelvesCalls();
+    shelvesDir0 = shelvesDir;
+    shelves = CdsShelfSource(libs, calls: calls, bookshelvesDir: () async => shelvesDir, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
     await shelves.whenRead();
     browse = BrowseState(sources: sources, libraries: libs, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
     made = true;
@@ -173,6 +177,29 @@ void main() {
       expect(find.text('210-001'), findsOneWidget);
       await tapKey(tester, 'crumb-CDS 200');
       expect(find.text('Medicine and Health'), findsOneWidget);
+    });
+
+    testWidgets('Go to a number clears and lets go of the box; coming back, it is empty, unfocused, keyboard closed', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      final box = find.byKey(const ValueKey('go-to-number'));
+      await tester.tap(box);
+      await tester.pumpAndSettle();
+      await tester.enterText(box, '210-002');
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(box).focusNode!.hasFocus, isTrue);
+      await tapKey(tester, 'go-to-number-go');
+      expect(find.text('CDS 210-002'), findsOneWidget);
+      expect(FocusManager.instance.primaryFocus?.context?.widget is EditableText, isFalse, reason: 'nothing has the keyboard on the book page');
+      await tapKey(tester, 'crumb-Bookshelves');
+      expect(box, findsOneWidget);
+      expect(tester.widget<TextField>(box).controller!.text, isEmpty, reason: 'the number is gone');
+      expect(tester.widget<TextField>(box).focusNode!.hasFocus, isFalse, reason: 'nothing refocuses it');
+      expect(tester.testTextInput.isVisible, isFalse, reason: 'the keyboard stays closed');
+      expect(tester.widget<ListView>(find.byType(ListView).first).keyboardDismissBehavior, ScrollViewKeyboardDismissBehavior.onDrag);
     });
 
     testWidgets('a tablet held upright: the current list and its detail; sideways and on a desktop: the rows, the list and the detail', (tester) async {
@@ -277,7 +304,7 @@ void main() {
       expect(shelves.unsorted, hasLength(3), reason: 'Undo reverses the whole batch');
     });
 
-    testWidgets('All divisions: the Place it sheet says the number before the tap, lists every division, and Leave unsorted', (tester) async {
+    testWidgets('All categories: the Place it sheet says the number before the tap, lists every category, and Leave unsorted', (tester) async {
       size(tester, const Size(390, 844));
       await tester.runAsync(setUpAll0);
       await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
@@ -286,7 +313,7 @@ void main() {
       await tapKey(tester, 'shelves-unsorted');
       await tapKey(tester, 'all-divisions-bees');
       expect(find.text('Where does this book go?'), findsOneWidget);
-      expect(find.text('The book gets its call number in the division you pick, for example CDS 350-001.'), findsOneWidget);
+      expect(find.text('The book gets its call number in the category you pick, for example CDS 350-001.'), findsOneWidget);
       await tapKey(tester, 'place-all-divisions');
       await tester.scrollUntilVisible(find.byKey(const ValueKey('place-div-530')), 200, scrollable: find.byType(Scrollable).last);
       await tapKey(tester, 'place-div-530');
@@ -296,6 +323,54 @@ void main() {
       await tapKey(tester, 'place-leave');
       await tapKey(tester, 'place-leave');
       expect(find.text('Where does this book go?'), findsNothing, reason: 'nothing more to place: the sheet closes');
+    });
+
+    testWidgets('Move has an "Unsorted" row for a filed book: one tap takes it off its shelf, into Unsorted, as a log event that syncs; it stays after a reload', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelf-200');
+      await tapKey(tester, 'shelf-210');
+      await tapKey(tester, 'book-aid');
+      expect(shelves.book('aid')!.shelf, '210');
+      await tapKey(tester, 'book-move');
+      expect(find.text('Move to another category'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-unsorted')), findsOneWidget, reason: 'a filed book can go back to Unsorted');
+      expect(find.text('Unsorted'), findsOneWidget);
+      calls.appended.clear();
+      await tapKey(tester, 'place-unsorted');
+      expect(find.text('Moved to Unsorted.'), findsOneWidget);
+      final aid = shelves.book('aid')!;
+      expect(aid.unsorted, isTrue, reason: 'off its shelf');
+      expect(shelves.unsorted.map((b) => b.id), contains('aid'), reason: 'in the Unsorted list');
+      expect(shelves.booksOn('210').map((b) => b.id), isNot(contains('aid')));
+      expect(aid.callNumber, isNull, reason: 'Unsorted books have no call number');
+      // the same events Add PDF\'s Undo writes: the log carries them to the other devices
+      expect([for (final e in calls.appended) e['ev']], ['unsort', 'retire']);
+      // it survives a reload: a new source reads the same log
+      final again = CdsShelfSource(libs, calls: calls, bookshelvesDir: () async => shelvesDir0, deviceId: () async => 'phone-test', ownIds: () async => const [], clock: () => 5000);
+      addTearDown(again.dispose);
+      await tester.runAsync(again.whenRead);
+      expect(again.book('aid')!.unsorted, isTrue);
+      expect(again.unsorted.map((b) => b.id), contains('aid'));
+      // Undo files it in its old division again
+      await tester.tap(find.byKey(const ValueKey('unsorted-undo')));
+      await tester.pumpAndSettle();
+      expect(shelves.book('aid')!.shelf, '210');
+    });
+
+    testWidgets('a book that is already in Unsorted has no Unsorted row', (tester) async {
+      size(tester, const Size(390, 844));
+      await tester.runAsync(setUpAll0);
+      await tester.pumpWidget(app(testDeps(browse: browse, shelves: shelves)));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'library-bookshelves');
+      await tapKey(tester, 'shelves-unsorted');
+      await tapKey(tester, 'all-divisions-bees');
+      expect(find.text('Where does this book go?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-unsorted')), findsNothing);
     });
 
     testWidgets('on a tablet Place it is the detail pane, never a dialog', (tester) async {
@@ -376,39 +451,63 @@ void main() {
       await tapKey(tester, 'book-aid');
     }
 
-    testWidgets('two separate choices: Remove from this device refuses when no other device has it; Delete from all devices', (tester) async {
-      final files = FakeBookFiles(outcome: RemoveOutcome.noOtherCopy);
+    testWidgets('synced: Delete asks "Delete this book?" with the line about synced devices; Cancel keeps the book, Delete deletes it', (tester) async {
+      final files = FakeBookFiles(remove: false)..synced = true;
       await openBook(tester, files);
-      expect(find.text('On this device · 3 KB'), findsOneWidget);
-      expect(find.byKey(const ValueKey('book-open')), findsOneWidget);
-      expect(find.text('Remove PDF from this device'), findsOneWidget, reason: 'the PDF-only button never shares a name with the book choice');
+      expect(find.text('Delete'), findsOneWidget, reason: 'one button on the book page');
       await tapKey(tester, 'book-delete');
-      expect(find.byKey(const ValueKey('delete-here')), findsOneWidget);
-      expect(find.byKey(const ValueKey('delete-all')), findsOneWidget);
-      expect(find.textContaining('its call number CDS 210-001 on every device you have linked. This cannot be undone.'), findsOneWidget);
-      await tapKey(tester, 'delete-here-button');
-      expect(find.text("No other device has this book right now, so it can't be removed from just this device. Delete it instead."), findsOneWidget);
-      expect(files.removed, isEmpty, reason: 'nothing is removed');
-      await tapKey(tester, 'delete-all-button');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsOneWidget);
+      expect(find.text('Delete this book?'), findsOneWidget);
+      expect(find.text('Deleting this will delete this from all synced devices.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-cancel')), findsOneWidget);
+      await tapKey(tester, 'delete-cancel');
+      expect(files.deleted, isEmpty, reason: 'Cancel does nothing');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.byKey(const ValueKey('book-delete')), findsOneWidget, reason: 'still on the book page');
+      await tapKey(tester, 'book-delete');
+      await tapKey(tester, 'delete-confirm-button');
       expect(files.deleted, ['aid']);
-      expect(find.byKey(const ValueKey('delete-all')), findsNothing, reason: 'the sheet closes');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text('Deleted. Your other devices remove it when they next connect.'), findsOneWidget);
     });
 
-    testWidgets('Remove from this device after the live check found a copy', (tester) async {
-      final files = FakeBookFiles();
+    testWidgets('not synced: the question only, no line; Delete deletes it and says "Deleted."', (tester) async {
+      final files = FakeBookFiles(remove: false);
       await openBook(tester, files);
       await tapKey(tester, 'book-delete');
-      await tapKey(tester, 'delete-here-button');
-      expect(files.removed, ['aid']);
-      expect(find.byKey(const ValueKey('delete-here')), findsNothing);
+      expect(find.text('Delete this book?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-synced-line')), findsNothing);
+      expect(find.textContaining('synced devices'), findsNothing);
+      await tapKey(tester, 'delete-confirm-button');
+      expect(files.deleted, ['aid']);
+      expect(find.text('Deleted.'), findsOneWidget);
     });
 
-    testWidgets('on a phone without offload or delete-everywhere yet, both choices say so and do nothing', (tester) async {
+    testWidgets('where nothing can be deleted yet, Delete says so and does nothing', (tester) async {
       await openBook(tester, BookFilesUnavailable());
       await tapKey(tester, 'book-delete');
-      expect(find.text('Not available on this device yet.'), findsNWidgets(2));
-      expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('delete-here-button'))).onPressed, isNull);
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text('Not available on this device yet.'), findsOneWidget);
       expect(tester.widget<FilledButton>(find.byKey(const ValueKey('delete-all-button'))).onPressed, isNull);
+    });
+
+    testWidgets("a book of a library the person didn't make: unchanged, the sheet with only the note, no dialog", (tester) async {
+      final files = FakeBookFiles(remove: false)..notYours.add('aid');
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      expect(find.byKey(const ValueKey('delete-confirm')), findsNothing);
+      expect(find.text("This book isn't in a library you made, so you can't delete it here."), findsOneWidget);
+      expect(find.byKey(const ValueKey('delete-all-button')), findsNothing, reason: 'no greyed button for an action they cannot take');
+      expect(find.textContaining("This can't be undone."), findsNothing, reason: 'no explanation of it either');
+    });
+
+    testWidgets('a delete that fails says so, and the book page stays', (tester) async {
+      final files = FakeBookFiles(remove: false)..failDelete = true;
+      await openBook(tester, files);
+      await tapKey(tester, 'book-delete');
+      await tapKey(tester, 'delete-confirm-button');
+      expect(find.text("Couldn't delete the book. Try again."), findsOneWidget);
+      expect(find.byKey(const ValueKey('book-delete')), findsOneWidget);
     });
   });
 

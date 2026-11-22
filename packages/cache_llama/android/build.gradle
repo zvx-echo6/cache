@@ -63,7 +63,7 @@ android {
         minSdk = 28
 
         ndk {
-            abiFilters "arm64-v8a", "x86_64"
+            abiFilters "arm64-v8a" // arm64 only; the app ships no x86_64 slice
         }
 
         externalNativeBuild {

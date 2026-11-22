@@ -40,9 +40,13 @@ class CacheCarAppService : CarAppService() {
  * starts and ends and what the trip is ([NavigationManager]), posts the turn-by-turn notification, and holds navigation audio
  * focus for the prompts.
  *
- * [startEngine] is the shared engine; the tests give a stand-in.
+ * [startEngine] and [endEngine] tell the shared engine that this session starts and has ended ([SharedEngine]: the first makes
+ * and starts the engine when nothing has yet; neither ever destroys it); the tests give stand-ins.
  */
-class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obtain(it) }) : Session(), CarLink.Listener {
+class CarSession(
+    private val startEngine: (Context) -> Unit = { SharedEngine.carStarted(it) },
+    private val endEngine: () -> Unit = { SharedEngine.carEnded() },
+) : Session(), CarLink.Listener {
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
     private var navigating = false
@@ -68,7 +72,6 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         } catch (e: Exception) {
             Log.w(TAG, "the app engine could not start", e)
         }
-        SharedEngine.carStarted()
         renderer = CarMapRenderer(carContext)
         carContext.getCarService(AppManager::class.java).setSurfaceCallback(renderer)
         notifications = try {
@@ -80,20 +83,21 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         val nav = carContext.getCarService(NavigationManager::class.java)
         navigation = nav
         nav.setNavigationManagerCallback(object : NavigationManagerCallback {
-            // The host stops Cache's guidance (another navigation app started, or the car asked): no more turns, notifications or
-            // voice from Cache, at once.
+            // The host stops Cache's guidance (another navigation app started, or the car's own navigation took over): no more
+            // turns, notifications or voice from Cache, at once, on the car and on the phone.
+            //
+            // The Car App Library also calls this when the session is destroyed (NavigationManager's own lifecycle observer;
+            // the callback is posted, so it runs after tearDown). That is the car going away, not another navigation source:
+            // the phone keeps guiding, and tearDown has already ended everything on the car side.
             override fun onStopNavigation() {
+                if (!ready) return
                 if (navigating) {
                     navigating = false
-                    try {
-                        navigation?.navigationEnded()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "navigationEnded", e)
-                    }
+                    HostNavigation.endAfterHostStop(nav)
                 }
                 notifications?.cancel()
                 audio?.release()
-                CarLink.call("stop")
+                CarLink.stopGuidance()
             }
 
             // Google Play's review: the next guidance is a simulated drive along the route.
@@ -113,27 +117,84 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         val home = HomeScreen(carContext, renderer)
         // A navigation request that opened Cache: handled once the first screen is up.
         NavIntent.parse(intent)?.let { req -> main.post { handle(req) } }
+        NavIntent.parseAction(intent)?.let { a -> main.post { handle(a) } }
+        NavIntent.parseView(intent)?.let { v -> main.post { handle(v) } }
         return home
     }
 
     override fun onNewIntent(intent: Intent) {
         NavIntent.parse(intent)?.let { handle(it) }
+        NavIntent.parseAction(intent)?.let { handle(it) }
+        NavIntent.parseView(intent)?.let { handle(it) }
+    }
+
+    // A navigation request that reached the phone's activity while this car is connected: handled as the car's own are.
+    override fun onNavRequest(req: NavRequest) = handle(req)
+
+    override fun onSearchRequest(search: GeoView.Search) = handle(search)
+
+    override fun onCarAction(action: CarAction) = handle(action)
+
+    /**
+     * A `VIEW` of a `geo:` address (a voice search): the search's places listed near the position, the list a name that is not a
+     * saved place's gets from NAVIGATE (always a list, whatever the name). Coordinates with no search show the route, not
+     * started (`intent=directions`).
+     */
+    private fun handle(view: GeoView) = when (view) {
+        is GeoView.Search -> handle(NavRequest(null, null, view.query, NavKind.NAVIGATION), search = true)
+        is GeoView.Point -> handle(view.req)
+    }
+
+    /**
+     * A custom action from the assistant (`geo.action:?act=...`, [CarAction]). End route and the voice switch are what their
+     * buttons on the guidance screen do; the answers are composed and said by the phone's voice (lib/car/car_answer.dart, said
+     * even when the voice is off: the driver asked); the overview is the screen the Overview button opens. Any other action
+     * gets one message, as Google requires.
+     */
+    internal fun handle(action: CarAction) {
+        when (action) {
+            CarAction.ExitNavigation -> CarLink.stopGuidance()
+            CarAction.Mute -> CarLink.call("voice", mapOf("on" to false))
+            CarAction.Unmute -> CarLink.call("voice", mapOf("on" to true))
+            is CarAction.Answer -> CarLink.call("answer", mapOf("kind" to action.kind))
+            CarAction.RouteOverview -> {
+                if (!CarLink.trip.guiding) {
+                    // No route to show: the phone says so.
+                    CarLink.call("answer", mapOf("kind" to "route"))
+                } else if (screenManager.top !is RouteOverviewScreen) {
+                    if (screenManager.top !is NavigationScreen) screenManager.popTo(STOP_RETURN)
+                    screenManager.push(RouteOverviewScreen(carContext, renderer))
+                }
+            }
+            is CarAction.Unsupported -> CarToast.makeText(carContext, "Cache can't do that yet.", CarToast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCarConfigurationChanged(newConfiguration: Configuration) {
         if (ready) renderer.setDark(carContext.isDarkMode)
     }
 
-    /** A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found. */
-    private fun handle(req: NavRequest) {
-        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start)) { r ->
+    /**
+     * A navigation request (NF-6): coordinates or a saved place's name start guidance; any other name lists the places found.
+     * An add-a-stop request during a drive, or while a route is shown before Start, adds the place as a stop instead (the
+     * route keeps its destination; the trip update shows it); a name that is not saved lists the places found for Add stop,
+     * as the car's own Add stop search does. With no route it is a plain navigation request (the phone answers so).
+     */
+    private fun handle(req: NavRequest, search: Boolean = false) {
+        CarLink.call("navigateTo", mapOf("lat" to req.lat, "lon" to req.lon, "query" to req.query, "start" to req.start, "stop" to req.addStop, "search" to search)) { r ->
             val res = r.asMap() ?: return@call
             val places = res["places"]
             if (places != null) {
                 val sm = screenManager
-                sm.popToRoot()
-                sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
-            } else if (res["started"] != true) {
+                if (res["forStop"] == true) {
+                    // Back to the guidance or route screen (Add stop returns there once a place is picked), with the places over it.
+                    sm.popTo(STOP_RETURN)
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places), forStop = true))
+                } else {
+                    sm.popToRoot()
+                    sm.push(SearchScreen(carContext, renderer, req.query, CarPlace.list(places)))
+                }
+            } else if (res["started"] != true && !res.containsKey("added")) {
                 val id = res["id"] as? String ?: return@call
                 val t = CarLink.trip
                 screenManager.push(RoutePreviewScreen(carContext, renderer, CarPlace(id, t.destinationName ?: req.query ?: "", t.destinationAddress, t.destinationLat ?: 0.0, t.destinationLon ?: 0.0, null)))
@@ -164,7 +225,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
                 }
                 notifications?.show(trip)
             }
-            if (screenManager.top !is NavigationScreen) {
+            if (screenManager.top !is NavigationScreen && !isOverGuidance(screenManager.top)) {
                 screenManager.popToRoot()
                 screenManager.push(NavigationScreen(carContext, renderer))
             }
@@ -178,7 +239,7 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
                 }
             }
             notifications?.cancel()
-            if (screenManager.top is NavigationScreen) screenManager.popToRoot()
+            if (screenManager.top is NavigationScreen || isOverGuidance(screenManager.top)) screenManager.popToRoot()
         }
     }
 
@@ -189,6 +250,11 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
     private fun tearDown() {
         if (!ready) return
         ready = false
+        // The app's engine, where guidance runs, always stays ([SharedEngine]), with or without a phone screen open. The car
+        // going away during a real drive leaves the phone guiding (the car side never asks it to stop here): when the car
+        // connects again the phone pushes its trip and onTrip shows guidance and tells the host it started. A simulated test
+        // drive is the deliberate exception: it exists only for the car's review, so the phone ends it when the car leaves
+        // (lib/car/car_bridge.dart).
         CarLink.removeListener(this)
         CarLink.setCarConnected(false)
         if (navigating) {
@@ -204,10 +270,41 @@ class CarSession(private val startEngine: (Context) -> Unit = { SharedEngine.obt
         CarLink.audio = null
         renderer.release()
         CarLocationService.stop(carContext)
-        SharedEngine.carEnded()
+        endEngine()
     }
 
     companion object {
         private const val TAG = "CacheCar"
+    }
+}
+
+/**
+ * Telling the host that navigation ended after the host itself stopped it.
+ *
+ * Car App Library 1.7.0, NavigationManager: when the host stops navigation (onStopNavigation) the library clears its own
+ * "navigating" flag before it calls the app, and navigationEnded() does nothing while that flag is clear. So after a host stop
+ * the app has no public way to send "navigation ended", and Android Auto keeps what Cache last sent as an active trip: the
+ * turn strip stays over every other Cache screen and takes the place of their buttons (Start among them) until the car
+ * reconnects. Calling navigationStarted() first would send the message, but it also asks for the navigation focus back from
+ * whatever just took it, so it is not used.
+ *
+ * This sets the library's flag back (a private field, by name; android/app/proguard-rules.pro keeps the name) so that
+ * navigationEnded() reaches the host, and nothing else. If the field is not there (another library version), nothing is sent,
+ * as before.
+ */
+internal object HostNavigation {
+    private const val TAG = "CacheCar"
+    private const val FLAG = "mIsNavigating"
+
+    /** True when "navigation ended" was sent to the host. */
+    fun endAfterHostStop(nav: NavigationManager): Boolean = try {
+        val f = NavigationManager::class.java.getDeclaredField(FLAG)
+        f.isAccessible = true
+        f.setBoolean(nav, true)
+        nav.navigationEnded()
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "navigation ended could not be sent after the host's stop", e)
+        false
     }
 }

@@ -344,6 +344,8 @@ class DownloadedVideo {
     this.warnings = const [],
     this.missingCaptions = const [],
     this.captionsIndex,
+    this.source = 'web',
+    this.remuxed = false,
   });
 
   factory DownloadedVideo.fromJson(Map<String, dynamic> j) => DownloadedVideo(
@@ -367,7 +369,15 @@ class DownloadedVideo {
             VideoCaptionInfo(language: (c['language'] ?? '') as String, label: (c['label'] ?? c['language'] ?? '') as String, url: '', automatic: c['automatic'] == true),
         ],
         captionsIndex: j['captions_index'] is Map ? VideoCaptionsIndex.fromJson((j['captions_index'] as Map).cast<String, dynamic>()) : null,
+        source: (j['source'] ?? 'web') as String,
+        remuxed: j['remuxed'] == true,
       );
+
+  /// Where the instance had the file: "web" (a plain MP4), "hls" or "hls+audio" (a fragmented MP4).
+  final String source;
+
+  /// An HLS file rewritten as a plain MP4 (every player can seek it); false for one saved before that, until it is.
+  final bool remuxed;
 
   /// The index of its caption files (with an indexes_dir in the core's config, when it has captions).
   final VideoCaptionsIndex? captionsIndex;
@@ -392,6 +402,40 @@ class DownloadedVideo {
 
   /// The captions the instance has that did not save with the video (fetched again with VideoCore.fetchMissingCaptions).
   final List<VideoCaptionInfo> missingCaptions;
+}
+
+/// A download the server's engine holds (Cache Server's `video.jobs`): what it is, and how far it is.
+class VideoJobInfo {
+  const VideoJobInfo({required this.instance, required this.video, required this.choice, required this.title, required this.label, required this.state, required this.done, required this.total, this.errorCode, this.errorMessage});
+
+  factory VideoJobInfo.fromJson(Map<String, dynamic> j) {
+    final e = j['error'];
+    return VideoJobInfo(
+      instance: (j['instance'] ?? '') as String,
+      video: (j['video'] ?? '') as String,
+      choice: (j['choice'] ?? 'lowest') as String,
+      title: (j['title'] ?? '') as String,
+      label: (j['label'] ?? '') as String,
+      state: (j['state'] ?? 'failed') as String,
+      done: ((j['done'] ?? 0) as num).toInt(),
+      total: ((j['total'] ?? 0) as num).toInt(),
+      errorCode: e is Map ? e['code'] as String? : null,
+      errorMessage: e is Map ? e['message'] as String? : null,
+    );
+  }
+
+  final String instance;
+  final String video;
+  final String choice;
+  final String title;
+  final String label;
+
+  /// "running", "done", "cancelled" or "failed".
+  final String state;
+  final int done;
+  final int total;
+  final String? errorCode;
+  final String? errorMessage;
 }
 
 /// Where to open a video for a citation: the file on this phone, or a stream.

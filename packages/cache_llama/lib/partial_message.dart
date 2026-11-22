@@ -1,5 +1,16 @@
 import 'dart:convert';
 
+/// The prompt does not fit the model's context: the chat is full. Thrown by the session; [detail] is the engine text, for the
+/// log only (never shown).
+class ContextFullException implements Exception {
+  const ContextFullException([this.detail = '']);
+
+  final String detail;
+
+  @override
+  String toString() => 'ContextFullException: $detail';
+}
+
 /// A tool call requested by the model.
 class ToolCall {
   const ToolCall({required this.id, required this.name, required this.arguments});
@@ -41,6 +52,7 @@ class PartialMessage {
     this.firstTokenMs,
     this.totalMs,
     this.prefixNote,
+    this.cutByContext = false,
   });
 
   factory PartialMessage.fromJson(Map<String, dynamic> j,
@@ -68,6 +80,7 @@ class PartialMessage {
       firstTokenMs: firstTokenMs,
       totalMs: totalMs,
       prefixNote: prefixNote,
+      cutByContext: j['stop'] == 'context',
     );
   }
 
@@ -95,6 +108,9 @@ class PartialMessage {
   /// saved ..."), for the app log; null when nothing.
   final String? prefixNote;
 
+  /// The generation ended because the context filled up, so the answer is cut off (native "stop":"context").
+  final bool cutByContext;
+
   int? get evaluatedPromptTokens => reusedTokens == null ? null : promptTokens - reusedTokens!;
 
   bool get hasToolCalls => toolCalls.isNotEmpty;
@@ -116,6 +132,7 @@ class ModelInfo {
     required this.supportsTools,
     this.weights,
     this.weightsReason,
+    this.generalName,
   });
 
   factory ModelInfo.fromJson(Map<String, dynamic> j) => ModelInfo(
@@ -125,6 +142,7 @@ class ModelInfo {
         supportsTools: (j['supports_tools'] ?? false) as bool,
         weights: j['weights'] as String?,
         weightsReason: j['weights_reason'] as String?,
+        generalName: j['general_name'] as String?,
       );
 
   final String description;
@@ -136,4 +154,8 @@ class ModelInfo {
   /// (null from an older library or a remote model), and why.
   final String? weights;
   final String? weightsReason;
+
+  /// The file's own name (GGUF `general.name`), as the server reads it for a browser; null from the native layer (the app reads the
+  /// file itself) and when the file has none.
+  final String? generalName;
 }

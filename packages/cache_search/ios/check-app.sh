@@ -20,7 +20,7 @@ fi
 work=$(mktemp -d /private/tmp/cache-check-app.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 xcrun nm -gU "$bin" > "$work/symbols.txt"
-for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress _cs_conversation_export _cs_conversation_import _cl_load _cl_next _cl_reused_tokens _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk _cache_total_bytes_on_disk; do
+for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress _cs_conversation_export _cs_conversation_import _cl_load _cl_next _cl_reused_tokens _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk _cache_free_now_bytes_on_disk _cache_total_bytes_on_disk; do
   grep -Eq " ${symbol}$" "$work/symbols.txt" || fail "missing native symbol: $symbol"
 done
 codesign --verify --deep --strict "$app"
@@ -29,4 +29,17 @@ for entitlement in com.apple.developer.kernel.increased-memory-limit com.apple.d
   [[ $(/usr/libexec/PlistBuddy -c "Print :$entitlement" "$work/entitlements.plist") == true ]] || fail "missing entitlement: $entitlement"
 done
 [[ $(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$work/entitlements.plist") == "$TEAM_ID.$BUNDLE_ID" ]] || fail 'signed application identity mismatch'
-echo 'PASS: signed app architecture, minimum OS, version/build, native symbols, identity and all required entitlements'
+# The car screen (CarPlay). Every build carries it: the signed app has the CarPlay entitlement (its icon is on every user's
+# CarPlay screen) and Info.plist says CacheCarPlay=YES (the build setting CACHE_CARPLAY=YES).
+carplay=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.carplay-maps' "$work/entitlements.plist" 2>/dev/null || true)
+flag=$(plist CacheCarPlay 2>/dev/null || true)
+[[ $carplay == true ]] || fail 'the signed app has no CarPlay entitlement (the car screen is in every build)'
+[[ $flag == YES ]] || fail 'Info.plist does not say the car screen is on (CacheCarPlay)'
+# The car screen is used with the phone locked in a pocket: the position and the spoken prompts then need their background
+# modes. And the car scene is declared in code, not in Info.plist, so its class has to be in the app for CarPlay to open it.
+modes=$(plist UIBackgroundModes 2>/dev/null || true)
+for mode in location audio; do
+  grep -qw "$mode" <<< "$modes" || fail "the background mode '$mode' is not declared (needed by the car screen)"
+done
+LC_ALL=C grep -q -a 'CarPlaySceneDelegate' "$bin" || fail 'the car scene (CarPlaySceneDelegate) is not in the app'
+echo "PASS: signed app architecture, minimum OS, version/build, native symbols, identity, all required entitlements, car screen ${flag}"

@@ -13,13 +13,21 @@ class FakeDeviceApi implements DeviceApi {
   DeviceSpaceInfo spaceInfo = const DeviceSpaceInfo(free: 100 << 30, total: 500 << 30);
   final List<Map<String, dynamic>> downloads = [];
   final List<String> cancelled = [];
+  final List<String> paused = [];
+  final List<String> resumed = [];
   final List<String> removed = [];
   int rescans = 0;
   int jobsReads = 0;
   DeviceException? failWith;
+
+  /// What Pause and Resume answer instead of doing it.
+  DeviceException? pauseError;
+  DeviceException? resumeError;
   Uint8List fetchBody = Uint8List(0);
   Object? fetchError;
   Uri? fetched;
+  String? fetchedScope;
+  bool fetchedPlain = false;
 
   /// What a removal does besides being recorded (a test that keeps real files removes them here).
   void Function(String id)? onRemove;
@@ -63,6 +71,27 @@ class FakeDeviceApi implements DeviceApi {
     ];
   }
 
+  void _setState(String id, String state) {
+    jobList = [
+      for (final j in jobList)
+        if (j.id == id) DeviceJob(id: id, url: j.url, kind: j.kind, name: j.name, bytes: j.bytes, total: j.total, state: state) else j,
+    ];
+  }
+
+  @override
+  Future<void> pauseJob(String id) async {
+    paused.add(id);
+    if (pauseError != null) throw pauseError!;
+    _setState(id, 'paused');
+  }
+
+  @override
+  Future<void> resumeJob(String id) async {
+    resumed.add(id);
+    if (resumeError != null) throw resumeError!;
+    _setState(id, 'queued');
+  }
+
   @override
   Future<void> removeItem(String id) async {
     removed.add(id);
@@ -74,8 +103,10 @@ class FakeDeviceApi implements DeviceApi {
   Future<void> rescan() async => rescans++;
 
   @override
-  Future<List<int>> fetch(Uri url) async {
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) async {
     fetched = url;
+    fetchedScope = scope;
+    fetchedPlain = plain;
     if (fetchError != null) throw fetchError!;
     return fetchBody;
   }
@@ -182,9 +213,13 @@ class FakeDeviceApiView implements DeviceApi {
   @override
   Future<void> cancelJob(String id) => inner.cancelJob(id);
   @override
+  Future<void> pauseJob(String id) => inner.pauseJob(id);
+  @override
+  Future<void> resumeJob(String id) => inner.resumeJob(id);
+  @override
   Future<void> removeItem(String id) => inner.removeItem(id);
   @override
   Future<void> rescan() => inner.rescan();
   @override
-  Future<List<int>> fetch(Uri url) => inner.fetch(url);
+  Future<List<int>> fetch(Uri url, {String? scope, bool plain = false}) => inner.fetch(url, scope: scope, plain: plain);
 }

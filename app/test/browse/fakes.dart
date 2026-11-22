@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/browse/opds.dart';
 import 'package:cache/settings/app_settings.dart';
@@ -18,6 +19,16 @@ class FakeSources extends SourcesState {
   final Map<String, String> titles = {};
   final Map<String, String> ids = {};
   final List<String> removed = [];
+
+  /// What the core would say is the ZIM's own icon (null: it has none). Counts the times it was asked.
+  Uint8List? illustration;
+  int illustrationAsked = 0;
+
+  @override
+  Future<Uint8List?> illustrationBytes(ZimFile z) async {
+    illustrationAsked++;
+    return illustration;
+  }
 
   void poke() => notifyListeners();
 

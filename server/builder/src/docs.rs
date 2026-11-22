@@ -293,6 +293,8 @@ impl Overrides {
                         classifier_version: None,
                         source: "label".into(),
                         second_div: r.second_division.clone(),
+                        filed: None,
+                        suggestions: Vec::new(),
                     });
                 }
                 Found::Ambiguous => applied.labels_ambiguous += 1,

@@ -324,6 +324,10 @@ class DownloadedArea {
   /// When the tiles were fetched (updates restart it).
   DateTime? fetchedAt;
 
+  /// The linked device whose shared copy holds this area, when this device holds none of its own (read-only here: Maps sync keeps
+  /// one writer per file). Null for an area this device downloaded.
+  String? sharedFrom;
+
   double get fraction => totalTiles == 0 ? 1 : doneTiles / totalTiles;
 
   Map<String, dynamic> toJson() => {

@@ -14,6 +14,7 @@ import 'package:cache/sharing/settings_sync.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sharing/synced_settings.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/weather/curated.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -421,6 +422,25 @@ void main() {
     s.dispose();
   });
 
+  // Weather always works (owner, 2026-11-15): a linked device whose list of sources on is empty does not switch weather off here.
+  testWidgets('a synced list of sources on that is empty leaves the default sources on', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final layout = LayoutState(settingsDirOverride: r.dir);
+    await tester.runAsync(layout.init);
+    final list = appSyncedSettings(app: r.app, layout: layout, settings: r.settings, maps: r.maps, weather: r.weather);
+    final sources = list.firstWhere((s) => s.key == 'weather.sources_on');
+    await tester.runAsync(() async {
+      await r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Earthquakes'), true);
+      await sources.write(<String>[]);
+    });
+    final on = {for (final c in r.weather.enabledSources) c.id};
+    expect(on, containsAll(['openmeteo-forecast', 'nws-alerts-point', 'wfigs-incidents-near', 'wfigs-perimeters-near']));
+    expect(on, isNot(contains('usgs-quakes-near')), reason: 'what the other device had off stays off');
+    expect(r.settings.liveSourcesOn, containsAll(['openmeteo-forecast', 'nws-alerts-point']), reason: 'and the setting says so too');
+    layout.dispose();
+    await r.dispose(tester);
+  });
+
   testWidgets('what never syncs never travels: the app settings that are not in a group are not sent or taken', (tester) async {
     final r = await SettingsRig.create(tester);
     final layout = LayoutState(settingsDirOverride: r.dir);
@@ -491,7 +511,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('the device page: the three choices, What\'s included, API keys; the follower says whose settings it follows', (tester) async {
+  testWidgets('the device page: the four choices, What\'s included, API keys; the follower says whose settings it follows', (tester) async {
     tall(tester);
     late Dev a, b;
     await tester.runAsync(() async {
@@ -500,10 +520,11 @@ void main() {
     });
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingDevicePage(sharing: a.sharing, peer: 'B', settingsSync: a.sync)));
     await tester.pump();
-    expect(find.text('Match'), findsOneWidget);
+    expect(find.text('Match both ways'), findsOneWidget);
     expect(find.text('Changes on either device go to both.'), findsOneWidget);
-    expect(find.text('Send mine'), findsOneWidget);
+    expect(find.text('Send mine to Phone'), findsOneWidget);
     expect(find.text('Phone follows my settings. Its own changes stay on Phone.'), findsOneWidget);
+    expect(find.text("Take Phone's settings"), findsOneWidget);
     expect(find.text('Off'), findsOneWidget);
     expect(find.text('Each keeps its own.'), findsOneWidget);
     expect(find.text("What's included"), findsOneWidget);
@@ -525,7 +546,7 @@ void main() {
     });
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingDevicePage(sharing: b.sharing, peer: 'A', settingsSync: b.sync)));
     await tester.pump();
-    expect(find.text("Follows Desk's settings"), findsOneWidget);
+    expect(find.text("Take Desk's settings"), findsOneWidget);
     expect(find.text('API keys'), findsNothing, reason: 'keys come from the device whose settings it follows');
 
     // What's included: six groups and what never syncs; a group's page ticks single settings.
@@ -547,7 +568,7 @@ void main() {
     });
   });
 
-  test('a watched place that has not come yet is named and waiting', () async {
+  test('a watched place that is not here is kept in the setting and not counted', () async {
     final (a, b) = await pair();
     final watched = ValueNotifier<List<String>>(['cabin', 'home']);
     final list = [
@@ -571,7 +592,57 @@ void main() {
       ..writeAsStringSync('${const SettingsEvent(at: 1 << 40, dev: 'A', key: kWatchPlacesKey, value: ['cabin', 'home', 'trailhead'], note: {'trailhead': 'Trailhead'}).toLine()}\n');
     await s.pull();
     expect(watched.value, ['cabin', 'home', 'trailhead']);
-    expect(s.placesNotHere({'cabin', 'home'}), ['Trailhead']);
+    expect(s.watchedPlacesHere({'cabin', 'home'}), 2, reason: 'a watch whose place is not here is kept but not counted');
+    expect(s.watchedPlacesHere(null), isNull);
+    s.dispose();
+    a.dispose();
+    b.dispose();
+  });
+
+  testWidgets('the linked device\'s Weather page counts only the watched places this device has and never says "waiting"', (tester) async {
+    tall(tester);
+    late Dev a, b;
+    late SettingsSync s;
+    final watched = ValueNotifier<List<String>>(['cabin', 'home']);
+    await tester.runAsync(() async {
+      (a, b) = await pair();
+      s = SettingsSync(
+        sharing: b.sharing,
+        settings: [
+          SyncedSetting(
+            key: kWatchPlacesKey,
+            group: SettingsGroupId.weather,
+            label: 'Saved places watched',
+            listenable: watched,
+            read: () => watched.value,
+            write: (v) async {
+              watched.value = [for (final x in v as List) '$x'];
+              return true;
+            },
+            note: () => {'cabin': 'Cabin', 'home': 'Home'},
+            shows: () => '${watched.value.length} places',
+          ),
+        ],
+        keys: () => const [],
+        storeKey: (_, _) async => false,
+        dir: () async => b.dir,
+        every: const Duration(hours: 1),
+        placesHere: () async => {'cabin', 'home'},
+      );
+      await s.start();
+      File('${b.dir.path}/log/A.jsonl')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('${const SettingsEvent(at: 1 << 40, dev: 'A', key: kWatchPlacesKey, value: ['cabin', 'home', 'trailhead'], note: {'trailhead': 'Trailhead'}).toLine()}\n');
+      await s.pull();
+    });
+    expect(watched.value, ['cabin', 'home', 'trailhead'], reason: 'kept in the setting, so it still syncs on');
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SettingsGroupPage(sync: s, peer: 'A', name: 'Desk', group: SettingsGroupId.weather)));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump();
+    expect(find.text('2 places'), findsOneWidget);
+    expect(find.textContaining('waiting'), findsNothing);
+    expect(find.textContaining('Trailhead'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
     s.dispose();
     a.dispose();
     b.dispose();
@@ -646,19 +717,20 @@ void main() {
     for (final (to, here, there, mode) in [
       (SettingsLink.match, SettingsLink.match, SettingsLink.match, 'match'),
       (SettingsLink.sending, SettingsLink.sending, SettingsLink.receiving, 'send'),
+      (SettingsLink.receiving, SettingsLink.receiving, SettingsLink.sending, 'send'),
       (SettingsLink.off, SettingsLink.off, SettingsLink.off, 'off'),
     ]) {
       final (a, b) = await pairNew();
       await a.sync.markNew('B');
       await b.sync.markNew('A');
       await a.sync.answer('B', to);
-      expect(a.core.peers.single['link'], {'mode': mode, 'from': 'A'}, reason: '$to');
+      expect(a.core.peers.single['link'], {'mode': mode, 'from': to == SettingsLink.receiving ? 'B' : 'A', 'by': 'A', 'at': 1000}, reason: '$to');
       await b.takeLink(a);
       expect(a.sync.linkWith('B'), here, reason: '$to');
       expect(b.sync.linkWith('A'), there, reason: '$to');
       expect(a.sync.unanswered('B'), isFalse);
       expect(b.sync.unanswered('A'), isFalse);
-      if (to != SettingsLink.off) {
+      if (to == SettingsLink.match || to == SettingsLink.sending) {
         // A's settings went as they are.
         await b.takeLog(a);
         expect([for (final e in a.events()) e['k']], contains('appearance.theme'));
@@ -668,17 +740,63 @@ void main() {
     }
   });
 
-  test('closing the question keeps what the other device answered meanwhile; Off chosen replaces it', () async {
+  test('closing the question, or a late Off, on the other device does not undo the first answer', () async {
     final (a, b) = await pairNew();
     await a.sync.markNew('B');
     await b.sync.markNew('A');
     await b.sync.answer('A', SettingsLink.sending);
     await a.takeLink(b);
     expect(a.sync.linkWith('B'), SettingsLink.receiving);
+    expect(a.sync.decidedByOther('B'), isTrue);
     await a.sync.answer('B', null);
     expect(a.sync.linkWith('B'), SettingsLink.receiving, reason: 'closing it is no choice');
     await a.sync.answer('B', SettingsLink.off);
-    expect(a.sync.linkWith('B'), SettingsLink.off, reason: 'Off, chosen, is a choice as on the device page');
+    expect(a.sync.linkWith('B'), SettingsLink.receiving, reason: 'a second answer is a notice, never applied');
+    await a.sync.answer('B', SettingsLink.match);
+    expect(a.sync.linkWith('B'), SettingsLink.receiving);
+    // The device page is a deliberate change, and still works.
+    await a.sync.setLink('B', SettingsLink.off);
+    expect(a.sync.linkWith('B'), SettingsLink.off);
+    expect(a.core.peers.single['link'], containsPair('by', 'B'), reason: 'who answered first is kept');
+    a.dispose();
+    b.dispose();
+  });
+
+  test('Take theirs sets both sides in one write; from either phone, and again from the receiving side', () async {
+    final (a, b) = await pairNew();
+    await a.sync.markNew('B');
+    await a.sync.answer('B', SettingsLink.receiving);
+    expect(a.core.peers.single['link'], {'mode': 'send', 'from': 'B', 'by': 'A', 'at': 1000});
+    await b.takeLink(a);
+    expect(a.sync.linkWith('B'), SettingsLink.receiving);
+    expect(b.sync.linkWith('A'), SettingsLink.sending);
+    expect(b.sync.decidedByOther('A'), isTrue);
+    expect(b.sync.unanswered('A'), isFalse);
+    // From the receiving side's device page: Take theirs again changes nothing; Send mine flips the direction.
+    final calls = a.core.argsOf['set_link']?.length;
+    await a.sync.setLink('B', SettingsLink.receiving);
+    expect(a.core.argsOf['set_link']?.length, calls);
+    await a.sync.setLink('B', SettingsLink.sending);
+    await b.takeLink(a);
+    expect(b.sync.linkWith('A'), SettingsLink.receiving);
+    a.dispose();
+    b.dispose();
+  });
+
+  test('both answer at once: each records who and when, so the engine picks the same winner', () async {
+    final (a, b) = await pairNew();
+    a.clock = 5000;
+    b.clock = 4000;
+    await a.sync.markNew('B');
+    await b.sync.markNew('A');
+    await a.sync.answer('B', SettingsLink.sending);
+    await b.sync.answer('A', SettingsLink.off);
+    expect(a.core.peers.single['link'], containsPair('at', 5000));
+    expect(b.core.peers.single['link'], containsPair('at', 4000));
+    // B answered earlier, so its record is the pair's (the merge is tested in cache_sync): A takes it and answers no more.
+    await a.takeLink(b);
+    expect(a.sync.linkWith('B'), SettingsLink.off);
+    expect(a.sync.decidedByOther('B'), isTrue);
     a.dispose();
     b.dispose();
   });
@@ -699,8 +817,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Sync Cache settings with Desk?'), findsOneWidget);
-    expect(find.text('Match'), findsOneWidget);
-    expect(find.text('Send mine'), findsOneWidget);
+    expect(find.text('Match both ways'), findsOneWidget);
+    expect(find.text('Send mine to Desk'), findsOneWidget);
+    expect(find.text("Take Desk's settings"), findsOneWidget);
     expect(find.text('Off'), findsOneWidget);
     expect(find.text('Changes on either device go to both.'), findsOneWidget);
     expect(find.text('Desk follows my settings.'), findsOneWidget);
@@ -715,8 +834,56 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Sync Cache settings with Desk?'), findsNothing);
-    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me'}, reason: 'closed: Off');
+    expect(a.core.peers.single['link'], {'mode': 'off', 'from': 'me', 'by': 'me', 'at': 1000}, reason: 'closed: Off');
     expect(a.sync.linkWith('peer1'), SettingsLink.off);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
+  });
+
+  testWidgets('the question is a plain notice when the other device answered first, and its OK keeps that', (tester) async {
+    tall(tester);
+    late Dev a;
+    await tester.runAsync(() async {
+      a = Dev('me', 'peer1', otherName: 'Pixel');
+      a.core.peers.single['link'] = {'mode': 'send', 'from': 'peer1', 'by': 'peer1', 'at': 900};
+      await a.start();
+    });
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: Builder(builder: (c) => TextButton(onPressed: () => askSettingsLink(c, a.sync, 'peer1', 'Pixel'), child: const Text('go')))));
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pixel is sending its settings to this phone'), findsOneWidget);
+    expect(find.text("Change this any time on Pixel's page in Sharing and sync."), findsOneWidget);
+    expect(find.text('Match both ways'), findsNothing);
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('notice-ok')));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+    expect(a.sync.linkWith('peer1'), SettingsLink.receiving);
+    expect(a.core.argsOf['set_link'], isNull, reason: 'OK writes nothing');
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => a.dispose());
+  });
+
+  testWidgets('the notice\'s "Change this any time on …\'s page" goes to that device\'s page', (tester) async {
+    tall(tester);
+    late Dev a;
+    await tester.runAsync(() async {
+      a = Dev('me', 'peer1', otherName: 'Pixel');
+      a.core.peers.single['link'] = {'mode': 'send', 'from': 'peer1', 'by': 'peer1', 'at': 900};
+      await a.start();
+    });
+    var opened = 0;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(CacheThemeId.dark),
+      home: Builder(builder: (c) => TextButton(onPressed: () => askSettingsLink(c, a.sync, 'peer1', 'Pixel', openDevice: () => opened++), child: const Text('go'))),
+    ));
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("Change this any time on Pixel's page in Sharing and sync."));
+    await tester.pumpAndSettle();
+    expect(opened, 1);
+    expect(find.byKey(const ValueKey('settings-link-notice')), findsNothing, reason: 'the notice closes first');
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async => a.dispose());
   });
@@ -747,7 +914,7 @@ void main() {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Sync Cache settings with Tablet?'), findsNothing);
-    expect(a.core.peers.single['link'], {'mode': 'send', 'from': 'me'});
+    expect(a.core.peers.single['link'], {'mode': 'send', 'from': 'me', 'by': 'me', 'at': 1000});
     expect(a.sync.linkWith('B'), SettingsLink.sending);
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async => a.dispose());

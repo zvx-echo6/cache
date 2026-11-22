@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/app_fs.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/settings/app_settings.dart';
@@ -15,6 +16,7 @@ import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/weather/places.dart';
+import 'package:cache/weather/weather_files.dart';
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,8 +43,10 @@ class Harness {
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true}) async {
     final h = Harness();
+    h.withBuiltIns = withBuiltIns;
+    h.browser = browser;
     h.notifier = notifier;
     if (clock != null) h.clock = clock;
     h.dir = again?.dir ?? Directory.systemTemp.createTempSync('weather-state');
@@ -66,6 +70,25 @@ class Harness {
 
   AlertNotifier? notifier;
 
+  /// False: no built-in sources either, so nothing is listed until a catalogue is read.
+  bool withBuiltIns = true;
+
+  /// The folders kept the browser's way (on Cache Server through AppFs, here over [dir]) instead of the phone's.
+  bool browser = false;
+  final List<AppFsFiles> browserFiles = [];
+
+  /// What the server's timer was told to fetch, each time it changed.
+  final List<Map<String, dynamic>> plans = [];
+
+  /// Every change to the browser's files has reached the folder.
+  Future<void> flushFiles() => Future.wait([for (final f in browserFiles) f.flush()]);
+
+  Future<AppFsFiles> _open(String base) async {
+    final f = await AppFsFiles.open(createAppFs(supportOverride: dir, docsOverride: dir), AppRoot.support, base);
+    browserFiles.add(f);
+    return f;
+  }
+
   WeatherState build() => WeatherState(
     notifier: notifier,
     told: notifier == null ? null : ToldStore(File('${dir.path}/told.json')),
@@ -73,20 +96,45 @@ class Harness {
     policy: policy,
     core: core,
     secrets: secrets,
-    catalogueDir: () async => Directory('${dir.path}/live-catalogues'),
-    liveDir: () async => liveDir,
-    builtIns: () async => builtInDefinitions(),
+    catalogueDir: browser ? null : () async => Directory('${dir.path}/live-catalogues'),
+    liveDir: browser ? null : () async => liveDir,
+    catalogueFiles: browser ? () => _open('live-catalogues') : null,
+    liveFiles: browser ? () => _open('live-sources') : null,
+    onPlan: browser ? (p) async => plans.add(p) : null,
+    builtIns: () async => withBuiltIns ? builtInDefinitions() : [],
     position: () => here,
     regions: () => regions,
     fetch: web.fetch,
     ownFetch: web.tryFetch,
     clock: () => clock,
+    hereSettle: hereSettle,
+    hereGap: hereGap,
+    townOf: townOf,
+    timer: timers == null ? null : (d, f) => timers!.make(d, f, () => clock),
   );
+
+  /// The town lookup (null: none); and, when set, timers the test runs by hand with [clock] as their time.
+  Future<String?> Function(double, double)? townOf;
+  FakeTimers? timers;
+
+  Duration hereSettle = const Duration(milliseconds: 30);
+  Duration hereGap = const Duration(minutes: 15);
 
   /// The settled end of a restart: the same folder, settings and keys, a new object.
   Future<Harness> restart() async {
     weather.dispose();
-    return create(again: this, serve: false);
+    return create(again: this, serve: false, browser: browser, withBuiltIns: withBuiltIns);
+  }
+
+  /// A clean slate for a test that is about something else than the defaults: exactly the sources [ids] on. Weather always works, so
+  /// "nothing on" is no state a test can start from; the sources wanted are switched on first, and only then the rest off.
+  Future<void> only(Iterable<String> ids) async {
+    for (final id in ids) {
+      await weather.setSourceOn(weather.sourceById(id)!, true);
+    }
+    for (final c in weather.enabledSources.toList()) {
+      if (!ids.contains(c.id)) await weather.setSourceOn(c, false);
+    }
   }
 
   Set<String> get inFolder => liveDir.existsSync() ? ({for (final f in liveDir.listSync().whereType<File>()) f.uri.pathSegments.last}..remove('.managed')) : {};
@@ -123,6 +171,156 @@ void main() {
   late Harness h;
   tearDown(() => h.dispose());
 
+  // Weather always works (owner, 2026-11-15): whenever no source would be on, the default sources (Weather forecast, Weather alerts,
+  // Wildfires, and the alert defaults) come back by themselves. The one state where weather does not work is an unwatched location.
+  group('weather always works: the default sources come back whenever none would be on', () {
+    const defaults = {'openmeteo-forecast', 'nws-alerts-point', 'wfigs-incidents-near', 'wfigs-perimeters-near'};
+    Set<String> on() => {for (final c in h.weather.enabledSources) c.id};
+
+    /// A start with the catalogue already kept on the phone and no source on in the settings.
+    Future<Harness> startWithCatalogueAndNothingOn() async {
+      final first = await Harness.create();
+      first.settings.replaceLiveSourcesOn(const <String>{});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final again = await first.restart();
+      expect(again.web.requested, isEmpty, reason: 'the catalogue came from the phone');
+      return again;
+    }
+
+    test('at start, with the catalogue loaded and no source on, the default rows come on and nothing else does', () async {
+      h = await startWithCatalogueAndNothingOn();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse, reason: 'Earthquakes is not a default');
+      expect(h.weather.isOn('firms-viirs-near'), isFalse);
+      expect(h.inFolder, {'openmeteo-forecast.json', 'nws-alerts-point.json', 'wfigs-incidents-near.json', 'wfigs-perimeters-near.json'}, reason: 'and the core holds exactly those');
+      expect(h.lastPolicy['enabled_sources'], unorderedEquals(defaults));
+      expect(WeatherState.defaultRows.map((r) => r.title), ['Weather forecast', 'Weather alerts', 'Wildfires']);
+    });
+
+    test('the alert defaults come with them: Emergency alerts is on with Weather alerts', () async {
+      final first = await Harness.create(serve: false);
+      first.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-alerts-point', 'alerts', 'Weather alerts (NWS, by point)', provider: 'NWS'),
+        entry('ipaws-alerts-near', 'alerts', 'Emergency alerts', provider: 'FEMA IPAWS'),
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+      ]));
+      await first.weather.refreshCatalogues();
+      first.settings.replaceLiveSourcesOn(const <String>{});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      h = await first.restart();
+      expect(h.weather.isOn('nws-alerts-point'), isTrue);
+      expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
+      expect(h.weather.isOn('openmeteo-forecast'), isTrue);
+    });
+
+    test('a settings sync from a linked device that would empty the list leaves the defaults on', () async {
+      h = await startWithCatalogueAndNothingOn();
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.settings.replaceLiveSourcesOn(const <String>{});
+      expect(h.weather.enabledSources, isEmpty, reason: 'the settings alone say nothing is on, until the weather part is told');
+      await h.weather.sourcesChanged();
+      expect(on(), defaults);
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse, reason: 'what the other device switched off stays off');
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+      expect(h.inFolder, isNot(contains('usgs-quakes-near.json')));
+    });
+
+    test('a synced list with sources in it is taken as it is, with no defaults added', () async {
+      h = await startWithCatalogueAndNothingOn();
+      h.settings.replaceLiveSourcesOn(const {'usgs-quakes-near'});
+      await h.weather.sourcesChanged();
+      expect(on(), {'usgs-quakes-near'});
+    });
+
+    test('switching the last source off brings the defaults back, with the last one off; no message', () async {
+      h = await Harness.create();
+      await h.only(['usgs-quakes-near']);
+      expect(on(), {'usgs-quakes-near'});
+      await h.weather.setRowOn(row('Earthquakes'), false);
+      expect(h.weather.isOn('usgs-quakes-near'), isFalse);
+      expect(on(), containsAll(['openmeteo-forecast', 'nws-alerts-point']));
+      expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
+      expect(h.weather.rowIsOn(row('Weather alerts')), isTrue);
+      expect(h.weather.rowIsOn(row('Wildfires')), isTrue);
+      expect(h.inFolder, isNot(contains('usgs-quakes-near.json')));
+    });
+
+    test('switching one of two off leaves the other alone, and adds no defaults', () async {
+      h = await Harness.create();
+      await h.only(['usgs-quakes-near', 'nwps-gauges-near']);
+      await h.weather.setRowOn(row('River levels'), false);
+      expect(on(), {'usgs-quakes-near'});
+      expect(h.weather.isOn('openmeteo-forecast'), isFalse);
+      expect(h.weather.isOn('nws-alerts-point'), isFalse);
+      expect(h.weather.isOn('wfigs-incidents-near'), isFalse);
+      expect(h.inFolder, {'usgs-quakes-near.json'});
+    });
+
+    test('with the catalogue not loaded yet (no sources) nothing is switched; once it loads the defaults come on', () async {
+      h = await Harness.create(connection: ConnectionKind.none, serve: false, withBuiltIns: false);
+      expect(h.weather.sources, isEmpty);
+      expect(h.weather.enabledSources, isEmpty);
+      expect(h.settings.liveSourcesOn, isEmpty, reason: 'nothing was switched on in the settings either');
+      expect(h.inFolder, isEmpty);
+      h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+      h.probe.change(ConnectionKind.wifi);
+      await h.weather.refreshCatalogues();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+    });
+
+    // A first start: the built-in sources (weather, alerts) are listed before the catalogue is read, but they stand in for only two of the
+    // three default rows, so nothing is switched on until the catalogue is there; then all three rows come on together.
+    test('a first start online, the catalogue read after the built-in sources: all three default rows are on', () async {
+      h = await Harness.create();
+      expect(on(), defaults);
+      expect(h.settings.liveSourcesOn, containsAll(defaults));
+    });
+
+    test('a first start with no connection: the built-in sources are listed, and nothing is switched until a catalogue is read', () async {
+      h = await Harness.create(connection: ConnectionKind.none, serve: false);
+      expect(h.weather.sources.map((c) => c.id).toSet(), {'weather', 'alerts'});
+      expect(h.weather.enabledSources, isEmpty);
+      expect(h.settings.liveSourcesOn, isEmpty);
+      h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+      h.probe.change(ConnectionKind.wifi);
+      await h.weather.refreshCatalogues();
+      expect(on(), defaults);
+    });
+
+    test('a source the person switched on and that is not a default is no reason to switch the defaults on', () async {
+      h = await startWithCatalogueAndNothingOn();
+      await h.only(['usgs-quakes-near']);
+      await h.weather.refreshCatalogues();
+      expect(on(), {'usgs-quakes-near'});
+    });
+
+    test('nothingWatched: only when Your location is not watched and no other place is', () async {
+      h = await Harness.create();
+      expect(h.weather.nothingWatched, isFalse);
+      h.settings.setWatched('here', false);
+      expect(h.weather.nothingWatched, isTrue);
+      expect(h.weather.status().headline, kWeatherHereOff);
+      h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
+      h.settings.setWatched('place:cabin', true);
+      await h.weather.placeChoices();
+      expect(h.weather.nothingWatched, isFalse, reason: 'another place is watched');
+      h.settings.setWatched('place:cabin', false);
+      expect(h.weather.nothingWatched, isTrue);
+    });
+
+    test('watchHereAgain watches Your location again and updates', () async {
+      h = await Harness.create();
+      h.settings.setWatched('here', false);
+      expect(h.weather.nothingWatched, isTrue);
+      await h.weather.watchHereAgain();
+      expect(h.settings.watchedPlaces, contains('here'));
+      expect(h.weather.nothingWatched, isFalse);
+      expect(h.core.fetches, isNotEmpty, reason: 'it updated for the place');
+    });
+  });
+
   group('sources', () {
     test('the catalogue is downloaded at the first start and its sources listed, the built-in ones they replace left out', () async {
       h = await Harness.create();
@@ -143,12 +341,9 @@ void main() {
       expect(h.web.requested, isEmpty, reason: 'nothing is asked while offline');
     });
 
-    test('the sources are not on until the person switches them on, and the core holds only the ones that are on', () async {
+    test('only the sources that are on are given to the core; a switch the person makes adds to them', () async {
       h = await Harness.create();
-      expect(h.weather.enabledSources, isEmpty);
-      expect(h.inFolder, isEmpty);
-      expect((await h.core.sources())['sources'], isEmpty);
-      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.only(['openmeteo-forecast']);
       expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
       expect(h.inFolder, {'openmeteo-forecast.json'});
       expect(h.weather.registeredIds, {'openmeteo-forecast'});
@@ -160,6 +355,8 @@ void main() {
 
     test('a built-in source switched on before the catalogue came is still on when the catalogue replaces it', () async {
       h = await Harness.create(connection: ConnectionKind.none, serve: false);
+      // Offline at the first start: only the built-in sources, and nothing is switched on before a catalogue is read.
+      expect(h.weather.enabledSources, isEmpty);
       await h.weather.setRowOn(row('Weather forecast'), true);
       expect(h.inFolder, contains('weather.json'));
       h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
@@ -168,7 +365,7 @@ void main() {
       expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
       expect(h.inFolder, contains('openmeteo-forecast.json'));
       expect(h.inFolder, isNot(contains('weather.json')));
-      expect(h.weather.enabledSources.map((c) => c.id), ['openmeteo-forecast']);
+      expect(h.weather.enabledSources.map((c) => c.id), ['openmeteo-forecast'], reason: 'only the one the person switched on; the defaults come only when none is on');
     });
 
     test('what is on survives a restart, and so do the downloaded sources', () async {
@@ -203,7 +400,7 @@ void main() {
 
     test('go with "Weather alerts" the first time the catalogue offers them; after that the switch is the person\'s', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      expect(h.weather.isOn('nws-alerts-point'), isTrue, reason: 'on by default');
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
       h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
@@ -217,10 +414,13 @@ void main() {
     });
 
     test('stay off without "Weather alerts", and Turn on weather switches them on with it', () async {
-      h = await Harness.create(serve: false);
+      h = await Harness.create();
+      // Forecast stays on, so the defaults do not come back by themselves when alerts are switched off.
+      await h.weather.setRowOn(row('Weather alerts'), false);
       h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
+      expect(h.weather.isOn('nws-alerts-point'), isFalse);
       await h.weather.setRowOn(row('Weather alerts'), true);
       await h.weather.applyAlertDefaults(force: true);
       expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
@@ -333,7 +533,7 @@ void main() {
       expect(await h.secrets.read(WeatherState.secretName('own-creek')), ownSecret);
       expect(h.weather.isOn('own-creek'), isTrue);
       expect(h.inFolder, contains('own-creek.json'));
-      expect(h.lastPolicy['enabled_sources'], ['own-creek']);
+      expect(h.lastPolicy['enabled_sources'], contains('own-creek'), reason: 'with the defaults that were already on');
       expect(h.core.everythingSeen(), isNot(contains(ownSecret)));
       // a second one by the same name gets its own id
       expect(await h.weather.saveOwnSource(const OwnDraft(name: 'Creek', address: 'https://other.example.org/x'), const [OwnPick('v', 'V')]), isNull);
@@ -411,14 +611,14 @@ void main() {
   });
 
   group('the fetch policy', () {
-    test('it is pushed at start: online, not metered, mobile data allowed, nothing enabled', () async {
+    test('it is pushed at start: online, not metered, mobile data allowed, the default sources enabled', () async {
       h = await Harness.create();
-      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': <String>[]});
+      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': ['nws-alerts-point', 'openmeteo-forecast', 'wfigs-incidents-near', 'wfigs-perimeters-near']});
     });
 
     test('it follows the connection: mobile data, none, Wi-Fi again', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       await Future<void>.delayed(Duration.zero);
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -433,6 +633,7 @@ void main() {
 
     test('it follows the settings: the sources that are on; mobile data is always allowed for updates', () async {
       h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['allow_metered'], true);
@@ -440,7 +641,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['allow_metered'], true);
       await h.weather.setRowOn(row('Wildfires'), true);
-      expect(h.lastPolicy['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
+      expect(h.lastPolicy['enabled_sources'], ['openmeteo-forecast', 'wfigs-incidents-near', 'wfigs-perimeters-near']);
     });
 
     test('the core can never answer "mobile data updates are off": on mobile data the policy always allows it, with no per-source state', () async {
@@ -473,6 +674,7 @@ void main() {
 
     test('a key that the provider accepts is saved in secure storage, given to the core, and switches the source on', () async {
       h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
       final firms = h.weather.sourceById('firms-viirs-near')!;
       expect(h.weather.keyReady(firms), isFalse);
       final r = await h.weather.saveKey(firms, '  $secret  ');
@@ -481,7 +683,7 @@ void main() {
       expect(h.core.keys['firms-viirs-near'], secret, reason: 'memory only in the core');
       expect(h.weather.hasKey('firms'), isTrue);
       expect(h.weather.isOn('firms-viirs-near'), isTrue);
-      expect(h.lastPolicy['enabled_sources'], ['firms-viirs-near']);
+      expect(h.lastPolicy['enabled_sources'], ['firms-viirs-near', 'openmeteo-forecast']);
       // the check was one real download with the key, for a place, storing nothing
       expect(h.core.previews.single['api_key'], secret);
       expect(h.core.previews.single['place'], containsPair('lat', 42.54));
@@ -505,7 +707,7 @@ void main() {
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 403: Forbidden');
       expect((await h.weather.saveKey(firms, secret)).message, contains("didn't accept"));
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 503');
-      expect((await h.weather.saveKey(firms, secret)).message, contains('had a problem (HTTP 503)'));
+      expect((await h.weather.saveKey(firms, secret)).message, allOf(contains('had a problem'), isNot(contains('HTTP'))));
       h.core.previewError = const CacheSearchException('fetch_failed', 'Dns: failed');
       expect((await h.weather.saveKey(firms, secret)).message, contains("Couldn't reach NASA FIRMS"));
       h.core.previewError = null;
@@ -520,6 +722,32 @@ void main() {
       h = await h.restart();
       expect(h.core.keys['firms-viirs-near'], secret);
       expect(h.weather.hasKey('firms'), isTrue);
+    });
+
+    // 1.1 audit: the app's own fetches (Update now, the background run, "Where I am") send no key; the core uses the one it was
+    // handed. Before, the core read that key only for the assistant, and every one of these failed with "needs a key".
+    test('a source with a saved key updates from Update now, after a restart and for "Where I am", with no key in the request', () async {
+      h = await Harness.create();
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, secret);
+      await h.only(['firms-viirs-near']);
+      final r = await h.weather.updateNow();
+      expect(r.failures, isEmpty);
+      expect(r.fetched, 1);
+      expect(h.core.fetches.single['source'], 'firms-viirs-near');
+      expect(h.core.fetches.single.containsKey('api_key'), isFalse, reason: 'the core uses the key it was handed');
+      expect(h.weather.sourceErrors, isEmpty);
+      // a new start (as a background run is): the key is handed over again before anything is fetched
+      h = await h.restart();
+      expect((await h.weather.updateNow()).failures, isEmpty);
+      // "Where I am" moved
+      h.here = (lat: 42.70, lon: -113.79);
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect((h.core.fetches.last['place'] as Map)['key'], 'at:42.70,-113.79');
+      expect(h.core.everythingSeen(), isNot(contains(secret)));
+      // the fake core refuses as the real one does when it holds no key
+      h.core.keys.remove('firms-viirs-near');
+      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Current location failed: needs a key');
     });
 
     test('one key serves every source that uses it', () async {
@@ -587,7 +815,7 @@ void main() {
       for (final k in ['a', 'b', 'c']) {
         h.settings.setWatched('place:$k', true);
       }
-      expect(await h.weather.watchedSummary(), 'Where I am\nHome\nCabin\n+1 more');
+      expect(await h.weather.watchedSummary(), 'Current location\nHome\nCabin\n+1 more');
       h.settings.setWatched('here', false);
       expect(await h.weather.watchedSummary(), 'Home\nCabin\nWork');
     });
@@ -602,7 +830,7 @@ void main() {
       expect(h.settings.watchedPlaces.contains('place:cabin'), isFalse);
       expect((await h.weather.placeChoices()).map((p) => p.id), isNot(contains('place:cabin')));
       await h.weather.removePlace((await h.weather.placeChoices()).first);
-      expect(h.core.deleted, ['cabin'], reason: 'Where I am is not a saved place');
+      expect(h.core.deleted, ['cabin'], reason: 'Current location is not a saved place');
     });
 
     test('regions are the finished map areas by name, at the middle of their areas', () {
@@ -633,8 +861,8 @@ void main() {
 
   group('Update now', () {
     Future<void> setUp3(Harness h) async {
-      await h.weather.setRowOn(row('Weather forecast'), true);
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      // Forecast and alerts only (the defaults also bring Wildfires), for two places.
+      await h.only(['openmeteo-forecast', 'nws-alerts-point']);
       h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
       h.settings.setWatched('place:cabin', true);
     }
@@ -655,6 +883,18 @@ void main() {
       expect(h.core.fetches.first['now'], matches(RegExp(r'^2026-10-26T12:00:00[+-]\d\d:\d\d$')));
       expect(r.words, 'Updated');
       expect(h.weather.lastOkAt, h.clock);
+    });
+
+    // 1.1 audit: "already updating" was only set after the places and the connection were read, so two calls in the same moment
+    // (back on the screen and a tap on Update now) both ran: every download twice, and two alert checks.
+    test('two updates asked for in the same moment run as one', () async {
+      h = await Harness.create();
+      await setUp3(h);
+      final both = await Future.wait([h.weather.updateNow(), h.weather.updateNow(force: true)]);
+      expect([for (final r in both) r.nothingToDo], [null, 'Already updating']);
+      expect(h.core.fetches.length, 4, reason: 'every source and place once');
+      expect(h.weather.updating, isFalse);
+      expect((await h.weather.updateNow()).fetched, 4, reason: 'and the next one runs');
     });
 
     test('a copy that is still fresh is not downloaded again, and says so', () async {
@@ -680,7 +920,11 @@ void main() {
 
     test('back on the screen: an update runs only when one is due, without forcing', () async {
       h = await Harness.create();
-      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'nothing is switched on');
+      h.settings.setWatched('here', false);
+      final none = await h.weather.updateIfDue(const Duration(minutes: 30));
+      expect(none?.words, contains('No place is being watched'), reason: 'no place is watched: nothing is fetched');
+      expect(h.core.fetches, isEmpty);
+      h.settings.setWatched('here', true);
       await setUp3(h);
       final first = await h.weather.updateIfDue(const Duration(minutes: 30));
       expect(first?.fetched, 4, reason: 'never updated: due');
@@ -691,6 +935,26 @@ void main() {
       expect(h.core.fetches, isEmpty);
       h.clock = h.clock.add(const Duration(minutes: 25));
       expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4);
+    });
+
+    test('a run where every fetch failed does not hold the next one back; a good one does', () async {
+      h = await Harness.create();
+      await setUp3(h);
+      for (final c in h.weather.enabledSources) {
+        h.core.fetchErrors[c.id] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      }
+      final failed = await h.weather.updateIfDue(const Duration(minutes: 30));
+      expect(failed?.fetched, 0);
+      expect(failed?.upToDate, 0);
+      expect(failed?.failures, isNotEmpty, reason: 'every fetch failed');
+      h.core.fetches.clear();
+      h.core.fetchErrors.clear();
+      h.clock = h.clock.add(const Duration(minutes: 5));
+      expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4, reason: 'a failed run is not recent');
+      h.core.fetches.clear();
+      h.clock = h.clock.add(const Duration(minutes: 5));
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'a good run within 30 minutes is');
+      expect(h.core.fetches, isEmpty);
     });
 
     test('on mobile data, updates still fetch, also with mobile data downloads off', () async {
@@ -710,10 +974,9 @@ void main() {
       expect(h.core.fetches, isEmpty);
     });
 
-    test('nothing on, or no place, or a source that needs a key it does not have, is said in words', () async {
+    test('no place, or a source that needs a key it does not have, is said in words', () async {
       h = await Harness.create();
-      expect((await h.weather.updateNow()).words, 'Switch on a source to update it.');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       h.settings.setWatched('here', false);
       expect((await h.weather.updateNow()).words, contains('No place is being watched'));
       h.settings.setWatched('here', true);
@@ -730,19 +993,23 @@ void main() {
       expect(r.ok, isFalse);
       expect(r.fetched, 2);
       expect(r.failures.length, 2);
-      expect(r.failures.first, 'NWS for Where I am failed: the service answered HTTP 503');
+      expect(r.failures.first, 'NWS for Current location failed: the service had a problem');
       expect(r.words, startsWith('Updated, but NWS'));
-      expect(h.weather.sourceErrors['nws-alerts-point'], 'the service answered HTTP 503');
+      expect(h.weather.sourceErrors['nws-alerts-point'], 'the service had a problem');
       h.core.fetchErrors['nws-alerts-point'] = const CacheSearchException('quota', 'limit');
       expect((await h.weather.updateNow()).failures.first, contains('reached its limit for now'));
     });
   });
 
   group('the status line', () {
-    test('nothing on, never updated, fresh, and stale for each reason', () async {
+    test('never updated, fresh, and old by the rule a reading goes by; no place watched says so', () async {
       h = await Harness.create();
-      expect(h.weather.status().headline, 'Nothing switched on yet');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      expect(h.weather.status().headline, 'Not updated yet', reason: 'the defaults are on from the start');
+      h.settings.setWatched('here', false);
+      expect(h.weather.status().headline, kWeatherHereOff);
+      expect(h.weather.status().tone, StatusTone.warn);
+      h.settings.setWatched('here', true);
+      await h.only(['nws-alerts-point']);
       expect(h.weather.status().headline, 'Not updated yet');
       expect(h.weather.status().tone, StatusTone.warn);
       await h.weather.updateNow();
@@ -750,10 +1017,18 @@ void main() {
       expect(h.weather.status().tone, StatusTone.ok);
       h.clock = h.clock.add(const Duration(minutes: 12));
       expect(h.weather.status().headline, 'Updated 12 min ago');
-      // past the source's refresh time (15 min): old, so the line turns into a warning
+      // Past the source's refresh time (15 min): the line used to turn into a warning here, between two updates that come
+      // about every half hour. The data is fresh for as long as a reading stands (three hours).
       h.clock = h.clock.add(const Duration(minutes: 20));
       expect(h.weather.status().headline, 'Updated 32 min ago');
-      expect(h.weather.status().tone, StatusTone.warn);
+      expect(h.weather.status().tone, StatusTone.ok);
+      h.clock = h.clock.add(const Duration(hours: 2, minutes: 28));
+      expect((h.weather.status().headline, h.weather.status().tone), ('Updated 3 hours ago', StatusTone.ok), reason: 'three hours to the minute: still fresh');
+      // older than that: old, and the line (and the whole-page states' dot) says so as a warning, in the same words
+      h.clock = h.clock.add(const Duration(minutes: 1));
+      expect((h.weather.status().headline, h.weather.status().tone), ('Updated 3 hours ago', StatusTone.warn));
+      // The Weather screen's own line shows the age and the connection; the screen shows old data in its own ways.
+      expect((h.weather.freshness().headline, h.weather.freshness().tone), ('Updated 3 hours ago', StatusTone.ok));
     });
 
     test('offline since Friday is the reason beside the age; mobile data never pauses updates', () async {
@@ -764,6 +1039,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       h.clock = DateTime(2026, 10, 26, 9);
       expect(h.weather.status().headline, 'Updated 3 days ago · No connection since Friday');
+      expect(h.weather.status().tone, StatusTone.warn);
       // back online on mobile data: no reason, just old
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -777,7 +1053,7 @@ void main() {
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
       await h.weather.updateNow();
-      expect(h.weather.status().headline, 'Updated just now · USGS for Where I am failed: the service answered HTTP 500');
+      expect(h.weather.status().headline, 'Updated just now · USGS for Current location failed: the service had a problem');
     });
 
     test('every failing source is in the line, not only the first', () async {
@@ -791,8 +1067,8 @@ void main() {
       await h.weather.updateNow();
       final line = h.weather.status().headline;
       expect(line, contains('2 updates failed'));
-      expect(line, contains('USGS for Where I am failed'));
-      expect(line, contains('NWS for Where I am failed'));
+      expect(line, contains('USGS for Current location failed'));
+      expect(line, contains('NWS for Current location failed'));
     });
 
     test('an update writes the definitions of every source that is on first, however it was switched on', () async {
@@ -810,7 +1086,7 @@ void main() {
 
     test('the age is kept across a restart', () async {
       h = await Harness.create();
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
       await h.weather.updateNow();
       h.clock = h.clock.add(const Duration(minutes: 5));
       final c = h.clock;
@@ -822,8 +1098,8 @@ void main() {
 
     test('the Settings line: how many are on and how old', () async {
       h = await Harness.create();
-      expect(h.weather.settingsLine(), 'Nothing on');
-      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.only(['nws-alerts-point']);
+      expect(h.weather.settingsLine(), '1 on');
       await h.weather.setRowOn(row('Wildfires'), true);
       expect(h.weather.settingsLine(), '3 on');
     });
@@ -841,6 +1117,11 @@ void main() {
   });
 
   group('what the Weather screen and Home show', () {
+    // 12:00 at the place of [forecast] (its times are written at -06:00), one hour after it was downloaded, whatever this
+    // machine's zone. A test that reads "Now" from it takes this as its clock: a reading stands for three hours, and the
+    // default clock is noon on this machine's own clock.
+    final noon = DateTime.utc(2026, 10, 26, 18);
+
     Map<String, dynamic> forecast() => {
       'fetched_at': '2026-10-26T11:00:00-06:00',
       'age': '1 hour old',
@@ -851,10 +1132,13 @@ void main() {
       ],
     };
 
-    test('Home: nothing switched on says so', () async {
+    test('Home: with no place watched it says weather is off, and with the defaults on it is not "Not set up yet"', () async {
       h = await Harness.create();
-      expect(await homeWeather(h.weather), 'Not set up yet');
-      expect(await homeAlerts(h.weather), 'Not set up yet');
+      expect(await homeWeather(h.weather), isNot('Not set up yet'), reason: 'the defaults are on from the start');
+      expect((await h.weather.homeCard()).hereOff, isFalse);
+      h.settings.setWatched('here', false);
+      expect(await homeWeather(h.weather), kWeatherHereOff);
+      expect((await h.weather.homeCard()).hereOff, isTrue);
     });
 
     test('after an update, Home never says "Not set up yet" for weather that is on while the weather part is still starting', () async {
@@ -888,20 +1172,617 @@ void main() {
       h.regions = [const WatchRegion(name: 'Idaho', lat: 44.0, lon: -114.7)];
       h.settings.setRegionWatched('Idaho', true);
       final areas = await h.weather.watchAreas();
-      expect([for (final a in areas) (a.place.name, a.on)], [('Where I am', true), ('Idaho', true)]);
+      expect([for (final a in areas) (a.place.name, a.on)], [('Current location', true), ('Idaho', true)]);
       h.settings.setWatchHere(false);
       expect([for (final a in await h.weather.watchAreas()) a.on], [false, true]);
     });
 
     test('Home weather: now, today and the place, with the age', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
+    });
+
+    // build 48 on a phone: Home said "no forecast yet" while the Weather screen showed Open-Meteo's forecast, because the first
+    // forecast source (NWS current conditions) listed a station with wind and pressure but no temperature.
+    Future<Harness> withStations(Map<String, dynamic> stations) async {
+      final x = await Harness.create(serve: false);
+      x.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-observations-latest', 'weather', 'Current conditions (NWS stations)', provider: 'NWS'),
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+      ]));
+      await x.weather.refreshCatalogues();
+      await x.weather.setSourcesOn([x.weather.sourceById('nws-observations-latest')!, x.weather.sourceById('openmeteo-forecast')!], true);
+      x.core.stored['nws-observations-latest'] = stations;
+      return x;
+    }
+
+    test('Home weather: a station with no temperature does not hide the forecast after it', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph', 'Pressure': '30.1 inHg', 'From the place': '4 mi'}},
+          {'address': 'live:nws-observations-latest/x/KBBB', 'label': 'Conditions at KBBB', 'fields': {'Temperature': '48 °F', 'From the place': '19 mi'}},
+        ],
+      });
+      expect(h.weather.enabledSources.first.id, 'nws-observations-latest', reason: 'the stations come first, as on the phone');
+      h.core.stored['openmeteo-forecast'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '50 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon 26 Oct', 'fields': {'Daytime high': '57 °F', 'Low (early morning)': '33 °F'}},
+        ],
+      };
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.high, c.low, c.age), ('50 °F', 'clear sky', '57 °F', '33 °F', '1 minute old'));
+      expect(c.forecastMissing, isFalse);
+    });
+
+    test('Home weather: from a list of stations, the nearest one that reports a temperature', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph', 'From the place': '4 mi'}},
+          {'address': 'live:nws-observations-latest/x/KCCC', 'label': 'Conditions at KCCC', 'fields': {'Temperature': '44 °F', 'Conditions': 'cloudy', 'From the place': '31 mi'}},
+          {'address': 'live:nws-observations-latest/x/KBBB', 'label': 'Conditions at KBBB', 'fields': {'Temperature': '48 °F', 'Conditions': 'fair', 'From the place': '19 mi'}},
+        ],
+      });
+      // nothing from Open-Meteo yet: the stations are all there is
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.age), ('48 °F', 'fair', '3 minutes old'));
+      expect(c.forecastMissing, isFalse);
+    });
+
+    test('Home weather: no source with a temperature or conditions still says no forecast yet', () async {
+      h = await withStations({
+        'age': '3 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-observations-latest/x/KAAA', 'label': 'Conditions at KAAA', 'fields': {'Wind': '5 mph'}},
+        ],
+      });
+      expect((await h.weather.homeCard()).forecastMissing, isTrue);
+    });
+
+    // 1.1 audit: a forecast's "Now" lasts 3 hours and the next download can be hours later. Home then took the source's first
+    // item ("Tonight", which has neither "Temperature" nor "Conditions") and said "no forecast yet" beside the day's high and low,
+    // with 16 days of forecast stored.
+    Map<String, dynamic> afterNow() => {
+      'fetched_at': '2026-10-26T11:00:00-06:00',
+      'age': '4 hours old',
+      'expired': false,
+      'items': [
+        {'address': 'live:openmeteo-forecast/x/tonight', 'label': 'Tonight (Mon Oct 26)', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Overnight low': '30 °F', 'Worst conditions': 'rain'}},
+        {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+        {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'clear sky'}},
+      ],
+    };
+
+    test('Home weather: when "Now" has ended, today\'s forecast under its own label with the age, and no temperature', () async {
+      // 15:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 21));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = afterNow();
+      final c = await h.weather.homeCard();
+      expect((c.period, c.conditions, c.high, c.low, c.age), ('Mon Oct 26', 'overcast', '52 °F', '30 °F', '4 hours old'));
+      expect(c.temperature, isNull, reason: 'a forecast is not a reading: nothing stands in for the temperature that ended');
+      expect(c.forecastMissing, isFalse, reason: 'days of forecast are stored');
+      expect(c.expired, isFalse);
+      // the next day, from the same stored copy: that day's forecast, not the day that has passed
+      h.clock = DateTime.utc(2026, 10, 27, 21);
+      final next = await h.weather.homeCard();
+      expect((next.period, next.conditions, next.high, next.low), ('Tue Oct 27', 'clear sky', '60 °F', '41 °F'));
+      // past every day it lists: no day is shown as today
+      h.clock = DateTime.utc(2026, 10, 29, 21);
+      final past = await h.weather.homeCard();
+      expect((past.period, past.conditions), (null, null));
+      // and with no item left it is still "no forecast yet"
+      h.core.stored['openmeteo-forecast'] = {'fetched_at': '2026-10-26T11:00:00-06:00', 'age': '3 days old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      expect((await h.weather.homeCard()).forecastMissing, isTrue);
+    });
+
+    test('Home weather: a day\'s forecast that comes first in the list is not shown as the conditions now', () async {
+      // the morning after: "Now" and "Tonight" have both ended, and the day's item comes first
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 15));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final f = afterNow();
+      (f['items'] as List).removeRange(0, 2);
+      f['age'] = '22 hours old';
+      h.core.stored['openmeteo-forecast'] = f;
+      final c = await h.weather.homeCard();
+      expect((c.period, c.conditions, c.high, c.low, c.age), ('Tue Oct 27', 'clear sky', '60 °F', '41 °F', '22 hours old'));
+      expect(c.temperature, isNull);
+    });
+
+    test('Home weather: a reading still comes first, and a period that has not started is not the one for now', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 21));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final f = afterNow();
+      (f['items'] as List).insert(0, {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T14:45:00-06:00', 'fields': {'Temperature': '45 °F', 'Conditions': 'clear sky'}});
+      h.core.stored['openmeteo-forecast'] = f;
+      final c = await h.weather.homeCard();
+      expect((c.temperature, c.conditions, c.period, c.high, c.low), ('45 °F', 'clear sky', null, '52 °F', '30 °F'));
+      // periods with a start time (a forecast written in parts of the day): the one under way, not the one to come
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T11:00:00-06:00',
+        'age': '4 hours old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/p1', 'label': 'This afternoon', 'time': '2026-10-26T12:00:00-06:00', 'fields': {'Conditions': 'sunny'}},
+          {'address': 'live:openmeteo-forecast/x/p2', 'label': 'Tonight', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Conditions': 'light rain'}},
+        ],
+      };
+      final part = await h.weather.homeCard();
+      expect((part.period, part.conditions, part.temperature), ('This afternoon', 'sunny', null));
+      h.clock = DateTime.utc(2026, 10, 27, 1); // 19:00 at the place
+      expect((await h.weather.homeCard()).period, 'Tonight');
+    });
+
+    // Found by reading (weather-screen rebuild): Home took any item of a weather source that has "Temperature" as a reading.
+    // NWS by point writes its forecast in 12-hour periods, each with a "Temperature", so with no "Now" from Open-Meteo Home
+    // showed tonight's forecast low as the temperature now.
+    test('Home weather: a forecast period\'s temperature is never the temperature now', () async {
+      // 19:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(serve: false, clock: DateTime.utc(2026, 10, 27, 1));
+      h.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+        entry('nws-forecast-point', 'weather', 'Weather forecast (NWS, by point)', provider: 'NWS', refresh: 60),
+      ]));
+      await h.weather.refreshCatalogues();
+      await h.weather.setSourcesOn([h.weather.sourceById('openmeteo-forecast')!, h.weather.sourceById('nws-forecast-point')!], true);
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Temperature': '31 °F', 'Wind': '5 mph W', 'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/2', 'label': 'Tuesday', 'time': '2026-10-27T06:00-06:00', 'fields': {'Temperature': '58 °F', 'Wind': '10 mph SW', 'Summary': 'Sunny'}},
+          {'address': 'live:nws-forecast-point/x/3', 'label': 'Tuesday Night', 'time': '2026-10-27T18:00-06:00', 'fields': {'Temperature': '40 °F', 'Wind': '5 mph S', 'Summary': 'Partly Cloudy'}},
+        ],
+      };
+      // nothing from Open-Meteo: the periods are all there is, and none of them is a reading
+      final only = await h.weather.homeCard();
+      expect(only.temperature, isNull, reason: 'tonight\'s forecast low is not the temperature now');
+      // Open-Meteo's "Now" has ended and its days are stored: today's forecast under its own label, as with Open-Meteo alone
+      h.core.stored['openmeteo-forecast'] = afterNow();
+      final both = await h.weather.homeCard();
+      expect(both.temperature, isNull, reason: 'no source holds a reading');
+      expect((both.period, both.conditions, both.high, both.low, both.age), ('Mon Oct 26', 'overcast', '52 °F', '30 °F', '4 hours old'));
+      // with a "Now" from Open-Meteo, that is the reading
+      final f = afterNow();
+      (f['items'] as List).insert(0, {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T18:45:00-06:00', 'fields': {'Temperature': '45 °F', 'Conditions': 'clear sky'}});
+      h.core.stored['openmeteo-forecast'] = f;
+      final read = await h.weather.homeCard();
+      expect((read.temperature, read.conditions, read.period), ('45 °F', 'clear sky', null));
+    });
+
+    // With NWS by point as the only forecast, Home said "no forecast yet" with a week of forecast stored: it read a period's
+    // conditions only under "Conditions", and that source calls them "Summary". A named period carries no end, so it is
+    // taken only from a copy no older than one period (12 hours); past that the stored forecast has run out.
+    test('Home weather: a forecast in named periods alone shows the period that covers now, from a copy no older than one period', () async {
+      // 19:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(serve: false, clock: DateTime.utc(2026, 10, 27, 1));
+      h.web.serve('https://data.cached.info/connectors/', buildCatalogue(connectors: [
+        entry('nws-forecast-point', 'weather', 'Weather forecast (NWS, by point)', provider: 'NWS', refresh: 60),
+      ]));
+      await h.weather.refreshCatalogues();
+      await h.weather.setSourcesOn([h.weather.sourceById('nws-forecast-point')!], true);
+      // downloaded at 18:40
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Temperature': '31 °F', 'Wind': '5 mph W', 'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/2', 'label': 'Tuesday', 'time': '2026-10-27T06:00-06:00', 'fields': {'Temperature': '58 °F', 'Wind': '10 mph SW', 'Summary': 'Sunny'}},
+          {'address': 'live:nws-forecast-point/x/3', 'label': 'Tuesday Night', 'time': '2026-10-27T18:00-06:00', 'fields': {'Temperature': '40 °F', 'Wind': '5 mph S', 'Summary': 'Partly Cloudy'}},
+        ],
+      };
+      final tonight = await h.weather.homeCard();
+      expect((tonight.period, tonight.conditions, tonight.temperature, tonight.age), ('Tonight', 'Mostly Clear', null, '20 minutes old'));
+      expect((tonight.forecastMissing, tonight.expired), (false, false));
+      // 06:30 the next morning, the copy 11 hours 50 minutes old: the period that has started since
+      h.clock = DateTime.utc(2026, 10, 27, 12, 30);
+      final morning = await h.weather.homeCard();
+      expect((morning.period, morning.conditions, morning.temperature, morning.expired), ('Tuesday', 'Sunny', null, false));
+      // 06:40, the copy exactly one period old: still shown
+      h.clock = DateTime.utc(2026, 10, 27, 12, 40);
+      expect((await h.weather.homeCard()).period, 'Tuesday');
+      // 06:41, older than one period: no named period is shown from it, and the stored forecast has run out
+      h.clock = DateTime.utc(2026, 10, 27, 12, 41);
+      final ranOut = await h.weather.homeCard();
+      expect((ranOut.period, ranOut.conditions, ranOut.temperature), (null, null, null));
+      expect(ranOut.expired, isTrue, reason: '"forecast expired, needs a connection", as when every stored day has passed');
+      // a day by its date is not a named period: today's day is shown from a copy of any age
+      h.core.stored['nws-forecast-point'] = {
+        'fetched_at': '2026-10-26T18:40:00-06:00',
+        'age': '12 hours old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-forecast-point/x/1', 'label': 'Tonight', 'time': '2026-10-26T18:00-06:00', 'fields': {'Summary': 'Mostly Clear'}},
+          {'address': 'live:nws-forecast-point/x/d', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Summary': 'Sunny', 'High': '58 °F', 'Low': '31 °F'}},
+        ],
+      };
+      final day = await h.weather.homeCard();
+      expect((day.period, day.conditions, day.high, day.low, day.expired), ('Tue Oct 27', 'Sunny', '58 °F', '31 °F', false));
+    });
+
+    // Found by reading (weather-screen rebuild): what the app kept of the core's last answer was shown as it was. Updated at
+    // 9 PM and opened at 7 AM, Home showed last night's temperature, and that day's high and low, as the weather now until
+    // the core answered. A reading stands for three hours (the Weather screen's rule, readingOf), in a kept copy too.
+    test('Home weather: a kept "Now" from last night is not the temperature this morning, nor yesterday\'s high and low today\'s', () async {
+      // 21:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 3));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T21:00:00-06:00',
+        'age': 'less than a minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T21:00:00-06:00', 'fields': {'Temperature': '41 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/tonight', 'label': 'Tonight (Mon Oct 26)', 'time': '2026-10-26T18:00:00-06:00', 'fields': {'Overnight low': '30 °F', 'Worst conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'light rain'}},
+        ],
+      };
+      final evening = await h.weather.homeCard();
+      expect((evening.temperature, evening.conditions, evening.period, evening.high, evening.low), ('41 °F', 'clear sky', null, '52 °F', '30 °F'));
+      // still the reading two hours later, from what the app kept
+      h.clock = DateTime.utc(2026, 10, 27, 5);
+      expect(h.weather.homeCardNow()?.temperature, '41 °F', reason: 'two hours old: it stands');
+      // the next start is at 07:00 at the place; the core has not answered yet, so Home has what the app kept
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 27, 13));
+      h.core.busy = Completer<void>();
+      final morning = h.weather.homeCardNow()!;
+      expect(morning.temperature, isNull, reason: 'last night\'s reading is ten hours old');
+      expect((morning.period, morning.conditions, morning.high, morning.low), ('Tue Oct 27', 'light rain', '60 °F', '41 °F'), reason: 'today\'s forecast under its own label, not yesterday\'s high and low');
+      expect(morning.age, '10 hours old');
+      expect((morning.forecastMissing, morning.expired), (false, false));
+      h.core.busy!.complete();
+    });
+
+    // The same fault by another path: the app stays in memory overnight, and Home's card keeps the answer of last night
+    // while the next one is awaited. The card is worked out again from that answer for the moment it is shown.
+    test('Home weather: a card given last night is worked out again for the morning it is shown in', () async {
+      // 21:00 at the place (its times are written at -06:00), whatever this machine's zone
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 27, 3));
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['openmeteo-forecast'] = {
+        'fetched_at': '2026-10-26T21:00:00-06:00',
+        'age': 'less than a minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'time': '2026-10-26T21:00:00-06:00', 'fields': {'Temperature': '41 °F', 'Conditions': 'clear sky'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon Oct 26', 'time': '2026-10-26', 'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F', 'Conditions': 'overcast'}},
+          {'address': 'live:openmeteo-forecast/x/2026-10-27', 'label': 'Tue Oct 27', 'time': '2026-10-27', 'fields': {'Daytime high': '60 °F', 'Low (early morning)': '41 °F', 'Conditions': 'light rain'}},
+        ],
+      };
+      h.core.stored['nws-alerts-point'] = {'fetched_at': '2026-10-26T21:00:00-06:00', 'valid_until': '2026-10-27T03:00:00-06:00', 'age': 'less than a minute old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      final evening = await h.weather.homeCard();
+      expect((evening.temperature, evening.high, evening.low, evening.age, evening.alertsExpired), ('41 °F', '52 °F', '30 °F', 'less than a minute old', false));
+      // shown again a moment later: the same card
+      final again = h.weather.homeCardAsOfNow(evening);
+      expect((again.temperature, again.conditions, again.high, again.low, again.alertsExpired), ('41 °F', 'clear sky', '52 °F', '30 °F', false));
+      // 07:00 the next morning, no new answer yet
+      h.clock = DateTime.utc(2026, 10, 27, 13);
+      final morning = h.weather.homeCardAsOfNow(evening);
+      expect(morning.temperature, isNull, reason: 'the 9 PM reading is not the temperature at 7 AM');
+      expect((morning.period, morning.conditions, morning.high, morning.low, morning.age), ('Tue Oct 27', 'light rain', '60 °F', '41 °F', '10 hours old'));
+      expect(morning.alertsExpired, isTrue, reason: 'the check of last night no longer speaks for now');
+      // words in place of a card are as they were
+      const words = HomeWeather(message: 'Not set up yet');
+      expect(identical(h.weather.homeCardAsOfNow(words), words), isTrue);
+    });
+
+    test('what is kept for Home is not wiped by a later answer with no items', () async {
+      h = await Harness.create(clock: noon);
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await homeWeather(h.weather), contains('45 °F'));
+      h.core.stored['openmeteo-forecast'] = {'age': '4 hours old', 'expired': true, 'items': <Map<String, dynamic>>[], 'last_error': {'code': 'fetch_failed', 'message': 'HTTP 500'}};
+      await h.weather.homeCard();
+      expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2), reason: 'the last good answer stays');
+      expect(h.weather.homeCardNow()?.temperature, '45 °F');
+    });
+
+    // Design read: a source that is on without its key is skipped by every update, and the Weather screen said "Not downloaded
+    // yet. Update now to get it.", which could never come true.
+    test('a source that is on without its key says it needs a key, not that an update will get it', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.settings.setLiveSourcesOn({'firms-viirs-near'}, true);
+      await h.weather.sourcesChanged();
+      final views = await h.weather.viewFor((await h.weather.watchedPlaces()).single);
+      final firms = views.firstWhere((v) => v.source.id == 'firms-viirs-near');
+      expect((firms.missing, firms.error), (true, 'needs a key'));
+      // a source with nothing downloaded that needs no key (or has it) is as before
+      final fires = views.firstWhere((v) => v.source.id == 'wfigs-incidents-near');
+      expect((fires.missing, fires.error), (true, null));
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, 'made-up-key-for-a-test');
+      final after = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).firstWhere((v) => v.source.id == 'firms-viirs-near');
+      expect((after.missing, after.error), (true, null));
+    });
+
+    // Found by reading (weather-screen rebuild): right after an update had failed for a source with nothing downloaded, the
+    // Weather screen's row for it still said "Not downloaded yet. Update now to get it.".
+    test('a source whose first download failed says why, not that an update will get it', () async {
+      h = await Harness.create();
+      await h.only(['usgs-quakes-near']);
+      h.core.fetchErrors['usgs-quakes-near'] = const CacheSearchException('fetch_failed', 'HTTP 500');
+      final r = await h.weather.updateNow();
+      expect(r.failures, hasLength(1));
+      final failed = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).single;
+      expect((failed.missing, failed.error), (true, 'the service had a problem'));
+      // the next update gets through without bringing anything for the place yet: nothing failed, so it says nothing
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      final after = (await h.weather.viewFor((await h.weather.watchedPlaces()).single)).single;
+      expect((after.missing, after.error), (true, null));
+    });
+
+    // Design read: a kept copy said "expired" as of when it was kept, so at a later start data past its time showed as current
+    // until the core answered.
+    test('what is kept says whether it has expired as of now, not as of when it was kept', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 17)); // 11:00 at the place
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['openmeteo-forecast'] = {...forecast(), 'valid_until': '2026-10-27T00:00:00-06:00'};
+      h.core.stored['nws-alerts-point'] = {'fetched_at': '2026-10-26T10:50:00-06:00', 'valid_until': '2026-10-26T16:50:00-06:00', 'age': '10 minutes old', 'expired': false, 'items': <Map<String, dynamic>>[]};
+      final card = await h.weather.homeCard();
+      expect((card.expired, card.alertsExpired), (false, false));
+      expect(h.weather.homeCardNow()?.expired, isFalse, reason: 'kept, and still inside its time');
+      // the next start is two days later; the core has not answered yet
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 28, 17));
+      h.core.busy = Completer<void>();
+      final now = h.weather.homeCardNow()!;
+      expect((now.expired, now.alertsExpired), (true, true));
+      expect([for (final v in h.weather.keptViewFor(h.weather.homePlaceNow()!)!) v.expired], [true, true]);
+      h.core.busy!.complete();
+    });
+
+    // 1.1 audit: the core answers with an empty list when nothing is active (it leaves out what has ended). That answer did
+    // not replace a kept one that had items, so a warning that ended came back at every start until the core answered.
+    test('a warning that has ended does not come back from what is kept: an answer with none replaces it', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 16, 30)); // 10:30 at the place
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      Map<String, dynamic> alerts(List<Map<String, dynamic>> items) => {'fetched_at': '2026-10-26T10:20:00-06:00', 'age': '10 minutes old', 'expired': false, 'items': items};
+      final warning = {
+        'address': 'live:nws-alerts-point/x/urn:oid:1',
+        'label': 'Tornado Warning',
+        'time': '2026-10-26T10:00:00-06:00',
+        'fields': {'Severity': 'extreme', 'Expires': '2026-10-26 11:00'},
+      };
+      h.core.stored['nws-alerts-point'] = alerts([warning]);
+      expect((await h.weather.homeCard()).alerts.single.label, 'Tornado Warning');
+      expect(h.weather.homeCardNow()?.alerts.single.label, 'Tornado Warning', reason: 'kept, and still in force');
+      // it ends: the core's answer has no items
+      h.clock = DateTime.utc(2026, 10, 26, 17, 30);
+      h.core.stored['nws-alerts-point'] = alerts([]);
+      expect((await h.weather.homeCard()).alerts, isEmpty);
+      expect(h.weather.homeCardNow()?.alerts, isEmpty, reason: 'the answer with none replaced the kept warning');
+      expect(h.weather.homeCardNow()?.alertsKnown, isTrue);
+      // and at the next start, before the core answers
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: h.clock);
+      h.core.busy = Completer<void>();
+      expect(h.weather.homeCardNow()?.alerts, isEmpty);
+      h.core.busy!.complete();
+    });
+
+    test('a kept warning whose own Expires has passed is not shown at the next start', () async {
+      h = await Harness.create(clock: DateTime.utc(2026, 10, 26, 16, 30)); // 10:30 at the place
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['nws-alerts-point'] = {
+        'fetched_at': '2026-10-26T10:20:00-06:00',
+        'age': '10 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-alerts-point/x/urn:oid:1', 'label': 'Tornado Warning', 'time': '2026-10-26T10:00:00-06:00', 'fields': {'Severity': 'extreme', 'Expires': '2026-10-26 11:00'}},
+          {'address': 'live:nws-alerts-point/x/urn:oid:2', 'label': 'Flood Watch', 'time': '2026-10-26T09:00:00-06:00', 'fields': {'Severity': 'moderate', 'Expires': '2026-10-27 09:00'}},
+        ],
+      };
+      expect([for (final a in (await h.weather.homeCard()).alerts) a.label], ['Tornado Warning', 'Flood Watch']);
+      // the app is closed over the warning's end and opened at 12:00; the core has not answered yet
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: DateTime.utc(2026, 10, 26, 18));
+      h.core.busy = Completer<void>();
+      expect([for (final a in h.weather.homeCardNow()!.alerts) a.label], ['Flood Watch'], reason: 'the one still in force stays');
+      h.core.busy!.complete();
+    });
+
+    test('"Where I am" moving to a new key fetches for it once it settles, at most every 15 minutes', () async {
+      h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
+      h.core.fetches.clear();
+      Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 150));
+      List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
+      h.here = (lat: 42.60, lon: -113.79);
+      h.weather.positionChanged();
+      h.here = (lat: 42.70, lon: -113.79);
+      h.weather.positionChanged();
+      expect(hereKeys(), isEmpty, reason: 'not before it settles');
+      await settle();
+      expect(hereKeys(), ['at:42.70,-113.79'], reason: 'one fetch, for where it settled');
+      h.here = (lat: 42.80, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys(), hasLength(1), reason: 'not again inside the gap');
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.here = (lat: 42.90, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys().last, 'at:42.90,-113.79');
+      h.probe.kind = ConnectionKind.none;
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.here = (lat: 43.0, lon: -113.79);
+      h.weather.positionChanged();
+      await settle();
+      expect(hereKeys(), hasLength(2), reason: 'nothing while offline');
+    });
+
+    // A car's key changes about every kilometre and never settles, so the key it is at has nothing fetched for it. The nearest key
+    // with data, within 25 km, stands in; the age line is that data's own.
+    // These tests move "Where I am" about: its own fetch for a settled key is kept an hour away so it does not race them.
+    Future<void> hereNeverSettles() async {
+      h.hereSettle = const Duration(hours: 1);
+      h.weather.dispose();
+      h.weather = h.build();
+      await h.weather.start();
+    }
+
+    test('"Where I am" with no data at its own key shows the nearest kept data within 25 km, and none beyond', () async {
+      h = await Harness.create(clock: noon);
+      await hereNeverSettles();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.storedAt['openmeteo-forecast at:42.54,-113.79'] = forecast();
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
+      // 3 km north: its own key has nothing downloaded
+      h.here = (lat: 42.57, lon: -113.79);
+      h.weather.positionChanged();
+      var c = await h.weather.homeCard();
+      expect(c.forecastMissing, isFalse);
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
+      // the same at once, without the core
+      expect(h.weather.homeCardNow()?.forecastMissing, isFalse);
+      // 40 km north: too far, as before
+      h.here = (lat: 42.90, lon: -113.79);
+      h.weather.positionChanged();
+      c = await h.weather.homeCard();
+      expect(c.forecastMissing, isTrue);
+      expect(c.temperature, isNull);
+      expect(h.weather.homeCardNow()?.forecastMissing ?? true, isTrue);
+    });
+
+    test('the Weather screen\'s view of "Where I am" borrows the nearest kept key too, and the nearest of several', () async {
+      h = await Harness.create(clock: noon);
+      await hereNeverSettles();
+      await h.only(['openmeteo-forecast']);
+      final near = forecast(), far = forecast();
+      (near['items'] as List)[0]['fields']['Temperature'] = '41 °F';
+      (far['items'] as List)[0]['fields']['Temperature'] = '60 °F';
+      h.here = (lat: 42.60, lon: -113.79);
+      h.core.storedAt['openmeteo-forecast at:42.60,-113.79'] = far;
+      await h.weather.viewFor((await h.weather.watchedPlaces()).first);
+      h.here = (lat: 42.50, lon: -113.79);
+      h.core.storedAt['openmeteo-forecast at:42.50,-113.79'] = near;
+      await h.weather.viewFor((await h.weather.watchedPlaces()).first);
+      // at 42.52: 42.50 is 2 km away, 42.60 is 9 km away
+      h.here = (lat: 42.52, lon: -113.79);
+      final here = (await h.weather.watchedPlaces()).first;
+      expect(here.key, 'at:42.52,-113.79');
+      final v = await h.weather.viewFor(here);
+      expect(v.single.items.first.fields['Temperature'], '41 °F');
+      expect(v.single.missing, isFalse);
+      expect(v.single.age, '1 hour old');
+    });
+
+    test('"Where I am" is named after its town when the lookup gives one, else "Current location"', () async {
+      h = await Harness.create();
+      final asked = <(double, double)>[];
+      String? answer = 'Pine Hollow, ID';
+      h.townOf = (lat, lon) async {
+        asked.add((lat, lon));
+        return answer;
+      };
+      h.weather.dispose();
+      h.weather = h.build();
+      await h.weather.start();
+      expect((await h.weather.placeChoices()).first.name, 'Current location', reason: 'before the lookup has answered');
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect((await h.weather.placeChoices()).first.name, 'Pine Hollow, ID');
+      expect(h.weather.placeChoicesNow().first.name, 'Pine Hollow, ID');
+      expect((await h.weather.placeChoices()).first.subtitle, 'Follows this device');
+      await h.weather.placeChoices();
+      expect(asked, hasLength(1), reason: 'looked up once for its key, not at every build');
+      // no town known at the next key
+      answer = null;
+      h.here = (lat: 43.20, lon: -113.79);
+      h.weather.positionChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(h.weather.placeChoicesNow().first.name, 'Current location');
+      // the core's request still names it as the model has always seen it
+      expect(WeatherState.placeRequest(h.weather.placeChoicesNow().first)['name'], 'current location');
+    });
+
+    test('the town is the `town` field of the point the core gives, not a reading of its address', () {
+      final p = MapPlace.fromJson({'id': 'loc:40.020000,-100.000000', 'type': 'coordinates', 'name': '40.02000, -100.00000', 'kind': 'Coordinates', 'address': '1.4 mi N of Pine Hollow, ID', 'town': 'Pine Hollow, ID', 'lat': 40.02, 'lon': -100.0});
+      expect(p.town, 'Pine Hollow, ID');
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'town': null, 'lat': 1, 'lon': 2}).town, isNull);
+      expect(MapPlace.fromJson({'id': 'loc:1,2', 'type': 'coordinates', 'name': 'x', 'kind': 'Coordinates', 'lat': 1, 'lon': 2}).town, isNull);
+    });
+
+    test('"Where I am" moving without settling is fetched for within 5 minutes; still, after 45 seconds; hereGap is kept', () async {
+      h = await Harness.create();
+      await h.only(['openmeteo-forecast']);
+      h.weather.dispose();
+      h.timers = FakeTimers();
+      h.hereSettle = const Duration(seconds: 45);
+      h.weather = h.build();
+      await h.weather.start();
+      h.core.fetches.clear();
+      List<String> hereKeys() => [for (final f in h.core.fetches) '${(f['place'] as Map)['key']}'];
+      // Runs what the fired timers started to its end: waits (a real delay of a few ms at a time, at most 5 s) until the fake core has
+      // recorded [want] fetches and no fetch is still running, so nothing depends on how fast the box is.
+      Future<void> pump({int? want}) async {
+        final end = DateTime.now().add(const Duration(seconds: 5));
+        await pumpEventQueue();
+        while (DateTime.now().isBefore(end) && (want != null && h.core.fetches.length < want)) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        await pumpEventQueue();
+      }
+      // still: one fetch, after 45 s
+      h.here = (lat: 42.60, lon: -113.79);
+      h.weather.positionChanged();
+      h.clock = h.clock.add(const Duration(seconds: 44));
+      h.timers!.fireDue(h.clock);
+      await pump();
+      expect(hereKeys(), isEmpty);
+      h.clock = h.clock.add(const Duration(seconds: 2));
+      h.timers!.fireDue(h.clock);
+      await pump(want: 1);
+      expect(hereKeys(), ['at:42.60,-113.79']);
+      // moving: a new key every 30 s for 6 minutes; the settle wait never ends
+      h.clock = h.clock.add(const Duration(minutes: 16));
+      h.core.fetches.clear();
+      final start = h.clock;
+      for (var i = 1; i <= 12; i++) {
+        h.clock = start.add(Duration(seconds: 30 * i));
+        h.here = (lat: 42.60 + 0.02 * i, lon: -113.79);
+        h.weather.positionChanged();
+        h.timers!.fireDue(h.clock);
+        await pump(want: i >= 11 ? 1 : null);
+      }
+      expect(hereKeys(), hasLength(1), reason: 'a fetch happened while it kept moving');
+      // the fetch says when it was asked for; the first move that did not settle was at start + 30 s
+      final firstMove = start.add(const Duration(seconds: 30));
+      final fetchedAt = DateTime.parse('${h.core.fetches.single['now']}');
+      expect(fetchedAt.difference(firstMove), lessThanOrEqualTo(const Duration(minutes: 5)), reason: 'at most 5 minutes after the first move');
+      expect(fetchedAt.difference(firstMove), greaterThan(const Duration(minutes: 4)), reason: 'not before the wait is out');
+      // hereGap: the next 6 minutes of moving fetch nothing again (the gap is 15 minutes)
+      final after = h.clock;
+      for (var i = 1; i <= 12; i++) {
+        h.clock = after.add(Duration(seconds: 30 * i));
+        h.here = (lat: 43.0 + 0.02 * i, lon: -113.79);
+        h.weather.positionChanged();
+        h.timers!.fireDue(h.clock);
+        await pump();
+      }
+      // a fetch that should not happen would still be running on real file IO: give it a moment to show (a wrong pass is the only risk)
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(hereKeys(), hasLength(1), reason: 'not inside hereGap');
     });
 
     test('Home weather: the field names the definition uses now', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       final f = forecast();
       (f['items'] as List)[1] = {
@@ -910,7 +1791,7 @@ void main() {
         'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F'},
       };
       h.core.stored['openmeteo-forecast'] = f;
-      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Current location · 1 hour old');
     });
 
     test('Home waits for the position while "Where I am" is ticked, and hears when it arrives', () async {
@@ -936,32 +1817,34 @@ void main() {
       h.weather.positionChanged();
       expect(heard, 2);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await homeWeather(h.weather), contains('Where I am'));
+      expect(await homeWeather(h.weather), contains('Current location'));
       // Not ticked: Home asks for a place, as before.
       h.here = null;
       h.settings.setWatched('here', false);
       expect(h.weather.waitingForPosition, isFalse);
-      expect(await homeWeather(h.weather), 'Choose a place to watch in Settings');
-      expect(await homeAlerts(h.weather), 'Choose a place to watch in Settings');
+      expect(await homeWeather(h.weather), kWeatherHereOff, reason: 'the one state where weather does not work');
+      expect(await homeAlerts(h.weather), kWeatherHereOff);
     });
 
     // build 46: at start Home's card and the Weather screen waited 10-15 s for the core (busy listing PDFs) for data the app
     // already had.
     test('after a restart Home and the Weather screen have the last data and the saved places before the core answers', () async {
-      h = await Harness.create();
+      h = await Harness.create(clock: noon);
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.saved = [const SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43.1, lon: -114.2)];
       h.core.stored['openmeteo-forecast'] = forecast();
       expect(await homeWeather(h.weather), contains('45 °F'), reason: 'shown once, so kept');
-      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Where I am', 'Cabin']));
+      expect([for (final p in await h.weather.placeChoices()) p.name], containsAll(['Current location', 'Cabin']));
 
-      h = await h.restart();
+      // the settled end of a restart, at the same moment
+      h.weather.dispose();
+      h = await Harness.create(again: h, serve: false, clock: noon);
       // The new core has nothing yet and is busy: nothing it says arrives.
       h.core.busy = Completer<void>();
-      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Where I am', 'Cabin']));
+      expect([for (final p in h.weather.placeChoicesNow()) p.name], containsAll(['Current location', 'Cabin']));
       final now = h.weather.homeCardNow();
       expect(now?.temperature, '45 °F');
-      expect(now?.place, 'Where I am');
+      expect(now?.place, 'Current location');
       expect(h.weather.keptViewFor(h.weather.homePlaceNow()!)?.single.items, hasLength(2));
       h.core.busy!.complete();
     });
@@ -1010,7 +1893,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/none', 'label': 'No active fires', 'none_active': true, 'fields': {}},
         ],
       };
-      expect(await homeAlerts(h.weather), 'None active · Where I am · checked 20 minutes old');
+      expect(await homeAlerts(h.weather), 'None active · Current location · checked 20 minutes old');
       h.core.stored['wfigs-incidents-near'] = {
         'age': '20 minutes old',
         'expired': false,
@@ -1019,7 +1902,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/2', 'label': 'Forleen fire', 'fields': {'Distance': '52 mi W'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       await h.weather.setRowOn(row('Weather alerts'), true);
       h.core.stored['nws-alerts-point'] = {
         'age': '5 minutes old',
@@ -1028,7 +1911,7 @@ void main() {
           {'address': 'live:nws-alerts-point/x/1', 'label': 'Red Flag Warning', 'fields': {'Severity': 'severe'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '1 warning · 2 fires · Red Flag Warning · Where I am');
+      expect(await homeAlerts(h.weather), '1 warning · 2 fires · Red Flag Warning · Current location');
       // a fire reported by both the incident and the perimeter source counts once
       await h.weather.setRowOn(row('Weather alerts'), false);
       h.core.stored['wfigs-perimeters-near'] = {
@@ -1038,7 +1921,7 @@ void main() {
           {'address': 'live:wfigs-perimeters-near/x/1', 'label': 'East Fork fire perimeter', 'fields': {'Distance to fire edge': '38 mi S'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       // earthquakes are not counted on Home
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.stored['usgs-quakes-near'] = {
@@ -1048,12 +1931,12 @@ void main() {
           {'address': 'live:usgs-quakes-near/x/1', 'label': 'M 2.1 near Hyde Park', 'fields': {'Magnitude': '2.1'}},
         ],
       };
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       // another watched place's fires are not added in: Home counts the place it names
       h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43, lon: -114)];
       h.settings.setWatched('place:cabin', true);
       expect((await h.weather.watchedPlaces()).length, 2);
-      expect(await homeAlerts(h.weather), '2 fires · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Current location');
       h.settings.setWatched('here', false);
       expect(await homeAlerts(h.weather), '2 fires · Cabin');
     });
@@ -1123,13 +2006,164 @@ void main() {
       h = await withNotifier(n);
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.title), ['East Fork fire near Where I am']);
+      expect(n.shown.map((a) => a.title), ['East Fork fire near Current location']);
       expect(n.deliveries.single, AlertDelivery.normal);
       await h.weather.updateNow();
       expect(n.shown.length, 1, reason: 'already told');
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
       await h.weather.updateNow();
       expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
+    });
+
+    // 1.1 audit: the address of an item at "Where I am" holds the position (rounded to 0.01 degrees) and a fire was known as told
+    // by its address only, so the same fire popped up as new each time the phone moved about a kilometre.
+    test('a fire told at one position of "Where I am" is not new at the next; it pops up once more when it becomes serious', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      Map<String, dynamic> fireAt(String key, String distance, {List<String> more = const []}) => {
+        'age': '5 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/$key/EF1', 'label': 'East Fork fire', 'fields': {'Distance': distance}},
+          for (final m in more) {'address': 'live:wfigs-incidents-near/$key/$m', 'label': m, 'fields': {'Distance': '40 mi W'}},
+        ],
+      };
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.54,-113.79', '38 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'new');
+      expect(n.shown.single.serious, isFalse);
+      // the phone moves about a kilometre: the same fire comes under a new address
+      h.here = (lat: 42.55, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.55,-113.79', '37 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'the same fire, told already');
+      // a drive towards it: within 10 mi it is serious, which it was not when it was told
+      h.here = (lat: 42.90, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.90,-113.79', '8 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'serious now: told once more');
+      expect(n.shown.last.serious, isTrue);
+      h.here = (lat: 42.91, lon: -113.79);
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.91,-113.79', '7 mi S');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'told as serious already');
+      // a fire not told before is still new there
+      h.core.stored['wfigs-incidents-near'] = fireAt('at:42.91,-113.79', '7 mi S', more: ['Forleen fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire', 'Forleen fire']);
+    });
+
+    // Design read: the app worked out how near a fire is from the words of its distance field. For a place inside a fire's mapped
+    // edge the words are "inside the area", with no number in them, so the fire had no distance and was never serious: under
+    // "Serious only" a fire you stood in did not pop up while one 9 miles away did. The core now gives the number beside the words.
+    test('a fire whose edge the place is inside is as near as a fire gets: serious, and it pops up under Serious only', () async {
+      LiveItem fire(String words, Map<String, Object>? number) => LiveItem.fromJson({
+        'address': 'live:wfigs-perimeters-near/x/1',
+        'label': 'Rock Creek fire perimeter',
+        'fields': {'From the place': words},
+        'distances': ?(number == null ? null : {'From the place': number}),
+      });
+      final inside = fire('inside the area', {'km': 0.0, 'inside': true});
+      expect(distanceMiles(inside), 0);
+      expect(isSerious(inside, fire: true), isTrue);
+      expect(isSerious(inside, fire: true, fireReachMiles: 1), isTrue, reason: 'inside any reach a place is set to');
+      expect(isSerious(fire('at the place', {'km': 0.02, 'inside': false}), fire: true), isTrue);
+      expect(distanceMiles(fire('20 km N', {'km': 20.0, 'inside': false})), closeTo(12.43, 0.01));
+      expect(isSerious(fire('20 km N', {'km': 20.0, 'inside': false}), fire: true), isFalse);
+      expect(distanceMiles(fire('8 mi SE', null)), 8, reason: 'stored before the core gave the number: the words, as before');
+      expect(inside.distance, 'inside the area', reason: 'what is shown stays the words');
+
+      final n = FakeNotifier();
+      h = await Harness.create(notifier: n);
+      expect(h.settings.popUpFor, PopUpFor.serious);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/in', 'label': 'Rock Creek fire', 'fields': {'From the place': 'inside the area'}, 'distances': {'From the place': {'km': 0.0, 'inside': true}}},
+          {'address': 'live:wfigs-incidents-near/x/far', 'label': 'East Fork fire', 'fields': {'From the place': '38 mi S'}, 'distances': {'From the place': {'km': 61.2, 'inside': false}}},
+        ],
+      };
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['Rock Creek fire']);
+      expect(n.shown.single.serious, isTrue);
+    });
+
+    // Design read: one fire source spoke for all, the one with the most items (incidents and their perimeters describe the same
+    // fires). With satellite detections on that was the detections: a named fire near the place gave no pop-up and no Home line.
+    test('with satellite detections on, a named fire inside reach still pops up, once, and is on Home', () async {
+      final n = FakeNotifier();
+      h = await Harness.create(notifier: n);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      await h.weather.saveKey(h.weather.sourceById('firms-viirs-near')!, 'made-up-key-for-a-test');
+      Map<String, dynamic> stored(List<Map<String, dynamic>> items) => {'age': '5 minutes old', 'expired': false, 'items': items};
+      h.core.stored['firms-viirs-near'] = stored([
+        for (var k = 1; k <= 6; k++) {'address': 'live:firms-viirs-near/x/d$k', 'label': 'Satellite fire detection', 'fields': {'From the place': '${40 + k} mi W'}},
+      ]);
+      h.core.stored['wfigs-incidents-near'] = stored([
+        {'address': 'live:wfigs-incidents-near/x/rc', 'label': 'Rock Creek fire', 'fields': {'From the place': '6 mi SE', 'Size': '120 acres'}},
+      ]);
+      h.core.stored['wfigs-perimeters-near'] = stored([
+        {'address': 'live:wfigs-perimeters-near/x/rc-edge', 'label': 'Rock Creek fire perimeter', 'fields': {'Distance to fire edge': '5 mi SE'}},
+      ]);
+      await h.weather.updateNow();
+      expect(n.shown, hasLength(1), reason: 'the named fire, once for its two feeds; the detections 40 miles off are not serious');
+      expect(n.shown.single.item.label, startsWith('Rock Creek fire'));
+      final card = await h.weather.homeCard();
+      expect(card.alerts.where((a) => a.label.startsWith('Rock Creek fire')), hasLength(1), reason: 'one line for the fire two feeds name');
+      expect(card.alerts.take(4).any((a) => a.label.startsWith('Rock Creek fire')), isTrue, reason: 'among the lines Home has room for');
+      expect(card.alerts.where((a) => a.label == 'Satellite fire detection'), hasLength(6), reason: 'the detections count as themselves');
+      // two feeds that write a fire's name differently list it twice: twice is better than not at all
+      h.core.stored['wfigs-perimeters-near'] = stored([
+        {'address': 'live:wfigs-perimeters-near/x/rc-edge', 'label': 'ROCK CK', 'fields': {'Distance to fire edge': '5 mi SE'}},
+      ]);
+      expect((await h.weather.homeCard()).alerts.where((a) => !a.label.startsWith('Satellite')).map((a) => a.label).toSet(), {'Rock Creek fire', 'ROCK CK'});
+    });
+
+    // 1.1 audit: a check reads what was told, shows, then writes. Two at once both saw a new alert before either had written.
+    test('two alert checks at once tell a new fire once', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await Future.wait([h.weather.checkAlerts(), h.weather.checkAlerts()]);
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire']);
+    });
+
+    // 1.1 audit: a told list that could not be read was taken as an empty one, so everything in force popped up again. A copy is
+    // kept beside it now. Only when neither can be read is it "nothing told": a repeated alert is better than a missed one.
+    test('a told list that cannot be read falls back to its copy; with both unreadable what is in force is told once more', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await h.weather.updateNow();
+      expect(n.shown.length, 1);
+      final list = File('${h.dir.path}/told.json'), copy = File('${h.dir.path}/told.json.bak');
+      Future<void> startAgain() async {
+        h.weather.dispose();
+        h = await Harness.create(again: h, serve: false, notifier: n);
+        h.settings.setPopUpFor(PopUpFor.all);
+        h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      }
+
+      // the list is damaged while the app is closed: the copy kept beside it says what was told
+      list.writeAsStringSync('["live:wfigs-inc');
+      await startAgain();
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'told before: no repeat');
+      // the copy is damaged too: nothing is known of what was told, so what is in force is told again, once
+      copy.writeAsStringSync('not a list');
+      await startAgain();
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire']);
+      expect(jsonDecode(list.readAsStringSync()), contains('live:wfigs-incidents-near/x/East Fork fire'), reason: 'the list is whole again');
+      expect(jsonDecode(copy.readAsStringSync()), jsonDecode(list.readAsStringSync()), reason: 'and so is its copy');
+      await h.weather.updateNow();
+      expect(n.shown.length, 2, reason: 'not a third time');
+      // what comes after pops up as usual
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'East Fork fire', 'Forleen fire']);
     });
 
     test('alerts already in fresh copies pop up too, once; earthquakes do not', () async {
@@ -1203,6 +2237,250 @@ void main() {
       expect(AlertFocus.fromPayload('not json'), isNull);
     });
   });
+
+  group('in a browser (the files are on Cache Server)', () {
+    test('weather starts on the server\'s folders: the catalogue is kept, the core\'s folder holds what is on, and a restart finds both', () async {
+      h = await Harness.create(browser: true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      await h.flushFiles();
+      expect(h.weather.sources.map((c) => c.id), contains('usgs-quakes-near'));
+      expect(h.inFolder, contains('usgs-quakes-near.json'));
+      expect(Directory('${h.dir.path}/live-catalogues').listSync().whereType<Directory>(), hasLength(1));
+      final back = await h.restart();
+      h = back;
+      expect(h.weather.catalogues.single.catalogue.title, 'Cache connectors');
+      expect(h.weather.isOn('usgs-quakes-near'), isTrue);
+    });
+
+    test('what the server\'s timer should fetch is sent when the sources or the places change, and only then', () async {
+      h = await Harness.create(browser: true);
+      h.settings.setWatchHere(true);
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.publishPlan();
+      final plan = h.plans.last;
+      expect([for (final s in plan['sources'] as List) (s as Map)['id']], contains('openmeteo-forecast'));
+      final place = (plan['places'] as List).single as Map;
+      expect(place['id'], kWatchHere);
+      expect((place['request'] as Map)['lat'], 42.54);
+      final before = h.plans.length;
+      await h.weather.publishPlan();
+      expect(h.plans.length, before, reason: 'nothing changed');
+    });
+
+    test('a status the server\'s timer wrote is read again, so the Weather line shows its run', () async {
+      h = await Harness.create(browser: true);
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final ran = h.clock.subtract(const Duration(minutes: 3));
+      File('${h.dir.path}/live-catalogues/status.json').writeAsStringSync(jsonEncode({'ok': ran.millisecondsSinceEpoch, 'run': ran.millisecondsSinceEpoch, 'online': ran.millisecondsSinceEpoch, 'failure': null}));
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'the server fetched 3 minutes ago');
+      expect(h.weather.lastOkAt, ran);
+    });
+  });
+
+  group('each source\'s health record and state', () {
+    const forecast = 'openmeteo-forecast';
+    Future<void> failWith(Harness h, String id, CacheSearchException e) async {
+      h.core.fetchErrors[id] = e;
+      await h.weather.updateNow();
+    }
+
+    test('a 401 after a key was saved is "Key not accepted"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect((await h.weather.saveKey(firms, 'k')).ok, isTrue);
+      await failWith(h, firms.id, const CacheSearchException('fetch_failed', 'HTTP 401 (the key or login was refused)'));
+      expect(h.weather.healthOf(firms)?.failure, SourceFailure.keyRejected);
+      expect(h.weather.statusOf(firms), SourceRowState.keyRejected);
+    });
+
+    test('a 401 with no key saved is "Needs a key"; a source with no key to give is a provider error', () {
+      const e = CacheSearchException('fetch_failed', 'HTTP 401');
+      expect(WeatherState.failureKind(e, needsKey: true, hasKey: false), SourceFailure.keyMissing);
+      expect(WeatherState.failureKind(e, needsKey: true, hasKey: true), SourceFailure.keyRejected);
+      expect(WeatherState.failureKind(const CacheSearchException('fetch_failed', 'HTTP 403: x'), needsKey: true, hasKey: true), SourceFailure.keyRejected);
+      expect(WeatherState.failureKind(e, needsKey: false, hasKey: false), SourceFailure.providerError);
+      expect(WeatherState.failureKind(const CacheSearchException('key_missing', 'needs the API key'), needsKey: true, hasKey: false), SourceFailure.keyMissing);
+    });
+
+    test('the core\'s codes and statuses map to the failure kinds', () {
+      SourceFailure k(String code, String m) => WeatherState.failureKind(CacheSearchException(code, m), needsKey: false, hasKey: false);
+      expect(k('fetch_failed', 'HTTP 429 (rate limited; gave up after retrying)'), SourceFailure.limit);
+      expect(k('quota', 'limit'), SourceFailure.limit);
+      expect(k('fetch_failed', 'HTTP 500'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'HTTP 503: unavailable'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'HTTP 404'), SourceFailure.providerError);
+      expect(k('fetch_failed', 'Dns: failed'), SourceFailure.unreachable);
+      expect(k('fetch_failed', 'Io: timed out reading response'), SourceFailure.unreachable);
+      expect(k('bad_response', 'not json'), SourceFailure.unreadable);
+    });
+
+    test('a 429 is "Limit reached"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 429 (rate limited; gave up after retrying)'));
+      expect(h.weather.statusOf(c), SourceRowState.limitReached);
+    });
+
+    test('a timeout is "Not answering"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'Io: timed out reading response'));
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.unreachable);
+      expect(h.weather.statusOf(c), SourceRowState.notAnswering);
+    });
+
+    test('one failure with a current copy stays "Working"; once the copy expires it is "Not answering"', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      h.core.stored[forecast] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.providerError, reason: 'the failure is kept');
+      expect(h.weather.statusOf(c), SourceRowState.working);
+      h.core.stored[forecast] = {'age': '5 hours old', 'age_seconds': 18000, 'fetched_at': '2026-10-26T07:00:00-06:00', 'expired': true};
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(c), SourceRowState.notAnswering);
+    });
+
+    test('a success clears the failure', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      expect(h.weather.statusOf(c), SourceRowState.notAnswering);
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      expect(h.weather.healthOf(c)?.failure, SourceFailure.none);
+      expect(h.weather.healthOf(c)?.failureSince, isNull);
+      expect(h.weather.healthOf(c)?.lastOkAt, h.clock);
+      expect(h.weather.statusOf(c), SourceRowState.working);
+    });
+
+    test('off, needs a key, and no network is a notice of its own', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect(h.weather.statusOf(h.weather.sourceById('usgs-quakes-near')!), SourceRowState.off);
+      await h.weather.setSourceOn(firms, true);
+      expect(h.weather.statusOf(firms), SourceRowState.needsKey);
+      h.probe.change(ConnectionKind.none);
+      await Future<void>.delayed(Duration.zero);
+      expect(h.weather.noNetwork, isTrue);
+      expect(h.weather.statusOf(h.weather.sourceById(forecast)!), SourceRowState.working, reason: 'not a per-row state');
+    });
+
+    test('a rejected key shows at once, even with a current copy; a source that needs a key and has none likewise', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final firms = h.weather.sourceById('firms-viirs-near')!;
+      expect((await h.weather.saveKey(firms, 'k')).ok, isTrue);
+      h.core.stored[firms.id] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, firms.id, const CacheSearchException('fetch_failed', 'HTTP 401 (the key or login was refused)'));
+      expect(h.weather.statusOf(firms), SourceRowState.keyRejected, reason: 'needs the person, so no waiting for the copy to expire');
+      // the same for the other kinds that wait: a current copy keeps them Working
+      h.core.fetchErrors[firms.id] = const CacheSearchException('fetch_failed', 'HTTP 503');
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(firms), SourceRowState.working);
+    });
+
+    test('more of the core\'s codes: busy and internal are provider errors; not_configured depends on the key', () {
+      SourceFailure k(String code, {bool needsKey = false, bool hasKey = false}) =>
+          WeatherState.failureKind(CacheSearchException(code, 'x'), needsKey: needsKey, hasKey: hasKey);
+      expect(k('busy'), SourceFailure.providerError);
+      expect(k('internal'), SourceFailure.providerError);
+      expect(k('not_configured', needsKey: true, hasKey: false), SourceFailure.keyMissing);
+      expect(k('not_configured', needsKey: true, hasKey: true), SourceFailure.providerError);
+      expect(k('not_configured'), SourceFailure.providerError);
+      expect(k('offline'), SourceFailure.unreachable);
+    });
+
+    test('"offline" from the core sets the one No network notice; the row is Working with a current copy, its failure once the copy is out of date', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      expect(h.weather.noNetwork, isFalse);
+      h.core.stored[forecast] = {'age': '1 hour old', 'age_seconds': 3600, 'fetched_at': '2026-10-26T11:00:00-06:00', 'expired': false};
+      await failWith(h, forecast, const CacheSearchException('offline', 'no connection'));
+      expect(h.weather.noNetwork, isTrue);
+      expect(h.weather.statusOf(c), SourceRowState.working);
+      h.core.stored[forecast] = {'age': '5 hours old', 'age_seconds': 18000, 'fetched_at': '2026-10-26T07:00:00-06:00', 'expired': true};
+      await h.weather.updateNow();
+      expect(h.weather.statusOf(c), SourceRowState.notAnswering);
+      h.core.fetchErrors.clear();
+      await h.weather.updateNow();
+      expect(h.weather.noNetwork, isFalse, reason: 'the next good update clears it');
+    });
+
+    test('the health record survives a restart, and an old status file without it loads', () async {
+      h = await Harness.create();
+      await h.only([forecast]);
+      final c = h.weather.sourceById(forecast)!;
+      await failWith(h, forecast, const CacheSearchException('fetch_failed', 'HTTP 503'));
+      final since = h.weather.healthOf(c)!.failureSince;
+      expect(since, isNotNull);
+      h = await h.restart();
+      final back = h.weather.healthOf(h.weather.sourceById(forecast)!);
+      expect(back?.failure, SourceFailure.providerError);
+      expect(back?.failureSince, since);
+      expect(back?.lastAttemptAt, h.clock);
+      expect(h.weather.statusOf(h.weather.sourceById(forecast)!), SourceRowState.notAnswering);
+
+      final old = await Harness.create(start: false);
+      Directory('${old.dir.path}/live-catalogues').createSync(recursive: true);
+      final ran = old.clock.subtract(const Duration(minutes: 3));
+      File('${old.dir.path}/live-catalogues/status.json').writeAsStringSync(jsonEncode({'ok': ran.millisecondsSinceEpoch, 'run': ran.millisecondsSinceEpoch, 'online': ran.millisecondsSinceEpoch, 'failure': null}));
+      await old.weather.start();
+      while (old.weather.refreshingCatalogues) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(old.weather.lastOkAt, ran);
+      expect(old.weather.healthOf(old.weather.sourceById(forecast)!), isNull);
+      expect(old.weather.statusOf(old.weather.sourceById(forecast)!), isNot(SourceRowState.notAnswering));
+      old.weather.dispose();
+    });
+  });
+}
+
+/// Timers run by hand: [make] records a timer; [fireDue] runs those due at the given time (a timer's time is the clock it was made at
+/// plus its wait), so a test with a fake clock never waits for real time.
+class FakeTimers {
+  final List<_FakeTimer> _all = [];
+
+  Timer make(Duration wait, void Function() f, DateTime Function() now) {
+    final t = _FakeTimer(now().add(wait), f);
+    _all.add(t);
+    return t;
+  }
+
+  void fireDue(DateTime now) {
+    for (final t in List.of(_all)) {
+      if (!t.cancelled && !t.fired && !t.due.isAfter(now)) {
+        t.fired = true;
+        t.callback();
+      }
+    }
+  }
+}
+
+class _FakeTimer implements Timer {
+  _FakeTimer(this.due, this.callback);
+
+  final DateTime due;
+  final void Function() callback;
+  bool cancelled = false;
+  bool fired = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled && !fired;
+
+  @override
+  int get tick => 0;
 }
 
 /// The Home card's weather part as one line, the way the card lays it out.

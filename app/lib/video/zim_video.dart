@@ -4,6 +4,9 @@ import 'dart:typed_data';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
+
+import 'video_media.dart';
 
 /// The file name endings of the video and sound entries a ZIM can hold (the player takes them; a web view may not).
 const Set<String> kZimMediaExtensions = {'mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv', 'mp3', 'm4a', 'oga', 'ogg', 'opus', 'wav'};
@@ -104,6 +107,53 @@ Future<ZimVideo> openZimVideo({
       durationS: 0,
       location: file.path,
       isAudio: audio,
+      captions: captions,
+    ),
+  );
+}
+
+/// A browser's [openZimVideo]: nothing is copied. The player takes the entry from Cache Server's `/api/video/zim/` route (with Range,
+/// so it can seek), and the caption entry beside it is found the same way [openZimVideo] finds it ([read] is the reader's own entry
+/// read), as an address of that route. A HEAD on the route first says whether the entry is there, and has the server read it ready for the
+/// player. Throws "not_found" when it is not, and "unsupported" when the address is not a video or sound entry.
+Future<ZimVideo> openZimVideoWeb({
+  required String address,
+  required Future<ZimBytes> Function(String address) read,
+  required String zimTitle,
+  double offsetS = 0,
+  Future<int> Function(Uri url)? headStatus,
+}) async {
+  final bare = _bare(address);
+  final ext = _ext(bare);
+  if (!bare.startsWith('zim:') || !kZimMediaExtensions.contains(ext)) throw CacheSearchException('unsupported', 'not a video: $bare');
+  final url = VideoMedia.zimEntry(bare);
+  final Future<int> Function(Uri url) head = headStatus ?? (Uri u) async => (await http.Client().head(u)).statusCode;
+  final status = await head(VideoMedia.resolve(url));
+  if (status == 404) throw const CacheSearchException('not_found', 'That video is not in a ZIM on this device');
+  if (status < 200 || status >= 300) throw CacheSearchException('internal', 'The server answered $status');
+  final captions = <DownloadedCaption>[];
+  for (final c in zimCaptionCandidates(bare)) {
+    try {
+      final cap = await read(c);
+      if (cap.bytes.isEmpty) continue;
+      final lang = RegExp(r'[_.-]([a-z]{2})\.(vtt|srt)$').firstMatch(c)?.group(1) ?? '';
+      captions.add(DownloadedCaption(language: lang, label: 'On', path: VideoMedia.zimEntry(c)));
+      break;
+    } on CacheSearchException {
+      continue;
+    }
+  }
+  final title = Uri.decodeComponent(bare.split('/').last.replaceAll('_', ' ')).replaceAll(RegExp(r'\.[A-Za-z0-9]+$'), '');
+  return ZimVideo(
+    zimTitle: zimTitle,
+    target: VideoTarget(
+      isLocal: true,
+      uuid: bare,
+      title: title,
+      offsetS: offsetS,
+      durationS: 0,
+      location: url,
+      isAudio: _audioExtensions.contains(ext),
       captions: captions,
     ),
   );

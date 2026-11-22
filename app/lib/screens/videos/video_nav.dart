@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import '../../app_fs.dart';
 
+import '../../platform.dart' as plat;
 import '../../video/video_state.dart';
 import '../../video/zim_video.dart';
 import 'player_screen.dart';
@@ -92,8 +93,14 @@ Future<void> _redownload(BuildContext context, VideoState state, DownloadedVideo
 /// ZIM has one beside it.
 Future<void> playZimVideo(BuildContext context, VideoState state, ZimVideoReader zims, {required String address, double offsetS = 0, bool cited = false, String? lang}) async {
   final id = address.startsWith('zim:') ? address.substring(4).split('/').first : '';
-  final dir = await (zims.cacheDir?.call() ?? appTempPath().then((p) => Directory('$p${Platform.pathSeparator}zim-video')));
-  final v = await openZimVideo(address: address, read: zims.read, cacheDir: dir, zimTitle: zims.titleOf(id), offsetS: offsetS);
+  final ZimVideo v;
+  if (plat.isWeb) {
+    // A browser has no files to copy to: the player takes the entry from the server (see openZimVideoWeb).
+    v = await openZimVideoWeb(address: address, read: zims.read, zimTitle: zims.titleOf(id), offsetS: offsetS);
+  } else {
+    final dir = await (zims.cacheDir?.call() ?? appTempPath().then((p) => Directory('$p${Platform.pathSeparator}zim-video')));
+    v = await openZimVideo(address: address, read: zims.read, cacheDir: dir, zimTitle: zims.titleOf(id), offsetS: offsetS);
+  }
   if (!context.mounted) return;
   await Navigator.push(
     context,

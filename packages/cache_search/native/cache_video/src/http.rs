@@ -10,7 +10,8 @@ use std::time::Duration;
 const MAX_JSON: u64 = 16 * 1024 * 1024;
 
 pub fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
+    // the public-address guard when the Linux server's helper installed it (a no-op on a phone)
+    cache_netguard::guarded(ureq::AgentBuilder::new())
         .timeout_connect(Duration::from_secs(15))
         // per read, not for the whole transfer: a stalled connection fails, a long download does not
         .timeout_read(Duration::from_secs(30))

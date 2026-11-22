@@ -420,7 +420,7 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
 }
 
 /// Bytes available on the volume that holds `path` (iPhone: the app's `cache_free_bytes_on_disk`, linked into the same
-/// binary, which counts the space iOS can purge as iPhone Storage in Settings does; statvfs leaves it out).
+/// binary, which counts free space now plus half of the space iOS can purge, for pre-checks).
 #[cfg(target_os = "ios")]
 pub fn available_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;

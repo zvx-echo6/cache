@@ -35,7 +35,7 @@ fn run(ts: &[Box<dyn Tool>], name: &str, args: Value) -> Value {
     let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args) {
         Ok(ToolOutput::Json(v)) => v,
-        Ok(ToolOutput::Text(_)) => panic!("text"),
+        Ok(ToolOutput::Text(_) | ToolOutput::Pieces(_)) => panic!("text"),
         Err(e) => e.to_json(),
     }
 }

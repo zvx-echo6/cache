@@ -30,7 +30,8 @@ impl std::fmt::Display for Fail {
 }
 
 pub fn agent(user_agent: &str) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(60)).user_agent(user_agent).max_idle_connections_per_host(8).build()
+    // the public-address guard when the Linux server's helper installed it (a no-op on a phone)
+    cache_netguard::guarded(ureq::AgentBuilder::new()).timeout_connect(Duration::from_secs(8)).timeout(Duration::from_secs(60)).user_agent(user_agent).max_idle_connections_per_host(8).build()
 }
 
 /// An https address, or http to this machine (the tests' server). Anything else is never fetched.
@@ -58,6 +59,19 @@ pub fn get(agent: &ureq::Agent, url: &str, timeout: Duration) -> Result<Vec<u8>,
             resp.into_reader().take(MAX_BODY).read_to_end(&mut body).map_err(|e| Fail::Net(format!("reading {url}: {e}")))?;
             Ok(body)
         }
+        Err(ureq::Error::Status(code, _)) => Err(Fail::Status(code, format!("HTTP {code} from {url}"))),
+        Err(ureq::Error::Transport(t)) => Err(Fail::Net(format!("{:?}: {} ({url})", t.kind(), t.message().unwrap_or(&t.to_string())))),
+    }
+}
+
+/// Whether the server has `url`, without fetching it: a GET for its first byte only (a server that ignores the range sends
+/// the whole file, which is dropped unread). Ok when it answers 200 or 206.
+pub fn probe(agent: &ureq::Agent, url: &str, timeout: Duration) -> Result<(), Fail> {
+    if !url_ok(url) {
+        return Err(Fail::Status(0, format!("{url} is not an https address")));
+    }
+    match agent.get(url).set("Range", "bytes=0-0").timeout(timeout.max(Duration::from_millis(1))).call() {
+        Ok(_) => Ok(()),
         Err(ureq::Error::Status(code, _)) => Err(Fail::Status(code, format!("HTTP {code} from {url}"))),
         Err(ureq::Error::Transport(t)) => Err(Fail::Net(format!("{:?}: {} ({url})", t.kind(), t.message().unwrap_or(&t.to_string())))),
     }

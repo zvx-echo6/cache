@@ -28,7 +28,7 @@ fn division_label(cls: &Classes, division: Option<&str>) -> String {
 
 impl BuildService {
     /// One book as the API shows it.
-    fn book_json(&self, cls: &Classes, b: &Book, replacing: bool) -> Value {
+    fn book_json(&self, cls: &Classes, lib: &str, presence: &super::linked_where::LinkedPresence, b: &Book, replacing: bool) -> Value {
         let found = b.division.as_deref().and_then(|d| cls.find(d));
         let suggestions: Vec<Value> = b
             .suggestions
@@ -52,7 +52,25 @@ impl BuildService {
             "placed_by_hand": b.placed, "moved_from": b.moved_from,
             "compression": b.compression,
             "filed_in": b.source_rel.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d),
+            "on_device": self.pdf_on_device(lib, b, presence),
         })
+    }
+
+    /// `GET /api/build/libraries/{id}/books/{doc}/pdf`: the device copy of the book (its filed PDF) and the name it is given. 404
+    /// for a library or book that is not there, and for a book whose copy is gone. The path comes from the stored record, never
+    /// from the request.
+    pub fn book_pdf(&self, id: &str, doc: &str) -> Result<(PathBuf, String), ApiErr> {
+        let lib_there = lock(&self.st).libs.iter().any(|l| l.id == id);
+        if !lib_there {
+            return Err(err(404, "not_found", "no such library"));
+        }
+        let b = self.book_of(id, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
+        let path = self.source_of(id, &b);
+        if !path.is_file() {
+            return Err(err(404, "not_found", "this book has no PDF on the server"));
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| format!("{doc}.pdf"));
+        Ok((path, name))
     }
 
     /// `GET /api/build/libraries/{id}/books?division=&class=&sort=`. `division` is a number or `unsorted`; `sort` is `title`
@@ -62,6 +80,10 @@ impl BuildService {
         let class = crate::fetch::query_param(query, "class");
         let by_call = crate::fetch::query_param(query, "sort").as_deref() == Some("call");
         let cls = self.classes();
+        // The linked-folder places are read first, with no lock held (they come from each folder's registry file).
+        let presence = self.linked_presence(id);
+        // The state is held only to read the books and collect the paths; the disk is read after it is let go.
+        let rows: Vec<(Value, PathBuf, PathBuf)> = {
         let st = lock(&self.st);
         let m = st.libs.iter().find(|l| l.id == id).ok_or_else(|| err(404, "not_found", "no such library"))?;
         let in_class: Option<Vec<&str>> = class.as_deref().map(|c| cls.find_class(c).map(|k| k.divisions.iter().map(|d| d.number.as_str()).collect()).unwrap_or_default());
@@ -83,12 +105,22 @@ impl BuildService {
         } else {
             books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.doc_id.cmp(&b.doc_id)));
         }
+        let out: Vec<(Value, PathBuf, PathBuf)> = books
+            .into_iter()
+            .map(|b| {
+                let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
+                let (pdf, pack) = self.book_files(id, b);
+                (self.book_json(&cls, id, &presence, b, replacing), pdf, pack)
+            })
+            .collect();
+        out
+        };
+        let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         Ok(Value::Array(
-            books
-                .into_iter()
-                .map(|b| {
-                    let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
-                    self.book_json(&cls, b, replacing)
+            rows.into_iter()
+                .map(|(mut v, pdf, pack)| {
+                    v["bytes"] = json!(len(pdf.as_path()) + len(pack.as_path()));
+                    v
                 })
                 .collect(),
         ))
@@ -163,7 +195,7 @@ impl BuildService {
     }
 
     /// Move a book's files to `division` (None is Unsorted) and record it. The caller holds `ops`.
-    fn refile(&self, lib: &str, doc: &str, division: Option<String>, by_hand: bool) -> Result<(), String> {
+    pub(crate) fn refile(&self, lib: &str, doc: &str, division: Option<String>, by_hand: bool) -> Result<(), String> {
         let cls = self.classes();
         let book = self.book_of(lib, doc).ok_or("no such book")?;
         let division = division.filter(|d| cls.find(d).is_some_and(|(_, x)| x.assigned()));
@@ -253,7 +285,7 @@ impl BuildService {
         // The placement is in this device's log (a `place` by the user, with the retire and assign): that is the training data
         // too, since a `place` whose division differs from `book.suggested` is a correction. The local view follows.
         self.rebuild_view_quietly();
-        Ok(self.book_json(&cls, &b, false))
+        Ok(self.book_json(&cls, lib, &self.linked_presence(lib), &b, false))
     }
 
     /// `GET /api/build/libraries/{id}/books/{doc}/suggestions`: what "Place it" offers. The sorter's top 3 divisions for the book, as

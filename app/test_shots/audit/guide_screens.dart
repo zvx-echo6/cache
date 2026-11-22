@@ -8,6 +8,7 @@ import 'dart:typed_data';
 
 import 'package:cache/location/position_source.dart' show LocationPermissionState;
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
+import 'package:cache/settings/app_settings.dart' show kWatchHere;
 import 'package:cache/settings/location_access.dart' show LocationAccess;
 import 'package:cache/theme.dart' show CacheThemeId;
 import 'package:cache/browse/zim_download.dart';
@@ -211,6 +212,8 @@ void guideScreens() {
     await tester.pump(const Duration(milliseconds: 400));
     await shot(tester, 'settings-maps');
 
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('maps-advanced')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('maps-advanced')));
     await settle(tester);
     await shot(tester, 'settings-maps-advanced');
@@ -349,11 +352,12 @@ void guideScreens() {
     await tester.pumpAndSettle();
     await shot(tester, 'settings-weather');
 
-    // The watch list (1.0.29) sits above the sources: the row with Get key is further down the page.
-    await tester.scrollUntilVisible(find.byKey(const ValueKey('get-key-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
+    // The watch list (1.0.29) sits above the sources: the row of the key-only source is further down the page.
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('source-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
     await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
+    // The source is off, so its row has a switch (the Add key button shows once it is on and has no key): the switch asks for the key.
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('source-firms-viirs-near')), matching: find.byType(Switch)));
     await tester.pumpAndSettle();
     await shot(tester, 'key-sheet', crop: _sheet);
     await tester.tapAt(const Offset(10, 60));
@@ -550,6 +554,8 @@ void guideScreens() {
       opener: (_) async => core,
       offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${s.dir.path}/region-catalogue'), fetch: offroadWeb.fetch),
       packDownloader: _Packs(),
+      // a fixed storage, so the region's space check never depends on the machine drawing the pictures
+      spaceOf: (_) => const Space(free: 200 << 30, reserve: 20 << 30),
     );
     await tester.runAsync(() async {
       await s.engine.saveDefinition(File('../packages/cache_search/layers/mapterhorn.json').readAsStringSync());
@@ -807,9 +813,10 @@ void guideScreens() {
     _ignoreDebugAsserts(tester);
     await shot(tester, 'weather');
 
-    // The Choose a place sheet, from the empty state.
+    // The Choose a place sheet, from the Weather screen with no place watched (Your location switched off, no other place): the
+    // page then offers Choose a place instead.
     final off = await _rig(tester);
-    off.here = null;
+    off.settings.setWatched(kWatchHere, false);
     await show(tester, WeatherScreen(weather: off.weather, turnOn: WeatherTurnOn(
       weather: off.weather,
       location: off.location,
@@ -821,6 +828,8 @@ void guideScreens() {
       savePlace: (p) async {},
     )));
     await settle(tester, rounds: 10);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('weather-choose-place')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
     await settle(tester);
     await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'twin');
@@ -911,20 +920,6 @@ void guideScreens() {
     await show(tester, NotebookEditor(notebook: n.nb, template: n.templates.byId('log')!));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('notebook-name')), 'Pump house check');
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Run time');
-    await tester.tap(find.text('Number'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-unit')), 'min');
-    await tester.tap(find.byKey(const ValueKey('field-done')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('add-field')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('field-label')), 'Under load');
-    await tester.tap(find.text('Yes/No'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('field-done')));
     await tester.pumpAndSettle();
     await shot(tester, 'log-editor');
 
@@ -1739,7 +1734,7 @@ class _HitSources extends FakeSources {
   bool get coreReady => true;
 
   @override
-  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0, Duration? meaningLimit}) async =>
       SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
 }
 
@@ -1850,7 +1845,7 @@ class _NbRig {
     hereOnMap: () => true,
     setHereOnMap: (_) {},
     // The map is a platform view: the space is left empty, as in the Maps tests.
-    map: (context, pin, onPick) => const SizedBox.shrink(),
+    map: (context, pin, onPick, look) => const SizedBox.shrink(),
   );
 
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);

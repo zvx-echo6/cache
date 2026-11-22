@@ -16,6 +16,7 @@ Future<void> addFromComputer(BuildContext context, {required DeviceLibrary devic
   final messenger = ScaffoldMessenger.maybeOf(context);
   final file = dropped ?? await pickLocalFile(accept: [...kZimEndings, ...kLibraryEndings]);
   if (file == null) return;
+  var open = true;
   void say(String text) => messenger
     ?..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(text)));
@@ -41,8 +42,15 @@ Future<void> addFromComputer(BuildContext context, {required DeviceLibrary devic
     );
     return;
   }
-  say('Uploading ${file.name}. Keep this tab open.');
-  final result = await device.send(file);
+  messenger?.hideCurrentSnackBar();
+  final bar = messenger?.showSnackBar(SnackBar(content: Text('Uploading ${file.name}. Keep this tab open.')))
+    ?..closed.whenComplete(() => open = false);
+  final Map<String, dynamic>? result;
+  try {
+    result = await device.send(file);
+  } finally {
+    if (open) bar?.close();
+  }
   if (result == null || kindOfFileName(file.name) != 'library' || libraries == null) return;
   if (!context.mounted) return;
   await addPackageOnDevice(context, libraries, file.name);

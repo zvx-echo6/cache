@@ -9,6 +9,7 @@ environment:
 # The helper reads the Flutter-free sources of packages/cache_search by relative path (that package depends on the Flutter
 # SDK, so it cannot be a pub dependency). Versions match app/pubspec.lock.
 dependencies:
+  crypto: ^3.0.7
   ffi: ^2.1.3
   http: ^1.6.0
 

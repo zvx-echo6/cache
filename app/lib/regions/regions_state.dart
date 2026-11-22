@@ -5,44 +5,34 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../platform/app_log.dart';
+import '../app_fs.dart';
 import '../browse/zim_download.dart';
+import '../chat/ask_focus.dart';
 import '../files.dart';
 import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
+import '../platform.dart' as plat;
+import '../screens/download_confirm.dart' show downloadSpace;
 import '../search/core_config.dart';
 import '../settings/damaged_files.dart';
 import '../settings/data_policy.dart';
+import '../settings/space.dart';
 import 'offroad_catalogue.dart';
 import 'problem_words.dart';
 import 'region_catalogue.dart';
 import 'regions_core.dart';
+import 'regions_share.dart';
 
-/// What the region engine's folder (the `regions` shared folder) holds that each device makes for itself, as sync patterns (see
-/// DataKind.notShared), so it never syncs. The downloaded parts all sync: regions.sqlite (the region records, tile lists and
-/// meta) with its -wal, `tiles/<build>/` (routing tiles, streamed ones among them: they share the folder), `places/<build>.sqlite`
-/// (the merged places, the only copy of the places tiles: each is merged in and its download deleted), `places/<build>/common.sqlite`,
-/// places/CURRENT and offroad/. Left out:
-/// - `index`, `places/index`: where the tile indexes were kept before. They now live, and sync, in the indexes folder as
-///   snapshots (`region-index/<build>/`, `places-index/<build>/`; search/indexes_share.dart): this version moves what it finds
-///   here into it, and only Cache 1.0.29 and earlier still write here, so these stay out of the regions share (a file a newer
-///   device moved away would otherwise go out as a delete and remove an older device's copy).
-/// - `**/*-shm`: SQLite's shared-memory index of a WAL file, which also holds the locks of the connections on this device; SQLite
-///   rebuilds it from the -wal when it opens the database.
-/// - `**/*-journal`: a rollback journal, this device's alone (a copied one would be played back into another device's database).
-const List<String> kRegionsNotShared = ['index', 'places/index', '**/*-shm', '**/*-journal'];
-
-/// What the layer engine's folder (the `maps` shared folder) holds that each device makes for itself, as sync patterns. The
-/// downloaded map layers sync: `store/<layer>.sqlite` (every tile downloaded for offline use, and the areas) with its -wal,
-/// catalogue.json and latest.json (the layer definitions those tiles belong to), user-defs/. Left out:
-/// - `tiles.sqlite*`: the cache of tiles viewed online (size-capped, least recently used first), with its -wal and -shm.
-/// - `tilejson`: TileJSON documents as fetched from each source, kept a day.
-/// - `**/*-shm`, `**/*-journal`: as for [kRegionsNotShared].
-const List<String> kMapLayersNotShared = ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'];
+export '../sharing/share_rules.dart' show kRegionsNotShared, kMapLayersNotShared;
 
 /// The file next to the core's region folder where the app keeps what each region holds (its parts and the map areas it
 /// downloaded).
 const String kRegionsAppFile = 'regions-app.json';
+
+/// How often a tab renews Ask's hold on the downloads while Ask answers (the server lets it go after about a minute without).
+const Duration kAskLeaseRenew = Duration(seconds: 20);
 
 /// What downloading one part of a region (road routing, or places and addresses) costs, from the core's plan.
 class PartPlan {
@@ -119,7 +109,12 @@ class RegionPlan {
     this.mapProblem,
     this.offroad,
     this.offroadProblem,
+    this.sharing = const [],
   });
+
+  /// Layers whose tiles are counted with another layer's (contour lines with hillshade: both read the elevation store), with the
+  /// layer that carries the estimate.
+  final List<({LayerDef def, String ownerId})> sharing;
 
   final PartPlan? routing;
   final String? routingProblem;
@@ -141,6 +136,9 @@ class RegionPlan {
 }
 
 const String _needsConnection = 'Needs a connection to work out the size.';
+
+/// The words an off-road add gives when the person's Pause is on.
+const String _heldOffroad = 'downloads are paused. Tap Resume, then add the off-road data.';
 
 /// Which part of a region a problem is about, for [regionPartWords].
 enum RegionPart { routing, places }
@@ -169,8 +167,8 @@ String regionPartWords(RegionPart part, String? code, String message) {
 enum RegionPhase { downloading, ready, paused, stopped, failed }
 
 /// Where one part of a region stands. [notAvailable]: nothing is published for the area yet (places: the region catalogue or the
-/// places server's current.json has none for it). It is not a failure: the region counts as complete and no retry is offered; a
-/// later Update adds the part once it is published.
+/// places server's current.json has none for it; directions: the published road routing has no tile over it). It is not a
+/// failure: the region counts as complete and no retry is offered; a later Update adds the part once it is published.
 enum PartState { ready, downloading, waiting, paused, stopped, failed, notAvailable }
 
 /// True when the core's places error says nothing is published (the places server has no current.json: HTTP 404 or 410 for it).
@@ -411,7 +409,8 @@ class LocalRegion {
       final done = l.fold<int>(0, (s, a) => s + a.doneTiles), total = l.fold<int>(0, (s, a) => s + a.totalTiles);
       final f = total == 0 ? null : (done / total).clamp(0.0, 1.0);
       final bytes = l.fold<int>(0, (s, a) => s + a.bytes);
-      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted).firstOrNull;
+      // A layer the person paused stopped on purpose: it is not a failure (its row offers Resume).
+      final failed = l.where((a) => a.phase == AreaPhase.failed && !a.interrupted && !a.paused).firstOrNull;
       if (failed != null) return RegionPartStatus(kind, PartState.failed, fraction: f, bytes: bytes, problem: areaProblemWords(failed.error));
       if (l.any((a) => a.phase == AreaPhase.failed)) return RegionPartStatus(kind, PartState.stopped, fraction: f, bytes: bytes);
       if (l.any((a) => a.phase == AreaPhase.running)) return RegionPartStatus(kind, PartState.downloading, fraction: f, bytes: bytes);
@@ -423,9 +422,11 @@ class LocalRegion {
       final total = (p['bytes'] as num?)?.toInt() ?? 0, done = (p['done_bytes'] as num?)?.toInt() ?? 0;
       final f = p['state'] == 'ready' ? 1.0 : (total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0));
       final e = p['error'];
-      // Places not published for the area: no current.json on the server, or the published index has no tile over it.
-      if (which == RegionPart.places &&
-          ((p['state'] == 'failed' && placesNotPublished(e is String ? e : null)) || (p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0))) {
+      // Nothing is published for the area: the published index has no tile over it (the core then reads "ready" with nothing to
+      // fetch, for road routing as for places: an area outside the published roads read "Ready" with no road data), or, for
+      // places, the server has no current.json.
+      final noTiles = p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0;
+      if (noTiles || (which == RegionPart.places && p['state'] == 'failed' && placesNotPublished(e is String ? e : null))) {
         return RegionPartStatus(kind, PartState.notAvailable);
       }
       return switch (p['state']) {
@@ -496,6 +497,10 @@ class LocalRegion {
   /// The places part is not published for this region's area yet (see [PartState.notAvailable]).
   bool get placesNotAvailable => parts.any((p) => p.kind == RegionPartKind.places && p.state == PartState.notAvailable);
 
+  /// The parts not published for this region's area yet, each as its row says it: "Places not available yet", and the same for
+  /// directions when the published roads do not reach the area. Empty when every part it has is published.
+  List<String> get notAvailableNotes => [for (final p in parts) if (p.state == PartState.notAvailable) '${p.name} ${p.words}'];
+
   /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting", or "Places not
   /// available yet". A part is used the moment its tiles are saved, so the parts that are ready are not named. Empty when every
   /// part is ready.
@@ -531,10 +536,21 @@ class RegionsState extends ChangeNotifier {
     this.offroadCatalogue,
     ZimDownloader? packDownloader,
     this.position,
+    this.focus,
+    this.spaceOf,
+    this.syncedWithOtherDevice,
   }) : _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
   final DataPolicy policy;
+
+  /// Whether a region deleted here is deleted on other devices too: the Maps share is on and at least one device is linked. It
+  /// decides whether the delete asks with the line "Deleting this will delete this from all synced devices." (null: not synced).
+  final bool Function()? syncedWithOtherDevice;
+
+  /// While Ask answers, the core starts no new region tile (set_policy hold); the tile in flight finishes and the downloads go on
+  /// when the answer is done. Not the person's pause ([held]): that one stays as it is. Null: not observed.
+  final AskFocus? focus;
   final Future<Directory> Function() supportDir;
   final RegionCatalogue catalogue;
   final MapsState maps;
@@ -544,6 +560,10 @@ class RegionsState extends ChangeNotifier {
 
   /// The published off-road packs; null: regions have no off-road part.
   final OffroadCatalogue? offroadCatalogue;
+
+  /// The storage a region is checked against before any of its parts starts ([download]); null: the one the download pop-up
+  /// reads, so the two agree.
+  final Space Function(String dir)? spaceOf;
 
   /// The phone's position (null while it is not known): a region downloads from there outwards.
   final ({double lat, double lon})? Function()? position;
@@ -575,9 +595,28 @@ class RegionsState extends ChangeNotifier {
   Timer? _poll;
   StreamSubscription<ConnectionKind>? _net;
   bool _networkOk = true;
+
+  /// The connection probe has answered and the engine has its network rule (the first [_applyPolicy] after launch is done). Until
+  /// then a download the engine reports as paused for the network is only "Paused": the engine's default (no network) is not the
+  /// phone's connection, and "Stopped: no connection" would be a guess.
+  bool _connectionKnown = false;
+  bool get connectionKnown => _connectionKnown;
+
+  @visibleForTesting
+  set connectionKnown(bool v) {
+    _connectionKnown = v;
+    notifyListeners();
+  }
   ConnectionKind _kind = ConnectionKind.wifi;
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
+
+  /// This device's share of its regions with linked devices (regions_share.dart), once the region engine has opened and named it.
+  RegionsShare? _share;
+
+  /// The regions linked devices share and nobody has deleted since (a delete shared by any device, this one's too, ends one added before it).
+  List<PeerRegion> _peers = const [];
+  bool _applying = false;
 
   /// Each downloading part's speed and time left.
   final TransferMeter _meter = TransferMeter();
@@ -601,15 +640,25 @@ class RegionsState extends ChangeNotifier {
 
   Future<File> _appFile() async => File('${(await supportDir()).path}/$kRegionsAppFile');
 
+  /// In a browser the app's folders are on Cache Server, reached through the folder seam (the same file there).
+  late final AppFs _webFs = createAppFs();
+
+  /// The text of regions-app.json; null when it is not there.
+  Future<String?> _readAppFile() async {
+    if (plat.isWeb) return _webFs.readString(AppRoot.support, kRegionsAppFile);
+    final f = await _appFile();
+    return await f.exists() ? f.readAsString() : null;
+  }
+
   /// Reads what the regions hold and starts the core's region engine.
   Future<void> init() async {
     if (_started) return;
     _started = true;
     maps.addListener(_onMaps);
     try {
-      final f = await _appFile();
-      if (await f.exists()) {
-        final j = (jsonDecode(await f.readAsString()) as Map).cast<String, dynamic>();
+      final text = await _readAppFile();
+      if (text != null) {
+        final j = (jsonDecode(text) as Map).cast<String, dynamic>();
         for (final e in ((j['regions'] as Map?) ?? const {}).entries) {
           _kept[e.key as String] = _Kept.fromJson(e.key as String, (e.value as Map).cast<String, dynamic>());
         }
@@ -619,21 +668,23 @@ class RegionsState extends ChangeNotifier {
       }
     } catch (_) {}
     try {
-      _offroadPath = (await offroadDir()).path;
+      if (!plat.isWeb) _offroadPath = (await offroadDir()).path;
     } catch (_) {}
     try {
-      final support = await supportDir();
-      _core = await _opener(regionsConfig(support, routingBaseUrl: baseUrl, placesBaseUrl: placesBaseUrl));
+      // A browser's engine is the server's, which opens it on its own folders: the config is not used there.
+      _core = await _opener(plat.isWeb ? const {} : regionsConfig(await supportDir(), routingBaseUrl: baseUrl, placesBaseUrl: placesBaseUrl));
     } catch (e) {
       routingUnavailable = e is CacheSearchException ? e.message : 'Road routing downloads are not available: $e';
       notifyListeners();
       return;
     }
+    if (!plat.isWeb) _share = RegionsShare(Directory('${(await supportDir()).path}/regions'));
     await _applyPolicy();
     unawaited(migrateOldDownloads().catchError((_) {}));
     _net = policy.probe.changes.listen((_) => _applyPolicy().catchError((_) {}));
     // Switching mobile data for downloads on or off applies at once, mid-download too.
     policy.settings.addListener(_onSettings);
+    focus?.addListener(_onAskFocus);
     await refresh();
     unawaited(recheckPublished().catchError((_) {}));
   }
@@ -644,6 +695,29 @@ class RegionsState extends ChangeNotifier {
   }
 
   bool? _lastMobile;
+
+  bool? _lastFocused;
+
+  /// Ask starts or stops answering: the core is told to hold the next tile, or to go on.
+  void _onAskFocus() {
+    final on = focus?.focused ?? false;
+    if (_lastFocused == on) return;
+    _lastFocused = on;
+    _askRenew?.cancel();
+    _askRenew = null;
+    if (on) {
+      // Ask's hold is a lease on the server, renewed while Ask answers: a closed or dead tab cannot leave the downloads held.
+      _askRenew = Timer.periodic(kAskLeaseRenew, (_) => _core?.call('set_policy', {'ask': true}).catchError((_) => <String, dynamic>{}));
+    } else {
+      unawaited(_core?.call('set_policy', {'ask': false}).catchError((_) => <String, dynamic>{}));
+    }
+    _applyPolicy().catchError((_) {});
+  }
+
+  Timer? _askRenew;
+
+  /// Ask is answering and has the downloads held (this tab's Ask, or one on another tab: the server says so).
+  bool get askHolds => (focus?.focused ?? false) || status['ask_hold'] == true;
 
   void _onSettings() {
     if (_lastMobile == policy.settings.mobileForDownloads) return;
@@ -656,7 +730,13 @@ class RegionsState extends ChangeNotifier {
   Future<void> _applyPolicy() async {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok, 'hold': held});
+    // The person's Pause and Ask's lease go apart (the server joins them); `ask` is only sent while Ask answers here, so another
+    // tab's lease is not ended by this one.
+    await _core?.call('set_policy', {'network': ok, 'hold': held, if (focus?.focused ?? false) 'ask': true});
+    if (!_connectionKnown) {
+      _connectionKnown = true;
+      notifyListeners();
+    }
     if (ok && !held) unawaited(_resumePacks());
     if (ok && _carryOnWaiting.isNotEmpty) {
       final go = List.of(_carryOnWaiting);
@@ -669,7 +749,9 @@ class RegionsState extends ChangeNotifier {
       final go = List.of(_waiting);
       _waiting.clear();
       for (final w in go) {
-        await download(w.$1, routing: w.$2, map: w.$3, places: w.$4, offroad: w.$5);
+        // Its space was checked when the person chose it (the pop-up), and there is nowhere to say a refusal now: it starts as it
+        // always has, with each part's own check.
+        await _download(w.$1, routing: w.$2, map: w.$3, places: w.$4, offroad: w.$5, anyway: false, checkSpace: false);
       }
     }
     notifyListeners();
@@ -713,6 +795,8 @@ class RegionsState extends ChangeNotifier {
       return;
     }
     _asked.removeWhere((id) => _statusOf(id) != null);
+    await _syncShare();
+    if (plat.isWeb) await _syncServerPacks(c);
     _schedulePoll();
     await _routingCheck();
     _placesCheck();
@@ -768,7 +852,8 @@ class RegionsState extends ChangeNotifier {
     final busy = watching ||
         _routingRegions.any((r) => r['state'] == 'downloading') ||
         _kept.values.any((k) => (k.routing || k.places) && _statusOf(k.id) == null) ||
-        placesUpdate?['downloading'] == true;
+        placesUpdate?['downloading'] == true ||
+        (plat.isWeb && _packRuns.values.any((r) => r.running));
     if (busy && _poll == null) {
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => refresh());
     } else if (!busy) {
@@ -830,41 +915,56 @@ class RegionsState extends ChangeNotifier {
 
   /// The map areas a region holds, each once (an elevation area lists under elevation, hillshade and contour lines: counted three
   /// times, its size was three times too big).
-  List<DownloadedArea> _areasOf(_Kept k) => [for (final a in maps.engine.allAreas) if (k.areas.contains(a.id)) a];
+  List<DownloadedArea> _areasOf(_Kept k) => _areasOfIds(k.areas);
 
-  /// Every region on this phone, largest first.
+  List<DownloadedArea> _areasOfIds(Iterable<String> ids) {
+    final want = ids.toSet();
+    return [for (final a in maps.engine.allAreas) if (want.contains(a.id)) a];
+  }
+
+  /// The ids of the regions this device holds itself (the app's list, and the core's).
+  Set<String> get _ownIds => {..._kept.keys, for (final r in _routingRegions) r['id'] as String};
+
+  /// What a linked device shares of region [id], when nobody has deleted it since (the first device's).
+  PeerRegion? _peerFor(String id) => _peers.where((p) => p.id == id).firstOrNull;
+
+  /// Every region on this phone, largest first: its own, then the ones only a linked device shares.
   List<LocalRegion> get local {
-    final ids = <String>{..._kept.keys, for (final r in _routingRegions) r['id'] as String};
+    final ids = <String>{..._ownIds, for (final p in _peers) p.id};
     final out = [for (final id in ids) regionOf(id)!];
     out.sort((a, b) => b.bytes.compareTo(a.bytes));
     return out;
   }
 
-  /// The region [id] as it is on this phone, or null when nothing of it is here.
+  /// The region [id] as it is on this phone (or, for one only a linked device shares, as that device holds it), or null when nothing
+  /// of it is here.
   LocalRegion? regionOf(String id) {
     final k = _kept[id];
     final r = _statusOf(id);
-    if (k == null && r == null) return null;
+    final peer = _peerFor(id);
+    if (k == null && r == null && peer == null) return null;
+    final packs = <String, _KeptPack>{
+      for (final p in peer?.offroad ?? const <Map<String, dynamic>>[]) (p['path'] as String? ?? ''): _KeptPack.fromJson(p),
+      for (final p in k?.offroad ?? const <_KeptPack>[]) p.path: p,
+    };
     return LocalRegion(
       id: id,
-      name: k?.name ?? r?['name'] as String? ?? id,
-      kind: k?.kind ?? (id.startsWith('drawn-') ? kDrawnRegionKind : null),
-      bbox: k?.bbox,
-      routing: _routingOf(r),
-      places: _placesOf(r),
-      areas: k == null ? const [] : _areasOf(k),
+      name: k?.name ?? r?['name'] as String? ?? peer?.name ?? id,
+      kind: k?.kind ?? peer?.kind ?? (id.startsWith('drawn-') ? kDrawnRegionKind : null),
+      bbox: k?.bbox ?? peer?.bbox,
+      routing: _routingOf(r) ?? (k?.routing == true ? null : peer?.routingPart),
+      places: _placesOf(r) ?? (k?.places == true ? null : peer?.placesPart),
+      areas: _areasOfIds([...?k?.areas, ...?peer?.areas]),
       // A part asked for is waited for until the core lists the region; once it does, a part it does not have was never added
       // (1.0.27 waited for places the core had left out, "Places waiting" for ever).
       wantsRouting: (k?.routing ?? false) && (r == null || _routingOf(r) != null),
       wantsPlaces: (k?.places ?? false) && (r == null || _placesOf(r) != null),
       asked: _asked.contains(id),
       meter: _meter,
-      offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
-      terrain: k == null ? const [] : _terrainOf(k),
+      offroad: [for (final p in packs.values) _packState(p)],
+      terrain: [for (final a in maps.engine.areasOf(kOffroadElevationLayer)) if ({...?k?.terrain, ...?peer?.terrain}.contains(a.id)) a],
     );
   }
-
-  List<DownloadedArea> _terrainOf(_Kept k) => [for (final a in maps.engine.areasOf(kOffroadElevationLayer)) if (k.terrain.contains(a.id)) a];
 
   OffroadPackState _packState(_KeptPack p) {
     final run = _packRuns[p.path];
@@ -899,21 +999,25 @@ class RegionsState extends ChangeNotifier {
   /// A region on the phone has [path] among its packs (on the phone, or downloading for it).
   bool _packKept(String path) => _kept.values.any((k) => k.offroad.any((x) => x.path == path));
 
-  /// The off-road packs on the phone or on their way, each with its size and the regions that use it (Storage > Regions lists
-  /// them: a pack stays while one of them is on the phone).
-  List<({String name, int bytes, bool done, List<String> usedBy})> get offroadPacks {
-    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy})>{};
+  /// The off-road packs on the phone or on their way, each with its size and the regions that use it, by name ([usedBy]) and by id
+  /// ([usedByIds], in the same order) (Storage > Regions lists them: a pack stays while one of them is on the phone).
+  List<({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})> get offroadPacks {
+    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy, List<String> usedByIds})>{};
     for (final k in _kept.values) {
       for (final p in k.offroad) {
         final st = _packState(p);
         final had = byPath[p.path];
-        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name]);
+        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name], usedByIds: [...?had?.usedByIds, k.id]);
       }
     }
     return byPath.values.toList()..sort((a, b) => a.name.compareTo(b.name));
   }
 
+  /// The packs the server says it has (a browser asks it: the files are not here).
+  final Set<String> _webOnDisk = {};
+
   bool _packOnPhone(String path) {
+    if (plat.isWeb) return _webOnDisk.contains(path);
     final dir = _offroadPath;
     return dir != null && File('$dir/$path').existsSync();
   }
@@ -948,7 +1052,9 @@ class RegionsState extends ChangeNotifier {
       }
     }
     final (offroad, offroadProblem) = await _offroadPlan(r);
+    final sharing = <({LayerDef def, String ownerId})>[];
     RegionPlan done({List<MapLayerPlan> map = const [], String? mapProblem}) => RegionPlan(
+      sharing: sharing,
       routing: routing,
       routingProblem: routingProblem,
       places: places,
@@ -964,12 +1070,29 @@ class RegionsState extends ChangeNotifier {
     if (layers.isEmpty) return done(mapProblem: 'No map layer that can be kept offline is switched on.');
     final map = <MapLayerPlan>[];
     String? mapProblem;
+    // The size is of what the download fetches: the outline's tiles, not the whole box.
+    final outline = await _mapOutline(r);
+    // One estimate per store the tiles are kept in: hillshade and contour lines both read the elevation layer's tiles, so with both on
+    // their tiles are counted once (as the download fetches them once, and costOf counts them).
+    final stores = <String, String>{};
     for (final card in layers) {
       final def = maps.downloadDefFor(card, bounds);
+      final store = maps.engine.downloadLayerOf(def.id);
+      final owner = stores[store];
+      if (owner != null) {
+        sharing.add((def: def, ownerId: owner));
+        logInfo('Region plan ${r.id}: layer ${def.id} shares the tiles of $store, counted once');
+        continue;
+      }
+      stores[store] = def.id;
       try {
-        map.add(MapLayerPlan(def, await maps.engine.estimate(def.id, bounds)));
+        final e = await maps.engine.estimate(def.id, bounds, outline: outline);
+        map.add(MapLayerPlan(def, e));
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): ${e.allowed ? 'allowed' : 'left out'}, max zoom ${e.maxZoom} of ${def.maxZoom}, '
+            '${e.tiles} tiles, ${e.bytes} B${e.tilesAlready > 0 ? ', ${e.bytesAlready} B already here' : ''}');
       } catch (_) {
         mapProblem = 'Could not work out the size of the map.';
+        logInfo('Region plan ${r.id}: layer ${def.id} (tiles kept in $store): its size could not be worked out');
       }
     }
     if (mapProblem == null && map.isNotEmpty && map.every((m) => !m.estimate.allowed)) {
@@ -990,21 +1113,83 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {
       return (null, _needsConnection);
     }
-    final packs = packsCovering(all, bounds);
+    final packs = packsCovering(all, bounds, states: await statesOf(r));
     if (packs.isEmpty) return (null, null);
-    _offroadPath ??= (await offroadDir()).path;
+    if (!plat.isWeb) _offroadPath ??= (await offroadDir()).path;
     if (maps.engine.layer(kOffroadElevationLayer) == null) return (null, 'Off-road needs the Elevation map layer, which is not installed.');
     final out = <OffroadPackPlan>[];
     for (final p in packs) {
       AreaEstimate e;
       try {
         e = await maps.engine.estimate(kOffroadElevationLayer, terrainBox(bounds, p.bounds), zoom: kOffroadElevationZoom);
-      } catch (_) {
+      } catch (err) {
+        logError('Off-road terrain size for ${r.id}', error: err);
         e = const AreaEstimate(tiles: 0, bytes: 0, maxZoom: kOffroadElevationZoom, allowed: false, problem: 'Could not work out the size of the terrain heights.');
       }
       out.add(OffroadPackPlan(p, onPhone: _packOnPhone(p.relativePath()) || _packKept(p.relativePath()), elevation: e));
     }
     return (OffroadPlan(out), null);
+  }
+
+  final Map<String, bool> _offroadCover = {};
+  final Set<String> _offroadCoverAsked = {};
+
+  /// Whether the loaded off-road catalogue has a pack over region [id] (the check the plan makes): null until it has been read,
+  /// which this starts (listeners hear when it is known). The region page greys Add off-road where it is false.
+  bool? offroadCovered(String id) {
+    final known = _offroadCover[id];
+    if (known != null) return known;
+    if (_offroadCoverAsked.add(id)) unawaited(_readOffroadCover(id));
+    return null;
+  }
+
+  /// [offroadCovered], waiting for the answer when it is not known yet (null: it cannot be read now).
+  Future<bool?> offroadCoveredNow(String id) async {
+    if (!_offroadCover.containsKey(id)) {
+      _offroadCoverAsked.add(id);
+      await _readOffroadCover(id);
+    }
+    return _offroadCover[id];
+  }
+
+  /// A region on the phone whose only missing part is off-road, with no pack over it: its Add off-road is greyed everywhere (the
+  /// region page, the Regions sheet, the menu, the Downloads tab's rows) and opens nothing.
+  bool offroadMissingNoPack(String id) {
+    final l = regionOf(id);
+    if (l == null || l.hasOffroad || l.isArea || offroadCatalogue == null || placesNowAvailable(l)) return false;
+    return offroadCovered(id) == false;
+  }
+
+  Future<void> _readOffroadCover(String id) async {
+    try {
+      final rec = await recordOf(id);
+      final cat = offroadCatalogue;
+      final bounds = rec?.bounds;
+      if (rec == null || cat == null || bounds == null) {
+        _offroadCoverAsked.remove(id);
+        return;
+      }
+      final all = await cat.packs();
+      _offroadCover[id] = packsCovering(all, bounds, states: await statesOf(rec)).isNotEmpty;
+      notifyListeners();
+    } catch (_) {
+      // No catalogue to read now (offline): the offer stays as it was, and is asked again next time.
+      _offroadCoverAsked.remove(id);
+    }
+  }
+
+  /// The states or provinces the region list says [r] is in ([statesIn]): a county's or a city's state. Its off-road data is
+  /// theirs. Empty when the list does not say: an area drawn on the map, a region larger than a state, or the region's country
+  /// file is not on the phone and cannot be read now (the packs are then chosen by their boxes).
+  Future<List<RegionRecord>> statesOf(RegionRecord r) async {
+    if (r.isDrawn || r.kind == kAreaRegionKind) return const [];
+    final loaded = catalogue.loadedShards.where((s) => s[r.id] != null).firstOrNull;
+    if (loaded != null) return statesIn(loaded.records, r.id);
+    try {
+      return statesIn((await catalogue.shard(r.id.split('-').first)).records, r.id);
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// One part's entry of the core's plan: its cost, or why it cannot be worked out. Nothing when the part is not there.
@@ -1018,10 +1203,49 @@ class RegionsState extends ChangeNotifier {
   }
 
   /// Starts downloading the parts of [r] that were picked. Throws [MobileDataBlocked] before anything starts when the phone is on
-  /// mobile data and downloads may not use it, unless [anyway].
-  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false, bool anyway = false}) async {
+  /// mobile data and downloads may not use it, unless [anyway]. Throws the core's `no_space`, also before anything starts, when
+  /// what is known of the picked parts does not fit the phone ([_checkSpace]).
+  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false, bool anyway = false}) =>
+      _download(r, routing: routing, map: map, places: places, offroad: offroad, anyway: anyway, checkSpace: true);
+
+  /// What the picked parts of [r] would download, from the sizes the app already has: the region catalogue's, as [costOf] reads
+  /// them (for off-road, the terrain heights and only the packs not on the phone). A part with no size there counts as nothing:
+  /// an area drawn on the map has none, and neither has a map layer the catalogue does not size.
+  int knownDownloadBytes(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false}) {
+    final c = costOf(r);
+    return (map ? (c.map ?? 0) : 0) + (routing ? (c.routing ?? 0) : 0) + (places ? (c.places ?? 0) : 0) + (offroad ? (c.offroad ?? 0) : 0);
+  }
+
+  /// One check of the free space for the whole region, before any part of it starts. Each part checks only itself when it starts
+  /// (every map layer downloads as a job of its own, and so do the off-road terrain heights and each pack; none of them counts
+  /// the others or what Cache keeps free), so the parts of a region that did not fit could each pass and fill the phone together.
+  /// What is known of the region ([knownDownloadBytes]) must fit what a download may use ([Space.usable]), the rule and the
+  /// figures of the download pop-up; when it does not, the core's `no_space` is thrown and nothing has started. A part whose size
+  /// is not known is not counted: its own check when it starts still stands.
+  Future<void> _checkSpace(RegionRecord r, {required bool routing, required bool map, required bool places, required bool offroad}) async {
+    final bytes = knownDownloadBytes(r, routing: routing, map: map, places: places, offroad: offroad);
+    if (bytes <= 0) return;
+    Space? space;
+    try {
+      space = (spaceOf ?? downloadSpace)((await supportDir()).path);
+    } catch (_) {
+      // The storage cannot be read: each part's own check is what there is.
+    }
+    if (space != null && space.shortBy(bytes) > 0) throw const CacheSearchException('no_space', 'There is not enough free space on this device.');
+  }
+
+  Future<void> _download(
+    RegionRecord r, {
+    required bool routing,
+    required bool map,
+    required bool places,
+    required bool offroad,
+    required bool anyway,
+    required bool checkSpace,
+  }) async {
     await policy.checkDownload(anyway: anyway);
     places = places && placesAvailable;
+    if (checkSpace) await _checkSpace(r, routing: routing, map: map, places: places, offroad: offroad);
     final k = _kept[r.id] ??= _Kept(id: r.id, name: r.name);
     k.bbox ??= r.bbox;
     if (r.isDrawn || r.kind == kAreaRegionKind) k.kind ??= r.kind;
@@ -1042,34 +1266,76 @@ class RegionsState extends ChangeNotifier {
       if (places) k.places = true;
     }
     if (map) {
-      // The layer engine downloads a box: the map part covers the region's bounding box, not its exact outline.
+      // Each layer is sized for the region's box (the zoom is the box's, as the catalogue's sizes are) and downloads only the
+      // tiles of its outline, where the catalogue has one; else the box.
       final bounds = r.bounds;
       if (bounds != null) {
+        final outline = await _mapOutline(r);
         // One download per layer the tiles are kept in: hillshade and contour lines both read the elevation layer's tiles, and
         // 1.0.27 downloaded them twice (two areas, listed four times).
         final asked = <String>{for (final a in _areasOf(k)) maps.engine.downloadLayerOf(a.layerId)};
         for (final card in mapLayers) {
           final def = maps.downloadDefFor(card, bounds);
           if (!asked.add(maps.engine.downloadLayerOf(def.id))) continue;
-          final est = await maps.engine.estimate(def.id, bounds);
+          final est = await maps.engine.estimate(def.id, bounds, outline: outline);
           if (!est.allowed) continue;
-          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near);
+          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near, outline: outline);
           k.areas.add(a.id);
+          // The person's Pause is on: a layer started now stops at once (the engine does not know of the hold), so no part of the
+          // region runs while the rows say "all downloads paused". Resume carries it on.
+          if (held) await maps.engine.pause(a.id);
         }
       }
     }
-    if (offroad) await _addOffroad(k, r, anyway: anyway);
+    // The off-road part never fails silently: what stopped it is kept and said after the other parts are saved (they have started).
+    String? offroadProblem;
+    if (offroad) offroadProblem = await _addOffroad(k, r, anyway: anyway, only: !routing && !map && !places);
     if (!k.routing && !k.places && k.areas.isEmpty && k.offroad.isEmpty) _kept.remove(r.id);
     await _save();
     await refresh();
     notifyListeners();
+    // WORDING (for cache-pm): the sentences below reach the person as "Couldn't add off-road to <region>: <sentence>".
+    if (offroadProblem != null) {
+      // A region download asked for while paused (not the Add off-road request, which keeps its own words): Resume starts it.
+      if (offroadProblem == _heldOffroad && (routing || map || places)) throw DownloadsPaused(r);
+      throw StateError(offroadProblem);
+    }
+  }
+
+  /// The outline [r]'s map part is downloaded for ([mapOutline]); null (the box) for an area drawn on the map, one kept from before
+  /// regions, and when the outline cannot be read now.
+  Future<List<List<List<double>>>?> _mapOutline(RegionRecord r) async {
+    if (r.isDrawn || r.kind == kAreaRegionKind) return null;
+    try {
+      return mapOutline(r, await catalogue.geometry(r));
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The off-road packs that cover [r], each checked against its published SHA-256 (a pack already on the phone is not downloaded
   /// again), and the terrain heights over the region (z12 elevation over the part of the region the pack covers).
-  Future<void> _addOffroad(_Kept k, RegionRecord r, {required bool anyway}) async {
-    final (plan, _) = await _offroadPlan(r);
-    if (plan == null || !plan.allowed) return;
+  ///
+  /// Returns why nothing was started (plain words, for the person), or null when it started. [only]: off-road is all that was asked
+  /// for (Add off-road), so a region with no pack over it is said, not passed over.
+  Future<String?> _addOffroad(_Kept k, RegionRecord r, {required bool anyway, bool only = false}) async {
+    // WORDING (cache-pm): these four sentences.
+    if (held) return _heldOffroad;
+    final (plan, problem) = await _offroadPlan(r);
+    if (plan == null) {
+      if (problem != null) {
+        logError('Off-road data: no plan for ${r.id}', detail: problem);
+        return problem[0].toLowerCase() + problem.substring(1);
+      }
+      return only ? 'no off-road data is published for this area.' : null;
+    }
+    if (!plan.allowed) {
+      final why = plan.problem;
+      logError('Off-road data: plan not allowed for ${r.id}', detail: why);
+      return why == null
+          ? "the terrain heights for this area can't be worked out."
+          : "the terrain heights for this area can't be downloaded (${why[0].toLowerCase()}${why.substring(1).replaceFirst(RegExp(r'\.$'), '')}).";
+    }
     for (final pp in plan.packs) {
       final p = pp.pack;
       final path = p.relativePath();
@@ -1084,15 +1350,25 @@ class RegionsState extends ChangeNotifier {
         for (final a in maps.engine.areasOf(kOffroadElevationLayer))
           if (k.terrain.contains(a.id) && a.phase != AreaPhase.failed) a.id,
       ].firstOrNull;
-      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom, near: nearFor(r))).id;
+      final String area;
+      try {
+        area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom, near: nearFor(r))).id;
+      } on MobileDataBlocked {
+        rethrow;
+      } catch (e, st) {
+        logError('Off-road terrain heights for ${r.id}', error: e, stack: st);
+        return "the terrain heights could not be downloaded. Try again.";
+      }
       if (!k.terrain.contains(area)) k.terrain.add(area);
       unawaited(_fetchPack(k.offroad.firstWhere((x) => x.path == path)));
     }
+    return null;
   }
 
   /// Downloads one pack into the off-road folder: under a hidden name, checked against its SHA-256 (a file that does not match is
   /// thrown away), then renamed into place, so the router only ever sees whole packs.
   Future<void> _fetchPack(_KeptPack p) async {
+    if (plat.isWeb) return _fetchPackOnServer(p);
     final dir = (await offroadDir()).path;
     _offroadPath = dir;
     final dest = File('$dir/${p.path}');
@@ -1134,6 +1410,75 @@ class RegionsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [_fetchPack] in a browser: Cache Server downloads the pack into its own off-road folder, with no tab needed, and [refresh]
+  /// reads how far it is (the phone's pack downloader and the server's are the same steps).
+  Future<void> _fetchPackOnServer(_KeptPack p) async {
+    final core = _core;
+    if (_packRuns[p.path]?.running ?? false) return;
+    if (core == null || held) {
+      // Not silent: the pack's row says why it is not coming (paused reads as Paused, a missing engine as a problem).
+      if (core == null) {
+        logError('Off-road pack ${p.path}: no region engine on the server');
+        (_packRuns[p.path] = _PackRun())
+          ..running = false
+          ..error = "Off-road data couldn't be downloaded: the server has no region engine.";
+        notifyListeners();
+      }
+      return;
+    }
+    final run = _packRuns[p.path] = _PackRun();
+    notifyListeners();
+    try {
+      final r = await core.call('offroad_fetch', {'path': p.path, 'url': p.url, 'bytes': p.bytes, 'sha256': p.sha256});
+      if (r['state'] == 'ready') {
+        _packRuns.remove(p.path);
+        _webOnDisk.add(p.path);
+      } else if (r['state'] == 'held') {
+        _packRuns.remove(p.path);
+      }
+    } catch (e) {
+      run
+        ..running = false
+        ..error = e is CacheSearchException && e.message.isNotEmpty ? e.message : "Off-road data couldn't be downloaded. Try again later.";
+    }
+    notifyListeners();
+    _schedulePoll();
+  }
+
+  /// A browser reads from the server which packs are on its disk and how far the ones downloading are.
+  Future<void> _syncServerPacks(RegionsCoreLike core) async {
+    final paths = {for (final k in _kept.values) for (final p in k.offroad) p.path}.toList();
+    if (paths.isEmpty) {
+      _webOnDisk.clear();
+      return;
+    }
+    final Map<String, dynamic> packs;
+    try {
+      packs = ((await core.call('offroad_status', {'paths': paths}))['packs'] as Map?)?.cast<String, dynamic>() ?? const {};
+    } catch (_) {
+      return;
+    }
+    _webOnDisk.clear();
+    for (final e in packs.entries) {
+      final v = (e.value as Map).cast<String, dynamic>();
+      if (v['on_disk'] == true) {
+        _webOnDisk.add(e.key);
+        _packRuns.remove(e.key);
+      } else if (v['running'] == true) {
+        _packRuns.putIfAbsent(e.key, _PackRun.new)
+          ..running = true
+          ..error = null
+          ..done = (v['done'] as num?)?.toInt() ?? 0;
+      } else if (v['error'] is String) {
+        _packRuns.putIfAbsent(e.key, _PackRun.new)
+          ..running = false
+          ..error = v['error'] as String;
+      } else {
+        _packRuns.remove(e.key);
+      }
+    }
+  }
+
   /// The person paused the region downloads (Pause on a region): the core fetches no tiles, the off-road packs and the map areas
   /// stop and keep what they have. Kept across restarts; [resumeAll] carries on in order.
   bool held = false;
@@ -1168,6 +1513,13 @@ class RegionsState extends ChangeNotifier {
     }
   }
 
+  /// Resume on a download that was asked for while paused: carries on everything paused, then starts the off-road part that waited.
+  Future<void> resumeAndStart(RegionRecord r) async {
+    await resumeAll(anyway: true);
+    final here = regionOf(r.id);
+    if (here != null && !here.hasOffroad) await download(r, routing: false, map: false, offroad: true, anyway: true);
+  }
+
   /// Carries on every paused region download, in the order they were added.
   Future<void> resumeAll({bool anyway = false}) async {
     if (!held) return;
@@ -1194,7 +1546,7 @@ class RegionsState extends ChangeNotifier {
   /// The packs kept regions want that are not on the phone and not downloading: started again (on a connection downloads may use).
   Future<void> _resumePacks() async {
     if (held) return;
-    _offroadPath ??= (await offroadDir()).path;
+    if (!plat.isWeb) _offroadPath ??= (await offroadDir()).path;
     for (final k in _kept.values) {
       for (final p in k.offroad) {
         if (!_packOnPhone(p.path) && !(_packRuns[p.path]?.running ?? false)) unawaited(_fetchPack(p));
@@ -1203,19 +1555,37 @@ class RegionsState extends ChangeNotifier {
   }
 
   /// Removes the region. Tiles another region still needs stay (the core and the layer engine keep shared tiles once).
-  Future<void> remove(String id) async {
+  ///
+  /// A delete is a delete on every linked device that shares Maps: it is noted in this device's shared folder, each device removes the
+  /// region from its own copy, and a region downloaded after it stays (regions_share.dart). [everywhere] false is for the repair that
+  /// deletes and downloads again ("Delete and start again"), which is not meant to take other devices' copies away.
+  Future<void> remove(String id, {bool everywhere = true}) async {
+    final peer = _peerFor(id);
     final k = _kept.remove(id);
+    final mine = _kept.values;
     if ((k?.routing ?? false) || (k?.places ?? false) || _statusOf(id) != null) await _core?.call('remove', {'id': id});
-    for (final a in k?.areas ?? const <String>[]) {
+    for (final a in {...?k?.areas, ...?peer?.areas}) {
       await maps.engine.delete(a);
     }
     // off-road packs and their terrain heights stay while another region uses them
-    for (final a in k?.terrain ?? const <String>[]) {
-      if (!_kept.values.any((o) => o.terrain.contains(a))) await maps.engine.delete(a);
+    for (final a in {...?k?.terrain, ...?peer?.terrain}) {
+      if (!mine.any((o) => o.terrain.contains(a))) await maps.engine.delete(a);
     }
-    for (final p in k?.offroad ?? const <_KeptPack>[]) {
-      if (_kept.values.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
+    final packs = <String, _KeptPack>{
+      for (final p in peer?.offroad ?? const <Map<String, dynamic>>[]) (p['path'] as String? ?? ''): _KeptPack.fromJson(p),
+      for (final p in k?.offroad ?? const <_KeptPack>[]) p.path: p,
+    };
+    for (final p in packs.values) {
+      if (mine.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
       _packRuns.remove(p.path)?.cancel.cancel();
+      if (plat.isWeb) {
+        // the server deletes the pack and its part
+        _webOnDisk.remove(p.path);
+        try {
+          await _core?.call('offroad_remove', {'path': p.path});
+        } catch (_) {}
+        continue;
+      }
       final dir = (await offroadDir()).path;
       for (final f in [File('$dir/${p.path}'), File('${File('$dir/${p.path}').parent.path}/.offroad.sqlite.part')]) {
         try {
@@ -1223,17 +1593,27 @@ class RegionsState extends ChangeNotifier {
         } catch (_) {}
       }
     }
+    if (everywhere) {
+      try {
+        _share?.recordDelete(id);
+      } catch (_) {}
+    }
+    _peers = [for (final p in _peers) if (p.id != id) p];
     await _save();
     await refresh();
     notifyListeners();
   }
+
+  /// Whether deleting a region here also deletes it on other devices (the Maps share is on and a device is linked): the delete's
+  /// confirmation then says so.
+  bool get deleteReachesOtherDevices => syncedWithOtherDevice?.call() ?? false;
 
   /// The region [id] as a record to download or carry on: its own box for an area drawn on the map or kept from before regions, else
   /// the catalogue's record (read from the copy on the phone when there is one), else a record made from the box it was downloaded
   /// for. Null when none of these is known.
   Future<RegionRecord?> recordOf(String id) async {
     final k = _kept[id];
-    final box = k?.bbox ?? _boxOfAreas(k);
+    final box = k?.bbox ?? _peerFor(id)?.bbox ?? _boxOfAreas(k);
     if (k != null && (k.kind == kDrawnRegionKind || k.kind == kAreaRegionKind || id.startsWith('drawn-')) && box != null) {
       return RegionRecord(id: id, name: k.name, kind: k.kind ?? kDrawnRegionKind, bbox: box);
     }
@@ -1349,6 +1729,33 @@ class RegionsState extends ChangeNotifier {
     );
   }
 
+  /// The box region [id] covers, for showing it on the map: the box it was downloaded for, else the box around its map areas, else
+  /// the catalogue's (when its country's file is read already). Null when none is known.
+  GeoBounds? boundsOf(String id) {
+    final k = _kept[id];
+    final b = k?.bbox ?? _boxOfAreas(k) ?? loadedRecord(id)?.bbox;
+    return b == null ? null : RegionRecord(id: id, name: id, kind: 'region', bbox: b).bounds;
+  }
+
+  /// A region on this phone whose box ([boundsOf]) holds the point: one with directions ([routing]), or one with no off-road yet
+  /// that can have it ([withoutOffroad]: not an area kept from before regions). The smallest when several do; null when none.
+  LocalRegion? regionHolding(double lat, double lon, {bool routing = false, bool withoutOffroad = false}) {
+    LocalRegion? best;
+    var bestSize = double.infinity;
+    for (final l in local) {
+      if (routing && !l.hasRouting) continue;
+      if (withoutOffroad && (l.hasOffroad || l.isArea)) continue;
+      final b = boundsOf(l.id);
+      if (b == null || !b.contains(lat, lon)) continue;
+      final size = (b.east - b.west) * (b.north - b.south);
+      if (size < bestSize) {
+        best = l;
+        bestSize = size;
+      }
+    }
+    return best;
+  }
+
   /// The catalogue's record of [id] when its country's file is read already (no waiting), or null.
   RegionRecord? loadedRecord(String id) {
     for (final s in catalogue.loadedShards) {
@@ -1368,8 +1775,10 @@ class RegionsState extends ChangeNotifier {
     for (final p in l.parts) {
       final b = switch (p.kind) {
         RegionPartKind.map => c.map ?? (p.ready ? p.bytes : null),
-        RegionPartKind.directions => sz.routing ?? p.totalBytes,
-        RegionPartKind.places => sz.places ?? p.totalBytes,
+        // The core's own total is what the part takes on the device, in the unit the bytes done are counted in; the catalogue's
+        // figure is the gzip transfer (about half), so it is only the answer before the core knows the part.
+        RegionPartKind.directions => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.routing,
+        RegionPartKind.places => (p.totalBytes ?? 0) > 0 ? p.totalBytes : sz.places,
         RegionPartKind.offroad => (sz.offroadTerrain ?? 0) + sz.offroadPacks.values.fold<int>(0, (a, b) => a + b),
       };
       sum = b == null || sum == null ? null : sum + b;
@@ -1473,8 +1882,11 @@ class RegionsState extends ChangeNotifier {
 
   Future<void> _migrateOldDownloads() async {
     final engine = maps.engine;
-    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain]};
-    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running) a];
+    // a region a linked device shares holds its areas too (they are listed with it, not adopted as regions of this device)
+    await _syncShare();
+    final held = <String>{for (final k in _kept.values) ...[...k.areas, ...k.terrain], for (final p in _peers) ...[...p.areas, ...p.terrain]};
+    // (an area only a linked device's shared copy holds is that device's, listed with its region; never adopted as this device's own)
+    final loose = [for (final a in engine.allAreas) if (!held.contains(a.id) && a.phase != AreaPhase.running && a.sharedFrom == null) a];
     // Each region's box: kept with it, else around its map areas, else the catalogue's.
     final boxes = <String, List<double>>{};
     for (final k in _kept.values) {
@@ -1612,12 +2024,72 @@ class RegionsState extends ChangeNotifier {
     await refresh();
   }
 
+  /// Reads what linked devices share of their regions and the deletes shared, ends this device's own regions that another device
+  /// deleted since they were added here, and shares this device's regions.
+  Future<void> _syncShare() async {
+    final sh = _share;
+    if (sh == null || _applying) return;
+    try {
+      final peers = sh.readPeers();
+      final deletes = sh.readDeletes();
+      _peers = [for (final p in peers) if (!deletes.any((d) => d.id == p.id && d.ends(p.added))) p];
+      // A region of kind "area" that an earlier version adopted from a store this device did not download (the other device's file
+      // landed in its live store) is the other device's: it is listed once, with the region that device shares; and one whose areas
+      // are gone everywhere (a delete took them) is not left behind as "0 B".
+      final shared = <String>{for (final p in _peers) ...[...p.areas, ...p.terrain]};
+      final known = maps.engine.ready ? {for (final a in maps.engine.allAreas) a.id} : null;
+      final adopted = [
+        for (final k in _kept.values)
+          if (k.kind == kAreaRegionKind && k.areas.isNotEmpty && (k.areas.every(shared.contains) || (known != null && k.areas.every((a) => !known.contains(a)))))
+            k.id,
+      ];
+      if (adopted.isNotEmpty) {
+        adopted.forEach(_kept.remove);
+        unawaited(_save());
+      }
+      final ended = [for (final id in _ownIds) if (deletes.any((d) => d.id == id && d.ends(_kept[id]?.added ?? 0))) id];
+      if (ended.isNotEmpty) {
+        _applying = true;
+        try {
+          for (final id in ended) {
+            await remove(id, everywhere: false);
+          }
+        } finally {
+          _applying = false;
+        }
+      }
+      sh.writeOwn(_shareOut());
+    } catch (_) {}
+  }
+
+  /// This device's own regions as it shares them: what each holds, and (for the parts the core reports) how each stands.
+  Map<String, Map<String, dynamic>> _shareOut() {
+    Map<String, dynamic>? part(Map<String, dynamic>? p) {
+      final state = p?['state'] as String?;
+      if (state == null) return null;
+      return {'state': state, if (state == 'ready' && p?['bytes'] is num) 'bytes': p!['bytes']};
+    }
+
+    final out = <String, Map<String, dynamic>>{};
+    for (final id in _ownIds) {
+      final k = _kept[id];
+      final r = _statusOf(id);
+      final routing = part(_routingOf(r));
+      final places = part(_placesOf(r));
+      out[id] = {
+        if (k != null) ...k.toJson(),
+        if (k == null) ...{'name': r?['name'] ?? id, 'added': 0, 'routing': routing != null, 'places': places != null},
+        'routingPart': ?routing,
+        'placesPart': ?places,
+      };
+    }
+    return out;
+  }
+
   Future<void> _save() async {
     try {
-      final f = await _appFile();
-      await f.parent.create(recursive: true);
       final ready = [for (final r in _routingRegions) if (_routingOf(r)?['state'] == 'ready') r['name'] as String? ?? r['id'] as String];
-      await writeStringAtomic(f, jsonEncode({
+      final text = jsonEncode({
         'regions': {for (final k in _kept.values) k.id: k.toJson()},
         if (held) 'held': true,
         'routing': {
@@ -1625,16 +2097,25 @@ class RegionsState extends ChangeNotifier {
           if (status['tile_dir'] is String && ready.isNotEmpty) 'tile_dir': status['tile_dir'],
           'regions': ready,
         },
-      }));
+      });
+      if (plat.isWeb) {
+        await _webFs.writeStringAtomic(AppRoot.support, kRegionsAppFile, text);
+        return;
+      }
+      final f = await _appFile();
+      await f.parent.create(recursive: true);
+      await writeStringAtomic(f, text);
     } catch (_) {}
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _askRenew?.cancel();
     _net?.cancel();
     maps.removeListener(_onMaps);
     if (_core != null) policy.settings.removeListener(_onSettings);
+    focus?.removeListener(_onAskFocus);
     _core?.close();
     super.dispose();
   }
@@ -1642,13 +2123,18 @@ class RegionsState extends ChangeNotifier {
 
 /// What the app remembers of one region: its name and the parts it asked for.
 class _Kept {
-  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas, List<_KeptPack>? offroad, List<String>? terrain, this.kind, this.bbox})
-    : areas = areas ?? [],
+  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas, List<_KeptPack>? offroad, List<String>? terrain, this.kind, this.bbox, int? added})
+    : added = added ?? DateTime.now().millisecondsSinceEpoch,
+      areas = areas ?? [],
       offroad = offroad ?? [],
       terrain = terrain ?? [];
 
   final String id;
   final String name;
+
+  /// When this device added the region (milliseconds; 0 for one kept by a version before this was recorded): a delete shared by a
+  /// linked device ends the region only when it was made after this (regions_share.dart).
+  final int added;
 
   /// [kDrawnRegionKind] or [kAreaRegionKind]; null for a catalogue region.
   String? kind;
@@ -1665,6 +2151,7 @@ class _Kept {
 
   Map<String, dynamic> toJson() => {
     'name': name,
+    'added': added,
     'routing': routing,
     'places': places,
     'areas': areas,
@@ -1677,6 +2164,7 @@ class _Kept {
   factory _Kept.fromJson(String id, Map<String, dynamic> j) => _Kept(
     id: id,
     name: j['name'] as String? ?? '',
+    added: (j['added'] as num?)?.toInt() ?? 0,
     routing: j['routing'] == true,
     places: j['places'] == true,
     areas: [for (final a in (j['areas'] as List? ?? const [])) a as String],

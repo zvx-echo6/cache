@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cache/app_state.dart';
 import 'package:cache/browse/browse_state.dart';
+import 'package:cache/discover/ui/discover_screen.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/history/conversation_store.dart';
 import 'package:cache/layout/edit_home_screen.dart';
@@ -213,6 +214,47 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(barLabels(tester), ['Home', 'Ask', 'Maps', 'Videos', 'Modules']);
     expect(barLabels(tester), hasLength(5));
+    await r.stop(tester);
+  });
+
+  testWidgets('Discover is a module: listed on Modules, opens its screen, and pins to and unpins from the bar', (tester) async {
+    final r = Rig();
+    await r.start(tester);
+    await openModules(tester);
+    expect(find.byKey(const ValueKey('module-discover')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('module-discover')), matching: find.text('Discover')), findsOneWidget);
+    expect(r.layout.isPinned(ModuleId.discover), isFalse, reason: 'unpinned by default');
+
+    await openModuleMenu(tester, ModuleId.discover);
+    await tester.tap(find.text('Pin to bar'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('The bar is full (3 max)'), findsOneWidget);
+    await tester.tap(find.text('Replace Library'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(barLabels(tester), ['Home', 'Ask', 'Maps', 'Discover', 'Modules']);
+
+    await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text('Discover')));
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(DiscoverScreen), findsOneWidget);
+
+    await openModules(tester);
+    await openModuleMenu(tester, ModuleId.discover);
+    await tester.tap(find.text('Unpin from bar'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(barLabels(tester), ['Home', 'Ask', 'Maps', 'Modules']);
+
+    await tester.tap(find.byKey(const ValueKey('module-discover')));
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(DiscoverScreen), findsOneWidget, reason: 'tapping its tile opens it');
     await r.stop(tester);
   });
 

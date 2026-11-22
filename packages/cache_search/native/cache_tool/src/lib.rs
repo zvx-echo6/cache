@@ -1,7 +1,8 @@
 //! cache_tool: the tool contract shared by every Cache tool and the framework that runs them.
 //!
 //! - The framework validates `args` against `Tool::schema()` before `Tool::run` is called.
-//! - The framework numbers addresses: `{{addr:<address>}}` markers in text and `"address"` keys in JSON become `[n]` / `"n"`.
+//! - The framework numbers addresses: a `Piece::Ref` in a text result and `"address"` keys in JSON become `[n]` / `"n"`. Text is
+//!   never scanned for references, so text from a document or a web page can never create one.
 //! - A JSON result that lacks `"ok"` gets `"ok":true` added as its first field.
 //! - A panic inside `run` becomes an `internal` error.
 //! - Field order is preserved (serde_json `preserve_order`), so tools emit fields in TOOLS.md order.
@@ -13,17 +14,6 @@ pub mod fetcher;
 pub mod hours;
 pub mod places;
 pub mod user;
-
-/// Start of an address marker in tool text.
-/// A citable line starts with `{{addr:<address>}}`; the framework replaces the marker with `[n]`.
-pub const ADDRESS_MARKER_OPEN: &str = "{{addr:";
-/// End of an address marker in tool text.
-pub const ADDRESS_MARKER_CLOSE: &str = "}}";
-
-/// The marker for `address`, e.g. `{{addr:lib:recon/123}}`.
-pub fn text_marker(address: &str) -> String {
-    format!("{ADDRESS_MARKER_OPEN}{address}{ADDRESS_MARKER_CLOSE}")
-}
 
 /// A GPS fix as the app passes it with cs_set_location.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,10 +95,32 @@ pub struct ToolCtx<'a> {
     pub live_fetcher: Option<&'a dyn LiveFetcher>,
 }
 
+/// One piece of a text result. A reference is made only by a tool, with `Piece::Ref`; `Piece::Text` is never read for references.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Piece {
+    /// Text emitted verbatim.
+    Text(String),
+    /// A citable result: the framework numbers `address` in the conversation (keeping an earlier number) and writes `[n]` here.
+    /// `title` is what the conversation remembers for it.
+    Ref { address: String, title: String },
+}
+
+impl Piece {
+    pub fn text(s: impl Into<String>) -> Piece {
+        Piece::Text(s.into())
+    }
+    pub fn reference(address: impl Into<String>, title: impl Into<String>) -> Piece {
+        Piece::Ref { address: address.into(), title: title.into() }
+    }
+}
+
 /// What a tool returns on success.
 pub enum ToolOutput {
-    /// search and read: plain text; each citable line holds an address marker (see ADDRESS_MARKER_OPEN) that the framework replaces with [n].
+    /// Plain text, emitted exactly as given. Nothing in it is ever numbered, whatever it contains (read's result).
     Text(String),
+    /// Text built from pieces: each `Piece::Ref` becomes `[n]` (numbered by the framework), each `Piece::Text` is emitted as is
+    /// (search and web_search results).
+    Pieces(Vec<Piece>),
     /// Every other tool: one JSON object; any object with an "address" key is citable, and the framework replaces "address" with "n".
     Json(Value),
 }
@@ -276,16 +288,11 @@ mod tests {
         let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "n", geocoder: None, live_fetcher: None };
         let mut st = ConvState::default();
         match t.run_in(&ctx, &Value::Null, &mut st).unwrap() {
-            ToolOutput::Text(s) => assert_eq!(s, "{{addr:a/1}} n"),
-            ToolOutput::Json(_) => panic!("expected text"),
+            ToolOutput::Pieces(p) => assert_eq!(p, [Piece::reference("a/1", "t"), Piece::text(" n")]),
+            _ => panic!("expected pieces"),
         }
         assert_eq!(st, ConvState::default());
         assert!(!t.checks_own_arguments());
-    }
-
-    #[test]
-    fn marker_text() {
-        assert_eq!(text_marker("lib:recon/123"), "{{addr:lib:recon/123}}");
     }
 
     struct Dummy;
@@ -297,7 +304,7 @@ mod tests {
             None
         }
         fn run(&self, ctx: &ToolCtx, _args: &Value) -> Result<ToolOutput, ToolError> {
-            Ok(ToolOutput::Text(format!("{} {}", text_marker("a/1"), ctx.now)))
+            Ok(ToolOutput::Pieces(vec![Piece::reference("a/1", "t"), Piece::text(format!(" {}", ctx.now))]))
         }
     }
 
@@ -308,8 +315,8 @@ mod tests {
         assert_eq!(t.name(), "dummy");
         assert!(t.schema().is_none());
         match t.run(&ctx, &Value::Null).unwrap() {
-            ToolOutput::Text(s) => assert_eq!(s, "{{addr:a/1}} 2026-01-01T00:00:00-07:00"),
-            ToolOutput::Json(_) => panic!("expected text"),
+            ToolOutput::Pieces(p) => assert_eq!(p, [Piece::reference("a/1", "t"), Piece::text(" 2026-01-01T00:00:00-07:00")]),
+            _ => panic!("expected pieces"),
         }
     }
 }

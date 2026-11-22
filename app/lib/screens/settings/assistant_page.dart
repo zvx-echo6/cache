@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../chat/answer_reports.dart';
+import '../../linux_ui.dart';
 import '../../location/location_service.dart';
+import '../../location/location_web_ui.dart';
 import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../models/model_downloads.dart' show ModelDownloads, modelDownloadLine;
-import '../../video/format.dart';
 import '../answer_reports_ui.dart';
 import '../history_drawer.dart';
 import '../models_screen.dart';
@@ -13,6 +14,24 @@ import 'deps.dart';
 import 'key_sheet.dart';
 import 'widgets.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
+
+/// Opens the Add a key sheet for web search (Kagi) and says so when the key was saved and web search is on. Also used by the Web search row
+/// of Weather and alerts.
+Future<void> setUpWebSearch(BuildContext context, SettingsDeps deps) async {
+  final saved = await showAddKeySheet(
+    context,
+    title: 'Web search',
+    gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
+        'It is a paid service and you need your own key.',
+    getKeyLabel: 'Get a key from Kagi',
+    getKeyUrl: 'https://kagi.com/api/keys',
+    steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
+    onSave: deps.hub.webSearch.saveKey,
+    openUrl: deps.hub.openUrl,
+    savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
+  );
+  if (saved == true && context.mounted) say(context, 'Web search is on');
+}
 
 /// Settings > Assistant: the model, the web search service and its switch, and the saved conversations.
 class AssistantPage extends StatelessWidget {
@@ -41,21 +60,7 @@ class AssistantPage extends StatelessWidget {
     say(context, 'All conversations deleted');
   }
 
-  Future<void> _setUp(BuildContext context) async {
-    final saved = await showAddKeySheet(
-      context,
-      title: 'Web search',
-      gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
-          'It is a paid service and you need your own key.',
-      getKeyLabel: 'Get a key from Kagi',
-      getKeyUrl: 'https://kagi.com/api/keys',
-      steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
-      onSave: deps.hub.webSearch.saveKey,
-      openUrl: deps.hub.openUrl,
-      savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
-    );
-    if (saved == true && context.mounted) say(context, 'Web search is on');
-  }
+  Future<void> _setUp(BuildContext context) => setUpWebSearch(context, deps);
 
   Future<void> _manage(BuildContext context) async {
     final choice = await showFittedSheet<String>(
@@ -105,6 +110,16 @@ class AssistantPage extends StatelessWidget {
     }
   }
 
+  /// A reported answer's row: the chat it came from, shown in Ask (a chat that was deleted since says so).
+  void _openReportChat(BuildContext context, int id) {
+    if (!deps.chat.hasConversation(id)) {
+      say(context, 'That chat is gone');
+      return;
+    }
+    deps.chat.openConversation(id);
+    deps.onOpenAsk?.call();
+  }
+
   void _openConversations(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -124,15 +139,23 @@ class AssistantPage extends StatelessWidget {
       listenable: Listenable.merge([app, web, deps.chat.historyRevision, reports, ?ModelDownloads.shared]),
       builder: (context, _) {
         final m = app.active;
+        final resting = app.resting;
         final List<Part> modelStatus = app.loading != null
             ? const [Part('Loading…')]
             : m == null && modelDownloadLine() != null
             ? [Part(modelDownloadLine()!)]
+            : m == null && resting != null
+            // the chosen model, not in memory now (a cold start leaves it resting): it loads when Ask opens
+            ? joinParts([
+                const [Part('On this device')],
+                [Part(app.sizeLine(resting))],
+                const [Part('Loads when you open Ask')],
+              ])
             : m == null
             ? const [Part('No model chosen', Tone.warn)]
             : joinParts([
                 const [Part('On this device')],
-                [Part(formatBytes(m.size))],
+                [Part(app.sizeLine(m))],
                 const [Part('Ready', Tone.ok)],
               ]);
         final count = deps.chat.store?.list().length ?? 0;
@@ -143,7 +166,7 @@ class AssistantPage extends StatelessWidget {
               label: 'Model',
               rows: [
                 SettingsRow(
-                  title: m == null ? 'Choose a model' : app.displayName(m),
+                  title: m != null ? app.displayName(m) : resting != null && app.loading == null && modelDownloadLine() == null ? app.displayName(resting) : 'Choose a model',
                   status: modelStatus,
                   onTap: () => openModels(context, app),
                 ),
@@ -191,7 +214,7 @@ class AssistantPage extends StatelessWidget {
                     title: 'Reported answers',
                     status: [Part(snap.hasData ? (snap.data == 0 ? 'None' : '${snap.data} on this device') : '…')],
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports)),
+                      MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports, onOpenChat: (id) => _openReportChat(context, id))),
                     ),
                   ),
                 ),
@@ -214,9 +237,12 @@ class AssistantPage extends StatelessWidget {
 /// "Use my location": Cache's own switch, the same one as the + menu in Ask. Cache uses the location whenever the phone allows it and
 /// never asks; when the phone blocks it, the row says so and opens the phone's settings.
 class UseMyLocationRow extends StatelessWidget {
-  const UseMyLocationRow({super.key, required this.location});
+  const UseMyLocationRow({super.key, required this.location, this.insecure = false});
 
   final LocationService location;
+
+  /// Cache on Linux: the page is not on a secure address, so the browser refuses location.
+  final bool insecure;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -224,6 +250,43 @@ class UseMyLocationRow extends StatelessWidget {
     builder: (context, _) {
       final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
       final serviceOff = location.problem == LocationProblem.serviceOff;
+      if (linuxUi) {
+        if (insecure || blocked || serviceOff) {
+          return SettingsRow(
+            key: const ValueKey('use-my-location-row'),
+            title: 'Use my location',
+            status: [
+              Part(
+                insecure
+                    ? 'Needs a secure address'
+                    : blocked
+                    ? 'Blocked in this browser'
+                    : 'This computer cannot find its location',
+                Tone.warn,
+              ),
+            ],
+            trailing: RowButton(
+              label: insecure
+                  ? 'Why?'
+                  : blocked
+                  ? 'How to allow'
+                  : 'Try again',
+              onPressed: insecure
+                  ? () => showNeedsSecureAddress(context)
+                  : blocked
+                  ? () => showHowToAllow(context)
+                  : () => location.setEnabled(true),
+            ),
+          );
+        }
+        return SwitchRow(
+          key: const ValueKey('use-my-location-row'),
+          title: 'Use my location',
+          status: const [Part("Uses this browser's location")],
+          value: location.enabled,
+          onChanged: location.setEnabled,
+        );
+      }
       if (blocked || serviceOff) {
         return SettingsRow(
           key: const ValueKey('use-my-location-row'),

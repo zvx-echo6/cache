@@ -8,6 +8,16 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The download slots are process-wide (`dl::SLOTS`, at most `MAX_TOTAL` in all), and the tests of this file run in parallel.
+/// Every test that runs a download holds this for reading (see [run_job]); the slot-limit test holds it for writing, so it
+/// sees the slot counts to itself, not those of other tests' downloads that happen to be running.
+static SLOTS_IN_USE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn run_job(params: &str, progress: &dyn Fn(u64, u64), cancel: &dyn Fn() -> bool) -> cache_video::Result<Outcome> {
+    let _shared = SLOTS_IN_USE.read().unwrap_or_else(|e| e.into_inner());
+    dl::run_job(params, progress, cancel)
+}
+
 struct Tmp(PathBuf);
 impl Tmp {
     fn new(name: &str) -> Tmp {
@@ -45,7 +55,7 @@ fn job(v: &Video, t: &Tmp, inst: &str, video: &str, choice: &str, extra: Value) 
         p[k] = x.clone();
     }
     let _ = v;
-    dl::run_job(&p.to_string(), &|_, _| {}, &|| false)
+    run_job(&p.to_string(), &|_, _| {}, &|| false)
 }
 
 #[test]
@@ -157,7 +167,7 @@ fn download_list_resolve_delete() {
     let (t, m, v, id) = setup("dl");
     let prog: std::sync::Mutex<Vec<(u64, u64)>> = Default::default();
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, t| prog.lock().unwrap().push((d, t)), &|| false).unwrap();
+    let out = run_job(&params, &|d, t| prog.lock().unwrap().push((d, t)), &|| false).unwrap();
     assert_eq!(out, Outcome::Done);
     let p = prog.lock().unwrap();
     assert_eq!(p.last().unwrap(), &(WEB_SIZE as u64, WEB_SIZE as u64));
@@ -242,7 +252,7 @@ fn interrupted_download_resumes_with_range() {
     assert_eq!(gets.len(), 2, "one cut request and one resumed request");
     assert!(gets[0].header("Range").is_none());
     let from: usize = gets[1].header("Range").unwrap().strip_prefix("bytes=").unwrap().strip_suffix('-').unwrap().parse().unwrap();
-    assert!(from >= 500_000 && from < WEB_SIZE, "resumed at {from}");
+    assert!((500_000..WEB_SIZE).contains(&from), "resumed at {from}");
     let f = std::fs::read(t.0.join("downloads").join(&id).join(WEB_UUID).join("video.mp4")).unwrap();
     assert_eq!(sha_hex(&f), sha_hex(&blob(WEB_SIZE, 7)));
 }
@@ -253,7 +263,7 @@ fn cancelled_download_keeps_its_data_and_a_new_job_resumes() {
     m.knobs.lock().unwrap().slow_ms = 5;
     let seen = AtomicU64::new(0);
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
+    let out = run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
     assert_eq!(out, Outcome::Cancelled);
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
     let part = std::fs::metadata(dir.join(".video.part")).unwrap().len();
@@ -274,7 +284,7 @@ fn a_half_finished_file_from_before_the_hidden_names_is_continued() {
     m.knobs.lock().unwrap().slow_ms = 5;
     let seen = AtomicU64::new(0);
     let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
-    let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
+    let out = run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
     assert_eq!(out, Outcome::Cancelled);
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
     // as earlier versions left it
@@ -344,6 +354,29 @@ fn hls_files_audio_only_and_the_joined_pair() {
 }
 
 #[test]
+fn a_saved_hls_video_is_a_plain_mp4_every_player_can_seek() {
+    // Android's player read a saved HLS video (fragmented MP4, one index per fragment) as its first fragment: "0:04 / 0:04" for
+    // a 1:59 video. A saved one is rewritten as a plain MP4: one moov with the whole length, then the samples.
+    let (t, m, v, id) = setup("hlsplain");
+    let (frag, samples) = fragmented_mp4();
+    m.knobs.lock().unwrap().generated = Some(frag.clone());
+    assert_eq!(job(&v, &t, &id, HLS_UUID, "720", json!({})).unwrap(), Outcome::Done);
+    let dir = t.0.join("downloads").join(&id).join(HLS_UUID);
+    let saved = std::fs::read(dir.join("video.mp4")).unwrap();
+    let names: Vec<String> = top_kinds(&saved).into_iter().map(|k| k.0).collect();
+    assert_eq!(names, ["ftyp", "moov", "mdat"], "no fragments left");
+    assert!(!dir.join(".video.remux").exists());
+    let man = j(v.downloads_json())["downloads"][0].clone();
+    assert_eq!(man["source"], "hls+audio");
+    assert_eq!(man["remuxed"], true);
+    assert_eq!(man["size"].as_u64().unwrap(), saved.len() as u64, "the manifest describes the saved file");
+    assert_eq!(man["sha256"].as_str().unwrap(), sha_hex(&saved));
+    // every sample's bytes are in the saved file, in order
+    let data: Vec<u8> = samples.concat();
+    assert!(saved.windows(data.len()).any(|w| w == data.as_slice()));
+}
+
+#[test]
 fn private_video_needs_a_login_and_a_file_token() {
     let (t, m, v, id) = setup("private");
     m.knobs.lock().unwrap().private_hls = true;
@@ -357,6 +390,8 @@ fn private_video_needs_a_login_and_a_file_token() {
 
 #[test]
 fn at_most_two_downloads_per_instance() {
+    // Exclusive: no other test's download holds a slot, so only this test's slots count towards the total of four.
+    let _alone = SLOTS_IN_USE.write().unwrap_or_else(|e| e.into_inner());
     let a = dl::acquire("limit.test", &|| false).unwrap();
     let b = dl::acquire("limit.test", &|| false).unwrap();
     // a third waits; here it is cancelled while waiting

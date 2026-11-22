@@ -24,10 +24,66 @@ pub struct Maneuver {
     pub length_km: f64,
     pub time_s: f64,
     pub street_names: Vec<String>,
+    /// The same names with the map's own word on which are route numbers (Valhalla's `StreetName.is_route_number`, which the
+    /// shim adds to the reply as `street_name_is_route_number`). Empty when the reply did not carry them.
+    pub streets: Vec<StreetName>,
+    /// Valhalla's `begin_street_names` (the names at the start of the maneuver, when they differ), with the same flag.
+    pub begin_streets: Vec<StreetName>,
     pub begin_shape_index: i64,
     pub end_shape_index: i64,
     pub bearing_after: Option<f64>,
     pub bearing_before: Option<f64>,
+    /// Turn lanes at the maneuver (Valhalla `turn_lanes`); empty when the tiles or the costing have none.
+    pub lanes: Vec<Lane>,
+}
+
+/// One name of a road as the map gives it: the text and whether the map says it is a route number (a highway's ref) rather
+/// than the road's name. Valhalla's `StreetName` (`value`, `is_route_number`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreetName {
+    pub text: String,
+    pub is_route_number: bool,
+}
+
+impl StreetName {
+    pub fn name(text: impl Into<String>) -> Self {
+        StreetName { text: text.into(), is_route_number: false }
+    }
+    pub fn route_number(text: impl Into<String>) -> Self {
+        StreetName { text: text.into(), is_route_number: true }
+    }
+    /// `{"text": ..., "is_route_number": ...}`.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"text": self.text, "is_route_number": self.is_route_number})
+    }
+    /// A list of names as JSON.
+    pub fn list_json(names: &[StreetName]) -> serde_json::Value {
+        serde_json::Value::Array(names.iter().map(StreetName::to_json).collect())
+    }
+}
+
+/// One lane of a maneuver. `directions` is Valhalla's `kTurnLane*` bitmask (baldr/turnlanes.h); `active` is the one bit the
+/// route takes when the lane is the one to be in, `valid` the bit a lane that also works carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lane {
+    pub directions: u16,
+    pub active: Option<u16>,
+    pub valid: Option<u16>,
+}
+
+impl Lane {
+    /// The guidance JSON of the lane: `{"directions": n}` with `active` or `valid` only when the reply had one.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        o.insert("directions".into(), self.directions.into());
+        if let Some(a) = self.active {
+            o.insert("active".into(), a.into());
+        }
+        if let Some(v) = self.valid {
+            o.insert("valid".into(), v.into());
+        }
+        serde_json::Value::Object(o)
+    }
 }
 
 /// First leg of a `/route` reply (the reference server only ever uses `legs[0]` of a two-location request).
@@ -99,6 +155,9 @@ pub struct EndOptions {
     pub min_road_class: Option<String>,
     /// `radius` in metres: every edge within it is a candidate, not only the nearest.
     pub radius_m: Option<u32>,
+    /// `heading` in degrees (0 north, clockwise): the way the vehicle is going, so the end snaps to the edge that goes that way
+    /// and a route from a moving vehicle carries on forward instead of starting with a U-turn.
+    pub heading_deg: Option<f64>,
 }
 
 /// A route end: the point, and how it snaps.

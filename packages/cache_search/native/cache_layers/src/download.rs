@@ -7,18 +7,20 @@
 //! version is older than the layer's into a staging table and swaps them in, with the area's new version, in one
 //! transaction when all are there.
 
-use crate::core::{now_secs, tile_bbox, Inner};
+use crate::core::{now_secs, Inner};
+use crate::cover::{Outline, Polygon};
 use crate::def::{LayerDef, Source, Transform};
 use crate::error::{available_bytes, Error, Result};
-use crate::pmtiles::{self, zxy_to_id};
-use crate::store::{Store, Table};
+use crate::pmtiles::{self, zxy_to_id, Reader};
+use crate::store::{Held, Store, Table};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AreaReq {
@@ -30,8 +32,10 @@ pub struct AreaReq {
     pub area: Option<String>,
     #[serde(default)]
     pub bbox: Option<[f64; 4]>,
+    /// The outline: one ring `[[lon, lat], ...]`, or several `[[[lon, lat], ...], ...]` (a region in parts, holes), read
+    /// even-odd (see cover.rs). Only the tiles it touches are downloaded.
     #[serde(default)]
-    pub polygon: Option<Vec<[f64; 2]>>,
+    pub polygon: Option<Polygon>,
     #[serde(default)]
     pub minzoom: Option<u8>,
     #[serde(default)]
@@ -104,8 +108,16 @@ pub fn order_blocks_from(tiles: &mut [(u64, u8, u32, u32)], near: Option<[f64; 2
     });
 }
 
-/// Tiles a PMTiles download looks up and fetches per batch (their merged range reads run in parallel).
+/// Tiles a PMTiles download stores per batch (one transaction, one progress report).
 const PMTILES_BATCH: usize = 1024;
+
+/// How far a PMTiles download reads ahead of the batch it stores next: at most this many batches and this many bytes of merged
+/// reads behind it, so the next batch's reads are in flight while this one's slowest read is still arriving.
+const AHEAD_BATCHES: usize = 3;
+const AHEAD_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Tiles a plan locates in the archive's directory per round: the directory pages they need are fetched in parallel first.
+const LOCATE_CHUNK: usize = 262_144;
 
 const MAX_ENUMERATED: u64 = 6_000_000;
 
@@ -136,44 +148,6 @@ pub fn tile_range(b: [f64; 4], z: u8) -> (u64, u64, u64, u64) {
     (x0, x1, y0, y1)
 }
 
-fn point_in_poly(p: [f64; 2], poly: &[[f64; 2]]) -> bool {
-    let mut inside = false;
-    let mut j = poly.len() - 1;
-    for i in 0..poly.len() {
-        let (a, b) = (poly[i], poly[j]);
-        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-fn seg_hits(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
-    let cross = |o: [f64; 2], p: [f64; 2], q: [f64; 2]| (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
-    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
-    ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0))
-}
-
-fn poly_hits_rect(poly: &[[f64; 2]], r: [f64; 4]) -> bool {
-    let corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
-    if poly.iter().any(|p| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]) {
-        return true;
-    }
-    if corners.iter().any(|c| point_in_poly(*c, poly)) {
-        return true;
-    }
-    for i in 0..poly.len() {
-        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-        for k in 0..4 {
-            if seg_hits(a, b, corners[k], corners[(k + 1) % 4]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 impl AreaReq {
     pub fn parse(json: &str) -> Result<AreaReq> {
         serde_json::from_str(json).map_err(|e| Error::bad_json(format!("download request: {e}")))
@@ -182,19 +156,7 @@ impl AreaReq {
     /// The bounding box of the request (of the polygon when given).
     pub fn bounds(&self) -> Result<[f64; 4]> {
         let b = match (&self.polygon, &self.bbox) {
-            (Some(p), _) => {
-                if p.len() < 3 {
-                    return Err(Error::bad_json("a polygon needs at least 3 points [lon, lat]"));
-                }
-                let (mut w, mut s, mut e, mut n) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-                for q in p {
-                    w = w.min(q[0]);
-                    e = e.max(q[0]);
-                    s = s.min(q[1]);
-                    n = n.max(q[1]);
-                }
-                [w, s, e, n]
-            }
+            (Some(p), _) => p.bounds()?,
             (None, Some(b)) => *b,
             _ => return Err(Error::bad_json("a download needs \"bbox\" [west, south, east, north] or \"polygon\" [[lon, lat], ...]")),
         };
@@ -204,23 +166,27 @@ impl AreaReq {
         Ok(b)
     }
 
-    /// Every tile of the area in the zoom range, in PMTiles tile id order.
+    /// Every tile of the area in the zoom range, in PMTiles tile id order: of the box, or of the box that the outline touches.
     pub fn tiles(&self, zmin: u8, zmax: u8) -> Result<Vec<(u64, u8, u32, u32)>> {
         let b = self.bounds()?;
         let mut out: Vec<(u64, u8, u32, u32)> = Vec::new();
-        for z in zmin..=zmax {
-            let (x0, x1, y0, y1) = tile_range(b, z);
-            if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1).saturating_add(out.len() as u64) > MAX_ENUMERATED {
-                return Err(Error::limit("that area at those zooms has far too many tiles to list; choose a smaller area or fewer zooms"));
-            }
-            for x in x0..=x1 {
-                for y in y0..=y1 {
-                    if let Some(p) = &self.polygon {
-                        if !poly_hits_rect(p, tile_bbox(z, x as u32, y as u32)) {
-                            continue;
-                        }
+        if let Some(p) = &self.polygon {
+            let ranges: Vec<(u64, u64, u64, u64)> = (0..=zmax).map(|z| tile_range(b, z)).collect();
+            let keep = |z: u8, x: u32, y: u32| {
+                let (x0, x1, y0, y1) = ranges[z as usize];
+                (x0..=x1).contains(&(x as u64)) && (y0..=y1).contains(&(y as u64))
+            };
+            out = Outline::new(p).tiles(zmin, zmax, MAX_ENUMERATED, keep)?.into_iter().map(|(z, x, y)| (zxy_to_id(z, x, y), z, x, y)).collect();
+        } else {
+            for z in zmin..=zmax {
+                let (x0, x1, y0, y1) = tile_range(b, z);
+                if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1).saturating_add(out.len() as u64) > MAX_ENUMERATED {
+                    return Err(Error::limit("that area at those zooms has far too many tiles to list; choose a smaller area or fewer zooms"));
+                }
+                for x in x0..=x1 {
+                    for y in y0..=y1 {
+                        out.push((zxy_to_id(z, x as u32, y as u32), z, x as u32, y as u32));
                     }
-                    out.push((zxy_to_id(z, x as u32, y as u32), z, x as u32, y as u32));
                 }
             }
         }
@@ -240,10 +206,21 @@ impl AreaReq {
         for v in b {
             h.update(format!("{v:.4},"));
         }
-        if let Some(p) = &self.polygon {
-            for q in p {
-                h.update(format!("{:.4},{:.4};", q[0], q[1]));
+        match &self.polygon {
+            Some(Polygon::Ring(p)) => {
+                for q in p {
+                    h.update(format!("{:.4},{:.4};", q[0], q[1]));
+                }
             }
+            Some(Polygon::Rings(rs)) => {
+                for r in rs {
+                    for q in r {
+                        h.update(format!("{:.4},{:.4};", q[0], q[1]));
+                    }
+                    h.update("|");
+                }
+            }
+            None => {}
         }
         h.update(format!("z{}-{}", self.minzoom.unwrap_or(0), self.maxzoom.unwrap_or(0)));
         let d = h.finalize();
@@ -265,7 +242,7 @@ fn type_of(fmt: Option<&str>) -> Option<u8> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shape {
     pub bbox: [f64; 4],
-    pub polygon: Option<Vec<[f64; 2]>>,
+    pub polygon: Option<Polygon>,
     pub minzoom: u8,
     pub maxzoom: u8,
 }
@@ -285,19 +262,17 @@ impl Shape {
         })
     }
 
-    pub fn covers(&self, z: u8, x: u32, y: u32) -> bool {
+    /// Whether the tile is in the area's zooms and box (the outline aside: see [`Shape::covers`]).
+    fn in_box(&self, z: u8, x: u32, y: u32) -> bool {
         if z < self.minzoom || z > self.maxzoom {
             return false;
         }
         let (x0, x1, y0, y1) = tile_range(self.bbox, z);
-        let (x, y) = (x as u64, y as u64);
-        if x < x0 || x > x1 || y < y0 || y > y1 {
-            return false;
-        }
-        match &self.polygon {
-            Some(p) => poly_hits_rect(p, tile_bbox(z, x as u32, y as u32)),
-            None => true,
-        }
+        (x0..=x1).contains(&(x as u64)) && (y0..=y1).contains(&(y as u64))
+    }
+
+    pub fn covers(&self, z: u8, x: u32, y: u32) -> bool {
+        self.in_box(z, x, y) && self.polygon.as_ref().map(|p| Outline::new(p).asker().touches(z, x, y)).unwrap_or(true)
     }
 
     pub fn tiles(&self) -> Result<Vec<(u64, u8, u32, u32)>> {
@@ -322,9 +297,82 @@ struct Prepared {
     area: String,
     cover: Vec<(u64, u8, u32, u32)>,
     need: Vec<(u64, u8, u32, u32)>,
+    /// Tiles of the cover already on the device (at the layer's version, for an update), and their bytes.
+    already: (u64, u64),
+    /// For a PMTiles source: where each tile of `need` is in the archive (offset and length in the tile data), or `None` when
+    /// the archive has no such tile. Found once, by the plan; the download reads by it and looks nothing up again.
+    located: Option<Vec<Option<(u64, u32)>>>,
     mode: &'static str,
     existing: Option<(String, Value)>,
 }
+
+/// The tiles of `tiles` (in tile id order, so zoom by zoom) a zoom at a time, with the box they span at that zoom.
+/// One zoom's tiles: the zoom, the x and y spans, the tiles.
+type ZoomRun<'a> = (u8, (u32, u32), (u32, u32), &'a [Tile]);
+
+fn by_zoom(tiles: &[Tile]) -> impl Iterator<Item = ZoomRun<'_>> {
+    tiles.chunk_by(|a, b| a.1 == b.1).map(|run| {
+        let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0, u32::MAX, 0);
+        for t in run {
+            x0 = x0.min(t.2);
+            x1 = x1.max(t.2);
+            y0 = y0.min(t.3);
+            y1 = y1.max(t.3);
+        }
+        (run[0].1, (x0, x1), (y0, y1), run)
+    })
+}
+
+/// What the store holds of `tiles`, one range query per zoom: `each(tile, (bytes, at version ver) or None)`.
+fn each_held(store: Option<&Store>, table: Table, tiles: &[(u64, u8, u32, u32)], ver: &str, mut each: impl FnMut(&(u64, u8, u32, u32), Option<(u64, bool)>)) -> Result<()> {
+    for (z, xs, ys, run) in by_zoom(tiles) {
+        let held: Held = match store {
+            Some(s) => s.held(table, z, xs, ys, ver)?,
+            None => Held::new(),
+        };
+        for t in run {
+            each(t, held.get(&(t.2, t.3)).copied());
+        }
+    }
+    Ok(())
+}
+
+/// Where each of `tiles` is in the archive. The directory pages they need are fetched in parallel, a large slice of tiles at a
+/// time, before the lookups, which then read memory only.
+fn locate(r: &Reader, tiles: &[(u64, u8, u32, u32)]) -> Result<Vec<Option<(u64, u32)>>> {
+    let mut out = Vec::with_capacity(tiles.len());
+    for chunk in tiles.chunks(LOCATE_CHUNK) {
+        r.prefetch_leaves(&chunk.iter().map(|t| t.0).collect::<Vec<_>>())?;
+        for t in chunk {
+            out.push(r.lookup(t.0)?);
+        }
+    }
+    Ok(out)
+}
+
+/// One batch of a PMTiles download on its way: its merged reads, and those that have arrived.
+struct InFlight {
+    start: usize,
+    end: usize,
+    want: Vec<(u64, u32)>,
+    /// for each tile of the batch, its place in `want` (None: the archive has no such tile)
+    slot: Vec<Option<usize>>,
+    groups: Vec<pmtiles::Group>,
+    bufs: Vec<Option<Vec<u8>>>,
+    left: usize,
+    bytes: u64,
+}
+
+/// Sets the flag when dropped: the readers stop taking work however the download ends.
+struct StopOnDrop<'a>(&'a AtomicBool);
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+type Tile = (u64, u8, u32, u32);
+type Commit<'a> = dyn FnMut(&[Tile], Vec<Option<Vec<u8>>>) -> Result<()> + 'a;
 
 impl Inner {
     /// An update or resume request (`"area"` and no shape) with the stored area's shape, zooms and name filled in; any other
@@ -394,22 +442,16 @@ impl Inner {
             return Err(Error::not_found(format!("no area {area:?} to update")));
         }
         let newest = base.version().to_string();
-        let mut need = Vec::new();
-        for t in &cover {
-            let have = match &store {
-                Some(s) => s.info(t.1, t.2, t.3)?,
-                None => None,
-            };
-            let wanted = match (&have, mode) {
-                (None, _) => true,
-                (Some((_, v)), "update") => *v != newest,
-                _ => false,
-            };
-            if wanted {
-                need.push(*t);
+        // one range query of the store per zoom, not one query per tile
+        let (mut need, mut already) = (Vec::new(), (0u64, 0u64));
+        each_held(store.as_deref(), Table::Tiles, &cover, &newest, |t, have| match (have, mode) {
+            (None, _) | (Some((_, false)), "update") => need.push(*t),
+            (Some((n, _)), _) => {
+                already.0 += 1;
+                already.1 += n;
             }
-        }
-        Ok(Prepared { req, base, dl, src, zmin, zmax, area, cover, need, mode, existing })
+        })?;
+        Ok(Prepared { req, base, dl, src, zmin, zmax, area, cover, need, already, located: None, mode, existing })
     }
 
     /// The dry run: how many tiles the area covers, how many of them are not on the device yet, and what fetching
@@ -419,45 +461,39 @@ impl Inner {
     }
 
     fn plan_inner(&self, req: &AreaReq) -> Result<(Value, Prepared)> {
-        let p = self.prepare(req)?;
-        let store = self.store_read(&p.base.id);
+        let mut p = self.prepare(req)?;
         let mut per_zoom: BTreeMap<u8, u64> = BTreeMap::new();
         for t in &p.cover {
             *per_zoom.entry(t.1).or_default() += 1;
         }
-        let (mut already, mut already_bytes) = (0u64, 0u64);
-        if let Some(s) = &store {
-            let needset: std::collections::HashSet<u64> = p.need.iter().map(|t| t.0).collect();
-            for t in &p.cover {
-                if !needset.contains(&t.0) {
-                    if let Some((n, _)) = s.info(t.1, t.2, t.3)? {
-                        already += 1;
-                        already_bytes += n;
-                    }
-                }
-            }
-        }
+        let (already, already_bytes) = p.already;
         let n = p.need.len() as u64;
+        let o = p.base.offline.as_ref();
         let (est, method, present) = if p.need.is_empty() {
             (0, "none".to_string(), Some(0))
         } else if !self.is_online() {
             return Err(Error::offline("the size of a download is read from the source, which needs a connection"));
         } else if p.src.kind == "pmtiles" {
-            let r = self.remote_pmtiles(&p.dl, &p.src.url)?;
+            // The download's own reader (its own limit of requests in flight, not the map's), whose directory pages every engine
+            // of the process shares: the job that follows reads none of them again.
+            let r = self.download_pmtiles(&p.dl, &p.src.url)?;
+            let located = locate(&r, &p.need)?;
             let (mut bytes, mut have) = (0u64, 0u64);
-            for t in &p.need {
-                if let Some((_, l)) = r.lookup(t.0)? {
-                    bytes += l as u64;
-                    have += 1;
-                }
+            for (_, l) in located.iter().flatten() {
+                bytes += *l as u64;
+                have += 1;
             }
+            p.located = Some(located);
             (bytes, "directory".to_string(), Some(have))
+        } else if o.and_then(|o| o.max_tiles_per_download).is_some_and(|m| n > m) {
+            // Over the layer's tile limit: that alone refuses the download, so no tile is fetched to size it (each sample is a round
+            // trip, and a step-down plans the same layer again at every lower zoom).
+            (0, "over the tile limit".to_string(), None)
         } else {
             let (est, k) = self.sample_estimate(&p)?;
             (est, format!("sample of {k} tiles"), None)
         };
         let mut problems: Vec<Value> = Vec::new();
-        let o = p.base.offline.as_ref();
         if let Some(m) = o.and_then(|o| o.max_tiles_per_download) {
             if n > m {
                 problems.push(json!({"code": "limit_exceeded", "message": format!("{n} tiles to download is above this layer's limit of {m} per download")}));
@@ -558,15 +594,29 @@ impl Inner {
     /// Statistics of what an area covers once downloaded: tiles with data and their bytes (shared tiles included).
     fn cover_stats(&self, store: &Store, cover: &[(u64, u8, u32, u32)]) -> Result<(u64, u64)> {
         let (mut present, mut bytes) = (0u64, 0u64);
-        for t in cover {
-            if let Some((n, _)) = store.info(t.1, t.2, t.3)? {
+        each_held(Some(store), Table::Tiles, cover, "", |_, have| {
+            if let Some((n, _)) = have {
                 if n > 0 {
                     present += 1;
                     bytes += n;
                 }
             }
-        }
+        })?;
         Ok((present, bytes))
+    }
+
+    /// How many of the tiles an area covers (by its stored shape) this store holds, empty ones ("the source has no tile") included, and
+    /// how many it covers: `None` when the area has no shape to count by.
+    pub(crate) fn area_held(&self, store: &Store, meta: &Value) -> Result<Option<(u64, u64)>> {
+        let Some(shape) = Shape::from_meta(meta) else { return Ok(None) };
+        let cover = shape.tiles()?;
+        let mut held = 0u64;
+        each_held(Some(store), Table::Tiles, &cover, "", |_, have| {
+            if have.is_some() {
+                held += 1;
+            }
+        })?;
+        Ok(Some((held, cover.len() as u64)))
     }
 
     /// Run a download, resume or update to the end (or cancellation). `progress(done, total, detail)` is called after
@@ -604,37 +654,27 @@ impl Inner {
             store.staging_keep_only(&ver)?;
         }
         // staged tiles of this version from an interrupted update are kept
-        let mut todo: Vec<(u64, u8, u32, u32)> = if updating { p.need.iter().filter(|t| !store.staging_has(t.1, t.2, t.3, &ver).unwrap_or(false)).copied().collect() } else { p.need.clone() };
+        let mut todo: Vec<(u64, u8, u32, u32)> = if updating {
+            let mut left = Vec::with_capacity(p.need.len());
+            each_held(Some(&*store), Table::Staging, &p.need, &ver, |t, staged| {
+                if !matches!(staged, Some((_, true))) {
+                    left.push(*t);
+                }
+            })?;
+            left
+        } else {
+            p.need.clone()
+        };
         if reader.is_some() {
             order_blocks_from(&mut todo, req.near);
         } else if let Some(near) = req.near {
             order_from(&mut todo, near);
         }
         let skipped = total - todo.len() as u64;
-        let batch = if reader.is_some() { PMTILES_BATCH } else { 48 };
-        let workers = p.base.max_parallel().clamp(1, 8);
         let (mut done, mut run_bytes) = (skipped, 0u64);
         let mut inserted: Vec<(u8, u32, u32)> = Vec::new();
         progress(done, total, json!({"bytes": 0}));
-        let mut at = 0usize;
-        while at < todo.len() {
-            if cancelled() {
-                return Ok(Done::Cancelled);
-            }
-            let chunk = &todo[at..(at + batch).min(todo.len())];
-            let fetched: Vec<Option<Vec<u8>>> = if let Some(r) = &reader {
-                r.prefetch_leaves(&chunk.iter().map(|t| t.0).collect::<Vec<_>>())?;
-                let found: Vec<Option<(u64, u32)>> = chunk.iter().map(|t| r.lookup(t.0)).collect::<Result<_>>()?;
-                let want: Vec<(u64, u32)> = found.iter().flatten().copied().collect();
-                let mut got = r.read_ranges(&want)?.into_iter();
-                found.iter().map(|f| f.map(|_| got.next().unwrap_or_default())).collect()
-            } else {
-                match self.fetch_chunk(&p.dl, chunk, workers, cancelled) {
-                    Ok(v) => v,
-                    Err(e) if e.code == "cancelled" => return Ok(Done::Cancelled),
-                    Err(e) => return Err(e),
-                }
-            };
+        let mut commit = |chunk: &[Tile], fetched: Vec<Option<Vec<u8>>>| -> Result<()> {
             let rows: Vec<(u8, u32, u32, Vec<u8>)> = chunk.iter().zip(fetched).map(|(t, d)| (t.1, t.2, t.3, gzip_if_mvt(d.unwrap_or_default(), gzip_mvt))).collect();
             run_bytes += rows.iter().map(|r| r.3.len() as u64).sum::<u64>();
             if let Some(m) = max_bytes {
@@ -656,9 +696,40 @@ impl Inner {
             if !updating {
                 inserted.extend(rows.iter().map(|r| (r.0, r.1, r.2)));
             }
-            at += chunk.len();
             done += chunk.len() as u64;
             progress(done, total, json!({"bytes": run_bytes}));
+            Ok(())
+        };
+        let outcome = if let Some(r) = &reader {
+            let located = p.located.as_deref().unwrap_or(&[]);
+            let need = &p.need;
+            let at = |id: u64| need.binary_search_by_key(&id, |t| t.0).ok().and_then(|i| located.get(i).copied().flatten());
+            self.fetch_pmtiles(r, &todo, &at, p.base.pmtiles_download_parallel().clamp(1, 64), cancelled, &mut commit)?
+        } else {
+            let workers = p.base.max_parallel().clamp(1, 8);
+            let mut at = 0usize;
+            let mut outcome = Done::Finished;
+            while at < todo.len() {
+                if cancelled() {
+                    outcome = Done::Cancelled;
+                    break;
+                }
+                let chunk = &todo[at..(at + 48).min(todo.len())];
+                let fetched = match self.fetch_chunk(&p.dl, chunk, workers, cancelled) {
+                    Ok(v) => v,
+                    Err(e) if e.code == "cancelled" => {
+                        outcome = Done::Cancelled;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                };
+                commit(chunk, fetched)?;
+                at += chunk.len();
+            }
+            outcome
+        };
+        if let Done::Cancelled = outcome {
+            return Ok(Done::Cancelled);
         }
         // finished
         if updating {
@@ -675,6 +746,110 @@ impl Inner {
         store.put_area(&p.area, "complete", &meta)?;
         progress(total, total, json!({"bytes": run_bytes}));
         Ok(Done::Finished)
+    }
+
+    /// Reads `todo` from the archive and hands it to `commit` a batch at a time, in order. The merged reads of the next batches
+    /// are kept in flight ([AHEAD_BATCHES], [AHEAD_BYTES]) while a batch waits for its last read, so one slow read no longer
+    /// holds up the next batch: `workers` readers take the reads in order (nearest first) and the gate keeps the requests in
+    /// flight to the layer's limit. `at(tile id)` is where the plan found the tile.
+    fn fetch_pmtiles(&self, r: &Reader, todo: &[Tile], at: &dyn Fn(u64) -> Option<(u64, u32)>, workers: usize, cancelled: &(dyn Fn() -> bool + Sync), commit: &mut Commit<'_>) -> Result<Done> {
+        if todo.is_empty() {
+            return Ok(Done::Finished);
+        }
+        let stop = AtomicBool::new(false);
+        let (work_tx, work_rx) = mpsc::channel::<(usize, usize, u64, u64)>();
+        let work_rx = Mutex::new(work_rx);
+        let (got_tx, got_rx) = mpsc::channel::<(usize, usize, Result<Vec<u8>>)>();
+        let pol = crate::http::policy();
+        std::thread::scope(|sc| {
+            for _ in 0..workers {
+                let (got_tx, work_rx, stop) = (got_tx.clone(), &work_rx, &stop);
+                sc.spawn(move || {
+                    crate::http::with_policy(pol, || loop {
+                        let next = match work_rx.lock() {
+                            Ok(g) => g.recv(),
+                            Err(_) => break,
+                        };
+                        let Ok((b, g, offset, len)) = next else { break };
+                        if stop.load(Ordering::SeqCst) {
+                            continue;
+                        }
+                        let read = r.read_range(offset, len);
+                        if got_tx.send((b, g, read)).is_err() {
+                            break;
+                        }
+                    })
+                });
+            }
+            drop(got_tx);
+            Self::pipeline(todo, at, cancelled, commit, work_tx, got_rx, &stop)
+        })
+    }
+
+    /// The storing side of [`Inner::fetch_pmtiles`]: queues the reads of the batches ahead, collects what arrives, and commits
+    /// the oldest batch as soon as all of it is here.
+    fn pipeline(
+        todo: &[Tile],
+        at: &dyn Fn(u64) -> Option<(u64, u32)>,
+        cancelled: &(dyn Fn() -> bool + Sync),
+        commit: &mut Commit<'_>,
+        work: mpsc::Sender<(usize, usize, u64, u64)>,
+        got: mpsc::Receiver<(usize, usize, Result<Vec<u8>>)>,
+        stop: &AtomicBool,
+    ) -> Result<Done> {
+        let _stop = StopOnDrop(stop);
+        let nbatches = todo.len().div_ceil(PMTILES_BATCH);
+        let mut pending: VecDeque<InFlight> = VecDeque::new();
+        let (mut queued, mut first, mut ahead) = (0usize, 0usize, 0u64);
+        loop {
+            if cancelled() {
+                return Ok(Done::Cancelled);
+            }
+            while queued < nbatches && (pending.is_empty() || (pending.len() <= AHEAD_BATCHES && ahead < AHEAD_BYTES)) {
+                let (start, end) = (queued * PMTILES_BATCH, ((queued + 1) * PMTILES_BATCH).min(todo.len()));
+                let (mut want, mut slot) = (Vec::new(), Vec::with_capacity(end - start));
+                for t in &todo[start..end] {
+                    slot.push(at(t.0).map(|l| {
+                        want.push(l);
+                        want.len() - 1
+                    }));
+                }
+                let groups = pmtiles::groups(&want);
+                let bytes: u64 = groups.iter().map(|g| g.len).sum();
+                for (gi, g) in groups.iter().enumerate() {
+                    work.send((queued, gi, g.offset, g.len)).map_err(|_| Error::internal("the download's readers stopped"))?;
+                }
+                if !pending.is_empty() {
+                    ahead += bytes;
+                }
+                pending.push_back(InFlight { start, end, want, slot, left: groups.len(), bufs: vec![None; groups.len()], groups, bytes });
+                queued += 1;
+            }
+            let Some(front) = pending.front() else { return Ok(Done::Finished) };
+            if front.left == 0 {
+                let f = pending.pop_front().expect("a batch");
+                let mut data = vec![Vec::new(); f.want.len()];
+                for (g, buf) in f.groups.iter().zip(f.bufs) {
+                    pmtiles::split_group(g, &buf.unwrap_or_default(), &f.want, &mut data)?;
+                }
+                let fetched: Vec<Option<Vec<u8>>> = f.slot.iter().map(|s| s.map(|i| std::mem::take(&mut data[i]))).collect();
+                commit(&todo[f.start..f.end], fetched)?;
+                first += 1;
+                if let Some(nf) = pending.front() {
+                    ahead -= nf.bytes;
+                }
+                continue;
+            }
+            match got.recv_timeout(Duration::from_millis(250)) {
+                Ok((b, g, read)) => {
+                    let p = &mut pending[b - first];
+                    p.bufs[g] = Some(read?);
+                    p.left -= 1;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Error::internal("the download's readers stopped")),
+            }
+        }
     }
 
     fn fetch_chunk(&self, dl: &LayerDef, chunk: &[(u64, u8, u32, u32)], workers: usize, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Vec<Option<Vec<u8>>>> {
@@ -722,7 +897,35 @@ impl Inner {
     }
 
     /// Delete one area (only the tiles no other area covers go), or every area of the layer and all its tiles.
+    ///
+    /// The delete is also written to this device's shared folder (share.rs), so every linked device that shares Maps deletes it too;
+    /// an area only a linked device's copy holds is deleted that way alone (no error: there is nothing of it here).
     pub fn delete_areas(&self, layer: &str, area: Option<&str>) -> Result<Value> {
+        let base = self.base_of(layer)?;
+        let mut ids: Vec<String> = Vec::new();
+        match area {
+            Some(a) => ids.push(a.to_string()),
+            None => ids.extend(self.areas(&base.id).iter().map(|a| a.id.clone())),
+        }
+        let held_here = match area {
+            Some(a) => self.store_read(&base.id).and_then(|s| s.area(a).ok().flatten()).is_some(),
+            None => true,
+        };
+        let r = if held_here {
+            self.delete_areas_inner(layer, area)?
+        } else if self.areas(&base.id).iter().any(|x| Some(x.id.as_str()) == area) {
+            json!({"layer": base.id, "removed": [area], "tiles_removed": 0, "tiles_kept": 0, "freed_bytes": 0, "shared_only": true})
+        } else {
+            return Err(Error::not_found(format!("no area {:?} of layer {layer:?}", area.unwrap_or(""))));
+        };
+        for id in &ids {
+            self.record_delete(&base.id, id)?;
+        }
+        Ok(r)
+    }
+
+    /// [`Inner::delete_areas`] for this device's own store only, with no record in the shared folder.
+    pub fn delete_areas_inner(&self, layer: &str, area: Option<&str>) -> Result<Value> {
         let base = self.base_of(layer)?;
         let store = self.store_read(&base.id);
         let Some(store) = store else {
@@ -743,13 +946,16 @@ impl Inner {
                 let (_, meta) = store.area(a)?.ok_or_else(|| Error::not_found(format!("no area {a:?} of layer {layer:?}")))?;
                 store.remove_area(a)?;
                 let others: Vec<Shape> = store.areas()?.iter().filter_map(|x| Shape::from_meta(&x.2)).collect();
+                // each outline made ready once, and asked tile by tile with what it found for the tiles above
+                let outlines: Vec<Option<Outline>> = others.iter().map(|s| s.polygon.as_ref().map(Outline::new)).collect();
+                let mut askers: Vec<_> = outlines.iter().map(|o| o.as_ref().map(|o| o.asker())).collect();
                 let cover = Shape::from_meta(&meta).map(|s| s.tiles()).transpose()?.unwrap_or_default();
                 let (mut gone, mut kept) = (Vec::new(), 0u64);
                 for t in &cover {
                     if store.info(t.1, t.2, t.3)?.is_none() {
                         continue;
                     }
-                    if others.iter().any(|s| s.covers(t.1, t.2, t.3)) {
+                    if others.iter().zip(askers.iter_mut()).any(|(s, a)| s.in_box(t.1, t.2, t.3) && a.as_mut().map(|a| a.touches(t.1, t.2, t.3)).unwrap_or(true)) {
                         kept += 1;
                     } else {
                         gone.push((t.1, t.2, t.3));

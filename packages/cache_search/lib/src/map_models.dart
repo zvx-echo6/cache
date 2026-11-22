@@ -48,7 +48,9 @@ List<GeoPoint> decodePolyline6(String encoded) {
         result |= (c & 0x1f) << shift;
         shift += 5;
       } while (c >= 0x20);
-      final delta = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      // -(x + 1), not ~x: compiled for a browser, ~ gives an unsigned 32-bit number, so every step west or south became a jump of
+      // 2^32 millionths of a degree (no route line, the camera on the whole world). The two are equal on the Dart VM.
+      final delta = (result & 1) != 0 ? -((result >> 1) + 1) : (result >> 1);
       if (axis == 0) {
         lat += delta;
       } else {
@@ -80,6 +82,7 @@ class MapPlace {
     required this.kind,
     this.category,
     this.address = '',
+    this.town,
     required this.lat,
     required this.lon,
     this.distanceM,
@@ -105,6 +108,7 @@ class MapPlace {
         kind: (j['kind'] ?? '') as String,
         category: _s(j['category']),
         address: (j['address'] ?? '') as String,
+        town: _s(j['town']),
         lat: _d(j['lat']) ?? 0,
         lon: _d(j['lon']) ?? 0,
         distanceM: _d(j['distance_m']),
@@ -146,6 +150,9 @@ class MapPlace {
   final String kind;
   final String? category;
   final String address;
+
+  /// For coordinates: the nearest town as data ("Burley, ID"), null when the places data has none near.
+  final String? town;
   final double lat;
   final double lon;
   final double? distanceM;
@@ -171,6 +178,10 @@ class MapPlace {
 
   bool get isCategory => type == 'category';
   bool get isCoordinates => type == 'coordinates';
+
+  /// A place the app made from an entry of a Places notebook (the pin's sheet on the map): it is in that notebook already, so it
+  /// is not offered for saving.
+  bool get isNotebookPlace => id.startsWith('notebook:');
   GeoPoint get point => GeoPoint(lat, lon);
 
   /// The end object cs_map_route takes.
@@ -267,6 +278,35 @@ class RouteSegment {
   bool get isRoad => kind == 'road';
 }
 
+/// One name of a road as the map gives it: the text, and whether the map says it is a route number (a highway's number) rather
+/// than the road's name. The core passes Valhalla's own flag (`StreetName.is_route_number`); nothing here reads the text to decide.
+class StreetName {
+  const StreetName(this.text, {this.isRouteNumber = false});
+
+  final String text;
+  final bool isRouteNumber;
+
+  /// A maneuver's `streets` (`[{"text": ..., "is_route_number": ...}]`), or, when it has none (a core that does not send
+  /// them), its plain `street_names` [fallback] taken as names in the map's order.
+  static List<StreetName> listFrom(Object? v, {Object? fallback}) {
+    final out = [
+      for (final e in _l(v))
+        if (e is Map && e['text'] is String && (e['text'] as String).isNotEmpty) StreetName(e['text'] as String, isRouteNumber: e['is_route_number'] == true),
+    ];
+    if (out.isNotEmpty) return out;
+    return [for (final s in _l(fallback)) if (s.toString().isNotEmpty) StreetName(s.toString())];
+  }
+
+  @override
+  bool operator ==(Object other) => other is StreetName && other.text == text && other.isRouteNumber == isRouteNumber;
+
+  @override
+  int get hashCode => Object.hash(text, isRouteNumber);
+
+  @override
+  String toString() => 'StreetName($text${isRouteNumber ? ', route number' : ''})';
+}
+
 class Maneuver {
   const Maneuver({
     required this.index,
@@ -274,6 +314,8 @@ class Maneuver {
     required this.type,
     required this.instruction,
     this.streetNames = const [],
+    this.streets = const [],
+    this.beginStreets = const [],
     required this.distanceM,
     required this.durationS,
     required this.lat,
@@ -295,6 +337,8 @@ class Maneuver {
         type: (j['type'] ?? '') as String,
         instruction: (j['instruction'] ?? '') as String,
         streetNames: [for (final s in _l(j['street_names'])) s.toString()],
+        streets: StreetName.listFrom(j['streets'], fallback: j['street_names']),
+        beginStreets: StreetName.listFrom(j['begin_streets']),
         distanceM: _d(j['distance_m']) ?? 0,
         durationS: _i(j['duration_s']) ?? 0,
         lat: _d(j['lat']) ?? 0,
@@ -319,6 +363,11 @@ class Maneuver {
   final String type;
   final String instruction;
   final List<String> streetNames;
+
+  /// [streetNames] with the map's word on which are route numbers; [beginStreets] the names where the maneuver starts, when
+  /// Valhalla gives different ones ("turn onto A, continue on B").
+  final List<StreetName> streets;
+  final List<StreetName> beginStreets;
   final double distanceM;
   final int durationS;
   final double lat;
@@ -473,6 +522,41 @@ class MapRoute {
   }
 }
 
+/// A direction a lane allows: Valhalla's `kTurnLane*` bits (baldr/turnlanes.h), in bit order from 1 << 0.
+enum LaneDirection { none, through, sharpLeft, left, slightLeft, slightRight, right, sharpRight, reverse, mergeToLeft, mergeToRight }
+
+/// One lane of the road at a maneuver: the directions it allows, the one the route takes from it (`active`, set on the lane to
+/// be in) and the one a lane that also works carries (`valid`). Null when the reply did not say.
+class Lane {
+  const Lane({this.directions = const {}, this.active, this.valid});
+
+  /// From Valhalla's `{"directions": bits, "active": bit, "valid": bit}`; bits that are not known are left out.
+  factory Lane.fromJson(Map<String, dynamic> j) => Lane(directions: _laneSet(_i(j['directions'])), active: _laneBit(_i(j['active'])), valid: _laneBit(_i(j['valid'])));
+
+  final Set<LaneDirection> directions;
+  final LaneDirection? active;
+  final LaneDirection? valid;
+
+  @override
+  bool operator ==(Object other) => other is Lane && other.active == active && other.valid == valid && other.directions.length == directions.length && other.directions.containsAll(directions);
+
+  @override
+  int get hashCode => Object.hash(active, valid, Object.hashAllUnordered(directions));
+
+  @override
+  String toString() => 'Lane($directions, active: $active, valid: $valid)';
+
+  /// The lanes of a maneuver's JSON `lanes`: absent, empty or not a list is an empty list ("no lanes").
+  static List<Lane> listFrom(Object? v) => [for (final l in _l(v)) if (l is Map) Lane.fromJson(l.cast<String, dynamic>())];
+}
+
+Set<LaneDirection> _laneSet(int? bits) => bits == null ? const {} : {for (final d in LaneDirection.values) if (bits & (1 << d.index) != 0) d};
+
+LaneDirection? _laneBit(int? bits) {
+  final s = _laneSet(bits);
+  return s.isEmpty ? null : s.first;
+}
+
 class ProgressManeuver {
   const ProgressManeuver({
     required this.index,
@@ -480,6 +564,8 @@ class ProgressManeuver {
     required this.type,
     required this.instruction,
     this.streetNames = const [],
+    this.streets = const [],
+    this.beginStreets = const [],
     this.travel,
     required this.lat,
     required this.lon,
@@ -492,6 +578,7 @@ class ProgressManeuver {
     this.gradeClass,
     this.followName,
     this.trailKind,
+    this.lanes = const [],
   });
 
   factory ProgressManeuver.fromJson(Map<String, dynamic> j) => ProgressManeuver(
@@ -500,6 +587,8 @@ class ProgressManeuver {
         type: (j['type'] ?? '') as String,
         instruction: (j['instruction'] ?? '') as String,
         streetNames: [for (final s in _l(j['street_names'])) s.toString()],
+        streets: StreetName.listFrom(j['streets'], fallback: j['street_names']),
+        beginStreets: StreetName.listFrom(j['begin_streets']),
         travel: _s(j['travel']),
         lat: _d(j['lat']) ?? 0,
         lon: _d(j['lon']) ?? 0,
@@ -512,6 +601,7 @@ class ProgressManeuver {
         gradeClass: _s(j['grade_class']),
         followName: _s(_m(j['follow'])['name']),
         trailKind: _s(_m(j['follow'])['trail_kind']),
+        lanes: Lane.listFrom(j['lanes']),
       );
 
   final int index;
@@ -519,6 +609,10 @@ class ProgressManeuver {
   final String type;
   final String instruction;
   final List<String> streetNames;
+
+  /// As [Maneuver.streets] and [Maneuver.beginStreets].
+  final List<StreetName> streets;
+  final List<StreetName> beginStreets;
   final String? travel;
   final double lat;
   final double lon;
@@ -537,6 +631,9 @@ class ProgressManeuver {
   /// A leg that follows a mapped track or trail: its name (null when it has none) and kind (road, track, trail).
   final String? followName;
   final String? trailKind;
+
+  /// The lanes of the road here, when the tiles gave them; empty means none (older packs, off-road, walking).
+  final List<Lane> lanes;
 
   bool get isOffroad => kind != 'road';
   bool get isArrival => type.startsWith('destination');
@@ -584,6 +681,7 @@ class MapProgress {
     required this.offRoute,
     required this.offRouteCount,
     required this.arrived,
+    this.stopsReached = 0,
     required this.fraction,
     required this.remainingM,
     required this.remainingS,
@@ -610,6 +708,7 @@ class MapProgress {
       offRoute: j['off_route'] == true,
       offRouteCount: _i(j['off_route_count']) ?? 0,
       arrived: j['arrived'] == true,
+      stopsReached: _i(j['stops_reached']) ?? 0,
       fraction: _d(j['progress']) ?? 0,
       remainingM: _d(r['distance_m']) ?? 0,
       remainingS: _i(r['duration_s']) ?? 0,
@@ -634,6 +733,10 @@ class MapProgress {
   final bool offRoute;
   final int offRouteCount;
   final bool arrived;
+
+  /// How many of the route's stops (its via points, in order) the fixes have reached. A fix is never matched beyond the next
+  /// stop that has not been reached.
+  final int stopsReached;
   final double fraction;
   final double remainingM;
   final int remainingS;

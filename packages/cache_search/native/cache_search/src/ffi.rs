@@ -199,6 +199,16 @@ pub unsafe extern "C" fn cs_zim_main_page(h: *mut Handle, zim_id: *const c_char)
 /// # Safety
 /// `h` NULL or live; `zim_id` NULL or NUL-terminated.
 #[no_mangle]
+pub unsafe extern "C" fn cs_zim_illustration(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let id = arg_str(zim_id, "zim_id")?;
+        out_string(h.zim_illustration(id)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `zim_id` NULL or NUL-terminated.
+#[no_mangle]
 pub unsafe extern "C" fn cs_zim_pdfs(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| {
         let id = arg_str(zim_id, "zim_id")?;
@@ -289,6 +299,16 @@ pub unsafe extern "C" fn cs_read(h: *mut Handle, address: *const c_char, max_cha
     with_handle(h, ptr::null_mut(), |h| {
         let a = arg_str(address, "address")?;
         out_string(h.read(a, max_chars)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `address` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_read_document(h: *mut Handle, address: *const c_char, max_chars: i32) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let a = arg_str(address, "address")?;
+        out_string(h.read_document(a, max_chars)?)
     })
 }
 
@@ -1004,6 +1024,15 @@ pub unsafe extern "C" fn cs_layers_refresh(h: *mut Handle) -> *mut c_char {
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_refresh()?))
 }
 
+/// `cs_layers_refresh` as a job on a thread of its own (see `Ext::layers_refresh_job`). NULL on error (`cs_last_error(h)`).
+///
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_refresh_start(h: *mut Handle) -> *mut Job {
+    with_handle(h, ptr::null_mut(), |h| Ok(Box::into_raw(Box::new(h.ext.layers_refresh_job()?))))
+}
+
 /// # Safety
 /// `h` NULL or live; `def_json` NULL or NUL-terminated.
 #[no_mangle]
@@ -1101,6 +1130,15 @@ pub unsafe extern "C" fn cs_sync_open(config_json: *const c_char) -> *mut cache_
     }
 }
 
+/// The lines `cs_sync_open` has said (one short line per step, with the time since the open began) since the last call, as a JSON
+/// array of strings, oldest first; the lines are cleared. `[]` when there are none. Free the string with `cs_free_string`. Safe from any
+/// thread, also while an open is running on another. The engine never calls into the app: the app asks.
+#[no_mangle]
+pub extern "C" fn cs_sync_take_log() -> *mut c_char {
+    let lines = cache_sync::take_log();
+    out_string(serde_json::to_string(&lines).unwrap_or_else(|_| "[]".to_string())).unwrap_or(ptr::null_mut())
+}
+
 /// One sync method (status, link_code, link, share_add, share_join, ...) with JSON args. Always a JSON string: the answer, or
 /// `{"error": "..."}`. Safe to call from several threads at once.
 ///
@@ -1122,7 +1160,11 @@ pub unsafe extern "C" fn cs_sync_call(s: *mut cache_sync::SyncEngine, method: *c
         let e = unsafe { &*s };
         Ok(match e.call(m, &args) {
             Ok(v) => v,
-            Err(err) => serde_json::json!({"error": format!("{err:#}")}),
+            // `kind` is the stable name of a failure the app tells apart (a link code from a newer Cache); the text is for people.
+            Err(err) => match cache_sync::error_kind(&err) {
+                Some(kind) => serde_json::json!({"error": format!("{err:#}"), "kind": kind}),
+                None => serde_json::json!({"error": format!("{err:#}")}),
+            },
         })
     });
     let v = out.unwrap_or_else(|e| serde_json::json!({"error": e.message}));
@@ -1256,6 +1298,7 @@ mod tests {
             assert!(cs_status(ptr::null_mut()).is_null());
             assert_eq!(cs_set_sources(ptr::null_mut(), ptr::null()), -1);
             assert!(cs_zim_main_page(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_zim_illustration(ptr::null_mut(), ptr::null()).is_null());
             let (mut m, mut n): (*mut c_char, i64) = (ptr::null_mut(), 0);
             assert!(cs_zim_get(ptr::null_mut(), ptr::null(), &mut m, &mut n).is_null());
             assert_eq!(cs_set_location(ptr::null_mut(), 1.0, 2.0, 3.0, ptr::null()), -1);

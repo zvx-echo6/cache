@@ -114,7 +114,7 @@ impl Env {
         let ctx = ToolCtx { location: None, places: &self.places, now, geocoder: None, live_fetcher: None };
         match t.run(&ctx, &json!({"source": "ipaws-alerts-near", "place": place})).unwrap() {
             ToolOutput::Json(v) => v,
-            ToolOutput::Text(_) => panic!("text"),
+            ToolOutput::Text(_) | ToolOutput::Pieces(_) => panic!("text"),
         }
     }
 }

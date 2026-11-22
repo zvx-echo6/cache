@@ -39,7 +39,7 @@ class FakeNotebookBackend implements NotebookBackend {
         'notebook' => _nbJson(_nb(a['id'] as String)),
         'notebook_save' => _nbJson(_save(a)),
         'notebook_delete' => _deleteNb(a['id'] as String),
-        'entries' => {'entries': [for (final e in _entriesOf(_nb(a['notebook_id'] as String)['id'] as String)) _entryJson(e)]},
+        'entries' => {'entries': _page(_entriesOf(_nb(a['notebook_id'] as String)['id'] as String), a['limit'] as int?)},
         'entry' => _entryJson(_entry(a['id'] as String)),
         'entry_save' => _entryJson(_saveEntry(a)),
         'entry_delete' => _deleteEntry(a['id'] as String),
@@ -54,11 +54,43 @@ class FakeNotebookBackend implements NotebookBackend {
           },
         'saved_places' => _nbJson(_savedPlaces()),
         'import' => _import(a),
+        'repeaters_import' => _repeatersImport(a),
+        'repeaters_add_back' => {'added': repeatersAddBack},
+        'source_rows' => {'rows': sourceRows},
         _ => throw CacheSearchException('unsupported', 'unknown notebook op $op'),
       };
 
+  /// Like the core: `entries` answers at most `limit` entries (1000 when the call gives none), and never more than [entryCap] when
+  /// that is set (a page, a limit or a timeout: whatever stops a read short).
+  int? entryCap;
+
+  List<Map<String, dynamic>> _page(List<Map<String, dynamic>> all, int? limit) {
+    var n = limit ?? 1000;
+    if (entryCap != null && entryCap! < n) n = entryCap!;
+    return [for (final e in all.take(n)) _entryJson(e)];
+  }
+
+  /// What the core answers to `repeaters_import` (the app's test decides: the merge itself is the core's, tested in Rust), and the
+  /// arguments it was called with.
+  Map<String, dynamic> repeatersAnswer = const {};
+  final List<Map<String, dynamic>> repeatersCalls = [];
+
+  /// What `repeaters_add_back` answers, and the ledger `source_rows` shows.
+  int repeatersAddBack = 0;
+  List<Map<String, dynamic>> sourceRows = [];
+
+  Map<String, dynamic> _repeatersImport(Map<String, dynamic> a) {
+    repeatersCalls.add(a);
+    return repeatersAnswer;
+  }
+
   /// The points the next `import` reads (name, lat, lon, notes), standing in for the file.
   List<Map<String, dynamic>> importPoints = const [];
+
+  /// The lines and areas the next `import` reads, and the name of the map layer they become (a file with no points makes no notebook).
+  int importLines = 0;
+  int importAreas = 0;
+  String? importLayer;
 
   Map<String, dynamic> _savedPlaces() {
     final have = notebooks.where((n) => n['saved_places'] == true).firstOrNull;
@@ -69,12 +101,16 @@ class FakeNotebookBackend implements NotebookBackend {
   }
 
   Map<String, dynamic> _import(Map<String, dynamic> a) {
+    final shapes = importLines + importAreas;
+    if (importPoints.isEmpty && shapes > 0 && a['notebook_id'] == null) {
+      return {'notebook': null, 'places': 0, 'lines': importLines, 'areas': importAreas, 'skipped': 0, 'layer': importLayer};
+    }
     final id = a['notebook_id'] as String? ??
         _save({'template': 'places', 'def': {'name': 'Imported places', 'due_every': null, 'shape': {'sort': 'distance'}, 'fields': []}})['id'] as String;
     for (final p in importPoints) {
       _saveEntry({'notebook_id': id, 'occurred_at': a['now'], 'title': p['name'], 'body': p['notes'], 'place': {'lat': p['lat'], 'lon': p['lon']}});
     }
-    return {'notebook': _nbJson(_nb(id)), 'places': importPoints.length, 'lines': 0, 'areas': 0, 'skipped': 0};
+    return {'notebook': _nbJson(_nb(id)), 'places': importPoints.length, 'lines': importLines, 'areas': importAreas, 'skipped': 0, 'layer': shapes > 0 ? importLayer : null};
   }
 
   Map<String, dynamic> _nb(String id) =>
@@ -149,6 +185,8 @@ class FakeNotebookBackend implements NotebookBackend {
     final stored = {
       for (final k in const ['id', 'version', 'author', 'group']) if (def[k] != null) k: def[k],
       'name': name,
+      if (def['icon'] != null) 'icon': def['icon'],
+      if (def['color'] != null) 'color': def['color'],
       'due_every': def['due_every'],
       if (def['shape'] != null) 'shape': def['shape'],
       'fields': fields,

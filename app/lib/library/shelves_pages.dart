@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../desktop/desktop.dart';
 import '../screens/settings/widgets.dart';
 import '../theme.dart';
 import '../video/format.dart' show formatBytes;
@@ -30,6 +31,7 @@ class BookshelvesPage extends StatefulWidget {
 
 class _BookshelvesPageState extends State<BookshelvesPage> {
   final _number = TextEditingController();
+  final _focus = FocusNode();
 
   LibraryDeps get d => widget.deps;
 
@@ -42,6 +44,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
   @override
   void dispose() {
     _number.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -57,7 +60,10 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
       if (shelf != null) ...shelfPath(d, shelf) else bookshelvesSpec(d),
       if (t.bookId != null) bookSpec(d, t.bookId!),
     ];
-    FocusScope.of(context).unfocus();
+    // Done with the box: it is emptied and let go of, so coming back to this page finds it empty with the keyboard closed.
+    _number.clear();
+    _focus.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
     nav.goTo(context, path);
   }
 
@@ -75,6 +81,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
           final unsorted = s.unsorted;
           final working = _working();
           return ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
               if (!nav.compact) LibraryCrumbs(crumbs: shelfCrumbs(context, d, null)),
@@ -89,6 +96,8 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 TextField(
                   key: const ValueKey('go-to-number'),
                   controller: _number,
+                  focusNode: _focus,
+                  // Text, not a number pad: a call number such as 530-002.1 needs "-" and "." and an Android number pad does not promise both.
                   keyboardType: TextInputType.text,
                   textInputAction: TextInputAction.go,
                   onSubmitted: (_) => _go(),
@@ -122,23 +131,7 @@ class _BookshelvesPageState extends State<BookshelvesPage> {
                 const SizedBox(height: 10),
               ],
               for (final g in s.notShelved) ...[
-                Container(
-                  key: ValueKey('shelves-gap-${g.library}'),
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                      const SizedBox(height: 4),
-                      Text(
-                        'This library was made before Cache could shelve books. They are still searchable. '
-                        'Update the library to put them on your shelves.',
-                        style: TextStyle(fontSize: 13, color: k.secondary),
-                      ),
-                    ],
-                  ),
-                ),
+                ShelfGapCard(key: ValueKey('shelves-gap-${g.library}'), gap: g),
                 const SizedBox(height: 10),
               ],
               if (s.bookCount == 0 && s.notShelved.isEmpty && !s.loading) ...[
@@ -558,7 +551,8 @@ class ShelfPage extends StatelessWidget {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
-              LibraryCrumbs(crumbs: shelfCrumbs(context, d, sh.id), trail: booksWord(n)),
+              // The Linux desktop shows the breadcrumb once, in the page beside this list, not again here.
+              if (!(isLinuxDesktop(context) && !LibraryNav.of(context).isLast)) LibraryCrumbs(crumbs: shelfCrumbs(context, d, sh.id), trail: booksWord(n)),
               const SizedBox(height: 4),
               if (!sh.holdsBooks)
                 _ShelfList(deps: d, shelves: sh.children, inside: true)
@@ -583,6 +577,7 @@ class HiddenBooksPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = deps;
+    final pageContext = context;
     return Scaffold(
       appBar: libraryAppBar(context, title: 'Hidden books'),
       body: ListenableBuilder(
@@ -616,6 +611,7 @@ class HiddenBooksPage extends StatelessWidget {
                           titleLines: 2,
                           statusLines: null,
                           chevron: false,
+                          onTap: () => LibraryNav.of(pageContext).open(pageContext, bookSpec(d, b.id)),
                           statusWidget: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
@@ -625,7 +621,7 @@ class HiddenBooksPage extends StatelessWidget {
                                 TextButton(
                                   key: ValueKey('hidden-show-${b.id}'),
                                   style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4), minimumSize: const Size(0, 40), alignment: Alignment.centerLeft),
-                                  onPressed: () => showOnBookshelves(context, d, b),
+                                  onPressed: () => showOnBookshelves(pageContext, d, b),
                                   child: const Text('Show on Bookshelves'),
                                 ),
                             ],
@@ -648,6 +644,7 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   final copies = d.shelves.copies;
   if (copies == null) return;
   final messenger = ScaffoldMessenger.of(context);
+  final nav = LibraryNav.of(context);
   try {
     await copies.hide(b, hidden: false);
   } catch (_) {
@@ -662,7 +659,18 @@ Future<void> showOnBookshelves(BuildContext context, LibraryDeps d, ShelfBook b)
   if (where == null) return;
   messenger
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(key: const ValueKey('shown-snack'), content: Text(where)));
+    ..showSnackBar(
+      SnackBar(
+        key: const ValueKey('shown-snack'),
+        content: Text(where),
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () {
+            if (context.mounted) nav.open(context, bookSpec(d, b.id));
+          },
+        ),
+      ),
+    );
 }
 
 /// The book rows of a division: call number (without "CDS"), title, size, and one small state mark when needed.
@@ -729,6 +737,34 @@ String? bookMark(LibraryDeps d, ShelfBook b) {
     default:
       break;
   }
-  if (b.pdfPath == null) return 'Not on this device';
+  if (addPdfShared?.awaitsWords(b.id) == true) return 'Adding to search index';
+  if (b.pdfPath == null && !b.onServer) return 'Not on this device';
   return null;
+}
+
+/// A library made before Cache could shelve books: its books are not on the shelves, and they are still searchable. (It once said
+/// "Update the library", which no library can: only ZIMs have Check for update, and Discover has no newer edition of a library
+/// made like this. Words that point somewhere link there, so it says nothing it cannot link.)
+class ShelfGapCard extends StatelessWidget {
+  const ShelfGapCard({super.key, required this.gap});
+
+  final ShelfGap gap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final g = gap;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("${booksWord(g.books)} in ${g.library} ${g.books == 1 ? "isn't" : "aren't"} on your shelves", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+          const SizedBox(height: 4),
+          Text('This library was made before Cache could shelve books. They are still searchable.', style: TextStyle(fontSize: 13, color: k.secondary)),
+        ],
+      ),
+    );
+  }
 }

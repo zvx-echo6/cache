@@ -356,10 +356,10 @@ Snippets and titles:
 
 `packages/cache_search/eval/` holds `queries.json` (15 queries with the expected source and/or article title for the top 3)
 and `search_eval.py` (standard library only; it talks to a running `cs serve` and prints hit@3 and hit@5 per query). It is
-a script, not a cargo test, because it needs the real source set. The expectations were written by reading what the recon
+a script, not a cargo test, because it needs the real source set. The expectations were written by reading what the field
 library and the ZIMs contain, each source searched alone, not from any ranking. Two queries come from the 2026-10-26 check
 ("replace iphone battery", "flood"), the other 13 from heldout-v1 (never used for training). Run 2026-10-26 on Windows with
-the recon library (keyword only, no embedder) and the 18 ZIMs, k=5, a debug build:
+the field library (keyword only, no embedder) and the 18 ZIMs, k=5, a debug build:
 
 | | hit@3 | hit@5 |
 |---|---|---|
@@ -637,7 +637,7 @@ Differences from Tantivy that callers can see:
 - Snippets: libzim's snippet is built from the whole article, so it shows the matched passage, where Tantivy's is
   cut from the first ~1,500 chars (`lead`). The same HTML-free, at-most-400-chars, sentence-end rule applies.
 - Titles are the ZIM's own entry titles (some ZIMs carry a site suffix, for example `Floods | Ready.gov`).
-- Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. Without prewarm libzim opens each
+- Speed (Windows, 18 ZIMs plus the field library, measured 2026-10-26): no build step. Without prewarm libzim opens each
   file on its first search, which on a cold disk took 39-52 s for the first query after a start (the 27M-entry Wikipedia
   included); after that a search over every source takes about 1-2 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title
   suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (whether the ZIM has an index
@@ -756,9 +756,9 @@ Wikipedia alone (about 293 MiB estimated) or a dozen small ZIMs, and everything 
 should be able to stay open together with a few small ZIMs and the cluster cache; more than that is a large share of a phone app's
 memory when the library, the model and the map layers share the process. The desktop default is 1024 MiB: the 18 ZIMs of
 `sources-full.json` are estimated at 445 MiB in all (measured 368 for libzim) so everything stays open with room for a larger set, and
-the process total stays under about 1 GiB with the recon library. Both are settings; the numbers were not tuned on a device.
+the process total stays under about 1 GiB with the field library. Both are settings; the numbers were not tuned on a device.
 
-**Measured with the budget** (Windows, release build, `sources-full.json`: 18 ZIMs and the recon library, default caps; private
+**Measured with the budget** (Windows, release build, `sources-full.json`: 18 ZIMs and the field library, default caps; private
 bytes sampled 3 s after the 20 queries; 20 varied queries run twice, warm time is the second pass; "ZIMs only" is the same without the library
 and so with the 272 MiB of `zim` crate readers visible; they are no longer held, see "One archive per ZIM"):
 
@@ -786,7 +786,7 @@ What the table says: the archives' memory goes back when a closed archive is lar
 with a 16 MiB cluster cap, and 640 to 355 MiB without the library at 256 MiB), but closing and reopening many small archives gives
 back almost nothing (384 against 1024 MiB: 893 against 905 MiB), because the heap keeps what small archives used. The budget therefore
 bounds the large archives well, the small ones poorly; and what is open stays bounded by the cost model, which is conservative. The
-recon library's own memory varied from 340 to 538 MiB between runs of the same config (measured 3 s after it finished opening), so
+field library's own memory varied from 340 to 538 MiB between runs of the same config (measured 3 s after it finished opening), so
 compare rows of the "ZIMs only" half to see the effect of the budget.
 
 **Cold reopen of Wikipedia** (what the least-recently-used close costs when the archive is the biggest one). Windows, release build, the 115 GiB `wikipedia_en_all_maxi_2026-02.zim`, one source in the handle (the `zim` crate reader already open at the time of that measurement; it no longer is), the archive
@@ -825,7 +825,7 @@ which on a phone with Wikipedia is as much as the whole libzim budget. Now, with
 - The old and the new reader are both in every xapian build, so the byte-identity test can run them side by side
   (`ZimSource::get_crate` / `main_page_crate` against `get` / `main_page_path`).
 
-**Measured, before and after** (Windows, release build, `cs serve` run once per row with `sources-full.json`: the recon library and
+**Measured, before and after** (Windows, release build, `cs serve` run once per row with `sources-full.json`: the field library and
 the 18 ZIMs, no `index_dir`, prewarm off, default caps; PrivateUsage of the process after the library opened, after 20 varied
 queries (`k` 10) and after 20 reads of the first ZIM hit of each query at 6000 characters; the same 20 queries as the budget table above):
 
@@ -857,7 +857,7 @@ budget fits them; an archive over the whole budget closes after its query; resul
 ### Coverage-read cost (Xapian hits)
 
 A Xapian source's top hits (at least 10 per source) are read from the ZIM to compute term coverage (see "Search and merge"). Measured
-2026-10-26 on Windows (release build, sources-full.json: 18 ZIMs plus the recon library, warm, mean of 10 queries, two runs each
+2026-10-26 on Windows (release build, sources-full.json: 18 ZIMs plus the field library, warm, mean of 10 queries, two runs each
 way, the reads switched off with a temporary test-only switch that is not in the code): 967 and 951 ms per query with the reads, 681
 and 681 ms without, so the reads cost about 270-285 ms per query (29%).
 
@@ -929,7 +929,7 @@ writer heap size (default 200 MB on phones). "Only while charging" is the app's 
 A handle is used from one thread at a time. A source whose index a job is building is not searched until the
 job is done. Jobs run on their own threads inside the core and are polled.
 
-Opening a library can take tens of seconds (13-37 s measured on the 28 GB recon library), so `cs_open` and
+Opening a library can take tens of seconds (13-37 s measured on the 28 GB field library), so `cs_open` and
 `cs_set_sources` never wait for it. Each library opens on a background thread inside the core; `cs_status` lists
 it with `"opening":true` until it is ready (`"updating":true` while an `update_library` job owns it) (`"opening":false` for every other source, ZIMs included), and search
 skips it meanwhile, the same as a source whose index is being built. An open failure is recorded on that source
@@ -1024,7 +1024,7 @@ with `cs index-zim`); `cs serve` answers `/search`, `/read` and `/status` byte f
 numbering continues across two `/format` calls; and, with the embedding library and model mounted, a generated
 bge-m3 library found by a paraphrased query through both the CLI and the server.
 
-## Measured on the recon library (2026-10-25)
+## Measured on the field library (2026-10-25)
 
 A 4-core Linux VM. Device numbers will differ: phone flash and CPUs are slower, and the VM's host
 may have cached reads.
@@ -1044,7 +1044,7 @@ may have cached reads.
   `hnsw_ef` 32 and 64 matched the default (ef 100) top 10 on 198-200 of 200 results.
 - Qdrant-side `must_not` filter instead of the post-filter: median 11-12 s at 4 GiB, same results as the
   post-filter (200/200).
-- BM25 on recon's existing text index: refused ("The text index on content does not score: set scoring on it
+- BM25 on the field library's existing text index: refused ("The text index on content does not score: set scoring on it
   to query it").
 - Device Tantivy index over the text field: 3,309,214 docs (210,065 left out), 1.69 GB of text, 229.6 s at
   2 CPUs and 1 GiB cap (about 14,400 docs/s), 594 MB index in 6 segments, peak anonymous memory 394 MB.
@@ -1285,8 +1285,10 @@ Item group: `{ "each": "<path>", "key": V, "label": V, "time": V?, "ends": V?, "
 `each`, an array, or an **object** (one item per member; `@key` is the member name, so `{"0": {...}, "1": {...}}` maps with
 `"each": "scales", "key": {"path": "@key"}`); without `each`, one item from the response root. `key` is the item's stable id (it ends
 up in its address); `ends` is when the item stops being true (ended items are left out); `fields` are the labelled values, in order,
-a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). Order of
-processing: map, `where`, `near`, `sort`, `limit`.
+a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). `"app":
+{"<name>": "<path>"}?` gives the app more values with the item, as the response has them (an alert's message type, references
+and VTEC, which tell an update of an alert from another alert); they are in `cs_live_get` only, never in what the model reads.
+Order of processing: map, `where`, `near`, `sort`, `limit`.
 
 A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that has a
 value), `distance`, `param` (a user parameter) or `calc`, then formatted by these steps, in this order: `after_last` (keep the text after the last `"/"`, for the last part of a URL); `time` or `scale`,
@@ -1712,12 +1714,12 @@ start) and the completeness check; and the hard-link staging measurements above.
 ### Real-server test plan
 
 1. Take a Qdrant 1.19.1 server with a collection (single shard) and a full shard snapshot of it
-   (`GET /collections/{c}/shards/0/snapshot`, 29.9 GB for the recon library; any small collection is enough for a
+   (`GET /collections/{c}/shards/0/snapshot`, 29.9 GB for the field library; any small collection is enough for a
    first run, a few MB).
 2. `cs unpack-library` the full snapshot, then `cs library-manifest --library <dir> --out m.json` (closed library).
 3. Change the collection on the server (upserts, deletes, a payload change; run the optimizer so segments are
    replaced).
 4. `POST /collections/{c}/shards/0/snapshot/partial/create` with `m.json` as the body, save the response
-   (the changed files only; for a small collection a few MB, for recon expected far below 29.9 GB).
+   (the changed files only; for a small collection a few MB, for the field library expected far below 29.9 GB).
 5. `cs update-library --library <dir> --snapshot <file> --manifest m.json`; then compare points with the server
    (ids and payloads of the changed and deleted points) and check segments_manifest.json against the folders.

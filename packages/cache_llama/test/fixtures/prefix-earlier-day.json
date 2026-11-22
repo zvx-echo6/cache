@@ -1,0 +1,341 @@
+{
+ "about": "Scripted Ask conversation for prefix_earlier_day.py: a prompt start saved on an earlier day (the date line differs), then today's chat 1 (two questions) and chat 2 (a new chat). Tool results are fixed; the assistant messages are scripted (the model's own text is only compared, never fed back).",
+ "schemas": [
+  {
+   "type": "function",
+   "function": {
+    "name": "search",
+    "description": "Search the offline library and reference articles (encyclopedias, manuals, medical and how-to guides) on this phone. Returns up to 5 numbered results. Use it before answering any question about facts or how to do something.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "minLength": 1,
+       "description": "What to search for, in plain words."
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "read",
+    "description": "Open the full text of one numbered result when its snippet is not enough.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "n": {
+       "type": "integer",
+       "minimum": 1,
+       "description": "The number of a result shown earlier in this conversation, e.g. 2 for [2]."
+      }
+     },
+     "required": [
+      "n"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "navigate",
+    "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links. to_matched may include about and wikipedia; read the result's number to open the destination's article.",
+    "strict": true,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "from": {
+       "type": "string",
+       "maxLength": 300,
+       "description": "Starting place name, or \"lat,lon\" coordinates the person gave. Omit it when the person means where they are now."
+      },
+      "to": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 300,
+       "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."
+      },
+      "to_type": {
+       "type": "string",
+       "enum": [
+        "emergency_room",
+        "hospital",
+        "urgent_care",
+        "pharmacy",
+        "fuel",
+        "police",
+        "fire_station",
+        "campground",
+        "trailhead",
+        "water",
+        "shelter"
+       ],
+       "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."
+      },
+      "mode": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "walk",
+        "bike",
+        "offroad_foot",
+        "offroad_vehicle"
+       ],
+       "description": "drive, walk and bike follow roads and paths. offroad_foot (on foot) and offroad_vehicle (4x4, ATV or dirt bike, on foot where no vehicle can go) go cross-country the whole way over trails, tracks and open ground, where off-road data is installed."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."
+      },
+      "land_access": {
+       "type": "string",
+       "enum": [
+        "strict",
+        "pragmatic",
+        "emergency"
+       ],
+       "description": "Off-road legs only: how land the map data marks private or closed is treated. strict avoids it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it. This follows the map data's access rules and cannot guarantee access on the ground."
+      }
+     },
+     "required": [
+      "mode"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "nearby",
+    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there. A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "category": {
+       "type": "string",
+       "enum": [
+        "emergency_room",
+        "hospital",
+        "urgent_care",
+        "pharmacy",
+        "fuel",
+        "police",
+        "fire_station",
+        "campground",
+        "trailhead",
+        "water",
+        "shelter"
+       ],
+       "description": "Kind of place. emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room; hospital = hospitals, for information or a non-emergency visit; urgent_care = walk-in urgent care and medical clinics; pharmacy = pharmacies and drug stores; fuel = gas stations; police = police stations; fire_station = fire stations; campground = campgrounds and campsites; trailhead = trailheads and trail access points; water = drinking water taps and fountains, water points, wells and springs; a result's kind says which; shelter = public shelters, huts and cabins open to travellers; a result's kind says what it is (emergency shelter, picnic shelter, trail shelter or hut)."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "Town and state, or a place name. Omit to search around the phone's current location."
+      },
+      "limit": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 10,
+       "default": 5
+      }
+     },
+     "required": [
+      "category"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "locate",
+    "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\". A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "place": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 300,
+       "description": "Place name. Omit for the phone's current location."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200
+      }
+     },
+     "required": [],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "live_data",
+    "description": "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: nws-alerts-point = active emergency alerts and weather warnings for the place (National Weather Service, US); openmeteo-forecast = weather forecast for the place: current conditions and a 16-day outlook with highs, lows, rain chance, rain and snow amounts, wind (Open-Meteo, worldwide). Set when to read one period: today, tonight, tomorrow, a weekday name, a date YYYY-MM-DD, or next_days (with days).",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "source": {
+       "type": "string",
+       "enum": [
+        "nws-alerts-point",
+        "openmeteo-forecast"
+       ],
+       "description": "Which source to read."
+      },
+      "place": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "A saved place or town. Omit for the phone's current location."
+      },
+      "when": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 20,
+       "description": "Which period. Omit for everything saved."
+      },
+      "days": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 16,
+       "description": "With when=next_days: how many days, today included."
+      }
+     },
+     "required": [
+      "source"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "calculate",
+    "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\". For dates write YYYY-MM-DD or today: \"today - 2026-10-20\" gives the days between, \"today + 30 days\" gives a date.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "expression": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 300,
+       "description": "Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."
+      }
+     },
+     "required": [
+      "expression"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "act",
+    "description": "Do something in one of the app's modules. Actions marked (confirm) show the user a confirm card; nothing changes until they tap it. * = required. Actions:\napp.setup_status(area:connection|regions|libraries|live_data|web_search|places|models|location) - What is set up on this phone: connection, sources, which keys are set (never the keys), regions, libraries, models.\nplaces.save(name:string*, place:place*, note:string) - Save a place to the user's saved places. (confirm)\nplaces.list() - The user's saved places.\nweather.watch_add(place:Home*) - Keep weather, alerts and fires for a place: where the phone is, a saved place or a downloaded region. (confirm)\nweather.watch_remove(place:Home*) - Stop keeping weather, alerts and fires for a place. (confirm)\nhome.source_switch(source:weather_forecast|weather_alerts|wildfires|earthquakes|river_levels|avalanche|satellite_fire_hotspots*, on:boolean*) - Turn a Home data source on or off. (confirm)\nnavigation.start(route_id:string*) - Start turn-by-turn guidance on a route navigate planned.\nnotebook.add_journal_entry(text:string*, title:string, place:place) - Write an entry in the user's Notebook journal. (confirm)",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "action": {
+       "type": "string"
+      },
+      "fields": {
+       "type": "object"
+      }
+     },
+     "required": [
+      "action"
+     ],
+     "additionalProperties": false
+    }
+   }
+  }
+ ],
+ "instructions": [
+  "You are Cache, an offline survival and preparedness assistant on this phone.",
+  "For facts, places, routes, weather and practical instructions, use tools and answer only from their results. Search offline first. Use available web search if offline sources are insufficient or current information is needed; say plainly when web search is unavailable.",
+  "Cite every sourced fact with its number, like [1]. If results are insufficient, say it is not in the user's sources. If data expired or was not downloaded, say online access is needed.",
+  "Use results already available. Read a source only when its snippet is insufficient. Once evidence is sufficient, answer directly without describing tool plans.",
+  "For small talk or feelings, talk without tools. Be calm, warm and supportive, especially under stress; give complete, practical answers."
+ ],
+ "location_line": "The phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are.",
+ "title_prompt": "Write a short title for this conversation, at most six words, in the language the user wrote in. Reply with the title only: no quotes, no markdown, no full stop.",
+ "answer_now": "Answer now from the tool results above. No more tools are available.",
+ "earlier_date": "Wednesday, 2026-11-11",
+ "today_date": "Thursday, 2026-11-12",
+ "utc_offset": "-07:00",
+ "results": {
+  "water": "[1] Emergency Water Storage, p. 14 — Store at least one gallon (about 4 litres) of water per person per day; keep a minimum of three days' supply for drinking and basic hygiene, and two weeks if you can.\n[2] Storing Water Safely, p. 15 — Use food-grade containers, keep them cool and dark, and replace stored water every six months.\n[3] Water for Children and Nursing Mothers, p. 16 — Children, nursing mothers and sick people need more; store extra beyond the one-gallon baseline.\n[4] Hot Climates, p. 17 — In hot weather, needs can double; plan for two gallons per person per day.\n[5] Purifying Water, p. 21 — Boil water for one minute, or use unscented household bleach, to make questionable water safe.",
+  "other": "[1] Result, p. 1 — No additional information is available offline for this request."
+ },
+ "chats": [
+  {
+   "chat": "1",
+   "turns": [
+    {
+     "label": "Q1",
+     "time": "09:05",
+     "question": "How much water should I store per person for an emergency kit?",
+     "rounds": [
+      {
+       "content": "I'll check the library for this.",
+       "name": "search",
+       "arguments": "{\"query\":\"water storage per person emergency kit\"}",
+       "result": "water"
+      }
+     ],
+     "answer": "For drinking and basic hygiene, keep a minimum of three days' supply, and up to two weeks if you can [1]. The baseline is one gallon (about 4 litres) per person per day [1].\n\n- **Hot weather:** needs can double, so plan for two gallons per person per day [4].\n- **Extra:** children, nursing mothers and sick people need more, so store extra beyond the one-gallon baseline [3].\n- **Storage:** use food-grade containers, keep them cool and dark, and replace the water every six months [2].\n\nThe sources don't give a specific amount for a full emergency kit, so I can't say how much to pack.",
+     "title": true
+    },
+    {
+     "label": "Q2",
+     "time": "09:08",
+     "question": "And how long should it last?",
+     "rounds": [],
+     "answer": "The sources don't give a set duration for how long the water supply should last, so I can't say how long it should last. They only give the minimum amount to store, which is three days for drinking and basic hygiene, and up to two weeks if you can [1].",
+     "title": false
+    }
+   ]
+  },
+  {
+   "chat": "2",
+   "turns": [
+    {
+     "label": "Q3",
+     "time": "09:12",
+     "question": "Where is the nearest pharmacy?",
+     "rounds": [
+      {
+       "content": "I'll look for the nearest pharmacy.",
+       "name": "nearby",
+       "arguments": "{\"category\":\"pharmacy\",\"limit\":5}",
+       "result": "other"
+      }
+     ],
+     "answer": "I couldn't find a pharmacy nearby. The offline map data has nothing on pharmacies, so I can't tell you where the nearest one is.",
+     "title": true
+    }
+   ]
+  }
+ ]
+}

@@ -16,18 +16,34 @@
 //!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
 //!                                              one engine and its source list; "sources.rescan" is refused (only the server calls it)
 //!   GET  /api/status                        -> the same, for the "status" op
+//!   GET  /api/version                       -> {"version"}: this server's own version ("0.1.0+1c6891f"), shown in Credits and licenses
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
+//!                                              The link (and `icon_url`) must be a public address: 400 invalid for a private, loopback,
+//!                                              link-local (169.254.169.254), Tailscale (100.64/10) or other non-public one, and the job fails
+//!                                              if the name or a redirect leads to one (checked at connect time; `fetch_scope::guarded_agent`).
+//!                                              The catalog hosts are the only exception.
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
+//!   POST /api/library/jobs/<id>/pause|resume -> a waiting or running download stops and keeps its part file (state "paused"); Resume continues it
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
 //!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   GET  /api/log -> {text,bytes} the server's own app log (not journalctl); DELETE clears it; GET/PUT /api/log/level {level}
+//!   GET  /api/library/cleanup               -> {bytes} Clean up would free; POST it -> {freed} (409 while a download runs)
+//!   GET  /api/library/storage               -> {kinds:{library,models,regions,videos,notebooks}} bytes the server keeps for each kind of the phone's Storage page
 //!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
-//!   GET  /api/fetch?url=<encoded>           -> the answer of a catalog host (allow-list in `fetch`), streamed, at most 50 MB
-//!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
+//!   GET  /api/fetch?url=<encoded>[&scope=catalog|models|video|user][&plain=1]
+//!                                            -> the answer of an address the scope allows (rules in `fetch_scope`), streamed. `catalog`
+//!                                               (default): the catalog hosts, at most 50 MB. The other scopes read other servers: a
+//!                                               public address only (never private, loopback or link-local, checked after DNS and on
+//!                                               every redirect), text, JSON, XML or a picture, at most 8 MB; `models` Hugging Face's API,
+//!                                               `video` a PeerTube site's /api/v1/ and caption and thumbnail files, `user` an address the
+//!                                               person typed. `plain=1` also takes http on port 80 (video, user). Errors: 400 invalid,
+//!                                               403 host_not_allowed | scope_off, 413 too_large, 415 unsupported_type, 429 busy, 502
+//!                                               upstream_status | unreachable. (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
 //!   /api/build/...                          -> building libraries from PDFs and the drop folder; the whole list is in server/BUILD-API.md
 //!                                              (libraries, books, upload, queue, drop folder)
 //!   GET  /api/models/embedder               -> {state:"missing"|"downloading"|"ready"|"error", bytes?,total?,error?, file,size,library_found}
@@ -40,12 +56,20 @@
 //!   POST /api/llm/stop {v:1,id?}            -> {stopped}: ends the running generation early (its `done` still arrives); with the id from `started`, only that one
 //!                                              (the browser build of Ask runs its loop itself and uses the server only for the model;
 //!                                              the protocol mirrors packages/cache_llama/lib/llama_session_io.dart: see server/docs/llm-protocol.md)
+//!   POST /api/llm/unload {v:1}              -> {unloaded}: frees the loaded model (a running generation is stopped and waited out); nothing loaded is fine
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
 //!                                              allow-popups` (no allow-same-origin), so a page in it has no origin and cannot use the
 //!                                              session. The URL's token is the only credential here (the cookie is not read), and the
 //!                                              token opens nothing under /api/. 401 for a missing, wrong or expired token.
+//!   GET|HEAD /api/video/media/<path>        -> a saved video, sound, caption or picture of <data>/app/docs/videos, with Range (see `video`)
+//!   GET|HEAD /api/video/zim/<zim id>/<entry> -> a video or caption entry of a ZIM, with Range
+//!   GET  /api/video/stream?u=<url>          -> a video site's stream, caption or picture read by the server (public hosts only), with Range;
+//!                                              an HLS playlist comes back with its parts rewritten to this route
+//!   GET  /api/tiles/layers/<id>/<z>/<x>/<y>[.ext] and /api/tiles/layers/<id>/tilejson.json
+//!                                           -> the core's local tile server's answer, unchanged (200 tile, 204 none, 503 + Retry-After for a
+//!                                              tile that may come later); the session cookie is the credential. See `tiles`.
 //!   GET  /settings/keys                     -> the keys settings page (signed in)
 //!   anything else (GET/HEAD)                -> signed in: a file from the web folder. Not signed in: the sign-in page (200) for a page
 //!                                              request ("/", "*.html", a path with no extension), 401 for anything else (assets)
@@ -119,7 +143,7 @@ impl Body for ChannelBody {
 }
 
 impl Reply {
-    fn empty(status: u16) -> Reply {
+    pub(crate) fn empty(status: u16) -> Reply {
         Reply { status, headers: vec![], body: vec![], stream: None }
     }
 
@@ -127,7 +151,7 @@ impl Reply {
         Reply { status, headers: vec![("Content-Type", "application/json".into())], body: body.into_bytes(), stream: None }
     }
 
-    fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
+    pub(crate) fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
         Reply::json(status, json!({"ok": false, "error": {"code": code, "message": message.as_ref()}}).to_string())
     }
 
@@ -165,14 +189,81 @@ fn library_reply(r: Result<Value, ApiErr>) -> Reply {
     }
 }
 
+/// The helper op that swaps the keystore references in an address for the stored keys. Only `/api/fetch` calls it (never a tab).
+const KEYS_EXPAND_OP: &str = "keys.expandUrl";
+
+/// `query` of `/api/fetch`, with a keystore reference (`keystore://<name>`) in its `url` swapped for the stored key by the helper,
+/// so a browser can try an own data source with its saved key without ever holding the key. A query without one is returned as is.
+async fn expand_fetch_keys(app: &App, query: &str) -> Result<String, Reply> {
+    let Some(url) = crate::fetch::query_param(query, "url") else { return Ok(query.to_string()) };
+    if !url.to_ascii_lowercase().contains("keystore") {
+        return Ok(query.to_string());
+    }
+    let Some(helper) = app.helper.clone() else { return Ok(query.to_string()) };
+    let mut reply = helper.call(KEYS_EXPAND_OP, json!({"url": url})).await.map_err(|m| Reply::error(503, "core_unavailable", m))?;
+    if reply["ok"] != json!(true) {
+        let m = reply["error"]["message"].as_str().unwrap_or("That key is not saved on the server").to_string();
+        return Err(Reply::error(404, "key_missing", m));
+    }
+    let Some(expanded) = reply["result"].take().as_str().map(str::to_string) else { return Ok(query.to_string()) };
+    let mut encoded = String::with_capacity(expanded.len() * 3);
+    for b in expanded.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|kv| if kv.split_once('=').is_some_and(|(k, _)| k == "url") { format!("url={encoded}") } else { kv.to_string() })
+        .collect();
+    Ok(parts.join("&"))
+}
+
+/// The job id in `/api/library/jobs/{id}{suffix}`; `None` when the path has none (`/api/library/jobs/pause`, where the one slash
+/// is both the prefix's and the suffix's).
+fn job_id<'a>(path: &'a str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix("/api/library/jobs/")?.strip_suffix(suffix).filter(|id| !id.is_empty())
+}
+
 /// `/api/library/...` and `/api/fetch` (the caller has checked the session). `None` when the path is not one of these.
 async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
     let lib = &app.library;
     Some(match (method, path) {
         ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
         ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/pause") => match job_id(p, "/pause") {
+            Some(id) => library_reply(lib.pause_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
+        ("POST", p) if p.starts_with("/api/library/jobs/") && p.ends_with("/resume") => match job_id(p, "/resume") {
+            Some(id) => library_reply(lib.resume_job(id)),
+            None => Reply::error(400, "invalid", "a job id is needed"),
+        },
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
         ("GET", "/api/library/space") => ok(lib.space()),
+        ("GET", "/api/library/storage") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.storage()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the sizes could not be read"),
+            }
+        }
+        ("GET", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup_bytes()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "failed", "the leftovers could not be measured"),
+            }
+        }
+        ("POST", "/api/library/cleanup") => {
+            let lib = lib.clone();
+            match tokio::task::spawn_blocking(move || lib.cleanup()).await {
+                Ok(r) => library_reply(r),
+                Err(_) => Reply::error(500, "failed", "Clean up could not run"),
+            }
+        }
         ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
         ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
         ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),
@@ -181,13 +272,19 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             let b = Full::new(Bytes::copy_from_slice(body));
             library_reply(lib.upload(query, Some(body.len() as u64), b).await)
         }
-        ("GET", "/api/fetch") => match lib.fetch(query).await {
+        ("GET", "/api/fetch") => match lib.fetch(&match expand_fetch_keys(app, query).await {
+            Ok(q) => q,
+            Err(r) => return Some(r),
+        })
+        .await
+        {
             Ok(s) => Reply {
                 status: 200,
                 headers: vec![
                     ("Content-Type", s.content_type.unwrap_or_else(|| "application/octet-stream".into())),
                     // whatever the catalog sends is data for the app to read, never a page of this origin
                     ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+                    ("X-Content-Type-Options", "nosniff".into()),
                 ],
                 body: vec![],
                 stream: Some(s.rx),
@@ -245,10 +342,20 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let (id, doc) = (id.to_string(), doc.to_string());
             library_reply(b.suggestions(&id, &doc))
         }
+        // a book's PDF, for the reader in the browser (which opens it from the bytes)
+        ("GET", ["libraries", id, "books", doc, "pdf"]) => match b.book_pdf(id, doc) {
+            Ok((path, name)) => pdf_reply(&path, &name),
+            Err(e) => api_error(e),
+        },
         ("POST", ["libraries", id, "books", doc, "place"]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.place_book(&id, &doc, &body_owned)).await
         }
+        // the Library in a browser: the person's shelves as this server holds them (server/BUILD-API.md "Bookshelves in the browser")
+        ("GET", ["bookshelves"]) => blocking(move || b.bookshelves_view()).await,
+        ("GET", ["bookshelves", "stamp"]) => blocking(move || Ok(b.bookshelves_stamp())).await,
+        ("GET", ["bookshelves", "facts"]) => blocking(move || b.bookshelves_facts()).await,
+        ("POST", ["bookshelves", "events"]) => blocking(move || b.bookshelves_events(&body_owned)).await,
         ("GET", ["classes"]) => {
             let lib = crate::fetch::query_param(query, "library_id");
             blocking(move || b.classes_view(lib.as_deref())).await
@@ -308,6 +415,76 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
         ("POST", ["drop", "retry"]) => blocking(move || b.drop_retry(&body_owned)).await,
         _ => return None,
     })
+}
+
+/// `/api/models/downloads...`, `/api/models/files/...`, `/api/models/upload` and `/api/system/memory` (the caller has checked the session):
+/// the model files of the browser build (see `models`). `None` when the path is not one of these.
+async fn models_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let jobs = app.llm.jobs().clone();
+    let name_of = |rest: &str| crate::fetch::percent_decode(rest).unwrap_or_default();
+    Some(match (method, path) {
+        ("GET", "/api/system/memory") => match crate::models::memory() {
+            Ok(v) => ok(v),
+            Err(e) => api_error(e),
+        },
+        ("GET", "/api/models/downloads") => ok(jobs.list(Some(&app.embed.status()))),
+        ("POST", "/api/models/downloads") => library_reply(jobs.add(body)),
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/pause") => {
+            library_reply(jobs.pause(&name_of(&p["/api/models/downloads/".len()..p.len() - "/pause".len()])))
+        }
+        ("POST", p) if p.starts_with("/api/models/downloads/") && p.ends_with("/resume") => {
+            library_reply(jobs.resume(&name_of(&p["/api/models/downloads/".len()..p.len() - "/resume".len()])))
+        }
+        ("DELETE", p) if p.starts_with("/api/models/downloads/") => library_reply(jobs.remove(&name_of(&p["/api/models/downloads/".len()..]))),
+        ("DELETE", p) if p.starts_with("/api/models/files/") => {
+            let (svc, id) = (app.llm.clone(), name_of(&p["/api/models/files/".len()..]));
+            blocking(move || svc.delete_model(&id)).await
+        }
+        // A body that came whole (the real server streams it: see `handle`).
+        ("POST", "/api/models/upload") => library_reply(jobs.upload(query, Some(body.len() as u64), Full::new(Bytes::copy_from_slice(body))).await),
+        _ => return None,
+    })
+}
+
+/// A PDF file as the reply: streamed from disk in pieces, never held whole. The name is cut to plain characters for the header.
+fn pdf_reply(path: &std::path::Path, name: &str) -> Reply {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Reply::error(404, "not_found", "this book has no PDF on the server"),
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' }).collect();
+    let (tx, rx) = tokio::sync::mpsc::channel(8);
+    tokio::task::spawn_blocking(move || {
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            match f.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    Reply {
+        status: 200,
+        headers: vec![
+            ("Content-Type", "application/pdf".into()),
+            ("Content-Length", len.to_string()),
+            ("Content-Disposition", format!("inline; filename=\"{name}\"")),
+            // data for the reader to open from its bytes, never a page of this origin
+            ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+        ],
+        body: vec![],
+        stream: Some(rx),
+    }
 }
 
 /// `/api/models/embedder...` and `/api/embed` (the caller has checked the session). `None` when the path is not one of these.
@@ -381,6 +558,12 @@ async fn llm_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
             };
             ok(json!({"stopped": svc.stop(id.as_deref())}))
         }
+        ("POST", "unload") => {
+            if let Err(e) = llm::parse_version_only(body) {
+                return Some(api_error(e));
+            }
+            blocking(move || svc.unload().map(|unloaded| json!({"unloaded": unloaded}))).await
+        }
         _ => return None,
     })
 }
@@ -392,6 +575,10 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
         let service = app.build.clone();
         let bytes = body.to_vec();
         return Some(blocking(move || crate::libbuild::linked_api::preview(&service, &bytes)).await);
+    }
+    if method == "GET" && rest == "storage" {
+        let service = app.build.clone();
+        return Some(blocking(move || Ok(crate::libbuild::linked_api::storage(&service))).await);
     }
     if method == "GET" && rest == "libraries" {
         let targets: Vec<Value> = app.library.items().await.into_iter()
@@ -407,11 +594,41 @@ async fn linked_folders(app: &App, method: &str, path: &str, body: &[u8]) -> Opt
     Some(blocking(move || crate::libbuild::linked_api::request(&service, &method, &library, &segments, &bytes)).await)
 }
 
+/// `/api/log` and `/api/log/level` (signed in only, like every `/api` route): the server's own app log for the browser's Advanced page,
+/// never the system journal. See `applog`.
+fn app_log(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
+    use crate::applog::Level;
+    let log = &app.library.log;
+    let level = |log: &crate::applog::AppLog| json!({"level": log.level().name(), "until": log.everything_until()});
+    Some(match (method, path) {
+        ("GET", "/api/log") => ok(json!({"text": log.text(), "bytes": log.bytes()})),
+        ("DELETE", "/api/log") => {
+            log.clear();
+            ok(json!({"cleared": true}))
+        }
+        ("GET", "/api/log/level") => ok(level(log)),
+        ("PUT", "/api/log/level") => {
+            let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match v["level"].as_str().and_then(Level::parse) {
+                Some(l) => {
+                    log.set_level(l);
+                    ok(level(log))
+                }
+                None => Reply::error(400, "invalid", "level must be minimal, standard, detailed or everything"),
+            }
+        }
+        _ => return None,
+    })
+}
+
 async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Reply {
     if let Some(r) = linked_folders(app, method, path, body).await {
         return r;
     }
     if let Some(r) = settings(app, method, path, body) {
+        return r;
+    }
+    if let Some(r) = models_api(app, method, path, query, body).await {
         return r;
     }
     if let Some(r) = embedder(app, method, path, body).await {
@@ -426,8 +643,15 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
     if let Some(r) = library(app, method, path, query, body).await {
         return r;
     }
+    if let Some(r) = app_log(app, method, path, body) {
+        return r;
+    }
+    if let Some(rest) = path.strip_prefix("/api/tiles/") {
+        return crate::tiles::tiles(app.helper.clone(), method, rest).await;
+    }
     match (method, path) {
         ("GET", "/api/status") => core_call(app, "status", json!({})).await,
+        ("GET", "/api/version") => ok(json!({"version": crate::VERSION})),
         ("POST", "/api/core") => {
             let parsed: Result<Value, _> = serde_json::from_slice(body);
             let Ok(req) = parsed else { return Reply::error(400, "bad_json", "the body is not JSON") };
@@ -443,6 +667,10 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
             }
             // The rescan is the server's own call, after it changes the library folders; a tab may not make the engine re-read them.
             if op == "sources.rescan" {
+                return Reply::error(403, "forbidden", "only the server may do that");
+            }
+            // `keys.expandUrl` gives a stored key back inside an address, for `/api/fetch` only: a tab may never ask for it.
+            if op == KEYS_EXPAND_OP {
                 return Reply::error(403, "forbidden", "only the server may do that");
             }
             core_call(app, op, args).await
@@ -467,14 +695,37 @@ if(u.origin===location.origin&&(u.protocol==='https:'||u.protocol==='http:'))ret
 e.preventDefault();if(u.protocol==='https:'||u.protocol==='http:'||u.protocol==='mailto:')post({cacheZim:'external',url:u.href})},true);
 })();</script>"#;
 
-/// `html` with [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
+/// The tag that loads the storage stand-in (`app/assets/reader/zim_storage.js`, one copy for the server and the phones). The sandboxed
+/// frame has no origin, so the browser denies the page IndexedDB and Web Storage; the script gives it in-memory ones, always.
+const ZIM_STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+/// The index just past the end of the first `<name ...>` tag in `text` (`lower` is its lower-cased copy), if there is one.
+fn after_open_tag(lower: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&format!("<{name}")) {
+        let start = from + i;
+        let next = lower.as_bytes().get(start + name.len() + 1).copied();
+        if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n' | 0x0c)) {
+            return lower[start..].find('>').map(|e| start + e + 1);
+        }
+        from = start + 1;
+    }
+    None
+}
+
+/// `html` with [ZIM_STORAGE_TAG] first in its `<head>` (after `<html>` with no head, at the very start with neither), so it runs
+/// before the page's own scripts, and [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
 fn with_frame_script(html: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(html);
-    let at = text.to_ascii_lowercase().rfind("</body").unwrap_or(text.len());
-    let mut out = String::with_capacity(text.len() + ZIM_FRAME_SCRIPT.len());
-    out.push_str(&text[..at]);
+    let lower = text.to_ascii_lowercase();
+    let first = after_open_tag(&lower, "head").or_else(|| after_open_tag(&lower, "html")).unwrap_or(0);
+    let end = lower.rfind("</body").unwrap_or(text.len()).max(first);
+    let mut out = String::with_capacity(text.len() + ZIM_STORAGE_TAG.len() + ZIM_FRAME_SCRIPT.len());
+    out.push_str(&text[..first]);
+    out.push_str(ZIM_STORAGE_TAG);
+    out.push_str(&text[first..end]);
     out.push_str(ZIM_FRAME_SCRIPT);
-    out.push_str(&text[at..]);
+    out.push_str(&text[end..]);
     out.into_bytes()
 }
 
@@ -763,6 +1014,18 @@ pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, 
             Reply::empty(204).with("Set-Cookie", app.auth.cookie("", 0))
         }
         ("GET", "/auth/check") => Reply::empty(if signed_in { 204 } else { 401 }),
+        // The storage stand-in for ZIM pages: public, because the sandboxed frame that loads it has no cookies. Same for every caller.
+        ("GET" | "HEAD", "/zim-storage.js") => Reply {
+            status: 200,
+            headers: vec![
+                ("Content-Type", "text/javascript; charset=utf-8".into()),
+                ("Access-Control-Allow-Origin", "*".into()),
+                ("Cache-Control", "public, max-age=86400".into()),
+                ("X-Content-Type-Options", "nosniff".into()),
+            ],
+            body: if method == "HEAD" { vec![] } else { include_str!("../../app/assets/reader/zim_storage.js").as_bytes().to_vec() },
+            stream: None,
+        },
         // ZIM pages: the token in the path is the credential; the session cookie plays no part.
         _ if path.starts_with("/zim/") => zim(app, method, path, query).await,
         _ if path == "/api" || path.starts_with("/api/") => {
@@ -832,11 +1095,21 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.library.upload(&query, len, req.into_body()).await)
+    } else if signed_in && method == "POST" && path == "/api/models/upload" {
+        // A model upload is streamed to disk the same way.
+        let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+        let query = req.uri().query().unwrap_or("").to_string();
+        library_reply(app.llm.jobs().upload(&query, len, req.into_body()).await)
     } else if let (true, "POST", Some((lib, replace))) = (signed_in, method.as_str(), build_upload_target(&path)) {
         // A PDF upload is streamed to disk the same way.
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.build.upload(&lib, replace.as_deref(), &query, len, req.into_body()).await)
+    } else if signed_in && matches!(method.as_str(), "GET" | "HEAD") && path.starts_with("/api/video/") {
+        // Videos: files, ZIM entries and streams, with Range (see `video`); the Range header is read here.
+        let range = req.headers().get(hyper::header::RANGE).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let query = req.uri().query().unwrap_or("").to_string();
+        crate::video::serve(app.helper.clone(), &method, &path, &query, range.as_deref()).await
     } else {
         match Limited::new(req.into_body(), limit).collect().await {
             Ok(b) => route(&app, &method, &target, cookie.as_deref(), &b.to_bytes()).await,
@@ -905,7 +1178,7 @@ mod tests {
     async fn api_needs_a_session() {
         let d = TempDir::new("http");
         let a = app(&d);
-        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example")] {
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other"), ("GET", "/api/linked-folders/libraries"), ("POST", "/api/linked-folders/example"), ("GET", "/api/linked-folders/storage"), ("GET", "/api/linked-folders/example/books/doc"), ("POST", "/api/linked-folders/example/books/doc/forget")] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
             let v: Value = serde_json::from_slice(&r.body).unwrap();
@@ -914,6 +1187,56 @@ mod tests {
         let r = route(&a, "POST", "/api/core", Some("cache_session=forged"), b"{}").await;
         assert_eq!(r.status, 401);
         assert_eq!(route(&a, "GET", "/auth/check", None, b"").await.status, 401);
+    }
+
+    #[tokio::test]
+    async fn version_is_the_servers_own_and_needs_a_session() {
+        let d = TempDir::new("http-version");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        assert_eq!(route(&a, "GET", "/api/version", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/version", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+    }
+
+    /// Writes `n` bytes to `<data>/<rel>`, making the folders.
+    fn put(d: &TempDir, rel: &str, n: usize) {
+        let p = d.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![7u8; n]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn storage_says_the_bytes_of_each_kind_the_phones_storage_page_shows() {
+        let d = TempDir::new("http-storage");
+        let mut a = app(&d);
+        a.auth = Arc::new(Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&d.0.join("sessions.json")), true));
+        put(&d, "app/docs/zims/a.zim", 1000);
+        put(&d, "app/docs/libraries/guide/shard", 200);
+        put(&d, "app/support/indexes/a.zim.idx/x", 30);
+        put(&d, "models/m.gguf", 4000);
+        put(&d, "app/support/regions/places/p.db", 500);
+        put(&d, "app/support/layers/l/tiles", 60);
+        put(&d, "app/docs/videos/site/v.mp4", 7000);
+        put(&d, "app/support/notebook-share/n.md", 80);
+        put(&d, "app/support/notebook/notebook.sqlite", 9);
+        assert_eq!(route(&a, "GET", "/api/library/storage", None, b"").await.status, 401);
+        let r = route(&a, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
+        let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.clone();
+        let pair = cookie.split(';').next().unwrap();
+        let r = route(&a, "GET", "/api/library/storage", Some(pair), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        let k = &v["result"]["kinds"];
+        assert_eq!(
+            (k["library"].clone(), k["models"].clone(), k["regions"].clone(), k["videos"].clone(), k["notebooks"].clone()),
+            (json!(1230), json!(4000), json!(560), json!(7000), json!(89))
+        );
     }
 
     #[tokio::test]
@@ -978,6 +1301,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_books_pdf_is_served_to_a_session_from_the_filed_copy() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-book-pdf");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        assert_eq!(route(&a, "POST", &up, Some(&c), &book("well", 3, Some("Well book"))).await.status, 200);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        let url = format!("/api/build/libraries/{lib}/books/{doc}/pdf");
+        // no session, no PDF
+        assert_eq!(route(&a, "GET", &url, None, b"").await.status, 401);
+        let mut r = route(&a, "GET", &url, Some(&c), b"").await;
+        assert_eq!(r.status, 200);
+        let header = |r: &Reply, k: &str| r.headers.iter().find(|(h, _)| *h == k).map(|(_, v)| v.clone());
+        assert_eq!(header(&r, "Content-Type").as_deref(), Some("application/pdf"));
+        assert!(header(&r, "Content-Disposition").unwrap().starts_with("inline; filename=\""));
+        let mut got = Vec::new();
+        let mut rx = r.stream.take().expect("the PDF is streamed");
+        while let Some(piece) = rx.recv().await {
+            got.extend_from_slice(&piece.unwrap());
+        }
+        assert!(got.starts_with(b"%PDF"), "the body is the PDF");
+        assert_eq!(header(&r, "Content-Length"), Some(got.len().to_string()));
+        // the same bytes as the device copy on the server
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), got);
+        // a library or book that is not there, and a path that tries to leave
+        for p in [
+            format!("/api/build/libraries/nope/books/{doc}/pdf"),
+            format!("/api/build/libraries/{lib}/books/nope/pdf"),
+            format!("/api/build/libraries/{lib}/books/..%2F..%2Fx/pdf"),
+        ] {
+            assert_eq!(route(&a, "GET", &p, Some(&c), b"").await.status, 404, "{p}");
+        }
+        // a book whose copy is gone is not found rather than an error
+        let (path, _) = a.build.book_pdf(&lib, &doc).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(route(&a, "GET", &url, Some(&c), b"").await.status, 404);
+    }
+
+    #[tokio::test]
+    async fn the_bookshelves_routes_serve_the_view_and_take_the_events_of_a_book_page() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-shelves");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        assert_eq!(route(&a, "POST", &up, Some(&c), &book("well", 3, Some("Well book"))).await.status, 200);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        // the view: this server's device id, the stamp and one book keyed by its copy
+        let (s, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(s, 200);
+        assert_eq!(v["result"]["device"], json!(a.build.device));
+        let stamp = v["result"]["stamp"].as_str().unwrap().to_string();
+        assert!(!stamp.is_empty());
+        assert_eq!(json_call(&a, "GET", "/api/build/bookshelves/stamp", &c, "").await.1["result"]["stamp"], json!(stamp));
+        let copy = v["result"]["view"]["books"].as_object().unwrap().keys().next().unwrap().to_string();
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        // the facts: the pack's header, without the bulky samebook block
+        let (s, f) = json_call(&a, "GET", "/api/build/bookshelves/facts", &c, "").await;
+        assert_eq!(s, 200);
+        let docs = f["result"]["libraries"].as_object().unwrap().values().find(|d| d.get(&doc).is_some()).expect("the book's pack header");
+        assert_eq!(docs[&doc]["doc_id"], json!(doc));
+        assert!(docs[&doc].get("samebook").is_none());
+        // a placement is the server's own: the number is its next free one, whatever number the page sent
+        let place = json!({"events": [
+            {"ev": "place", "copy": copy, "div": "530", "by": "user", "at": 1},
+            {"ev": "assign", "copy": copy, "div": "530", "seq": 7, "at": 1},
+        ]})
+        .to_string();
+        let (s, v) = json_call(&a, "POST", "/api/build/bookshelves/events", &c, &place).await;
+        assert_eq!((s, v["result"]["moved"].clone()), (200, json!(1)), "{v}");
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        assert_eq!((b["result"][0]["division"].clone(), b["result"][0]["call_number"].clone()), (json!("530"), json!("CDS 530-001")));
+        let (_, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(v["result"]["view"]["books"][&copy]["call"]["text"], json!("CDS 530-001"));
+        assert_ne!(v["result"]["stamp"], json!(stamp), "the stamp follows the log");
+        // hiding is written as it came
+        let (s, v) = json_call(&a, "POST", "/api/build/bookshelves/events", &c, &json!({"events": [{"ev": "remove", "copy": copy}]}).to_string()).await;
+        assert_eq!((s, v["result"]["written"].clone()), (200, json!(1)), "{v}");
+        let (_, v) = json_call(&a, "GET", "/api/build/bookshelves", &c, "").await;
+        assert_eq!(v["result"]["view"]["books"][&copy]["removed"], json!(true));
+        // refused: not JSON, no events, an event the Library does not write, a division that does not exist
+        for body in [
+            "nope".to_string(),
+            "{}".to_string(),
+            r#"{"events":[]}"#.to_string(),
+            json!({"events": [{"ev": "facts", "copy": copy, "author": "A"}]}).to_string(),
+            json!({"events": [{"ev": "place", "copy": copy, "div": "999", "by": "user"}]}).to_string(),
+        ] {
+            assert_eq!(json_call(&a, "POST", "/api/build/bookshelves/events", &c, &body).await.0, 400, "{body}");
+        }
+    }
+
+    #[tokio::test]
     async fn the_embedder_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-embed");
         let a = file_app(&d);
@@ -997,10 +1422,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_model_file_routes_need_a_session_and_check_their_input() {
+        let d = TempDir::new("route-models");
+        let a = file_app(&d);
+        for (m, p) in [
+            ("GET", "/api/system/memory"),
+            ("GET", "/api/models/downloads"),
+            ("POST", "/api/models/downloads"),
+            ("POST", "/api/models/downloads/x.gguf/pause"),
+            ("DELETE", "/api/models/downloads/x.gguf"),
+            ("DELETE", "/api/models/files/x.gguf"),
+            ("POST", "/api/models/upload?name=x.gguf"),
+        ] {
+            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        }
+        let c = sign_in(&a).await;
+        let (s, v) = json_call(&a, "GET", "/api/system/memory", &c, "").await;
+        assert_eq!(s, 200);
+        assert!(v["result"]["total"].as_u64().unwrap() >= v["result"]["avail"].as_u64().unwrap());
+        let (s, v) = json_call(&a, "GET", "/api/models/downloads", &c, "").await;
+        assert_eq!((s, v["result"]["downloads"].clone()), (200, json!([])));
+        // only Hugging Face and Cache's own address
+        let (s, v) = json_call(&a, "POST", "/api/models/downloads", &c, r#"{"name":"a.gguf","url":"https://evil.example/a.gguf","size":1}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (403, json!("host_not_allowed")));
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads", &c, "nope").await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/models/downloads/nope.gguf/pause", &c, "").await.0, 404);
+        // delete: by name only, and only what is there
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        std::fs::write(d.0.join("models/bge-m3-Q8_0.gguf"), b"e").unwrap();
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/..%2Fchat.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/bge-m3-Q8_0.gguf", &c, "").await.0, 400);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/nope.gguf", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+        // upload: whole body here (the real server streams it)
+        let r = route(&a, "POST", "/api/models/upload?name=up.gguf", Some(&c), b"abcd").await;
+        assert_eq!(r.status, 200);
+        assert_eq!(std::fs::read(d.0.join("models/up.gguf")).unwrap(), b"abcd");
+        assert_eq!(route(&a, "POST", "/api/models/upload?name=up.txt", Some(&c), b"abcd").await.status, 400);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"], json!([{"id": "up.gguf", "size": 4, "loaded": false}]));
+    }
+
+    /// A loaded model that does nothing, for the routes that load and unload.
+    struct Idle;
+    impl llm::ChatBackend for Idle {
+        fn start(&self, _: &str) -> Result<(), cache_embed::chat::StartFailure> {
+            Ok(())
+        }
+        fn next(&self) -> i32 {
+            -1
+        }
+        fn partial(&self) -> Option<String> {
+            None
+        }
+        fn finish(&self) -> Option<String> {
+            None
+        }
+        fn prompt_tokens(&self) -> i32 {
+            0
+        }
+        fn generated_tokens(&self) -> i32 {
+            0
+        }
+        fn stop(&self) {}
+    }
+
+    #[tokio::test]
+    async fn unload_needs_a_session_frees_the_model_and_lets_the_file_be_deleted() {
+        let d = TempDir::new("route-llm-unload");
+        let mut a = file_app(&d);
+        a.llm = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(|_, _| Ok((Arc::new(Idle) as Arc<dyn llm::ChatBackend>, r#"{"description":"d","n_ctx":8192,"chat_format":"c","supports_tools":false}"#.to_string()))),
+        );
+        assert_eq!(route(&a, "POST", "/api/llm/unload", None, br#"{"v":1}"#).await.status, 401);
+        let c = sign_in(&a).await;
+        std::fs::create_dir_all(d.0.join("models")).unwrap();
+        std::fs::write(d.0.join("models/chat.gguf"), b"abc").unwrap();
+        // the body is versioned like load's
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":2}"#).await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, "{}").await.0, 400);
+        // nothing loaded: fine
+        let (s, v) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!((s, v["ok"].clone()), (200, json!(true)));
+        // loaded: the file is kept, then unload frees it and the file can go
+        assert_eq!(json_call(&a, "POST", "/api/llm/load", &c, r#"{"v":1,"model":"chat.gguf"}"#).await.0, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(true));
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 409);
+        let (s, _) = json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await;
+        assert_eq!(s, 200);
+        let (_, v) = json_call(&a, "GET", "/api/llm/models", &c, "").await;
+        assert_eq!(v["result"]["models"][0]["loaded"], json!(false));
+        // twice is fine
+        assert_eq!(json_call(&a, "POST", "/api/llm/unload", &c, r#"{"v":1}"#).await.0, 200);
+        assert_eq!(json_call(&a, "DELETE", "/api/models/files/chat.gguf", &c, "").await.0, 200);
+        assert!(!d.0.join("models/chat.gguf").exists());
+    }
+
+    #[tokio::test]
     async fn the_llm_routes_need_a_session_and_check_their_input() {
         let d = TempDir::new("route-llm");
         let a = file_app(&d);
-        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop")] {
+        for (m, p) in [("GET", "/api/llm/models"), ("POST", "/api/llm/load"), ("POST", "/api/llm/generate"), ("POST", "/api/llm/stop"), ("POST", "/api/llm/unload")] {
             assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
         }
         let c = sign_in(&a).await;
@@ -1013,7 +1540,7 @@ mod tests {
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=2", &c, "").await.0, 400);
         assert_eq!(json_call(&a, "GET", "/api/llm/models?v=1", &c, "").await.0, 200);
         // every POST carries v:1
-        for p in ["load", "generate", "stop"] {
+        for p in ["load", "generate", "stop", "unload"] {
             let (s, v) = json_call(&a, "POST", &format!("/api/llm/{p}"), &c, r#"{"v":2,"model":"chat.gguf","request":{}}"#).await;
             assert_eq!((s, v["error"]["code"].clone()), (400, json!("unsupported_version")), "{p}");
             assert_eq!(json_call(&a, "POST", &format!("/api/llm/{p}"), &c, "{}").await.0, 400, "{p}");
@@ -1419,6 +1946,52 @@ mod tests {
         assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 401);
     }
 
+    const STORAGE_TAG: &str = r#"<script src="/zim-storage.js"></script>"#;
+
+    #[test]
+    fn zim_html_gets_the_storage_script_first_in_head() {
+        let page = br#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1"><script>var a=1</script></HEAD><body>hi</body></html>"#;
+        let out = String::from_utf8(with_frame_script(page)).unwrap();
+        let want = format!(r#"<!DOCTYPE html><HTML lang="en"><HEAD data-x="1">{STORAGE_TAG}<script>var a=1</script>"#);
+        assert!(out.starts_with(&want), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+        // the frame script still sits before the last </body>
+        assert!(out.find(ZIM_FRAME_SCRIPT).unwrap() < out.rfind("</body>").unwrap());
+    }
+
+    #[test]
+    fn zim_html_without_head_gets_the_storage_script_after_html() {
+        let out = String::from_utf8(with_frame_script(b"<html lang=\"en\"><body><script>x()</script></body></html>")).unwrap();
+        assert!(out.starts_with(&format!("<html lang=\"en\">{STORAGE_TAG}<body>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[test]
+    fn zim_html_fragment_gets_the_storage_script_at_the_start() {
+        let out = String::from_utf8(with_frame_script(b"<p>hello</p><script>x()</script>")).unwrap();
+        assert!(out.starts_with(&format!("{STORAGE_TAG}<p>hello</p>")), "{out}");
+        assert_eq!(out.matches(STORAGE_TAG).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_zim_storage_script_is_public() {
+        let d = TempDir::new("zimstorage");
+        let a = file_app(&d);
+        for method in ["GET", "HEAD"] {
+            let r = route(&a, method, "/zim-storage.js", None, b"").await;
+            assert_eq!(r.status, 200, "{method} with no cookie");
+            let h = |k: &str| r.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+            assert_eq!(h("Content-Type"), Some("text/javascript; charset=utf-8"));
+            assert_eq!(h("Access-Control-Allow-Origin"), Some("*"));
+            assert_eq!(h("Cache-Control"), Some("public, max-age=86400"));
+            assert_eq!(h("X-Content-Type-Options"), Some("nosniff"));
+            assert_eq!(r.body.is_empty(), method == "HEAD");
+            if method == "GET" {
+                assert_eq!(r.body, include_str!("../../app/assets/reader/zim_storage.js").as_bytes());
+            }
+        }
+    }
+
     #[test]
     fn zim_entries_with_a_generic_type_get_one_from_the_extension() {
         for (mime, entry, want) in [
@@ -1476,6 +2049,11 @@ mod tests {
             ("POST", "/api/build/queue/x/decide"),
             ("POST", "/api/build/libraries/x/books/y/place"),
             ("GET", "/api/build/libraries/x/books/y/suggestions"),
+            ("GET", "/api/build/libraries/x/books/y/pdf"),
+            ("GET", "/api/build/bookshelves"),
+            ("GET", "/api/build/bookshelves/stamp"),
+            ("GET", "/api/build/bookshelves/facts"),
+            ("POST", "/api/build/bookshelves/events"),
         ] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");

@@ -137,8 +137,10 @@ void main() {
       expect(find.byType(MapLibreMap), findsOneWidget);
       final live = tester.state(find.byType(MapLibreMap));
       expect(tester.getSize(find.byType(MapLibreMap)), const Size(390, 844));
-      // The corner's picture was asked for once, fitted to the inset (112 less its border).
-      expect(rig.snapshots.asked.single.size, const Size(108, 108));
+      // The visible corner is the inset (112) less its border: 108 x 108. The picture behind it was asked for once, the credit strip
+      // taller, and the strip is cropped off.
+      expect(tester.getSize(find.byKey(const ValueKey('route-overview-crop'))), const Size(108, 108));
+      expect(rig.snapshots.asked.single.size, const Size(108, 108 + kSnapshotCreditStripPt));
 
       await tester.tap(find.byKey(const ValueKey('route-inset')));
       await _settle(tester);

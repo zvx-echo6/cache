@@ -9,7 +9,7 @@
 //! their place. Loading and generating are blocking (llama.cpp), so they run on worker threads, never on the async threads.
 
 use crate::library::ApiErr;
-use cache_embed::chat::{ChatModel, CHAT_DEFAULT_N_CTX};
+use cache_embed::chat::{ChatModel, StartFailure, CHAT_DEFAULT_N_CTX, START_CONTEXT_FULL};
 use hyper::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
@@ -29,6 +29,8 @@ pub const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// The range of `n_ctx` a client may ask for.
 pub const N_CTX_RANGE: std::ops::RangeInclusive<i64> = 256..=262_144;
 /// The message the app shows when `cl_next` fails (llama_session_io.dart).
+/// The `context_full` error: the client shows its own text for it.
+const CONTEXT_FULL: &str = "The chat is full";
 const GENERATION_FAILED: &str = "The model stopped with an error while answering";
 /// What the app uses when `cl_finish` fails (llama_session_io.dart `readJson`).
 const EMPTY_MESSAGE: &str = r#"{"role":"assistant","content":""}"#;
@@ -41,7 +43,7 @@ fn err(status: u16, code: &'static str, message: impl Into<String>) -> ApiErr {
 
 /// The native chat calls (`ChatModel` is the real one; the tests use a fake).
 pub trait ChatBackend: Send + Sync {
-    fn start(&self, request_json: &str) -> Result<(), String>;
+    fn start(&self, request_json: &str) -> Result<(), StartFailure>;
     /// `cl_next`: byte count of the token, -1 finished, -2 error.
     fn next(&self) -> i32;
     fn partial(&self) -> Option<String>;
@@ -52,7 +54,7 @@ pub trait ChatBackend: Send + Sync {
 }
 
 impl ChatBackend for ChatModel {
-    fn start(&self, r: &str) -> Result<(), String> {
+    fn start(&self, r: &str) -> Result<(), StartFailure> {
         ChatModel::start(self, r)
     }
     fn next(&self) -> i32 {
@@ -73,6 +75,103 @@ impl ChatBackend for ChatModel {
     fn stop(&self) {
         ChatModel::stop(self)
     }
+}
+
+/// The longest piece of a GGUF header read for one string or one key (a real one is a few hundred bytes).
+const GGUF_MAX_STRING: u64 = 1 << 20;
+/// The most metadata pairs a header may claim (real files have a few dozen to a few hundred).
+const GGUF_MAX_PAIRS: u64 = 1_000_000;
+
+/// The model's own name (`general.name`) from the header of the GGUF file at `path`; `None` when the file is not a readable GGUF
+/// version 3, has no such pair or the pair is not a string. Reads the header up to the name and no further; every length and count is
+/// bounded, so a damaged or hostile file ends in `None`, never a large allocation or a long read.
+pub fn gguf_general_name(path: &Path) -> Option<String> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let mut r = BufReader::new(std::fs::File::open(path).ok()?);
+    fn u32le(r: &mut impl Read) -> Option<u32> {
+        let mut b = [0u8; 4];
+        r.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b))
+    }
+    fn u64le(r: &mut impl Read) -> Option<u64> {
+        let mut b = [0u8; 8];
+        r.read_exact(&mut b).ok()?;
+        Some(u64::from_le_bytes(b))
+    }
+    fn string(r: &mut impl Read) -> Option<String> {
+        let n = u64le(r)?;
+        if n > GGUF_MAX_STRING {
+            return None;
+        }
+        let mut b = vec![0u8; n as usize];
+        r.read_exact(&mut b).ok()?;
+        Some(String::from_utf8_lossy(&b).into_owned())
+    }
+    fn fixed_size(t: u32) -> Option<u64> {
+        match t {
+            0 | 1 | 7 => Some(1),
+            2 | 3 => Some(2),
+            4..=6 => Some(4),
+            10..=12 => Some(8),
+            _ => None,
+        }
+    }
+    // Moves `n` bytes on; None when that is past the end of the file.
+    fn advance(r: &mut BufReader<std::fs::File>, n: u64, len: u64) -> Option<()> {
+        let pos = r.stream_position().ok()?;
+        if pos.checked_add(n)? > len {
+            return None;
+        }
+        r.seek(SeekFrom::Current(i64::try_from(n).ok()?)).ok().map(|_| ())
+    }
+    // Skips a value of metadata type `t`; None for a type this reader does not know or a value past the end of the file.
+    fn skip(r: &mut BufReader<std::fs::File>, t: u32, len: u64) -> Option<()> {
+        if let Some(n) = fixed_size(t) {
+            return advance(r, n, len);
+        }
+        match t {
+            8 => {
+                let n = u64le(r)?;
+                advance(r, n, len)
+            }
+            9 => {
+                let et = u32le(r)?;
+                let n = u64le(r)?;
+                if let Some(size) = fixed_size(et) {
+                    return advance(r, n.checked_mul(size)?, len);
+                }
+                if et != 8 {
+                    return None;
+                }
+                for _ in 0..n {
+                    let l = u64le(r)?;
+                    advance(r, l, len)?;
+                }
+                Some(())
+            }
+            _ => None,
+        }
+    }
+    let file_len = r.get_ref().metadata().ok()?.len();
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" || u32le(&mut r)? != 3 {
+        return None;
+    }
+    let _tensors = u64le(&mut r)?;
+    let pairs = u64le(&mut r)?;
+    if pairs > GGUF_MAX_PAIRS {
+        return None;
+    }
+    for _ in 0..pairs {
+        let key = string(&mut r)?;
+        let t = u32le(&mut r)?;
+        if key == "general.name" {
+            return if t == 8 { string(&mut r) } else { None };
+        }
+        skip(&mut r, t, file_len)?;
+    }
+    None
 }
 
 /// Loads a model file: the backend and the `cl_info` JSON, or the reason.
@@ -192,7 +291,7 @@ pub fn valid_model_id(id: &str) -> bool {
         && id.to_ascii_lowercase().ends_with(".gguf")
 }
 
-/// The body of `POST /api/llm/load` or `stop`: `{"v":1}`.
+/// The body of `POST /api/llm/unload` (and the version part of any body): `{"v":1}`.
 pub fn parse_version_only(body: &[u8]) -> Result<(), ApiErr> {
     parse_body(body).map(|_| ())
 }
@@ -307,6 +406,8 @@ pub struct LlmService {
     send_timeout_ms: AtomicU64,
     /// The id (sent to its client in the `started` event) and the model of the generation that is running now (what `stop` stops).
     running: Mutex<Option<(String, Arc<dyn ChatBackend>)>>,
+    /// Downloads and uploads of model files (see `models`).
+    jobs: Arc<crate::models::ModelJobs>,
 }
 
 impl LlmService {
@@ -327,7 +428,8 @@ impl LlmService {
     }
 
     pub fn with_loader(data: PathBuf, embed_file: String, loader: Box<Loader>) -> Arc<LlmService> {
-        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(),
+        let jobs = crate::models::ModelJobs::new(data.clone(), embed_file.clone());
+        Arc::new(LlmService { data, embed_file, loader, queue: GenQueue::default(), jobs,
             loaded: Mutex::new(None),
             is_loaded: AtomicBool::new(false),
             send_timeout_ms: AtomicU64::new(SEND_TIMEOUT.as_millis() as u64),
@@ -337,6 +439,28 @@ impl LlmService {
 
     fn models_dir(&self) -> PathBuf {
         self.data.join("models")
+    }
+
+    /// The model downloads and uploads.
+    pub fn jobs(&self) -> &Arc<crate::models::ModelJobs> {
+        &self.jobs
+    }
+
+    /// `DELETE /api/models/files/<id>`: removes a model file. The model loaded now is kept (409 `in_use`).
+    pub fn delete_model(&self, id: &str) -> Result<Value, ApiErr> {
+        if !valid_model_id(id) || id == self.embed_file {
+            return Err(err(400, "bad_model", "that is not a model id"));
+        }
+        // the loaded slot is held across the removal, so a load cannot start between the check and the delete
+        let slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|l| l.id == id) {
+            return Err(err(409, "in_use", "That model is loaded. Unload it first."));
+        }
+        match std::fs::remove_file(self.models_dir().join(id)) {
+            Ok(()) => Ok(json!({"deleted": id})),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(err(404, "model_not_found", "no such model on this server")),
+            Err(e) => Err(err(500, "server_error", format!("could not delete the file: {e}"))),
+        }
     }
 
     /// The `.gguf` files in `<data>/models/` other than the embedder, as (id, size), by name. Every other `.gguf` is taken to be a
@@ -414,10 +538,33 @@ impl LlmService {
         };
         drop(old); // cl_free the old one before the new one takes its memory
         let (backend, info) = (self.loader)(&self.models_dir().join(id), n_ctx).map_err(|m| err(503, "load_failed", m))?;
-        let info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        let mut info: Value = serde_json::from_str(&info).unwrap_or_else(|_| json!({}));
+        // The file's own name (GGUF `general.name`), for the browser's model list: llama.cpp's description can be wrong about the size.
+        if let (Some(name), Some(o)) = (gguf_general_name(&self.models_dir().join(id)), info.as_object_mut()) {
+            o.insert("general_name".into(), json!(name));
+        }
         *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = Some(Loaded { id: id.to_string(), n_ctx, info: info.clone(), backend });
         self.is_loaded.store(true, Ordering::SeqCst);
         Ok(info)
+    }
+
+    /// `POST /api/llm/unload`: blocking. Frees the loaded model; nothing loaded is fine (it returns false). A running generation is
+    /// stopped (its `done` still arrives, with the answer so far) and waited out, as a load waits for it, so the model is never
+    /// freed under a generation. Generations already waiting in the queue go first (they are served in arrival order, like a load),
+    /// and any that arrive after this one find no model and are told so (`no_model`). Afterwards `is_loaded` is false and the model's
+    /// file can be deleted. Returns whether a model was freed.
+    pub fn unload(&self) -> Result<bool, ApiErr> {
+        // Without this the unload would wait for the answer to finish by itself.
+        self.stop(None);
+        let _turn = self.queue.acquire(|_| {}, || false).map_err(|_| err(429, "busy", "too many requests are waiting for the model; try again shortly"))?;
+        let old = {
+            let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            self.is_loaded.store(false, Ordering::SeqCst);
+            slot.take()
+        };
+        let was = old.is_some();
+        drop(old); // cl_free, with the turn still held
+        Ok(was)
     }
 
     /// `POST /api/llm/stop`: ends the running generation early (its `done` still arrives). With an `id` (from the `started` event) only
@@ -497,8 +644,13 @@ fn send_event(tx: &tokio::sync::mpsc::Sender<std::io::Result<Bytes>>, ev: Value,
 /// The worker of llama_session_io.dart (`case 'generate'`), call for call. `send` returns false once the client is gone.
 fn generate_loop(b: &dyn ChatBackend, gen_id: &str, request: &Value, send: &dyn Fn(Value) -> bool) {
     // jsonEncode(request): the whole map goes to the native layer ("max_tokens" is ignored there).
-    if let Err(m) = b.start(&request.to_string()) {
-        send(error_event("start_failed", &m));
+    if let Err(f) = b.start(&request.to_string()) {
+        // -3 (by the code, never the text): the prompt does not fit the context, the chat is full.
+        if f.code == START_CONTEXT_FULL {
+            send(error_event("context_full", CONTEXT_FULL));
+        } else {
+            send(error_event("start_failed", &f.message));
+        }
         return;
     }
     let max_tokens = max_tokens_of(request);
@@ -551,7 +703,7 @@ mod tests {
     struct Fake {
         tokens: i32,
         fail_after: Option<i32>,
-        fail_start: bool,
+        fail_start: Option<i32>,
         made: AtomicI32,
         stopped: AtomicBool,
         stops: AtomicI32,
@@ -566,7 +718,7 @@ mod tests {
             Arc::new(Fake {
                 tokens,
                 fail_after: None,
-                fail_start: false,
+                fail_start: None,
                 made: AtomicI32::new(0),
                 stopped: AtomicBool::new(false),
                 stops: AtomicI32::new(0),
@@ -578,14 +730,14 @@ mod tests {
     }
 
     impl ChatBackend for Fake {
-        fn start(&self, r: &str) -> Result<(), String> {
+        fn start(&self, r: &str) -> Result<(), StartFailure> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             *self.last_request.lock().unwrap() = r.to_string();
             // cl_start clears the stop flag first, then decodes the prompt (the hold stands in for that)
             self.made.store(0, Ordering::SeqCst);
             self.stopped.store(false, Ordering::SeqCst);
-            if self.fail_start {
-                return Err("bad template".into());
+            if let Some(code) = self.fail_start {
+                return Err(StartFailure { code, message: "bad template".into() });
             }
             if let Some(rx) = self.hold.lock().unwrap().take() {
                 let _ = rx.recv();
@@ -726,6 +878,55 @@ mod tests {
     }
 
     #[test]
+    fn a_model_is_deleted_by_name_and_the_loaded_one_is_kept() {
+        let d = TempDir::new("llm-delete");
+        let s = service(&d, Fake::new(1));
+        std::fs::write(d.0.join("models").join("chat-b.gguf"), b"xy").unwrap();
+        for bad in ["../chat-a.gguf", "chat-a.txt", "bge-m3-Q8_0.gguf"] {
+            assert_eq!(s.delete_model(bad).unwrap_err().status, 400, "{bad}");
+        }
+        s.load("chat-a.gguf", 512).unwrap();
+        assert_eq!(s.delete_model("chat-a.gguf").unwrap_err().code, "in_use");
+        assert!(d.0.join("models").join("chat-a.gguf").exists());
+        assert_eq!(s.delete_model("chat-b.gguf").unwrap()["deleted"], "chat-b.gguf");
+        assert_eq!(s.delete_model("chat-b.gguf").unwrap_err().status, 404);
+        assert_eq!(s.list_models(), vec![("chat-a.gguf".to_string(), 4)]);
+    }
+
+    #[test]
+    fn unload_frees_the_model_and_a_running_answer_is_stopped_first() {
+        let d = TempDir::new("llm-unload");
+        let fake = Fake::new(1_000_000);
+        let s = service(&d, fake.clone());
+        // nothing loaded: fine, and nothing was freed
+        assert!(!s.unload().unwrap());
+        s.load("chat-a.gguf", 512).unwrap();
+        assert!(s.is_loaded());
+        // an answer runs (it would take a million tokens): unload stops it, waits for it, then frees the model
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let reader = std::thread::spawn(move || collect(rx));
+        let s2 = s.clone();
+        let gen = std::thread::spawn(move || s2.run_generation(None, json!({"messages": []}), tx));
+        while fake.made.load(Ordering::SeqCst) < 5 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.unload().unwrap());
+        gen.join().unwrap();
+        assert!(fake.stops.load(Ordering::SeqCst) >= 1);
+        assert!(!s.is_loaded());
+        assert_eq!(s.models_json()["models"][0]["loaded"], false);
+        // the generation ended with its final message, and a new one is told there is no model
+        let events = reader.join().unwrap();
+        assert_eq!(events.last().unwrap()["type"], "done", "{events:?}");
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        s.run_generation(None, json!({"messages": []}), tx);
+        assert_eq!(collect(rx)[0]["code"], "no_model");
+        // the file can go now, and a second unload is fine
+        assert!(!s.unload().unwrap());
+        assert_eq!(s.delete_model("chat-a.gguf").unwrap()["deleted"], "chat-a.gguf");
+    }
+
+    #[test]
     fn load_takes_ids_only_and_a_second_load_is_a_no_op() {
         let d = TempDir::new("llm-load");
         let loads = Arc::new(AtomicI32::new(0));
@@ -755,6 +956,88 @@ mod tests {
         assert_eq!(s.load("chat-a.gguf", 8192).unwrap(), info);
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(s.models_json()["models"][0]["loaded"], true);
+    }
+
+    /// A tiny GGUF header: magic, version 3, no tensors, and the given metadata pairs already encoded.
+    fn gguf(pairs: &[Vec<u8>], kv_count: Option<u64>) -> Vec<u8> {
+        let mut b = b"GGUF".to_vec();
+        b.extend(3u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+        b.extend(kv_count.unwrap_or(pairs.len() as u64).to_le_bytes());
+        for p in pairs {
+            b.extend(p);
+        }
+        b
+    }
+    fn gstr(s: &str) -> Vec<u8> {
+        let mut b = (s.len() as u64).to_le_bytes().to_vec();
+        b.extend(s.as_bytes());
+        b
+    }
+    fn kv_str(k: &str, v: &str) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(8u32.to_le_bytes());
+        b.extend(gstr(v));
+        b
+    }
+    fn kv_u32(k: &str, v: u32) -> Vec<u8> {
+        let mut b = gstr(k);
+        b.extend(4u32.to_le_bytes());
+        b.extend(v.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn general_name_is_read_from_the_header_and_garbage_is_none() {
+        let d = TempDir::new("llm-gguf-name");
+        let at = |name: &str, bytes: &[u8]| {
+            let p = d.0.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let ok = gguf(&[kv_str("general.architecture", "llama"), kv_u32("general.file_type", 2), kv_str("general.name", "SmolLM2 135M Instruct")], None);
+        assert_eq!(gguf_general_name(&at("ok", &ok)).as_deref(), Some("SmolLM2 135M Instruct"));
+        assert_eq!(gguf_general_name(&at("none", &gguf(&[kv_str("general.architecture", "llama")], None))), None);
+        assert_eq!(gguf_general_name(&at("notstr", &gguf(&[kv_u32("general.name", 7)], None))), None);
+        assert_eq!(gguf_general_name(&at("empty", b"")), None);
+        assert_eq!(gguf_general_name(&at("junk", &[0x41; 64])), None);
+        assert_eq!(gguf_general_name(&d.0.join("missing")), None);
+        let mut v2 = ok.clone();
+        v2[4] = 99;
+        assert_eq!(gguf_general_name(&at("ver", &v2)), None);
+        for n in [3, 8, 20, 30, ok.len() - 3] {
+            assert_eq!(gguf_general_name(&at("cut", &ok[..n])), None, "cut at {n}");
+        }
+        assert_eq!(gguf_general_name(&at("manykv", &gguf(&[kv_str("general.name", "X")], Some(1 << 40)))), None);
+        let mut huge_key = gguf(&[], Some(1));
+        huge_key.extend(0x4000_0000_0000_0000u64.to_le_bytes());
+        assert_eq!(gguf_general_name(&at("hugekey", &huge_key)), None);
+        let mut huge_name = gguf(&[], Some(1));
+        huge_name.extend(gstr("general.name"));
+        huge_name.extend(8u32.to_le_bytes());
+        huge_name.extend(0x4000_0000u64.to_le_bytes());
+        huge_name.push(b'A');
+        assert_eq!(gguf_general_name(&at("hugename", &huge_name)), None);
+    }
+
+    #[test]
+    fn load_adds_general_name_to_the_info_when_the_file_has_one() {
+        let d = TempDir::new("llm-load-name");
+        let models = d.0.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("named.gguf"), gguf(&[kv_str("general.name", "SmolLM2 135M Instruct")], None)).unwrap();
+        std::fs::write(models.join("plain.gguf"), b"0123").unwrap();
+        let fake = Fake::new(1);
+        let s = LlmService::with_loader(
+            d.0.clone(),
+            "bge-m3-Q8_0.gguf".into(),
+            Box::new(move |_p, _n| Ok((fake.clone() as Arc<dyn ChatBackend>, r#"{"description":"llama 256M Q4_0","n_ctx":8192,"chat_format":"x","supports_tools":true}"#.to_string()))),
+        );
+        let info = s.load("named.gguf", 8192).unwrap();
+        assert_eq!(info["general_name"], "SmolLM2 135M Instruct");
+        assert_eq!(info["description"], "llama 256M Q4_0", "llama.cpp's own fields are untouched");
+        let info = s.load("plain.gguf", 8192).unwrap();
+        assert!(info.get("general_name").is_none());
     }
 
     #[test]
@@ -787,7 +1070,7 @@ mod tests {
     }
 
     impl ChatBackend for Replay {
-        fn start(&self, _r: &str) -> Result<(), String> {
+        fn start(&self, _r: &str) -> Result<(), StartFailure> {
             Ok(())
         }
         fn next(&self) -> i32 {
@@ -890,12 +1173,35 @@ mod tests {
         // cl_start refusing
         let d2 = TempDir::new("llm-err2");
         let mut f2 = Fake::new(5);
-        Arc::get_mut(&mut f2).unwrap().fail_start = true;
+        Arc::get_mut(&mut f2).unwrap().fail_start = Some(-1);
         let s2 = service(&d2, f2);
         s2.load("chat-a.gguf", 8192).unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         s2.run_generation(None, json!({"messages": []}), tx);
         assert_eq!(collect(rx), vec![error_event("start_failed", "bad template")]);
+    }
+
+    #[test]
+    fn cl_start_minus_3_is_context_full_and_any_other_code_is_start_failed() {
+        for (code, want) in [(-3, error_event("context_full", CONTEXT_FULL)), (-1, error_event("start_failed", "bad template")), (-2, error_event("start_failed", "bad template"))] {
+            let d = TempDir::new("llm-ctxfull");
+            let mut f = Fake::new(5);
+            Arc::get_mut(&mut f).unwrap().fail_start = Some(code);
+            let s = service(&d, f);
+            s.load("chat-a.gguf", 8192).unwrap();
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            s.run_generation(None, json!({"messages": []}), tx);
+            assert_eq!(collect(rx), vec![want], "cl_start code {code}");
+        }
+    }
+
+    /// #54: cl_finish adds "stop":"context" when an answer was cut off; the done event carries it to the browser.
+    #[test]
+    fn the_done_event_passes_stop_context_through() {
+        let ev = done_event(r#"{"role":"assistant","content":"cut","tool_calls":[],"stop":"context"}"#, 7, 3);
+        assert_eq!(ev["type"], "done");
+        assert_eq!(ev["stop"], "context");
+        assert_eq!((ev["prompt_tokens"].clone(), ev["generated_tokens"].clone()), (json!(7), json!(3)));
     }
 
     #[test]

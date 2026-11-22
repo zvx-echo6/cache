@@ -371,6 +371,10 @@ pub struct Step {
     pub type_: String,
     pub mode: Option<String>,
     pub street_names: Vec<String>,
+    /// The road's names with the map's route-number flag ([`crate::valhalla::Maneuver::streets`]), for the guidance path only
+    /// (`to_json` leaves them out); `begin_streets` likewise.
+    pub streets: Vec<crate::valhalla::StreetName>,
+    pub begin_streets: Vec<crate::valhalla::StreetName>,
     pub distance_m: Option<i64>,
     pub distance_km: f64,
     pub distance_mi: f64,
@@ -385,6 +389,8 @@ pub struct Step {
     pub end: (f64, f64),
     pub instruction: Option<String>,
     pub follow: Option<Follow>,
+    /// Turn lanes of a road maneuver, for the guidance path only (`to_json` leaves them out).
+    pub lanes: Vec<crate::valhalla::Lane>,
 }
 
 impl Step {
@@ -440,6 +446,8 @@ fn make_step(run: &Run, vi: usize, vj: usize, mode: &str, extra_s: f64, min_leg_
         type_: if follow.is_none() { if is_switch { "mode_change".into() } else { "offroad_leg".into() } } else { "offroad_follow".into() },
         mode: Some(mode.to_string()),
         street_names: vec![],
+        streets: vec![],
+        begin_streets: vec![],
         distance_m: Some(round_i(p.dist)),
         distance_km: round_py(km, 2),
         distance_mi: round_py(km * KM_TO_MI, 2),
@@ -454,6 +462,7 @@ fn make_step(run: &Run, vi: usize, vj: usize, mode: &str, extra_s: f64, min_leg_
         end: pt(run.pt(b)),
         instruction: None,
         follow,
+        lanes: Vec::new(),
     };
     (step, (p.dist, dur))
 }

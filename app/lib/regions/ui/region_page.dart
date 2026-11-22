@@ -21,12 +21,15 @@ Future<void> openRegionPage(BuildContext context, RegionsState regions, String i
 
 /// The line under a region's name: "Ready · 1.8 GB" when all of it is here; otherwise only the parts that are not ready and where
 /// each stands ("Places 40% · Off-road waiting"), in the warning colour when something stopped and the danger colour when it failed.
-List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.phase) {
-  // Places not published for the area count as done; the row still says so, in the neutral colour with an info mark (a search that
-  // finds no places is then understood). On a narrow row the size goes before the note does.
+List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => regions.held && (l.phase == RegionPhase.downloading || l.phase == RegionPhase.stopped)
+    ? [Part('Paused · $kHeldNote', Tone.warn), Part(' · ${l.partsLine}')]
+    : switch (l.phase) {
+  // A part not published for the area (places, or directions where the published roads do not reach) counts as done; the row
+  // still says so, in the neutral colour with an info mark (a search that finds no places, or a route that cannot be worked out,
+  // is then understood). On a narrow row the size goes before the note does.
   RegionPhase.ready => [
     Part('${l.isArea ? 'Map ready' : 'Ready'} · ${formatBytes(l.bytes)}'),
-    if (l.placesNotAvailable) ...[const Part(' · '), const Part(kPlacesNotAvailableShort, Tone.quiet, Icons.info_outline)],
+    for (final note in l.notAvailableNotes) ...[const Part(' · '), Part(note, Tone.quiet, Icons.info_outline)],
   ],
   RegionPhase.downloading => [Part(l.partsLine)],
   RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
@@ -34,7 +37,8 @@ List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.p
   RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
 };
 
-/// "Places not available yet": a region's places not published for its area, on its row.
+/// "Places not available yet": a region's places not published for its area, on its row ([LocalRegion.notAvailableNotes] says the
+/// same of each part that is not published, in these words).
 const String kPlacesNotAvailableShort = 'Places not available yet';
 
 /// What the bar under a downloading region says: how far the whole region is and the part downloading now, "56% of 2.6 GB in all ·
@@ -69,7 +73,7 @@ class RegionRow extends StatelessWidget {
       state: s,
       actions: regionDlActions(context, regions, l),
       selected: isPaneSelected(context, 'region-${l.id}'),
-      doneLine: regionDoneLine(l, placesNote: kPlacesNotAvailableShort),
+      doneLine: regionDoneLine(l),
       doneAction: Icon(Icons.chevron_right, color: context.t.secondary),
       onOpen: () => openRegionPage(context, regions, l.id),
       onDoneHold: () => showRegionActions(context, regions, l),
@@ -166,7 +170,19 @@ class RegionPage extends StatelessWidget {
                         status: const [Part('Now available')],
                         trailing: RowButton(key: const ValueKey('add-places'), label: 'Add', onPressed: () => askAddPlaces(context, regions, l.id)),
                       ),
-                    if (canAddOffroad)
+                    // No pack covers the region (the plan's own check): the row stays, greyed, and says why (owner's choice).
+                    if (canAddOffroad && regions.offroadCovered(l.id) == false)
+                      Opacity(
+                        opacity: 0.55,
+                        child: SettingsRow(
+                          key: const ValueKey('part-offroad-none'),
+                          title: 'Off-road',
+                          // WORDING (owner, exact): the line under the row.
+                          status: const [Part(kNoOffroadLine, Tone.quiet)],
+                          trailing: const RowButton(key: ValueKey('add-offroad-disabled'), label: 'Add', onPressed: null),
+                        ),
+                      )
+                    else if (canAddOffroad)
                       SettingsRow(
                         key: const ValueKey('part-offroad-add'),
                         title: 'Off-road',
@@ -175,6 +191,19 @@ class RegionPage extends StatelessWidget {
                       ),
                   ],
                 ),
+                // The region on the Maps tab, the map fitted to it.
+                if (regions.boundsOf(l.id) != null) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('region-show-on-map'),
+                      icon: const Icon(Icons.map_outlined),
+                      label: const Text('Show on map'),
+                      onPressed: () => showRegionOnMap(regions, l.id),
+                    ),
+                  ),
+                ],
                 // Try again has not worked twice: the last fix, one pop-up.
                 if (l.phase == RegionPhase.failed && regions.triesOf(l.id) >= 2) ...[
                   const SizedBox(height: 10),
@@ -319,8 +348,9 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
   // counted, and the line says so.
   final shared = o.offroad && o.offroadShared ? (offroadFrom.isEmpty ? ' · off-road shared' : ' · off-road shared with ${offroadFrom.join(', ')}') : '';
   final what = switch (o.kind) {
-    RegionOfferKind.download => '${sizeWords(o.bytes)}$shared',
-    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to go',
+    // The catalogue's figure is what is fetched (gzip), never the room it takes: said so (the core's plan gives the other when asked).
+    RegionOfferKind.download => '${o.bytes == null ? sizeWords(null) : regionSizeLine(download: o.bytes)}$shared',
+    RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to download',
     RegionOfferKind.tryAgain => "Couldn't finish",
     RegionOfferKind.addParts => 'On this device · off-road not added',
     RegionOfferKind.busy => 'Downloading',

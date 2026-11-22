@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/app_state.dart' show ModelEntry;
 import 'package:cache/screens/settings/assistant_page.dart';
 import 'package:cache/screens/settings/notifications_page.dart';
 import 'package:cache/screens/settings/storage_page.dart';
@@ -9,6 +10,7 @@ import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/web_search_setup.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/version.dart';
+import 'package:cache/video/format.dart' show formatBytes;
 import 'package:cache/location/position_source.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,7 +39,8 @@ void main() {
       }
       expect(find.text('Choose a model · web search off'), findsOneWidget);
       expect(find.text('No regions yet · miles'), findsOneWidget);
-      expect(find.text('Nothing on'), findsOneWidget, reason: 'Weather and alerts');
+      expect(find.text('All 4 working'), findsOneWidget, reason: 'Weather and alerts: the defaults are on from the start, not "Nothing on"');
+      expect(find.text('Nothing on'), findsNothing);
       expect(find.text('Serious alerts · quiet 10 PM–6 AM'), findsOneWidget);
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
@@ -101,6 +104,39 @@ void main() {
       await tester.pump();
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
       expect(r.app.theme, CacheThemeId.light);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Assistant: the model row in each state', () {
+    final model = ModelEntry(path: '/models/Gemma-4-E2B-it-Q4_K_M.gguf', size: 3 * 1024 * 1024 * 1024);
+
+    testWidgets('resting (not loaded after a cold start): the chosen model, on this device, loads when Ask opens', (tester) async {
+      final r = await SettingsRig.create(tester);
+      r.app.resting = model;
+      await r.show(tester, AssistantPage(deps: r.deps));
+      expect(find.text(r.app.displayName(model)), findsOneWidget);
+      expect(find.text('On this device · ${formatBytes(model.size)} · Loads when you open Ask'), findsOneWidget);
+      expect(find.text('Choose a model'), findsNothing);
+      expect(find.textContaining('No model chosen'), findsNothing);
+      await r.dispose(tester);
+    });
+
+    testWidgets('loaded: Ready, as before', (tester) async {
+      final r = await SettingsRig.create(tester);
+      r.app.active = model;
+      await r.show(tester, AssistantPage(deps: r.deps));
+      expect(find.text(r.app.displayName(model)), findsOneWidget);
+      expect(find.text('On this device · ${formatBytes(model.size)} · Ready'), findsOneWidget);
+      expect(find.textContaining('Loads when you open Ask'), findsNothing);
+      await r.dispose(tester);
+    });
+
+    testWidgets('no model at all: No model chosen, as before', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, AssistantPage(deps: r.deps));
+      expect(find.text('Choose a model'), findsOneWidget);
+      expect(find.text('No model chosen'), findsOneWidget);
       await r.dispose(tester);
     });
   });

@@ -146,7 +146,7 @@ the book afterwards (where it is shelved, its call number, a new title, hiding i
 | `original_blake3` | BLAKE3 (hex) of the file **as it arrived**. This is the book's identity, even if the stored file was compressed (`source.blake3` is then the stored file's hash) or the text came from an OCR copy that is never shipped. |
 | `compression` | What compression did, as the build record has it (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`), or `null`. |
 | `ocr` | `{engine, version, pages_ocrd, confidence?}`: the text came from OCR (`pages_ocrd` is how many pages it read; `confidence` is the mean of the confidences the engine gave, 0 to 1, written only when it gave any), or `null`. |
-| `suggested` | `{div, label, score, classifier_version, source, second_div}` or `null`. `source` is `classifier` or `label` (readers refuse other values). `score`, `classifier_version` and `second_div` are `null` when unknown (a label has no score). It is a suggestion, not a shelf: the shelf is the latest `place` in the log. |
+| `suggested` | `{div, label, score, classifier_version, source, second_div, filed, suggestions}` or `null`. `filed` (optional boolean) is `true` when the sorter was confident and the book was filed in `div`, `false` when it was left in Unsorted; absent in older packs, which readers take as not confident. `suggestions` (optional) is the sorter's top three, best first, as `[{div, label, score}]`; `second_div` stays for older readers. Readers ignore keys they do not know. `source` is `classifier` or `label` (readers refuse other values). `score`, `classifier_version` and `second_div` are `null` when unknown (a label has no score). It is a suggestion, not a shelf: the shelf is the latest `place` in the log. |
 | `author` | Optional. Who wrote the book: a string of 1 to 200 characters. |
 | `edition` | Optional. The edition, for example `"7th edition"`: a string of 1 to 60 characters. |
 | `year` | Optional. The year of this edition: a JSON integer from 1400 to 2100. |
@@ -162,7 +162,7 @@ Every other key of `book` is always written (`null` when unknown). `cache-build 
 - `compression`: the outcome of `--compress`, else `null`.
 - `ocr`: `--ocr-engine E --ocr-version V [--ocr-pages N]`, or `--ocr-json FILE`. With an OCR record every page of the PDF is marked as OCR text
   (`text_source_ocr_pages` lists all pages: an OCR'd copy has its whole text layer replaced); `--ocr-text-pages 1-5,9` lists only the pages that are (partial OCR). The JSON is either `{"engine", "version", "pages_ocrd", "original_blake3"?}`
-  (applies to every PDF in the call) or an object of those keyed by input file name (a file with no entry has no OCR record). The recon OCR'd
+  (applies to every PDF in the call) or an object of those keyed by input file name (a file with no entry has no OCR record). The OCR'd
   copies use this.
 - `suggested`: from `--labels` (source `label`, see below) or, in the build service, the classifier (source `classifier`).
 

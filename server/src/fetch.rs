@@ -3,9 +3,20 @@
 //! The client is `ureq`, the one the Cache core crates use (blocking, rustls with the bundled web roots), so every call here
 //! runs in `spawn_blocking`. Redirects are never followed by the client: this module follows them itself so each hop can be
 //! checked against the allow-list.
+//!
+//! Which addresses may be read, and what may come back, is decided per scope in `fetch_scope` (catalog, models, video, user);
+//! the catalog scope is this file's [`FETCH_HOSTS`] and is the default of `GET /api/fetch`.
+//!
+//! The server only ever connects to public addresses for an address a tab supplied: the fetch scopes other than catalog, and the
+//! library downloads, their checksum files and icons (`fetch_scope::guarded_agent`). Private, loopback, link-local (including the
+//! metadata address 169.254.169.254) and Tailscale 100.64/10 are refused when the connection is made, on every redirect. The
+//! three catalog hosts are the one exception.
 
+use crate::fetch_scope::{Policy, PublicResolver, Scope};
 use std::io::Read;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The hosts the app's catalog screens read from, and nothing else (app/lib, checked 2026-11-01):
 ///   opds.library.kiwix.org  the Kiwix OPDS catalog (browse/opds.dart `kiwixCatalogHost`) and its icons
@@ -88,6 +99,8 @@ pub enum FetchError {
     TooManyRedirects,
     /// No connection, a timeout, a broken answer.
     Unreachable(String),
+    /// The answer is not a kind of thing this scope hands on (a page, a video, a file).
+    BadType(String),
 }
 
 /// Check an address against the allow-list.
@@ -154,12 +167,20 @@ pub fn query_param(query: &str, name: &str) -> Option<String> {
 
 /// A client that follows no redirects and gives up connecting after [`CONNECT_TIMEOUT`].
 pub fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
+    agent_with(None)
+}
+
+/// [`agent`], with a resolver that decides which addresses a name may connect to (see `fetch_scope::PublicResolver`).
+pub fn agent_with(resolver: Option<PublicResolver>) -> ureq::Agent {
+    let b = ureq::AgentBuilder::new()
         .redirects(0)
         .timeout_connect(CONNECT_TIMEOUT)
         .timeout_read(Duration::from_secs(60))
-        .user_agent(USER_AGENT)
-        .build()
+        .user_agent(USER_AGENT);
+    match resolver {
+        Some(r) => b.resolver(r).build(),
+        None => b.build(),
+    }
 }
 
 /// A Kiwix catalog icon asked for at a size the catalog does not have (it answers 404 for anything but the 48 px its feed
@@ -188,14 +209,30 @@ pub struct Opened {
     pub reader: Box<dyn Read + Send + Sync>,
 }
 
-/// GET `url` (blocking), following up to six redirects, each of which must be on the allow-list too. The answer's declared size is
-/// held to `max`.
+/// GET `url` (blocking) in the `catalog` scope: [`open_with`] on the catalog hosts.
 pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError> {
-    let agent = agent();
+    open_with(&Policy::new(Scope::Catalog, hosts.to_vec()), url, max)
+}
+
+/// GET `url` (blocking) under `policy`, following up to six redirects, each of which must pass it too. The answer's declared size
+/// is held to `max`, and its type to the scope's (see `fetch_scope`).
+pub fn open_with(policy: &Policy, url: &str, max: u64) -> Result<Opened, FetchError> {
+    let refused = Arc::new(AtomicBool::new(false));
+    let agent = if policy.public_only() { agent_with(Some(PublicResolver::new(refused.clone(), vec![]))) } else { agent() };
     let mut cur = url.to_string();
-    for _ in 0..7 {
-        check(hosts, &cur)?;
-        let resp = match agent.get(&cur).call() {
+    let started = Instant::now();
+    for hop in 0..7 {
+        policy.check(&cur, hop == 0)?;
+        let mut req = agent.get(&cur);
+        if policy.scope != Scope::Catalog {
+            // one deadline for the whole read, redirects and body included
+            let left = policy.deadline.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                return Err(FetchError::Unreachable("it took too long".into()));
+            }
+            req = req.timeout(left);
+        }
+        let resp = match req.call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) if illustration_fallback(&cur).is_some() => {
                 // The catalog only serves its icons at the size its own feed links (48); another size is a 404.
@@ -203,6 +240,7 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
                 continue;
             }
             Err(ureq::Error::Status(code, _)) => return Err(FetchError::Upstream(code)),
+            Err(_) if refused.load(Ordering::Relaxed) => return Err(FetchError::Denied(parse_url(&cur).map(|p| p.host).unwrap_or_default())),
             Err(e) => return Err(FetchError::Unreachable(e.to_string())),
         };
         let status = resp.status();
@@ -218,6 +256,9 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
             return Err(FetchError::TooLarge);
         }
         let content_type = resp.header("content-type").map(str::to_string);
+        if !policy.type_ok(content_type.as_deref()) {
+            return Err(FetchError::BadType(content_type.unwrap_or_default()));
+        }
         return Ok(Opened { content_type, reader: resp.into_reader() });
     }
     Err(FetchError::TooManyRedirects)

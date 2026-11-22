@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../browse/web/local_files.dart' show pickLocalFile;
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 import '../../weather/catalogue.dart';
 import '../../weather/catalogue_store.dart';
@@ -18,6 +21,13 @@ typedef PickText = Future<String?> Function();
 
 /// The phone's file chooser: one file, read as text (a source file is small; one over 4 MB is refused).
 Future<String?> pickTextFile() async {
+  // A browser gives a handle with no path: the file is read from the handle (called straight from the tap, as the chooser needs).
+  if (plat.isWeb) {
+    final f = await pickLocalFile(accept: const ['.json', 'application/json', 'text/plain']);
+    if (f == null) return null;
+    if (f.size > 4 * 1024 * 1024) throw const CatalogueException('That file is too large to be a source file.');
+    return utf8.decode(await f.readAll(), allowMalformed: true);
+  }
   final picked = await FilePicker.pickFile();
   if (picked == null || picked.path == null) return null;
   try {
@@ -159,6 +169,7 @@ class OwnSourceFormPage extends StatefulWidget {
 class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   final _name = TextEditingController();
   final _address = TextEditingController();
+  final _addressFocus = FocusNode();
   final _key = TextEditingController();
   int _every = kOwnRefreshDefault;
   String? _error;
@@ -186,22 +197,41 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
   void dispose() {
     _name.dispose();
     _address.dispose();
+    _addressFocus.dispose();
     _key.dispose();
     super.dispose();
   }
 
   OwnDraft get _draft => OwnDraft(name: _name.text, address: _address.text, key: _key.text, refreshMinutes: _every, id: widget.editing?.id, savedKey: _savedKey);
 
-  void _insert(String placeholder) => setState(() => _address.value = insertPlaceholder(_address.value, placeholder));
+  // Where the cursor is when the address has the focus; at the end when it has not. The value is set whole (composing cleared) so the
+  // keyboard takes it, and the focus stays or comes back with the cursor right after the placeholder.
+  void _insert(String placeholder) {
+    final v = _address.value;
+    final from = _addressFocus.hasFocus ? v : v.copyWith(selection: TextSelection.collapsed(offset: v.text.length));
+    final next = insertPlaceholder(from, placeholder);
+    setState(() => _address.value = next.copyWith(composing: TextRange.empty));
+    _addressFocus.requestFocus();
+  }
+
+  // Counts the tries; Cancel moves it on, so the answer of a cancelled try finds it changed and does nothing.
+  int _tryTurn = 0;
+
+  void _cancelTry() => setState(() {
+    _tryTurn++;
+    _busy = false;
+  });
 
   Future<void> _try() async {
     final d = _draft;
     final p = d.problem();
     setState(() => _error = p);
     if (p != null) return;
+    final turn = ++_tryTurn;
     setState(() => _busy = true);
     final t = await w.tryOwnSource(d);
-    if (!mounted) return;
+    // Cancelled while waiting: the form is already back, and a late answer is ignored.
+    if (!mounted || turn != _tryTurn) return;
     setState(() => _busy = false);
     final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => OwnSourcePickPage(deps: widget.deps, draft: d, first: t, earlier: _picks)));
     if (saved == true && mounted) {
@@ -215,7 +245,9 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
     if (added == true && mounted) Navigator.of(context).pop(true);
   }
 
-  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => OutlinedButton(
+  // ExcludeFocus + TextFieldTapRegion: the insert buttons never take the focus, and a tap on one is not a tap outside the address,
+  // so the keyboard stays on it.
+  Widget _placeButton(CacheTokens k, String key, String label, String placeholder) => TextFieldTapRegion(child: ExcludeFocus(child: OutlinedButton(
     key: ValueKey(key),
     onPressed: () => _insert(placeholder),
     style: OutlinedButton.styleFrom(
@@ -226,7 +258,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
       shape: const StadiumBorder(),
     ),
     child: Text(label, style: const TextStyle(fontSize: 14)),
-  );
+  )));
 
   @override
   Widget build(BuildContext context) {
@@ -242,19 +274,20 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _label(k, 'Name'),
-              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'Creek level at the bridge')),
+              TextField(key: const ValueKey('own-name'), controller: _name, textCapitalization: TextCapitalization.sentences, style: TextStyle(fontSize: 15, color: k.text), decoration: _box(k, hint: 'For example: Temperature')),
               const SizedBox(height: 14),
               _label(k, 'Web address'),
               TextField(
                 key: const ValueKey('own-address'),
                 controller: _address,
+                focusNode: _addressFocus,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
                 enableSuggestions: false,
                 minLines: 1,
                 maxLines: 4,
                 style: TextStyle(fontSize: 15, color: k.text, fontFamily: 'monospace'),
-                decoration: _box(k, hint: 'https://example.org/api/data'),
+                decoration: _box(k, hint: 'For example: https://api.open-meteo.com/v1/forecast?current=temperature_2m&latitude={lat}&longitude={lon}'),
               ),
               const SizedBox(height: 10),
               Wrap(
@@ -299,6 +332,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _bigButton(key: const ValueKey('own-try'), label: 'Try it', onPressed: _try, busy: _busy),
+            if (_busy) TextButton(key: const ValueKey('own-try-cancel'), onPressed: _cancelTry, child: const Text('Cancel')),
             const SizedBox(height: 8),
             Text('Cache calls it once and shows what came back. Nothing is saved yet.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: k.secondary)),
           ],
@@ -315,7 +349,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
 }
 
 /// How a source of your own will look in Weather and alerts: its name over the line the Weather screen shows (the first ticked
-/// value, then the next two).
+/// value, then the next two), as the values come (no units: the card shows none).
 class OwnPreview extends StatelessWidget {
   const OwnPreview({super.key, required this.name, required this.lines});
 
@@ -377,13 +411,14 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
     _seed();
   }
 
-  /// Ticks and names for the values of [_t]: kept from before where the value is the same; the first three ticked on a new source.
+  /// Ticks and names for the values of [_t]: kept from before where the value is the same; on a new source what the address asked for
+  /// ([OwnTry.preticked]).
   void _seed() {
     final earlier = {for (final p in widget.earlier ?? const <OwnPick>[]) p.path: p.label};
-    for (var i = 0; i < _t.values.length; i++) {
-      final v = _t.values[i];
+    final first = _t.preticked.toSet();
+    for (final v in _t.values) {
       _names.putIfAbsent(v.path, () => earlier[v.path] ?? v.label);
-      _on.putIfAbsent(v.path, () => widget.earlier == null ? i < 3 : earlier.containsKey(v.path));
+      _on.putIfAbsent(v.path, () => widget.earlier == null ? first.contains(v.path) : earlier.containsKey(v.path));
     }
   }
 
@@ -428,7 +463,12 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
       _busy = false;
       _error = err;
     });
-    if (err == null) Navigator.of(context).pop(true);
+    if (err == null) {
+      // The new source is fetched at once, in the background (the same fetch as Update now, for every watched place), so the Weather
+      // card has it without a tap. Save does not wait for it; offline or failing, the next update picks it up as before.
+      unawaited(w.updateNow(force: true).then((_) {}, onError: (_) {}));
+      Navigator.of(context).pop(true);
+    }
   }
 
   Widget _banner(CacheTokens k) {
@@ -489,7 +529,7 @@ class _OwnSourcePickPageState extends State<OwnSourcePickPage> {
                   key: ValueKey('own-value-${v.path}'),
                   leading: Checkbox(value: _on[v.path] == true, onChanged: (x) => setState(() => _on[v.path] = x == true)),
                   title: _names[v.path] ?? v.label,
-                  status: [Part(v.value)],
+                  status: [Part(v.shown)],
                   trailing: Icon(Icons.edit_outlined, size: 18, color: k.secondary),
                   onTap: () => _rename(v),
                 ),

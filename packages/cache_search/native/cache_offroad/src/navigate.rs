@@ -84,13 +84,15 @@ pub struct NavigateRequest {
     pub offroad_snap_m: f64,
     pub merge_bearing_deg: f64,
     pub min_leg_m: f64,
+    /// The vehicle's heading at the start, degrees clockwise from north, when it is moving (a re-route).
+    pub from_heading_deg: Option<f64>,
 }
 
 impl NavigateRequest {
     pub fn new(from: Waypoint, to: Waypoint, mode: TravelMode, land_access: Boundary) -> Self {
         NavigateRequest {
             from, to, mode, land_access, offroad: OffroadChoice::Auto, offroad_snap_m: DEFAULT_OFFROAD_SNAP_M,
-            merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M,
+            merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M, from_heading_deg: None,
         }
     }
 }
@@ -148,6 +150,7 @@ impl<'a> Navigator<'a> {
         dr.boundary = req.land_access;
         dr.from_category = req.from.category();
         dr.to_category = req.to.category();
+        dr.from_heading_deg = req.from_heading_deg;
         let env = Env {
             pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, options: self.options.clone(), namer: None,
             version: self.version.clone(),
@@ -170,6 +173,7 @@ impl<'a> Navigator<'a> {
         dr.boundary = req.land_access;
         dr.from_category = req.from.category();
         dr.to_category = req.to.category();
+        dr.from_heading_deg = req.from_heading_deg;
         let env = Env {
             pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, options: self.options.clone(), namer: None,
             version: self.version.clone(),

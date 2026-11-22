@@ -15,17 +15,25 @@
 //!   runs that procedure itself. The server only brings the file: a downloaded or uploaded package lands in
 //!   `<data>/app/docs/incoming/<name>` (the docs root, where the helper's `fs.*` ops and the core's jobs can reach it), and the
 //!   browser installs it from there and deletes it.
+//! - **Pause and resume** (`POST /api/library/jobs/{id}/pause` and `/resume`): a paused job keeps its part file and its place in the
+//!   list (state `paused`); Resume queues it and it continues where the file ends (a Range request), as the phone's downloads do.
+//!   A canceled job (`DELETE`) throws the part file away. A paused job is still "active": asking for its address again gives it.
 //! - **Uploads** (`POST /api/library/upload`) stream the request body to `<data>/tmp/up-<random>.part` without holding it in memory.
 //! - **Items** (`GET /api/library/items`, `DELETE /api/library/items/{id}`) list and remove what is on the server.
 //! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
+//! - **Storage** (`GET /api/library/storage`): the bytes the server keeps for each kind the phone's Storage page lists, measured from
+//!   the server's folders as the phone measures its own.
 //! - **Rescan** (`POST /api/library/rescan`): tells the core to read the library folders again, for a browser that has put a
 //!   library in place itself.
+//! - **Clean up** (`GET`/`POST /api/library/cleanup`): the unfinished downloads no job continues and the upload leftovers in `<data>/tmp`.
 //! - **Fetch** (`GET /api/fetch?url=`) reads a catalog through the server, from the allow-listed hosts only (`fetch`).
 //!
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
 
 use crate::fetch::{self, FetchError};
+use crate::fetch_scope::{address_ok, guarded_agent, Policy, Scope};
 use crate::helper::Helper;
+use crate::metalink;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
 use ring::digest;
@@ -41,6 +49,8 @@ use tokio::io::AsyncWriteExt;
 
 /// Free space kept back when an upload is accepted, beyond the file itself.
 const UPLOAD_HEADROOM: u64 = 1 << 30;
+/// An upload's part file this long untouched is a leftover, not an upload in progress.
+const UPLOAD_IDLE: Duration = Duration::from_secs(15 * 60);
 /// Finished and failed jobs kept in the list.
 const KEEP_FINISHED: usize = 50;
 /// The largest origin sidecar taken from a request.
@@ -65,6 +75,8 @@ fn api_err(status: u16, code: &'static str, message: impl Into<String>) -> ApiEr
 pub enum State {
     Queued,
     Running,
+    /// Stopped by the person; the part file is kept and Resume continues it.
+    Paused,
     Done,
     Failed,
     Cancelled,
@@ -72,7 +84,7 @@ pub enum State {
 
 impl State {
     fn active(self) -> bool {
-        matches!(self, State::Queued | State::Running)
+        matches!(self, State::Queued | State::Running | State::Paused)
     }
 }
 
@@ -132,10 +144,22 @@ impl Job {
 struct JobErr {
     code: &'static str,
     message: String,
+    /// The HTTP status the download server answered, when that is what stopped the job.
+    status: Option<u16>,
 }
 
+impl JobErr {
+    fn with_status(mut self, status: u16) -> JobErr {
+        self.status = Some(status);
+        self
+    }
+}
+
+/// What a job says when every mirror answered 404 or 410.
+const NOT_MIRRORED: &str = "This file isn't on the download servers yet. Try again later.";
+
 fn job_err(code: &'static str, message: impl Into<String>) -> JobErr {
-    JobErr { code, message: message.into() }
+    JobErr { code, message: message.into(), status: None }
 }
 
 fn io_job_err(e: std::io::Error) -> JobErr {
@@ -165,14 +189,27 @@ pub struct LibraryOptions {
     pub fetch_hosts: Option<Vec<String>>,
     /// The size cap of `/api/fetch`. Default: [`fetch::FETCH_MAX_BYTES`].
     pub fetch_max: Option<u64>,
+    /// Whether the `user` scope of `/api/fetch` (any public address the person typed) is on. Default: on.
+    pub fetch_user: Option<bool>,
+    /// Tests only: `/api/fetch` scopes other than `catalog` may read addresses on this machine.
+    pub fetch_allow_private: bool,
+    /// The most one read of a non-catalog `/api/fetch` scope may take. Default: [`crate::fetch_scope::READ_DEADLINE`].
+    pub fetch_deadline: Option<Duration>,
 }
 
 pub struct Library {
     data: PathBuf,
+    /// The server's own app log (`GET /api/log`).
+    pub log: crate::applog::AppLog,
     helper: Option<Arc<Helper>>,
     free: FreeFn,
     total: FreeFn,
     fetch_hosts: Vec<String>,
+    fetch_user: bool,
+    fetch_allow_private: bool,
+    fetch_deadline: Duration,
+    /// How many reads of the non-catalog scopes may run at once.
+    fetch_slots: Arc<tokio::sync::Semaphore>,
     fetch_max: u64,
     jobs: Mutex<Vec<Job>>,
     /// The cancel flag of the job that is running.
@@ -314,6 +351,9 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     })
 }
 
+/// How many reads of the non-catalog `/api/fetch` scopes may run at once.
+const FETCH_SLOTS: usize = 8;
+
 /// What the library routes need to answer the fetch proxy: the type, and the body as it arrives. An error item ends the body
 /// early (the connection is cut), which is what happens when the cap is passed.
 pub struct FetchStream {
@@ -347,12 +387,17 @@ impl Library {
             }
         }
         let lib = Arc::new(Library {
+            log: crate::applog::AppLog::open(data.join("log")),
             data,
             helper,
             free: o.free_bytes.unwrap_or_else(|| Arc::new(free_bytes)),
             total: o.total_bytes.unwrap_or_else(|| Arc::new(total_bytes)),
             fetch_hosts: o.fetch_hosts.unwrap_or_else(|| fetch::FETCH_HOSTS.iter().map(|h| h.to_string()).collect()),
             fetch_max: o.fetch_max.unwrap_or(fetch::FETCH_MAX_BYTES),
+            fetch_user: o.fetch_user.unwrap_or(true),
+            fetch_allow_private: o.fetch_allow_private,
+            fetch_deadline: o.fetch_deadline.unwrap_or(crate::fetch_scope::READ_DEADLINE),
+            fetch_slots: Arc::new(tokio::sync::Semaphore::new(FETCH_SLOTS)),
             jobs: Mutex::new(jobs),
             running: Mutex::new(None),
             locks: Mutex::new(HashMap::new()),
@@ -467,6 +512,7 @@ impl Library {
             if res.is_ok() && job.kind == "zim" {
                 if let Err(e) = self.rescan().await {
                     eprintln!("cache: rescan after installing {} failed: {e}", job.name);
+                    self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a finished download: {e}"));
                     note = Some(format!("Installed, but the search core was not told: {e}"));
                 }
             }
@@ -474,6 +520,10 @@ impl Library {
             self.update_jobs(|jobs| {
                 let Some(j) = jobs.iter_mut().find(|j| j.id == job.id) else { return };
                 if j.state == State::Cancelled && res.is_err() {
+                    return;
+                }
+                // Paused (or paused and resumed again before the worker noticed): the job is as the person left it.
+                if matches!(j.state, State::Paused | State::Queued) && res.as_ref().is_err_and(|e| e.code == "cancelled") {
                     return;
                 }
                 j.finished_at = Some(now_rfc3339());
@@ -505,8 +555,12 @@ impl Library {
         let part = part_path(&self.data, &job.url);
         let result = self.download_and_install(job, &part, cancel);
         match &result {
+            // Paused keeps the part file (Resume continues it with a Range request); a canceled job throws it away.
             Err(e) if e.code == "cancelled" => {
-                let _ = std::fs::remove_file(&part);
+                let state = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|j| j.id == job.id).map(|j| j.state);
+                if matches!(state, None | Some(State::Cancelled)) {
+                    let _ = std::fs::remove_file(&part);
+                }
             }
             Err(e) if e.code == "checksum" => {
                 let _ = std::fs::remove_file(&part);
@@ -519,10 +573,75 @@ impl Library {
     fn download_and_install(&self, job: &Job, part: &Path, cancel: &AtomicBool) -> Result<(), JobErr> {
         let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         std::fs::create_dir_all(self.tmp_dir()).map_err(io_job_err)?;
-        let agent = fetch::agent();
+        // The address came from a tab: connect only to public addresses, on every redirect too (the catalog hosts excepted).
+        let (agent, refused) = guarded_agent(&self.fetch_hosts, self.fetch_allow_private);
+
+        // 1-3. The file into the part file. For a ZIM, Kiwix's metalink lists the mirrors in order of preference (and the file's
+        // sha-256): each is tried in turn. Without a metalink (or without a sha-256 in it) the address is followed as it is.
+        let meta = if job.kind == "zim" { fetch_metalink(&agent, &job.url) } else { None }
+            .filter(|m| !m.mirrors.is_empty() && (m.sha256.is_some() || job.sha256.is_some()));
+        match &meta {
+            Some(m) => self.fetch_from_mirrors(job, part, cancel, &agent, &refused, m)?,
+            None => self.fetch_to_part(job, part, cancel, &agent, &refused, &job.url, None)?,
+        }
+        check_cancel()?;
+
+        // 4. The checksum: the one given, else the metalink's, else (for a ZIM) the one Kiwix publishes beside the file.
+        let expected = match &job.sha256 {
+            Some(h) => Some(h.to_ascii_lowercase()),
+            None if meta.is_some() => meta.as_ref().and_then(|m| m.sha256.clone()),
+            None if job.kind == "zim" => published_sha256(&agent, &job.url),
+            None => None,
+        };
+        if let Some(want) = expected {
+            let got = sha256_file(part, cancel)?;
+            if got != want {
+                return Err(job_err("checksum", "The file did not match its published checksum, so it was thrown away. Try again."));
+            }
+        }
+        check_cancel()?;
+
+        // 5. Install. A library package is only put in the docs root: the browser installs it.
+        if job.kind == "library" {
+            return self.install_incoming(part, &job.name).map_err(io_job_err);
+        }
+        let icon = job.icon_url.as_deref().and_then(|u| fetch_icon(&agent, u));
+        self.install_zim(part, &job.name, job.origin.as_ref(), icon.as_deref()).map_err(io_job_err)
+    }
+
+    /// Mirrors in the metalink's order: one that answers 404, 410 or 5xx, cannot be reached, or stalls or drops the connection
+    /// mid-body hands over to the next, which continues the part file with a Range request. When every mirror says 404 or 410 the
+    /// file is not on the download servers yet.
+    fn fetch_from_mirrors(&self, job: &Job, part: &Path, cancel: &AtomicBool, agent: &ureq::Agent, refused: &AtomicBool, meta: &metalink::Metalink) -> Result<(), JobErr> {
+        let mut last: Option<JobErr> = None;
+        let mut all_missing = true;
+        for mirror in &meta.mirrors {
+            match self.fetch_to_part(job, part, cancel, agent, refused, mirror, meta.size) {
+                Ok(()) => return Ok(()),
+                Err(e) => match (e.code, e.status) {
+                    (_, Some(404 | 410)) => last = Some(e),
+                    (_, Some(500..=599)) | ("network", _) => {
+                        all_missing = false;
+                        last = Some(e);
+                    }
+                    _ => return Err(e),
+                },
+            }
+        }
+        match (all_missing, last) {
+            (false, Some(e)) => Err(e),
+            _ => Err(job_err("not_mirrored", NOT_MIRRORED)),
+        }
+    }
+
+    /// Steps 1 to 3 of a download from `start`: the answer (where to start, how big the file is), room for the rest, and the body
+    /// appended to the part file. `want_size` is the size the metalink gives: a mirror with another size is passed over.
+    #[allow(clippy::too_many_arguments)]
+    fn fetch_to_part(&self, job: &Job, part: &Path, cancel: &AtomicBool, agent: &ureq::Agent, refused: &AtomicBool, start_url: &str, want_size: Option<u64>) -> Result<(), JobErr> {
+        let check_cancel = || if cancel.load(Ordering::Relaxed) { Err(job_err("cancelled", "Canceled")) } else { Ok(()) };
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         let mut restarted = false;
-        let mut cur = job.url.clone();
+        let mut cur = start_url.to_string();
         let mut hops = 0;
 
         // 1. The answer: where to start, how big the whole file is, and the body (None when the part is already whole).
@@ -548,8 +667,11 @@ impl Library {
                     restarted = true;
                     continue;
                 }
-                Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.")),
-                Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}."))),
+                Err(ureq::Error::Status(404, _)) => return Err(job_err("failed", "That file is no longer on the download server.").with_status(404)),
+                Err(ureq::Error::Status(code, _)) => return Err(job_err("failed", format!("The download server answered {code}.")).with_status(code)),
+                Err(_) if refused.load(Ordering::Relaxed) => {
+                    return Err(job_err("failed", "That address is not on the public internet, so the server will not download from it."))
+                }
                 Err(e) => return Err(job_err("network", format!("The connection failed: {e}"))),
             };
             let status = resp.status();
@@ -580,6 +702,12 @@ impl Library {
                 other => return Err(job_err("failed", format!("The download server answered {other}."))),
             }
         };
+
+        if let Some(w) = want_size {
+            if total > 0 && total != w {
+                return Err(job_err("network", "The download server sent a file of the wrong size. Try again."));
+            }
+        }
 
         // 2. Room for the rest of the file and a margin (5%, at least 64 MB), as the phone's downloader asks.
         if total > 0 {
@@ -624,28 +752,7 @@ impl Library {
         if total > 0 && size != total {
             return Err(job_err("network", format!("The download stopped early ({} of {} MB). Add it again to continue.", size >> 20, total >> 20)));
         }
-        check_cancel()?;
-
-        // 4. The checksum: the one given, else (for a ZIM) the one Kiwix publishes beside the file.
-        let expected = match &job.sha256 {
-            Some(h) => Some(h.to_ascii_lowercase()),
-            None if job.kind == "zim" => published_sha256(&agent, &job.url),
-            None => None,
-        };
-        if let Some(want) = expected {
-            let got = sha256_file(part, cancel)?;
-            if got != want {
-                return Err(job_err("checksum", "The file did not match its published checksum, so it was thrown away. Try again."));
-            }
-        }
-        check_cancel()?;
-
-        // 5. Install. A library package is only put in the docs root: the browser installs it.
-        if job.kind == "library" {
-            return self.install_incoming(part, &job.name).map_err(io_job_err);
-        }
-        let icon = job.icon_url.as_deref().and_then(|u| fetch_icon(&agent, u));
-        self.install_zim(part, &job.name, job.origin.as_ref(), icon.as_deref()).map_err(io_job_err)
+        Ok(())
     }
 
     /// Put a finished ZIM where the app would: `<data>/app/docs/zims/<name>`, first under a hidden name and then renamed over any
@@ -720,7 +827,10 @@ impl Library {
     pub fn add_download(self: &Arc<Self>, body: &[u8]) -> Result<Value, ApiErr> {
         let v: Value = serde_json::from_slice(body).map_err(|_| api_err(400, "bad_json", "the body is not JSON"))?;
         let url = v["url"].as_str().ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?.trim().to_string();
-        fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        let parsed = fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
+        if !address_ok(&parsed, &self.fetch_hosts, self.fetch_allow_private) {
+            return Err(api_err(400, "invalid", "That address is not on the public internet, so the server will not download from it."));
+        }
         let kind = v["kind"].as_str().unwrap_or("");
         if kind != "zim" && kind != "library" {
             return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\""));
@@ -746,7 +856,7 @@ impl Library {
         };
         let icon_url = match v["icon_url"].as_str() {
             None => None,
-            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p)) => Some(u.to_string()),
+            Some(u) if fetch::parse_url(u).is_some_and(|p| fetch::scheme_ok(&p) && address_ok(&p, &self.fetch_hosts, self.fetch_allow_private)) => Some(u.to_string()),
             Some(_) => return Err(api_err(400, "invalid", "\"icon_url\" is not an address the server can read")),
         };
         let view = self.update_jobs(|jobs| {
@@ -767,6 +877,52 @@ impl Library {
     pub fn list_jobs(&self) -> Value {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         Value::Array(jobs.iter().map(Job::view).collect())
+    }
+
+    /// `POST /api/library/jobs/{id}/pause`: a waiting or running job stops and keeps what it has downloaded (the part file); it is
+    /// not started again until [Library::resume_job]. Pausing a paused job answers with it; a finished one is 409 `not_active`.
+    pub fn pause_job(&self, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Queued | State::Running => {
+                        j.state = State::Paused;
+                        j.error = None;
+                        Ok(j.view())
+                    }
+                    State::Paused => Ok(j.view()),
+                    _ => Err(api_err(409, "not_active", "That download has already ended.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        if let Some((rid, flag)) = self.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if rid == id {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+        Ok(view)
+    }
+
+    /// `POST /api/library/jobs/{id}/resume`: a paused job goes back in the queue and continues from its part file. A job that is
+    /// not paused is answered as it is; a finished one is 409 `not_paused`.
+    pub fn resume_job(self: &Arc<Self>, id: &str) -> Result<Value, ApiErr> {
+        let view = self
+            .update_jobs(|jobs| {
+                let j = jobs.iter_mut().find(|j| j.id == id)?;
+                Some(match j.state {
+                    State::Paused => {
+                        j.state = State::Queued;
+                        Ok(j.view())
+                    }
+                    State::Queued | State::Running => Ok(j.view()),
+                    _ => Err(api_err(409, "not_paused", "That download has already ended. Add it again.")),
+                })
+            })
+            .ok_or_else(|| api_err(404, "not_found", "no such job"))??;
+        self.ensure_worker();
+        self.wake.notify_one();
+        Ok(view)
     }
 
     /// `DELETE /api/library/jobs/{id}`: a waiting or running job is canceled (its part file is thrown away); a finished one is
@@ -869,6 +1025,7 @@ impl Library {
         let rescan = self.rescan().await;
         if let Err(e) = &rescan {
             eprintln!("cache: rescan after the upload of {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about an upload: {e}"));
         }
         let mut out = json!({"name": name, "bytes": got, "id": item_id("zim", &name)});
         if let Err(e) = rescan {
@@ -882,6 +1039,75 @@ impl Library {
     /// `GET /api/library/space`: the free and total bytes of the disk the data folder is on (null when that cannot be told).
     pub fn space(&self) -> Value {
         json!({"free_bytes": (self.free)(&self.data), "total_bytes": (self.total)(&self.data)})
+    }
+
+    /// `GET /api/library/storage`: `{"kinds": {"library", "models", "regions", "videos", "notebooks"}}`, the bytes under the folders of
+    /// each kind (the server's side of the phone's `dataKinds`: Library = ZIMs, libraries and their search indexes; Models; Regions =
+    /// the region engine's folder and the map layers; Videos; Notebooks). Walks the disk, so callers run it off the async threads.
+    pub fn storage(&self) -> Value {
+        let app = self.data.join("app");
+        let (docs, support) = (app.join("docs"), app.join("support"));
+        let kind = |dirs: &[PathBuf]| dirs.iter().map(|d| dir_bytes(d)).sum::<u64>();
+        json!({"kinds": {
+            "library": kind(&[docs.join("zims"), docs.join("libraries"), support.join("indexes"), support.join("shared-indexes")]),
+            "models": kind(&[self.data.join("models")]),
+            "regions": kind(&[support.join("regions"), support.join("layers")]),
+            "videos": kind(&[docs.join("videos")]),
+            "notebooks": kind(&[support.join("notebook-share"), support.join("notebook")]),
+        }})
+    }
+
+    /// The leftovers Clean up removes: in `<data>/tmp`, the part file of a download that no job continues (a canceled or finished job
+    /// left it; a queued, running or paused job keeps its own), and an upload's part file untouched for a quarter of an hour (one
+    /// being written is never one). Never anything installed.
+    fn leftovers(&self) -> Vec<PathBuf> {
+        let keep: Vec<PathBuf> = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|j| j.state.active())
+            .map(|j| part_path(&self.data, &j.url))
+            .collect();
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(self.tmp_dir()) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if !n.ends_with(".part") || !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    continue;
+                }
+                let stale = || {
+                    e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a >= UPLOAD_IDLE)
+                };
+                if (n.starts_with("dl-") && !keep.contains(&e.path())) || (n.starts_with("up-") && stale()) {
+                    out.push(e.path());
+                }
+            }
+        }
+        out
+    }
+
+    /// `GET /api/library/cleanup`: the bytes Clean up would free. Walks the disk, so callers run it off the async threads.
+    pub fn cleanup_bytes(&self) -> Value {
+        json!({"bytes": self.leftovers().iter().map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum::<u64>()})
+    }
+
+    /// `POST /api/library/cleanup`: removes the leftovers and tells the bytes freed. Waits (409) while a download is queued or running,
+    /// as the phone's Clean up does.
+    pub fn cleanup(&self) -> Result<Value, ApiErr> {
+        let busy = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|j| matches!(j.state, State::Queued | State::Running));
+        if busy {
+            return Err(api_err(409, "busy", "Wait for the downloads to finish, then clean up."));
+        }
+        let mut freed = 0;
+        for p in self.leftovers() {
+            let n = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            if std::fs::remove_file(&p).is_ok() {
+                freed += n;
+            }
+        }
+        self.log.add(crate::applog::Level::Standard, "CLEANUP", &format!("Clean up freed {freed} bytes"));
+        Ok(json!({"freed": freed}))
     }
 
     /// `POST /api/library/rescan`: the core reads the library folders again. The number of sources it now has.
@@ -930,6 +1156,7 @@ impl Library {
         let mut out = json!({"removed": true, "id": id});
         if let Err(e) = self.rescan().await {
             eprintln!("cache: rescan after removing {name} failed: {e}");
+            self.log.add(crate::applog::Level::Minimal, "ERROR", &format!("The search core was not told about a removal: {e}"));
             out["note"] = json!(format!("Removed, but the search core was not told: {e}"));
         }
         Ok(out)
@@ -961,23 +1188,42 @@ impl Library {
 
     // ---- the catalog fetch proxy
 
-    /// `GET /api/fetch?url=`: check the address, connect, and hand back the body as a stream capped at the size limit.
+    /// `GET /api/fetch?url=[&scope=catalog|models|video|user][&plain=1]`: check the address against the scope's rules, connect, and
+    /// hand back the body as a stream capped at the scope's size limit. `plain=1` is the phone's `httpsOnly: false`.
     pub async fn fetch(self: &Arc<Self>, query: &str) -> Result<FetchStream, ApiErr> {
         let url = fetch::query_param(query, "url").ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?;
-        let (hosts, max) = (self.fetch_hosts.clone(), self.fetch_max);
-        let u2 = url.clone();
-        let opened = tokio::task::spawn_blocking(move || fetch::open(&hosts, &u2, max)).await.map_err(|e| api_err(500, "server_error", e.to_string()))?;
+        let scope = match fetch::query_param(query, "scope") {
+            None => Scope::Catalog,
+            Some(s) => Scope::parse(&s).ok_or_else(|| api_err(400, "invalid", "\"scope\" is catalog, models, video or user"))?,
+        };
+        let mut policy = Policy::new(scope, self.fetch_hosts.clone());
+        policy.plain = fetch::query_param(query, "plain").as_deref() == Some("1");
+        policy.allow_private = self.fetch_allow_private;
+        policy.deadline = self.fetch_deadline;
+        if scope == Scope::User && !self.fetch_user {
+            return Err(api_err(403, "scope_off", "Reading an address you typed is switched off on this server."));
+        }
+        // The catalog hosts are few and fixed; the other scopes reach other people's servers, so only a few run at once.
+        let permit = if scope == Scope::Catalog {
+            None
+        } else {
+            Some(self.fetch_slots.clone().try_acquire_owned().map_err(|_| api_err(429, "busy", "Too many reads are running. Try again in a moment."))?)
+        };
+        let max = policy.max_bytes(self.fetch_max);
+        let opened = tokio::task::spawn_blocking(move || fetch::open_with(&policy, &url, max)).await.map_err(|e| api_err(500, "server_error", e.to_string()))?;
         let opened = opened.map_err(|e| match e {
             FetchError::BadUrl => api_err(400, "invalid", "That is not an address the server will read."),
-            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not one of the catalog hosts.")),
-            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The catalog answered {c}.")),
-            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than a catalog."),
-            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The catalog redirected too many times."),
-            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the catalog: {m}")),
+            FetchError::Denied(h) => api_err(403, "host_not_allowed", format!("{h} is not an address this server will read for that.")),
+            FetchError::Upstream(c) => api_err(502, "upstream_status", format!("The server answered {c}.")),
+            FetchError::TooLarge => api_err(413, "too_large", "That answer is bigger than this server hands on."),
+            FetchError::TooManyRedirects => api_err(502, "upstream_status", "The server redirected too many times."),
+            FetchError::Unreachable(m) => api_err(502, "unreachable", format!("Could not reach the server: {m}")),
+            FetchError::BadType(t) => api_err(415, "unsupported_type", format!("That answer is not text, data or a picture ({t}).")),
         })?;
         let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
         let mut reader = opened.reader;
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let mut buf = vec![0u8; 64 << 10];
             let mut sent: u64 = 0;
             loop {
@@ -1010,7 +1256,8 @@ fn item_id(kind: &str, name: &str) -> String {
     format!("{kind}-{}", &hex(h.as_ref())[..16])
 }
 
-fn dir_bytes(p: &Path) -> u64 {
+/// Every byte under `p`, in all its files and folders (0 for a folder that is not there).
+pub(crate) fn dir_bytes(p: &Path) -> u64 {
     let mut total = 0;
     if let Ok(rd) = std::fs::read_dir(p) {
         for e in rd.flatten() {
@@ -1057,6 +1304,30 @@ fn scan_items(data: &Path, zims: &Path, libs: &Path) -> Vec<Value> {
         out.push(json!({"id": item_id("library", &n), "kind": "library", "name": n, "title": n, "bytes": dir_bytes(&p), "path": rel(&p)}));
     }
     out
+}
+
+/// Kiwix's metalink for a ZIM (`<address>.meta4`, beside the file), or None when there is none or it cannot be read.
+fn fetch_metalink(agent: &ureq::Agent, url: &str) -> Option<metalink::Metalink> {
+    let path = url.split(['?', '#']).next()?;
+    if !path.to_ascii_lowercase().ends_with(".zim") {
+        return None;
+    }
+    let mut cur = format!("{path}.meta4");
+    for _ in 0..6 {
+        fetch::parse_url(&cur).filter(fetch::scheme_ok)?;
+        let resp = agent.get(&cur).timeout(Duration::from_secs(30)).call().ok()?;
+        if matches!(resp.status(), 301 | 302 | 303 | 307 | 308) {
+            cur = fetch::resolve(&cur, resp.header("location")?)?;
+            continue;
+        }
+        if resp.status() != 200 {
+            return None;
+        }
+        let mut text = String::new();
+        resp.into_reader().take(1 << 20).read_to_string(&mut text).ok()?;
+        return metalink::parse(&text);
+    }
+    None
 }
 
 /// The SHA-256 Kiwix publishes next to a ZIM (`<address>.sha256`), when there is one.

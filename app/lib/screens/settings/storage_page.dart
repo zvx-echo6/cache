@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
+import '../../desktop/desktop.dart';
+import '../../desktop/fact_table.dart';
+import '../../linux_ui.dart';
 import '../../platform/app_log.dart';
 import '../../platform/app_log_io.dart' show appLogSize, shareAppLog;
 import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
+import '../../platform/server_log.dart';
+import '../../platform/share_or_copy.dart' show shareTextOrCopy;
 import '../../video/format.dart';
 import '../../weather/catalogue.dart' show isAllowedAddress;
 import '../../weather/weather_state.dart';
@@ -28,10 +34,14 @@ class _StoragePageState extends State<StoragePage> {
   StorageUsage get u => d.hub.storage;
   bool _cleaning = false;
 
+  /// In a browser: Cache Server's own log, whose level the Advanced row shows.
+  late final ServerLog? _serverLog = linuxUi ? ServerLog() : null;
+
   @override
   void initState() {
     super.initState();
     u.measure();
+    _serverLog?.refresh();
   }
 
   /// A list was opened to delete from: measure again when it closes.
@@ -60,12 +70,41 @@ class _StoragePageState extends State<StoragePage> {
     final k = context.t;
     final s = d.hub.settings;
     return ListenableBuilder(
-      listenable: Listenable.merge([u, s]),
+      listenable: Listenable.merge([u, s, ?_serverLog]),
       builder: (context, _) {
         final kinds = u.kinds;
         final colors = _colors(k);
         final free = u.freeBytes;
         final clean = u.cleanupBytes;
+        final desktop = isLinuxDesktop(context);
+        // The Clean up and Kept free rows: on the desktop one card of flat 44-pixel rows, in the table's own row language.
+        final rows = <Widget>[
+                SettingsRow(
+                  key: const ValueKey('clean-up'),
+                  compact: desktop,
+                  icon: Icons.cleaning_services_outlined,
+                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
+                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
+                  trailing: _cleaning
+                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
+                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
+                ),
+                if (!linuxUi)
+                  SwitchRow(
+                  title: 'Mobile data downloads',
+                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
+                  value: s.mobileForDownloads,
+                  onChanged: s.setMobileForDownloads,
+                ),
+                SettingsRow(
+                  key: const ValueKey('kept-free'),
+                  compact: desktop,
+                  icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
+                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
+                  status: const [Part('10% of storage, 5 to 20 GB')],
+                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
+                ),
+              ];
         return SettingsPage(
           title: 'Storage',
           children: [
@@ -77,7 +116,7 @@ class _StoragePageState extends State<StoragePage> {
                 Text(
                   [
                     u.measured ? '${formatBytes(u.usedBytes)} used by Cache' : 'Measuring…',
-                    free == null ? 'free space unknown' : '${formatBytes(free)} free on this device',
+                    free == null ? 'free space unknown' : '${formatBytes(free)} free on ${linuxUi ? 'the server' : 'this device'}',
                   ].join(' · '),
                   key: const ValueKey('storage-line'),
                   maxLines: 1,
@@ -86,46 +125,62 @@ class _StoragePageState extends State<StoragePage> {
                 ),
               ],
             ),
-            SettingsGroup(
-              rows: [
-                SettingsRow(
-                  key: const ValueKey('clean-up'),
-                  icon: Icons.cleaning_services_outlined,
-                  title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
-                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
-                  trailing: _cleaning
-                      ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
-                      : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),
-                ),
-                SwitchRow(
-                  title: 'Mobile data downloads',
-                  status: [Part(s.mobileForDownloads ? 'On: big downloads use mobile data too' : 'Off: big downloads wait for Wi-Fi')],
-                  value: s.mobileForDownloads,
-                  onChanged: s.setMobileForDownloads,
-                ),
-                SettingsRow(
-                  key: const ValueKey('kept-free'),
-                  icon: Icons.phone_android,
-                  title: 'Kept free for the device',
-                  status: const [Part('10% of storage, 5 to 20 GB')],
-                  trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
-                ),
-              ],
-            ),
-            const NoteText('Weather and alerts always update, on any connection.'),
-            SettingsGroup(
-              rows: [
-                for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
-              ],
-            ),
+            if (desktop)
+              Material(
+                color: k.surface,
+                borderRadius: BorderRadius.circular(14),
+                clipBehavior: Clip.antiAlias,
+                child: Column(children: [for (var i = 0; i < rows.length; i++) ...[if (i > 0) Divider(height: 1, color: k.secondary.withValues(alpha: 0.2)), rows[i]]]),
+              )
+            else
+              SettingsGroup(rows: rows),
+            if (!linuxUi) const NoteText('Weather and alerts always update, on any connection.'),
+            // The Linux desktop shows the kinds as a table; every other window keeps the rows.
+            if (isLinuxDesktop(context))
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const GroupLabel('What Cache stores'),
+                  FactTable(
+                    headers: const ['Kind', 'Items', 'Size'],
+                    rows: [for (var i = 0; i < kinds.length; i++) _factRow(kinds[i], colors[i % colors.length])],
+                  ),
+                ],
+              )
+            else
+              SettingsGroup(
+                rows: [
+                  for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
+                ],
+              ),
             AdvancedRow(
               key: const ValueKey('storage-advanced'),
-              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather))),
+              status: linuxUi ? 'Log: ${logLevelTitle(_serverLog?.level ?? appLog.level)}' : 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'} · Log: ${logLevelTitle(appLog.level)}',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s, weather: d.hub.weather, serverLog: _serverLog))).then((_) => _serverLog?.refresh()),
             ),
           ],
         );
       },
+    );
+  }
+
+  FactRow _factRow(DataKind kind, Color color) {
+    final k = context.t;
+    final n = kind.count?.call();
+    final list = kind.list;
+    return FactRow(
+      key: ValueKey('kind-${kind.id}'),
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(kind.icon, size: 22, color: k.secondary),
+          Positioned(right: -3, bottom: -3, child: Container(width: 9, height: 9, decoration: BoxDecoration(color: color, shape: BoxShape.circle))),
+        ],
+      ),
+      label: kind.label,
+      items: n?.toString(),
+      size: u.measured ? formatBytes(u.bytesOf(kind.id)) : 'Measuring…',
+      onTap: list == null ? null : () => _open(list()),
     );
   }
 
@@ -187,8 +242,8 @@ class _Bar extends StatelessWidget {
 /// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer), and Cache's
 /// own log: how much it keeps, Share log and Clear log; and the Source list address, where the list of weather and alerts sources
 /// comes from.
-class IndexingSpeedPage extends StatelessWidget {
-  const IndexingSpeedPage({super.key, required this.settings, this.log, this.weather});
+class IndexingSpeedPage extends StatefulWidget {
+  const IndexingSpeedPage({super.key, required this.settings, this.log, this.weather, this.serverLog});
 
   final AppSettings settings;
 
@@ -197,6 +252,37 @@ class IndexingSpeedPage extends StatelessWidget {
 
   /// Weather and alerts, for the Source list address (left out where there is none).
   final WeatherState? weather;
+
+  /// In a browser: Cache Server's own log, which the log rows then use (a browser has no log file). Null on a phone.
+  final ServerLog? serverLog;
+
+  @override
+  State<IndexingSpeedPage> createState() => _IndexingSpeedPageState();
+}
+
+class _IndexingSpeedPageState extends State<IndexingSpeedPage> {
+  AppSettings get settings => widget.settings;
+  WeatherState? get weather => widget.weather;
+  late final ServerLog? _server = widget.serverLog ?? (linuxUi ? ServerLog() : null);
+
+  @override
+  void initState() {
+    super.initState();
+    _server?.refresh();
+  }
+
+  Future<void> _shareServerLog(BuildContext context) async {
+    final text = await _server!.text();
+    if (!context.mounted) return;
+    if (text == null) return say(context, "Couldn't read the log.");
+    // The Copy and Download sheet (Download saves the text with the browser's own save); a browser with a share sheet uses that.
+    await shareTextOrCopy(context, 'Cache Server log', text, (title, t) => SharePlus.instance.share(ShareParams(text: t, title: title)));
+  }
+
+  Future<void> _clearServerLog(BuildContext context) async {
+    final ok = await _server!.clear();
+    if (context.mounted) say(context, ok ? 'Log cleared' : "Couldn't clear the log.");
+  }
 
   /// Asks for the address of the source list; Use the default puts the published one back. An address that is not https is refused.
   Future<void> _changeSourceList(BuildContext context, WeatherState w) async {
@@ -215,10 +301,12 @@ class IndexingSpeedPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final log = this.log ?? appLog;
+    final log = widget.log ?? appLog;
+    final server = _server;
     return ListenableBuilder(
-      listenable: Listenable.merge([settings, log, ?weather]),
+      listenable: Listenable.merge([settings, log, ?server, ?weather]),
       builder: (context, _) {
+        final level = server?.level ?? log.level;
         Widget choice(String key, String title, String status, bool normal) => SettingsRow(
               key: ValueKey(key),
               title: title,
@@ -230,7 +318,8 @@ class IndexingSpeedPage extends StatelessWidget {
         return SettingsPage(
           title: 'Advanced',
           children: [
-            SettingsGroup(
+            if (!linuxUi)
+              SettingsGroup(
               label: 'Background indexing speed',
               rows: [
                 choice('indexing-gentle', 'Gentle', 'Keeps the device cool and the battery longer', false),
@@ -245,28 +334,32 @@ class IndexingSpeedPage extends StatelessWidget {
                     key: ValueKey('log-${l.name}'),
                     title: l == LogLevel.standard ? '${logLevelTitle(l)} (default)' : logLevelTitle(l),
                     status: [Part(logLevelDetail(l))],
-                    trailing: log.level == l ? Icon(Icons.check, color: k.accent) : null,
+                    trailing: level == l ? Icon(Icons.check, color: k.accent) : null,
                     chevron: false,
-                    onTap: () => log.setLevel(l),
+                    onTap: () => server != null ? server.setLevel(l) : log.setLevel(l),
                   ),
               ],
             ),
-            const NoteText('The log stays on this device. Nothing leaves it unless you tap Share log.'),
+            NoteText('The log stays on ${linuxUi ? 'the server' : 'this device'}. Nothing leaves it unless you tap Share log.'),
             SettingsGroup(
               rows: [
                 SettingsRow(
                   key: const ValueKey('log-share'),
                   icon: Icons.ios_share,
                   title: 'Share log',
-                  status: [Part(log.dir == null ? 'No log yet' : appLogSize())],
-                  onTap: log.dir == null ? null : () => shareAppLog(context),
+                  status: [Part(server != null ? (server.bytes == 0 ? 'No log yet' : formatBytes(server.bytes)) : log.dir == null ? 'No log yet' : appLogSize())],
+                  onTap: server != null
+                      ? (server.bytes == 0 ? null : () => _shareServerLog(context))
+                      : log.dir == null
+                      ? null
+                      : () => shareAppLog(context),
                 ),
                 SettingsRow(
                   key: const ValueKey('log-clear'),
                   icon: Icons.delete_outline,
                   title: 'Clear log',
                   chevron: false,
-                  onTap: log.dir == null ? null : log.clear,
+                  onTap: server != null ? () => _clearServerLog(context) : (log.dir == null ? null : log.clear),
                 ),
               ],
             ),

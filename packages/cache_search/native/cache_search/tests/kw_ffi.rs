@@ -218,6 +218,66 @@ fn epub(title: &str, chapters: &[(&str, &str, &str, usize)]) -> Vec<u8> {
     zip(&refs)
 }
 
+/// An EPUB with a table of contents. `toc` is "nav" (EPUB 3 nav.xhtml), "ncx" (EPUB 2 toc.ncx) or "none". Chapters are
+/// (file name, table-of-contents label, h1 heading, topic word); an empty label has no entry in the table of contents, an
+/// empty heading has no h1.
+fn epub_toc(title: &str, toc: &str, chapters: &[(&str, &str, &str, &str)]) -> Vec<u8> {
+    let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    let mut manifest = String::new();
+    let mut spine = String::new();
+    for (i, (file, _, _, _)) in chapters.iter().enumerate() {
+        manifest.push_str(&format!(r#"<item id="c{i}" href="{file}" media-type="application/xhtml+xml"/>"#));
+        spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
+    }
+    let mut spine_attr = String::new();
+    let mut members: Vec<(String, Vec<u8>)> = Vec::new();
+    match toc {
+        "nav" => {
+            manifest.push_str(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
+            let items: String = chapters
+                .iter()
+                .filter(|c| !c.1.is_empty())
+                .map(|(f, l, _, _)| format!(r##"<li><a href="{f}#top">{l}</a></li>"##))
+                .collect();
+            members.push((
+                "OEBPS/nav.xhtml".into(),
+                format!(r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>{items}</ol></nav></body></html>"#).into_bytes(),
+            ));
+        }
+        "ncx" => {
+            manifest.push_str(r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#);
+            spine_attr = r#" toc="ncx""#.into();
+            let points: String = chapters
+                .iter()
+                .filter(|c| !c.1.is_empty())
+                .enumerate()
+                .map(|(k, (f, l, _, _))| format!(r#"<navPoint id="p{k}" playOrder="{k}"><navLabel><text>{l}</text></navLabel><content src="{f}"/></navPoint>"#))
+                .collect();
+            members.push((
+                "OEBPS/toc.ncx".into(),
+                format!(r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>{points}</navMap></ncx>"#).into_bytes(),
+            ));
+        }
+        _ => {}
+    }
+    let opf = format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title></metadata><manifest>{manifest}</manifest><spine{spine_attr}>{spine}</spine></package>"#
+    );
+    members.push(("mimetype".into(), b"application/epub+zip".to_vec()));
+    members.push(("META-INF/container.xml".into(), container.as_bytes().to_vec()));
+    members.push(("OEBPS/content.opf".into(), opf.into_bytes()));
+    for (file, _, heading, topic) in chapters {
+        let h1 = if heading.is_empty() { String::new() } else { format!("<h1>{heading}</h1>") };
+        let body = format!(
+            "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>x</title></head><body>{h1}<p>{}</p></body></html>",
+            words(topic, 200)
+        );
+        members.push((format!("OEBPS/{file}"), body.into_bytes()));
+    }
+    let refs: Vec<(&str, Vec<u8>)> = members.iter().map(|(n, d)| (n.as_str(), d.clone())).collect();
+    zip(&refs)
+}
+
 fn srt(cues: &[(u32, &str)]) -> Vec<u8> {
     // one cue every 4 seconds starting at `start`, numbered; times as SRT writes them
     let mut s = String::new();
@@ -414,6 +474,36 @@ fn media_entries(epubs: &[(&str, Vec<u8>)]) -> Vec<(&'static str, &'static str, 
 
 // ---------------------------------------------------------------------------------------------------------
 // captions (a saved video)
+
+/// A saved video's captions are found by the app's own search (Home, Videos) but not by Ask's search tool: what the model
+/// reads stays as it was until the owner decides otherwise (1.1).
+#[test]
+fn asks_search_tool_leaves_out_saved_video_captions_the_apps_search_finds_them() {
+    // Its own video id: caption jobs are keyed by source (host/uuid) across the test process, so a test sharing another's id
+    // (cancelling_keeps_the_build_… uses …0002) can be handed the other's job when both run at once.
+    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000003";
+    let t = TempDir::new("vidask");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    save_video(&vdir, VIDEO, "Flood Safety Basics", &[("en", vtt_of("sandbag barriers", 30))]);
+    let source = format!("{HOST}/{VIDEO}");
+    let mut h = open(&[], &idx, &vdir);
+    let done = run(job_params(&idx, "captions", &source));
+    assert_eq!(done["phase"], "publish", "{done}");
+    let started = Instant::now();
+    let r = loop {
+        let r = search(&mut h, "sandbag barriers", json!({"k": 3}));
+        if !r["results"].as_array().unwrap().is_empty() || started.elapsed() > Duration::from_secs(30) {
+            break r;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(r["results"][0]["source_kind"], "video", "the app's search finds the caption: {r}");
+
+    let mut conv = cache_search::conv::Conversation::new();
+    let out = h.call_tool(&mut conv, "search", &json!({"query": "sandbag barriers"}).to_string(), "2026-11-14T12:00:00-07:00").unwrap();
+    assert!(!out.contains("Flood Safety Basics") && !out.contains("cap:"), "Ask's search tool shows no caption: {out}");
+}
+
 
 #[test]
 fn saved_video_captions_build_publish_attach_search_cite_read_and_resume() {
@@ -958,7 +1048,7 @@ fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
     let first = &r["results"][0];
     let addr = first["address"].as_str().unwrap().to_string();
     assert!(addr.starts_with(&format!("zimepub:{U1}/Books/guide.epub@")), "{addr}");
-    assert_eq!(first["title"], "Field Guide, Wildfire");
+    assert_eq!(first["title"], "Field Guide · Wildfire");
     assert_eq!(first["source_kind"], "zim");
     let (_, c) = h.last_cites.iter().find(|(a, _)| *a == addr).unwrap().clone();
     let link = c.link.clone().unwrap();
@@ -972,7 +1062,7 @@ fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
     assert!(first.get("time").is_none() && first.get("lang").is_none(), "{first}");
     // read: the chapter around the passage, with its heading
     let read: Value = serde_json::from_str(&h.read(&addr, 6000).unwrap()).unwrap();
-    assert_eq!(read["title"], "Field Guide, Wildfire");
+    assert_eq!(read["title"], "Field Guide · Wildfire");
     let text = read["text"].as_str().unwrap();
     assert!(
         text.starts_with("Chapter: Wildfire\n\n") && text.contains("wildfire guidance"),
@@ -1094,6 +1184,45 @@ fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn an_epub_hit_is_titled_with_the_book_and_the_chapter_never_the_file_name() {
+    const U1: &str = "0badc0de-0000-4000-8000-000000000b11";
+    let t = TempDir::new("epubtitle");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let horror = epub_toc(
+        "Le Horror Altissime",
+        "nav",
+        &[
+            ("5869263921187440717_15949-h-1.htm", "Chapter II", "Not This Heading", "wildfire"),
+            ("5869263921187440717_15949-h-2.htm", "", "Second Heading", "kayak"),
+            ("5869263921187440717_15949-h-3.htm", "", "", "tarpaulin"),
+        ],
+    );
+    let old = epub_toc("Old Style Book", "ncx", &[("b1.htm", "Opening", "Other", "sextant")]);
+    let d = t.0.join("e1");
+    std::fs::create_dir_all(&d).unwrap();
+    let z = d.join("media.zim");
+    write_zim(&z, U1, "media_test", &media_entries(&[("horror.epub", horror), ("old.epub", old)]));
+    let mut h = open(&[&z], &idx, &vdir);
+    wait_status(&mut h, |v| v["sources"][0]["epubindex"]["entries"].is_u64());
+    run(job_params(&idx, "zim-epub", U1));
+    wait_status(&mut h, |v| v["sources"][0]["epubindex"]["state"] == "ready");
+    for (query, want) in [
+        ("wildfire guidance", "Le Horror Altissime \u{b7} Chapter II"),
+        ("kayak guidance", "Le Horror Altissime \u{b7} Second Heading"),
+        ("tarpaulin guidance", "Le Horror Altissime \u{b7} Part 3"),
+        ("sextant guidance", "Old Style Book \u{b7} Opening"),
+    ] {
+        let r = search(&mut h, query, json!({"kinds": ["zim-epub"]}));
+        let first = &r["results"][0];
+        assert_eq!(first["title"], want, "{query}: {first}");
+        assert!(!first["title"].as_str().unwrap().contains(".htm"), "{first}");
+        let addr = first["address"].as_str().unwrap().to_string();
+        let read: Value = serde_json::from_str(&h.read(&addr, 6000).unwrap()).unwrap();
+        assert_eq!(read["title"], want, "read {query}");
+    }
 }
 
 #[test]

@@ -8,7 +8,9 @@ import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/places.dart';
+import '../../platform.dart' as plat;
 import '../../theme.dart';
+import 'photo_viewer.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
 /// One control for a field (UX 3.3): text input, number keypad with its unit, Yes/No segments, choice chips, a place with
@@ -128,9 +130,12 @@ class _PlaceField extends StatelessWidget {
   Widget build(BuildContext context) => PlaceRow(place: value, places: places, onChanged: onChanged, label: null);
 }
 
-/// "Place: Home  [Change]": the entry's place (or "No place"), changed through the place picker.
+/// "Place: Home  [Edit]": the entry's place (or "No place"), changed through the place picker.
 class PlaceRow extends StatelessWidget {
-  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false});
+  const PlaceRow({super.key, required this.place, required this.places, required this.onChanged, this.label = 'Place', this.pending = false, this.onShowOnMap});
+
+  /// Tapping the "Place: ..." line opens Maps focused on the place; null leaves the line plain.
+  final VoidCallback? onShowOnMap;
 
   final NbPlace? place;
   final PlaceChoices places;
@@ -148,21 +153,33 @@ class PlaceRow extends StatelessWidget {
       children: [
         Icon(Icons.place_outlined, size: 20, color: k.secondary),
         const SizedBox(width: 8),
-        Expanded(child: Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.text))),
+        Expanded(
+          child: onShowOnMap != null && place != null
+              // the whole line is the link (as the Book page's Subject): it opens Maps at the place
+              ? InkWell(
+                  key: const ValueKey('place-show-on-map'),
+                  onTap: onShowOnMap,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent)),
+                  ),
+                )
+              : Text(label == null ? text : '$label: $text', style: TextStyle(fontSize: 16, color: k.text)),
+        ),
         TextButton(
           key: const ValueKey('place-change'),
           onPressed: () async {
             final pick = await pickPlace(context, places);
             if (pick != null) onChanged(pick.place);
           },
-          child: const Text('Change'),
+          child: const Text('Edit'),
         ),
       ],
     );
   }
 }
 
-/// The photos of an entry or a photo field: thumbnails (tap and hold to take one out) and "Add photo" (Take photo / Choose
+/// The photos of an entry or a photo field: thumbnails (tap to view full screen, tap and hold to take one out) and "Add photo" (Take photo / Choose
 /// from phone). Photos added here and taken out again before the entry is saved are deleted by the caller.
 class PhotoStrip extends StatelessWidget {
   const PhotoStrip({super.key, required this.notebook, required this.ids, required this.onChanged, this.onAdded});
@@ -180,10 +197,15 @@ class PhotoStrip extends StatelessWidget {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          for (final id in ids)
+          for (var i = 0; i < ids.length; i++)
             GestureDetector(
-              onLongPress: () => onChanged([for (final x in ids) if (x != id) x]),
-              child: NbThumb(notebook: notebook, id: id),
+              key: ValueKey('photo-${ids[i]}'),
+              onTap: () => openPhotoViewer(context, notebook, ids, i),
+              onLongPress: () async {
+                final id = ids[i];
+                if (await confirmRemovePhoto(context) && context.mounted) onChanged([for (final x in ids) if (x != id) x]);
+              },
+              child: NbThumb(notebook: notebook, id: ids[i]),
             ),
           OutlinedButton.icon(
             key: const ValueKey('add-photo'),
@@ -198,6 +220,29 @@ class PhotoStrip extends StatelessWidget {
           ),
         ],
       );
+}
+
+const String kRemovePhotoQuestion = 'Remove this photo?';
+
+/// Tap and hold on a photo asks first (same dialog style as "Delete this book?"): only Remove takes it out; Cancel or dismissing keeps it.
+Future<bool> confirmRemovePhoto(BuildContext context) async {
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('remove-photo-confirm'),
+      title: const Text(kRemovePhotoQuestion),
+      actions: [
+        TextButton(key: const ValueKey('remove-photo-cancel'), onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+        TextButton(
+          key: const ValueKey('remove-photo-remove'),
+          style: TextButton.styleFrom(foregroundColor: ctx.t.emergency),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+  return yes == true;
 }
 
 /// "Take photo" or "Choose from phone", then the photo is stored.
@@ -237,7 +282,7 @@ class NbThumb extends StatelessWidget {
         child: SizedBox(
           width: size,
           height: size,
-          child: FutureBuilder<File>(
+          child: plat.isWeb ? _WebThumb(notebook: notebook, id: id, size: size) : FutureBuilder<File>(
             future: notebook.thumbFile(id),
             builder: (context, snap) {
               final f = snap.data;
@@ -246,5 +291,37 @@ class NbThumb extends StatelessWidget {
             },
           ),
         ),
+      );
+}
+
+/// A thumbnail in a browser: read from the server's media folder (photos that came by sync are there too), once per photo.
+class _WebThumb extends StatefulWidget {
+  const _WebThumb({required this.notebook, required this.id, required this.size});
+
+  final NotebookState notebook;
+  final String id;
+  final double size;
+
+  @override
+  State<_WebThumb> createState() => _WebThumbState();
+}
+
+class _WebThumbState extends State<_WebThumb> {
+  late Future<Uint8List?> _bytes = widget.notebook.thumbBytes(widget.id);
+
+  @override
+  void didUpdateWidget(_WebThumb old) {
+    super.didUpdateWidget(old);
+    if (old.id != widget.id || old.notebook != widget.notebook) _bytes = widget.notebook.thumbBytes(widget.id);
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List?>(
+        future: _bytes,
+        builder: (context, snap) {
+          final b = snap.data;
+          if (b == null) return ColoredBox(color: context.t.surface, child: Icon(Icons.photo_outlined, color: context.t.secondary));
+          return Image.memory(b, fit: BoxFit.cover, width: widget.size, height: widget.size);
+        },
       );
 }

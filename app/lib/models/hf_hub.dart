@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import '../net/fetch.dart' show kUserAgent;
-
+import '../net/fetch.dart' show FetchException, FetchFailure, FetchScope, fetchBytes, kUserAgent;
+import '../platform.dart' as plat;
 
 /// A model repository on Hugging Face.
 class HfModel {
@@ -58,6 +58,14 @@ class HfHub {
     ..connectionTimeout = const Duration(seconds: 20);
 
   Future<Object?> _getJson(Uri u) async {
+    if (plat.isWeb) {
+      // A browser may not read Hugging Face itself: Cache Server reads its model API (the `models` scope) and hands the answer on.
+      try {
+        return jsonDecode(utf8.decode(await fetchBytes(u, maxBytes: 8 * 1024 * 1024, scope: FetchScope.models), allowMalformed: true));
+      } on FetchException catch (e) {
+        throw HttpException(e.failure == FetchFailure.status ? 'Hugging Face answered ${e.status}' : 'Hugging Face could not be read (${e.failure.name})', uri: u);
+      }
+    }
     final c = _client();
     try {
       final req = await c.getUrl(u);

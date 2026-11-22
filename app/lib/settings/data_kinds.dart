@@ -2,6 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
+/// What a row of Sharing and sync opens: the action for [item] of [kind] (its notebook, its page), or null when the app has no
+/// page for it (the row then toggles sharing, as before).
+typedef ShareItemOpener = VoidCallback? Function(BuildContext context, DataKind kind, ShareItem item);
+
 /// One kind of thing Cache keeps on the phone (Library, Models, Regions, ...) and the folders that hold it: the one list Storage
 /// measures and Sharing shares, so the two always agree. A new kind is one more entry in the app's list.
 class DataKind {
@@ -19,7 +23,10 @@ class DataKind {
     this.items,
     this.itemDepth = const {},
     this.remoteItem,
+    this.alongside,
     this.setPrivate,
+    this.gated = const {},
+    this.allowed,
   });
 
   final String id;
@@ -55,15 +62,28 @@ class DataKind {
   final List<ShareItem> Function()? items;
 
   /// How deep an item sits in each shared folder, by share id: 1 (the default) for a file or folder at the top (a ZIM, a
-  /// library), 2 for `store/<layer>.sqlite`, 3 for `downloads/<site>/<video>`. What a linked device holds is listed by it.
+  /// library), 2 for `store-share/<layer>` (the layers shared by the devices), 3 for `downloads/<site>/<video>`. What a linked device holds is listed by it.
   final Map<String, int> itemDepth;
 
   /// The item a path listed by a linked device is ([itemDepth] segments of it), or null when it is not one (a file every item
   /// of the kind needs, which travels with the kind). Null: every listed path is an item, named after its file.
   final ShareItem? Function(String share, String path, int bytes)? remoteItem;
 
+  /// The other paths that go with an item, as sync patterns in the same shared folder (a ZIM's saved icon beside it): switched off
+  /// and synced with the item, but never an item of their own. Null: the item's path covers all of it.
+  final List<String> Function(String share, String path)? alongside;
+
   /// Switches a private item on or off (a private notebook's "Include in sync and sharing"); its state is [ShareItem.on].
   final Future<void> Function(ShareItem item, bool on)? setPrivate;
+
+  /// Folders of a shared folder that are sent only when something shared refers to them, by share id: the notebooks' `photos`
+  /// (every notebook keeps its photos in that one folder). The engine offers a file under it only if it is in the list
+  /// [allowed] gives; what arrives from the other devices is never held back.
+  final Map<String, String> gated;
+
+  /// The files of [gated]'s folder that may be sent, as paths in the shared folder ("photos/cache-ID.jpg"), given the items
+  /// switched off now in share [share] ([off], as the engine gets them).
+  final Future<List<String>> Function(String share, List<String> off)? allowed;
 
   /// Every folder of this kind.
   List<Directory?> get folders => [...shared().values, ...local()];

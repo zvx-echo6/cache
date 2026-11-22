@@ -7,10 +7,13 @@ import '../app_fs.dart';
 
 import '../browse/web/build_api.dart' show BuildBook;
 import '../browse/web/build_compression.dart' show compressionOutcomeWords;
+import '../browse/web/device_files.dart';
 import '../sharing/settings_sync.dart' show kBookshelvesDir;
+import '../sharing/share_rules.dart' show isOwnLibraryFolderName;
 import '../sources/libraries_state.dart';
 import 'cds.dart';
 import 'library_device.dart';
+import 'shelf_server.dart';
 import 'shelf_source.dart';
 import 'shelves_calls.dart';
 
@@ -30,6 +33,7 @@ Future<String?> Function()? libraryDeviceIdShared;
 class PackFacts {
   const PackFacts({
     this.suggested = const [],
+    this.filed,
     this.compression,
     this.sourceBytes,
     this.pages,
@@ -50,8 +54,13 @@ class PackFacts {
   final String? edition;
   final String? year;
 
-  /// The suggested division, then the second best, when known.
+  /// The sorter's top divisions, best first (up to three): the pack's `book.suggested.suggestions`, else (an older pack) its `div`
+  /// then `second_div`.
   final List<String> suggested;
+
+  /// `book.suggested.filed`: the sorter was confident, so the book was filed in `suggested.first`. Null when the pack does not say
+  /// (a pack written before the flag): that is "not confident", and a book is never shelved from a suggestion alone.
+  final bool? filed;
   final Map<String, dynamic>? compression;
   final int? sourceBytes;
   final int? pages;
@@ -72,13 +81,18 @@ class PackFacts {
     final old = h['division'] is Map ? (h['division'] as Map).cast<String, dynamic>() : null;
     final first = (s?['div'] ?? old?['division']) as String?;
     final second = (s?['second_div'] ?? old?['second_division']) as String?;
+    final listed = [
+      for (final x in (s?['suggestions'] is List ? s!['suggestions'] as List : const []))
+        if (x is Map && x['div'] is String) x['div'] as String,
+    ];
     final source = h['source'] is Map ? (h['source'] as Map).cast<String, dynamic>() : null;
     final original = _text(book?['original_blake3']);
     return PackFacts(
-      suggested: [
-        for (final d in [first, second])
+      suggested: {
+        for (final d in (listed.isNotEmpty ? listed : [first, second]).take(3))
           if (d != null && cdsDivision(d) != null) d,
-      ],
+      }.toList(),
+      filed: s?['filed'] is bool ? s!['filed'] as bool : null,
       compression: book?['compression'] is Map ? (book!['compression'] as Map).cast<String, dynamic>() : null,
       sourceBytes: (source?['size'] as num?)?.toInt(),
       pages: (h['page_count'] as num?)?.toInt(),
@@ -179,6 +193,20 @@ class _ViewBook {
   Map<String, dynamic>? get call => (j['call'] as Map?)?.cast<String, dynamic>();
   Map<String, dynamic>? get suggested => (j['suggested'] as Map?)?.cast<String, dynamic>();
 
+  /// The sorter's top divisions the view stores (`suggested.suggestions`, best first); just `suggested.div` when it has no list
+  /// (a pack from before the list, or a publisher's seed place).
+  List<String> get suggestedDivs {
+    final s = suggested;
+    if (s == null) return const [];
+    final listed = [
+      for (final x in (s['suggestions'] is List ? s['suggestions'] as List : const []))
+        if (x is Map && x['div'] is String && cdsDivision(x['div'] as String) != null) x['div'] as String,
+    ];
+    if (listed.isNotEmpty) return {...listed}.take(3).toList();
+    final d = s['div'];
+    return d is String && cdsDivision(d) != null ? [d] : const [];
+  }
+
   /// The copy that holds the book's number (its own number is the book's), else the book's id.
   String get numbered {
     final c = call;
@@ -201,6 +229,11 @@ class _ViewBook {
 /// Each read: this device's own old per-library logs are imported (once per library; the core keeps the record), the view is
 /// resolved, every copy seen for the first time is checked against the others once and a match is written as the same book,
 /// and a new book that matches nothing is shelved in its suggested division with the next free number.
+///
+/// In a browser ([server] given) the shelves are Cache Server's: the libraries' catalogues are read from the server's folders through
+/// AppFs ([DeviceFiles]), the facts of the packs and the resolved view come from the server (server/BUILD-API.md "Bookshelves in the
+/// browser"), and every change is sent to it to write into its own file of the log (the server is the one device that writes: it finds
+/// the same books and shelves new ones itself when it builds). Nothing on this path touches dart:io; the phone's path above is unchanged.
 class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer, ShelfCopies, ShelfUnsorter {
   CdsShelfSource(
     this.libraries, {
@@ -210,7 +243,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     Future<Directory?> Function()? bookshelvesDir,
     Duration? pollEvery,
     int Function()? clock,
-  })  : _calls = calls ?? (libraries == null ? null : CoreShelvesCalls(libraries.sources.whenCoreReady)),
+    ShelfServer? server,
+    DeviceFiles? deviceFiles,
+    void Function(String)? log,
+  })  : _log = log ?? debugPrint,
+        _calls = calls ?? (libraries == null ? null : CoreShelvesCalls(libraries.sources.whenCoreReady)),
+        _server = server,
+        _files = server == null ? null : (deviceFiles ?? DeviceFiles(createAppFs())),
         // ignore: prefer_initializing_formals
         _deviceId = deviceId,
         // ignore: prefer_initializing_formals
@@ -225,10 +264,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Null: no libraries on this device (the shelves show, empty).
   final LibrariesState? libraries;
   final ShelvesCalls? _calls;
+
+  /// A browser: Cache Server's shelves, and its folders' files. Null on a phone and on desktop.
+  final ShelfServer? _server;
+  final DeviceFiles? _files;
   final Future<String?> Function()? _deviceId;
   final Future<List<String>> Function()? _ownIds;
   final Future<Directory?> Function() _dirOf;
   final int Function() _clock;
+  final void Function(String) _log;
   Timer? _poll;
 
   static Future<Directory?> _defaultDir() async {
@@ -256,14 +300,17 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   bool _readOnly = false;
   String _signature = '';
   Future<void>? _reading;
+
+  /// A browser: the check of the server's stamp under way (it reads the books again when the stamp changed).
+  Future<void>? _checking;
   bool _again = false;
   Directory? _dir;
   final Set<String> _imported = {};
 
   /// Ends when the books have been read again after the last change (tests).
   Future<void> whenRead() async {
-    while (_reading != null) {
-      await _reading;
+    while (_reading != null || _checking != null) {
+      await (_reading ?? _checking)!;
     }
   }
 
@@ -366,7 +413,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     return ShelfTarget.shelf(a.division ?? a.classNumber);
   }
 
-  bool get _canWrite => !_readOnly && (_deviceId != null || libraryDeviceIdShared != null);
+  bool get _canWrite => !_readOnly && (_server != null || _deviceId != null || libraryDeviceIdShared != null);
 
   @override
   ShelfPlacer? get placer => _canWrite ? this : null;
@@ -393,6 +440,48 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   /// Whether [l] is a library of books (its rows go to Bookshelves).
   bool holdsBooks(LibraryItem l) => _libs.any((x) => x.item.path == l.path);
+
+  /// How many books [l] holds, shelved or not, as Bookshelves counts books: a book of several files is one, and a catalogue document
+  /// Bookshelves has no book for counts as one. A book with copies in two libraries counts in each.
+  int booksIn(LibraryItem l) => documentsIn(l).length;
+
+  /// Every book of [l], as Bookshelves resolves it: the shelf it is on, Unsorted or Hidden, one entry per BOOK (a book of several
+  /// files, in this library or others, is one entry with its copies counted), and one entry for each document of the catalogue the
+  /// view has no book for (no copy: "on no shelf"). Empty when [l] holds no books. In the catalogue's order.
+  List<LibraryDoc> documentsIn(LibraryItem l) {
+    final lb = _libs.where((x) => x.item.path == l.path).firstOrNull;
+    if (lb == null) return const [];
+    final at = <String, _ViewBook>{
+      for (final vb in _view.values)
+        for (final c in vb.copies)
+          for (final loc in (c['locs'] as List? ?? const [])) '$loc': vb,
+    };
+    final out = <LibraryDoc>[];
+    final seen = <String>{};
+    for (final d in lb.docs.entries) {
+      if (_readOnly) {
+        final b = _books['${lb.item.folderName}/${d.key}'];
+        if (b != null) out.add(LibraryDoc(docId: d.key, title: b.title, place: DocPlace.unsorted, book: b));
+        continue;
+      }
+      final vb = at['${lb.id}/${d.key}'];
+      final shown = vb == null ? null : (_books[vb.id] ?? _hidden[vb.id]);
+      if (vb == null || shown == null) {
+        final id = '${lb.id}/${d.key}';
+        out.add(LibraryDoc(docId: d.key, title: d.value.title, place: DocPlace.none, book: _shelfBook(id: id, lb: lb, doc: d.key, title: d.value.title)));
+        continue;
+      }
+      if (!seen.add(vb.id)) continue;
+      out.add(LibraryDoc(
+        docId: d.key,
+        title: shown.title,
+        place: vb.removed ? DocPlace.hidden : (shown.shelf == null ? DocPlace.unsorted : DocPlace.shelved),
+        book: shown,
+        copies: vb.copies.length,
+      ));
+    }
+    return out;
+  }
 
   static void _signFiles(StringBuffer b, Directory dir) {
     if (!dir.existsSync()) return;
@@ -430,6 +519,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   void _onLibraries() {
     if (_disposed) return;
+    if (_server != null) {
+      final c = _checking = _checkServer();
+      unawaited(c.catchError((Object _) {}).whenComplete(() {
+        if (identical(_checking, c)) _checking = null;
+      }));
+      return;
+    }
     String sig;
     try {
       sig = _sign();
@@ -439,6 +535,21 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     if (sig == _signature && !_loading) return;
     _signature = sig;
     _read();
+  }
+
+  /// A browser: reads the books again when the libraries or the server's logs and catalogues changed (its stamp).
+  Future<void> _checkServer() async {
+    String sig;
+    try {
+      final libs = libraries?.libraries ?? const <LibraryItem>[];
+      sig = '${[for (final l in libs) '${l.path}:${l.size}'].join('|')}#${await _server!.stamp()}';
+    } catch (_) {
+      sig = '';
+    }
+    // the same stamp: nothing to read, unless the first read has not started (one under way is reading it)
+    if (_disposed || (sig == _signature && (!_loading || _reading != null))) return;
+    _signature = sig;
+    await _read();
   }
 
   /// Reads the books again (after a change), one read at a time.
@@ -526,7 +637,73 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     }
   }
 
+  /// A browser: each library's catalogue, read from the server's folder through AppFs. Packs are not read here; the server gives their
+  /// facts. A library with no catalogue holds no books.
+  Future<List<_LibraryBooks>> _readLibrariesServer() async {
+    final out = <_LibraryBooks>[];
+    final ids = <String>{};
+    final libs = libraries;
+    if (libs == null) return out;
+    for (final l in libs.libraries) {
+      if (libs.isGuide(l)) continue;
+      String? text;
+      try {
+        text = await _files!.readText('${l.path}/$kDocumentsFile');
+      } catch (_) {
+        continue;
+      }
+      if (text == null) continue;
+      final lb = _LibraryBooks(l);
+      for (final line in const LineSplitter().convert(text).skip(1)) {
+        final f = line.split('\t');
+        if (f.isEmpty || f[0].isEmpty) continue;
+        final hash = f.length > 3 && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(f[3]) ? f[3].toLowerCase() : null;
+        lb.docs[f[0]] = (
+          title: f.length > 2 && f[2].isNotEmpty ? f[2] : f[0],
+          version: f.length > 1 ? int.tryParse(f[1]) ?? 1 : 1,
+          pages: f.length > 5 ? int.tryParse(f[5]) : null,
+          hash: hash,
+        );
+      }
+      var id = libs.idOf(l) ?? l.folderName;
+      if (!ids.add(id)) {
+        id = l.folderName;
+        ids.add(id);
+      }
+      lb.id = id;
+      out.add(lb);
+    }
+    return out;
+  }
+
+  /// A browser: the books from the server's view, and the packs' facts it gives. No view (the server did not answer): the books show
+  /// from their catalogues, read-only, in Unsorted.
+  Future<void> _readOnceServer() async {
+    final server = _server!;
+    final libs = await _readLibrariesServer();
+    _libs = libs;
+    try {
+      try {
+        final facts = await server.facts();
+        for (final lb in libs) {
+          for (final e in (facts[lb.id] ?? const <String, Map<String, dynamic>>{}).entries) {
+            if (lb.docs.containsKey(e.key)) lb.facts[e.key] = PackFacts.fromHeader(e.value);
+          }
+        }
+      } catch (_) {
+        // a book without its pack's facts shows what its catalogue has
+      }
+      final v = await server.view();
+      if (_disposed) return;
+      _apply(libs, v.view);
+    } catch (_) {
+      if (_disposed) return;
+      _apply(libs, null);
+    }
+  }
+
   Future<void> _readOnce() async {
+    if (_server != null) return _readOnceServer();
     final libs = _readLibraries();
     _libs = libs;
     final calls = _calls;
@@ -556,6 +733,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
         }
       }
       var view = await calls.resolve({'dir': dir.path, 'libraries': refs});
+      // the one-time return to Unsorted of what an earlier build shelved with no confidence, then the new copies
+      if (dev != null && await _returnUnconfident(calls, dir, dev, libs, view)) {
+        view = await calls.resolve({'dir': dir.path, 'libraries': refs});
+      }
       if (dev != null && await _firstSeen(calls, dir, dev, libs, view)) {
         view = await calls.resolve({'dir': dir.path, 'libraries': refs});
       }
@@ -589,9 +770,154 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     } catch (_) {}
   }
 
+  /// Whether the sorter was confident about [b]: a publisher's seed `place` (the publisher filed it) or a pack that says `filed`
+  /// (`book.suggested.filed`, which the view carries). Anything else, a pack from before the flag included, is not confident: the
+  /// book stays in Unsorted with its suggestions offered.
+  static bool _confident(_ViewBook b, List<_LibraryBooks> libs) {
+    final s = b.suggested;
+    if (s == null) return false;
+    if (s['filed'] is bool) return s['filed'] == true;
+    // a view that does not say: the pack's own flag, when its pack is on this device
+    for (final c in b.copies) {
+      for (final loc in (c['locs'] as List? ?? const [])) {
+        final t = '$loc';
+        final i = t.indexOf('/');
+        if (i < 0) continue;
+        for (final lb in libs) {
+          if (lb.id == t.substring(0, i) && lb.facts[t.substring(i + 1)]?.filed == true) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static const String _returnFile = 'unconfident-return.json';
+
+  File _returnMarker(Directory dir) => File('${dir.path}${Platform.pathSeparator}.local${Platform.pathSeparator}$_returnFile');
+
+  static bool _writeJson(File f, Map<String, dynamic> j) {
+    try {
+      f.parent.createSync(recursive: true);
+      final tmp = File('${f.path}.tmp')..writeAsStringSync(jsonEncode(j), flush: true);
+      tmp.renameSync(f.path);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Every event of every device's file in the Bookshelves log, with its (at, dev, line) stamp, as the resolver orders them.
+  static List<({int at, String dev, int line, Map<String, dynamic> e})> _readEvents(Directory dir) {
+    final out = <({int at, String dev, int line, Map<String, dynamic> e})>[];
+    final logs = Directory('${dir.path}${Platform.pathSeparator}$kLogDir');
+    if (!logs.existsSync()) return out;
+    for (final f in logs.listSync().whereType<File>()) {
+      if (!f.path.endsWith('.jsonl')) continue;
+      var n = 0;
+      try {
+        for (final l in f.readAsLinesSync()) {
+          final line = n++;
+          if (l.trim().isEmpty) continue;
+          try {
+            final j = jsonDecode(l);
+            if (j is Map && j['at'] is num && j['dev'] is String && j['ev'] is String) out.add((at: (j['at'] as num).toInt(), dev: j['dev'] as String, line: line, e: j.cast<String, dynamic>()));
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    out.sort((a, b) => a.at != b.at ? a.at.compareTo(b.at) : (a.dev != b.dev ? a.dev.compareTo(b.dev) : a.line.compareTo(b.line)));
+    return out;
+  }
+
+  /// A ONE-TIME return to Unsorted for the books an earlier build of this page shelved with no confidence: it shelved every new
+  /// book that had any suggestion (`place ... by: auto` with a `loc`; the app's own add-time place has no `loc`).
+  ///
+  /// A book is returned only when all of these hold:
+  /// - its library was built on a device (the library's settings say `"own": true`, as Add PDF makes them; a published or
+  ///   server-built library has no such key);
+  /// - its latest shelf event is an `auto` place with a `loc`, written by THIS device (so each place is returned by its writer,
+  ///   once), dated before this device first ran the fix;
+  /// - no copy of the book has ever been placed or unsorted by a person, and no copy has an auto place without a `loc` (that is the
+  ///   add-time place: the sorter was confident, or another device's build placed it later);
+  /// - its pack does not say `filed`.
+  ///
+  /// It writes `unsort` (by auto) and a `retire` of the number the book held, through the core's `unconfident-return` append: the
+  /// ONLY write that keeps the `at` it is given instead of holding this device's clock. They are stamped one millisecond after the
+  /// place they replace, so a person's move made on another device and not yet synced, whenever this device last wrote, always
+  /// outranks them (the resolver orders by `at`, `dev`, position).
+  ///
+  /// Once: `.local/unconfident-return.json` (device-local, survives restarts) holds the time of this device's first run, written
+  /// before anything else, and `done` when the events are written. Nothing runs again after `done`, so a device that syncs in later
+  /// with old events is not acted on. Two devices that both run it agree: each returns only its own places, and a book either has
+  /// already returned has an unsort as its latest event. Devices that stay on build 49 keep shelving guesses; those are not returned.
+  Future<bool> _returnUnconfident(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
+    final own = {for (final lb in libs) if (lb.item.settings?['own'] == true) lb.id};
+    if (own.isEmpty) return false; // nothing built on a device is here yet: the one run is kept for when it is
+    final marker = _returnMarker(dir);
+    int? cutoff;
+    if (marker.existsSync()) {
+      try {
+        final j = jsonDecode(marker.readAsStringSync());
+        if (j is! Map || j['done'] == true) return false;
+        cutoff = (j['first_run_at'] as num?)?.toInt();
+      } catch (_) {
+        return false; // a marker that cannot be read is never an invitation to run again
+      }
+    }
+    if (cutoff == null) {
+      cutoff = _clock();
+      if (!_writeJson(marker, {'format': 1, 'first_run_at': cutoff, 'done': false})) return false;
+    }
+    final events = _readEvents(dir);
+    // the ids this device has written its log under (the shared one, and this install's own before sharing was set up)
+    final mine = <String>{dev};
+    try {
+      mine.addAll(await _ownIds?.call() ?? const <String>[]);
+      if (_ownIds == null) {
+        final local = await libraryLocalDeviceId();
+        if (local != null) mine.add(local);
+      }
+    } catch (_) {}
+    final books = (view['books'] as Map? ?? const {}).cast<String, dynamic>();
+    final write = <Map<String, dynamic>>[];
+    final said = <String>[];
+    for (final key in books.keys.toList()..sort()) {
+      final vb = _ViewBook(key, (books[key] as Map).cast<String, dynamic>());
+      if (!vb.shelved || vb.shelf == null || vb.j['by'] != 'auto' || _confident(vb, libs)) continue;
+      final copies = {for (final c in vb.copies) c['copy'] as String};
+      final shelf = [for (final x in events) if ((x.e['ev'] == 'place' || x.e['ev'] == 'unsort') && copies.contains(x.e['copy'])) x];
+      if (shelf.isEmpty) continue;
+      // never a book a person has placed or unsorted on any of its copies, nor one with an add-time place (an auto place with no loc)
+      if (shelf.any((x) => x.e['by'] == 'user')) continue;
+      if (shelf.any((x) => x.e['ev'] == 'place' && x.e['by'] == 'auto' && !(x.e['loc'] is String && (x.e['loc'] as String).isNotEmpty))) continue;
+      final last = shelf.last;
+      if (last.e['ev'] != 'place' || last.e['by'] != 'auto' || last.at >= cutoff || !mine.contains(last.dev)) continue;
+      final loc = last.e['loc'];
+      if (loc is! String || !loc.contains('/') || !own.contains(loc.substring(0, loc.indexOf('/')))) continue;
+      final copy = last.e['copy'] as String;
+      write.add({'ev': 'unsort', 'copy': copy, 'by': 'auto', 'at': last.at + 1});
+      final call = vb.call;
+      if (call != null && call['div'] is String && call['seq'] is num) {
+        write.add({'ev': 'retire', 'copy': vb.numbered, 'div': call['div'], 'seq': (call['seq'] as num).toInt(), 'at': last.at + 1});
+      }
+      said.add('Bookshelves: returned "${vb.title}" ($copy, $loc) from ${vb.shelf} to Unsorted: Cache shelved it with no confidence');
+    }
+    if (write.isNotEmpty) {
+      try {
+        await calls.append({'dir': dir.path, 'dev': dev, 'events': write, 'migration': 'unconfident-return'});
+      } catch (e) {
+        _log('Bookshelves: the return to Unsorted could not be written, it will be tried again: $e');
+        return false;
+      }
+      said.forEach(_log);
+    }
+    _writeJson(marker, {'format': 1, 'first_run_at': cutoff, 'done': true, 'returned': said.length});
+    return write.isNotEmpty;
+  }
+
   /// Copies seen for the first time (in the view, on this device): the core checks them once, against each other and every other
-  /// copy here (`same ... by: auto` for each match), then a new book that matches nothing is shelved in its suggested division
-  /// with the next free number, in (title, copy) order. The copies checked are remembered in `.local/detected.json`. True when
+  /// copy here (`same ... by: auto` for each match), then a new book that matches nothing and that the sorter was confident about
+  /// (`filed`) is shelved in its suggested division with the next free number, in (title, copy) order; the rest stay in Unsorted. The copies checked are remembered in `.local/detected.json`. True when
   /// anything was written.
   Future<bool> _firstSeen(ShelvesCalls calls, Directory dir, String dev, List<_LibraryBooks> libs, Map<String, dynamic> view) async {
     final checked = _readChecked(dir);
@@ -620,7 +946,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     final toShelve = <_ViewBook>[
       for (final e in books.entries)
         if (_ViewBook(e.key, (e.value as Map).cast<String, dynamic>()) case final b
-            when !b.shelved && !b.removed && b.suggested?['div'] is String &&
+            when !b.shelved && !b.removed && b.suggested?['div'] is String && _confident(b, libs) &&
                 b.copies.where((c) => c['available'] == true).every((c) => freshSet.contains(c['copy'])))
           b,
     ]..sort((a, b) {
@@ -725,7 +1051,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
           },
           author: vb.j['author'] as String?,
           edition: [?vb.j['edition'] as String?, if (vb.j['year'] != null) '${vb.j['year']}'].join(', '),
-          suggested: vb.suggested?['div'] as String?,
+          suggested: vb.suggestedDivs,
           spares: spares,
           aka: [for (final a in (vb.j['aka'] as List? ?? const [])) '$a'],
           reading: reading?['copy'] as String? ?? vb.id,
@@ -773,7 +1099,7 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
     ShelvedBy? shelvedBy,
     String? author,
     String? edition,
-    String? suggested,
+    List<String> suggested = const [],
     List<SpareCopy> spares = const [],
     List<String> aka = const [],
     String? reading,
@@ -791,16 +1117,18 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       shelf: shelf,
       callNumber: callNumber,
       shelvedBy: shelvedBy,
-      suggestions: facts?.suggested.isNotEmpty == true
-          ? facts!.suggested
-          : [if (suggested != null && cdsDivision(suggested) != null) suggested],
+      // the pack's three when it is on this device; else what the synced view stored (its top three when the pack had them, else the one)
+      suggestions: facts?.suggested.isNotEmpty == true ? facts!.suggested : suggested,
       pages: facts?.pages ?? d?.pages,
       bytes: lb == null || doc == null ? null : _bytesOf(lb, doc),
       stored: stored,
       author: author ?? facts?.author,
       edition: (edition == null || edition.isEmpty) ? [?facts?.edition, ?facts?.year].join(', ').emptyToNull : edition,
       originalTitle: facts?.sourceTitle != null && facts!.sourceTitle != title ? facts.sourceTitle : null,
-      pdfPath: lb == null || doc == null ? null : localPdfOf(lb.item, doc, d?.hash),
+      // a browser has no file of the book: its PDF is on the server, which the page says
+      pdfPath: _server != null || lb == null || doc == null ? null : localPdfOf(lb.item, doc, d?.hash),
+      onServer: _server != null && lb != null && doc != null,
+      libraryId: _server != null && lb != null && doc != null ? lb.id : null,
       spares: spares,
       aka: aka,
       reading: reading,
@@ -845,6 +1173,13 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   // ---- writing
 
   @override
+  Future<List<int>> Function()? pdfFetcher(ShelfBook book) {
+    final server = _server, lib = book.libraryId, doc = book.docId;
+    if (server == null || !book.onServer || lib == null || doc == null) return null;
+    return () => server.bookPdf(lib, doc);
+  }
+
+  @override
   String? nextNumber(String shelfId) => cdsDivision(shelfId) == null ? null : cdsCallText(shelfId, _next[shelfId] ?? 1);
 
   /// The number [book] would get on [shelfId]: one call number across all of the person's Bookshelves.
@@ -855,6 +1190,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
   /// Appends [events] to this device's file of the Bookshelves log and reads the books again.
   Future<void> _append(List<Map<String, dynamic>> events) async {
     if (events.isEmpty) return;
+    final server = _server;
+    if (server != null) {
+      if (_readOnly) throw StateError('the Bookshelves cannot be written here');
+      final at = _clock();
+      await server.events([for (final e in events) {'at': at, ...e}]);
+      _signature = '';
+      await _read();
+      return;
+    }
     final calls = _calls;
     final dir = _dir ??= await _dirOf();
     if (calls == null || dir == null || _readOnly) throw StateError('the Bookshelves cannot be written here');
@@ -867,13 +1211,119 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
 
   _ViewBook _vb(ShelfBook b) => _view[b.id] ?? _view[_byCopy[b.id]] ?? (throw StateError('the book is not on the Bookshelves'));
 
+  /// What "Delete from all your devices" removes of one document in an own library at [libraryDir] (paths relative to it, `/`):
+  /// every version of the document's pack (`packs/<doc>@<version>.cdoc`, those on disk now) and its PDF (`bookshelf/<pdfHash>.pdf`,
+  /// named by the file's BLAKE3: the `source_blake3` of its `documents.tsv` row, as [localPdfOf] finds it). The one definition:
+  /// [deleteOwnBook] and the two-device harness (tools/books-proof) both remove exactly these.
+  static List<String> deleteTargets(String libraryDir, String docId, String pdfHash) {
+    final sep = Platform.pathSeparator;
+    final packs = <String>[];
+    try {
+      for (final f in Directory('$libraryDir${sep}packs').listSync().whereType<File>()) {
+        final name = f.uri.pathSegments.last;
+        if (name.startsWith('$docId@') && name.endsWith('.cdoc')) packs.add('packs/$name');
+      }
+    } catch (_) {}
+    packs.sort();
+    return [...packs, 'bookshelf/$pdfHash.pdf'];
+  }
+
+  /// The files of [book] in the person's own libraries on this device (My books), which "Delete from all your devices" removes:
+  /// each copy's packs (every version of its document) and its PDF (`bookshelf/<copy>.pdf`). A copy in a downloaded or shared
+  /// library is not the person's to delete and is not listed. Empty when the book has none here.
+  List<({LibraryItem library, String docId, String copy, List<File> packs, File pdf})> ownFilesOf(ShelfBook book) {
+    final _ViewBook vb;
+    try {
+      vb = _vb(book);
+    } catch (_) {
+      return const [];
+    }
+    final sep = Platform.pathSeparator;
+    final out = <({LibraryItem library, String docId, String copy, List<File> packs, File pdf})>[];
+    for (final c in vb.copies) {
+      final copy = c['copy'] as String?;
+      if (copy == null) continue;
+      for (final loc in (c['locs'] as List? ?? const [])) {
+        final l = '$loc';
+        final slash = l.indexOf('/');
+        if (slash <= 0) continue;
+        final (lid, doc) = (l.substring(0, slash), l.substring(slash + 1));
+        final lb = _libs.where((x) => x.id == lid).firstOrNull;
+        if (lb == null || lb.item.settings?['own'] != true || !isOwnLibraryFolderName(lb.item.folderName)) continue;
+        final targets = deleteTargets(lb.item.path, doc, lb.docs[doc]?.hash ?? copy);
+        File at(String rel) => File('${lb.item.path}$sep${rel.replaceAll('/', sep)}');
+        out.add((library: lb.item, docId: doc, copy: copy, packs: [for (final t in targets) if (t.startsWith('packs/')) at(t)], pdf: at(targets.last)));
+      }
+    }
+    return out;
+  }
+
+  /// "Delete from all your devices" (owner decisions, 2026-11-14): removes the book's packs and PDFs from the person's own libraries
+  /// here. Those two files are what syncs of an own library (kLibraryNotShared), so the deletes reach the person's other devices as
+  /// the sync's own deletes, and each device rebuilds its shard and lists from the packs that are left (own_library_sync), which
+  /// takes the book out of search and off the shelves there too. A
+  /// copy another device added without having seen the delete stays (the sync never deletes what was changed meanwhile). The
+  /// Bookshelves events are kept: the shelf place and the call number come back if the book is added again. The packs go first:
+  /// a kill before the PDF leaves only a PDF nothing lists, and the rebuild runs at the next start if it did not here.
+  /// Returns the number of copies deleted.
+  Future<int> deleteOwnBook(ShelfBook book) async {
+    final files = ownFilesOf(book);
+    if (files.isEmpty) throw StateError('the book has no copy in your own libraries on this device');
+    for (final f in files) {
+      for (final p in f.packs) {
+        try {
+          if (p.existsSync()) p.deleteSync();
+        } catch (e) {
+          _log('Delete: a pack could not be removed: $e');
+          rethrow;
+        }
+      }
+    }
+    for (final f in files) {
+      try {
+        if (f.pdf.existsSync()) f.pdf.deleteSync();
+      } catch (e) {
+        _log('Delete: a PDF could not be removed: $e');
+      }
+    }
+    // the shard and the lists follow the packs (LibrariesState.rescan runs own_library_sync, then reads the folder again)
+    await libraries?.rescan();
+    _signature = '';
+    await _read();
+    return files.length;
+  }
+
+  /// The most encoded bytes of events one request to the server carries: a quarter of its 1 MiB body limit (the "at" of each event
+  /// and the brackets are not counted, and the largest realistic book, a long title in a few events, is under 1 KiB).
+  static const kEventBatchBytes = 256 * 1024;
+
   /// Writes the events of a set of moves (each book: to a division, or back to Unsorted with null) and reads the books again.
   /// Each move is against the book's numbered copy: `place`, `retire` (its old number), `assign`; Unsorted is `unsort`, `retire`.
   Future<List<PlacedBook>> _write(List<(ShelfBook, String?)> moves, {required String by}) async {
     final next = Map<String, int>.of(_next);
-    final events = <Map<String, dynamic>>[];
+    var events = <Map<String, dynamic>>[];
     final placed = <PlacedBook>[];
+    final done = <PlacedBook>[];
+    var size = 0;
+    // On the server a request body has a limit (1 MiB), so a big set goes in batches of at most [kEventBatchBytes] encoded bytes, a
+    // book's events never split. The phone writes its own log, with no such limit, and sends everything in one go.
+    final limit = _server == null ? null : kEventBatchBytes;
+    Future<void> flush() async {
+      if (events.isEmpty) return;
+      try {
+        await _append(events);
+      } catch (e) {
+        if (done.isEmpty) rethrow;
+        throw PartialPlacementException(done.length, moves.length, e);
+      }
+      done.addAll(placed);
+      placed.clear();
+      events = [];
+      size = 0;
+    }
+
     for (final (b, to) in moves) {
+      final before = events.length;
       final vb = _view[b.id] ?? _view[_byCopy[b.id]];
       if (vb == null) continue;
       final copy = vb.numbered;
@@ -882,6 +1332,10 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
       if (to == null) {
         events.add({'ev': 'unsort', 'copy': copy, 'by': by});
         if (retire != null) events.add(retire);
+        if (limit != null) {
+          size += utf8.encode(jsonEncode(events.sublist(before))).length + 1;
+          if (size >= limit) await flush();
+        }
         continue;
       }
       final seq = next[to] ?? 1;
@@ -891,11 +1345,15 @@ class CdsShelfSource extends ChangeNotifier implements ShelfSource, ShelfPlacer,
         ..addAll([?retire])
         ..add({'ev': 'assign', 'copy': copy, 'div': to, 'seq': seq});
       placed.add(PlacedBook(before: b, shelf: to, callNumber: cdsCallText(to, seq)));
+      if (limit != null) {
+        size += utf8.encode(jsonEncode(events.sublist(before))).length + 1;
+        if (size >= limit) await flush();
+      }
     }
-    await _append(events);
+    await flush();
     // The numbers as the logs now resolve them (a clash with another device's claim shows its suffix).
     return [
-      for (final p in placed) PlacedBook(before: p.before, shelf: p.shelf, callNumber: book(p.before.id)?.callNumber ?? p.callNumber),
+      for (final p in done) PlacedBook(before: p.before, shelf: p.shelf, callNumber: book(p.before.id)?.callNumber ?? p.callNumber),
     ];
   }
 

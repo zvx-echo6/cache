@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
+class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsLayersJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsZimIconNative, CsDocumentNative, CsCaptionsNative, CsShelvesNative, CsIngestNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -383,6 +383,21 @@ class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative
     return using((a) => f(_p(handle), requestJson.toNativeUtf8(allocator: a)).address);
   }
 
+  late final Pointer<Void> Function(Pointer<Void>)? _layersRefreshStart = () {
+    try {
+      return _lib.lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>('cs_layers_refresh_start');
+    } on ArgumentError {
+      return null;
+    }
+  }();
+
+  @override
+  int layersRefreshStart(int handle) {
+    final f = _layersRefreshStart;
+    if (f == null) return -1;
+    return f(_p(handle)).address;
+  }
+
   @override
   String? jobSet(int job, String json) => _callHS(_jobSet, job, json);
 
@@ -574,6 +589,38 @@ class FfiCsNative implements CsNative, CsJobNative, CsLiveJobNative, CsMapNative
 
   @override
   String? captionsSearch(int handle, String requestJson) => _callHS(_captionsSearch, handle, requestJson);
+
+  // ---- A library document read whole: looked up on first use ----
+
+  late final _HStrInt? _readDocument = _lookupReadDocument();
+
+  _HStrInt? _lookupReadDocument() {
+    try {
+      return _lib.lookupFunction<_HStrIntC, _HStrInt>('cs_read_document');
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  @override
+  bool get hasReadDocument => _readDocument != null;
+
+  @override
+  String? readDocument(int handle, String address, int maxChars) {
+    final f = _readDocument;
+    if (f == null) return null;
+    return using((a) => _take(f(_p(handle), address.toNativeUtf8(allocator: a), maxChars)));
+  }
+
+  // ---- A ZIM's own icon: looked up on first use ----
+
+  late final _HStrStr? _zimIllustration = _lookupHS('cs_zim_illustration');
+
+  @override
+  bool get hasZimIllustration => _zimIllustration != null;
+
+  @override
+  String? zimIllustration(int handle, String zimId) => _callHS(_zimIllustration, handle, zimId);
 
   // ---- PDF indexes of ZIMs: looked up on first use ----
 

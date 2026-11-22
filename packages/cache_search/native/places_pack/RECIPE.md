@@ -112,6 +112,16 @@ container on the build host; nothing is installed on the host itself.
    applied once, every place and town written by level 1 tile.
 4. `places_pack blocks --harvest work/harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox=W,S,E,N] --jobs N`:
    one format 2 pack per level 0 cell (4 degrees), built with a 0.25 degree halo that is dropped afterwards.
+4b. Optional, OpenAddresses (needs OA's per-source `output.geojson` files, from batch.openaddresses.io): write `oa-sources.tsv`
+   (header `source<TAB>path<TAB>license<TAB>license_url<TAB>attribution<TAB>website`, one OA source per line, county sources
+   before the statewide one, licence and attribution from the source's JSON in github.com/openaddresses/openaddresses) and run
+   `places_pack oa-merge --overture-csv in/overture_addresses.csv --sources oa-sources.tsv --out in/addresses_oa.csv
+   --provenance work/oa-provenance.tsv --attribution work/oa-attribution.json [--dist 30] [--bbox=W,S,E,N]`. An OA address is
+   added only when the pack has none for it: not the same normalised street and number within 30 m, nor the same street, number
+   and town, nor the same number within 5 m. Step 5 then reads `in/addresses_oa.csv` (its extra `source` column goes into
+   `addr_streets.source`), and step 8 takes `--oa-attribution work/oa-attribution.json`, which adds the sources that gave
+   at least one address to the build's `sources` and `attribution`. `oa-provenance.tsv` (the OA id, `oa:<source>:<hash>`, of each
+   added address) stays on the builder.
 5. `places_pack addresses --csv in/overture_addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite`:
    the street rows, one street at a time; `street_expanded` writes out USPS Publication 28 suffixes and directionals
    (`usps-pub28.tsv`), in the data only.

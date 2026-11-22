@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cache/layout/layout_state.dart';
 import 'package:cache/location/position_source.dart';
-import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/settings/app_settings.dart';
@@ -32,12 +30,15 @@ void main() {
     },
   );
 
-  testWidgets('Weather, nothing on: "Turn on weather" switches on forecast, alerts and fires for Where I am, asks for the location and updates',
+  // Weather always works: the three are on from the start, so the page that offers "Turn on weather" is the one for a location that
+  // is not watched (the person switched it off), where the flow asks for the location and watches it.
+  testWidgets('Weather, location not watched: "Turn on weather" asks for the location, watches it, keeps forecast, alerts and fires on, and updates',
       (tester) async {
     final r = await SettingsRig.create(tester, permission: LocationPermissionState.notAsked);
+    r.settings.setWatched('here', false);
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r), onOpenSettings: () {}));
     await tester.pumpAndSettle();
-    expect(find.text('Weather is off.'), findsOneWidget);
+    expect(find.text('No place is being watched.'), findsOneWidget);
     expect(find.text('Choose a place instead'), findsOneWidget);
     expect(find.text('Open Weather and alerts settings'), findsOneWidget, reason: 'Settings stays reachable');
     await tester.tap(find.byKey(const ValueKey('weather-turn-on')));
@@ -52,13 +53,14 @@ void main() {
     await tester.pumpAndSettle();
     final snack = find.descendant(of: find.byType(SnackBar), matching: find.byType(Text)).evaluate().map((e) => (e.widget as Text).data).join(' | ');
     expect(r.liveCore.fetches, isNotEmpty, reason: 'it updated (snack: $snack, updating: ${r.weather.updating})');
-    expect(find.text('Weather is off.'), findsNothing);
+    expect(find.text('No place is being watched.'), findsNothing);
     await r.dispose(tester);
   });
 
   testWidgets('location refused: it offers a place instead; a saved place is watched and updated', (tester) async {
     final r = await SettingsRig.create(tester, permission: LocationPermissionState.deniedForever);
     r.here = null;
+    r.settings.setWatched('here', false);
     r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9, label: 'Near Stanley')];
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
     await tester.pumpAndSettle();
@@ -76,6 +78,7 @@ void main() {
   testWidgets('"Choose a place instead": a place found by name is saved and watched', (tester) async {
     final r = await SettingsRig.create(tester);
     r.here = null;
+    r.settings.setWatched('here', false);
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r, found: [_stanley])));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
@@ -135,7 +138,15 @@ void main() {
     }
     expect(find.byType(CircularProgressIndicator), findsNothing, reason: 'nothing to wait for: the forecast is on the phone');
     expect(find.textContaining('43 °F'), findsWidgets);
-    expect(find.textContaining('50 minutes old'), findsWidgets, reason: 'the age as of now, not as of the last read');
+    // The page no longer prints each source's age (one line says when everything was updated); a reading's age is in its
+    // detail, which the reading opens.
+    await tester.tap(find.byKey(const ValueKey('weather-temperature')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('50 minutes old'), findsOneWidget, reason: 'the age as of now, not as of the last read');
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     r.liveCore.busy!.complete();
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pump();
@@ -151,25 +162,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Waiting for your position.'), findsOneWidget);
     expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: 'weather is on');
-    await r.dispose(tester);
-  });
-
-  testWidgets('Home: the Weather and alerts card offers "Turn on weather" while weather is off', (tester) async {
-    final r = await SettingsRig.create(tester);
-    final layout = LayoutState(settingsDirOverride: r.dir);
-    await tester.runAsync(layout.init);
-    await r.show(tester, HomeScreen(layout: layout, weather: r.weather, turnOn: turnOn(r), onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('weather-turn-on')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('weather-turn-on')));
-    await tester.pumpAndSettle();
-    if (find.byKey(const ValueKey('weather-location-continue')).evaluate().isNotEmpty) {
-      await tester.tap(find.byKey(const ValueKey('weather-location-continue')));
-      await tester.pumpAndSettle();
-    }
-    expect(_three(r), _threeIds);
-    expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: 'weather is set up now');
-    layout.dispose();
     await r.dispose(tester);
   });
 
@@ -206,12 +198,91 @@ void main() {
     await tester.runAsync(() => r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Weather forecast'), true));
     await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ChoiceChip, 'Where I am'), findsOneWidget, reason: 'the place row is there for a single place');
+    // The place is named in the top card (it was a chip): the page says which place it is about, for a single place too.
+    expect(find.descendant(of: find.byKey(const ValueKey('weather-place')), matching: find.text('Current location')), findsOneWidget);
+    // (opening the screen already ran the update that was due, not forced: only the person's tap is looked at here)
+    r.liveCore.fetches.clear();
     await tester.tap(find.text('Update now'));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tester.pumpAndSettle();
     expect(r.liveCore.fetches, isNotEmpty);
     expect(r.liveCore.fetches.every((f) => f['force'] == true), isTrue, reason: "a person's Update now skips the refresh interval");
+    await r.dispose(tester);
+  });
+
+  // Search as you type: the Choose a place sheet searches after a short pause, without Enter.
+  const hilo = MapPlace(id: 'place:osm:n1', type: 'place', name: 'Hilo Town', kind: 'Town', address: 'Test County', lat: 19.7, lon: -155.1);
+  const hiPlace = MapPlace(id: 'place:osm:n2', type: 'place', name: 'Hi Village', kind: 'Town', address: 'Other County', lat: 20.0, lon: -155.0);
+
+  Future<SettingsRig> openSheet(WidgetTester tester, Future<List<MapPlace>> Function(String) search) async {
+    final r = await SettingsRig.create(tester);
+    r.here = null;
+    r.settings.setWatched('here', false);
+    r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9, label: 'Near Stanley')];
+    final t = WeatherTurnOn(weather: r.weather, location: r.location, searchPlaces: search, savePlace: (p) async {});
+    await r.show(tester, WeatherScreen(weather: r.weather, turnOn: t));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('weather-choose-place')));
+    await tester.pumpAndSettle();
+    return r;
+  }
+
+  testWidgets('place search: typing without Enter shows the results after the pause', (tester) async {
+    final r = await openSheet(tester, (q) async => q == 'Hilo' ? [hilo] : []);
+    await tester.enterText(find.byKey(const ValueKey('weather-place-search')), 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('place search: an older answer arriving last never replaces the newest results', (tester) async {
+    final hi = Completer<List<MapPlace>>();
+    final r = await openSheet(tester, (q) => q == 'Hi' ? hi.future : Future.value([hilo]));
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Hi');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.enterText(field, 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    hi.complete([hiPlace]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n2')), findsNothing);
+    await r.dispose(tester);
+  });
+
+  testWidgets('place search: "No places match." from an older answer is not shown while a newer search runs', (tester) async {
+    final boise = Completer<List<MapPlace>>();
+    final r = await openSheet(tester, (q) => q == 'Boise' ? boise.future : Future.value(<MapPlace>[]));
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Boi');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(find.text('No places match.'), findsOneWidget);
+    await tester.enterText(field, 'Boise');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget, reason: 'the newest search is running');
+    expect(find.text('No places match.'), findsNothing);
+    boise.complete([hilo]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('place search: clearing the field shows the saved list again', (tester) async {
+    final r = await openSheet(tester, (q) async => [hilo]);
+    final field = find.byKey(const ValueKey('weather-place-search'));
+    await tester.enterText(field, 'Hilo');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsOneWidget);
+    await tester.enterText(field, '');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('weather-found-place:osm:n1')), findsNothing);
+    expect(find.byKey(const ValueKey('weather-saved-place:cabin')), findsOneWidget);
     await r.dispose(tester);
   });
 }

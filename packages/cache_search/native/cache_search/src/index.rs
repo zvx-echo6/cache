@@ -30,6 +30,12 @@ use zim::{MimeType, Namespace, Target};
 pub const INDEX_FORMAT: u32 = 3;
 /// The format of a library's device keyword index (`libindex`): built from the library's plain text fields, no HTML, so the
 /// ZIM body change above does not touch it and a built device index stays valid.
+///
+/// ANY change to how text is tokenized or indexed (the analyzer's filters or stemmer, the schema, what a field stores or records such as
+/// positions, the length cap) MUST bump this number or rename the analyzer (`ANALYZER`). A library's snapshot grows by generations:
+/// `idxsnap::extend_library` links the old segments and adds one new segment written by THIS code, and refuses to do so (it builds the
+/// whole index instead) unless the old manifest's format, Tantivy version, tokenizer and analyzer are exactly what this core writes
+/// now. A change that keeps the number and the name would leave old and new segments tokenized differently and queries inconsistent.
 pub const LIB_INDEX_FORMAT: u32 = 2;
 pub const META_FILE: &str = "cache_search_index.json";
 pub const LOCK_FILE: &str = "cache_search_index.lock";

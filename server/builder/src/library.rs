@@ -10,7 +10,7 @@ use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
 use crate::source_identity::{write_source_identities, SourceIdentity, SOURCE_IDENTITIES_FILE};
 use crate::view::{view_value, write_view, BookFacts};
 use cache_shelves::events::FactFields;
-use cache_shelves::library::{content_hash, copy_key, PackFacts, SameInfo, SuggestedDiv};
+use cache_shelves::library::{content_hash, copy_key, PackFacts, SameInfo, SuggestedDiv, SuggestedShelf};
 use edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
     VectorStorageDatatype,
@@ -244,7 +244,12 @@ pub fn copies_entry(doc: &LibDoc, facts: &BookFacts) -> PackFacts {
         doc_id: doc.doc_id.clone(),
         version: doc.doc_version,
         title: facts.title.clone(),
-        suggested: facts.suggested.as_ref().map(|s| SuggestedDiv { div: s.div.clone(), label: s.label.clone() }),
+        suggested: facts.suggested.as_ref().map(|s| SuggestedDiv {
+            div: s.div.clone(),
+            label: s.label.clone(),
+            filed: s.filed,
+            suggestions: s.suggestions.iter().map(|x| SuggestedShelf { div: x.div.clone(), label: x.label.clone(), score: x.score }).collect(),
+        }),
         blake3: content_hash(original, source),
         original_blake3: original.map(str::to_string),
         source_blake3: source.map(str::to_string),
@@ -386,6 +391,11 @@ impl LibraryWriter {
     /// archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
         let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, identities, copies, .. } = self;
+        // The vector index (HNSW): Qdrant Edge never builds it by itself, and without it a meaning search reads every vector
+        // (a 6.6 GB library took 4.5 s a search on an 8 GB server). It needs the vectors in memory and takes minutes for millions.
+        let t = std::time::Instant::now();
+        shard.optimize().map_err(|e| Error::ctx("indexing the library's vectors (HNSW)", e))?;
+        eprintln!("library {}: vectors indexed (optimize) in {:.1} s, {points} points", opts.id, t.elapsed().as_secs_f64());
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
@@ -605,6 +615,16 @@ fn sort_book(model: &cache_classify::Model, pack: &Pack, names: &std::collection
                     classifier_version: Some(v.version),
                     source: "classifier".into(),
                     second_div: v.top.get(1).map(|s| s.division.clone()),
+                    filed: Some(v.division.is_some()),
+                    suggestions: v
+                        .top
+                        .iter()
+                        .map(|s| crate::pack::ShelfSuggestion {
+                            div: s.division.clone(),
+                            label: names.get(&s.division).cloned().unwrap_or_else(|| s.division.clone()),
+                            score: Some(s.score),
+                        })
+                        .collect(),
                 });
                 e.unsure = v.division.is_none();
                 row.score = best.score;
@@ -664,5 +684,8 @@ fn write_archive(shard_dir: &Path, settings: &str, library: &Path, out: &Path) -
 pub fn check_library_dir(dir: &Path) -> Result<Value> {
     let settings: Value = serde_json::from_slice(&std::fs::read(dir.join(SETTINGS_FILE)).map_err(|e| Error::ctx("reading cache-library.json", e))?)
         .map_err(|e| Error::ctx("cache-library.json", e))?;
-    cache_search::libadd::check_library(&dir.join("shard"), Some(&settings)).map_err(|e| Error::ctx("library check", e.message))
+    let c = cache_search::libadd::check_library(&dir.join("shard"), Some(&settings)).map_err(|e| Error::ctx("library check", e.message))?;
+    // A library this builder writes has its vector index (HNSW) once it is past Qdrant's threshold.
+    cache_search::libadd::require_vectors_indexed(&dir.join("shard")).map_err(|e| Error::ctx("library check", e.message))?;
+    Ok(c)
 }

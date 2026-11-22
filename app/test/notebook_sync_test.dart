@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
+import 'package:cache/notebook/templates.dart';
 import 'package:cache/notebook/sync/folder.dart';
 import 'package:cache/notebook/sync/folder_access.dart';
 import 'package:cache/notebook/sync/formats.dart';
@@ -64,6 +65,9 @@ class MemFolder implements SyncFolder {
   Future<bool> exists(String path) async => text.containsKey(path) || bytes.containsKey(path);
 }
 
+/// The templates and starter logs the app ships (the engine loads them from the asset bundle; a test reads the files).
+Templates builtInTemplates() => Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync());
+
 class _Rig {
   _Rig(this.kind, {this.includePrivate = true}) {
     nb = fakeNotebook(store);
@@ -76,7 +80,8 @@ class _Rig {
   final MemFolder folder = MemFolder();
   final File state = File('${Directory.systemTemp.createTempSync('cache-nbsync-').path}/state.json');
 
-  NotebookSync get engine => NotebookSync(notebook: nb, kind: kind, folder: folder, stateFile: state, includePrivate: includePrivate, clock: () => DateTime(2026, 10, 29, 17, 2));
+  NotebookSync get engine => NotebookSync(
+      notebook: nb, kind: kind, folder: folder, stateFile: state, includePrivate: includePrivate, clock: () => DateTime(2026, 10, 29, 17, 2), templates: () async => builtInTemplates());
 
   Future<Notebook> journal() async {
     await nb.start();
@@ -424,6 +429,410 @@ void main() {
     });
   });
 
+  group('a notebook\'s fields are fixed (1.1: the field editor is gone)', () {
+    // Two devices of one share, each with its own folder. What cache_sync carries from one to the other: every file but hidden
+    // ones (a name starting with "."), so `.cache/notebooks.json` stays on the device that wrote it.
+    void carry(_Rig from, _Rig to) {
+      bool hidden(String p) => p.split('/').any((c) => c.startsWith('.'));
+      for (final e in from.folder.text.entries) {
+        if (!hidden(e.key)) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!hidden(e.key)) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    Future<void> syncTo(_Rig from, _Rig to) async {
+      await from.engine.run();
+      carry(from, to);
+      await to.engine.run();
+    }
+
+    const hikes = NotebookDef(
+        name: 'Hikes', fields: [LogField(label: 'Trail', type: FieldType.text), LogField(label: 'Distance', type: FieldType.number, unit: 'mi')], quickAdd: true, sort: NotebookSort.recent);
+
+    // "Hikes" (Trail, Distance) made on both devices (as from one starter log), two entries made on A and synced to B. Then B gets a
+    // field A does not have, "Weather" (added before 1.1, as an earlier build could), with a value on Ridge, synced to A.
+    Future<(_Rig, _Rig, String, String)> twoDevices() async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final la = await a.nb.saveNotebook(template: 'log', def: hikes);
+      final lb = await b.nb.saveNotebook(template: 'log', def: hikes);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-20T09:00:00-06:00', title: 'Ridge', body: 'Steep.', values: {'f1': 'Ridge loop', 'f2': 5});
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-21T09:00:00-06:00', title: 'Lake', body: 'Calm.', values: {'f1': 'Lake trail', 'f2': 3});
+      await syncTo(a, b);
+      expect([for (final e in await b.nb.entries(lb.id)) e.values['f1']]..sort(), ['Lake trail', 'Ridge loop']);
+      final def = b.store.notebooks.firstWhere((n) => n['id'] == lb.id)['def'] as Map;
+      (def['fields'] as List).add({'fid': 'f3', 'label': 'Weather', 'type': 'text'});
+      await b.nb.reload();
+      final ridge = (await b.nb.entries(lb.id)).firstWhere((e) => e.title == 'Ridge');
+      await b.nb.saveEntry(id: ridge.id, notebookId: lb.id, occurredAt: ridge.occurredAt, title: 'Ridge', body: ridge.body, values: {...ridge.values, 'f3': 'Sunny'});
+      await syncTo(b, a);
+      return (a, b, la.id, lb.id);
+    }
+
+    String fileOf(_Rig r, String title) =>
+        r.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && !e.key.startsWith('Conflicts/') && e.value.contains('title: $title')).value;
+
+    Future<NbEntry> entryOf(_Rig r, String nb, String title) async => (await r.nb.entries(nb)).firstWhere((e) => e.title == title);
+
+    test('R1: a notebook renamed on one device is renamed on the other, which keeps its fields and every value in its field', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      // A renames the notebook and edits Lake, so a file naming the new name reaches B.
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      final lake = await entryOf(a, ida, 'Lake');
+      await a.nb.saveEntry(id: lake.id, notebookId: ida, occurredAt: lake.occurredAt, title: 'Lake', body: 'Windy.', values: lake.values);
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      final book = b.nb.notebook(idb)!;
+      expect(book.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect([for (final f in book.def.fields) (f.fid, f.label, f.hidden)], [('f1', 'Trail', false), ('f2', 'Distance', false), ('f3', 'Weather', false)],
+          reason: 'no field is made again or hidden');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3});
+      expect((await entryOf(b, idb, 'Lake')).body, 'Windy.');
+      expect((await entryOf(b, idb, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5, 'f3': 'Sunny'});
+      // B edits Ridge: its file keeps the keys both devices read.
+      final ridge = await entryOf(b, idb, 'Ridge');
+      await b.nb.saveEntry(id: ridge.id, notebookId: idb, occurredAt: ridge.occurredAt, title: 'Ridge', body: 'Steep and dry.', values: ridge.values);
+      await syncTo(b, a);
+      final text = fileOf(a, 'Ridge');
+      expect(text, contains('notebook: Hikes 2024'));
+      expect(text, contains('trail: Ridge loop'));
+      expect(text, contains('distance: 5'));
+      expect(text, contains('weather: Sunny'));
+      expect((await entryOf(a, ida, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A keeps its values in its fields');
+      expect((await entryOf(a, ida, 'Ridge')).body, 'Steep and dry.');
+      expect(a.nb.notebook(ida)!.def.fields.length, 2);
+    });
+
+    test('R1b: a notebook renamed on one device is renamed on the other with no entry touched: the rename travels with the notebook\'s files', () async {
+      final (a, b, ida, idb) = await twoDevices();
+      final notebooksOnB = b.nb.notebooks.length;
+      await a.nb.saveNotebook(id: ida, def: a.nb.notebook(ida)!.def.copyWith(name: 'Hikes 2024'));
+      await syncTo(a, b);
+      await b.engine.run();
+      expect(b.nb.notebooks.length, notebooksOnB, reason: 'no notebook is made for the new name');
+      expect(b.nb.notebook(idb)!.name, 'Hikes 2024', reason: 'the rename arrives');
+      expect((await entryOf(b, idb, 'Lake')).values, {'f1': 'Lake trail', 'f2': 3}, reason: 'every value stays in its field');
+      expect(fileOf(a, 'Lake'), contains('notebook: Hikes 2024'));
+    });
+
+    test('R2: a value no field here holds stays in the file, line for line, through an edit, a merge and both answers to a conflict', () async {
+      final (a, b, id, idb) = await twoDevices();
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      expect((await entryOf(a, id, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 5}, reason: 'A has no Weather field');
+      Future<void> editA(String body) async {
+        final e = await entryOf(a, id, 'Ridge');
+        await a.nb.saveEntry(id: e.id, notebookId: id, occurredAt: e.occurredAt, title: e.title, body: body, values: e.values);
+      }
+
+      Future<void> editB({String? body, Map<String, dynamic>? values}) async {
+        final e = await entryOf(b, idb, 'Ridge');
+        await b.nb.saveEntry(id: e.id, notebookId: idb, occurredAt: e.occurredAt, title: e.title, body: body ?? e.body, values: values ?? e.values);
+      }
+
+      // an edit on A (A writes the file)
+      await editA('Steep. Loose rock.');
+      await syncTo(a, b);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      // a clean merge on A: A changes the text, B a value
+      await editA('Steep. Loose rock near the top.');
+      await editB(values: {'f1': 'Ridge loop', 'f2': 6, 'f3': 'Sunny'});
+      await syncTo(b, a);
+      expect((await entryOf(a, id, 'Ridge')).values['f2'], 6);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      await syncTo(a, b);
+      // a conflict, answered with this device's version
+      await editA('Gentle.');
+      await editB(body: 'Brutal.');
+      await b.engine.run();
+      carry(b, a);
+      var ea = a.engine;
+      await ea.run();
+      expect(ea.conflicts, hasLength(1));
+      await ea.resolve(ea.conflicts.single, keepCache: true);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      await syncTo(a, b);
+      // a conflict, answered with the folder's version, then an edit here
+      await editA('Rocky.');
+      await editB(body: 'Muddy.');
+      await b.engine.run();
+      carry(b, a);
+      ea = a.engine;
+      await ea.run();
+      expect(ea.conflicts, hasLength(1));
+      await ea.resolve(ea.conflicts.single, keepCache: false);
+      await editA('Muddy, then dry.');
+      await syncTo(a, b);
+      expect(fileOf(a, 'Ridge'), contains('weather: Sunny'));
+      expect(fileOf(b, 'Ridge'), contains('weather: Sunny'));
+      expect((await entryOf(b, idb, 'Ridge')).values, {'f1': 'Ridge loop', 'f2': 6, 'f3': 'Sunny'});
+      expect((await entryOf(b, idb, 'Ridge')).body, 'Muddy, then dry.');
+      // one more round changes nothing
+      final ra = await a.engine.run();
+      carry(a, b);
+      final rb = await b.engine.run();
+      expect([ra.written, ra.read, rb.written, rb.read], [0, 0, 0, 0]);
+    });
+
+    test('G1: saving a notebook that exists keeps its fields, hidden ones too; a new notebook gets the fields it is given', () async {
+      final r = _Rig(SyncKind.share);
+      await r.journal();
+      final log = await r.nb.saveNotebook(
+          template: 'log',
+          def: const NotebookDef(
+              name: 'Generator test',
+              fields: [LogField(label: 'Run time', type: FieldType.number, unit: 'min'), LogField(label: 'Under load', type: FieldType.yesNo)],
+              quickAdd: true,
+              sort: NotebookSort.recent));
+      expect([for (final f in log.def.fields) f.fid], ['f1', 'f2'], reason: 'a new notebook gets its fields');
+      // a field taken out by an earlier build, hidden with its values
+      final def = r.store.notebooks.firstWhere((n) => n['id'] == log.id)['def'] as Map;
+      (def['fields'] as List).add({'fid': 'f3', 'label': 'Fuel', 'type': 'text', 'hidden': true});
+      await r.nb.reload();
+      final before = jsonEncode(r.nb.notebook(log.id)!.def.toJson()['fields']);
+      final renamed = await r.nb.saveNotebook(
+          id: log.id, def: r.nb.notebook(log.id)!.def.copyWith(name: 'Generator check', fields: const [LogField(label: 'Something new', type: FieldType.text)]));
+      expect(renamed.name, 'Generator check');
+      expect(jsonEncode(renamed.def.toJson()['fields']), before);
+      final emptied = await r.nb.saveNotebook(id: log.id, def: renamed.def.copyWith(fields: const []), map: true);
+      expect(jsonEncode(emptied.def.toJson()['fields']), before);
+      expect(emptied.map, isTrue);
+    });
+  });
+
+  group('a notebook of more than 1000 entries loses none to sync', () {
+    void carry(_Rig from, _Rig to) {
+      for (final e in from.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    int files(_Rig r) => r.folder.text.keys.where((k) => k.endsWith('.md')).length;
+
+    Future<(_Rig, _Rig, String, String)> big(int n) async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      const def = NotebookDef(name: 'Repeaters', fields: [], sort: NotebookSort.distance);
+      final la = await a.nb.saveNotebook(template: 'notes', def: def);
+      final lb = await b.nb.saveNotebook(template: 'notes', def: def);
+      for (var i = 0; i < n; i++) {
+        await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-20T09:00:00-06:00', title: 'R$i', body: 'row $i');
+      }
+      return (a, b, la.id, lb.id);
+    }
+
+    test('1050 entries reach the other device and none is lost on later rounds, both ways', () async {
+      const n = 1050; // just over the 1000 the bug lived at; a lighter notebook, the same boundary
+      expect(n, greaterThan(1000));
+      final (a, b, ida, idb) = await big(n);
+      await a.engine.run();
+      expect(files(a), n, reason: 'every entry is written, not the first 1000');
+      carry(a, b);
+      await b.engine.run();
+      expect((await b.nb.entries(idb)).length, n);
+      // a second round each way changes nothing
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect(files(a), n);
+      expect((await a.nb.entries(ida)).length, n);
+      expect((await b.nb.entries(idb)).length, n);
+      // an edit to the last entry made on B comes back to A
+      final last = (await b.nb.entries(idb)).firstWhere((e) => e.title == 'R${n - 1}');
+      await b.nb.saveEntry(id: last.id, notebookId: idb, occurredAt: last.occurredAt, title: 'R${n - 1}', body: 'edited on B');
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect((await a.nb.entries(ida)).firstWhere((e) => e.title == 'R${n - 1}').body, 'edited on B');
+      expect((await a.nb.entries(ida)).length, n);
+    }, timeout: const Timeout(Duration(minutes: 6)));
+
+    test('an entry the read did not return is never treated as deleted', () async {
+      final (a, _, ida, _) = await big(300);
+      await a.engine.run();
+      expect(files(a), 300);
+      // the read now stops short (whatever the reason): 100 of 300 come back
+      a.store.entryCap = 100;
+      final r = await a.engine.run();
+      expect(r.deleted, 0);
+      expect(files(a), 300, reason: 'no file is removed for an entry that was only not read');
+      expect(a.store.entries.where((e) => e['notebook_id'] == ida).length, 300);
+    }, timeout: const Timeout(Duration(minutes: 3)));
+  });
+
+  group('a notebook made from a built-in template reaches the other phone with its fields', () {
+    void carry(_Rig from, _Rig to) {
+      for (final e in from.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) to.folder.text[e.key] = e.value;
+      }
+    }
+
+    test('a starter log: phone 2 makes the Log with its fields, and every value is in its field', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran fine.', values: {'f1': 20, 'f2': true, 'f3': 'Half'});
+      await a.engine.run();
+      expect(a.folder.text.values.firstWhere((v) => v.contains('Ran fine.')), contains('cache_template: starters/starter.generator_test@1'));
+      carry(a, b);
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
+      expect((lb.template, lb.isLog, lb.def.dueEvery, lb.templateRef), ('log', true, 'month', 'starters/starter.generator_test@1'));
+      expect([for (final f in lb.def.visible) (f.label, f.type)], [('Run time', FieldType.number), ('Under load', FieldType.yesNo), ('Fuel level', FieldType.choice)]);
+      final eb = (await b.nb.entries(lb.id)).single;
+      expect(eb.values, {'f1': 20, 'f2': true, 'f3': 'Half'}, reason: 'the values are in the template\'s fields, not left in the file');
+      expect(eb.body, 'Ran fine.');
+      // phone 2 changes the fuel level; phone 1 reads it into its field
+      await b.nb.saveEntry(id: eb.id, notebookId: lb.id, occurredAt: eb.occurredAt, body: eb.body, values: {...eb.values, 'f3': 'Low'});
+      await b.engine.run();
+      carry(b, a);
+      await a.engine.run();
+      expect((await a.nb.entries(la.id)).single.values['f3'], 'Low');
+    });
+
+    test('a built-in template: phone 2 makes the notebook from it (shape, icon, colour, map switch)', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().byId('notes')!;
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def.copyWith(name: 'Family plan'), templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', title: 'Meeting spot', body: 'The old mill.');
+      await a.engine.run();
+      carry(a, b);
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Family plan');
+      expect((lb.template, lb.templateRef, lb.def.sort, lb.map), ('notes', t.ref, NotebookSort.recent, false));
+    });
+
+    test('a template this build does not have is made as before: a notes notebook that keeps every value', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran fine.', values: {'f1': 20, 'f2': true, 'f3': 'Half'});
+      await a.engine.run();
+      for (final e in a.folder.text.entries) {
+        if (e.key.split('/').any((c) => c.startsWith('.'))) continue; // a hidden file never leaves the device
+        b.folder.text[e.key] = e.value.replaceFirst('starters/starter.generator_test@1', 'starters/starter.from_the_future@3');
+      }
+      await b.engine.run();
+      final lb = b.nb.notebooks.firstWhere((n) => n.name == 'Generator test');
+      expect((lb.template, lb.isLog), ('notes', false));
+      expect(lb.def.fields, isEmpty);
+      final file = b.folder.text.values.firstWhere((v) => v.contains('Ran fine.'));
+      expect(file, contains('run_time: 20'), reason: 'every value stays in the file');
+      expect(file, contains('cache_template: starters/starter.from_the_future@3'), reason: 'and so does the line, for a build that knows it');
+    });
+
+    test('a notebook with its own fields (not from a template) arrives as before, and the person\'s own vault gets no template line', () async {
+      final a = _Rig(SyncKind.share), vault = _Rig(SyncKind.obsidian);
+      await a.journal();
+      await vault.journal();
+      const def = NotebookDef(name: 'Hikes', fields: [LogField(label: 'Trail', type: FieldType.text)], sort: NotebookSort.recent);
+      final la = await a.nb.saveNotebook(template: 'log', def: def);
+      await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Dry.', values: {'f1': 'Ridge'});
+      await a.engine.run();
+      expect(a.folder.text.values.firstWhere((v) => v.contains('Dry.')), isNot(contains('cache_template')));
+      final t = builtInTemplates().starters.firstWhere((s) => s.id == 'starter.generator_test');
+      final lv = await vault.nb.saveNotebook(template: t.template, def: t.def, templateRef: t.ref, map: false);
+      await vault.nb.saveEntry(notebookId: lv.id, occurredAt: '2026-10-25T16:12:00-06:00', body: 'Ran.', values: {'f1': 20});
+      await vault.engine.run();
+      expect(vault.folder.text.values.firstWhere((v) => v.contains('Ran.')), isNot(contains('cache_template')));
+    });
+  });
+
+  group('a repeater list syncs as a notebook with one .md entry per repeater', () {
+    test('its entries are files with the callsign, the settings and the position; another device reads them as a notebook and loses nothing', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync()).byId('repeaters')!;
+      // as the core makes one: the template's ref, so notebook sync names the template in every entry file
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true, templateRef: t.ref);
+      await a.nb.saveEntry(
+        notebookId: la.id,
+        occurredAt: '2026-11-14T09:00:00-07:00',
+        title: 'W0TST1',
+        body: 'Checked on the 14th.',
+        values: {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true},
+        place: const NbPlace(lat: 42.54, lon: -113.8),
+      );
+      await a.engine.run();
+      final md = a.folder.text.entries.firstWhere((e) => e.key.endsWith('.md') && e.value.contains('title: W0TST1')).value;
+      expect(md, contains('notebook: Repeaters'));
+      expect(md, contains('frequency: 146.940 MHz'));
+      expect(md, contains('on_air: true'));
+      expect(md, contains('lat: 42.54'));
+      expect(md, contains('Checked on the 14th.'));
+      // what cache_sync carries (never a hidden file) reaches B, which has no such notebook yet
+      for (final e in a.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) b.folder.text[e.key] = e.value;
+      }
+      await b.engine.run();
+      expect(md, contains('cache_template: templates/repeaters@1'));
+      final nbB = b.nb.notebooks.firstWhere((n) => n.name == 'Repeaters');
+      final eB = (await b.nb.entries(nbB.id)).single;
+      expect((eB.title, eB.body, eB.place?.lat), ('W0TST1', 'Checked on the 14th.', 42.54));
+      // phone 2 has the Repeaters template's fields, and every value is in its field
+      expect((nbB.template, nbB.isRepeaters, nbB.def.sort, nbB.def.icon, nbB.def.color), ('repeaters', true, NotebookSort.distance, 'radio_tower', 'purple'));
+      expect([for (final f in nbB.def.visible) (f.label, f.type)], [for (final f in la.def.visible) (f.label, f.type)]);
+      expect(eB.values, {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true},
+          reason: 'frequency, offset, tone, town and on air are in their fields on phone 2');
+      // B writes it back unchanged: A's entry keeps every value
+      await b.engine.run();
+      for (final e in b.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) a.folder.text[e.key] = e.value;
+      }
+      await a.engine.run();
+      final eA = (await a.nb.entries(la.id)).single;
+      expect(eA.values, {'f1': '146.940 MHz', 'f2': '-600 kHz', 'f3': '151.4 Hz to transmit and receive', 'f5': 'Burley', 'f6': true});
+    });
+  });
+
+  group('a repeater list that arrives all at once on a phone that has no such notebook', () {
+    test('every repeater keeps its fields, not only the first (three rows with no position, as a CSV import makes them)', () async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final t = Templates.parse(File('assets/notebook/templates.json').readAsStringSync(), File('assets/notebook/starters.json').readAsStringSync()).byId('repeaters')!;
+      final la = await a.nb.saveNotebook(template: t.template, def: t.def, map: true, templateRef: t.ref);
+      const rows = [
+        ('R11 Boise', {'f1': '146.760 MHz', 'f2': '-600 kHz', 'f3': '100.0 Hz to transmit and receive', 'f4': 'FM'}),
+        ('R11 Nampa', {'f1': '147.020 MHz', 'f2': '+600 kHz', 'f3': '107.2 Hz to transmit and receive', 'f4': 'FM'}),
+        ('R11 Meridian', {'f1': '444.100 MHz', 'f2': '+5 MHz', 'f3': '123.0 Hz to transmit and receive', 'f4': 'FM'}),
+      ];
+      var minute = 0;
+      for (final r in rows) {
+        await a.nb.saveEntry(notebookId: la.id, occurredAt: '2026-11-15T09:0${minute++}:00-07:00', title: r.$1, body: '', values: r.$2);
+      }
+      await a.engine.run();
+      for (final e in a.folder.text.entries) {
+        if (!e.key.split('/').any((c) => c.startsWith('.'))) b.folder.text[e.key] = e.value;
+      }
+      // one round on the other phone brings all three: the first makes the notebook, the others must be read with its fields
+      await b.engine.run();
+      final nbB = b.nb.notebooks.firstWhere((n) => n.name == 'Repeaters');
+      final got = {for (final e in await b.nb.entries(nbB.id)) e.title: e.values};
+      expect(got, {for (final r in rows) r.$1: r.$2}, reason: 'every row has its frequency, offset, tone and mode on phone 2');
+      // and it stays so after more rounds
+      await b.engine.run();
+      await b.engine.run();
+      final again = {for (final e in await b.nb.entries(nbB.id)) e.title: e.values};
+      expect(again, {for (final r in rows) r.$1: r.$2});
+    });
+  });
+
   group('the app PIN', () {
     test('set, checked, five wrong tries wait, removed; only a salted hash is stored', () async {
       var now = DateTime(2026, 10, 30, 9);
@@ -454,6 +863,19 @@ void main() {
     });
   });
 
+  group('Activity lines', () {
+    test('notebook sync says, in a few words and with no ids or paths, what arrived, changed or was removed', () {
+      final nb = fakeNotebook(FakeNotebookBackend());
+      final lines = <String>[];
+      final c = NotebookConnections(notebook: nb, dir: () async => Directory.systemTemp, onActivity: lines.add);
+      c.say(SyncReport()..read = 5..arrived = 3..removedHere = 1);
+      expect(lines, ['Notebooks: 3 entries arrived from your other devices', 'Notebooks: 2 entries updated from your other devices', 'Notebooks: 1 entry removed by your other devices']);
+      lines.clear();
+      c.say(SyncReport()..written = 4);
+      expect(lines, isEmpty, reason: 'what this device sent is not said');
+    });
+  });
+
   group('screens', () {
     testWidgets('Connections: Obsidian and Logseq only where folders can be kept; a connected folder shows its status', (tester) async {
       final store = FakeNotebookBackend();
@@ -469,9 +891,15 @@ void main() {
           theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, pickFolder: () async => (path: 'content://tree/primary%3ADocuments%2FVault', display: 'Vault'))));
       expect(find.text('Obsidian'), findsOneWidget);
       expect(find.text('Logseq'), findsOneWidget);
+      // The status line appears when the first sync of the new folder has ended; that sync does real file work, so wait for
+      // it (up to 10 s) instead of a fixed time.
       await tester.runAsync(() async {
         await tester.tap(find.byKey(const ValueKey('connect-obsidian')));
-        await Future<void>.delayed(const Duration(milliseconds: 300));
+        for (var i = 0; i < 200; i++) {
+          final t = c.target(SyncKind.obsidian);
+          if (t != null && c.status(t.id) != null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
       });
       await tester.pumpAndSettle();
       expect(c.target(SyncKind.obsidian)?.path, 'content://tree/primary%3ADocuments%2FVault');

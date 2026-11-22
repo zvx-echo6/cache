@@ -1,16 +1,31 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
+import 'own_libraries.dart';
 import 'fs_ops.dart';
+import 'guide_install.dart';
+import 'history_ops.dart';
+import 'host_load.dart';
 import 'index_driver.dart';
+import 'indexes_sync.dart';
+import 'keystore.dart';
+import 'pdf_zim_indexer.dart';
+import 'starter_layers.dart';
 import 'line_protocol.dart';
+import 'live_timer.dart';
+import 'regions_ops.dart';
+import 'server_settings_sync.dart';
+import 'sharing_host.dart';
+import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
-/// CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
-/// the core's config work on them. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
+/// CACHE_STARTER_LAYERS is the web build's folder of starter map layer definitions (see starter_layers.dart). /// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
+/// the core's config work on them. CACHE_DATA is the server's data folder: with it the helper runs the sharing host (bin/sharing_host.dart:
+/// the sync engine, on `<data>/sync`), which starts here when sharing was set up and stops when stdin ends. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
 Future<void> main() async {
   final path = Platform.environment['CACHE_CORE_LIB'];
@@ -35,7 +50,97 @@ Future<void> main() async {
   }
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
-  final indexer = IndexDriver(dispatcher, log: log, extra: serverCoreExtras(dirs));
+  // The keystore file is outside both fs.* roots: CACHE_KEYSTORE, else beside them in <support>/../keystore.json.
+  final keystorePath = Platform.environment['CACHE_KEYSTORE'];
+  final keys = KeyStore(File(keystorePath != null && keystorePath.isNotEmpty ? keystorePath : '${dirs.support.parent.path}/keystore.json'), log: log);
+  final extras = serverCoreExtras(dirs);
+  // The starter map layers, put in place before the core opens and reads them (the phone does this at every start).
+  final starter = Platform.environment['CACHE_STARTER_LAYERS'];
+  if (starter != null && starter.isNotEmpty) installStarterLayers(Directory(starter), Directory('${dirs.support.path}/layer-defs'), log: log);
+  // The PDFs inside ZIMs are read by the server program itself (`cache pdf-text`, MuPDF); without it (a helper run by hand) they are
+  // not indexed.
+  final pdfExe = Platform.environment['CACHE_PDF_TEXT_EXE'];
+  final indexes = extras['indexes_dir'];
+  final pdf = pdfExe != null && pdfExe.isNotEmpty && indexes is String
+      ? PdfWork(core: DispatcherPdfCore(dispatcher), read: PdfTextProcess(pdfExe, '${dirs.support.path}/tmp/pdf-text').read, indexesDir: indexes)
+      : null;
+  // The saved videos (the browser's downloads, kept in <docs>/videos): their captions are indexed by the driver, and a finished
+  // download kicks it.
+  late final VideoOps videoOps;
+  // What the sharing host fetches of the indexes share, kept in step with the core (set below, once the host exists).
+  IndexesSync? indexesSync;
+  void updateIndexes() {
+    final s = indexesSync;
+    if (s != null) unawaited(s.update());
+  }
+
+  // The source list the server last gave, so the helper can give the core its sources again after a sync changed the indexes share.
+  final givenSources = GivenSources();
+  final indexer = IndexDriver(dispatcher,
+      log: log, extra: extras, load: HostLoad(), pdf: pdf, savedVideos: () => videoOps.savedVideos(), videoDir: '${dirs.docs.path}/videos');
+  videoOps = VideoOps(dirs, () => FfiCsNative(lib), log: log, resolve: keys.resolve, onSaved: () {
+    indexer.kick();
+    updateIndexes();
+  }, onRemoved: updateIndexes);
+  // saved HLS videos from before are rewritten as plain MP4 in the background, a while after start (not in its way)
+  Timer(const Duration(seconds: 30), () => unawaited(videoOps.repairSaved()));
+  // The guide library the app bundles, which the server's web build carries: installed here so guide search has something to search.
+  final guidePath = Platform.environment['CACHE_GUIDE_LIBRARY'];
+  final guide = guidePath != null && guidePath.isNotEmpty
+      ? GuideInstaller(dispatcher, dirs, File(guidePath), log: log, onChanged: indexer.useSources)
+      : null;
+  // The person's own libraries (My books) that sync here: made to match their packs on this server (their shard is each device's).
+  final own = OwnLibrarySync(dispatcher, dirs, log: log, onChanged: indexer.useSources, onDone: () {
+    indexer.kick();
+    updateIndexes();
+  });
+  final rescanOp = RescanOp(dirs, dispatcher, log: log, indexer: indexer, own: own, given: givenSources, onRescanned: updateIndexes);
+  // Weather, alerts and fires stay fresh with no tab open (what a phone's background run does).
+  final liveTimer = LiveTimer(dispatcher, support: dirs.support, log: log)..start();
+  // The browser's way to the region engine (and the off-road pack downloads), which run on the server with no tab open.
+  final regionsOps = RegionsOps(
+    dirs.support,
+    config: (serverCoreExtras(dirs)['regions'] as Map).cast<String, Object?>(),
+    open: (c) => FfiRegionsEngine.open(lib, c),
+    log: log,
+  );
+  final data = dirs.data;
+  if (data == null) log('CACHE_DATA is not set: no sharing host');
+  final SharingHost? sharing = data == null
+      ? null
+      : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
+  // The settings log, run here with no tab open: a browser's write of a settings file (FsOps) and a linked device's change
+  // (the settings share) both end in it.
+  ServerSettingsSync? settingsSync;
+  if (sharing != null) {
+    final host = sharing;
+    settingsSync = ServerSettingsSync(support: dirs.support, running: () => host.running, myId: () => host.myId, peers: () => host.peers, askSince: () => host.askSince,
+        log: log, keys: keys, setSecrets: host.setSecrets, takeSecrets: host.takeSecrets,
+        onWebKeyKept: () => keys.replay(dispatcher));
+    host.settingsApplied = () => settingsSync!.applied;
+    host.keyNames = settingsSync.keyNames;
+    host.onLinkSet = settingsSync.linkSetByBrowser;
+    host.setKeyOn = settingsSync.setKeyOnFromBrowser;
+    unawaited(settingsSync.start());
+  }
+  // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
+  if (sharing != null) {
+    indexesSync = IndexesSync(host: sharing, dispatcher: dispatcher, savedVideos: () => videoOps.savedVideos(), log: log);
+    // a snapshot of the search indexes that arrived is attached when the core is given its sources again, and the driver is kicked
+    final indexesArrived = IndexesShareReaction(
+      refreshSources: () => rescanOp.handle('sources.rescan', {'sources': givenSources.value}),
+      kick: indexer.kick,
+      log: log,
+    );
+    // a pack of My books that another device added arrives in the libraries share: made searchable here
+    sharing.onShareChanged = (ids) {
+      if (ids.contains('libraries')) unawaited(own.run());
+      indexesArrived(ids);
+      final s = settingsSync;
+      if (s != null) unawaited(s.shareChanged(ids));
+    };
+    unawaited(sharing.init());
+  }
   await serveLines(
     stdin,
     (line) async {
@@ -45,14 +150,30 @@ Future<void> main() async {
     dispatcher,
     log: log,
     handlers: [
-      OpenOp(dirs, dispatcher, log: log, indexer: indexer),
-      RescanOp(dirs, dispatcher, log: log, indexer: indexer),
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, given: givenSources, onOpened: () {
+        updateIndexes();
+        regionsOps.afterOpen();
+        keys.replay(dispatcher);
+      }),
+      rescanOp,
       IndexStateOp(indexer),
+      IndexPauseOp(indexer),
       FeaturesOp(dirs),
-      FsOps(support: dirs.support, docs: dirs.docs),
+      FsOps(support: dirs.support, docs: dirs.docs, onWritten: (p) => unawaited(settingsSync?.fileChanged(p) ?? Future<void>.value())),
+      regionsOps,
+      videoOps,
+      HistoryOps(Directory('${dirs.support.path}/history'), log: log),
+      keys,
+      if (sharing != null) SharingOps(sharing),
     ],
+    hook: keys,
+    onEnd: () {
+      settingsSync?.stop();
+      return sharing?.stop();
+    },
   );
   indexer.stop();
+  liveTimer.stop();
   await stdout.flush();
   exit(0);
 }

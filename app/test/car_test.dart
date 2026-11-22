@@ -1,20 +1,66 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:cache/car/car_answer.dart';
 import 'package:cache/car/car_bridge.dart';
 import 'package:cache/car/car_drive.dart';
+import 'package:cache/app_state.dart';
+import 'package:cache/car/car_overlay.dart';
+import 'package:cache/car/car_places.dart';
+import 'package:cache/car/phone_drive.dart';
+import 'package:cache/maps/palette/map_palette.dart';
+import 'package:cache/nav/elevation/elevation_profile.dart';
+import 'package:cache/theme.dart';
 import 'package:cache/car/car_trip.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/nav/nav_geojson.dart';
+import 'package:cache/notebook/pin_image.dart' show PinStyle;
+import 'package:cache/nav/nav_backend.dart' show CoreMapBackend;
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/speaker.dart';
+import 'package:cache/nav/ui/lane_strip.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'nav_fakes.dart';
 import 'support/test_layer_engine.dart';
+
+/// A layer engine whose connection count the test moves (a reconnect).
+class _GenEngine extends TestLayerEngine {
+  int gen = 0;
+  @override
+  int get sourcesGeneration => gen;
+  void reconnect() {
+    gen++;
+    notifyListeners();
+  }
+}
+
+/// A tile server that is started again on a new port when it is asked for after losing its socket ([lose]).
+class _PortEngine extends TestLayerEngine {
+  int _port = 1;
+  int _upcoming = 1;
+  int rechecks = 0;
+  @override
+  int get port => _port;
+  void lose(int next) => _upcoming = next;
+  @override
+  Future<void> recheckServer() async {
+    rechecks++;
+    if (_upcoming == _port) return;
+    _port = _upcoming;
+    notifyListeners();
+  }
+}
 
 class _NoSource implements PositionSource {
   @override
@@ -31,6 +77,33 @@ class _NoSource implements PositionSource {
   Future<void> openAppSettings() async {}
   @override
   Future<void> openLocationSettings() async {}
+}
+
+/// The car's own places handle (car_places.dart), answering at once; [fails] makes every call throw.
+class _FakeCarPlaces implements CarPlaces {
+  final List<SavedPlaceRecord> saved = [];
+  final List<MapPlace> found = [];
+  final List<String> queries = [];
+  bool fails = false;
+  int closed = 0;
+
+  @override
+  Future<List<SavedPlaceRecord>> savedPlaces() async {
+    if (fails) throw StateError('no handle');
+    return saved;
+  }
+
+  @override
+  Future<MapSearchResponse> search(String query, {GeoPoint? near, int limit = 10}) async {
+    if (fails) throw StateError('no handle');
+    queries.add(query);
+    return MapSearchResponse(query: query, kind: 'text', meaning: 'off', results: found);
+  }
+
+  @override
+  Future<void> close() async {
+    closed++;
+  }
 }
 
 MapPlace _place(String id, String name, {double lat = 42.5, double lon = -113.5}) =>
@@ -78,9 +151,9 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  Future<void> preview() async {
+  Future<void> preview([Map<String, dynamic>? route]) async {
     location.publish(fixAt(42.5, -113.8));
-    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+    backend.onRoute = (to, mode, from) async => MapRoute.fromJson(route ?? routeJson);
     await nav.openDirections(_place('place:4', 'Cassia Regional Hospital'));
   }
 
@@ -115,6 +188,256 @@ void main() {
       expect(t['remainingM'], closeTo((routeJson['distance_m'] as num) * 0.9, 1));
       expect(t['remainingS'], isNotNull);
       expect(t['currentRoad'], 'Road 0');
+    });
+
+    test('a street with a name and a route number: the car shows the name first and the number after it, as the phone does', () async {
+      final named = namedRoadsRouteJson();
+      await preview(named);
+      expect(((carTrip(nav)['routes'] as List).first as Map)['via'], 'Via Lakeside Boulevard (US 99 Bus)');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(named, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(named, 0.1));
+      final t = carTrip(nav);
+      final step = t['step'] as Map;
+      expect(step['cue'], 'Turn left onto Lakeside Boulevard (US 99 Bus).');
+      expect(step['road'], 'Lakeside Boulevard (US 99 Bus)');
+      // A highway with only a number keeps the number.
+      expect((t['then'] as Map)['cue'], 'Turn right onto SH 99.');
+      expect((t['then'] as Map)['road'], 'SH 99');
+      // A street with two names keeps its first.
+      expect(t['currentRoad'], 'Lakeside Boulevard');
+    });
+
+    // The iPhone car side (app/ios/Runner/CarPlay) is tested on recorded messages (tools/carplay-harness/recorded). They are
+    // held here to the shape of what carTrip really sends: the same keys, and the same kind of value under each.
+    test('the trips recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      String kind(Object? v) => switch (v) {
+            null => 'null',
+            bool() => 'bool',
+            num() => 'number',
+            String() => 'text',
+            List() => 'list',
+            Map() => 'map',
+            _ => 'other',
+          };
+      void sameShape(Map<dynamic, dynamic> sent, Map<dynamic, dynamic> recorded, String where) {
+        expect(recorded.keys.toSet(), sent.keys.toSet(), reason: '$where: the keys');
+        for (final key in sent.keys) {
+          final a = sent[key], b = recorded[key];
+          if (a == null || b == null) continue;
+          expect(kind(b), kind(a), reason: '$where: $key');
+          if (a is Map && b is Map) sameShape(a, b, '$where.$key');
+          if (a is List && b is List && a.isNotEmpty && b.isNotEmpty && a.first is Map && b.first is Map) {
+            sameShape(a.first as Map, b.first as Map, '$where.$key[0]');
+          }
+        }
+      }
+
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+
+      await preview();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.2), heading: 90), recorded('trip_previewing'), 'previewing');
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      sameShape(carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90), recorded('trip_guiding'), 'guiding');
+    });
+
+    // The same for the recorded route messages: each stretch of the line carries what routeGeoJson marks it with (the car map
+    // draws by those marks), and the bounds are in MapRoute.bounds' order, which the car's camera reads by position.
+    test('the routes recorded for the iPhone car tests have the shape of what the phone sends', () async {
+      Map<String, dynamic> recorded(String name) =>
+          jsonDecode(File('../tools/carplay-harness/recorded/$name.json').readAsStringSync()) as Map<String, dynamic>;
+      const marks = {'alt', 'kind', 'route'};
+
+      await preview();
+      expect(nav.routes, isNotEmpty);
+      for (final f in routeGeoJson(nav.routes, nav.routeIndex)['features'] as List) {
+        expect(((f as Map)['properties'] as Map).keys.toSet(), marks, reason: 'what routeGeoJson marks a stretch with');
+      }
+      expect(nav.routes[nav.routeIndex].bounds, hasLength(4));
+
+      for (final name in const ['route_previewing', 'route_previewing_alt', 'route_guiding']) {
+        final message = recorded(name);
+        expect(message.keys.toSet(), {'geojson', 'bounds'}, reason: name);
+        final line = jsonDecode(message['geojson'] as String) as Map<String, dynamic>;
+        final features = line['features'] as List;
+        expect(features, isNotEmpty, reason: name);
+        var south = 90.0, west = 180.0, north = -90.0, east = -180.0;
+        for (final f in features) {
+          final properties = (f as Map)['properties'] as Map;
+          final geometry = f['geometry'] as Map;
+          expect(properties.keys.toSet(), marks, reason: '$name: what marks a stretch');
+          expect(properties['alt'], isA<bool>(), reason: name);
+          expect(properties['kind'], isA<String>(), reason: name);
+          expect(geometry['type'], 'LineString', reason: name);
+          if (properties['alt'] == true) continue;
+          for (final c in geometry['coordinates'] as List) {
+            final lon = ((c as List)[0] as num).toDouble();
+            final lat = (c[1] as num).toDouble();
+            if (lat < south) south = lat;
+            if (lat > north) north = lat;
+            if (lon < west) west = lon;
+            if (lon > east) east = lon;
+          }
+        }
+        expect(message['bounds'], [south, west, north, east], reason: '$name: the chosen route, south, west, north, east');
+      }
+
+      final none = recorded('route_none');
+      expect(none['bounds'], isNull);
+      expect(jsonDecode(none['geojson'] as String), routeGeoJson(const [], 0));
+    });
+
+    // The iPhone car side writes distances itself (app/ios/Runner/CarPlay/CarTrip.swift, CarText.distance), in the phone's
+    // words: CarPlay's lists take plain text. Its tests and this one read one table, so the two cannot drift apart.
+    test('the distances recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/distances.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        final fmt = Fmt(r['imperial'] == true ? UnitSystem.imperial : UnitSystem.metric);
+        expect(fmt.distance((r['meters'] as num).toDouble()), r['text'], reason: '${r['meters']} m');
+      }
+    });
+
+    test('the times recorded for the iPhone car tests are what the phone writes', () {
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/durations.json').readAsStringSync()) as List;
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        final r = row as Map;
+        expect(const Fmt(UnitSystem.imperial).duration(r['seconds'] as int), r['text'], reason: '${r['seconds']} s');
+      }
+    });
+
+    test('lanes: the step carries what the phone shows under its banner, and none before the turn is near', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final far = nav.farStageM!;
+      // One lane as the router sends it: Valhalla's bits.
+      Map<String, dynamic> lane(Set<LaneDirection> d, {LaneDirection? active, LaneDirection? valid}) => {
+            'directions': d.fold<int>(0, (a, x) => a | (1 << x.index)),
+            'active': ?(active == null ? null : 1 << active.index),
+            'valid': ?(valid == null ? null : 1 << valid.index),
+          };
+      void turnAhead(double meters, List<Map<String, dynamic>> lanes) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({...j, 'next': {...(j['next'] as Map<String, dynamic>), 'distance_m': meters, 'lanes': lanes}});
+      }
+
+      final lanes = [
+        lane({LaneDirection.left, LaneDirection.through}, valid: LaneDirection.left),
+        lane({LaneDirection.left}, active: LaneDirection.left),
+        lane({LaneDirection.through}),
+        lane({LaneDirection.none}),
+      ];
+      // As close as the first voice prompt: the lanes, as the phone's strip draws them, and the phone's words for them.
+      turnAhead(far - 1, lanes);
+      var t = carTrip(nav);
+      var step = t['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through', 'left'], 'role': 'valid', 'take': 'left'},
+        {'directions': ['left'], 'role': 'active', 'take': 'left'},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+        {'directions': ['through'], 'role': 'dim', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use the 2 left lanes');
+      // Never on the maneuver after next.
+      expect((t['then'] as Map)['lanes'], isEmpty);
+      expect((t['then'] as Map)['lanesLabel'], isNull);
+
+      // Further off: none yet, as on the phone.
+      turnAhead(far + 1, lanes);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], isEmpty);
+      expect(step['lanesLabel'], isNull);
+
+      // The road did not say which lanes work: every lane alike.
+      turnAhead(100, [lane({LaneDirection.through}), lane({LaneDirection.through, LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect(step['lanes'], [
+        {'directions': ['through'], 'role': 'plain', 'take': null},
+        {'directions': ['through', 'right'], 'role': 'plain', 'take': null},
+      ]);
+      expect(step['lanesLabel'], 'Lanes: use any lane');
+
+      // A lane to be in that is not marked with a direction takes the straight arrow.
+      turnAhead(100, [lane({LaneDirection.through}, active: LaneDirection.none), lane({LaneDirection.right})]);
+      step = carTrip(nav)['step'] as Map;
+      expect((step['lanes'] as List).first, {'directions': ['through'], 'role': 'active', 'take': 'through'});
+
+      // No lanes from the road: none.
+      turnAhead(100, const []);
+      expect((carTrip(nav)['step'] as Map)['lanes'], isEmpty);
+
+      // The lanes recorded for the iPhone car tests are in these words.
+      final near = jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_near.json').readAsStringSync()) as Map<String, dynamic>;
+      final recorded = (near['step'] as Map)['lanes'] as List;
+      expect(recorded, isNotEmpty);
+      expect((near['step'] as Map)['lanesLabel'], isA<String>());
+      for (final l in recorded) {
+        expect((l as Map).keys.toSet(), {'directions', 'role', 'take'});
+        expect([for (final r in LaneRole.values) r.name], contains(l['role']));
+        for (final d in l['directions'] as List) {
+          expect([for (final x in LaneDirection.values) x.name], contains(d));
+        }
+      }
+    });
+
+    // One time left on the phone and in the car. CarPlay (CPTravelEstimates) and Android Auto (TravelEstimate, DurationSpan)
+    // write the time themselves, and neither says how it rounds: the car is sent the phone's minutes as a whole number of
+    // minutes in seconds, which reads the same rounded down, to the nearest or up. The arrival clock is the fix's moment plus
+    // those minutes, on the phone and in the car.
+    test('the time left and the arrival clock are the phone bar\'s in the car, at every rounding edge', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      const fmt = Fmt(UnitSystem.imperial);
+      final fixAtMoment = DateTime.utc(2026, 11, 13, 14, 40, 50);
+      const shown = {0: 1, 20: 1, 59: 1, 61: 1, 89: 1, 91: 2, 179: 3, 181: 3, 209: 3, 211: 4, 239: 4, 241: 4, 269: 4, 271: 5, 3569: 59, 3571: 60};
+      for (final MapEntry(key: s, value: minutes) in shown.entries) {
+        final j = fakeProgressJson(routeJson, 0.1);
+        nav.progress = MapProgress.fromJson({
+          ...j,
+          'remaining': {...(j['remaining'] as Map<String, dynamic>), 'duration_s': s, 'eta': fixAtMoment.add(Duration(seconds: s)).toIso8601String()},
+        });
+        final t = carTrip(nav);
+        final sent = t['remainingS'] as int;
+        expect(shownMinutes(s), minutes, reason: '$s s: the minutes the phone shows');
+        expect(sent, minutes * 60, reason: '$s s: the car is sent the phone\'s minutes');
+        // However the car's host rounds the seconds to minutes, it gets the phone's minutes.
+        expect([(sent / 60).floor(), (sent / 60).round(), (sent / 60).ceil()], everyElement(minutes), reason: '$s s');
+        expect(fmt.duration(sent), fmt.duration(s), reason: '$s s: the same words');
+        final arrival = fixAtMoment.add(Duration(minutes: minutes));
+        expect(t['etaMs'], arrival.millisecondsSinceEpoch, reason: '$s s: the car\'s arrival is the fix plus the minutes shown');
+        expect(shownArrival(nav.progress!.eta, s), arrival, reason: '$s s: the phone bar\'s arrival clock');
+      }
+      // The route list's times too: the phone's minutes, in seconds.
+      final routes = carTrip(nav)['routes'] as List;
+      expect(routes, isNotEmpty);
+      for (final (i, r) in routes.indexed) {
+        expect((r as Map)['durationS'], shownMinutes(nav.routes[i].durationS) * 60);
+      }
+    });
+
+    test('arrived: the car is sent no time left', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.1)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      nav.progress = MapProgress.fromJson(fakeProgressJson(routeJson, 0.99, arrived: true));
+      nav.arrived = true;
+      expect(carTrip(nav)['remainingS'], 0);
     });
 
     test('an off-road maneuver reads as the way to head and how far, in the phone units', () async {
@@ -184,10 +507,336 @@ void main() {
     });
   });
 
+  group('the climb card and the route mini map (car_overlay.dart)', () {
+    // Sample data: a gentle rise for 9 km, then 2 km at about 9%, then flat.
+    ElevationProfile profile(double total) {
+      final dist = <double>[], h = <double>[];
+      for (var d = 0.0; d <= total; d += 40) {
+        dist.add(d);
+        h.add(1000 + (d < 9000 ? d * 0.02 : d < 11000 ? 180 + (d - 9000) * 0.09 : 360));
+      }
+      return ElevationProfile.fromSamples(dist, h, totalM: total);
+    }
+
+    Future<void> guide(double fraction) async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, fraction)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.8 + 0.3 * fraction, heading: 90));
+      await settle();
+    }
+
+    // The iPhone car side's tests read a recorded trip with a climb ahead (tools/carplay-harness/recorded): held here to the
+    // shape of what the phone sends for one.
+    test('the trip recorded with a climb for the iPhone car tests has the shape of what the phone sends', () async {
+      final total = (routeJson['distance_m'] as num).toDouble();
+      await guide(0.1);
+      final sent = carTrip(nav, position: const GeoPoint(10.5, 20.23), heading: 90, elevation: profile(total));
+      final recorded =
+          jsonDecode(File('../tools/carplay-harness/recorded/trip_guiding_climb.json').readAsStringSync()) as Map<String, dynamic>;
+      expect(sent['climb'], isNotNull);
+      expect(recorded.keys.toSet(), sent.keys.toSet());
+      expect((recorded['climb'] as Map).keys.toSet(), (sent['climb'] as Map).keys.toSet());
+      final steep = (sent['overview'] as Map)['steep'];
+      expect(steep, isNotNull);
+      expect(((recorded['overview'] as Map)['steep'] as Map).keys.toSet(), (steep as Map).keys.toSet());
+    });
+
+    test('no elevation data: no climb block, but the mini map and palette still go', () async {
+      await guide(0.1);
+      final t = carTrip(nav);
+      expect(t.containsKey('climb'), isFalse);
+      expect(t['overview'], isNotNull);
+      expect(t['palette'], isNotNull);
+      expect(t['overlay'], {'phoneDrive': false});
+      final none = ElevationProfile.none(24000);
+      expect(none.hasData, isFalse);
+      expect(carClimb(none, distanceAlongM: 0, routeM: 24000), isNull);
+      expect(carClimb(null, distanceAlongM: 0, routeM: 24000), isNull);
+      expect(carTrip(nav, elevation: none).containsKey('climb'), isFalse);
+    });
+
+    test('the climb block: climb ahead, steepest grade and how far, heights and the steep span', () async {
+      final total = (routeJson['distance_m'] as num).toDouble();
+      final p = profile(total);
+      final c = carClimb(p, distanceAlongM: 0, routeM: total)!;
+      expect((c['heightsM'] as List), hasLength(kClimbSamples));
+      expect((c['heightsM'] as List).first, closeTo(1000, 2));
+      expect(c['climbAheadM'] as double, closeTo(360, 30));
+      expect(c['gradePct'] as double, closeTo(9, 1.5));
+      expect(c['steepestInM'] as double, closeTo(9000, 700));
+      final from = c['steepFrom'] as int, to = c['steepTo'] as int;
+      expect(from, lessThan(to));
+      expect(to, lessThanOrEqualTo(kClimbSamples - 1));
+      expect(c['windowM'] as double, greaterThanOrEqualTo(8000));
+
+      // Further along: the steep part is nearer, the heights start at the position, and less climb is left.
+      final later = carClimb(p, distanceAlongM: 4000, routeM: total)!;
+      expect(later['steepestInM'] as double, lessThan(c['steepestInM'] as double));
+      expect(later['climbAheadM'] as double, lessThan(c['climbAheadM'] as double));
+      expect((later['heightsM'] as List).first, closeTo(1000 + 4000 * 0.02, 3));
+
+      // On the steep part: it counts from the position, and it is 0 m away.
+      final on = carClimb(p, distanceAlongM: 10000, routeM: total)!;
+      expect(on['steepestInM'], 0);
+      // Past it: no climb ahead, so no block (the card is not drawn).
+      expect(carClimb(p, distanceAlongM: 12000, routeM: total), isNull);
+    });
+
+    // A profile of straight stretches: [at] metres along and the height there, sampled every 40 m.
+    ElevationProfile stretches(List<(double, double)> at) {
+      final dist = <double>[], h = <double>[];
+      for (var d = 0.0; d <= at.last.$1; d += 40) {
+        var k = 1;
+        while (k < at.length - 1 && at[k].$1 < d) {
+          k++;
+        }
+        final t = (d - at[k - 1].$1) / (at[k].$1 - at[k - 1].$1);
+        dist.add(d);
+        h.add(at[k - 1].$2 + (at[k].$2 - at[k - 1].$2) * t);
+      }
+      return ElevationProfile.fromSamples(dist, h, totalM: at.last.$1);
+    }
+
+    test('no climb block unless a climb of at least 3% is ahead', () {
+      expect(kCarClimbMinGrade, 0.03);
+      // Flat: nothing.
+      final flat = stretches([(0, 1000), (9660, 1000)]);
+      expect(carClimb(flat, distanceAlongM: 0, routeM: 9660), isNull);
+      // Six miles that rise 160 ft (49 m) evenly, about half a percent: the climb finder calls it a climb, the car shows none.
+      final gentle = stretches([(0, 1000), (9660, 1049)]);
+      expect(gentle.steepestClimbAhead(0), isNotNull);
+      expect(gentle.steepestClimbAhead(0)!.grade, lessThan(kCarClimbMinGrade));
+      expect(carClimbAhead(gentle, 0), isNull);
+      expect(carClimb(gentle, distanceAlongM: 0, routeM: 9660), isNull);
+      // 2% for 9 km: still none.
+      final two = stretches([(0, 1000), (9000, 1180), (12000, 1180)]);
+      expect(carClimb(two, distanceAlongM: 0, routeM: 12000), isNull);
+      // Flat for 20 miles, then 5% for half a mile (40 m up over 800 m), then flat: the card is there from the start, says 5%
+      // and how far, and its shape reaches to the climb; once the climb is behind there is no card.
+      final far = stretches([(0, 1000), (32200, 1000), (33000, 1040), (40000, 1040)]);
+      final c = carClimb(far, distanceAlongM: 0, routeM: 40000)!;
+      expect(c['gradePct'] as double, closeTo(5, 1));
+      expect(c['steepestInM'] as double, closeTo(32200, 400));
+      expect(c['windowM'] as double, greaterThanOrEqualTo(33000));
+      expect(c['steepFrom'], isNotNull);
+      expect(carClimb(far, distanceAlongM: 20000, routeM: 40000), isNotNull);
+      expect(carClimb(far, distanceAlongM: 34000, routeM: 40000), isNull);
+      // Just under and just over the floor.
+      expect(carClimb(stretches([(0, 1000), (2000, 1000), (4000, 1050), (6000, 1050)]), distanceAlongM: 0, routeM: 6000), isNull);
+      expect(carClimb(stretches([(0, 1000), (2000, 1000), (4000, 1070), (6000, 1070)]), distanceAlongM: 0, routeM: 6000), isNotNull);
+    });
+
+    test('the mini map and the map badge mark a steepest point only for a climb of at least 3%', () {
+      final r = MapRoute.fromJson(routeJson);
+      final gentle = stretches([(0, 1000), (r.distanceM, 1000 + r.distanceM * 0.005)]);
+      expect(gentle.steepestClimbAhead(0), isNotNull);
+      expect(carOverview(r, distanceAlongM: 0, profile: gentle)!['steep'], isNull);
+      final steep = stretches([(0, 1000), (r.distanceM / 2, 1000), (r.distanceM / 2 + 1000, 1060), (r.distanceM, 1060)]);
+      expect((carOverview(r, distanceAlongM: 0, profile: steep)!['steep'] as Map)['gradePct'] as double, closeTo(6, 1));
+    });
+
+    test('no climb block on arrival', () async {
+      await guide(0.1);
+      final total = nav.route!.distanceM;
+      expect(carTrip(nav, elevation: profile(total)).containsKey('climb'), isTrue);
+      nav.arrived = true;
+      final t = carTrip(nav, elevation: profile(total));
+      expect(t['arrived'], isTrue);
+      expect(t.containsKey('climb'), isFalse);
+    });
+
+    test('the climb block is in the trip while guiding, with the heights and the overview', () async {
+      await guide(0.1);
+      final total = nav.route!.distanceM;
+      final t = carTrip(nav, elevation: profile(total));
+      expect(t['climb'], isNotNull);
+      expect((t['climb'] as Map)['heightsM'], hasLength(kClimbSamples));
+    });
+
+    test('the overview: the route simplified, the driven fraction, the steepest point and the destination', () async {
+      await guide(0.33);
+      final total = nav.route!.distanceM;
+      final t = carTrip(nav, elevation: profile(total));
+      final o = t['overview'] as Map;
+      expect(o['drivenFraction'], closeTo(0.33, 0.001));
+      expect((o['points'] as List).length, lessThanOrEqualTo(kOverviewMaxPoints));
+      final steep = o['steep'] as Map;
+      expect(steep['gradePct'] as double, closeTo(9, 1.5));
+      // The steep part is about 9 to 11 km of 24.6 km along a straight east line.
+      expect(steep['lon'] as double, greaterThan(-113.8 + 0.3 * 0.35));
+      expect(steep['lon'] as double, lessThan(-113.8 + 0.3 * 0.5));
+      expect((o['destination'] as Map)['lon'], -113.5);
+      // Without elevation there is no steep point.
+      expect((carTrip(nav)['overview'] as Map)['steep'], isNull);
+    });
+
+    test('a long route is cut to at most 150 points and keeps both ends', () {
+      final pts = [for (var i = 0; i < 3000; i++) GeoPoint(42.5 + 0.0002 * i + 0.00005 * ((i * 37) % 11), -113.8 + 0.0003 * i + 0.00008 * ((i * 17) % 7))];
+      final s = simplifyRoute(pts, kOverviewMaxPoints);
+      expect(s.length, lessThanOrEqualTo(kOverviewMaxPoints));
+      expect(s.first, pts.first);
+      expect(s.last, pts.last);
+    });
+
+    test('no route: no overview', () {
+      expect(carOverview(null, distanceAlongM: 0), isNull);
+    });
+
+    test('the car follows the phone\'s chosen theme alone: one palette block, the theme\'s own colors', () {
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayPalette(id), {'theme': id.name, ...carOverlayColors(id)}, reason: id.name);
+      }
+      expect(carOverlayPalette(CacheThemeId.tactical).containsKey('day'), isFalse);
+      expect(carOverlayPalette(CacheThemeId.tactical).containsKey('night'), isFalse);
+    });
+
+    test('palette colors come from the theme tokens: the theme\'s own route color, a white badge, and Tactical all red', () {
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayColors(id)['route'], mapPaletteFor(id).css('route'), reason: id.name);
+      }
+      for (final id in [CacheThemeId.light, CacheThemeId.dark]) {
+        final c = carOverlayColors(id);
+        final hsl = HSLColor.fromColor(Color(int.parse('FF${c['route']!.substring(1)}', radix: 16)));
+        expect(hsl.hue, inInclusiveRange(180, 260), reason: '${id.name} route is blue, never a traffic color');
+      }
+      // Parchment on the car: the phone's own Parchment brown for the route and everything made from it.
+      final pc = carOverlayColors(CacheThemeId.parchment);
+      expect(pc['route'], '#7a4e1d');
+      expect(pc['posRing'], pc['route']);
+      expect(pc['badgeEdge'], pc['route']);
+      expect((carOverlayPalette(CacheThemeId.parchment))['route'], '#7a4e1d');
+      expect(carOverlayColors(CacheThemeId.light)['badge'], '#ffffff');
+      expect(carOverlayColors(CacheThemeId.dark)['badgeGlyph'], '#161b20');
+      final t = carOverlayColors(CacheThemeId.tactical);
+      expect(t['route'], '#ff5a4a');
+      for (final e in t.entries) {
+        final r = int.parse(e.value.substring(1, 3), radix: 16), g = int.parse(e.value.substring(3, 5), radix: 16), b = int.parse(e.value.substring(5, 7), radix: 16);
+        expect(r >= g && r >= b, isTrue, reason: 'tactical ${e.key} ${e.value} is on the red ramp');
+        expect(g < 0xC0 && b < 0xC0, isTrue, reason: 'tactical ${e.key} is not white');
+      }
+      // The host's guidance card: the theme surface, and a dark red in Tactical.
+      expect(carOverlayColors(CacheThemeId.dark)['hostCard'], carOverlayColors(CacheThemeId.dark)['card']);
+      expect(t['hostCard'], '#3a0b07');
+      // Inverted badge: a dark red glyph on a light red pill.
+      expect(t['badge'], isNot(t['badgeGlyph']));
+      expect(t['routeDriven'], isNot(t['route']));
+    });
+
+    test('text on the climb card reads at 4.5:1 or better in all four themes, and Tactical stays red', () {
+      double contrast(String a, String b) {
+        double lum(String h) => Color(int.parse('FF${h.substring(1)}', radix: 16)).computeLuminance();
+        final x = lum(a), y = lum(b);
+        return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+      }
+
+      for (final id in CacheThemeId.values) {
+        final c = carOverlayColors(id);
+        expect(contrast(c['cardText']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} figures on the card');
+        expect(contrast(c['cardSecondary']!, c['card']!), greaterThanOrEqualTo(4.5), reason: '${id.name} label on the card');
+      }
+      // Tactical: the label and the figures are the theme's brightest red, well clear of the limit (6.5:1), so a measurement
+      // on real, anti-aliased pixels stays above it; nothing else on the card changed.
+      final t = carOverlayColors(CacheThemeId.tactical);
+      expect(t['cardSecondary'], '#ff5a4a');
+      expect(t['cardText'], '#ff5a4a');
+      expect(contrast(t['cardSecondary']!, t['card']!), greaterThanOrEqualTo(6.0));
+      expect(contrast(t['cardText']!, t['card']!), greaterThanOrEqualTo(6.0));
+      expect(t['card'], '#120404');
+      // The other three keep their theme's text and secondary.
+      expect(carOverlayColors(CacheThemeId.dark)['cardText'], '#dcc9a3');
+      expect(carOverlayColors(CacheThemeId.light)['cardSecondary'], '#55594f');
+      expect(carOverlayColors(CacheThemeId.parchment)['cardSecondary'], '#4a4638');
+    });
+
+    test('the mini map keeps the page background of its theme, which is not the card color (the approved look)', () {
+      expect(carOverlayColors(CacheThemeId.light)['miniBg'], '#f3ebd9');
+      expect(carOverlayColors(CacheThemeId.parchment)['miniBg'], '#dcc9a3');
+      expect(carOverlayColors(CacheThemeId.dark)['miniBg'], '#1a1d1f');
+      expect(carOverlayColors(CacheThemeId.tactical)['miniBg'], '#000000');
+      for (final id in CacheThemeId.values) {
+        expect(carOverlayColors(id)['miniBg'], isNot(carOverlayColors(id)['card']), reason: id.name);
+      }
+    });
+
+    test('the Kotlin tests read the same palette: the fixture is these colors', () {
+      final f = File('android/app/src/test/resources/car/overlay_palette.json');
+      final now = {for (final id in CacheThemeId.values) id.name: {'theme': id.name, ...carOverlayColors(id)}};
+      if (Platform.environment['CAR_AA_WRITE_FIXTURE'] == '1') {
+        f.createSync(recursive: true);
+        f.writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(now)}\n');
+      }
+      expect(jsonDecode(f.readAsStringSync()), now, reason: 'run once with CAR_AA_WRITE_FIXTURE=1 to rewrite it');
+    });
+  });
+
+  test('picking a theme in Appearance marks it picked, and that is saved; a file from before the flag counts as picked', () async {
+    final d = Directory.systemTemp.createTempSync('carset');
+    addTearDown(() => d.deleteSync(recursive: true));
+    final file = File('${d.path}/settings.json');
+    Future<AppState> load(Map<String, Object?>? saved) async {
+      if (saved == null) {
+        if (file.existsSync()) file.deleteSync();
+      } else {
+        file.writeAsStringSync(jsonEncode(saved));
+      }
+      final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
+      await a.init();
+      return a;
+    }
+
+    // A new install: not picked.
+    var a = await load(null);
+    expect(a.themeChosen, isFalse);
+    // Picking, even the theme already shown, marks it picked; any other change of theme (a synced one) does not.
+    await a.setTheme(CacheThemeId.dark);
+    expect(a.themeChosen, isFalse);
+    await a.chooseTheme(CacheThemeId.dark);
+    expect(a.themeChosen, isTrue);
+    expect((jsonDecode(file.readAsStringSync()) as Map)['themeChosen'], isTrue);
+    a.dispose();
+    a = await load({'theme': 'dark', 'themeChosen': true});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    // A file from before the flag counts as picked, whatever theme it holds (Dark too).
+    a = await load({'theme': 'light'});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    a = await load({'theme': 'dark'});
+    expect(a.themeChosen, isTrue);
+    a.dispose();
+    // No file again: not picked.
+    a = await load(null);
+    expect(a.themeChosen, isFalse);
+    a.dispose();
+    a = await load({'theme': 'tactical', 'themeChosen': false});
+    expect(a.themeChosen, isFalse);
+    a.dispose();
+  });
+
+  test('an old settings file that still has the two removed car switches loads, and does not write them back', () async {
+    final d = Directory.systemTemp.createTempSync('carset');
+    addTearDown(() => d.deleteSync(recursive: true));
+    final file = File('${d.path}/settings.json');
+    file.writeAsStringSync(jsonEncode({'theme': 'light', 'moduleIcons': 'large', 'carClimbAhead': false, 'carRouteMiniMap': false}));
+    final a = AppState(settingsDirOverride: d, modelsDirOverride: d);
+    await a.init();
+    expect(a.theme, CacheThemeId.light);
+    expect(a.largeModuleIcons, isTrue);
+    await a.setTheme(CacheThemeId.dark); // any change writes the file again
+    final written = jsonDecode(file.readAsStringSync()) as Map;
+    expect(written['theme'], 'dark');
+    expect(written.containsKey('carClimbAhead'), isFalse);
+    expect(written.containsKey('carRouteMiniMap'), isFalse);
+    a.dispose();
+  });
+
   group('CarBridge over the platform channel', () {
     late MapsState maps;
     late List<MethodCall> toCar;
     late CarBridge bridge;
+    // What the car side answers to a prompt (the iPhone's says how iOS wants it given; Android's says nothing).
+    Object? promptAnswer;
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
     Future<Object?> fromCar(String method, [Object? args]) async {
@@ -201,9 +850,11 @@ void main() {
     setUp(() async {
       maps = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir);
       toCar = [];
+      promptAnswer = null;
       messenger.setMockMethodCallHandler(channel, (call) async {
         toCar.add(call);
         if (call.method == 'hello') return {'connected': true};
+        if (call.method == 'prompt') return promptAnswer;
         return null;
       });
       bridge = CarBridge(nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'file:///g/{fontstack}/{range}.pbf');
@@ -214,6 +865,486 @@ void main() {
       bridge.dispose();
       maps.dispose();
       messenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('the car map style is the phone\'s chosen theme, each of the four, whatever the car\'s day or night', () async {
+      await maps.engine.start();
+      Future<Map<String, Object?>?> styleFor(CacheThemeId t) =>
+          CarBridge(nav: nav, maps: maps, drive: drive, theme: () => t, glyphs: () async => 'file:///g/{fontstack}/{range}.pbf').style();
+      final styles = <String>{};
+      for (final t in CacheThemeId.values) {
+        final st = await styleFor(t);
+        expect(st!['theme'], t.name);
+        expect((st['colors'] as Map)['route'], mapPaletteFor(t).css('route'), reason: t.name);
+        styles.add(st['style'] as String);
+      }
+      expect(styles, hasLength(4));
+      // The car's own day or night, still sent by a car side, does not change it.
+      final b = CarBridge(nav: nav, maps: maps, drive: drive, theme: () => CacheThemeId.tactical, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      for (final dark in [true, false]) {
+        final st = await fromCar('style', {'dark': dark}) as Map;
+        expect(st['theme'], 'tactical');
+        expect((st['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
+      }
+      b.dispose();
+    });
+
+    test('the car map reloads for its own look only: not a reconnect or an opacity change, but pins and layers', () async {
+      final eng = _GenEngine();
+      final m = MapsState(engine: eng, settingsDirOverride: dir);
+      addTearDown(m.dispose);
+      await m.init();
+      final b = CarBridge(nav: nav, maps: m, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(m.uses, isNotEmpty);
+      await b.style(); // the car's own first style: the key is recorded as the car loads it
+      int count() => toCar.where((c) => c.method == 'styleChanged').length;
+      toCar.clear();
+      // The connection came back: the phone's key moves, the car's does not.
+      final keyBefore = m.styleKey;
+      eng.reconnect();
+      await settle();
+      expect(m.styleKey, isNot(keyBefore));
+      expect(count(), 0);
+      // A layer's opacity.
+      m.setOpacity(m.uses.first.def.id, 0.5);
+      await settle();
+      expect(count(), 0);
+      // The pin style.
+      m.setPinStyle(m.pinStyle == PinStyle.icon ? PinStyle.teardrop : PinStyle.icon);
+      await settle();
+      expect(count(), 1);
+      // A layer switched off, then on again.
+      final on = m.layersOn;
+      m.setLayersOn(on.take(on.length - 1));
+      await settle();
+      expect(count(), 2);
+      m.setLayersOn(on);
+      await settle();
+      expect(count(), 3);
+      b.dispose();
+    });
+
+    test('until a theme is picked the car follows its own day and night; once picked, the theme always', () async {
+      await maps.engine.start();
+      var chosen = CacheThemeId.tactical;
+      var picked = false;
+      final changed = ValueNotifier(0);
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed, theme: () => chosen,
+          themeChosen: () => picked, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      Future<Map> styleAt({required bool dark}) async => await fromCar('style', {'dark': dark}) as Map;
+      // Not picked: Light by day, Dark by night, whatever the theme; the car is told its day and night decide.
+      var st = await styleAt(dark: false);
+      expect(st['theme'], 'light');
+      expect(st['followsCar'], isTrue);
+      expect((st['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.light).css('route'));
+      st = await styleAt(dark: true);
+      expect(st['theme'], 'dark');
+      expect(b.carShows, CacheThemeId.dark);
+      // The trip's palette follows the same theme (carTrip's `palette` is carOverlayPalette(carShows)).
+      await styleAt(dark: false);
+      expect(b.carShows, CacheThemeId.light);
+      // The person picks a theme: one style reload, and from then on it is that theme by day and by night.
+      toCar.clear();
+      picked = true;
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), hasLength(1));
+      expect(b.carShows, CacheThemeId.tactical);
+      for (final dark in [true, false]) {
+        st = await styleAt(dark: dark);
+        expect(st['theme'], 'tactical');
+        expect(st['followsCar'], isFalse);
+      }
+      // A day and night change with the theme picked changes nothing.
+      await styleAt(dark: true);
+      expect(b.carShows, CacheThemeId.tactical);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: false, carDark: false), CacheThemeId.light);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: false, carDark: true), CacheThemeId.dark);
+      expect(carTheme(chosen: CacheThemeId.parchment, themeChosen: true, carDark: true), CacheThemeId.parchment);
+      b.dispose();
+    });
+
+    test('a tile server on a new port reloads the phone map and the car map; one found while answering the car is in that answer', () async {
+      final eng = _PortEngine();
+      final m = MapsState(engine: eng, settingsDirOverride: dir);
+      addTearDown(m.dispose);
+      await m.init();
+      final b = CarBridge(nav: nav, maps: m, drive: drive, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(eng.rechecks, greaterThan(0), reason: 'a car screen connecting asks for the tile server again');
+      await b.style(dark: true);
+      int count() => toCar.where((c) => c.method == 'styleChanged').length;
+      toCar.clear();
+      // The app comes back to the front and the server has a new port.
+      final keyBefore = m.styleKey;
+      eng.lose(2);
+      await eng.recheckServer();
+      await settle();
+      expect(m.styleKey, isNot(keyBefore), reason: 'the phone map loads its style again');
+      expect(count(), 1, reason: 'the car map loads its style again');
+      // The car asks for its style and the server has to be started again right then: the answer is the new style, no second load.
+      eng.lose(3);
+      final before = eng.rechecks;
+      expect(await b.style(dark: true), isNotNull);
+      expect(eng.rechecks, before + 1);
+      expect(eng.port, 3);
+      await settle();
+      expect(count(), 1);
+      b.dispose();
+    });
+
+    test('a new phone theme makes the car reload its map style, without reconnecting', () async {
+      await maps.engine.start();
+      var chosen = CacheThemeId.dark;
+      final changed = ValueNotifier(0);
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(milliseconds: 5), settings: changed, theme: () => chosen,
+          glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      toCar.clear();
+      // Something else changed: no style refresh.
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), isEmpty);
+      chosen = CacheThemeId.tactical;
+      changed.value++;
+      await settle();
+      expect(toCar.where((c) => c.method == 'styleChanged'), hasLength(1));
+      // The car's own style request then builds the Tactical style.
+      final st = await b.style();
+      expect((st!['colors'] as Map)['route'], mapPaletteFor(CacheThemeId.tactical).css('route'));
+      b.dispose();
+    });
+
+    Map<Object?, Object?> lastTrip() => toCar.lastWhere((c) => c.method == 'trip').arguments as Map;
+
+    test('the car is told when the phone position changes while nothing is guided', () async {
+      await settle();
+      toCar.clear();
+      // The phone has a position (read when the car connected, or it moved): the car's home map marker is that position.
+      location.publish(fixAt(43.0, -114.0));
+      await settle();
+      expect(toCar.where((c) => c.method == 'trip'), isNotEmpty, reason: 'nothing told the car the position changed');
+      expect(lastTrip()['phase'], 'browsing');
+      expect((lastTrip()['position'] as Map)['lat'], 43.0);
+      expect((lastTrip()['position'] as Map)['lon'], -114.0);
+      location.publish(fixAt(43.1, -114.2));
+      await settle();
+      expect((lastTrip()['position'] as Map)['lon'], -114.2);
+      // The position forgotten: the car is told there is none (it draws no marker) instead of keeping the last one.
+      location.forgetPublished();
+      await settle();
+      expect(lastTrip().containsKey('position'), isFalse);
+    });
+
+    test('after a test drive ends the car has the phone position again, not the last point of the drive', () async {
+      await preview(); // the phone is at 42.5, -113.8
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, ((lon + 113.8) / 0.3).clamp(0.0, 1.0)));
+      await fromCar('autoDrive', {'on': true});
+      await fromCar('start');
+      expect(drive.simulating, isTrue);
+      await settle(120);
+      // The drive's fixes are the position while it runs: the car's marker and the phone's own have moved east along the route.
+      final driven = location.fix!;
+      expect(driven.lon, greaterThan(-113.8));
+      // End route on the car.
+      await fromCar('stop');
+      await settle(80);
+      expect(nav.guiding, isFalse);
+      expect(lastTrip()['phase'], 'browsing');
+      // The phone's real position again (the test's position source reads 42.5, -113.8), with no heading: parked.
+      final pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.5);
+      expect(pos['lon'], -113.8, reason: 'the car was left with the last point of the test drive');
+      expect(pos.containsKey('heading'), isFalse);
+      expect(location.fix!.lon, -113.8);
+      expect(nav.here!.lon, -113.8);
+    });
+
+    test('a test drive that has not given its first fix yet does not put the car\'s marker on the phone\'s own position', () async {
+      await preview(); // the phone is at 42.5, -113.8
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.8);
+      // A drive that gives no fix for a long time: guidance has started, the vehicle is not known yet.
+      final slow = CarDriveSource(gps, route: () => nav.route, tick: const Duration(hours: 1));
+      final b = CarBridge(nav: nav, maps: maps, drive: slow, throttle: const Duration(milliseconds: 5), glyphs: () async => 'g');
+      nav.phase = NavPhase.guiding;
+      expect(b.snapshot().containsKey('position'), isTrue, reason: 'no test drive was asked for: the phone\'s fix is the vehicle');
+      // The car asked for a test drive. The trip that says guidance has started is made before the drive runs (that trip
+      // carried the phone's own position, and the car slid its arrow from there onto the route).
+      slow.simulate = true;
+      expect(slow.simulating, isFalse);
+      expect(b.snapshot().containsKey('position'), isFalse);
+      final sub = slow.start(title: '', text: '').listen((_) {});
+      expect(slow.simulating, isTrue);
+      expect(b.snapshot().containsKey('position'), isFalse);
+      // Guidance has a fix: that is the vehicle.
+      nav.lastFix = fixAt(42.5, -113.79, heading: 90);
+      expect((b.snapshot()['position'] as Map)['lon'], -113.79);
+      await sub.cancel();
+      await slow.stop();
+      nav.lastFix = null;
+      nav.phase = NavPhase.browsing;
+      b.dispose();
+    });
+
+    test('after arrival the car\'s marker keeps following the phone\'s position until End, with no progress call', () async {
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['arrived'], isTrue);
+      final progressCalls = backend.calls.where((c) => c.startsWith('progress')).length;
+      // The vehicle moves on after arrival.
+      gps.controller.add(fixAt(42.501, -113.502, heading: 180));
+      await settle();
+      var pos = lastTrip()['position'] as Map;
+      expect(pos['lat'], 42.501, reason: 'the car\'s marker is the phone\'s position after arrival, not the last matched point');
+      expect(pos['lon'], -113.502);
+      expect(pos['heading'], 180);
+      expect((bridge.snapshot()['position'] as Map)['lon'], -113.502);
+      gps.controller.add(fixAt(42.502, -113.504, heading: 180));
+      await settle();
+      pos = lastTrip()['position'] as Map;
+      expect(pos['lon'], -113.504);
+      expect(lastTrip()['arrived'], isTrue, reason: 'the arrived card stays');
+      expect(lastTrip()['phase'], 'guiding');
+      expect(backend.calls.where((c) => c.startsWith('progress')).length, progressCalls, reason: 'no progress call after arrival');
+      expect(backend.calls.where((c) => c.startsWith('route:')), hasLength(1), reason: 'no re-route after arrival');
+      await nav.end();
+      await settle();
+      expect(lastTrip()['phase'], 'browsing');
+      expect(nav.lastFix, isNull);
+    });
+
+    test('with no End after arrival, guidance ends by itself and the car\'s trip ends as it does on End', () async {
+      nav.arrivalEndAfter = const Duration(milliseconds: 150);
+      await preview();
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 1.0, arrived: true));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.5, heading: 90));
+      await settle();
+      expect(nav.arrived, isTrue);
+      expect(lastTrip()['phase'], 'guiding');
+      await settle(400);
+      expect(nav.phase, NavPhase.browsing);
+      expect(gps.stops, 1, reason: 'the position service is let go');
+      expect(lastTrip()['phase'], 'browsing', reason: 'the car is told guidance ended');
+      expect(lastTrip()['arrived'], isFalse);
+      expect([for (final c in toCar) if (c.method == 'route') c].last.arguments, containsPair('bounds', isNull), reason: 'the route line is taken off');
+    });
+
+    test('Add stop on the car before Start: the place joins the route shown and the trip names it', () async {
+      backend.onSearch = (q, {near, meaning}) async =>
+          MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);
+      final found = (await fromCar('search', {'query': 'fuel'})) as List;
+      // No route is shown: nothing to add to.
+      expect(await fromCar('addStop', {'id': (found.first as Map)['id']}), isFalse);
+      await preview();
+      await settle();
+      expect(lastTrip()['stops'], isEmpty);
+      // A place the car was never shown is not added.
+      expect(await fromCar('addStop', {'id': 'place:nope'}), isFalse);
+      expect(await fromCar('addStop', {'id': (found.first as Map)['id']}), isTrue);
+      expect(nav.stops.single.name, 'Quartz Fuel');
+      expect(nav.phase, NavPhase.previewing);
+      expect(backend.vias.last.single['lon'], -113.6);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Quartz Fuel']);
+    });
+
+    test('Add stop on the car while guiding: it becomes the next stop and guidance carries on to it', () async {
+      backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [
+            _place('place:30', 'Quartz Fuel', lon: -113.6),
+            _place('place:31', 'Juniper Diner', lon: -113.7),
+          ]);
+      final found = (await fromCar('search', {'query': 'stop'})) as List;
+      String id(int i) => (found[i] as Map)['id'] as String;
+      await preview();
+      expect(await fromCar('addStop', {'id': id(0)}), isTrue); // before Start: Quartz Fuel
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.1));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final routesBefore = backend.froms.length;
+      expect(await fromCar('addStop', {'id': id(1)}), isTrue);
+      expect(nav.guiding, isTrue, reason: 'guidance carries on');
+      // The new stop is the next one, before the stop that was there; the new route starts where the phone is.
+      expect([for (final s in nav.stops) s.name], ['Juniper Diner', 'Quartz Fuel']);
+      expect(backend.froms.length, routesBefore + 1);
+      expect(backend.froms.last!['lon'], -113.77);
+      expect([for (final v in backend.vias.last) v['lon']], [-113.7, -113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Juniper Diner', 'Quartz Fuel']);
+      expect(lastTrip()['phase'], 'guiding');
+      // No route through the stop: the stops stay as they were and guidance carries on.
+      backend.onRoute = (to, mode, from) async => throw StateError('no route');
+      expect(await fromCar('addStop', {'id': id(0)}), isFalse);
+      expect([for (final s in nav.stops) s.name], ['Juniper Diner', 'Quartz Fuel']);
+      expect(nav.guiding, isTrue);
+      expect(nav.rerouting, isFalse);
+    });
+
+    test('two routes in one car session, a stop added to each: both come back named', () async {
+      backend.onSearch = (q, {near, meaning}) async =>
+          MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:30', 'Quartz Fuel', lon: -113.6)]);
+      final found = (await fromCar('search', {'query': 'fuel'})) as List;
+      final id = (found.first as Map)['id'];
+      List<Object?> named() => [for (final s in lastTrip()['stops'] as List) (s as Map)['name']];
+      // The first route: the stop is named, the drive passes it, End route.
+      await preview();
+      expect(await fromCar('addStop', {'id': id}), isTrue);
+      expect(named(), ['Quartz Fuel']);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.4));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.6, heading: 90)); // at the stop
+      await settle();
+      expect(named(), isEmpty, reason: 'the stop is behind');
+      await fromCar('stop');
+      await settle();
+      expect(nav.stops, isEmpty);
+      // The second route of the same session: the stop added to it is ahead and is named (it was in the route but not in
+      // the trip, so the car's route screen did not show its line).
+      await preview();
+      expect(await fromCar('addStop', {'id': id}), isTrue);
+      expect(nav.stops.single.name, 'Quartz Fuel');
+      expect(backend.vias.last.single['lon'], -113.6);
+      expect(named(), ['Quartz Fuel']);
+      // And in the drive that follows it is ahead until it is passed.
+      await fromCar('start');
+      await settle();
+      expect(named(), ['Quartz Fuel']);
+    });
+
+    test('stops are passed in order, and the stops the route has reached are the stops the car no longer lists', () async {
+      backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [
+            _place('place:30', 'Juniper Diner', lon: -113.7),
+            _place('place:31', 'Quartz Fuel', lon: -113.6),
+          ]);
+      final found = (await fromCar('search', {'query': 'stop'})) as List;
+      List<Object?> named() => [for (final s in lastTrip()['stops'] as List) (s as Map)['name']];
+      await preview();
+      expect(await fromCar('addStop', {'id': (found[0] as Map)['id']}), isTrue);
+      expect(await fromCar('addStop', {'id': (found[1] as Map)['id']}), isTrue);
+      var reached = 0;
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.1)..['stops_reached'] = reached);
+      await fromCar('start');
+      await settle();
+      expect(named(), ['Juniper Diner', 'Quartz Fuel']);
+      // A fix at the second stop while the first is not reached passes nothing: both stay ahead, and a new route from
+      // there goes through both.
+      gps.controller.add(fixAt(42.5, -113.6, heading: 90));
+      await settle();
+      expect(named(), ['Juniper Diner', 'Quartz Fuel']);
+      // The route's first stop is reached (the core says so): it is no longer listed. Then the second.
+      List<Object?> numbers() => [for (final s in lastTrip()['stops'] as List) (s as Map)['number']];
+      expect(numbers(), [1, 2]);
+      reached = 1;
+      gps.controller.add(fixAt(42.5, -113.75, heading: 90));
+      await settle();
+      expect(named(), ['Quartz Fuel']);
+      // The stop that is left keeps its number: it is the route's second stop, and the turn card will say "Stop 2 reached"
+      // for it (the car's overview called it Stop 1).
+      expect(numbers(), [2]);
+      reached = 2;
+      gps.controller.add(fixAt(42.5, -113.75, heading: 90));
+      await settle();
+      expect(named(), isEmpty);
+    });
+
+    test('a real drive that ends keeps the position it has', () async {
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.2)));
+      await fromCar('start');
+      gps.controller.add(fixAt(42.5, -113.74, heading: 90));
+      await settle();
+      await fromCar('stop');
+      await settle();
+      // The GPS fix was the phone's own position: it is not thrown away when guidance ends.
+      expect(location.fix!.lon, -113.74);
+      expect((lastTrip()['position'] as Map)['lon'], -113.74);
+    });
+
+    test('car search goes by name and address only: meaning false, and the search model is never asked for a vector', () async {
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      await fromCar('search', {'query': 'coffee'});
+      await fromCar('navigateTo', {'query': 'pharmacy', 'start': false});
+      expect(asked, isNotEmpty);
+      expect(asked, everyElement(isFalse), reason: 'every car search path asks with meaning off');
+
+      // The real backend: with meaning off it never calls the embedder (the search model); with it on (the phone) it does.
+      var embedded = 0;
+      final real = CoreMapBackend(() => throw StateError('no core in this test'), embedder: (q) async {
+        embedded++;
+        return null;
+      });
+      await expectLater(real.search('coffee', meaning: false), throwsStateError);
+      expect(embedded, 0);
+      await expectLater(real.search('coffee'), throwsStateError);
+      expect(embedded, 1, reason: 'control: the phone path does use the embedder');
+    });
+
+    test('phoneDrive reaches the car in the trip at once on every change, and only that key is sent', () async {
+      final signal = PhoneDriveSignal();
+      final b = CarBridge(
+          nav: nav, maps: maps, drive: drive, throttle: const Duration(seconds: 30), phoneDrive: signal,
+          overlay: () => carOverlaySwitches(phoneDrive: signal.value), glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      await preview();
+      backend.progressQueue.add(MapProgress.fromJson(fakeProgressJson(routeJson, 0.2)));
+      await nav.start();
+      gps.controller.add(fixAt(42.5, -113.74, heading: 90));
+      await settle();
+      Map lastOverlay() => (toCar.lastWhere((c) => c.method == 'trip').arguments as Map)['overlay'] as Map;
+      expect(lastOverlay(), {'phoneDrive': false});
+      // The throttle is 30 s here: a change that arrives within it would not be seen if the signal waited for it.
+      signal.value = true;
+      await settle();
+      expect(lastOverlay(), {'phoneDrive': true});
+      signal.value = false;
+      await settle();
+      expect(lastOverlay(), {'phoneDrive': false});
+      b.dispose();
+      signal.dispose();
+    });
+
+    test('what the car carries: each word, an unknown word, absent, and the reset when the car disconnects', () async {
+      final carries = ValueNotifier(CarExtras.never);
+      final b = CarBridge(nav: nav, maps: maps, drive: drive, carries: carries, glyphs: () async => 'g');
+      await b.start();
+      await fromCar('connected', {'on': true});
+      expect(carries.value, CarExtras.never, reason: 'absent until the car reports');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('extras', {'carries': 'unlessPhone'});
+      expect(carries.value, CarExtras.unlessPhoneShows);
+      await fromCar('extras', {'carries': 'never'});
+      expect(carries.value, CarExtras.never);
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', {'carries': 'huge'});
+      expect(carries.value, CarExtras.never, reason: 'an unknown word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      await fromCar('extras', <String, Object?>{});
+      expect(carries.value, CarExtras.never, reason: 'a missing word reads as never');
+      await fromCar('extras', {'carries': 'always'});
+      expect(carries.value, CarExtras.always);
+      await fromCar('connected', {'on': false});
+      expect(carries.value, CarExtras.never, reason: 'absent again when the car disconnects');
+      b.dispose();
+      carries.dispose();
     });
 
     test('places wait for the core when the car started the app', () async {
@@ -235,6 +1366,68 @@ void main() {
       expect([for (final p in answer as List) (p as Map)['name']], ['Home']);
       waiting.dispose();
       messenger.setMockMethodCallHandler(const MethodChannel('co.cache/car-wait'), null);
+    });
+
+    /// Asks [ch] as the car would; the answer, or a timeout well inside [CarBridge.readyWait].
+    Future<Object?> askOn(MethodChannel ch, String method, [Object? args]) {
+      final c = Completer<Object?>();
+      unawaited(messenger.handlePlatformMessage(ch.name, const StandardMethodCodec().encodeMethodCall(MethodCall(method, args)), (data) {
+        c.complete(data == null ? null : const StandardMethodCodec().decodeEnvelope(data));
+      }));
+      return c.future.timeout(const Duration(seconds: 2));
+    }
+
+    test('saved places and search answer at once on the car\'s own handle while the core has not opened', () async {
+      // The main core never opens here (its libraries are still opening, or it is busy): nothing the car asks for places waits on it.
+      final never = Completer<void>();
+      const ch = MethodChannel('co.cache/car-own');
+      final own = _FakeCarPlaces()
+        ..saved.add(const SavedPlaceRecord(key: 'k0', name: 'Home', lat: 42.6, lon: -113.7))
+        ..found.add(_place('place:9', 'Home Depot'));
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, ready: () => never.future, places: own);
+      await car.start();
+      final before = backend.calls.length;
+      final saved = await askOn(ch, 'saved');
+      expect([for (final p in saved as List) (p as Map)['name']], ['Home']);
+      final found = await askOn(ch, 'search', {'query': 'home'});
+      expect([for (final p in found as List) (p as Map)['name']], ['Home', 'Home Depot']);
+      expect(own.queries, ['home']);
+      // The main core (and with it the search model, which only a meaning search there would load) was never asked.
+      expect(backend.calls.length, before);
+      car.dispose();
+      expect(own.closed, 1, reason: 'the handle goes with the bridge');
+      messenger.setMockMethodCallHandler(ch, null);
+    });
+
+    test('the car\'s own handle is let go when the car disconnects', () async {
+      const ch = MethodChannel('co.cache/car-own-close');
+      final own = _FakeCarPlaces();
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, places: own);
+      await car.start();
+      await askOn(ch, 'connected', {'on': true});
+      expect(own.closed, 0);
+      await askOn(ch, 'connected', {'on': false});
+      expect(own.closed, 1);
+      car.dispose();
+      messenger.setMockMethodCallHandler(ch, null);
+    });
+
+    test('when the car\'s own handle fails, places come from the main core once it is open', () async {
+      final open = Completer<void>();
+      const ch = MethodChannel('co.cache/car-own-fails');
+      final own = _FakeCarPlaces()..fails = true;
+      messenger.setMockMethodCallHandler(ch, (call) async => null);
+      final car = CarBridge(nav: nav, maps: maps, drive: drive, channel: ch, ready: () => open.future, places: own);
+      await car.start();
+      backend.saved.add(('Home', 42.6, -113.7));
+      final answer = askOn(ch, 'saved');
+      await settle();
+      open.complete();
+      expect([for (final p in await answer as List) (p as Map)['name']], ['Home']);
+      car.dispose();
+      messenger.setMockMethodCallHandler(ch, null);
     });
 
     test('hello: a car session that is already there connects the bridge', () {
@@ -290,6 +1483,236 @@ void main() {
       expect(speaker.stops, greaterThan(0));
     });
 
+    test('a route Siri started has no opening line of its own (Siri says it); one started otherwise has', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'fromSiri': true});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isEmpty);
+      await fromCar('stop');
+      speaker.said.clear();
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital'});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isNotEmpty);
+    });
+
+    test('a route Siri started answers with the time and distance the opening line would have said', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'fromSiri': true})) as Map;
+      final summary = r['summary'] as String;
+      expect(summary, matches(RegExp(r'^\d.*, .*\.$')));
+      // The opening of the same route, as a start without Siri says it.
+      await fromCar('stop');
+      speaker.said.clear();
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital'});
+      await pumpEventQueue();
+      expect(speaker.said.single, contains(' $summary '));
+    });
+
+    test('Add stop by Siri with no route is a plain navigation without the opening line; the flag changes nothing for a stop added to a route', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Hospital', 'stop': true, 'fromSiri': true});
+      await pumpEventQueue();
+      expect(nav.guiding, isTrue);
+      expect(speaker.said, isEmpty);
+      final added = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'stop': true, 'fromSiri': true})) as Map;
+      expect(added['added'], isTrue);
+      expect(nav.guiding, isTrue);
+    });
+
+    test('a voice search lists the places found, even for a saved place\'s exact name and with coordinates given', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      final asked = <bool?>[];
+      backend.onSearch = (q, {near, meaning}) async {
+        asked.add(meaning);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Home Depot')]);
+      };
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'place 1', 'start': true, 'search': true})) as Map;
+      expect(r['places'], isNotEmpty);
+      expect(r.containsKey('started'), isFalse);
+      expect(nav.guiding, isFalse);
+      expect(asked, everyElement(isFalse), reason: 'the car never loads the search model');
+    });
+
+    test('a navigation request by a saved place\'s name starts guidance and says which place, for Siri on an iPhone', () async {
+      backend.saved.add(('Place 1', 42.6, -113.7));
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'query': 'place 1', 'start': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r['name'], 'Place 1');
+      expect(r['lat'], 42.6);
+      expect(r['lon'], -113.7);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue);
+    });
+
+    Future<void> guide() async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.5, 'query': 'Made Up Clinic'})) as Map;
+      expect(r['started'], isTrue);
+    }
+
+    String? lastPhase() {
+      final trips = toCar.where((c) => c.method == 'trip').toList();
+      return trips.isEmpty ? null : (trips.last.arguments as Map)['phase'] as String?;
+    }
+
+    // Bug: unplugging the car ended the route on the phone.
+    test('the car going away in a real drive leaves the phone guiding, and the car gets guidance again when it is back', () async {
+      await guide();
+      await fromCar('connected', {'on': false});
+      await settle();
+      expect(nav.guiding, isTrue);
+      expect(gps.stops, 0);
+      expect(speaker.stops, 0);
+      toCar.clear();
+      await fromCar('connected', {'on': true});
+      await settle();
+      expect(lastPhase(), 'guiding');
+      expect((toCar.lastWhere((c) => c.method == 'route').arguments as Map)['geojson'], contains('LineString'));
+    });
+
+    test('a test drive ends with the car session, and the phone is back on its real position', () async {
+      await fromCar('autoDrive', {'on': true});
+      await guide();
+      expect(drive.simulating, isTrue);
+      await fromCar('connected', {'on': false});
+      await settle();
+      expect(nav.guiding, isFalse);
+      expect(drive.simulating, isFalse);
+      expect(drive.simulate, isFalse);
+    });
+
+    // Guidance ending reaches the car at once, not after the throttle (ten seconds here, so a throttled push never arrives).
+    test('guidance ending is told to the car at once, from the car or from the phone', () async {
+      bridge.dispose();
+      bridge = CarBridge(nav: nav, maps: maps, drive: drive, throttle: const Duration(seconds: 10), glyphs: () async => 'file:///g/{fontstack}/{range}.pbf');
+      await bridge.start();
+      await guide();
+      expect(lastPhase(), 'guiding');
+      toCar.clear();
+      await fromCar('stop');
+      expect(lastPhase(), 'browsing');
+      expect((toCar.lastWhere((c) => c.method == 'route').arguments as Map)['geojson'], isNot(contains('LineString')));
+      // Ended on the phone (End route there, or an arrival dismissed).
+      await guide();
+      toCar.clear();
+      await nav.end();
+      await settle();
+      expect(lastPhase(), 'browsing');
+    });
+
+    // Bug: "add a stop" by voice during a drive ended the route and started a new one to the stop.
+    test('an add-a-stop request while guiding adds the place as the next stop; the route keeps its destination', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['added'], isTrue);
+      expect(r['started'], isTrue);
+      expect(r.containsKey('places'), isFalse);
+      expect(nav.guiding, isTrue, reason: 'guidance carries on');
+      expect(nav.selected!.name, 'Made Up Clinic', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, routesBefore + 1);
+      expect(backend.froms.last!['lon'], -113.77, reason: 'the new route starts where the phone is');
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+      expect(lastTrip()['phase'], 'guiding');
+    });
+
+    test('an add-a-stop request while guiding by a saved name adds it; any other name returns the places for Add stop', () async {
+      backend.saved.add(('Place 2', 42.6, -113.65));
+      backend.onSearch = (q, {near, meaning}) async =>
+          MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:33', 'Place 3', lon: -113.7)]);
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      final saved = (await fromCar('navigateTo', {'query': 'Place 2', 'stop': true})) as Map;
+      expect(saved['added'], isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect([for (final s in nav.stops) s.name], ['Place 2']);
+      final other = (await fromCar('navigateTo', {'query': 'place three', 'stop': true})) as Map;
+      expect(other['forStop'], isTrue);
+      expect([for (final p in other['places'] as List) (p as Map)['name']], ['Place 3']);
+      expect([for (final s in nav.stops) s.name], ['Place 2'], reason: 'nothing is added until the driver picks');
+      // The place picked from that list is added as the car's own Add stop adds it.
+      expect(await fromCar('addStop', {'id': ((other['places'] as List).single as Map)['id']}), isTrue);
+      expect([for (final s in nav.stops) s.name], ['Place 3', 'Place 2']);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.guiding, isTrue);
+    });
+
+    test('an add-a-stop request that cannot be added leaves the route as it was, and the phone says why', () async {
+      await guide();
+      gps.controller.add(fixAt(42.5, -113.77, heading: 90));
+      await settle();
+      toCar.clear();
+      backend.onRoute = (to, mode, from) async => throw StateError('no route');
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Made Up Clinic');
+      expect(nav.stops, isEmpty);
+      // The same notice the car's own Add stop shows when no route goes through the stop.
+      expect([for (final c in toCar.where((m) => m.method == 'notice')) (c.arguments as Map)['text']], hasLength(1));
+    });
+
+    test('an add-a-stop request while a route is shown before Start adds the stop to it; guidance is not started', () async {
+      await preview();
+      await settle();
+      final routesBefore = backend.froms.length;
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      await settle();
+      expect(r['added'], isTrue);
+      expect(r['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.guiding, isFalse);
+      expect(nav.selected!.name, 'Cassia Regional Hospital', reason: 'the destination is kept');
+      expect([for (final s in nav.stops) s.name], ['Place 1']);
+      expect(backend.froms.length, greaterThan(routesBefore));
+      expect([for (final v in backend.vias.last) v['lon']], [-113.6]);
+      expect([for (final s in lastTrip()['stops'] as List) (s as Map)['name']], ['Place 1']);
+    });
+
+    test('an add-a-stop request with nothing guided is a navigation request: guidance starts to the place', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      backend.onProgress = (r, lat, lon) async => MapProgress.fromJson(fakeProgressJson(r.raw, 0.05));
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': true})) as Map;
+      expect(r['started'], isTrue);
+      expect(r.containsKey('added'), isFalse);
+      expect(nav.guiding, isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+    });
+
+    test('navigation and directions requests while guiding still replace the route, as before', () async {
+      await guide();
+      final r = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.6, 'query': 'Place 1', 'start': true, 'stop': false})) as Map;
+      expect(r['started'], isTrue);
+      expect(nav.selected!.name, 'Place 1');
+      expect(nav.stops, isEmpty);
+      final d = (await fromCar('navigateTo', {'lat': 42.5, 'lon': -113.65, 'query': 'Place 2', 'start': false})) as Map;
+      expect(d['started'], isFalse);
+      expect(nav.phase, NavPhase.previewing);
+      expect(nav.selected!.name, 'Place 2');
+    });
+
     test('a navigation request by a name that is not saved returns the places found, without starting', () async {
       backend.onSearch = (q, {near, meaning}) async =>
           MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [_place('place:9', 'Burley Library')]);
@@ -305,6 +1728,100 @@ void main() {
       expect(nav.voiceOn, isFalse);
     });
 
+    group('the assistant asks about the trip (geo.action)', () {
+      const fmt = Fmt(UnitSystem.imperial);
+
+      test('with no route running every question gets the one no-route answer, said aloud', () async {
+        for (final kind in ['eta', 'distance', 'turn', 'destination', 'route']) {
+          expect(carAnswer(nav, kind), 'No route is running.');
+        }
+        speaker.said.clear();
+        expect(await fromCar('answer', {'kind': 'eta'}), 'No route is running.');
+        expect(speaker.said, ['No route is running.']);
+      });
+
+      test('arrival time is the clock the phone shows', () async {
+        await guide();
+        final p = nav.progress!;
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'eta', now: () => now), 'Arriving at ${clockTime(at)}.');
+        expect(carAnswer(nav, 'eta', now: () => now), matches(RegExp(r'^Arriving at \d{1,2}:\d\d (AM|PM)\.$')));
+      });
+
+      test('the distance left is said as the phone says distances', () async {
+        await guide();
+        final said = fmt.spoken(nav.progress!.remainingM);
+        expect(carAnswer(nav, 'distance'), '${said[0].toUpperCase()}${said.substring(1)} to go.');
+        expect(carAnswer(nav, 'distance'), endsWith(' to go.'));
+      });
+
+      test('the next turn is the step and how far', () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn'), 'Next: $step in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test('the destination is named', () async {
+        await guide();
+        final named = nav.route!.destinationName;
+        final name = named.isNotEmpty ? named : nav.selected!.name;
+        expect(carAnswer(nav, 'destination'), 'Going to $name.');
+      });
+
+      test("Siri's arrival words: the clock the phone shows and the distance left", () async {
+        await guide();
+        final p = nav.progress!;
+        final now = DateTime(2026, 1, 1, 9);
+        final at = shownArrival(p.eta, p.remainingS, leftS: nav.leftS) ?? now.add(Duration(seconds: shownSeconds(nav.leftS ?? p.remainingS)));
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), "You'll arrive at ${clockTime(at)}, ${fmt.spoken(p.remainingM)} to go.");
+        expect(carAnswer(nav, 'arrival_ios', now: () => now), matches(RegExp(r"^You'll arrive at \d{1,2}:\d\d (AM|PM), .+ to go\.$")));
+      });
+
+      test("Siri's next-turn words: the step, then how far", () async {
+        await guide();
+        final next = nav.progress!.next!;
+        var step = (carStep(next, fmt)['cue'] as String).trim();
+        if (step.endsWith('.')) step = step.substring(0, step.length - 1);
+        expect(carAnswer(nav, 'turn_ios'), 'Next: $step, in ${fmt.spoken(next.distanceM)}.');
+      });
+
+      test("Siri's words with no route are the one no-route answer", () async {
+        expect(carAnswer(nav, 'arrival_ios'), 'No route is running.');
+        expect(carAnswer(nav, 'turn_ios'), 'No route is running.');
+      });
+
+      test('say: false returns the words and the phone says nothing', () async {
+        await guide();
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'arrival_ios', 'say': false});
+        expect(text, startsWith("You'll arrive at "));
+        expect(speaker.said, isEmpty);
+        expect(await fromCar('answer', {'kind': 'turn_ios', 'say': false}), startsWith('Next: '));
+        expect(speaker.said, isEmpty);
+      });
+
+      test('stop answers whether a route was running', () async {
+        expect(await fromCar('stop'), isFalse);
+        await guide();
+        expect(await fromCar('stop'), isTrue);
+        expect(nav.guiding, isFalse);
+        expect(await fromCar('stop'), isFalse);
+      });
+
+      test('the answer is spoken even when the voice prompts are off', () async {
+        await guide();
+        expect(await fromCar('voice', {'on': false}), isFalse);
+        speaker.said.clear();
+        final text = await fromCar('answer', {'kind': 'distance'});
+        expect(text, endsWith(' to go.'));
+        expect(speaker.said, [text]);
+        expect(nav.voiceOn, isFalse);
+      });
+    });
+
     test('the voice takes the car audio focus only while a car is connected', () async {
       final s = CarAwareSpeaker(speaker, car: () => bridge);
       await s.speak('Turn left.');
@@ -315,5 +1832,138 @@ void main() {
       expect(toCar.where((c) => c.method == 'prompt'), hasLength(1));
       expect(speaker.said, ['Turn left.', 'Turn right.']);
     });
+
+    test('the iPhone car side says how a prompt may be given: spoken, or not by the phone voice', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      // The states recorded for the iPhone car tests (tools/carplay-harness/recorded): what the system says, what the car side
+      // answers, and whether the phone's voice then speaks.
+      final rows = jsonDecode(File('../tools/carplay-harness/recorded/prompt_styles.json').readAsStringSync()) as List;
+      expect(rows, hasLength(greaterThanOrEqualTo(3)));
+      expect({for (final r in rows) (r as Map)['answer']}, containsAll([kPromptNormal, kPromptShort, kPromptNone]));
+      var asked = 0;
+      for (final r in rows) {
+        final row = r as Map;
+        speaker.said.clear();
+        promptAnswer = row['answer'];
+        await s.speak('Turn left.');
+        asked++;
+        expect(toCar.where((c) => c.method == 'prompt'), hasLength(asked), reason: 'the car side is asked before every prompt');
+        expect(speaker.said, row['phoneSpeaks'] == true ? ['Turn left.'] : isEmpty, reason: '${row['state']}');
+      }
+      // An answer that is not one of the three, and no answer (the Android car side), are spoken.
+      for (final other in <Object?>[null, 'loud', 3, true]) {
+        speaker.said.clear();
+        promptAnswer = other;
+        await s.speak('Turn right.');
+        expect(speaker.said, ['Turn right.'], reason: '$other');
+      }
+      expect(await bridge.prompt('x'), isNull);
+      promptAnswer = kPromptShort;
+      expect(await bridge.prompt('x'), kPromptShort);
+    });
+
+    test('when the phone\'s voice has said its prompts the car side is told at once, so the other apps\' sound comes back', () async {
+      final voice = _IdleVoice();
+      final s = CarAwareSpeaker(voice, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      await s.speak('Turn left.');
+      expect(toCar.where((c) => c.method == 'promptDone'), isEmpty);
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+      // With no car attached nothing is sent.
+      await fromCar('connected', {'on': false});
+      voice.onIdle!();
+      await pumpEventQueue();
+      expect(toCar.where((c) => c.method == 'promptDone'), hasLength(1));
+    });
+
+    test('an empty prompt asks nothing of the car side (it would make the audio session active for nothing) and says nothing', () async {
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      promptAnswer = kPromptNormal;
+      for (final empty in ['', '  ']) {
+        await s.speak(empty);
+      }
+      expect(toCar.where((c) => c.method == 'prompt'), isEmpty);
+      expect(speaker.said, isEmpty);
+    });
+
+    test('with the phone app in front, in the back and hidden, a prompt the car side answers normal is spoken; short and none are not', () async {
+      Future<void> lifecycle(AppLifecycleState state) async {
+        await messenger.handlePlatformMessage('flutter/lifecycle', const StringCodec().encodeMessage(state.toString()), (_) {});
+      }
+
+      final s = CarAwareSpeaker(speaker, car: () => bridge);
+      final phoneOnly = CarAwareSpeaker(speaker, car: () => null);
+      for (final state in [AppLifecycleState.resumed, AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused, AppLifecycleState.resumed]) {
+        await lifecycle(state);
+        for (final answer in [kPromptNormal, kPromptShort, kPromptNone]) {
+          speaker.said.clear();
+          promptAnswer = answer;
+          await s.speak('Turn left.');
+          expect(speaker.said, answer == kPromptNormal ? ['Turn left.'] : isEmpty, reason: '$state, the car side answering $answer');
+        }
+        speaker.said.clear();
+        await phoneOnly.speak('Turn left.');
+        expect(speaker.said, ['Turn left.'], reason: '$state, no car');
+      }
+    });
   });
+
+  group('CoreCarPlaces: the car\'s own handle', () {
+    test('opens with only the saved places, the places and the regions sections', () {
+      final extra = <String, dynamic>{
+        'indexes_dir': '/i',
+        'user': {'db_path': '/u.sqlite'},
+        'live': {'db_path': '/l.sqlite'},
+        'places': {'packs': <String>[]},
+        'layers': {'dir': '/layers'},
+        'routing': {'offroad': {'dir': '/o'}},
+        'notebook': {'db_path': '/n.sqlite'},
+        'regions': {'dir': '/r'},
+      };
+      expect(carPlacesConfig(extra).keys.toSet(), {'user', 'places', 'regions'});
+      // The car only reads the saved places: its handle opens user.sqlite read-only.
+      expect(carPlacesConfig(extra)['user'], {'db_path': '/u.sqlite', 'read_only': true});
+      expect(extra['user'], {'db_path': '/u.sqlite'}, reason: 'the main core\'s config is left as it is');
+    });
+
+    test('opens at the first call, and again after a failed open', () async {
+      final opened = <Map<String, dynamic>>[];
+      final places = CoreCarPlaces(
+        config: () async => {'user': {'db_path': '/u.sqlite'}, 'layers': {'dir': '/layers'}},
+        open: (extra) async {
+          opened.add(extra);
+          throw StateError('no native core in a test');
+        },
+      );
+      expect(opened, isEmpty, reason: 'nothing opens before the car asks');
+      await expectLater(places.savedPlaces(), throwsStateError);
+      await expectLater(places.search('home'), throwsStateError);
+      expect(opened, hasLength(2));
+      expect(opened.first.keys, ['user']);
+      await places.close();
+    });
+
+    test('no config: nothing is opened', () async {
+      var opens = 0;
+      final places = CoreCarPlaces(config: () async => null, open: (extra) async {
+        opens++;
+        throw StateError('unreachable');
+      });
+      await expectLater(places.savedPlaces(), throwsStateError);
+      expect(opens, 0);
+    });
+  });
+}
+
+/// A voice that says when it has said its prompts, as the phone's real one does.
+class _IdleVoice implements Speaker, IdleSpeaker {
+  final List<String> said = [];
+  @override
+  void Function()? onIdle;
+  @override
+  Future<void> speak(String text) async => said.add(text);
+  @override
+  Future<void> stop() async {}
 }

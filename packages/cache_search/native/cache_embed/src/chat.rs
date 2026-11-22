@@ -29,6 +29,16 @@ struct Bufs {
 
 /// One loaded chat model. One generation at a time per model (callers serialise them); only [`ChatModel::stop`] may be called
 /// from another thread while one runs.
+/// `cl_start` refused: its return code and the native reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartFailure {
+    pub code: i32,
+    pub message: String,
+}
+
+/// `cl_start` returns this when the prompt does not fit the context (the chat is full).
+pub const START_CONTEXT_FULL: i32 = -3;
+
 pub struct ChatModel {
     info: BufFn,
     start: StartFn,
@@ -102,14 +112,14 @@ impl ChatModel {
         }
     }
 
-    /// `cl_start`: `Ok(())` or the native reason.
-    pub fn start(&self, request_json: &str) -> Result<(), String> {
-        let req = CString::new(request_json).map_err(|_| "the request contains NUL".to_string())?;
+    /// `cl_start`: `Ok(())` or the native code and reason.
+    pub fn start(&self, request_json: &str) -> Result<(), StartFailure> {
+        let req = CString::new(request_json).map_err(|_| StartFailure { code: -1, message: "the request contains NUL".to_string() })?;
         let mut b = self.bufs.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: req and err are valid for the lengths given.
         let rc = unsafe { (self.start)(self.handle, req.as_ptr(), b.err.as_mut_ptr(), ERR_LEN as c_int) };
         if rc != 0 {
-            return Err(text(&b.err));
+            return Err(StartFailure { code: rc, message: text(&b.err) });
         }
         Ok(())
     }

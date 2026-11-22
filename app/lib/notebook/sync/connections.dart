@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../../chat/ask_focus.dart';
 import '../../files.dart';
 import '../notebook_state.dart';
 import 'folder.dart';
@@ -12,8 +13,7 @@ import 'formats.dart';
 import 'sync_engine.dart';
 import '../../platform/app_log.dart';
 
-/// Notebook sync's folder in the app's support folder (a sharing kind, "Notebooks").
-const String kNotebookShareDir = 'notebook-share';
+export '../../sharing/share_rules.dart' show kNotebookShareDir;
 
 /// One connected folder: an Obsidian vault, a Logseq graph (two-way, or export-only for Logseq 2.x), or notebook sync's own
 /// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private
@@ -54,9 +54,21 @@ class SyncTargetConfig {
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
 class NotebookConnections extends ChangeNotifier implements PrivateSharing {
-  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor});
+  NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.onActivity, this.prepareShare, DateTime Function()? clock})
+    : _now = clock ?? DateTime.now;
+
+  /// The time now: for the "Synced" line and for what each sync stamps (a fixed clock in tests and the guide's pictures).
+  final DateTime Function() _now;
 
   final NotebookState notebook;
+
+  /// Told one short line when notebook entries arrive, change or are removed by a sync with the other devices (the Sharing page's
+  /// Activity); the app log gets the same line.
+  final void Function(String line)? onActivity;
+
+  /// Run before the sync with the other devices' folder writes anything: the share's list of photos that may be sent is made
+  /// current, so a photo that is not for sharing is never offered in the time between its writing and the next update.
+  final Future<void> Function()? prepareShare;
 
   /// Where the connections and each one's record live (`<support>/notebook-sync`).
   final Future<Directory> Function() dir;
@@ -84,7 +96,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Notes imported by their tag in the last sync: the app's name ("Obsidian") and their titles. Read and cleared by
   /// [takeImported] (the snack bar "2 notes added from Obsidian").
-  final List<({String app, String target, List<String> titles, Set<String> books})> _news = [];
+  final List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> _news = [];
 
   List<SyncTargetConfig> get targets => [for (final t in _targets) if (t.kind != SyncKind.share) t];
   SyncTargetConfig? target(SyncKind kind) => _targets.where((t) => t.kind == kind || (kind == SyncKind.logseq && t.kind == SyncKind.logseqExport)).firstOrNull;
@@ -118,7 +130,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   String? stoppedWith(String entryId) => switch (_linkTarget(entryId, true)) { final t? => appName(t.kind), null => null };
 
   /// The notes imported since the last call, by connection.
-  List<({String app, String target, List<String> titles, Set<String> books})> takeImported() {
+  List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> takeImported() {
     final out = [..._news];
     _news.clear();
     return out;
@@ -255,8 +267,14 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   SyncTargetConfig? _shareTarget() {
     final have = _targets.where((t) => t.kind == SyncKind.share).firstOrNull;
-    if (have != null) return have;
     final d = shareFolder?.call();
+    if (have != null) {
+      // The app's folder path changes across iOS installs and updates: the saved one is re-rooted at the current folder.
+      if (d == null || d.path == have.path) return have;
+      final moved = SyncTargetConfig(id: have.id, kind: have.kind, path: d.path, paused: have.paused, display: have.display, importTag: have.importTag);
+      _targets = [for (final t in _targets) t.id == have.id ? moved : t];
+      return moved;
+    }
     if (d == null) return null;
     final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path);
     _targets = [..._targets, t];
@@ -276,6 +294,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
       importTag: t.tag,
+      clock: _now,
     );
     final sp = storePhoto;
     if (sp != null) e.storePhotoBytes = sp;
@@ -301,6 +320,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
         _again = false;
         final share = shareOn?.call() == true ? _shareTarget() : null;
         for (final t in [..._targets.where((t) => t.kind != SyncKind.share), ?share]) {
+          // While Ask answers, the next folder waits (the one syncing finishes); sync goes on where it left off.
+          await askIdle(worker: 'Notebook sync');
           if (t.paused) {
             _status[t.id] = 'Paused.';
             continue;
@@ -308,6 +329,13 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
           _status[t.id] = 'Syncing...';
           notifyListeners();
           try {
+            if (t.kind == SyncKind.share) {
+              try {
+                await prepareShare?.call();
+              } catch (x) {
+                logError('Notebook sync: could not update the photos that may be sent', error: x);
+              }
+            }
             final e = await _engine(t);
             final r = await e.run();
             _conflicts[t.id] = e.conflicts;
@@ -315,10 +343,11 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             if (t.kind != SyncKind.share) {
               _notAdded[t.id] = r.notAdded;
               _links[t.id] = await NotebookSync.links(e.stateFile);
-              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
+              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}, ids: [...r.importedIds]));
             }
+            if (t.kind == SyncKind.share) say(r);
             final n = e.conflicts.length;
-            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';
+            _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(_now())}';
           } on FileSystemException catch (x) {
             _status[t.id] = (x.osError?.errorCode == 28 || x.osError?.errorCode == 112) ? "Can't write: storage is full." : "Can't reach the folder.";
           } catch (x) {
@@ -331,6 +360,21 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     } finally {
       _running = false;
       notifyListeners();
+    }
+  }
+
+  /// The lines for what a notebook sync with the other devices did here (no ids, names or paths).
+  @visibleForTesting
+  void say(SyncReport r) {
+    String entries(int n) => n == 1 ? '1 entry' : '$n entries';
+    final changed = r.read - r.arrived;
+    for (final line in [
+      if (r.arrived > 0) 'Notebooks: ${entries(r.arrived)} arrived from your other devices',
+      if (changed > 0) 'Notebooks: ${entries(changed)} updated from your other devices',
+      if (r.removedHere > 0) 'Notebooks: ${entries(r.removedHere)} removed by your other devices',
+    ]) {
+      logInfo(line);
+      onActivity?.call(line);
     }
   }
 

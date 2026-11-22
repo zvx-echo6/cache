@@ -49,4 +49,19 @@ void main() {
       await core.close();
     }
   });
+
+  test('what the core answered to the assistant\'s web search is handed to the web search record; other tools are not', () async {
+    final core = await SearchCore.open(const [], native: echoNative);
+    final numbering = CoreNumbering(core.newConversation);
+    try {
+      final seen = <String>[];
+      final host = CoreToolHost(core: core, numbering: numbering, onWebSearch: seen.add);
+      await host.call('web_search', {'query': 'water'}, DateTime(2026));
+      await host.call('nearby', {'category': 'pharmacy'}, DateTime(2026));
+      expect(seen, ['{"query":"water"}']);
+    } finally {
+      await numbering.dispose();
+      await core.close();
+    }
+  });
 }

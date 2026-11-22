@@ -61,7 +61,7 @@ void main() {
   }
 
   ChatController controller(ChatLocation bridge, ScriptedBackend backend) =>
-      ChatController(actCore: const ActCoreStandIn(), tools: const [], prepareTurn: bridge.prepare, locationKnown: () => bridge.known)
+      ChatController(actCore: const ActCoreStandIn(), tools: const [], prepareTurn: bridge.prepare, locationKnown: () => bridge.turnKnown)
         ..setBackend(backend);
 
   String prompt(Map<String, dynamic> request) => ((request['messages'] as List).first as Map)['content'] as String;
@@ -155,6 +155,87 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(location.fix, isNull);
     expect(source.prompts, 0);
+  });
+
+  Fix aged(Duration d, {double lat = 42.5}) =>
+      Fix(lat: lat, lon: -113.8, accuracyM: 10, time: DateTime.now().subtract(d));
+
+  test('stationary phone: a 5 minute old fix with a healthy stream is still known, and the core keeps it', () async {
+    final source = FakeSource()..state = LocationPermissionState.granted..pendingFix = Completer<Fix>().future;
+    final written = <Fix?>[];
+    final (location, bridge) = await setup(source, sync: (f) async { written.add(f); return true; });
+    final old = aged(const Duration(minutes: 5));
+    location.publish(old);
+    await bridge.prepare(() => false);
+    expect(source.currentCalls, 0, reason: 'a healthy stream makes the fix current, so no one-shot request is needed');
+    expect(bridge.turnKnown, isTrue);
+    expect(location.fix, same(old));
+    expect(written.last, same(old));
+  });
+
+  test('stale fix with the stream down and a timed-out request: not known, the core is cleared, the map keeps its fix', () async {
+    final source = FakeSource()..state = LocationPermissionState.granted..pendingFix = Completer<Fix>().future;
+    final written = <Fix?>[];
+    final (location, bridge) = await setup(source, sync: (f) async { written.add(f); return true; });
+    source.controller.addError(StateError('stream lost'));
+    await Future<void>.delayed(Duration.zero);
+    final old = aged(const Duration(minutes: 5));
+    location.publish(old);
+    await bridge.prepare(() => false);
+    expect(source.currentCalls, 1);
+    expect(bridge.turnKnown, isFalse);
+    expect(written.last, isNull);
+    expect(location.fix, same(old), reason: 'what the map shows is never cleared by a timeout');
+  });
+
+  test('an older fix arriving out of order is ignored', () async {
+    final source = FakeSource()..state = LocationPermissionState.granted;
+    final written = <Fix?>[];
+    final (location, _) = await setup(source, sync: (f) async { written.add(f); return true; });
+    final newer = aged(Duration.zero, lat: 43), older = aged(const Duration(seconds: 30), lat: 41);
+    location.publish(newer);
+    location.publish(older);
+    expect(location.fix, same(newer));
+    await Future<void>.delayed(Duration.zero);
+    expect(written.where((f) => f != null).map((f) => f!.lat), [43]);
+  });
+
+  test('a fix arriving during a turn does not change that turn\'s known flag', () async {
+    final source = FakeSource()..state = LocationPermissionState.granted;
+    final written = <Fix?>[];
+    final (location, bridge) = await setup(source, sync: (f) async { written.add(f); return true; });
+    // A turn that starts without a position keeps saying so, though a fix arrives meanwhile.
+    source.pendingFix = Completer<Fix>().future;
+    location.publish(aged(const Duration(minutes: 5)));
+    source.controller.addError(StateError('stream lost'));
+    await Future<void>.delayed(Duration.zero);
+    await bridge.prepare(() => false);
+    expect(bridge.turnKnown, isFalse);
+    final arriving = fresh();
+    location.publish(arriving);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.turnKnown, isFalse, reason: 'this turn keeps its snapshot');
+    expect(written.last, same(arriving), reason: 'the core takes the fix for the next turn');
+    // The next turn sees it.
+    await bridge.prepare(() => false);
+    expect(bridge.turnKnown, isTrue);
+    // And a turn that began known stays known when the next fix is being written.
+    location.publish(fresh());
+    expect(bridge.turnKnown, isTrue);
+  });
+
+  test('permission revoked still clears the fix and the core', () async {
+    final source = FakeSource()..state = LocationPermissionState.granted;
+    final written = <Fix?>[];
+    final (location, bridge) = await setup(source, sync: (f) async { written.add(f); return true; });
+    location.publish(fresh());
+    await bridge.prepare(() => false);
+    expect(bridge.turnKnown, isTrue);
+    source.state = LocationPermissionState.denied;
+    await bridge.prepare(() => false);
+    expect(bridge.turnKnown, isFalse);
+    expect(location.fix, isNull);
+    expect(written.last, isNull);
   });
 
   test('guidance reuses a recent fix and never acquires another stream or fix', () async {

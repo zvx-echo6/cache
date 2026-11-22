@@ -137,7 +137,7 @@ Lists have no tick boxes until you ask for them.
 
 To use an item's menu:
 1. Press and hold the item. You feel a short buzz and it lifts.
-2. Pick an action. For a Library item: "Check for update", "Change icon", "Add to Home" or "Delete".
+2. Pick an action. For a Library item: "Check for update", "Change icon", "Get icon from source", "Add to Home" or "Delete".
 
 To act on several items:
 1. Tap "Select" in the list's header.
@@ -157,7 +157,7 @@ Delete always asks first. The pop-up shows what it frees and says "You can downl
 1. Open "Ask" from the bar. You can also type in the Home search box and tap "Ask Cache:".
 2. If "Ask" says "Ask needs a model on this device.", tap "Choose a model" first. If the title says "No model", tap it and choose a model.
 3. Type in "Ask anything" and tap "Send".
-4. Follow the progress: "Preparing answer…", "Looking this up…" and "Reading from source…". The work stays visible as the answer appears; "Answer delivered" marks completion. Tap "Stop" to stop it.
+4. Follow the progress. While Cache works, one line says what it is doing, such as searching your library, reading a source or calculating, and each finished step stays above it with a check. When the answer starts to appear, the steps fold into one line such as "3 steps"; tap it to show or hide them. "Answer delivered" marks completion. Tap "Stop" to stop it.
 
 Cache looks in your Library, libraries, downloaded places and maps, and weather data. If you set it up, it also searches the web when you're online.
 
@@ -254,7 +254,7 @@ Answers show where they came from.
 - A source in an EPUB opens the book at that chapter, with the first words of the passage marked.
 - A source from a video's captions opens the video at that moment, with the line marked "Match". See Captions and the transcript.
 
-"Not from your sources" means the answer came from nothing on your device or a search. Check it before you rely on it.
+"Not from your sources" means the answer came from nothing on your device or a search. "Searched your sources, but cites none of them" means Cache searched your sources, but the answer does not say which one each part comes from. Check either before you rely on it.
 
 The assistant can be wrong, even with sources. For anything about your safety, read the source.
 
@@ -315,6 +315,8 @@ To delete all chats, go to ["Settings" > "Cache model and web search" > "Delete 
 
 Search finds a place, town, address or coordinates.
 
+![Map search results](shot:maps-search)
+
 1. Open "Maps".
 2. Tap "Search places or coordinates" and type.
 3. Tap a result. The map moves there and the place card opens.
@@ -328,6 +330,8 @@ The locate button ("Find me") moves the map to you. Tap it again to turn the map
 ## The place card and saving a place
 
 Tap a search result or a place to open its card at the bottom of "Maps".
+
+![A place card](shot:place-card)
 
 The card has:
 - "Directions": a route from where you are;
@@ -347,6 +351,8 @@ Press and hold on the map for the ring menu. It has "Add stop" and "Measure". Se
 
 Directions plan a route from where you are to a place.
 
+![The directions panel](shot:directions-panel)
+
 1. In "Maps", open a place's card. Or press and hold the map and choose "To here".
 2. Tap "Directions".
 3. Choose "Drive", "Walk", "Bike" or "Off-road".
@@ -362,6 +368,8 @@ Road directions work offline if the region is downloaded.
 ## Off-road directions
 
 Off-road plans a route away from roads.
+
+![Off-road directions](shot:directions-offroad)
 
 1. Open a place's card and tap "Directions".
 2. Tap "Off-road".
@@ -382,6 +390,8 @@ Changing a choice plans the route again. Choices reset on restart: "Drive", then
 
 After "Start", Cache guides you turn by turn.
 
+![Following a route](shot:guidance)
+
 - The banner shows the next turn.
 - "Rerouting" means you left the route.
 - Near the end it says "Arriving", then "You have arrived".
@@ -393,9 +403,13 @@ Guidance keeps running with the screen locked. On Android a "Cache navigation" n
 - If you refuse notifications, guidance still works.
 - If it says "Getting your position", wait for the first GPS fix.
 
+CarPlay: say "Hey Siri, navigate with Cache", "Hey Siri, start a Cache route" or "Hey Siri, get Cache directions". Siri asks "Where to?", then say the place. A saved place's name starts the route; any other name lists the places found on the car screen. "Hey Siri, navigate to <place> with Cache" works only for saved places.
+
 ## Map layers and offline maps
 
 The "Layers" button on the right of "Maps" opens the layers sheet.
+
+![The layers sheet](shot:layers-sheet)
 
 - Switch a layer on or off. Its line says "Downloaded for offline", "Streams when online" or "Needs a connection".
 - Use "Opacity" for a layer laid over the map.
@@ -431,27 +445,27 @@ On a tablet the Library's rows stay at the left and each one opens beside them. 
 
 1. Open "Library" and tap "ZIM Collections".
 2. Tap a row to open it in the reader.
-3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
+3. Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Get icon from source", "Add to Home" and "Delete".
 
 A badge shows only when something needs attention, for example "Update ready". Tap it to update.
 
 Under a row, a line can say how its search is going, for example `Making PDFs searchable · 340 of 5,768`. Tap that line to open it in "Catalog", where "Pause all" and "Resume" are.
 
-"Change icon" picks a picture from your device. "Delete" asks first and shows what it frees.
+"Change icon" picks a picture from your device. "Get icon from source" fetches the picture again from where the ZIM came from (Kiwix), or reads the one inside the ZIM; it says "No icon found at the source" when there is none. "Delete" asks first and shows what it frees.
 
 - If you see "No ZIM Collections yet. Add Wikipedia, medical guides or survival manuals.", tap "Add to Library".
 
 ## Bookshelves
 
-"Bookshelves" shows your books on numbered shelves, the Cache Decimal System, CDS for short. There are ten classes, for example "CDS 200 · Medicine and Health", and each has nine divisions, for example "CDS 210 · First aid and emergency care". Every shelf shows, empty ones too.
+"Bookshelves" shows your books on numbered shelves, the Cache Decimal System, CDS for short. There are ten classes, for example "CDS 200 · Medicine and Health", and each has nine categories, for example "CDS 210 · First aid and emergency care". Every shelf shows, empty ones too.
 
 1. Open "Library" and tap "Bookshelves".
 2. At the top, choose how the shelves look: "List", "Drawers" or "Spines". Cache keeps your choice on this device.
-3. Tap a class to see its divisions, then a division to see its books.
+3. Tap a class to see its categories, then a category to see its books.
 
-Every book has a call number, for example `CDS 210-002`: its division, then its place in the order books arrived. A number never changes and is never used again. A moved book gets a new number in its new division. If two of your devices give out the same number at the same moment, the later book shows `.1` after it, for example `CDS 210-002.1`.
+Every book has a call number, for example `CDS 210-002`: its category, then its place in the order books arrived. A number never changes and is never used again. A moved book gets a new number in its new category. If two of your devices give out the same number at the same moment, the later book shows `.1` after it, for example `CDS 210-002.1`.
 
-To jump to a shelf or a book, type its number in "Go to a number, such as 530". It takes a class (500), a division (530) or a call number (530-002).
+To jump to a shelf or a book, type its number in "Go to a number, such as 530". It takes a class (500), a category (530) or a call number (530-002).
 
 - If you see "No books yet.", tap "Add to Library".
 - If you see "No shelf has that number. Try one such as 530.", check the number.
@@ -464,7 +478,7 @@ Books Cache was not sure about wait in "Unsorted" at the top of "Bookshelves". I
 
 1. On "Bookshelves", tap "Unsorted", then "Place them".
 2. Each book shows its best guesses, the best one first. Tap one to place the book there.
-3. Or tap "All divisions" and pick any division.
+3. Or tap "All categories" and pick any category.
 
 Cache says where the book went and its new call number, for example `Placed in CDS 350 · Beekeeping as CDS 350-004.` Tap "Undo" to take it back.
 
@@ -475,7 +489,7 @@ A book that is not searchable yet can be placed too. Your choice is saved and he
 ## A book's page
 
 Tap a book on a shelf to open its page. At the top is its catalog card: its call number, title, and author and edition when known. Under it:
-- "Subject": its division, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another division;
+- "Subject": its category, and "Filed by Cache" or "Placed by you". Tap "Move" to put it in another category;
 - "PDF": its size, and where it is when Cache knows;
 - "Search": "Searchable here", or how far Cache is;
 - "Stored": how much smaller Cache made it, when it did.
@@ -529,6 +543,8 @@ This page says what Cache is and what it is built on.
    - "Open-source licenses": the full text for every package.
 
 If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
+
+The maps in this guide's pictures are drawn from these sources. Base map: © OpenStreetMap contributors · Protomaps; its land cover © ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium, CC BY 4.0, from the Daylight Map Distribution. Public lands: USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS). Hillshade: © Mapterhorn.
 
 ## The reader
 
@@ -837,11 +853,11 @@ Without saved videos, tap "Remove".
 
 - What's already on the device shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
-- The box at the top says when data was last updated. Tap "Update now", or pull the screen down.
-- "Happening nearby" lists alerts, fires and other sources you switched on. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
-- With more than one place, tap a place's chip to switch.
+- The card at the top has one line that says when data was last updated, for example "Updated 12 min ago". Tap "Update now", or pull the screen down.
+- "Happening nearby" lists alerts, fires and other sources you switched on, the most serious first. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
+- Tap the place's name at the top to open "Places". With more than one place, tap a place there to switch.
 
-Tap any item for details. "Ask about this" starts a chat about what it means for you.
+Tap any item for details. Under "Forecast", tap a day for its details. "Ask about this" starts a chat about what it means for you.
 
 The tune button ("Weather and alerts settings") opens the source settings.
 

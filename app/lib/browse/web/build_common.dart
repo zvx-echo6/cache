@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../theme.dart';
@@ -126,6 +128,20 @@ String callWords(Object e, {String fallback = 'Something went wrong. Try again.'
 void say(BuildContext context, String text) => ScaffoldMessenger.maybeOf(context)
   ?..hideCurrentSnackBar()
   ..showSnackBar(SnackBar(content: Text(text)));
+
+/// [say] for the words of an upload ("Uploading 3 PDFs. Keep this tab open."): they go as soon as [done] completes, instead of
+/// waiting out the toast's own time.
+void sayUntil(BuildContext context, String text, Future<void> done) {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (messenger == null) return;
+  messenger.hideCurrentSnackBar();
+  final bar = messenger.showSnackBar(SnackBar(content: Text(text)));
+  var open = true;
+  unawaited(bar.closed.whenComplete(() => open = false));
+  unawaited(done.catchError((Object _) {}).whenComplete(() {
+    if (open) bar.close();
+  }));
+}
 
 /// "Building 8%", "Paused", "2 failed", or null: the badge of a built library in the Library list.
 String? buildBadge(BuildController c, BuildLibrary l) {

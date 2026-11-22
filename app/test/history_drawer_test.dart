@@ -183,6 +183,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('delete-confirm-button')));
+      await tester.pumpAndSettle();
       expect(store.list(), isEmpty);
       expect(find.text('Chat deleted'), findsOneWidget);
       await tester.tap(find.text('Undo'));
@@ -197,9 +199,56 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('delete-confirm-button')));
+      await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 10)); // the snack bar times out
       await tester.pumpAndSettle();
       expect(store.messages(id), isEmpty);
+    });
+
+    // Owner-approved (build 53): every chat delete asks "Delete this chat?" first. Chats never sync (no chats kind in Sharing), so no synced line.
+    testWidgets('delete asks first: Cancel keeps the chat, Delete removes it', (tester) async {
+      final id = seed('Snake bite', DateTime(2026, 10, 26, 8), text: 'bite?');
+      await openDrawer(tester);
+      await tester.longPress(find.text('Snake bite'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete this chat?'), findsOneWidget);
+      expect(find.text('Deleting this will delete this from all synced devices.'), findsNothing);
+      expect(store.get(id), isNotNull);
+
+      await tester.tap(find.byKey(const ValueKey('delete-cancel')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete this chat?'), findsNothing);
+      expect(store.list().length, 1);
+      expect(find.text('Chat deleted'), findsNothing);
+
+      await tester.longPress(find.text('Snake bite'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('delete-confirm-button')));
+      await tester.pumpAndSettle();
+      expect(store.list(), isEmpty);
+      expect(find.text('Chat deleted'), findsOneWidget);
+    });
+
+    testWidgets('delete asks first in the docked list too', (tester) async {
+      seed('Snake bite', DateTime(2026, 10, 26, 8), text: 'bite?');
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: Scaffold(body: HistoryDrawer(chat: chat, now: () => now, docked: true)),
+      ));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Snake bite'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete this chat?'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('delete-cancel')));
+      await tester.pumpAndSettle();
+      expect(store.list().length, 1);
     });
   });
 }

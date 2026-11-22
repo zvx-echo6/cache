@@ -8,6 +8,10 @@ enum ActOutcomeForm { toolMessage, hostEvent }
 
 const ActOutcomeForm kActOutcomeForm = ActOutcomeForm.hostEvent;
 
+/// The last key of a declined outcome, said plainly: a small model reads `"ok":true` as success. The same text as the core's
+/// `DECLINED_NOTE` (cache_act/src/reply.rs).
+const String kDeclinedNote = 'The person tapped Cancel. Nothing was done or saved.';
+
 enum ConfirmState {
   /// Waiting for a tap.
   open,
@@ -53,6 +57,9 @@ class ConfirmCard {
   /// The error detail of a failed run.
   String? error;
 
+  /// What a done action returned (the outcome's `result`), for the card's "Done" line to open what it made. App side only.
+  Map<String, dynamic>? result;
+
   bool get resolved => state == ConfirmState.done || state == ConfirmState.declined || state == ConfirmState.failed;
 
   /// The card for an `act` tool result, or null when it is not a `needs_confirmation`.
@@ -79,6 +86,8 @@ class ConfirmCard {
     switch (outcome['status']) {
       case 'done':
         state = ConfirmState.done;
+        final r = outcome['result'];
+        result = r is Map ? r.cast<String, dynamic>() : null;
       case 'declined':
         state = ConfirmState.declined;
       case 'failed':
@@ -96,7 +105,10 @@ class ConfirmCard {
   /// The message that carries [outcome] into the conversation.
   Map<String, dynamic> outcomeMessage(Map<String, dynamic> outcome, {ActOutcomeForm form = kActOutcomeForm}) => switch (form) {
         ActOutcomeForm.toolMessage => {'role': 'tool', 'tool_call_id': toolCallId, 'content': jsonEncode(outcome)},
-        ActOutcomeForm.hostEvent => {'role': 'system', 'content': jsonEncode({'host_event': 'act_outcome', ...outcome})},
+        ActOutcomeForm.hostEvent => {
+          'role': 'system',
+          'content': jsonEncode({'host_event': 'act_outcome', ...outcome, if (outcome['status'] == 'declined') 'note': kDeclinedNote}),
+        },
       };
 }
 

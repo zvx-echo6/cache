@@ -72,14 +72,14 @@ Before the stream starts: 400 (`bad_json`, `unsupported_version`), 409 `no_model
 | `error` | something failed | `code`, `message` |
 
 `error` codes: `busy` (8 generations are already waiting; the limit is checked under the queue lock, so it is exact),
-`model_changed` (see `model` above), `no_model` (no model was loaded when its turn came), `start_failed` (`cl_start` refused; `message` is the native reason),
+`model_changed` (see `model` above), `no_model` (no model was loaded when its turn came), `context_full` (`cl_start` returned -3: the prompt does not fit the context), `start_failed` (`cl_start` refused for any other reason; `message` is the native reason),
 `generation_failed` (`cl_next` returned -2; `message` is "The model stopped with an error while answering"), `internal` (the engine
 crashed). After `done` or `error` the stream ends. A stream that ends without either was cut off and is an error to the client.
 A generation that is stopped, or reaches `max_tokens`, still ends with `done`.
 
 How the native layer is driven (the worker in `llama_session_io.dart`, call for call):
 
-1. `cl_start(h, jsonEncode(request), err, 512)`; non-zero is `start_failed`.
+1. `cl_start(h, jsonEncode(request), err, 512)`; -3 is `context_full`, any other non-zero is `start_failed`.
 2. Loop `n = cl_next(h, tok, 1024)` while `n >= 0`. After each call, `capped = max_tokens != null && cl_generated_tokens(h) >= max_tokens`.
    If `n > 0`, `cl_partial(h, buf, 4 MiB)` (if it is not negative) is sent as a `partial`. If `capped`, break.
    `max_tokens` counts only when it is a whole number above 0 (the native layer ignores the key).
@@ -96,6 +96,17 @@ lets the generation drain, and sends nothing more. A client that keeps the conne
 if one event cannot be queued for 30 seconds, the generation is stopped the same way (otherwise it would hold the one turn for
 everyone). A client that is still waiting in the queue leaves it. This is what canceling
 the Dart stream does (`stop()` in `onCancel`).
+
+## `POST /api/llm/unload`
+
+    {"v":1}   ->   {"ok":true,"result":{"unloaded":true}}
+
+Frees the model the server has loaded (the same session rule as `load`: signed in only). The model is shared by every browser, so
+it is freed for all of them. A generation that is running is stopped (`cl_stop`; its stream still ends with `done`, carrying the
+answer so far) and waited out before the model is freed, as `load` waits for it. Generations already waiting in the queue are
+served first; one that arrives after this finds no model and gets `no_model`. Afterwards `GET /api/llm/models` reports `loaded:
+false` for every file, and `DELETE /api/models/files/<file>` no longer answers `409 in_use`. Idempotent: with nothing loaded it
+answers `{"unloaded":false}`. `429 busy` when too many requests are already waiting for the model.
 
 ## `POST /api/llm/stop`
 
