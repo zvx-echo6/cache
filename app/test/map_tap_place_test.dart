@@ -789,6 +789,7 @@ void _screenTests() {
 }
 
 void main() {
+  areaFitSettle = Duration.zero;
   TestWidgetsFlutterBinding.ensureInitialized();
   _pureTests();
   _screenTests();

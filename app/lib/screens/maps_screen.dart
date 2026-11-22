@@ -335,6 +335,9 @@ const int kRouteRefits = 4;
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
+/// How long the card is given to settle before an area's outline is fitted above it (tests set it to zero).
+Duration areaFitSettle = const Duration(milliseconds: 300);
+
 class MapsScreen extends StatefulWidget {
   const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump, this.areas});
 
@@ -1827,7 +1830,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     WidgetsBinding.instance.ensureVisualUpdate();
     await WidgetsBinding.instance.endOfFrame;
     // The card's last lines (a note under the summary) settle a moment later: measure it then.
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (areaFitSettle > Duration.zero) await Future<void>.delayed(areaFitSettle);
     if (!mounted || _area != a) return;
     final size = _fitMapSize();
     final pad = areaFitPadding(map: size, header: _boxOf(_headerKey), chip: _boxOf(_chipKey), buttons: _boxOf(_controlsKey), panel: _boxOf(_panelKey));
