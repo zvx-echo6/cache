@@ -15,7 +15,7 @@ enum TapSource { basemap, imported, overlay }
 
 /// One feature under a tap, as the map's query of rendered features gave it, read into what a card needs.
 class TapFeature {
-  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId, this.poi = false});
+  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId, this.poi = false, this.placeLabel = false});
 
   final TapSource source;
   final TapTier tier;
@@ -35,6 +35,11 @@ class TapFeature {
 
   /// A public place of the base map's POI layer (a chip), which wins a tap over a town or road name beside it.
   final bool poi;
+
+  /// The label of a city or town (not a road's name or a neighbourhood's): it opens that town's area card.
+  final bool placeLabel;
+
+  TapFeature asPlaceLabel() => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi, placeLabel: true);
 
   bool get named => name != null && name!.isNotEmpty;
 }
@@ -150,7 +155,7 @@ List<String> overlayHitLayers(String styleJson, {required String source}) {
 /// the order the map gave them. Null: none. (The user's own pins and routes are asked before any of this, by the screen.)
 TapFeature? pickTapFeature(List<TapFeature> hits) {
   TapFeature? best;
-  int rank(TapFeature f) => f.tier.index * 100 + (f.poi ? 0 : 20) + (f.named ? 0 : 10) + f.source.index;
+  int rank(TapFeature f) => f.tier.index * 100 + (f.poi ? 0 : f.placeLabel ? 5 : 20) + (f.named ? 0 : 10) + f.source.index;
   for (final f in hits) {
     if (best == null || rank(f) < rank(best)) best = f;
   }

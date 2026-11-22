@@ -82,6 +82,7 @@ class RegionRecord {
     this.polygon,
     this.country,
     this.regionCode,
+    this.placeClass,
     this.sizes,
   });
 
@@ -109,6 +110,9 @@ class RegionRecord {
   /// The ISO 3166-2 code of the state it is in ("US-ID"), where the catalogue says.
   final String? regionCode;
 
+  /// What a city or town is called by the catalogue: city, town, village, hamlet.
+  final String? placeClass;
+
   /// What each part weighs, from the catalogue; null for a region it has no sizes for (and a drawn area).
   final RegionSizes? sizes;
 
@@ -134,6 +138,7 @@ class RegionRecord {
     polygon: j['polygon'] as String?,
     country: j['country'] as String?,
     regionCode: j['region_code'] as String?,
+    placeClass: j['class'] as String?,
     sizes: RegionSizes.fromJson(j['sizes']),
   );
 
@@ -339,7 +344,7 @@ class RegionIndex {
 /// The region catalogue, read from the public host and kept in [dir] so it works offline once seen. A file is fetched again
 /// when it is older than [maxAge] (a month: the catalogue follows the monthly map releases); when that fails, the copy on
 /// the phone is used.
-class RegionCatalogue {
+class RegionCatalogue implements AreaSource {
   RegionCatalogue({required this.dir, FetchBytes? fetch, DateTime Function()? now, this.base = kRegionCatalogueBase, this.maxAge = const Duration(days: 30)})
     : _fetch = fetch ?? ((u) => fetchBytes(u, maxBytes: 64 * 1024 * 1024)),
       _now = now ?? DateTime.now;
@@ -424,6 +429,7 @@ class RegionCatalogue {
 
   /// The outline of [r] as it is kept on the phone, never fetched: null when it is not there or cannot be read (a part-written or
   /// corrupt file is skipped, not an error). What a lookup of the town and county of a point reads.
+  @override
   Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async {
     try {
       final String? text;
@@ -445,6 +451,15 @@ class RegionCatalogue {
     if (type == 'FeatureCollection') return ((j['features'] as List).first as Map)['geometry'].cast<String, dynamic>();
     if (type == 'Feature') return (j['geometry'] as Map).cast<String, dynamic>();
     return j;
+  }
+
+  @override
+  List<RegionRecord> townsIn(RegionRecord county, {int limit = 3}) {
+    final s = _shards[county.id.split('-').first];
+    if (s == null) return const [];
+    final towns = [for (final r in s.records.values) if (r.kind == 'locality' && r.parents.contains(county.id) && (r.population ?? 0) > 0) r]
+      ..sort((a, b) => (b.population ?? 0).compareTo(a.population ?? 0));
+    return towns.take(limit).toList();
   }
 
   /// The regions a region's download keeps outlines for: its counties and its cities and towns (every level below it, found through
@@ -517,6 +532,7 @@ class RegionCatalogue {
 
   /// The town, county and state of a point from the outlines kept on the phone (never fetched). The shards of the countries around
   /// the point are read first; null when the point is in none of the outlines that are there.
+  @override
   Future<AreaHit?> areaAtPoint(double lat, double lon) async {
     await readShardAt(lat, lon);
     return areaAt(lat, lon, [for (final s in _shards.values) ...s.records.values], storedGeometry);

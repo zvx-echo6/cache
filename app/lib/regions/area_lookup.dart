@@ -6,6 +6,16 @@ import 'region_catalogue.dart';
 /// The kinds of the catalogue a point is placed in: a city or town, a county, a state.
 const Set<String> kAreaKinds = {'locality', 'county', 'region'};
 
+/// Where the Maps screen gets the town and county of a tapped point, their outlines and the county's towns: the region catalogue
+/// ([RegionCatalogue]); tests give their own. Nothing here fetches: it is what is on the phone.
+abstract class AreaSource {
+  Future<AreaHit?> areaAtPoint(double lat, double lon);
+  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r);
+
+  /// The most populous cities and towns inside [county] that the catalogue lists, largest first.
+  List<RegionRecord> townsIn(RegionRecord county, {int limit = 3});
+}
+
 /// The result of [areaAt]: the smallest city or town holding the point, the county, the state. Any may be null.
 class AreaHit {
   const AreaHit({this.town, this.county, this.state});
