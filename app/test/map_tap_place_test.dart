@@ -399,7 +399,7 @@ void _screenTests() {
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.name, 'Cascade Park');
       expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
-      expect(find.text('Park'), findsOneWidget);
+      expect(find.byWidgetPredicate((w) => w is Text && (w.data ?? '').startsWith('Park')), findsOneWidget, reason: 'the kind line, the icon\'s name');
       expect(find.byKey(const ValueKey('place-card-no-details')), findsOneWidget);
       expect(find.text('No other details for this place.'), findsOneWidget);
       expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
