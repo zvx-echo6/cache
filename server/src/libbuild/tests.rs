@@ -185,7 +185,8 @@ fn pause_holds_the_running_book_mid_book_and_resume_finishes_it_from_the_same_pi
     let d = TempDir::new("b4");
     let (svc, fake) = rig(&d);
     let lib = new_lib(&svc, "L");
-    let ids: Vec<String> = (0..3).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("topic{i}"), 2, None))).collect();
+    // long enough for several batches of vectors (16 pieces each): the pause lands between two of them
+    let ids: Vec<String> = (0..3).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("topic{i}"), 60, None))).collect();
     let h = run_paused_mid_book(&svc, &fake);
     wait_for("the book to be paused mid-book", || lock(&svc.st).paused && fake.calls.load(Ordering::Relaxed) >= 1);
     *lock(&fake.hook) = None;
@@ -196,6 +197,8 @@ fn pause_holds_the_running_book_mid_book_and_resume_finishes_it_from_the_same_pi
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(fake.calls.load(Ordering::Relaxed), calls, "no embedder request while paused");
     assert_eq!(item(&svc, &ids[0]).pieces_done, done, "pieces_done is frozen while paused");
+    let it = item(&svc, &ids[0]);
+    assert!(it.pieces_done > 0 && it.pieces_done < it.pieces_total.unwrap(), "held part-way: {} of {:?}", it.pieces_done, it.pieces_total);
     assert_eq!(state(&svc, &ids[0]), S::Building, "the book stays in its Building state, held");
     assert!(!h.is_finished(), "the build is held, not ended");
     assert_eq!((state(&svc, &ids[1]), state(&svc, &ids[2])), (S::Queued, S::Queued));
@@ -232,7 +235,7 @@ fn a_held_book_still_answers_service_stop() {
     let d = TempDir::new("b4c");
     let (svc, fake) = rig(&d);
     let lib = new_lib(&svc, "L");
-    let id = add(&svc, &lib, "b.pdf", &book("topic", 2, None));
+    let id = add(&svc, &lib, "b.pdf", &book("topic", 60, None));
     let h = run_paused_mid_book(&svc, &fake);
     wait_for("the book to be held", || lock(&svc.st).paused && fake.calls.load(Ordering::Relaxed) >= 1);
     *lock(&fake.hook) = None;
