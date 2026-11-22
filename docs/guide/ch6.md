@@ -419,8 +419,8 @@ In the key sheet from "Get key" on a source's row (["Settings" > "Weather and al
 - "[Provider] didn't accept this key, or answered with something Cache couldn't read. Check you copied all of it."
 - "[Provider] says this key has reached its limit. Try again later."
 - "Couldn't reach [provider]. Check your connection."
-- "[Provider] had a problem (HTTP [code]). Try again in a moment."
-- "[Provider] answered with an error (HTTP [code])." or "[Provider] answered with something Cache couldn't read. Try again later."
+- "[Provider] had a problem. Try again in a moment."
+- "[Provider] answered with an error." or "[Provider] answered with something Cache couldn't read. Try again later."
 - "This source needs no key.": nothing to add.
 - "That key wasn't accepted." or "Couldn't check the key. Try again."
 - "The key was accepted but couldn't be saved on this device.": try again.

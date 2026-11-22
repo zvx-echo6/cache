@@ -20,3 +20,9 @@ Hey Siri, navigate with Cache
 # Maps > Layers section heading: the code has MY LAYERS (shown in capitals); the guide quotes it in normal case.
 My layers
 
+
+# Maps > Follow a route (CarPlay): the other two App Shortcut phrases (CarVoiceIntents.swift:229-230) and the question Siri asks when no place is said
+# (IntentDialog("Where to?"), CarVoiceIntents.swift:67,105). Spoken, not text of app/lib.
+Hey Siri, start a Cache route
+Hey Siri, get Cache directions
+Where to?

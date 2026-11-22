@@ -420,7 +420,7 @@ A setting changes on the other device at once. Nothing restarts.
 - Each setting goes on its own. If both devices change the same setting, the later change wins.
 - When settings go one way, a change made on the other device stays there until you change that setting again.
 - If the other device uses a model this one doesn't have, "Model" says, for example, "Uses Gemma 4 E4B · Q4_K_M, not downloaded here". Tap "Download" to get it. Cache never downloads it on its own.
-- A watched place that hasn't come to this device yet says "waiting for this place" under "What weather watches". It comes with the notebooks.
+- A watched place whose saved place hasn't come to this device yet is not listed under "What weather watches". It is listed, and its weather loads, by itself when it comes with the notebooks.
 - Your Bookshelves are kept the same only with devices set to "Match both ways".
 
 ## Search indexes on linked devices
