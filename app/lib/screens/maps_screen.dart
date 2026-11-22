@@ -1699,6 +1699,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
     final reachM = math.max(kLabelMatchFloorM, kLabelMatchReach * metresPerPoint(f.lat, _zoom));
     final choice = tapChoiceFor(f, match: f.tier == TapTier.label ? matchLabelPlace(f, candidates, reachM: reachM) : null);
+    if (f.tier == TapTier.label) {
+      appLog.add(LogLevel.standard, 'INFO',
+          'map tap ${f.poi ? 'poi' : 'label'} name="${f.name}" kind=${f.kind.isEmpty ? '-' : f.kind} candidates=${candidates.length} reachM=${reachM.round()} -> ${choice.place.id} ${choice.place.matched == kPoiMatched || choice.place.id.startsWith('loc:') ? 'no-match' : 'matched'}');
+    }
     final book = choice.notebookId;
     _tappedBook = book == null ? null : (placeId: choice.place.id, notebookId: book);
     widget.userLayers?.clearRepeater();
