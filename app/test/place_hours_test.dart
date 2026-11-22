@@ -75,6 +75,12 @@ void main() {
       expect(hoursText(List.generate(7, (_) => [[510, 1260]]), use24h: true), 'Daily 08:30–21:00');
     });
 
+    test('a close at midnight is "midnight" in 12 hour time and 00:00 in 24 hour time', () {
+      final week = List.generate(7, (_) => [[630, 1440]]);
+      expect(hoursText(week, use24h: false), 'Daily 10:30 AM–midnight');
+      expect(hoursText(week, use24h: true), 'Daily 10:30–00:00');
+    });
+
     test('an overnight range ends at the next morning\'s time', () {
       // "Fr-Sa 18:00-02:00": Friday and Saturday evenings run to 2 in the morning.
       final List<List<List<int>>> week = [[], [], [], [], [[1080, 1560]], [[1080, 1560]], []];
@@ -83,11 +89,15 @@ void main() {
     });
 
     test('noon, midnight, split days, days that are not next to each other', () {
-      expect(clockText(720, use24h: false), '12 PM');
-      expect(clockText(0, use24h: false), '12 AM');
-      expect(clockText(1440, use24h: false), '12 AM');
+      expect(clockText(720, use24h: false), 'noon');
+      expect(clockText(720, use24h: true), '12:00');
+      expect(clockText(750, use24h: false), '12:30 PM');
+      expect(clockText(30, use24h: false), '12:30 AM');
+      expect(clockText(0, use24h: false), 'midnight');
+      expect(clockText(0, use24h: true), '00:00');
+      expect(clockText(1440, use24h: false), 'midnight');
       expect(clockText(1440, use24h: true), '00:00');
-      expect(hoursText([[[480, 720], [780, 1020]], [], [[480, 720], [780, 1020]], [], [], [], <List<int>>[]], use24h: false), 'Mon, Wed 8 AM–12 PM, 1 PM–5 PM');
+      expect(hoursText([[[480, 720], [780, 1020]], [], [[480, 720], [780, 1020]], [], [], [], <List<int>>[]], use24h: false), 'Mon, Wed 8 AM–noon, 1 PM–5 PM');
       expect(hoursText([[[0, 1440]], [[0, 1440]], [[0, 1440]], [[0, 1440]], [[0, 1440]], [[600, 1020]], []], use24h: false), 'Mon–Fri open 24 hours · Sat 10 AM–5 PM');
     });
   });
