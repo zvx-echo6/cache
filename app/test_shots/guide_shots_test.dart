@@ -414,7 +414,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, 'sample-key-0000'));
-    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1000);
+    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1100);
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
