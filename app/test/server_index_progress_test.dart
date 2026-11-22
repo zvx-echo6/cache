@@ -68,6 +68,17 @@ void main() {
     expect(s.calls, ['index.retry {key: /docs/c.zim}']);
   });
 
+  testWidgets('a failed job says it could not do its step, never Stuck, and Retry goes to the server', (tester) async {
+    final s = _Server()..progress.update(_q([_item('zim-captions/army', 'failed', done: 1, total: 4, step: 'captions'), _item('/docs/c.zim', 'stuck', step: 'keywords')], 0, 2));
+    await _open(tester, s.progress);
+    expect(find.text("Couldn't make captions searchable · Retry"), findsOneWidget);
+    expect(find.text('Stuck at: getting the search index ready · Retry'), findsOneWidget, reason: 'the genuine no-progress state keeps its own words');
+    expect(find.textContaining('Stuck at: making captions'), findsNothing);
+    await tester.tap(find.text("Couldn't make captions searchable · Retry"));
+    await tester.pump();
+    expect(s.calls, ['index.retry {key: zim-captions/army}']);
+  });
+
   testWidgets('Pause all and Resume go to the server as index.pause', (tester) async {
     final s = _Server()..progress.update(threeOfWork);
     await _open(tester, s.progress);

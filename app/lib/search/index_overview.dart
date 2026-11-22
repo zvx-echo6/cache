@@ -205,7 +205,7 @@ class IndexQueueSheet extends StatelessWidget {
         final words = indexQueueWords(i, battery: scheduler.reading);
         final p = i.progress;
         final storage = i.why == IndexWait.storage && openStorageForSpace != null;
-        final stuck = i.why == IndexWait.stuck;
+        final stuck = i.why == IndexWait.stuck || i.why == IndexWait.failed;
         return ListTile(
           key: ValueKey('index-item-${i.key}'),
           title: Text(indexItemTitle(i, items), maxLines: 1, overflow: TextOverflow.ellipsis),

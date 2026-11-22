@@ -21,13 +21,19 @@ String indexDoingWords(String kind) => switch (kind) {
   _ => 'Getting the search index ready',
 };
 
-/// "Waiting to make PDFs searchable"; the seal: "Waiting to get the search index ready".
-String indexWaitingWords(String kind) => switch (kind) {
-  'pdf-add' => 'Waiting to add a PDF',
-  'watch-check' => 'Waiting to check for new PDFs',
-  'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'Waiting to make ${indexPartWord(kind)} searchable',
-  _ => 'Waiting to get the search index ready',
+/// The step as a phrase after "to": "make PDFs searchable"; the seal: "get the search index ready".
+String indexToWords(String kind) => switch (kind) {
+  'pdf-add' => 'add a PDF',
+  'watch-check' => 'check for new PDFs',
+  'zim-pdf' || 'zim-epub' || 'zim-captions' || 'captions' => 'make ${indexPartWord(kind)} searchable',
+  _ => 'get the search index ready',
 };
+
+/// "Waiting to make PDFs searchable"; the seal: "Waiting to get the search index ready".
+String indexWaitingWords(String kind) => 'Waiting to ${indexToWords(kind)}';
+
+/// A job that failed, in its own words (never "Stuck"): "Couldn't make captions searchable · Retry".
+String indexFailedWords(String kind) => 'Couldn\'t ${indexToWords(kind)} · Retry';
 
 /// Running, slowed for heat: "device is warm" only when the system's thermal status says so; on its forecast alone, keeping it cool.
 String indexSlowedWords(bool warm) => warm ? 'Slowed down · device is warm' : 'Slowed down · keeping the device cool';
@@ -51,6 +57,7 @@ String? indexWaitWords(IndexWait w, {BatteryReading? battery, int bytesNeeded = 
   IndexWait.storage => bytesNeeded > 0 ? 'Needs ${formatBytes(bytesNeeded)} free · Free space' : 'Needs more free space · Free space',
   IndexWait.person => 'Paused by you · Resume',
   IndexWait.stuck => 'Stuck · skipped for now · Retry',
+  IndexWait.failed => 'Couldn\'t finish · Retry',
 };
 
 /// "340 of 5,768".
@@ -71,6 +78,7 @@ String? indexItemWords(IndexItem i, {BatteryReading? battery}) {
       // stuck: where it stopped moving, so a screenshot shows the step it hangs in
       final at = i.step;
       if (i.why == IndexWait.stuck && at != null && at.isNotEmpty) return 'Stuck at: ${at[0].toLowerCase()}${at.substring(1)} · Retry';
+      if (i.why == IndexWait.failed) return indexFailedWords(i.kind);
       return indexWaitWords(i.why, battery: battery, bytesNeeded: i.bytesNeeded, warm: i.warm) ?? indexWaitingWords(i.kind);
     case IndexState.queued:
       return indexWaitingWords(i.kind);

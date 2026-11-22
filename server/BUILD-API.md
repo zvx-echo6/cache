@@ -121,7 +121,7 @@ finished ones stay (up to 1000) so "x of 214 books done" can be counted: `counts
 
 | Call | Result |
 |---|---|
-| `POST /api/build/queue/pause` | the queue. The book being built is finished, then building holds. Remembered across restarts. |
+| `POST /api/build/queue/pause` | the queue. The book being built pauses mid-book, between two batches of vectors: it stays `building`, no more work is done and `pieces_done` stays where it is, and Resume continues the same book from the same piece (nothing restarts it). A held book still ends when the service stops. Remembered across restarts. |
 | `POST /api/build/queue/resume` | the queue |
 | `POST /api/build/queue/stop` | the queue plus `removed` (the waiting books taken off the list). The book being built finishes. Files in the drop folder's `ingest/` would be queued again at the next check, so the Stop dialog's "Also turn off the drop folder" matters. |
 | `POST /api/build/queue/{id}/decide` | `{"action": "keep_both"\|"replace_older"}` for a `needs_decision` book (409 `not_waiting` otherwise). `keep_both` queues it to be added as its own book (it takes the next call number in its division). `replace_older` rebuilds the older book from this file (`doc_version` + 1, same call number and place) and puts it at the front of the queue, next after the book being worked on. The queue. |

@@ -49,7 +49,8 @@ PdfHold pdfHoldOf(IndexWait why) => switch (why) {
       IndexWait.closed => PdfHold.closed,
       IndexWait.model || IndexWait.memory => PdfHold.model,
       IndexWait.person => PdfHold.person,
-      IndexWait.stuck => PdfHold.stuck,
+      // the phone's own PDF work never fails this way (only the server's progress reports `failed`)
+      IndexWait.stuck || IndexWait.failed => PdfHold.stuck,
       IndexWait.none => PdfHold.waiting,
     };
 

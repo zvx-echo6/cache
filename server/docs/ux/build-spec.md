@@ -19,7 +19,7 @@ Mock: build-mock.html (`?theme=light|dark&state=...`), viewed at 1920x1080. Same
 Dropping PDFs anywhere on Library; renaming a library (from the library's "..." menu); Stop building (confirm; offers to turn the drop folder off too, state `stop-confirm`; replaces the old close icon); adding PDFs during the model download. The "On your phones" card is removed everywhere.
 
 ## Open questions
-- Does Pause stop mid-book, or finish the book? The resume line depends on it.
+- Decided 2026-11-22: Pause stops mid-book (the book stays Building, held) and Resume continues from the same piece.
 - Is a duplicate judged within this library only, or across libraries?
 - Does editing a title need passages rebuilt? The mock says no.
 - Can the browser read folder contents on every target browser (Firefox, Safari)? Choose a folder may need a fallback.
