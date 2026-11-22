@@ -18,6 +18,7 @@ import '../maps/maps_state.dart';
 import '../maps/map_tap.dart';
 import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
+import '../maps/poi_chips.dart';
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
 import '../regions/region_catalogue.dart';
@@ -834,6 +835,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       await images.ensure(kRepeaterIcon, mapIcon(kRepeaterIcon).icon, repeaterTint(tactical: tactical));
     } catch (_) {}
+    // The public-place chips (the base map's POI layer draws them by name), at the screen's own scale like the pins.
+    await addPoiChips((name, png) => c.addImage(name, png), _palette, ratio: pinImageRatio(screenRatio));
     try {
       final p = _palette;
       // The car's arrow, at the map's own scale: a phone reads an added image at the screen's pixels per point, a browser at one.

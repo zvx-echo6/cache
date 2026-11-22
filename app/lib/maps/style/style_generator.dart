@@ -141,7 +141,7 @@ Map<String, dynamic> buildMapStyle({
     sources[src] = _source(basemap.def, 'vector', tilesUrl(basemap.def), tileSize: null);
     if (MapLayout.parse(basemap.def.raw['layout']) == MapLayout.protomapsV4) {
       if (protomapsTemplate == null) throw ArgumentError('A Protomaps base map needs the Protomaps template');
-      base = protomapsLayers(palette, protomapsTemplate, src);
+      base = protomapsLayers(palette, protomapsTemplate, src, poiIconScale: pinIconSize());
       groundPrefix = protomapsGroundAt;
       labelsId = protomapsLabelsAt;
     } else {

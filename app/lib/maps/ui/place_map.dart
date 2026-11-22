@@ -14,6 +14,7 @@ import '../../theme.dart';
 import '../geo.dart';
 import '../maps_state.dart';
 import '../palette/map_palette.dart';
+import '../poi_chips.dart';
 import '../style/style_generator.dart';
 import 'map_assets.dart';
 
@@ -263,9 +264,18 @@ class _PlaceMapState extends State<PlaceMap> {
   void _styleLoaded() {
     _ready = true;
     _images = null;
+    _addPoiChips();
     _showPin();
     _showExtent();
     _aim();
+  }
+
+  /// The public-place chips the style's POI layer draws, at this screen's scale (as the pins).
+  Future<void> _addPoiChips() async {
+    final c = _c;
+    if (c == null) return;
+    await addPoiChips((name, png) => c.addImage(name, png), mapPaletteFor(widget.themeId),
+        ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
   }
 
   /// The area's outline ([PlaceMap.extent]), drawn as the user's own areas are.

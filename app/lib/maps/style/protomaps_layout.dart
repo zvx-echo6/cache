@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../palette/map_palette.dart';
+import '../poi_chips.dart';
 
 /// The Protomaps (basemap tiles v4) layout of the base map. Its layers come from the official
 /// `@protomaps/basemaps` package (BSD-3-Clause, https://github.com/protomaps/basemaps, version 5.7.2), turned into
@@ -112,7 +113,7 @@ Map<String, Color> protomapsFlavor(MapPalette p) {
     'country_label': p['labelPlace'],
     'address_label': p['labelPath'],
     'address_label_halo': p['labelHalo'],
-    // Points of interest: step 1 of the map POI work draws a plain dot and a name (poiLayers); chips come later.
+    // Points of interest are drawn as round chips (poiLayers); the pois.* colours stay defined for the template's own fields.
     'pois.blue': p['labelMinor'],
     'pois.green': p['labelMinor'],
     'pois.lapis': p['labelMinor'],
@@ -132,7 +133,7 @@ Map<String, Color> protomapsFlavor(MapPalette p) {
 }
 
 /// The template's layers with every `@field` replaced from the palette and the source set to [src].
-List<Map<String, dynamic>> protomapsLayers(MapPalette p, Map<String, dynamic> template, String src) {
+List<Map<String, dynamic>> protomapsLayers(MapPalette p, Map<String, dynamic> template, String src, {double poiIconScale = 1}) {
   final flavor = protomapsFlavor(p);
   Object? fill(Object? v) {
     if (v is String && v.startsWith('@')) {
@@ -155,28 +156,12 @@ List<Map<String, dynamic>> protomapsLayers(MapPalette p, Map<String, dynamic> te
   ];
   // Points of interest sit above road labels and below place labels, so a town name wins a collision with a nearby POI.
   final at = out.indexWhere((l) => l['id'] == 'places_subplace');
-  out.insertAll(at < 0 ? out.length : at, poiLayers(flavor, src));
+  out.insertAll(at < 0 ? out.length : at, poiLayers(flavor, src, iconScale: poiIconScale));
   return out;
 }
 
-/// The kinds of the basemap's `pois` layer that are drawn (tile schema values, not language). Churches, schools, banks and civic
-/// buildings are left out on purpose. Hostel, guest_house, chalet, volcano, viewpoint and zoo are listed but not yet seen in tiles.
-const List<String> poiKinds = [
-  'fuel', 'charging_station', 'aerodrome',
-  'restaurant', 'fast_food', 'food_court', 'bakery', 'ice_cream', 'bar', 'pub', 'cafe', 'coffee',
-  'supermarket', 'convenience', 'variety_store', 'wholesale', 'department_store', 'doityourself', 'outdoor', 'mall',
-  'hotel', 'motel', 'hostel', 'guest_house', 'chalet', 'camp_site', 'caravan_site',
-  'park', 'nature_reserve', 'garden', 'golf_course', 'peak', 'volcano', 'viewpoint', 'trailhead', 'ranger_station',
-  'hospital', 'clinic', 'doctors', 'pharmacy', 'chemist', 'police', 'fire_station',
-  'drinking_water', 'toilets', 'attraction', 'museum', 'monument', 'stadium', 'theatre', 'zoo', 'information',
-];
-
-/// Kinds that show this many zoom levels earlier than their data `min_zoom` (approved: people need them from further out).
-const List<String> poiEarlyKinds = ['hospital', 'pharmacy', 'fuel'];
-const int poiEarlyBy = 2;
-
 /// Ids of the layers [poiLayers] makes (the tests list them).
-const List<String> poiLayerIds = ['pois_dot', 'pois_label'];
+const List<String> poiLayerIds = ['pois'];
 
 /// The POI filter: a whitelisted kind whose effective `min_zoom` (the data's, minus [poiEarlyBy] for [poiEarlyKinds]) has been
 /// reached. Zoom-dependent, so native MapLibre has to accept it; the fallback is one layer per integer min_zoom.
@@ -200,45 +185,42 @@ List<Object> poiFilter() => [
       ],
     ];
 
-/// Step 1: a plain dot and the name beside it. Step 2 replaces the dot with the category chips.
-List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src) => [
+/// The public places: a round chip (an image `poi-<icon>`, added at style load, see poi_chips.dart) and the name beside it. The name is
+/// optional, so a crowded chip keeps its icon. Medical and emergency kinds sort first, so they win a collision. The chip is 0.78 of its size
+/// at zoom 12 and full size from zoom 16.
+List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src, {double iconScale = 1}) => [
       {
-        'id': 'pois_dot',
-        'type': 'circle',
-        'source': src,
-        'source-layer': 'pois',
-        'filter': poiFilter(),
-        'paint': {
-          'circle-radius': 5,
-          'circle-color': MapPalette.cssOf(flavor['pois.slategray']!),
-          'circle-stroke-color': MapPalette.cssOf(flavor['address_label_halo']!),
-          'circle-stroke-width': 1.5,
-        },
-      },
-      {
-        'id': 'pois_label',
+        'id': 'pois',
         'type': 'symbol',
         'source': src,
         'source-layer': 'pois',
         'filter': poiFilter(),
         'layout': {
-          'symbol-sort-key': ['get', 'min_zoom'],
+          'icon-image': [
+            'match',
+            ['get', 'kind'],
+            for (final i in poiIcons) ...[i.kinds, i.image],
+            '',
+          ],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 12, 0.78 * iconScale, 16, 1.0 * iconScale],
+          'icon-padding': 3,
+          'symbol-sort-key': [
+            '-',
+            ['get', 'min_zoom'],
+            ['match', ['get', 'kind'], poiPriorityKinds, 20, 0],
+          ],
           'text-field': ['get', 'name'],
           'text-font': ['NotoSans-Regular'],
           'text-size': 11,
-          'text-anchor': 'left',
-          'text-offset': [0.8, 0],
-          'text-max-width': 8,
+          'text-optional': true,
+          'text-variable-anchor': ['left', 'right', 'top', 'bottom'],
+          'text-radial-offset': 1.25,
+          'text-max-width': 7,
         },
         'paint': {
-          'text-color': MapPalette.cssOf(flavor['address_label']!),
+          'text-color': MapPalette.cssOf(flavor['pois.slategray']!),
           'text-halo-color': MapPalette.cssOf(flavor['address_label_halo']!),
-          'text-halo-width': 1,
+          'text-halo-width': 1.4,
         },
       },
     ];
-
-/// Where overlays slot in: the first layer with this id prefix is where "under the roads" overlays go, and
-/// the label layers start at [protomapsLabelsAt].
-const String protomapsGroundAt = 'roads_tunnels';
-const String protomapsLabelsAt = 'address_label';
