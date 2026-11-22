@@ -224,3 +224,8 @@ List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src, {dou
         },
       },
     ];
+
+/// Where overlays slot in: the first layer with this id prefix is where "under the roads" overlays go, and
+/// the label layers start at [protomapsLabelsAt].
+const String protomapsGroundAt = 'roads_tunnels';
+const String protomapsLabelsAt = 'address_label';
