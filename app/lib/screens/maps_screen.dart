@@ -1637,10 +1637,20 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     void logTap(String chose) => appLog.add(LogLevel.standard, 'INFO', 'map $note -> $chose');
     TapFeature? read(Object? raw, TapSource source, String kind, {String? notebookId}) =>
         tapFeatureFrom(raw, source: source, kind: kind, tapLat: at.latitude, tapLon: at.longitude, notebookId: notebookId);
-    note.write(' | labels(${_basemapLabels().length}):');
-    for (final raw in await _query(c, point, _basemapLabels(), note)) {
+    final labels = [for (final l in _basemapLabels()) if (!poiLayerIds.contains(l)) l];
+    note.write(' | labels(${labels.length}):');
+    for (final raw in await _query(c, point, labels, note)) {
       final f = read(raw, TapSource.basemap, '');
       if (f != null) hits.add(f);
+    }
+    // The public places' chips are asked on their own, so they rank above a town or road name beside them (map_tap.dart).
+    final chips = [for (final l in _basemapLabels()) if (poiLayerIds.contains(l)) l];
+    if (chips.isNotEmpty) {
+      note.write(' | pois:');
+      for (final raw in await _query(c, point, chips, note)) {
+        final f = tapFeatureFrom(raw, source: TapSource.basemap, kind: '', tapLat: at.latitude, tapLon: at.longitude, poi: true);
+        if (f != null) hits.add(f);
+      }
     }
     // A label is first whatever lies under it: the overlays and files are asked only when there is none.
     if (hits.isEmpty) {

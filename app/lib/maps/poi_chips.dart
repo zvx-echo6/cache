@@ -64,6 +64,15 @@ final List<PoiIcon> poiIcons = [
   PoiIcon('info', Symbols.info, poiLandmark, 'Visitor information', ['information']),
 ];
 
+/// The kind line of a tapped chip: the name of its icon ("Park", "Fuel", "Pharmacy"); empty for a kind that is not drawn.
+String poiKindName(String? kind) {
+  if (kind == null) return '';
+  for (final i in poiIcons) {
+    if (i.kinds.contains(kind)) return i.name;
+  }
+  return '';
+}
+
 /// Every `kind` that is drawn.
 List<String> get poiKinds => [for (final i in poiIcons) ...i.kinds];
 

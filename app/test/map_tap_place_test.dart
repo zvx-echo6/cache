@@ -29,6 +29,10 @@ import 'support/test_layer_engine.dart';
 TapFeature _f(TapSource source, TapTier tier, {String? name, String kind = '', double lat = 42.5, double lon = -113.5, String? notebookId}) =>
     TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId);
 
+extension on TapFeature {
+  TapFeature poiCopy() => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, poi: true);
+}
+
 MapPlace _place(String id, String name, double lat, double lon, {String type = 'place', String kind = 'Village'}) =>
     MapPlace(id: id, type: type, name: name, kind: kind, lat: lat, lon: lon, matched: 'name');
 
@@ -153,6 +157,37 @@ void _pureTests() {
       expect(tapFeatureFrom('nonsense', source: TapSource.overlay, kind: '', tapLat: 0, tapLon: 0), isNull);
     });
 
+    test('a public place\'s chip beats a town or road name beside it, which beats a line', () {
+      final town = _f(TapSource.basemap, TapTier.label, name: 'Quillmoor');
+      final chip = _f(TapSource.basemap, TapTier.label, name: 'Sorrel Park', kind: 'Park').poiCopy();
+      final line = _f(TapSource.overlay, TapTier.line, name: 'Hollow Fern Trail');
+      expect(pickTapFeature([town, chip, line])?.name, 'Sorrel Park');
+      expect(pickTapFeature([line, town, chip])?.name, 'Sorrel Park');
+      expect(pickTapFeature([line, town])?.name, 'Quillmoor');
+      expect(pickTapFeature([line])?.name, 'Hollow Fern Trail');
+    });
+
+    test('a chip is read with its icon\'s name as its kind; a chip with no name is nothing', () {
+      Map<String, dynamic> raw(Map<String, dynamic> props) => _raw('Point', [-113.5, 42.5], props);
+      TapFeature? chip(Map<String, dynamic> props) => tapFeatureFrom(raw(props), source: TapSource.basemap, kind: '', tapLat: 0, tapLon: 0, poi: true);
+      expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.kind, 'Park');
+      expect(chip({'name': 'Quik Stop', 'kind': 'fuel'})?.kind, 'Fuel');
+      expect(chip({'name': 'Chem Mart', 'kind': 'chemist'})?.kind, 'Pharmacy');
+      expect(chip({'name': 'X', 'kind': 'church'})?.kind, '');
+      expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.poi, isTrue);
+      expect(chip({'kind': 'park'}), isNull);
+    });
+
+    test('a chip the places data does not have opens a card with its name and kind, marked so the card says it has no details', () {
+      final f = _f(TapSource.basemap, TapTier.label, name: 'Cascade Park', kind: 'Park').poiCopy();
+      final c = tapChoiceFor(f);
+      expect((c.place.name, c.place.kind, c.place.matched), ('Cascade Park', 'Park', kPoiMatched));
+      expect(c.place.id, startsWith('loc:'));
+      final matched = tapChoiceFor(f, match: _place('place:test:c1', 'Cascade Park', 42.5, -113.5, kind: 'Park'));
+      expect(matched.place.id, 'place:test:c1');
+      expect(matched.place.matched, isNot(kPoiMatched));
+    });
+
     test('the name comes from the tiles\' name fields', () {
       expect(featureName({'name': 'A'}), 'A');
       expect(featureName({'NAME': 'B'}), 'B');
@@ -192,6 +227,9 @@ void _pureTests() {
 /// overlay's layers and [user] for the imported files' lines and areas; it records the layers each query asked for.
 class _TapCamera extends CameraController {
   final List<Map<String, dynamic>> labels = [];
+
+  /// What the public places' chip layer answers.
+  final List<Map<String, dynamic>> pois = [];
   final List<Map<String, dynamic>> trails = [];
   final List<Map<String, dynamic>> user = [];
 
@@ -211,6 +249,8 @@ class _TapCamera extends CameraController {
         out = trails;
       } else if (layers.contains('places_locality')) {
         out = labels;
+      } else if (layers.contains('pois')) {
+        out = pois;
       } else {
         out = baseLines;
       }
@@ -330,6 +370,55 @@ void _screenTests() {
       expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
       expect(m.camera.asked.any((l) => l.any((x) => x.startsWith('test-trails-'))), isFalse, reason: 'with a label, the overlays are not asked');
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip beside a town\'s label opens the chip\'s place, found by its own name', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final shop = _place('place:test:s1', 'Sorrel Bakery', 42.5001, -113.5001, kind: 'Bakery');
+      final searched = <String>[];
+      m.rig.backend.onSearch = (q, {near, meaning}) async {
+        searched.add(q);
+        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [shop]);
+      };
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
+      m.camera.pois.add(_raw('Point', [-113.5001, 42.5001], {'name': 'Sorrel Bakery', 'kind': 'bakery'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.camera.asked.any((l) => l.contains('pois')), isTrue, reason: 'the chip layer is asked');
+      expect(m.camera.asked.where((l) => l.contains('places_locality')).every((l) => !l.contains('pois')), isTrue, reason: 'on its own, so it can rank first');
+      expect(searched, ['Sorrel Bakery']);
+      expect(m.nav.selected?.id, 'place:test:s1');
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip with no place of the places data: its kind and one muted line, with the same three buttons; no Open', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Cascade Park');
+      expect(find.byKey(const ValueKey('place-card-name')), findsOneWidget);
+      expect(find.text('Park'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-card-no-details')), findsOneWidget);
+      expect(find.text('No other details for this place.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-open-entry')), findsNothing);
+      await m.finish(tester);
+    });
+
+    testWidgets('while a route is shown, a chip opens nothing', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.rig.backend.onRoute = (to, mode, from) async => MapRoute.fromJson(driveRouteJson(withStop: false));
+      await tester.runAsync(() => m.nav.openDirections(driveDestination));
+      await tester.pump();
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.phase, NavPhase.previewing);
+      expect(m.nav.selected?.name, isNot('Cascade Park'));
       await m.finish(tester);
     });
 

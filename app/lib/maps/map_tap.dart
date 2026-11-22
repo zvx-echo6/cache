@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cache_search/cache_search.dart' show MapPlace;
 
+import 'poi_chips.dart' show poiKindName;
 import 'user_layers.dart' show RepeaterNotebookSource;
 
 /// What a tap on the phone's map can land on, beyond the screen's own pins and lines (notebook pins, repeaters, search results'
@@ -14,7 +15,7 @@ enum TapSource { basemap, imported, overlay }
 
 /// One feature under a tap, as the map's query of rendered features gave it, read into what a card needs.
 class TapFeature {
-  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId});
+  const TapFeature({required this.source, required this.tier, required this.name, required this.kind, required this.lat, required this.lon, this.notebookId, this.poi = false});
 
   final TapSource source;
   final TapTier tier;
@@ -31,6 +32,9 @@ class TapFeature {
 
   /// The Places notebook an imported line or area belongs to (its "Open").
   final String? notebookId;
+
+  /// A public place of the base map's POI layer (a chip), which wins a tap over a town or road name beside it.
+  final bool poi;
 
   bool get named => name != null && name!.isNotEmpty;
 }
@@ -61,7 +65,7 @@ String? featureName(Object? properties) {
 /// Reads one feature of the map's query ([raw], a GeoJSON feature) drawn from [source]. A base-map feature is a label whatever its
 /// geometry (a road's name runs along its line); the others are a line or an area by their geometry. Null for a feature that cannot
 /// be read, a point of an overlay (the map draws none), or a base-map label with no name.
-TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required String kind, required double tapLat, required double tapLon, String? notebookId}) {
+TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required String kind, required double tapLat, required double tapLon, String? notebookId, bool poi = false}) {
   if (raw is! Map) return null;
   final g = raw['geometry'];
   final type = g is Map ? '${g['type']}' : '';
@@ -85,7 +89,11 @@ TapFeature? tapFeatureFrom(Object? raw, {required TapSource source, required Str
       lat = (c[1] as num).toDouble();
     }
   }
-  return TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId);
+  if (poi) {
+    final props = raw['properties'];
+    kind = poiKindName(props is Map ? props['kind'] as String? : null);
+  }
+  return TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId, poi: poi);
 }
 
 /// The base map's label layers in a style ([styleJson], as the screen applied it): its symbol layers drawn from the base map's
@@ -136,11 +144,12 @@ List<String> overlayHitLayers(String styleJson, {required String source}) {
   }
 }
 
-/// The one feature a tap opens among [hits]: a label first, then a line, then an area; within each, a named one first, then the
-/// base map, a file the user imported (drawn above the overlays), an overlay, each in the order the map gave them. Null: none.
+/// The one feature a tap opens among [hits]: a label first (a public place's chip before a town or road name), then a line, then an
+/// area; within each, a named one first, then the base map, a file the user imported (drawn above the overlays), an overlay, each in
+/// the order the map gave them. Null: none. (The user's own pins and routes are asked before any of this, by the screen.)
 TapFeature? pickTapFeature(List<TapFeature> hits) {
   TapFeature? best;
-  int rank(TapFeature f) => f.tier.index * 100 + (f.named ? 0 : 10) + f.source.index;
+  int rank(TapFeature f) => f.tier.index * 100 + (f.poi ? 0 : 20) + (f.named ? 0 : 10) + f.source.index;
   for (final f in hits) {
     if (best == null || rank(f) < rank(best)) best = f;
   }
@@ -173,6 +182,9 @@ MapPlace? matchLabelPlace(TapFeature label, List<MapPlace> candidates, {required
   return best;
 }
 
+/// The `matched` mark of the card of a chip the places data did not have.
+const String kPoiMatched = 'poi';
+
 /// What [f] opens: the matched place of the places data ([match]) for a label, with its details and Directions as a search
 /// result has; else a card naming the feature at its point, so Directions go there. An imported feature's card has Open to its
 /// notebook (and no Save: it is in that notebook already).
@@ -189,6 +201,8 @@ TapChoice tapChoiceFor(TapFeature f, {MapPlace? match}) {
       kind: f.named ? f.kind : '',
       lat: f.lat,
       lon: f.lon,
+      // A chip with no place of the places data: its card says so ([kPoiNoMatch]) instead of being bare.
+      matched: f.poi ? kPoiMatched : '',
     ),
     notebookId: imported ? f.notebookId : null,
   );

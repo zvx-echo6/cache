@@ -91,6 +91,39 @@ void main() {
       expect(find.byKey(const ValueKey('place-directions')), findsOneWidget);
     });
 
+    testWidgets('a long summary is cut to three lines with an ellipsis, and every button still fits on a phone', (tester) async {
+      tester.view.physicalSize = const Size(412, 915) * 2.625;
+      tester.view.devicePixelRatio = 2.625;
+      addTearDown(tester.view.reset);
+      final long = MapPlace(
+        id: 'place:osm:w1', type: 'place', name: 'Shoshone Falls', kind: 'Waterfall', address: 'Twin Falls, ID', lat: 42.6, lon: -114.4, matched: 'name',
+        phone: '+1 208 555 0142', hours: 'Open daily, 6 AM to 10 PM', website: 'https://www.example.org/shoshone-falls', wikipediaTitle: 'Shoshone Falls',
+        summary: List.filled(40, 'Shoshone Falls is a waterfall in the western United States, on the Snake River.').join(' ').substring(0, 367),
+      );
+      await tester.pumpWidget(app(Scaffold(body: Align(alignment: Alignment.bottomCenter, child: PlaceCard(nav: nav, place: long, fmt: const Fmt(UnitSystem.imperial), onClose: () {})))));
+      final t = tester.widget<Text>(find.byKey(const ValueKey('place-card-summary')));
+      expect((t.maxLines, t.overflow), (3, TextOverflow.ellipsis));
+      final lines = tester.getSize(find.byKey(const ValueKey('place-card-summary'))).height / (14 * 1.35);
+      expect(lines, lessThanOrEqualTo(3.05), reason: 'three lines of the summary at most');
+      for (final k in ['place-directions', 'place-save', 'place-add-home']) {
+        final r = tester.getRect(find.byKey(ValueKey(k)));
+        expect(r.bottom, lessThanOrEqualTo(915), reason: '$k is on the screen');
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a short summary and a card without one are as they were; the no-details line is only for a chip with nothing', (tester) async {
+      const short = MapPlace(id: 'place:osm:w2', type: 'place', name: 'Sorrel Bakery', kind: 'Bakery', lat: 42.6, lon: -114.4, matched: 'name', summary: 'A bakery.');
+      await tester.pumpWidget(app(Scaffold(body: PlaceCard(nav: nav, place: short, fmt: const Fmt(UnitSystem.imperial), onClose: () {}))));
+      expect(find.text('A bakery.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('place-card-no-details')), findsNothing);
+      await tester.pumpWidget(app(Scaffold(body: PlaceCard(nav: nav, place: found, fmt: const Fmt(UnitSystem.imperial), onClose: () {}))));
+      expect(find.byKey(const ValueKey('place-card-no-details')), findsNothing);
+      const chip = MapPlace(id: 'loc:42.5,-113.5', type: 'place', name: 'Cascade Park', kind: 'Park', lat: 42.5, lon: -113.5, matched: 'poi');
+      await tester.pumpWidget(app(Scaffold(body: PlaceCard(nav: nav, place: chip, fmt: const Fmt(UnitSystem.imperial), onClose: () {}))));
+      expect(find.text('No other details for this place.'), findsOneWidget);
+    });
+
     testWidgets('a found place still is', (tester) async {
       await tester.pumpWidget(app(Scaffold(body: PlaceCard(nav: nav, place: found, fmt: const Fmt(UnitSystem.imperial), onClose: () {}))));
       expect(find.byKey(const ValueKey('place-save')), findsOneWidget);

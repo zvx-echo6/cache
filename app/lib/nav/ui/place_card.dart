@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../browse/place_about.dart';
+import '../../maps/map_tap.dart' show kPoiMatched;
 import '../../maps/ui/map_widgets.dart';
 import '../../screens/settings/places_page.dart' show confirmRemovePlace;
 import '../../theme.dart';
@@ -102,9 +103,14 @@ class PlaceCard extends StatelessWidget {
                     ),
                 ],
                 if (detail.isNotEmpty) ...[const SizedBox(height: 6), ...detail],
+                if (place.matched == kPoiMatched && detail.isEmpty && place.summary == null) ...[
+                  const SizedBox(height: 8),
+                  Text('No other details for this place.', key: const ValueKey('place-card-no-details'), style: TextStyle(fontSize: 14, color: k.secondary)),
+                ],
                 if (place.summary != null) ...[
                   const SizedBox(height: 8),
-                  Text(aboutSummary(place.summary!), key: const ValueKey('place-card-summary'), style: TextStyle(fontSize: 14, height: 1.35, color: k.text)),
+                  // Three lines; "Read about it" is the way to the whole text, so the card never outgrows its height.
+                  Text(aboutSummary(place.summary!), key: const ValueKey('place-card-summary'), maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, height: 1.35, color: k.text)),
                   if (place.wikipediaTitle != null && about != null)
                     ReadAbout(key: ValueKey('read-about-${place.id}'), about: about!, title: place.wikipediaTitle!)
                   else if (place.wikipediaTitle != null)
