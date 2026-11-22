@@ -539,6 +539,10 @@ void _areaScreenTests() {
     testWidgets('on a style load the Maps screen hides the POI layer, adds every chip, then shows it (the same helper as the place map)', (tester) async {
       final m = _Maps();
       await m.pump(tester);
+      // The chips are drawn with real image encoding, which takes real time.
+      for (var i = 0; i < 40 && !m.camera.styleEvents.contains('visible:pois:true'); i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      }
       final e = m.camera.styleEvents;
       final first = e.indexOf('visible:pois:false'), last = e.lastIndexOf('visible:pois:true');
       expect(first, greaterThanOrEqualTo(0));

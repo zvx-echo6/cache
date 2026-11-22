@@ -44,7 +44,7 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
   @override
   Future<void> forceOnlineMode() async {}
 
-  /// What the screen did to the style's images and layers, in order: 'image:<name>', 'visible:<layer>:<bool>', 'filter:<layer>'.
+  /// What the screen did to the style's images and layers, in order: `image:name`, `visible:layer:flag`, `filter:layer`.
   final List<String> styleEvents = [];
   @override
   Future<void> addImage(
