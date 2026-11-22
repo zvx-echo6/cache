@@ -331,14 +331,13 @@ jobs:
           unzip -p "$aab" base/lib/arm64-v8a/libcache_search.so > "$RUNNER_TEMP/cache-core-check.so"
           LC_ALL=C grep -aFq '.cache-search-index.guard' "$RUNNER_TEMP/cache-core-check.so" || { echo "::error::Crash-safe indexing core is missing"; exit 1; }
           rm -f "$RUNNER_TEMP/cache-core-check.so"
-          # A car build must never reach a track it should not, and a normal build must never carry Android Auto by accident:
-          # the bundle's manifest (protobuf, names as plain text) must declare the car service exactly when android_auto is on.
+          # Every bundle carries Android Auto: the manifest (protobuf, names as plain text) must always declare the car service.
           unzip -p "$aab" base/manifest/AndroidManifest.xml > "$RUNNER_TEMP/manifest-check.pb"
           test -s "$RUNNER_TEMP/manifest-check.pb" || { echo "::error::The bundle has no base/manifest/AndroidManifest.xml"; exit 1; }
           car=$(LC_ALL=C grep -a -c CacheCarAppService "$RUNNER_TEMP/manifest-check.pb" || true)
           rm -f "$RUNNER_TEMP/manifest-check.pb"
           if [[ "$car" -eq 0 ]]; then echo "::error::the bundle's manifest has no CacheCarAppService (Android Auto is always on)"; exit 1; fi
-          echo "Android Auto in the bundle: $([[ "$car" -ne 0 ]] && echo on || echo off) (android_auto input: $ANDROID_AUTO)"
+          echo "Android Auto in the bundle: on (CacheCarAppService declared)"
           signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
           if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
             echo "::error::The bundle is not signed with the upload key (signer $signer)"; exit 1

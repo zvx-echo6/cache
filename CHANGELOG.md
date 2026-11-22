@@ -6,6 +6,13 @@ release notes).
 
 ## Unreleased
 
+## 1.1.0 (build 54, test) - 2026-11-21
+
+Build 53 with the car screens back on.
+
+### Car
+- CarPlay and Android Auto are in every build again: Cache's map, search and directions on the car screen.
+
 ## 1.1.0 (build 53, test) - 2026-11-17
 
 ### Car and Siri
