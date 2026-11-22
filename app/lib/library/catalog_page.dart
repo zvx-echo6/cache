@@ -244,7 +244,7 @@ class CatalogPage extends StatelessWidget {
               if (!nav.compact) const LibraryCrumbs(crumbs: [Crumb('Library', []), Crumb('Catalog')]),
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                child: Text('Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                child: Text(plat.isWeb ? 'Every search index on this device. Pause and Resume are also on the Library\'s indexing line.' : 'Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
               if (indexSchedulerShared case final s? when s.busy)
                 Align(
@@ -262,9 +262,9 @@ class CatalogPage extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
-                    child: d.sources.serverIndexPaused
-                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: () => d.sources.setServerIndexPaused(false))
-                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: () => d.sources.setServerIndexPaused(true)),
+                    child: d.sources.serverIndexPaused || d.sources.serverIndex.pausedAll
+                        ? RowButton(key: const ValueKey('catalog-resume-all'), label: 'Resume', onPressed: d.sources.serverIndex.resumeAll)
+                        : RowButton(key: const ValueKey('catalog-pause-all'), label: 'Pause all', onPressed: d.sources.serverIndex.pauseAll),
                   ),
                 ),
               if (entries.isEmpty) ...[

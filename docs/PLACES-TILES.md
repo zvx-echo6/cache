@@ -61,7 +61,8 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
   `localities`, `localities_ctx`, `addr_streets` and `addresses`), its places and towns, the towns outside it within 25 km
   (`localities_ctx`, used only while their own tile is not on the phone), its streets with house numbers (`addr_streets`),
   the vectors of its notable places and towns (those with a Wikipedia summary, `"{name}. {summary}"`), and how many places
-  of each category and kind it holds (`tile_counts`). Row ids are local, 1 to 2^24 - 1. A tile has no full-text or
+  of each category and kind it holds (`tile_counts`), and the links of the base map's chips to its places (`poi_links`,
+  below). Row ids are local, 1 to 2^24 - 1. A tile has no full-text or
   R-tree index: the phone builds those as it merges.
 - **A street row** is one street within one tile, grouped by the street as the source writes it, the postcode and the
   postal city or town. `street` is the source's form ("Main St") and `street_expanded` the same with its USPS Publication
@@ -87,6 +88,40 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
   The numeric part is the leading digits when they are a plain number (no leading zero) that fits 32 bits; any other
   number ("0", "007", "A12") has numeric part 0 and the whole number as its suffix, so every number reads back exactly as
   written. Units are dropped, and a number that appears twice in a row is kept once, with its first point.
+
+### Chip links (`poi_links`)
+
+The base map (Protomaps v4, layer `pois`) draws a chip for a public place with a name, a `kind` and a point, and no OpenStreetMap
+id. `places_pack poi-link` (RECIPE.md step 10b) matches every chip to the place record of the same place when the tiles are
+built, and writes one row per chip into the tile that holds the record:
+`poi_links(name_norm, kind, lat, lon, source_id)`. `name_norm` is the chip's name lower-cased with every run of characters that
+are not letters or digits made one space (`cache_places::poi::norm_name`); `kind` is the tile's own kind ("attraction", "park");
+`lat`/`lon` is the chip's point as the z15 tile gives it; `source_id` is the record's (`osm:n123`, stable across builds).
+
+A chip links only to a record that comes from OpenStreetMap, has the same normalised name, whose `places.kind` the kind table
+(`places_pack/poi-kinds.tsv`, data between the two schemas) lists for the chip's tile kind, and that is within 25 m (a node: both
+sides carry the node's point) or 2 km (an outline: the base map's label point against the pack's centre of the outline). Chips take
+records nearest first, one chip to one record. Two records of one name and one icon class within 60 m are one place mapped twice
+and are merged into one (the one with most details, filling its gaps from the other); a fuel station and a convenience store of one
+name, or a park and an attraction, stay apart.
+
+The merged database holds the rows with their tile (`poi_links(tile, ...)`, indexed by `(name_norm, kind)`). `cs_map_search` with
+`"poi": {"kind", "name", "lat", "lon"}` looks a tapped chip up: the row with the same normalised name and kind whose stored point is
+nearest the chip's own within 15 m (`poi::LINK_REACH_M`, covering the tile quantisation at the lowest zoom a chip is drawn), then the
+record by its `source_id`. The answer is that one place (`matched` "link"), or no result. Nothing is searched or guessed. A tile
+cut before the links has no table, merges as before, and its chips have no link.
+
+Across basemap updates the key is as stable as the data: a chip keeps its link while its name and kind are unchanged and its point
+moves less than 15 m (a node moves when a mapper moves it; an area's label point when its outline is reshaped). A chip that breaks
+the key (renamed, retagged, moved), or one the pack's build did not see, has no link and opens the "No other details for this place."
+card until the next places build, which reads the basemap of its day.
+
+**Transition fallback, to remove.** The app asks the core whether the places data has links at all (`cs_map_search`'s answer to a
+`poi` probe carries `poi_links`: true once a merged tile that went through `poi-link` is in, false for an older build). Only when
+it is false, a chip is still matched by name and distance (300 m or more, as before) so an old build's chips keep working. When it
+is true the app uses links only and never guesses; a chip with no link gets the "No other details" card. Remove the fallback
+(`maps_screen.dart` `_tapMapFeature` and `chooseMapTap`'s `linksPresent`) once every published places build has links, i.e. once the
+first build made with `poi-link` has been published and the earlier ones are gone from `data.cached.info/places/`.
 
 ## On the device
 

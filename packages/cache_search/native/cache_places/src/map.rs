@@ -70,11 +70,22 @@ pub struct SearchOpts {
     pub vector: Option<(String, Vec<f32>)>,
     /// What the places feed did around `near` just before the search (None when it was not asked).
     pub prepared: Option<PrepareAnswer>,
+    /// A tapped chip of the base map: the answer is the place the build linked it to, never a search.
+    pub poi: Option<PoiProbe>,
+}
+
+/// A chip as the base map's `pois` layer gives it: its tile `kind`, its name and its point.
+#[derive(Debug, Clone)]
+pub struct PoiProbe {
+    pub kind: String,
+    pub name: String,
+    pub lat: f64,
+    pub lon: f64,
 }
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { near: None, limit: 10, meaning: true, vector: None, prepared: None }
+        SearchOpts { near: None, limit: 10, meaning: true, vector: None, prepared: None, poi: None }
     }
 }
 
@@ -498,6 +509,16 @@ impl PlacesCore {
         let mut out = Map::new();
         out.insert("query".into(), json!(q));
         out.insert("near".into(), opts.near.map(|(la, lo)| json!({"lat": la, "lon": lo})).unwrap_or(Value::Null));
+        if let Some(p) = &opts.poi {
+            // A chip: the build's link, looked up by what the tile carries. No link is an empty answer, not a search.
+            let row = packs.iter().find_map(|k| k.poi_link(&p.kind, &p.name, p.lat, p.lon).ok().flatten().map(|r| (k.clone(), r)));
+            out.insert("interpreted".into(), json!({"kind": "poi"}));
+            // Whether the places data has links at all: an old build's has none, and the app then falls back to name and distance.
+            out.insert("poi_links".into(), json!(packs.iter().any(|k| k.has_poi_links())));
+            out.insert("meaning".into(), json!("off"));
+            out.insert("results".into(), json!(row.map(|(k, r)| vec![cand_json(&cand_place(&[k], &r, 1.0, "link"), opts.near, 1.0)]).unwrap_or_default()));
+            return Ok(Value::Object(out));
+        }
         if q.is_empty() {
             out.insert("interpreted".into(), json!({"kind": "empty"}));
             out.insert("meaning".into(), json!("off"));
@@ -847,11 +868,13 @@ fn nearest_of_kind(packs: &[Arc<Pack>], kind: &str, lat: f64, lon: f64, limit: u
     found
 }
 
-/// The request of `cs_map_search`: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?: {"model","vector"}}`.
+/// The request of `cs_map_search`: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?: {"model","vector"},
+/// "poi"?: {"kind","name","lat","lon"}}`. With `poi` the answer is the place the places build linked that chip to (`results` has
+/// that one place with `matched` "link", or nothing when the build has no link for it); `query` is not searched.
 pub fn parse_request(v: &Value) -> Result<(String, SearchOpts), MapError> {
     let o = v.as_object().ok_or_else(|| bad("the request must be a JSON object"))?;
     for k in o.keys() {
-        if !["query", "near", "limit", "meaning", "query_vector"].contains(&k.as_str()) {
+        if !["query", "near", "limit", "meaning", "query_vector", "poi"].contains(&k.as_str()) {
             return Err(bad(format!("{k}: not allowed")));
         }
     }
@@ -879,5 +902,32 @@ pub fn parse_request(v: &Value) -> Result<(String, SearchOpts), MapError> {
             Some((model, vec.ok_or_else(|| bad("query_vector.vector must be an array of numbers"))?))
         }
     };
-    Ok((query, SearchOpts { near, limit, meaning, vector, prepared: None }))
+    let poi = match o.get("poi") {
+        None | Some(Value::Null) => None,
+        Some(p) => Some(PoiProbe {
+            kind: p["kind"].as_str().ok_or_else(|| bad("poi.kind (string) is required"))?.to_string(),
+            name: p["name"].as_str().ok_or_else(|| bad("poi.name (string) is required"))?.to_string(),
+            lat: p["lat"].as_f64().filter(|x| x.abs() <= 90.0).ok_or_else(|| bad("poi.lat must be a number in range"))?,
+            lon: p["lon"].as_f64().filter(|x| x.abs() <= 180.0).ok_or_else(|| bad("poi.lon must be a number in range"))?,
+        }),
+    };
+    Ok((query, SearchOpts { near, limit, meaning, vector, prepared: None, poi }))
+}
+
+#[cfg(test)]
+mod poi_request_tests {
+    use super::*;
+
+    #[test]
+    fn a_chip_request_carries_its_kind_name_and_point_and_nothing_else_is_accepted() {
+        let v = json!({"query": "Shoshone Falls", "limit": 1, "meaning": false, "poi": {"kind": "attraction", "name": "Shoshone Falls", "lat": 42.596, "lon": -114.402}});
+        let (q, o) = parse_request(&v).unwrap();
+        assert_eq!(q, "Shoshone Falls");
+        let p = o.poi.expect("poi");
+        assert_eq!((p.kind.as_str(), p.name.as_str(), p.lat, p.lon), ("attraction", "Shoshone Falls", 42.596, -114.402));
+        assert!(parse_request(&json!({"query": "x"})).unwrap().1.poi.is_none());
+        assert!(parse_request(&json!({"query": "x", "poi": {"kind": "park", "name": "x", "lat": 91.0, "lon": 0.0}})).is_err());
+        assert!(parse_request(&json!({"query": "x", "poi": {"name": "x", "lat": 1.0, "lon": 0.0}})).is_err(), "kind is required");
+        assert!(parse_request(&json!({"query": "x", "other": 1})).is_err());
+    }
 }

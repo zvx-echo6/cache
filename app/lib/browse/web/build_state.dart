@@ -402,6 +402,13 @@ class BuildController extends ChangeNotifier {
 
   Future<void> pause() => _queueCall(api.pause);
   Future<void> resume() => _queueCall(api.resume);
+
+  /// In a browser, set by the server's index progress: Resume for everything the person paused (the build queue and the index queue).
+  /// Unset where there is no index queue (a phone): then it is just [resume].
+  Future<void> Function()? resumeEverything;
+
+  /// What every Resume button for the build queue calls.
+  Future<void> resumeAll() => (resumeEverything ?? resume)();
   Future<void> retry(String itemId) => _queueCall(() => api.retry(itemId));
   Future<void> dismiss(String itemId) => _queueCall(() => api.dismiss(itemId));
 

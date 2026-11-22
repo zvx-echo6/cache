@@ -1,3 +1,5 @@
+import 'dart:ui' show Offset, Rect, Size;
+
 import 'package:cache/maps/area_tap.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/regions/area_lookup.dart';
@@ -10,6 +12,24 @@ RegionRecord _r(String id, String name, String kind, {String? cls, int? pop, dou
     });
 
 void main() {
+  test('the outline is fitted below the search bar and the location box, left of the buttons and above the card', () {
+    const map = Size(412, 915);
+    final header = Rect.fromLTWH(12, 62, 388, 57);
+    final chip = Rect.fromLTWH(12, 130, 180, 55);
+    final buttons = Rect.fromLTWH(352, 130, 48, 110);
+    final panel = Rect.fromLTWH(12, 560, 388, 340);
+    final p = areaFitPadding(map: map, header: header, chip: chip, buttons: buttons, panel: panel);
+    expect(p.top, chip.bottom + 16, reason: 'under the lower of the two top controls');
+    expect(p.bottom, map.height - panel.top + 16);
+    expect(p.right, map.width - buttons.left + 16);
+    expect(p.left, 16);
+    // The header alone, when the location box is not shown; no card yet: half the map.
+    expect(areaFitPadding(map: map, header: header).top, header.bottom + 16);
+    expect(areaFitPadding(map: map, header: header).bottom, map.height * 0.5);
+    // A taller card leaves less room.
+    expect(areaFitPadding(map: map, header: header, chip: chip, panel: panel.shift(const Offset(0, -100))).bottom, greaterThan(p.bottom));
+  });
+
   const imperial = Fmt(UnitSystem.imperial);
   final town = _r('us-id-twin-falls', 'Twin Falls', 'locality', cls: 'city', pop: 49764, area: 50.4);
   final county = _r('us-id-twin-falls-county', 'Twin Falls County', 'county', pop: 82375, area: 4988);

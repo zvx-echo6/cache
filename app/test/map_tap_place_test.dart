@@ -33,7 +33,7 @@ TapFeature _f(TapSource source, TapTier tier, {String? name, String kind = '', d
     TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, notebookId: notebookId);
 
 extension on TapFeature {
-  TapFeature poiCopy() => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, poi: true);
+  TapFeature poiCopy({String rawKind = ''}) => TapFeature(source: source, tier: tier, name: name, kind: kind, lat: lat, lon: lon, poi: true, rawKind: rawKind);
 }
 
 MapPlace _place(String id, String name, double lat, double lon, {String type = 'place', String kind = 'Village'}) =>
@@ -110,6 +110,23 @@ void _pureTests() {
       expect(c.place, same(town));
     });
 
+    test('a chip opens the place it is linked to and is never matched by name and distance; no link is the no-details card', () {
+      final chip = _f(TapSource.basemap, TapTier.label, name: 'Shoshone Falls', kind: 'Landmark', lat: 42.596, lon: -114.402).poiCopy(rawKind: 'attraction');
+      final attraction = _place('place:osm:n1671534021', 'Shoshone Falls', 42.596, -114.402, kind: 'Attraction');
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      // The park is a same-named place 300 m away: the old name-and-distance match could pick it. A chip uses only its link.
+      expect(chooseMapTap([chip], candidates: [park], reachM: 500)!.place.matched, kPoiMatched, reason: 'candidates are not looked at for a chip');
+      expect(chooseMapTap([chip], candidates: [park], linked: attraction, reachM: 500)!.place, same(attraction));
+      expect(chooseMapTap([chip])!.place.id, startsWith('loc:'));
+    });
+
+    test('places data from before the links (old build): a chip is matched by name and distance, as a label is (transition fallback)', () {
+      final chip = _f(TapSource.basemap, TapTier.label, name: 'Shoshone Falls', kind: 'Park', lat: 42.5933, lon: -114.4003).poiCopy(rawKind: 'park');
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      expect(chooseMapTap([chip], candidates: [park], linksPresent: false, reachM: 500)!.place, same(park));
+      expect(chooseMapTap([chip], candidates: [park], linksPresent: true, reachM: 500)!.place.matched, kPoiMatched, reason: 'new data: links only');
+    });
+
     test('no match: the label\'s name at its point, so Directions go there', () {
       final label = _f(TapSource.basemap, TapTier.label, name: 'Larkspur Flats', lat: 42.51, lon: -113.52);
       final c = chooseMapTap([label], candidates: [_place('town:test:x', 'Elsewhere', 42.51, -113.52)])!;
@@ -178,6 +195,8 @@ void _pureTests() {
       expect(chip({'name': 'Chem Mart', 'kind': 'chemist'})?.kind, 'Pharmacy');
       expect(chip({'name': 'X', 'kind': 'church'})?.kind, '');
       expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.poi, isTrue);
+      expect(chip({'name': 'Cascade Park', 'kind': 'park'})?.rawKind, 'park', reason: 'the tile\'s own kind is what its link is looked up by');
+      expect(chip({'name': 'Chem Mart', 'kind': 'chemist'})?.rawKind, 'chemist');
       expect(chip({'kind': 'park'}), isNotNull, reason: 'a chip with no name still opens a card, named by its kind');
       expect(chip({'kind': 'drinking_water'})?.kind, 'Drinking water');
       expect(tapFeatureFrom(raw({'kind': 'park'}), source: TapSource.basemap, kind: '', tapLat: 0, tapLon: 0), isNull, reason: 'a name label with no name is nothing');
@@ -555,6 +574,40 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
+    testWidgets('Back with an area card open closes the card, the outline and the selection and stays on Maps; the next Back is not taken', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(_outlineFeatures(m), 1);
+      expect(await tester.binding.handlePopRoute(), isTrue, reason: 'the screen took Back');
+      await tester.pump();
+      expect(m.nav.selected, isNull);
+      expect(_outlineFeatures(m), 0, reason: 'the outline stays cleared');
+      expect(find.byKey(const ValueKey('place-card-name')), findsNothing);
+      expect(await tester.binding.handlePopRoute(), isFalse, reason: 'with no card open Back is the system\'s: it leaves');
+      await m.finish(tester);
+    });
+
+    testWidgets('Back with a place card (a chip\'s) open closes it; with a route shown it is not taken for the card', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.name, 'Cascade Park');
+      expect(await tester.binding.handlePopRoute(), isTrue);
+      await tester.pump();
+      expect(m.nav.selected, isNull);
+      expect(await tester.binding.handlePopRoute(), isFalse);
+      m.rig.backend.onRoute = (to, mode, from) async => MapRoute.fromJson(driveRouteJson(withStop: false));
+      await tester.runAsync(() => m.nav.openDirections(driveDestination));
+      await tester.pump();
+      expect(m.nav.phase, NavPhase.previewing);
+      expect(await tester.binding.handlePopRoute(), isFalse, reason: 'a route preview is not a card');
+      await m.finish(tester);
+    });
+
     testWidgets('a polygon that is not stored: the card opens, no outline is drawn', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()
@@ -608,21 +661,18 @@ void _screenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('a chip beside a town\'s label opens the chip\'s place, found by its own name', (tester) async {
+    testWidgets('a chip beside a town\'s label opens the chip\'s place, by its link', (tester) async {
       final m = _Maps();
       await m.pump(tester);
       final shop = _place('place:test:s1', 'Sorrel Bakery', 42.5001, -113.5001, kind: 'Bakery');
-      final searched = <String>[];
-      m.rig.backend.onSearch = (q, {near, meaning}) async {
-        searched.add(q);
-        return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [shop]);
-      };
+      m.rig.backend.links[('bakery', 'Sorrel Bakery')] = shop;
       m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       m.camera.pois.add(_raw('Point', [-113.5001, 42.5001], {'name': 'Sorrel Bakery', 'kind': 'bakery'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.camera.asked.any((l) => l.contains('pois')), isTrue, reason: 'the chip layer is asked');
       expect(m.camera.asked.where((l) => l.contains('places_locality')).every((l) => !l.contains('pois')), isTrue, reason: 'on its own, so it can rank first');
-      expect(searched, ['Sorrel Bakery']);
+      expect(m.rig.backend.linkCalls, ['bakery:Sorrel Bakery'], reason: 'the chip\'s kind and name are its key');
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty, reason: 'a chip is never searched for by name');
       expect(m.nav.selected?.id, 'place:test:s1');
       await m.finish(tester);
     });
@@ -641,6 +691,58 @@ void _screenTests() {
       expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
       expect(find.byKey(const ValueKey('place-open-entry')), findsNothing);
+      await m.finish(tester);
+    });
+
+    testWidgets('Shoshone Falls: the attraction chip opens the attraction and the park chip opens the park, each by its link and kind', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final attraction = _place('place:osm:n1671534021', 'Shoshone Falls', 42.596005, -114.402164, kind: 'Attraction');
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      m.rig.backend.links[('attraction', 'Shoshone Falls')] = attraction;
+      m.rig.backend.links[('park', 'Shoshone Falls')] = park;
+      // A search for the name finds the park first: a chip must not be answered by it.
+      m.rig.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [park, attraction]);
+      m.camera.pois.add(_raw('Point', [-114.402164, 42.596005], {'name': 'Shoshone Falls', 'kind': 'attraction'}));
+      await m.tap(tester, 42.596005, -114.402164);
+      expect(m.nav.selected?.id, 'place:osm:n1671534021');
+      expect(m.nav.selected?.kind, 'Attraction');
+      m.camera.pois
+        ..clear()
+        ..add(_raw('Point', [-114.40056, 42.593015], {'name': 'Shoshone Falls', 'kind': 'park'}));
+      await m.tap(tester, 42.593015, -114.40056);
+      expect(m.nav.selected?.id, 'place:osm:w121853382');
+      expect(m.nav.selected?.kind, 'Park');
+      expect(m.rig.backend.linkCalls, ['attraction:Shoshone Falls', 'park:Shoshone Falls']);
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty, reason: 'a chip is never searched for');
+      await m.finish(tester);
+    });
+
+    testWidgets('old places data (no links in it): the chip is matched by name and distance, the old way', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      m.rig.backend.linksPresent = false;
+      m.rig.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [park]);
+      m.camera.pois.add(_raw('Point', [-114.4003, 42.5933], {'name': 'Shoshone Falls', 'kind': 'park'}));
+      await m.tap(tester, 42.5933, -114.4003);
+      expect(m.nav.selected?.id, 'place:osm:w121853382');
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), ['search:Shoshone Falls:k']);
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip with no link opens the no-details card even when a place of that name is near; the link is asked once', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      final park = _place('place:osm:w121853382', 'Shoshone Falls', 42.5933, -114.4003, kind: 'Park');
+      m.rig.backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: [park]);
+      m.camera.pois.add(_raw('Point', [-114.402164, 42.596005], {'name': 'Shoshone Falls', 'kind': 'attraction'}));
+      await m.tap(tester, 42.596005, -114.402164);
+      expect(m.nav.selected?.id, startsWith('loc:'));
+      expect(m.nav.selected?.matched, 'poi');
+      expect(find.text('No other details for this place.'), findsOneWidget);
+      expect(m.rig.backend.linkCalls, ['attraction:Shoshone Falls']);
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty);
       await m.finish(tester);
     });
 
@@ -774,6 +876,7 @@ void _screenTests() {
 }
 
 void main() {
+  areaFitSettle = Duration.zero;
   TestWidgetsFlutterBinding.ensureInitialized();
   _pureTests();
   _screenTests();
