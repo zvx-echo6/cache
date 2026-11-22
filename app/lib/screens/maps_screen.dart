@@ -1842,6 +1842,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// The fill's fade, from the zoom at which the outline fits the room it was fitted into.
   Future<void> _pushAreaFade(MapLibreMapController c) async {
+    if (!mounted) return;
     final a = _area, pad = _areaPad;
     final g = a == null || nav.selected?.id != a.place.id ? null : a.geometry;
     final b = g == null ? null : geometryBounds(g);
