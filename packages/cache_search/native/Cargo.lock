@@ -1224,6 +1224,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_store"
+version = "0.1.0"
+dependencies = [
+ "bao-tree",
+ "blake3",
+ "bytes",
+ "cache_store",
+ "data-encoding",
+ "iroh-blobs",
+ "postcard",
+ "reflink-copy",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cache_sync"
 version = "0.1.0"
 dependencies = [
