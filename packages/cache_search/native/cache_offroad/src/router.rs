@@ -734,7 +734,8 @@ pub fn render_unified_path(path: &[[i64; 3]], total_cost: f64, meta: &GridMeta, 
 }
 
 /// `OffrouteRouter._path_detail`: per-cell detail of a travelled path. step_s[k] is the time from cell k to
-/// k+1 from the kernel's own edge model, or the flat transition cost for a same-cell mode change; a hop the
+/// k+1 from the kernel's own edge model with the search's preferences left out (a trail's friction and a barrier's cost say where to go, not how
+/// fast; the reference server counted them as time, which made a walk along roads about ten times too quick), or the flat transition cost for a same-cell mode change; a hop the
 /// kernel would not take falls back to distance / mode base speed.
 #[allow(clippy::too_many_arguments)]
 pub fn path_detail(
@@ -771,7 +772,7 @@ pub fn path_detail(
                 cost_mult: stack, stride: N_MODES, mode: m0, trail_friction: &trail_friction_stack[m0 * 256..(m0 + 1) * 256],
                 max_grade: mg, speed_function_id: sf, base_speed_kmh: bs,
             };
-            t = crate::astar::movement_edge_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols,
+            t = crate::astar::movement_travel_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols,
                 elevation, &mp, trails, barriers, boundary_id, cell_m, cell_m);
         }
         if !t.is_finite() {

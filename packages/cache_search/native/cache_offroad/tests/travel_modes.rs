@@ -292,3 +292,55 @@ fn the_quad_still_cannot_ride_a_foot_trail() {
     assert!(!quad.ok, "the quad rode a foot trail");
     assert!(env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot)).ok);
 }
+
+/// Km/h a mode travels over a world that is track from edge to edge (the friction that makes the search prefer a track must not make it faster):
+/// the route's own leg times against its distance.
+fn track_speed_kmh(mode: Mode, variant: Variant) -> f64 {
+    let mut world = flat_world();
+    world.trails = vec![15; world.rows * world.cols];
+    let v = Recorder(Mutex::new(vec![]));
+    let mut rr = RouteRequest::new(FROM, TO, RequestMode::Single(mode), Boundary::Pragmatic);
+    rr.variant = variant;
+    rr.collect_detail = true;
+    let r = Router { pack: &world, elevation: &world, valhalla: &v, opts: RouteOptions::default() }.route(&rr).expect("a route");
+    let seconds: f64 = r.detail.as_ref().expect("detail").step_s.iter().sum();
+    r.total_distance_km / (seconds / 3600.0)
+}
+
+#[test]
+fn the_time_of_a_leg_is_the_machines_speed_not_the_searchs_preference_for_tracks() {
+    // flat ground: foot 3 km/h (Tobler), bicycle 7, dirt bike 18, quad 15, side-by-side 15, car 40
+    for (mode, variant, lo, hi) in [
+        (Mode::Foot, Variant::Standard, 2.0, 6.0),
+        (Mode::TwoW, Variant::Standard, 5.0, 12.0),
+        (Mode::TwoW, Variant::Moto, 10.0, 30.0),
+        (Mode::FourW, Variant::Standard, 8.0, 25.0),
+        (Mode::FourW, Variant::Sxs, 8.0, 25.0),
+        (Mode::Vehicle, Variant::Standard, 20.0, 45.0),
+    ] {
+        let k = track_speed_kmh(mode, variant);
+        assert!((lo..=hi).contains(&k), "{mode:?} {variant:?}: {k:.1} km/h, plausible is {lo} to {hi}");
+    }
+}
+
+#[test]
+fn crossing_a_barrier_costs_the_search_but_takes_no_longer() {
+    // pragmatic land access routes across a barrier at 5x the cost; walking across it is as quick as the ground either side
+    let clear = flat_world();
+    let mut walled = flat_world();
+    for c in 0..walled.cols {
+        for r in 290..310 {
+            walled.barriers[r * walled.cols + c] = 255;
+        }
+    }
+    let secs = |w: &MemPack| {
+        let v = Recorder(Mutex::new(vec![]));
+        let mut rr = RouteRequest::new(FROM, TO, RequestMode::Single(Mode::Foot), Boundary::Pragmatic);
+        rr.collect_detail = true;
+        let r = Router { pack: w, elevation: w, valhalla: &v, opts: RouteOptions::default() }.route(&rr).expect("a route");
+        (r.detail.unwrap().step_s.iter().sum::<f64>(), r.total_distance_km)
+    };
+    let (a, da) = secs(&clear);
+    let (b, db) = secs(&walled);
+    assert!(((b / db) - (a / da)).abs() / (a / da) < 0.05, "{a} s over {da} km vs {b} s over {db} km");
+}
