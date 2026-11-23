@@ -5,6 +5,7 @@ import '../weather/catalogue.dart';
 import '../weather/connector.dart';
 import 'credential_strip.dart';
 import 'rate_limiter.dart';
+import 'road_registry.dart';
 import 'road_511_def.dart';
 import 'road_sources.dart';
 import 'wzdx_def.dart';
@@ -131,6 +132,28 @@ class RoadSources {
     final have = records;
     if (have.any((h) => h.kind == r.kind && h.id == r.id)) return;
     settings.setRoadSources([for (final h in [...have, r]) h.toJson()]);
+  }
+
+  /// Adds a registry feed: usable ones only (open, or with a key a person can get on their own, in a WZDx version Cache reads), with an
+  /// address from the registry, stripped of credentials. By-request and unverified feeds are listed but not added. Adds nothing on.
+  AddFeedResult addRegistryFeed(RoadFeed f, RoadRegistry registry) {
+    if (!f.usable) return AddFeedResult.notUsable;
+    final row = registry.feed(f.id);
+    if (row == null || !row.hasAddress) return AddFeedResult.noAddress;
+    final r = RoadSourceRecord.feed(f.id, url: row.url);
+    if (records.any((h) => h.kind == r.kind && h.id == r.id)) return AddFeedResult.already;
+    add(r);
+    return AddFeedResult.added;
+  }
+
+  /// Adds a pasted feed address (credentials removed first); null when the text is not a usable address (see [readPastedFeed]).
+  RoadSourceRecord? addPastedFeed(String text, {String? name}) {
+    final p = readPastedFeed(text);
+    if (!p.ok) return null;
+    final id = _hash(p.url!);
+    final r = RoadSourceRecord.feed(id, url: p.url, name: name?.trim().isEmpty ?? true ? null : name!.trim());
+    add(r);
+    return r;
   }
 
   void remove(RoadSourceRecord r) {
@@ -261,12 +284,15 @@ class RoadSources {
     );
   }
 
+  /// A short stable name for a pasted address: FNV-1a over 32 bits, done in steps a browser's numbers keep exact.
   static String _hash(String s) {
-    var h = 0xcbf29ce484222325;
+    var h = 0x811c9dc5;
     for (final u in s.codeUnits) {
-      h = ((h ^ u) * 0x100000001b3) & 0x7fffffffffffffff;
+      h = (h ^ (u & 0xff)) & 0xffffffff;
+      h = (((h << 24) & 0xffffffff) + h * 0x193) & 0xffffffff;
+      h = (h ^ (u >> 8)) & 0xffffffff;
     }
-    return 'custom-${h.toRadixString(16)}';
+    return 'custom-${h.toRadixString(16).padLeft(8, '0')}';
   }
 
   /// The name a key is kept under now: Idaho's old `idaho511` is the one key of 511.idaho.gov.

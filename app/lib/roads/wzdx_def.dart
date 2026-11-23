@@ -44,7 +44,10 @@ int? updateMinutesOf(String text) {
 
 /// Minutes between downloads: the publisher's rate, never under 30 (the existing work zone source's pace; a feed is statewide and
 /// changes slowly, and the limiter and the quota stay far away).
-int wzdxRefreshMinutes(int? update) => (update ?? 30) < 30 ? 30 : update!;
+int wzdxRefreshMinutes(int? update) {
+  final u = update ?? 30;
+  return u < 30 ? 30 : u;
+}
 
 /// The address with the key's place made (`{api_key}` in the query for a query key); a header key leaves the address as it is.
 String wzdxRequestUrl(WzdxSpec s) {

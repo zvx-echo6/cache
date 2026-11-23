@@ -90,7 +90,7 @@ impl Env {
     fn get(&self) -> Value {
         serde_json::from_str(&self.live.get(&self.req(), &self.places).unwrap()).unwrap()
     }
-    fn tool_ctx<'a>(&'a self) -> ToolCtx<'a> {
+    fn tool_ctx(&self) -> ToolCtx<'_> {
         ToolCtx { location: None, places: &self.places, now: NOW, geocoder: None, live_fetcher: None }
     }
     /// What the model reads: the tool's definition and its result, as text.
