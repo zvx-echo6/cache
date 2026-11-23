@@ -76,6 +76,10 @@ fn road_pieces_of_an_offroad_route_use_the_machines_costing() {
         assert_eq!(c, "auto");
         assert_eq!((o.use_highways, o.use_tracks), (Some(0.0), Some(1.0)));
     }
+    // a road stretch of a single-machine route is a "vehicle" piece (see `pieces_with_road_legs`): the same costing
+    assert_eq!(TravelMode::OffroadMoto.road_costing("vehicle"), TravelMode::OffroadMoto.road_costing("2w"));
+    assert_eq!(TravelMode::OffroadFourW.road_costing("vehicle"), TravelMode::OffroadFourW.road_costing("4w"));
+    assert_eq!(TravelMode::OffroadSxs.road_costing("vehicle"), TravelMode::OffroadSxs.road_costing("4w"));
     // the assistant's off-road modes keep what they had
     assert_eq!(TravelMode::OffroadVehicle.road_costing("4w"), ("auto", CostingOpts::default()));
     assert_eq!(TravelMode::OffroadVehicle.road_costing("2w"), ("bicycle", CostingOpts::default()));
@@ -343,4 +347,74 @@ fn crossing_a_barrier_costs_the_search_but_takes_no_longer() {
     let (a, da) = secs(&clear);
     let (b, db) = secs(&walled);
     assert!(((b / db) - (a / da)).abs() / (a / da) < 0.05, "{a} s over {da} km vs {b} s over {db} km");
+}
+
+/// The road legs Valhalla was asked for: not the plain `auto` route the search itself asks for to find where the surface changes.
+fn road_leg_calls(v: &Recorder) -> Vec<(String, CostingOpts)> {
+    v.0.lock().unwrap().iter().filter(|c| **c != ("auto".to_string(), CostingOpts::default())).cloned().collect()
+}
+
+/// A world with a road at each end (a stretch of road, 40 cells, about 570 m, from each point) and open ground between.
+fn roads_at_both_ends() -> MemPack {
+    let mut world = flat_world();
+    let (s, e) = (cell_of(&world, FROM), cell_of(&world, TO));
+    let cols = world.cols;
+    for k in 0..40 {
+        world.trails[s + k] = 5; // east along the start's row
+        world.trails[e + k * cols] = 5; // south along the end's column, away from the end
+    }
+    world
+}
+
+/// Road stretches of a dirt bike, quad or side-by-side route are Valhalla legs, with the machine's own costing; the stretch between them is
+/// off-road with the machine's own profile.
+#[test]
+fn road_stretches_of_an_offroad_route_are_valhalla_legs() {
+    let world = roads_at_both_ends();
+    for (mode, costing, opts) in [
+        (TravelMode::OffroadMoto, "motorcycle", CostingOpts { use_trails: Some(1.0), ..Default::default() }),
+        (TravelMode::OffroadFourW, "auto", CostingOpts { use_highways: Some(0.0), use_tracks: Some(1.0), ..Default::default() }),
+        (TravelMode::OffroadSxs, "auto", CostingOpts { use_highways: Some(0.0), use_tracks: Some(1.0), ..Default::default() }),
+    ] {
+        let v = Recorder(Mutex::new(vec![]));
+        let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, mode));
+        assert!(d.ok, "{mode:?}: {:?}", d.errors);
+        let calls = road_leg_calls(&v);
+        assert!(calls.len() >= 2, "{mode:?}: Valhalla was asked for {} road legs", calls.len());
+        assert!(calls.iter().all(|c| c.0 == costing && c.1 == opts), "{mode:?}: {calls:?}");
+        // road leg, off-road middle, road leg (a few cells of off-road at either end are where the point is not quite on the road)
+        let kinds: Vec<bool> = d.steps.iter().map(|s| s.kind.starts_with("offroad")).collect();
+        let first_road = kinds.iter().position(|o| !o).expect("a road leg");
+        let last_road = kinds.iter().rposition(|o| !o).unwrap();
+        assert!(kinds[first_road..last_road].contains(&true), "{mode:?}: off-road between the two road legs: {:?}", d.steps.iter().map(|s| &s.kind).collect::<Vec<_>>());
+        let road_steps = kinds.iter().filter(|o| !**o).count();
+        assert!(road_steps >= 2, "{mode:?}");
+        // and the off-road middle is the machine's own
+        let tag = if mode == TravelMode::OffroadMoto { "2w" } else { "4w" };
+        assert!(d.steps.iter().filter(|s| s.kind.starts_with("offroad")).all(|s| s.mode.as_deref() == Some(tag)), "{mode:?}");
+    }
+}
+
+/// A short stretch of road (a driveway, a crossing) stays part of the off-road route: Valhalla is not asked for it.
+#[test]
+fn a_short_stretch_of_road_is_not_a_leg() {
+    let mut world = flat_world();
+    let s = cell_of(&world, FROM);
+    for k in 0..6 {
+        world.trails[s + k] = 5;
+    }
+    let v = Recorder(Mutex::new(vec![]));
+    let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadMoto));
+    assert!(d.ok, "{:?}", d.errors);
+    assert!(road_leg_calls(&v).is_empty(), "no road leg for 80 m of road");
+}
+
+/// The assistant's off-road modes are as they were: no road legs from a single-machine route.
+#[test]
+fn the_assistants_off_road_modes_get_no_road_legs_from_the_trail_cells() {
+    let world = roads_at_both_ends();
+    let v = Recorder(Mutex::new(vec![]));
+    let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot));
+    assert!(d.ok, "{:?}", d.errors);
+    assert!(road_leg_calls(&v).is_empty());
 }

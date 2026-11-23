@@ -110,13 +110,21 @@ impl TravelMode {
             TravelMode::OffroadFoot | TravelMode::OffroadVehicle | TravelMode::OffroadMoto | TravelMode::OffroadFourW | TravelMode::OffroadSxs
         )
     }
+    /// The pieces of a router result: for the dirt bike, quad and side-by-side (one machine over the whole trip), the road stretches are
+    /// Valhalla legs ([`pieces_with_road_legs`]); every other mode as the reference server does it.
+    pub fn pieces(self, result: &crate::router::RouteResult) -> Vec<Piece> {
+        match self {
+            TravelMode::OffroadMoto | TravelMode::OffroadFourW | TravelMode::OffroadSxs => pieces_with_road_legs(result, ROAD_LEG_MIN_M),
+            _ => pieces_from_result(result),
+        }
+    }
     /// The Valhalla costing and options for a road piece of an off-road route travelled in the router mode `piece_mode`
     /// ("foot", "2w", "4w", "vehicle"): the dirt bike rides roads with `motorcycle` costing preferring trails; the quad and the
     /// side-by-side drive with highways avoided and tracks preferred; the other off-road modes are as they always were.
     pub fn road_costing(self, piece_mode: &str) -> (&'static str, CostingOpts) {
         match (self, piece_mode) {
-            (TravelMode::OffroadMoto, "2w") => ("motorcycle", CostingOpts { use_trails: Some(1.0), ..Default::default() }),
-            (TravelMode::OffroadFourW | TravelMode::OffroadSxs, "4w") => ("auto", CostingOpts { use_highways: Some(0.0), use_tracks: Some(1.0), ..Default::default() }),
+            (TravelMode::OffroadMoto, "vehicle" | "2w") => ("motorcycle", CostingOpts { use_trails: Some(1.0), ..Default::default() }),
+            (TravelMode::OffroadFourW | TravelMode::OffroadSxs, "vehicle" | "4w") => ("auto", CostingOpts { use_highways: Some(0.0), use_tracks: Some(1.0), ..Default::default() }),
             (_, "vehicle" | "4w") => ("auto", CostingOpts::default()),
             (_, "foot") => ("pedestrian", CostingOpts::default()),
             (_, "2w") => ("bicycle", CostingOpts::default()),
@@ -498,7 +506,7 @@ impl Env<'_> {
 
     fn last_mile(&self, a: (f64, f64), b: (f64, f64), req: &DirectionsRequest, after_road: bool, from_cat: Option<&String>, to_cat: Option<&String>) -> ADirResult<OffroadPiece> {
         let result = self.run_offroad_router(a, b, req, from_cat, to_cat).map_err(|e| Self::offroad_error(&e))?;
-        let mut pieces = pieces_from_result(&result);
+        let mut pieces = req.mode.pieces(&result);
         if after_road {
             if let Some(p) = pieces.first_mut() {
                 if let PieceKind::Offroad { after_switch } = &mut p.kind {
@@ -526,7 +534,7 @@ impl Env<'_> {
             Ok(r) => r,
             Err(e) => return self.fail(req, rid, Self::offroad_error(&e)),
         };
-        let pieces = pieces_from_result(&result);
+        let pieces = req.mode.pieces(&result);
         let asm = match self.assemble_offroad(&pieces, req) {
             Ok(a) => a,
             Err(e) => return self.fail(req, rid, e),
