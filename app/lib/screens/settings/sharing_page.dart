@@ -15,6 +15,7 @@ import '../../theme.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
 import '../../update/update_ui.dart' show updateCacheSnackAction;
+import '../../platform/device_lock.dart';
 import '../../platform/share_or_copy.dart' show shareOrCopy;
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
@@ -709,9 +710,16 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
     if (name != null && name.isNotEmpty && name != now) await _run(() => s.renamePeer(widget.peer, name));
   }
 
-  /// Both Unlink controls (the row and the button for a device never reached) ask once first.
+  /// Both Unlink controls (the row and the button for a device never reached) ask once first, then for the
+  /// phone's own screen lock (with none set, the confirm alone is enough).
   Future<void> _unlink(String name) async {
     if (!await confirmUnlink(context, name)) return;
+    final lock = await DeviceLock.confirm(title: 'Unlink $name?', description: "Confirm it's you to unlink this device.");
+    if (!mounted) return;
+    if (lock == DeviceLockResult.cancelled) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Not unlinked')));
+      return;
+    }
     await _run(() async {
       await s.unlink(widget.peer);
       if (mounted) Navigator.of(context).pop();
