@@ -23,6 +23,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - Other map layers in the Cache catalog, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
 - Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own license (Wikipedia and most others: CC BY-SA), which the file states.
 - PeerTube: videos from the PeerTube sites you connect. Each video keeps the license its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
+- BIP-39 English word list: the 2,048 words Cache shows as the three words when two devices link nearby (vendored as a text file in the Reticulum crate). MIT License, per the BIP's own copyright statement (BIP-0039, Marek Palatinus, Pavol Rusnak, Aaron Voisine, Sean Bowe). Taken from github.com/bitcoin/bips, bip-0039/english.txt, repository commit fdcd8024595bc1e97db73883e716dbb91627c371. https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 
 ## Native libraries and tools
 

@@ -31,6 +31,7 @@ pub mod blobs;
 pub mod rnode;
 #[cfg(feature = "rnode")]
 pub mod standin;
+pub mod pair_core;
 
 /// Cache's Reticulum destination name: `cache.sync.v1`.
 pub const APP_NAME: &str = "cache";
