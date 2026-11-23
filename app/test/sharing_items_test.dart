@@ -514,4 +514,49 @@ void main() {
     await settleCalls(tester, () => r.calls('set_off').length > before);
     expect((r.calls('set_off').last['off'] as List), contains('Journal'));
   });
+
+  testWidgets('Sync now says what happened: nothing shared, up to date, or syncing', (tester) async {
+    final r = await tester.runAsync(_rig);
+    final s = r!.make();
+    await tester.runAsync(s.setUp);
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch, 'via': 'direct', 'error': null});
+    await tester.runAsync(s.refresh);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
+    await tester.pump();
+
+    Future<void> tapAndRead(Finder f) async {
+      await tester.tap(f);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+
+    // Nothing is shared with anyone: every Sync now says so, on the main page and on the device's page.
+    await tapAndRead(find.byKey(const ValueKey('sync-all')));
+    expect(find.text('Nothing is shared yet'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('peer-p1')));
+    await tester.pumpAndSettle();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    expect(find.text('Nothing is shared yet'), findsOneWidget);
+    expect(r.calls('sync_now').last, {'peer': 'p1'}, reason: 'the sync still goes ahead');
+
+    // Shared, and nothing new on the other device.
+    await tester.runAsync(() => s.setShared(r.kind('models'), true));
+    await tester.runAsync(s.refresh);
+    await tester.pump();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    expect(find.text('Up to date'), findsOneWidget);
+    expect(find.text('Nothing is shared yet'), findsNothing);
+
+    // Something to fetch from the other device: the existing line.
+    r.sync.shares.first['pending_files'] = 2;
+    await tester.runAsync(s.refresh);
+    await tester.pump();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    expect(find.text('Syncing with Desk'), findsOneWidget);
+    expect(find.text('Up to date'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    s.dispose();
+    await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
 }

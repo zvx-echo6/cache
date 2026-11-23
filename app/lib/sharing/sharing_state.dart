@@ -362,6 +362,20 @@ class SharingState extends ChangeNotifier {
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
 
+  /// What to tell the person right after a Sync now, from the last status read: nothing shared in [shareIds] (every folder when
+  /// null, only those shared with [peer] when given); something still to fetch or a transfer running (then [working], the line
+  /// the page already showed); or nothing new ("Up to date").
+  String syncResult({Iterable<String>? shareIds, String? peer, required String working}) {
+    final ids = shareIds?.toSet();
+    final scoped = [
+      for (final sh in shares)
+        if ((ids == null || ids.contains(sh['id'])) && (peer == null || sh['with'] is! List || (sh['with'] as List).contains(peer))) sh,
+    ];
+    if (scoped.isEmpty) return 'Nothing is shared yet';
+    final pending = scoped.any((sh) => ((sh['pending_files'] as num?) ?? 0) > 0);
+    return pending || transfer != null ? working : 'Up to date';
+  }
+
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
   /// stops sharing it, and the files stay.
   Future<void> setShared(DataKind k, bool on) => _driver.setShared(k, on);
