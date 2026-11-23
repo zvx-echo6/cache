@@ -1,7 +1,6 @@
 # Guide labels that are not in this branch's app yet, one per line. ci_check.py lets these pass.
 #
 # Catalogue source titles: the app shows them from the published connector catalogue, so they are data, not app text.
-Idaho 511 winter road conditions
 Traffic flow at the place (TomTom)
 
 # Notebook template names: the app shows them from assets/notebook/templates.json (data, like the catalogue titles above).

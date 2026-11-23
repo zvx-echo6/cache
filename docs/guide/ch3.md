@@ -33,8 +33,8 @@ This page sets your model, web search, location and chats.
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
 2. Use a row:
    - "Model": tap it to open the Models screen. It shows the loaded model and its size, or "No model chosen".
-   - "Search service": tap "Set up" (or "Change") to add, replace or remove the Kagi key.
-   - "Search the web when online": lets the assistant search the web. It needs a search service first.
+   - "Kagi API key": tap it to open "Settings" > "API keys" at Kagi, where you add, replace or remove the key.
+   - "Search the web when online": lets the assistant search the web. It works with or without a key; with no key, Ask uses your offline sources.
    - "Use my location": see below.
 
 To get a Kagi key, see Web search with Kagi in chapter 4.
@@ -99,7 +99,7 @@ Each row says what the source gives and who provides it. Tap a row to open the s
 
 The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Under them is "Your own", with the sources you added, and at the bottom "Add your own source".
 
-- If the row has a "Get key" button, the source needs a free key. See Keys for data sources.
+- A source that needs a key has a key row in "Settings" > "Maps" or on its own page. Turning it on without a key is fine: it downloads nothing until you add the key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.
 
 Which places the data covers is set under "What weather watches" at the top of this page. See What weather watches.
@@ -125,11 +125,13 @@ Some sources need your own free key from the provider. The key goes on the sourc
 
 ![The key sheet](shot:key-sheet)
 
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and find the source.
-2. Tap "Get key" on its row.
-3. Tap "Get a key from [provider]" and follow their steps.
-4. Copy the key, come back, and paste it.
-5. Tap "Check and save".
+1. Go to "Settings" > "API keys". "Your keys" are saved; "Keys Cache can use" are not set yet.
+2. Tap the provider's row to open it, then tap "Add key". (A source's page and "Settings" > "Maps" have a plain row for its key that opens the same place.)
+3. Tap "Get a key from [provider]" and follow the numbered steps.
+4. Copy the key, come back, and paste it (or tap "Paste").
+5. Tap "Check and save". Saving turns nothing on.
+
+An open row also has "Replace", "Test key" (one request from your account), Used by, Shared with, About and "Remove the key". Removing a key turns nothing off; the features go back to the data on this device.
 
 Cache checks the key with one real download. If it works, the key is saved and the source turns on.
 

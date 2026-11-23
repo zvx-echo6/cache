@@ -11,27 +11,8 @@ import '../answer_reports_ui.dart';
 import '../history_drawer.dart';
 import '../models_screen.dart';
 import 'deps.dart';
-import 'key_sheet.dart';
+import 'api_keys_page.dart';
 import 'widgets.dart';
-import '../../layout/adaptive.dart' show showFittedSheet;
-
-/// Opens the Add a key sheet for web search (Kagi) and says so when the key was saved and web search is on. Also used by the Web search row
-/// of Weather and alerts.
-Future<void> setUpWebSearch(BuildContext context, SettingsDeps deps) async {
-  final saved = await showAddKeySheet(
-    context,
-    title: 'Web search',
-    gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
-        'It is a paid service and you need your own key.',
-    getKeyLabel: 'Get a key from Kagi',
-    getKeyUrl: 'https://kagi.com/api/keys',
-    steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
-    onSave: deps.hub.webSearch.saveKey,
-    openUrl: deps.hub.openUrl,
-    savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
-  );
-  if (saved == true && context.mounted) say(context, 'Web search is on');
-}
 
 /// Settings > Assistant: the model, the web search service and its switch, and the saved conversations.
 class AssistantPage extends StatelessWidget {
@@ -58,56 +39,6 @@ class AssistantPage extends StatelessWidget {
     if (ok != true || !context.mounted) return;
     deps.chat.deleteAllConversations();
     say(context, 'All conversations deleted');
-  }
-
-  Future<void> _setUp(BuildContext context) => setUpWebSearch(context, deps);
-
-  Future<void> _manage(BuildContext context) async {
-    final choice = await showFittedSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              key: const ValueKey('replace-key'),
-              minTileHeight: 56,
-              leading: const Icon(Icons.vpn_key_outlined),
-              title: const Text('Replace the key', style: TextStyle(fontSize: 18)),
-              onTap: () => Navigator.pop(ctx, 'replace'),
-            ),
-            ListTile(
-              key: const ValueKey('remove-key'),
-              minTileHeight: 56,
-              leading: Icon(Icons.delete_outline, color: ctx.t.emergency),
-              title: Text('Remove the key', style: TextStyle(fontSize: 18, color: ctx.t.emergency)),
-              onTap: () => Navigator.pop(ctx, 'remove'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted || choice == null) return;
-    if (choice == 'replace') {
-      await _setUp(context);
-    } else {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Remove the Kagi key?'),
-          content: const Text('Web search turns off. You can add a key again later.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-            TextButton(key: const ValueKey('confirm-remove-key'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
-          ],
-        ),
-      );
-      if (ok == true) {
-        await deps.hub.webSearch.removeKey();
-        if (context.mounted) say(context, 'Key removed');
-      }
-    }
   }
 
   /// A reported answer's row: the chat it came from, shown in Ask (a chat that was deleted since says so).
@@ -175,27 +106,13 @@ class AssistantPage extends StatelessWidget {
             SettingsGroup(
               label: 'Web search',
               rows: [
-                SettingsRow(
-                  title: 'Search service',
-                  status: web.hasKey
-                      ? joinParts(const [
-                          [Part('Set up', Tone.ok)],
-                          [Part('Kagi key saved on this device')],
-                        ])
-                      : joinParts(const [
-                          [Part('Not set up', Tone.warn)],
-                          [Part('Kagi, paid, your own key')],
-                        ]),
-                  trailing: web.hasKey
-                      ? RowButton(label: 'Change', onPressed: () => _manage(context))
-                      : RowButton(label: 'Set up', onPressed: () => _setUp(context)),
-                ),
                 SwitchRow(
                   title: 'Search the web when online',
-                  status: web.hasKey ? null : const [Part('Set up a search service to turn this on')],
-                  value: web.active,
-                  onChanged: web.hasKey ? (v) => web.setEnabled(v) : null,
+                  status: const [Part('Kagi searches the web for the assistant')],
+                  value: web.settings.webSearchOn,
+                  onChanged: (v) => web.setEnabled(v),
                 ),
+                ApiKeyShortcutRow(deps: deps, providerId: 'kagi'),
               ],
             ),
             SettingsGroup(label: 'Location', rows: [UseMyLocationRow(location: deps.location)]),

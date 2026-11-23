@@ -9,6 +9,7 @@ import 'package:cache/history/conversation_store.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/roads/road_state.dart';
 import 'package:cache/screens/models_screen.dart';
 import 'package:cache/screens/settings/deps.dart';
 import 'package:cache/screens/videos/library_screen.dart' as videos show LibraryScreen;
@@ -159,6 +160,8 @@ class SettingsRig {
     // Layer definitions as the published catalogue brings them, on top of the test catalogue (see TestLayerEngine.published).
     List<Map<String, dynamic>> publishedLayers = const [],
     AppState Function(Directory settingsDir, Directory modelsDir)? appFactory,
+    // The road sources (511 road events, WZDx road work), made from the data file in the assets.
+    bool roadSources = false,
   }) async {
     tester.view.physicalSize = const Size(1080, 5400);
     tester.view.devicePixelRatio = 3;
@@ -233,6 +236,7 @@ class SettingsRig {
       builtIns: () async => builtInDefinitions(),
       position: () => r.here,
       regions: () => r.regionList,
+      roads: roadSources ? RoadSources(settings: r.settings, loadShipped: () async => File('assets/roads/road_sources.json').readAsString()) : null,
       fetch: r.web.fetch,
       ownFetch: r.web.tryFetch,
       clock: () => r.clock,

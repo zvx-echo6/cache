@@ -96,6 +96,7 @@ class AppSettings extends ChangeNotifier {
   Set<String> _defaultsSeen = {};
   String? _catalogueUrl;
   List<String> _extraCatalogues = [];
+  List<Map<String, dynamic>> _roadSources = [];
   AppFs? _fs;
 
   /// Which alerts near the person's places pop up.
@@ -129,6 +130,11 @@ class AppSettings extends ChangeNotifier {
   /// The live data sources that are switched on (weather, alerts, fires...), by source id. Nothing is downloaded for a source that
   /// is not here. A source and the built-in one it replaces (see liveReplaces in weather/catalogue.dart) are on or off together.
   Set<String> get liveSourcesOn => Set.unmodifiable(_liveOn);
+
+  /// The road sources the person added or that came from the Idaho 511 move (roads/road_state.dart): `{"k": "511", "id": host}` or
+  /// `{"k": "wzdx", "id": feed id, "url": address without credentials}`. A source's switch is by the ids of its connectors, in
+  /// [liveSourcesOn].
+  List<Map<String, dynamic>> get roadSources => List.unmodifiable(_roadSources);
 
   /// The places weather, alerts and fires are kept for: [kWatchHere] ("Where I am"), `place:<key>` (a saved place) or `region:<name>`
   /// (a downloaded region). "Where I am" is watched until the person unchecks it.
@@ -179,7 +185,7 @@ class AppSettings extends ChangeNotifier {
 
   static const Set<String> _known = {
     'popUpFor', 'alertPopups', 'toldNoPopUps', 'quiet', 'mobileForDownloads', 'indexingSpeed', 'webSearchOn', 'liveSourcesOn', 'watchedPlaces',
-    'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues', 'carSeen', 'carVoiceCardDone',
+    'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues', 'carSeen', 'carVoiceCardDone', 'roadSources',
   };
 
   /// Each setting is read on its own: one that cannot be read keeps its default and the rest are still read (one bad value used
@@ -223,6 +229,7 @@ class AppSettings extends ChangeNotifier {
     each(() => _carSeen = j['carSeen'] == true);
     each(() => _carVoiceCardDone = j['carVoiceCardDone'] == true);
     each(() => _liveOn = _strings(j['liveSourcesOn']).toSet());
+    each(() => _roadSources = [for (final m in (j['roadSources'] is List ? j['roadSources'] as List : const [])) if (m is Map) m.cast<String, dynamic>()]);
     each(() {
       final ww = j['weatherWatch'];
       if (ww is Map && ww['format'] == kWeatherWatchFormat) {
@@ -277,6 +284,7 @@ class AppSettings extends ChangeNotifier {
         if (_defaultsSeen.isNotEmpty) 'liveDefaultsSeen': _defaultsSeen.toList()..sort(),
         'catalogueUrl': _catalogueUrl,
         'extraCatalogues': _extraCatalogues,
+        if (_roadSources.isNotEmpty) 'roadSources': _roadSources,
       }));
     } catch (_) {}
   }
@@ -365,6 +373,13 @@ class AppSettings extends ChangeNotifier {
     final next = {for (final id in _watched) if (!id.startsWith(prefix)) id, for (final id in ids) if (id.startsWith(prefix)) id};
     if (next.length == _watched.length && next.containsAll(_watched)) return;
     _watched = next;
+    _save();
+  }
+
+  /// Replaces the road sources list (roads/road_state.dart keeps it).
+  void setRoadSources(List<Map<String, dynamic>> next) {
+    if (jsonEncode(next) == jsonEncode(_roadSources)) return;
+    _roadSources = [for (final m in next) Map<String, dynamic>.of(m)];
     _save();
   }
 

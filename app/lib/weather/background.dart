@@ -7,6 +7,9 @@ import '../app_fs.dart';
 import '../background/background_tasks.dart';
 
 import '../maps/layers/starter_defs.dart' show readLiveSourceAssets;
+import 'package:flutter/services.dart' show rootBundle;
+import '../roads/road_sources.dart' show kRoadSourcesAsset;
+import '../roads/road_state.dart';
 import '../search/core_config.dart';
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
@@ -117,6 +120,7 @@ Future<void> runBackgroundUpdate({bool onlyIfDue = false}) async {
       builtIns: readLiveSourceAssets,
       position: () => last.here,
       regions: () => last.regions,
+      roads: RoadSources(settings: settings, loadShipped: () => rootBundle.loadString(kRoadSourcesAsset)),
       notifier: LocalAlertNotifier.instance,
       told: ToldStore(File('${support.path}/alerts_told.json')),
     )..placeAlerts = PlaceAlerts(() async => File('${support.path}/$kPlaceAlertsFile'));

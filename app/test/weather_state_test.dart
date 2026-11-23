@@ -15,6 +15,11 @@ import 'package:cache/weather/own_source.dart';
 import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/roads/rate_limiter.dart';
+import 'package:cache/roads/road_dedupe.dart';
+import 'package:cache/roads/road_geo.dart';
+import 'package:cache/roads/road_events_state.dart';
+import 'package:cache/roads/road_state.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_files.dart';
 import 'package:cache/weather/weather_state.dart';
@@ -37,13 +42,14 @@ class Harness {
   late FakeLiveCore core;
   late FakeWeb web;
   late WeatherState weather;
+  RoadSources? roads;
   Position? here = (lat: 42.54, lon: -113.79);
   DateTime clock = DateTime(2026, 10, 26, 12, 0);
   List<WatchRegion> regions = [];
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true, bool roadSources = false, Future<void> Function(Harness h)? before}) async {
     final h = Harness();
     h.withBuiltIns = withBuiltIns;
     h.browser = browser;
@@ -57,7 +63,11 @@ class Harness {
     h.secrets = again?.secrets ?? MemoryTokenStore();
     h.core = FakeLiveCore(h.liveDir);
     h.web = FakeWeb();
+    if (roadSources) {
+      h.roads = RoadSources(settings: h.settings, loadShipped: () async => File('assets/roads/road_sources.json').readAsString(), limiter: HostRateLimiter(clock: () => h.clock));
+    }
     if (serve) h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+    await before?.call(h);
     h.weather = h.build();
     if (start) {
       await h.weather.start();
@@ -104,6 +114,7 @@ class Harness {
     builtIns: () async => withBuiltIns ? builtInDefinitions() : [],
     position: () => here,
     regions: () => regions,
+    roads: roads,
     fetch: web.fetch,
     ownFetch: web.tryFetch,
     clock: () => clock,
@@ -696,7 +707,7 @@ void main() {
     test('a key the provider refuses is not saved, and the words never repeat it', () async {
       h = await Harness.create();
       final firms = h.weather.sourceById('firms-viirs-near')!;
-      h.core.previewError = const CacheSearchException('key_missing', 'web search key rejected');
+      h.core.previewError = const CacheSearchException('key_missing', 'That source isn\'t available right now.');
       final r = await h.weather.saveKey(firms, secret);
       expect(r.ok, isFalse);
       expect(r.message, "NASA FIRMS didn't accept this key. Check you copied all of it.");
@@ -709,7 +720,7 @@ void main() {
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 503');
       expect((await h.weather.saveKey(firms, secret)).message, allOf(contains('had a problem'), isNot(contains('HTTP'))));
       h.core.previewError = const CacheSearchException('fetch_failed', 'Dns: failed');
-      expect((await h.weather.saveKey(firms, secret)).message, contains("Couldn't reach NASA FIRMS"));
+      expect((await h.weather.saveKey(firms, secret)).message, contains("Can't reach NASA FIRMS"));
       h.core.previewError = null;
       h.core.previewResult = {'valid': true, 'mapping_error': {'code': 'bad_response', 'message': 'x'}};
       expect((await h.weather.saveKey(firms, secret)).ok, isFalse);
@@ -747,7 +758,7 @@ void main() {
       expect(h.core.everythingSeen(), isNot(contains(secret)));
       // the fake core refuses as the real one does when it holds no key
       h.core.keys.remove('firms-viirs-near');
-      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Current location failed: needs a key');
+      expect((await h.weather.updateNow()).failures.single, "NASA FIRMS for Current location failed: couldn't update", reason: 'never "needs a key"');
     });
 
     test('one key serves every source that uses it', () async {
@@ -759,7 +770,7 @@ void main() {
       expect(h.weather.sourcesUsingKey('idaho511').length, 2);
     });
 
-    test('replacing a key does not switch anything on; removing one forgets it everywhere and switches its sources off', () async {
+    test('replacing a key does not switch anything on; removing one forgets it everywhere and turns nothing off', () async {
       h = await Harness.create();
       final firms = h.weather.sourceById('firms-viirs-near')!;
       await h.weather.saveKey(firms, secret);
@@ -772,7 +783,109 @@ void main() {
       expect(h.secrets.values, isEmpty);
       expect(h.core.keys['firms-viirs-near'], isNull);
       expect(h.weather.hasKey('firms'), isFalse);
-      expect(h.weather.isOn('firms-viirs-near'), isFalse);
+      expect(h.weather.isOn('firms-viirs-near'), isTrue, reason: 'removing a key turns nothing off');
+    });
+  });
+
+  group('road sources', () {
+    test('the Idaho sources and key move to the one Idaho 511 source at start; the catalogue copies are not listed again', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'wzdx-idaho'}, true);
+        },
+      );
+      expect(h.weather.hasKey('road511.511.idaho.gov'), isTrue, reason: 'no re-entry');
+      expect(h.secrets.values['live.key.road511.511.idaho.gov'], 'IDAHO-KEY');
+      final ev = h.weather.sourceById('idaho511-events')!;
+      expect(ev.origin.catalogueId, 'roads');
+      expect(ev.keyAlias, 'road511.511.idaho.gov');
+      expect(h.weather.sources.where((c) => c.id == 'idaho511-events').length, 1);
+      expect(h.weather.sourceById('wzdx-idaho')!.origin.catalogueId, 'roads');
+      expect(h.weather.isOn('idaho511-events'), isTrue);
+      expect(h.weather.isOn('idaho511-winter-roads'), isFalse, reason: 'what was off stays off');
+      // the fake core is handed the one key for both
+      expect(h.core.keys['idaho511-events'], 'IDAHO-KEY');
+      expect(h.core.keys['idaho511-winter-roads'], 'IDAHO-KEY');
+      // a second start changes nothing
+      final records = h.settings.roadSources.length;
+      final again = await Harness.create(again: h, roadSources: true);
+      expect(again.settings.roadSources.length, records);
+      expect(again.weather.sources.where((c) => c.id == 'idaho511-events').length, 1);
+      again.weather.dispose();
+    });
+
+    test('a download of a road source goes through its site\'s limiter; one answered from the stored copy gives the call back', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'idaho511-winter-roads'}, true);
+        },
+      );
+      await h.weather.updateNow();
+      expect(h.roads!.limiter.used('511.idaho.gov'), 2, reason: 'events and conditions share the one budget');
+      h.core.fetchedNew = false;
+      await h.weather.updateNow(force: true);
+      expect(h.roads!.limiter.used('511.idaho.gov'), 2, reason: 'nothing new was downloaded');
+    });
+
+    test('the map reads what is stored: 511 events and WZDx zones, once each, the same work zone once, conditions not drawn', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'idaho511-winter-roads', 'wzdx-idaho'}, true);
+        },
+      );
+      const line = 'kabiGpg}dU?etBXqYVaG|@cL`@gD';
+      Map<String, dynamic> stored(String source, List<Map<String, dynamic>> items, {bool expired = false}) => {
+        'age': expired ? '5 hours old' : '40 minutes old',
+        'age_seconds': expired ? 18000 : 2400,
+        'fetched_at': '2026-10-26T11:00:00-06:00',
+        'expired': expired,
+        'items': [for (final i in items) {...i, 'address': 'live:$source/x/${i['key']}'}],
+      };
+      h.core.stored['idaho511-events'] = stored('idaho511-events', [
+        {'key': 'e1', 'label': 'I-84: Bridge repair', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': {'Direction': 'Westbound'}, 'app': {'type': 'closures', 'full': true, 'road': 'I-84', 'line': line, 'start': 1795370000, 'until': 1795456400}},
+        {'key': 'e2', 'label': 'US-20: Crash', 'point': {'lat': 43.7, 'lon': -116.3}, 'fields': <String, String>{}, 'app': {'type': 'accidentsAndIncidents', 'full': false, 'road': 'US-20'}},
+      ]);
+      h.core.stored['idaho511-winter-roads'] = stored('idaho511-winter-roads', [
+        {'key': 'c1', 'label': 'I-84: Sample section', 'point': {'lat': 43.6, 'lon': -116.3}, 'fields': {'Details': 'dry'}, 'app': <String, dynamic>{}},
+      ]);
+      h.core.stored['wzdx-idaho'] = stored('wzdx-idaho', [
+        // the same stretch and dates as the 511 closure: drawn once, the 511 one
+        {'key': 'z1', 'label': 'I-84 westbound', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': <String, String>{}, 'app': {'geom': {'type': 'LineString', 'coordinates': [for (final p in decodePolyline(line)) [p.lon, p.lat]]}, 'start': '2026-11-20T12:00:00Z', 'until': '2026-11-30T12:00:00Z', 'dir': 'westbound', 'impact': 'some-lanes-closed', 'road': ['I-84']}},
+        // a different zone, far away
+        {'key': 'z2', 'label': 'SH-55', 'point': {'lat': 44.5, 'lon': -116.1}, 'fields': <String, String>{}, 'app': {'geom': {'type': 'Point', 'coordinates': [-116.1, 44.5]}, 'road': ['SH-55']}},
+      ]);
+      final events = await readRoadEvents(h.weather, h.roads!);
+      expect(events.map((e) => e.id).toSet(), {'idaho511-events/e1', 'idaho511-events/e2', 'wzdx-idaho/z2'}, reason: 'z1 is the same work zone as e1; the conditions are a list, not drawn');
+      expect(events.firstWhere((e) => e.id == 'idaho511-events/e1').credit, 'Road events: Idaho 511');
+      expect(events.firstWhere((e) => e.id == 'wzdx-idaho/z2').credit, 'Road work: Idaho DOT');
+      expect(events.every((e) => !e.stale), isTrue);
+      expect(kDedupeRules.bufferM, 50);
+      // a copy past its validity is flagged, not dropped
+      h.core.stored['idaho511-events'] = stored('idaho511-events', [
+        {'key': 'e1', 'label': 'I-84: Bridge repair', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': <String, String>{}, 'app': {'type': 'closures', 'full': true, 'line': line}},
+      ], expired: true);
+      final late = await readRoadEvents(h.weather, h.roads!);
+      final e1 = late.firstWhere((e) => e.id == 'idaho511-events/e1');
+      expect(e1.stale, isTrue);
+      expect(e1.age, '5 hours old');
+      // the state wraps the read and drops a chosen event that is gone
+      final state = RoadEventsState.fromWeather(h.weather, h.roads!);
+      await state.refresh();
+      expect(state.events.length, 2);
+      state.select('idaho511-events/e1');
+      expect(state.selected, isNotNull);
+      state.dispose();
+    });
+
+    test('without road sources the catalogue sources are as they were', () async {
+      h = await Harness.create();
+      expect(h.weather.sourceById('idaho511-events')!.keyAlias, 'idaho511');
     });
   });
 
@@ -1493,14 +1606,14 @@ void main() {
 
     // Design read: a source that is on without its key is skipped by every update, and the Weather screen said "Not downloaded
     // yet. Update now to get it.", which could never come true.
-    test('a source that is on without its key says it needs a key, not that an update will get it', () async {
+    test('a source that is on without its key is silent: nothing downloaded, no "needs a key"', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Wildfires'), true);
       h.settings.setLiveSourcesOn({'firms-viirs-near'}, true);
       await h.weather.sourcesChanged();
       final views = await h.weather.viewFor((await h.weather.watchedPlaces()).single);
       final firms = views.firstWhere((v) => v.source.id == 'firms-viirs-near');
-      expect((firms.missing, firms.error), (true, 'needs a key'));
+      expect((firms.missing, firms.error), (true, null));
       // a source with nothing downloaded that needs no key (or has it) is as before
       final fires = views.firstWhere((v) => v.source.id == 'wfigs-incidents-near');
       expect((fires.missing, fires.error), (true, null));
@@ -2359,13 +2472,13 @@ void main() {
       expect(h.weather.statusOf(c), SourceRowState.working);
     });
 
-    test('off, needs a key, and no network is a notice of its own', () async {
+    test('off, no key (silent: working), and no network is a notice of its own', () async {
       h = await Harness.create();
       await h.only([forecast]);
       final firms = h.weather.sourceById('firms-viirs-near')!;
       expect(h.weather.statusOf(h.weather.sourceById('usgs-quakes-near')!), SourceRowState.off);
       await h.weather.setSourceOn(firms, true);
-      expect(h.weather.statusOf(firms), SourceRowState.needsKey);
+      expect(h.weather.statusOf(firms), SourceRowState.working, reason: 'a keyed source on with no key is silent');
       h.probe.change(ConnectionKind.none);
       await Future<void>.delayed(Duration.zero);
       expect(h.weather.noNetwork, isTrue);

@@ -129,7 +129,8 @@ void main() {
     await _tap(tester, 'link-receive');
     expect(lastLink(host), containsPair('mode', 'send'));
     expect(lastLink(host), containsPair('from', 'p1'));
-    expect(find.byKey(const ValueKey('link-keys')), findsNothing, reason: 'keys come from the device whose settings this one follows');
+    expect(find.byKey(const ValueKey('link-keys')), findsOneWidget, reason: 'read only: keys come from the device whose settings this one follows');
+    expect(find.textContaining('Keys come from'), findsOneWidget);
     await _tap(tester, 'link-match');
     expect(lastLink(host), containsPair('mode', 'match'));
     await _tap(tester, 'link-off');

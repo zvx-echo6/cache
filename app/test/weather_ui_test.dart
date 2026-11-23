@@ -9,8 +9,8 @@ import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/curated.dart';
+import 'package:cache/weather/weather_state.dart';
 import 'package:cache/weather/own_source.dart';
-import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -52,7 +52,7 @@ void main() {
       expect(find.text('Not checked yet'), findsOneWidget, reason: 'the defaults are on from the start');
       expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget);
       expect(find.text('Update now'), findsNothing);
-      expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);
+      expect(find.text('What Cache watches for your places.'), findsOneWidget);
       for (final t in ['Weather alerts (NWS, by point)', 'Weather forecast (Open-Meteo)', 'Wildfires near the place (WFIGS)', 'Earthquakes near the place (USGS)']) {
         expect(find.text(t), findsOneWidget, reason: t);
         // Weather always works: the forecast, alerts and wildfires are on from the start; the rest start off.
@@ -98,38 +98,20 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('the switch of a source that needs a key asks for it: saving checks the key, switches the source on and never shows it again', (tester) async {
+    testWidgets('the switch of a keyed source just turns it on: no sheet, no prompt, nothing downloaded; it reads as working', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.descendant(of: rowWith('Satellite fire detections near the place (NASA FIRMS)'), matching: find.byType(Switch)));
+      const t = 'Satellite fire detections near the place (NASA FIRMS)';
+      await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pumpAndSettle();
-      expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
-      expect(find.text('You need your own key from NASA FIRMS.'), findsOneWidget);
-      expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining('VIIRS satellite hotspots')), findsNothing,
-          reason: 'the key sheet says only what the app says, not the source description (the row behind it still shows it)');
-      await tester.tap(find.byKey(const ValueKey('get-key')));
-      await tester.pump();
-      expect(r.opened, ['https://firms.modaps.eosdis.nasa.gov/api/area/']);
-      // refused first
-      r.liveCore.previewError = const CacheSearchException('key_missing', 'rejected');
-      await tester.enterText(find.byKey(const ValueKey('key-field')), secret);
-      await tester.tap(find.byKey(const ValueKey('check-and-save')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('key-error')), findsOneWidget);
-      expect(find.textContaining("NASA FIRMS didn't accept this key"), findsOneWidget);
-      expect(r.secrets.values, isEmpty);
-      // then accepted
-      r.liveCore.previewError = null;
-      await tester.tap(find.byKey(const ValueKey('check-and-save')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('key-field')), findsNothing, reason: 'the sheet closed');
-      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsNothing);
-      expect(switchIn(tester, 'Satellite fire detections near the place (NASA FIRMS)').value, isTrue);
-      expect(r.liveCore.keys['firms-viirs-near'], secret);
-      // the key is on no screen
-      expect(find.textContaining(secret), findsNothing);
-      expect(find.textContaining('SENTINEL'), findsNothing);
+      expect(find.byKey(const ValueKey('key-field')), findsNothing, reason: 'no key sheet');
+      expect(find.textContaining('needs a'), findsNothing);
+      expect(find.textContaining('Add key'), findsNothing);
+      expect(switchIn(tester, t).value, isTrue);
+      expect(r.weather.isOn('firms-viirs-near'), isTrue);
+      expect(r.weather.keyReady(r.weather.sourceById('firms-viirs-near')!), isFalse);
+      expect(r.liveCore.fetches.where((f) => f['source'] == 'firms-viirs-near'), isEmpty, reason: 'nothing is downloaded without the key');
       await r.dispose(tester);
     });
 
@@ -248,74 +230,63 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('a source that needs a key shows Get key in place of the switch; with a key it shows Replace', (tester) async {
+    testWidgets('a source that needs a key shows its switch and a plain key row that opens the API keys list at that key', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
       await tester.pumpAndSettle();
-      expect(find.text('Needs your own key'), findsOneWidget);
-      expect(find.text('Get key'), findsOneWidget);
-      expect(find.byType(Switch), findsNothing);
-      await tester.tap(find.text('Get key'));
+      expect(find.text('Needs your own key'), findsNothing);
+      expect(find.text('Get key'), findsNothing);
+      expect(find.byType(Switch), findsOneWidget);
+      expect(find.text('NASA FIRMS API key'), findsOneWidget);
+      expect(find.text('Not set'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('key-shortcut-firms')));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byKey(const ValueKey('key-field')), secret);
-      await tester.tap(find.byKey(const ValueKey('check-and-save')));
+      expect(find.byKey(const ValueKey('api-key-open-firms')), findsOneWidget);
+      await tester.pageBack();
       await tester.pumpAndSettle();
-      expect(find.text('Replace'), findsOneWidget);
-      expect(find.text('Saved on this device, not shown again'), findsOneWidget);
-      expect(find.textContaining(secret), findsNothing);
-      expect(switchIn(tester, 'Use this source').value, isTrue);
+      expect(find.byKey(const ValueKey('key-shortcut-firms')), findsOneWidget);
       await r.dispose(tester);
     });
   });
 
   group('A key on its source', () {
-    testWidgets('a saved key is never shown, and is replaced or removed (after asking) on its source', (tester) async {
+    testWidgets('a saved key is never shown; the source page says Set and the list replaces or removes it, turning nothing off', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, secret));
       await r.show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
       await tester.pumpAndSettle();
       expect(find.textContaining(secret), findsNothing);
-      // replace
-      await tester.tap(find.text('Replace'));
+      expect(find.text('Set'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('key-shortcut-firms')));
       await tester.pumpAndSettle();
+      // replace
+      await tester.tap(find.byKey(const ValueKey('replace-firms')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replace your NASA FIRMS key'), findsOneWidget);
+      expect(find.textContaining('Replaces the key for'), findsOneWidget);
       await tester.enterText(find.byKey(const ValueKey('key-field')), '$secret-2');
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
-      expect(r.liveCore.keys['firms-viirs-near'], '$secret-2');
+      expect(r.secrets.values[WeatherState.secretName('firms')], '$secret-2');
       expect(find.text('Key replaced'), findsOneWidget);
       await tester.pump(const Duration(seconds: 5));
       // remove
-      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.tap(find.byKey(const ValueKey('remove-firms')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('turns off'), findsOneWidget);
-      expect(find.text('Satellite fire detections near the place (NASA FIRMS) turns off. You can add a key again later.'), findsOneWidget);
+      expect(find.textContaining('go back to the data on this device'), findsNothing, reason: 'one feature says goes');
+      expect(find.textContaining('goes back to the data on this device'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isTrue);
-      await tester.tap(find.byKey(const ValueKey('remove-key')));
+      await tester.tap(find.byKey(const ValueKey('remove-firms')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('confirm-remove-key')));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isFalse);
       expect(r.secrets.values, isEmpty);
       expect(r.liveCore.keys['firms-viirs-near'], isNull);
-      expect(find.text('Get key'), findsOneWidget);
-      await r.dispose(tester);
-    });
-  });
-
-  group('Removing a key shared by two sources', () {
-    testWidgets('says "turn off" (plural) when two sources use the key', (tester) async {
-      final r = await SettingsRig.create(tester);
-      await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('idaho511-events')!, secret));
-      await r.show(tester, SourcePage(deps: r.deps, sourceId: 'idaho511-events'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('remove-key')));
-      await tester.pumpAndSettle();
-      expect(find.text('Road conditions (Idaho 511) and Winter road conditions (Idaho 511) turn off. You can add a key again later.'), findsOneWidget);
-      expect(find.textContaining('turns off'), findsNothing);
-      await tester.tap(find.text('Keep'));
-      await tester.pumpAndSettle();
+      expect(r.weather.isOn('firms-viirs-near'), isTrue, reason: 'removing a key turns nothing off');
       await r.dispose(tester);
     });
   });

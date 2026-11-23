@@ -1,0 +1,60 @@
+{
+  "format": 2,
+  "id": "wzdx-idaho",
+  "title": "Road work zones near the place, Idaho (WZDx)",
+  "provider": "Idaho Transportation Department",
+  "description": "Idaho road work zones and lane closures from the national WZDx feed within 50 miles of the place (default), most restrictive first then nearest",
+  "attribution": "Work zone data from the Idaho Transportation Department (511.idaho.gov) in the USDOT WZDx format",
+  "request": {"url": "https://511.idaho.gov/api/wzdx", "timeout_seconds": 60},
+  "refresh_minutes": 30,
+  "quota": {"per_minute": 4, "per_day": 200, "per_month": 3000},
+  "validity": {"fixed_hours": 6},
+  "require": ["features"],
+  "items": [
+    {
+      "each": "features",
+      "key": {"path": "id"},
+      "label": {
+        "template": "{road} {dir}",
+        "vars": {
+          "road": {"path": "properties.core_details.road_names"},
+          "dir": {"path": "properties.core_details.direction", "omit_if": ["unknown", "undefined"]}
+        }
+      },
+      "time": {"path": "properties.core_details.update_date", "time": {"in": "rfc3339", "zone": "place", "out": "datetime"}},
+      "ends": {"path": "properties.end_date", "time": {"in": "rfc3339"}},
+      "sort": [
+        {
+          "by": {"path": "properties.vehicle_impact"},
+          "rank": [
+            "all-lanes-closed",
+            "some-lanes-closed",
+            "alternating-one-way",
+            "some-lanes-closed-merge-left",
+            "some-lanes-closed-merge-right",
+            "flagging",
+            "temporary-traffic-signal",
+            "all-lanes-open-shift-left",
+            "all-lanes-open-shift-right",
+            "all-lanes-open"
+          ]
+        },
+        {"distance": true}
+      ],
+      "point": {"lat": {"path": "geometry.coordinates[0][1]"}, "lon": {"path": "geometry.coordinates[0][0]"}},
+      "fields": [
+        {"label": "Type", "path": "properties.core_details.event_type"},
+        {"label": "From the place", "distance": {"geometry": "geometry", "unit": "mi"}},
+        {"label": "Lanes", "path": "properties.vehicle_impact"},
+        {"label": "Cross street", "path": "properties.beginning_cross_street"},
+        {"label": "Starts", "path": "properties.start_date", "time": {"in": "rfc3339", "zone": "place", "out": "%Y-%m-%d %H:%M"}},
+        {"label": "Ends", "path": "properties.end_date", "time": {"in": "rfc3339", "zone": "place", "out": "%Y-%m-%d %H:%M"}},
+        {"label": "Speed limit in zone", "path": "properties.reduced_speed_limit_kph", "scale": 0.621371, "round": 0, "suffix": " mph"},
+        {"label": "Details", "path": "properties.core_details.description", "max_chars": 300}
+      ],
+      "near": {"max": {"param": "radius_mi"}, "unit": "mi", "geometry": "geometry"},
+      "limit": 30
+    }
+  ],
+  "params": [{"name": "radius_mi", "label": "Radius (miles)", "type": "integer", "default": 50, "min": 5, "max": 500}]
+}

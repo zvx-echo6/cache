@@ -4,6 +4,7 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
 import '../../notebook/pin_image.dart' show PinStyle, pinIconSize;
+import '../../roads/road_map_layers.dart';
 import '../../theme.dart' show CacheThemeId;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
@@ -241,6 +242,12 @@ Map<String, dynamic> buildMapStyle({
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
+  // Road events (closures, crashes, work zones) from what the sources stored: above every base-map layer, under the route and the pins.
+  sources[kRoadEventSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  all.addAll(roadEventLayers(palette));
   all.addAll(_routeLayers(palette, pinStyle));
   all.addAll(_positionLayers(palette));
 
@@ -672,6 +679,12 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     if (base != null) for (final l in template['layers'] as List) (l as Map)['id'] as String else 'background',
     if (base != null && protomapsTemplate != null && identical(template, protomapsTemplate)) ...poiLayerIds,
     for (final u in layers) ...overlayLayerIds(u.def),
+    kRoadEventCasing,
+    kRoadEventClosure,
+    kRoadEventWork,
+    kRoadEventDetour,
+    kRoadEventSelected,
+    kRoadEventChips,
     kRouteAlt,
     kRouteCasing,
     kRouteRoad,

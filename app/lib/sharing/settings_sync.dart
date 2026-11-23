@@ -169,6 +169,7 @@ class SettingsSync extends ChangeNotifier {
   Map<String, int> get _localAt => _kept.localAt;
   Map<String, String> get _last => _kept.last;
   Map<String, Set<String>> get _keysFor => _kept.keysFor;
+  Map<String, Set<String>> get _keysAll => _kept.keysAll;
   Map<String, SettingsEvent> get _waiting => _kept.waiting;
   Map<String, Object?> get _notes => _kept.notes;
 
@@ -624,17 +625,76 @@ class SettingsSync extends ChangeNotifier {
 
   // ---------------------------------------------------------------- keys
 
-  /// The key [name] is ticked for [peer]. Every key starts off.
-  bool keyOn(String peer, String name) => sharing.onServer ? (_serverOn[name]?.contains(peer) ?? false) : (_keysFor[peer]?.contains(name) ?? false);
+  /// "Include API keys" is on for [peer]. Off for a newly linked device. In a browser the server holds the ticks: on when every key it can
+  /// send is ticked for [peer].
+  bool includeKeys(String peer) {
+    if (sharing.onServer) {
+      final ks = keys();
+      return ks.isNotEmpty && ks.every((k) => keyOn(peer, k.name));
+    }
+    return _keysAll.containsKey(peer);
+  }
 
-  /// The keys saved here that are ticked for [peer].
+  /// The key [name] goes to [peer]: the switch is on and the key is not left out. A key saved later follows the switch.
+  bool keyOn(String peer, String name) {
+    if (sharing.onServer) return _serverOn[name]?.contains(peer) ?? false;
+    final all = _keysAll[peer];
+    if (all != null) return !all.contains(name);
+    return _keysFor[peer]?.contains(name) ?? false;
+  }
+
+  /// The keys saved here that go to [peer].
   int keysOn(String peer) => keys().where((k) => keyOn(peer, k.name)).length;
+
+  /// The "Include API keys" switch for [peer]: on sends every key (each can be left out below it, and keys saved later go too); off
+  /// sends none.
+  Future<void> setIncludeKeys(String peer, bool on) async {
+    if (sharing.onServer) {
+      for (final k in keys()) {
+        await _setServerKeyOn(peer, k.name, on);
+      }
+      return;
+    }
+    if (on) {
+      _keysAll[peer] = <String>{};
+    } else {
+      _keysAll.remove(peer);
+    }
+    _keysFor.remove(peer);
+    await _saveState();
+    await pushKeys();
+    _tell();
+  }
+
+  /// Test only: the single ticks an earlier version kept for [peer].
+  @visibleForTesting
+  void seedLegacyTicks(String peer, Set<String> names) => _keysFor[peer] = {...names};
+
+  /// Turns the single ticks of before "Include API keys" into the switch: a device with any key ticked gets the switch on with every
+  /// other saved key left out, so exactly the same keys go; a device with none stays off. Nothing is asked again. Safe to run twice.
+  Future<void> migrateKeys() async {
+    if (sharing.onServer || _keysFor.isEmpty) return;
+    final saved = [for (final k in _appKeys()) k.name];
+    // The keys are not read yet (the weather part starts after this): try again at the next push, never guess an empty list.
+    if (saved.isEmpty) return;
+    for (final peer in _keysFor.keys.toList()) {
+      final ticked = _keysFor[peer] ?? const <String>{};
+      if (ticked.isNotEmpty && !_keysAll.containsKey(peer)) _keysAll[peer] = {for (final n in saved) if (!ticked.contains(n)) n};
+      _keysFor.remove(peer);
+    }
+    await _saveState();
+  }
 
   Future<void> setKeyOn(String peer, String name, bool on) async {
     if (sharing.onServer) return _setServerKeyOn(peer, name, on);
-    final set = _keysFor.putIfAbsent(peer, () => <String>{});
-    on ? set.add(name) : set.remove(name);
-    if (set.isEmpty) _keysFor.remove(peer);
+    final all = _keysAll[peer];
+    if (all == null) {
+      // The switch is off: a single key can only be left out of an included set.
+      if (!on) return;
+      _keysAll[peer] = {for (final k in keys()) if (k.name != name) k.name};
+    } else {
+      on ? all.remove(name) : all.add(name);
+    }
     await _saveState();
     await pushKeys();
     _tell();
@@ -699,6 +759,7 @@ class SettingsSync extends ChangeNotifier {
   Future<void> pushKeys() async {
     // In a browser the server gives its own keys to the engine; a tab never holds one.
     if (sharing.onServer || !sharing.running) return;
+    await migrateKeys();
     final saved = keys();
     for (final p in sharing.peers) {
       final id = p['id'];

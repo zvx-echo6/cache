@@ -38,6 +38,8 @@ class MapPalette {
     'position', 'positionAccuracy', 'positionRing',
     // A route (the line, its outline, the off-road part, the other routes) and the pin on a chosen place.
     'route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'pin',
+    // Road events (closures and crashes; work zones): drawn beside the road they are on (road_map_layers.dart).
+    'eventClosure', 'eventWork',
     // The nine colour groups of the public-place chips (poi_chips.dart).
     'poiFuel', 'poiFood', 'poiShop', 'poiLodging', 'poiOutdoor', 'poiMedical', 'poiSafety', 'poiWater', 'poiLandmark',
   ];
@@ -85,7 +87,7 @@ final MapPalette _light = MapPalette(CacheThemeId.light, {
   'publicLandsFill': _c(0x5EA657, 0.16), 'publicLandsLine': _c(0x3C8246, 0.75), 'trail': _c(0xB5470F),
   'mvum': _c(0x7B3FA0), 'blm': _c(0xB8860B),
   'position': _c(0x1F6FA8), 'positionAccuracy': _c(0x1F6FA8, 0.16), 'positionRing': _c(0xFFFFFF),
-  'route': _c(0x1F6FA8), 'routeCasing': _c(0xFFFFFF), 'routeOffroad': _c(0xB5470F), 'routeAlternate': _c(0x7C8590), 'pin': _c(0xC62E24),
+  'route': _c(0x1F6FA8), 'routeCasing': _c(0xFFFFFF), 'routeOffroad': _c(0xB5470F), 'routeAlternate': _c(0x7C8590), 'pin': _c(0xC62E24), 'eventClosure': _c(0xA3127A), 'eventWork': _c(0xC28100),
   'poiFuel': _c(0x5B6770), 'poiFood': _c(0xD9620B), 'poiShop': _c(0x8A4FB5), 'poiLodging': _c(0x0F8B8D), 'poiOutdoor': _c(0x2E7D4F),
   'poiMedical': _c(0xC2255C), 'poiSafety': _c(0x4A5BB8), 'poiWater': _c(0x1F7FB0), 'poiLandmark': _c(0x9C6D12),
 });
@@ -107,7 +109,7 @@ final MapPalette _dark = MapPalette(CacheThemeId.dark, {
   'publicLandsFill': _c(0x5FB98A, 0.12), 'publicLandsLine': _c(0x5FB98A, 0.7), 'trail': _c(0xE8955A),
   'mvum': _c(0xB48AE0), 'blm': _c(0xE0B45A),
   'position': _c(0x6BB4DE), 'positionAccuracy': _c(0x6BB4DE, 0.18), 'positionRing': _c(0x0F1115),
-  'route': _c(0x6BB4DE), 'routeCasing': _c(0x0F1115), 'routeOffroad': _c(0xE8955A), 'routeAlternate': _c(0x707987), 'pin': _c(0xFF6B5E),
+  'route': _c(0x6BB4DE), 'routeCasing': _c(0x0F1115), 'routeOffroad': _c(0xE8955A), 'routeAlternate': _c(0x707987), 'pin': _c(0xFF6B5E), 'eventClosure': _c(0xFF6FD0), 'eventWork': _c(0xFFC933),
   'poiFuel': _c(0x8D99A6), 'poiFood': _c(0xE9893A), 'poiShop': _c(0xB184D6), 'poiLodging': _c(0x35B5B7), 'poiOutdoor': _c(0x4FA878),
   'poiMedical': _c(0xE0587F), 'poiSafety': _c(0x7C8CE0), 'poiWater': _c(0x4DA6D6), 'poiLandmark': _c(0xD1A13F),
 });
@@ -129,7 +131,7 @@ final MapPalette _parchment = MapPalette(CacheThemeId.parchment, {
   'publicLandsFill': _c(0x6B8F4E, 0.2), 'publicLandsLine': _c(0x4F7A3A, 0.8), 'trail': _c(0xA3261C),
   'mvum': _c(0x6B3A7A), 'blm': _c(0x8A5A00),
   'position': _c(0x7A4E1D), 'positionAccuracy': _c(0x7A4E1D, 0.18), 'positionRing': _c(0xF3E9D2),
-  'route': _c(0x7A4E1D), 'routeCasing': _c(0xF3E9D2), 'routeOffroad': _c(0xA3261C), 'routeAlternate': _c(0x9A8A70), 'pin': _c(0xA3261C),
+  'route': _c(0x7A4E1D), 'routeCasing': _c(0xF3E9D2), 'routeOffroad': _c(0xA3261C), 'routeAlternate': _c(0x9A8A70), 'pin': _c(0xA3261C), 'eventClosure': _c(0x7C1A6E), 'eventWork': _c(0x9A6A00),
   'poiFuel': _c(0x5B6770), 'poiFood': _c(0xD9620B), 'poiShop': _c(0x8A4FB5), 'poiLodging': _c(0x0F8B8D), 'poiOutdoor': _c(0x2E7D4F),
   'poiMedical': _c(0xC2255C), 'poiSafety': _c(0x4A5BB8), 'poiWater': _c(0x1F7FB0), 'poiLandmark': _c(0x9C6D12),
 });
@@ -152,7 +154,7 @@ final MapPalette _tactical = MapPalette(CacheThemeId.tactical, {
   'publicLandsFill': _c(0xB23A2E, 0.14), 'publicLandsLine': _c(0xB23A2E, 0.75), 'trail': _c(0xFF5A4A),
   'mvum': _c(0xC24A1E), 'blm': _c(0x8E2B24),
   'position': _c(0xFF5A4A), 'positionAccuracy': _c(0xFF5A4A, 0.18), 'positionRing': _c(0x000000),
-  'route': _c(0xFF5A4A), 'routeCasing': _c(0x000000), 'routeOffroad': _c(0xF08070), 'routeAlternate': _c(0x8E2B24), 'pin': _c(0xFF2D1F),
+  'route': _c(0xFF5A4A), 'routeCasing': _c(0x000000), 'routeOffroad': _c(0xF08070), 'routeAlternate': _c(0x8E2B24), 'pin': _c(0xFF2D1F), 'eventClosure': _c(0xFFB4A6), 'eventWork': _c(0xC45A48),
   // Red only: every group is the one red, and a chip is told apart by its glyph.
   'poiFuel': _c(0xE0473C), 'poiFood': _c(0xE0473C), 'poiShop': _c(0xE0473C), 'poiLodging': _c(0xE0473C), 'poiOutdoor': _c(0xE0473C),
   'poiMedical': _c(0xE0473C), 'poiSafety': _c(0xE0473C), 'poiWater': _c(0xE0473C), 'poiLandmark': _c(0xE0473C),

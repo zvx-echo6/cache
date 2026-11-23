@@ -617,7 +617,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
 
   // ---------------------------------------------------------------- the one plain line
 
-  /// The one line under the top card, only while something a person relies on is not updating, has no key, or no alert source
+  /// The one line under the top card, only while something a person relies on is not updating, or no alert source
   /// is on. It names the source, because that is what the person has to act on; why, and the key, are in Settings.
   String? _plainLine(PlaceSummary s) {
     // Without a connection nothing updates, and the top card's own line says so.
@@ -633,9 +633,6 @@ class _WeatherScreenState extends State<WeatherScreen> {
       }
       if (failed.length > 1) return '${failed.length} sources have not updated: ${failed.map((v) => v.source.title).join(', ')}';
     }
-    final keyless = [for (final c in w.enabledSources) if (!w.keyReady(c)) c];
-    if (keyless.length == 1) return '${keyless.single.title} needs a key';
-    if (keyless.length > 1) return '${keyless.length} sources need a key: ${keyless.map((c) => c.title).join(', ')}';
     if (!s.alertsOn) return 'Alerts and fires are not switched on';
     return null;
   }

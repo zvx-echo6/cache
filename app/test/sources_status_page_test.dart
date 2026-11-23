@@ -74,19 +74,15 @@ void main() {
       await _mixed(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('2 need attention · 1 off'), findsOneWidget);
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget);
       expect(find.text('Last checked just now'), findsOneWidget);
       // a group's label is drawn in capitals
       expect(_top(tester, 'NEEDS ATTENTION'), lessThan(_top(tester, 'WORKING')));
       expect(_top(tester, 'WORKING'), lessThan(_top(tester, 'OFF')));
       expect(_top(tester, 'OFF'), lessThan(_top(tester, 'More sources')));
-      expect(find.text('NASA FIRMS needs a free key.'), findsOneWidget);
-      expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget);
-      expect(find.text('Add key'), findsOneWidget);
       expect(find.text("NIFC WFIGS didn't answer. Showing what Cache saved 3 hours ago."), findsOneWidget);
       expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsOneWidget);
       expect(find.text('Try again'), findsOneWidget);
-      expect(find.text('Replace key'), findsNothing);
       expect(find.textContaining('HTTP'), findsNothing);
       await r.dispose(tester);
     });
@@ -97,12 +93,11 @@ void main() {
       await _calm(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      final n = r.weather.enabledSources.length + 1; // and Web search
+      final n = r.weather.enabledSources.length;
       expect(find.text('All $n sources working'), findsOneWidget);
       for (final h in ['NEEDS ATTENTION', 'WORKING', 'OFF']) {
         expect(find.text(h), findsNothing, reason: h);
       }
-      expect(find.text('Add key'), findsNothing);
       await r.dispose(tester);
     });
 
@@ -122,27 +117,15 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Add key opens the key sheet', (tester) async {
-      tall(tester);
-      final r = await SettingsRig.create(tester);
-      await _mixed(tester, r);
-      await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('add-key-$_firms')));
-      await tester.pumpAndSettle();
-      expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
-      await r.dispose(tester);
-    });
-
     testWidgets('the Settings row says how many need attention, or that all work', (tester) async {
       final r = await SettingsRig.create(tester);
       await _mixed(tester, r);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('2 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       await _calm(tester, r);
       await tester.pump();
-      expect(find.text('All ${r.weather.enabledSources.length + 1} working'), findsOneWidget);
+      expect(find.text('All ${r.weather.enabledSources.length} working'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -152,7 +135,7 @@ void main() {
       await _mixed(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('2 need attention · 1 off'), findsOneWidget);
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget);
       expect(find.byKey(const ValueKey('source-swpc-kp')), findsNothing, reason: 'off, not featured: under More sources');
       expect(find.text('More sources'), findsOneWidget);
       await tester.runAsync(() async {
@@ -162,7 +145,7 @@ void main() {
         await r.weather.updateNow(force: true);
       });
       await tester.pumpAndSettle();
-      expect(find.text('3 need attention · 1 off'), findsOneWidget);
+      expect(find.text('2 need attention · 1 off'), findsOneWidget);
       expect(find.byKey(const ValueKey('source-swpc-kp')), findsOneWidget, reason: 'on, not featured: listed');
       expect(find.byKey(const ValueKey('try-again-swpc-kp')), findsOneWidget);
       expect(find.textContaining('HTTP'), findsNothing);
@@ -195,8 +178,7 @@ void main() {
     testWidgets('the Weather screen\'s source line opens this page', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
-      await sceneQuietDay(tester, r);
-      await tester.runAsync(() => r.weather.setSourceOn(r.weather.sourceById(_firms)!, true));
+      await _mixed(tester, r);
       await r.show(
         tester,
         Builder(
@@ -210,7 +192,6 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('weather-plain-line')));
       await tester.pumpAndSettle();
       expect(find.text('NEEDS ATTENTION'), findsOneWidget);
-      expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget);
       await r.dispose(tester);
     });
   });
@@ -258,7 +239,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsNothing);
       expect(find.descendant(of: row, matching: find.textContaining('Working')), findsOneWidget);
-      expect(find.text('1 needs attention · 1 off'), findsOneWidget);
+      expect(find.text('All ${r.weather.sourceCounts.working} sources working · 1 off'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -272,7 +253,7 @@ void main() {
       await settleReal(tester);
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('try-again-$_wfigs')), findsOneWidget);
-      expect(find.text('2 need attention · 1 off'), findsOneWidget);
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget);
       await r.dispose(tester);
     });
   });
@@ -284,7 +265,7 @@ void main() {
       await _mixed(tester, r);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('2 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
       r.liveCore.fetchGate = Completer<void>();
@@ -295,12 +276,11 @@ void main() {
       });
       await tester.pump();
       expect(find.textContaining('Updating'), findsWidgets, reason: 'the rows say Updating');
-      expect(find.text('2 need attention · 1 off'), findsOneWidget, reason: 'the summary does not turn all-good because a refresh started');
+      expect(find.text('1 needs attention · 1 off'), findsOneWidget, reason: 'the summary does not turn all-good because a refresh started');
       expect(find.text('NEEDS ATTENTION'), findsOneWidget);
-      expect(find.byKey(const ValueKey('add-key-$_firms')), findsOneWidget, reason: 'a key is still needed');
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('2 need attention'), findsOneWidget);
+      expect(find.text('1 needs attention'), findsOneWidget);
       r.liveCore.fetchGate!.complete();
       await tester.runAsync(() => running);
       await r.dispose(tester);
@@ -328,7 +308,7 @@ void main() {
       expect(find.text('Not answering'), findsNothing);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
-      expect(find.text('1 needs attention'), findsOneWidget, reason: 'only Firms; the one waiting for a connection is not counted');
+      expect(find.text('All ${r.weather.sourceCounts.working} working'), findsOneWidget, reason: 'the one waiting for a connection is not counted');
       await r.dispose(tester);
     });
   });
@@ -345,7 +325,7 @@ void main() {
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
       const sentence = 'NIFC WFIGS says it has reached its limit. Cache tries again later.';
-      expect(find.text('1 needs attention · 1 off'), findsOneWidget, reason: 'only Firms (no key) is counted');
+      expect(find.text('All ${r.weather.sourceCounts.working} sources working · 1 off'), findsOneWidget, reason: 'a source at its limit is not counted');
       expect(find.text(sentence), findsOneWidget);
       expect(find.descendant(of: find.byKey(const ValueKey('source-$_wfigs')), matching: find.byType(RowButton)), findsNothing);
       final row = tester.getTopLeft(find.byKey(const ValueKey('source-$_wfigs'))).dy;
@@ -358,88 +338,21 @@ void main() {
     });
   });
 
-  group('Web search in the same list', () {
-    const row = ValueKey('source-web-search');
-    const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
-    const limit = '{"ok":false,"error":{"type":"fetch_failed","detail":"HTTP 429 (rate limited)"}}';
-    const results = '[1] Cache (web, fetched now) - a result';
+  group('Web search', () {
+    const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}';
 
-    testWidgets('no key and switched off: Off, with its switch; the switch opens the Kagi key sheet', (tester) async {
-      tall(tester);
-      final r = await SettingsRig.create(tester);
-      await _calm(tester, r);
-      await tester.runAsync(r.webSearch.removeKey);
-      await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      expect(find.byKey(row), findsOneWidget);
-      expect(find.text('Web search'), findsOneWidget);
-      expect(_top(tester, 'OFF'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
-      expect(find.text('${r.weather.enabledSources.length} need attention'), findsNothing);
-      await tester.tap(find.descendant(of: find.byKey(row), matching: find.byType(Switch)));
-      await tester.pumpAndSettle();
-      expect(find.text('Get a key from Kagi'), findsOneWidget);
-      await r.dispose(tester);
-    });
-
-    testWidgets('a key and no search yet, or a search that worked: Working', (tester) async {
+    testWidgets('is not in the Weather and alerts list, and not in its counts', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await _calm(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.descendant(of: find.byKey(row), matching: find.textContaining('Working')), findsOneWidget);
-      r.webSearch.noteSearch(results);
-      await tester.pumpAndSettle();
-      expect(find.descendant(of: find.byKey(row), matching: find.textContaining('Working')), findsOneWidget);
-      await r.dispose(tester);
-    });
-
-    testWidgets('the last search was refused (a rejected key): Key not accepted, counted, with Replace key', (tester) async {
-      tall(tester);
-      final r = await SettingsRig.create(tester);
-      await _calm(tester, r);
+      expect(find.byKey(const ValueKey('source-web-search')), findsNothing);
+      expect(find.text('Web search'), findsNothing);
+      expect(find.text('All ${r.weather.enabledSources.length} sources working'), findsOneWidget);
       r.webSearch.noteSearch(rejected);
-      await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('1 needs attention'), findsOneWidget);
-      expect(find.text('Kagi no longer accepts the saved key.'), findsOneWidget);
-      expect(_colourOf(tester, 'Kagi no longer accepts the saved key.'), tester.element(find.byKey(row)).t.warning);
-      expect(_top(tester, 'NEEDS ATTENTION'), lessThan(tester.getTopLeft(find.byKey(row)).dy));
-      await tester.tap(find.byKey(const ValueKey('replace-key-web-search')));
-      await tester.pumpAndSettle();
-      expect(find.text('Get a key from Kagi'), findsOneWidget);
-      await r.dispose(tester);
-    });
-
-    testWidgets('the last search hit its limit: Limit reached, not counted, no button; a later good search clears it', (tester) async {
-      tall(tester);
-      final r = await SettingsRig.create(tester);
-      await _calm(tester, r);
-      r.webSearch.noteSearch(limit);
-      await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      expect(find.text('Kagi says it has reached its limit. Cache tries again later.'), findsOneWidget);
-      final k = tester.element(find.byKey(row)).t;
-      expect(_colourOf(tester, 'Kagi says it has reached its limit. Cache tries again later.'), isNot(k.warning), reason: 'quiet, not a warning');
-      expect(find.text('NEEDS ATTENTION'), findsNothing);
-      expect(find.byKey(const ValueKey('replace-key-web-search')), findsNothing);
-      r.webSearch.noteSearch(results);
-      await tester.pumpAndSettle();
-      expect(find.text('Kagi says it has reached its limit. Cache tries again later.'), findsNothing);
-      await r.dispose(tester);
-    });
-
-    testWidgets('switched on with no key (a synced setting): Needs a key, with Add key', (tester) async {
-      tall(tester);
-      final r = await SettingsRig.create(tester);
-      await _calm(tester, r);
-      await tester.runAsync(r.webSearch.removeKey);
-      r.settings.setWebSearchOn(true);
-      await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      expect(find.text('Kagi needs a key.'), findsOneWidget, reason: 'a paid service, so not "free"');
-      expect(find.byKey(const ValueKey('add-key-web-search')), findsOneWidget);
-      expect(find.text('1 needs attention'), findsOneWidget);
+      expect(find.text('All ${r.weather.enabledSources.length} sources working'), findsOneWidget, reason: 'a refused Kagi key is not counted here');
       await r.dispose(tester);
     });
 
@@ -471,7 +384,7 @@ void main() {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await _calm(tester, r);
-      final before = r.weather.enabledSources.length + 1;
+      final before = r.weather.enabledSources.length;
       await addOwn(tester, r);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();

@@ -61,6 +61,7 @@ import '../update/app_update.dart' show ReleaseFileSource;
 import '../update/update_ui.dart';
 import '../video/video_state.dart';
 import '../video/zim_video.dart' show openZimMediaInPlayer;
+import '../roads/road_events_state.dart';
 import '../weather/alert_notifier.dart';
 import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/alert_watch.dart';
@@ -199,6 +200,9 @@ class _HeldAsk {
 }
 
 class _ShellState extends State<Shell> {
+  /// The road events the map draws, read from what the road sources stored; null where there are no road sources.
+  late final RoadEventsState? _roadEvents = widget.hub.weather.roads == null ? null : RoadEventsState.fromWeather(widget.hub.weather, widget.hub.weather.roads!);
+
   /// The module on screen; null with [_onModules] false is Home.
   ModuleId? _module;
   bool _onModules = false;
@@ -543,6 +547,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    _roadEvents?.dispose();
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
     openMapsInbox.removeListener(_openMapsFromNotification);
@@ -1310,7 +1315,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack, held: _heldText, returned: _returnedText, onHold: _holdTyped),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps, roadEvents: _roadEvents),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
