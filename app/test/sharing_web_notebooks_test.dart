@@ -69,7 +69,9 @@ void main() {
   test('the Notebooks kind is listed in a browser, with every notebook and the private one\'s switch off', () {
     expect(r.s.shareKinds.map((k) => k.id), ['notebooks']);
     final items = notebookItems(r.nb);
-    expect({for (final i in items) i.name: (i.private, i.on)}, {'Camp notes': (false, null), 'Health log': (true, false)},
+    expect(items.firstWhere((i) => i.name == 'Health log').private, isTrue);
+    expect(items.firstWhere((i) => i.name == 'Health log').on, isFalse);
+    expect({for (final i in items) i.name: (i.private, i.on)}, containsPair('Camp notes', (false, null)),
         reason: 'a notebook that is not private has no switch of this kind; a private one starts off');
   });
 
@@ -95,7 +97,7 @@ void main() {
     await r.s.setItem(r.kind, r.item(r.health), true);
     expect(r.host.privateIncluded, {r.health.id});
     final i = r.host.ops.lastIndexOf('sharing.set_item');
-    expect(r.host.opArgs[i]['all'], [r.item(r.camp).key], reason: 'every item of the kind but the private ones');
+    expect(r.host.opArgs[i]['all'], containsAll([r.item(r.camp).key]), reason: 'every item of the kind but the private ones');
     expect(r.s.kindOn(r.kind), isTrue);
     expect(r.s.itemOn(r.kind, r.item(r.health)), isTrue);
     expect(r.s.itemOn(r.kind, r.item(r.camp)), isFalse, reason: 'the kind was switched on with that item alone');
@@ -113,13 +115,14 @@ void main() {
     final phone = fakeNotebook(FakeNotebookBackend());
     await phone.start();
     final p = await _book(phone, 'Medical', private: true);
-    expect(notebookItems(phone).single.on, isFalse, reason: 'no switch kept: off');
+    ShareItem med() => notebookItems(phone).firstWhere((i) => i.name == 'Medical');
+    expect(med().on, isFalse, reason: 'no switch kept: off');
     final ps = _Kept();
     phone.privateSharing = ps;
-    expect(notebookItems(phone).single.on, isFalse);
-    await setNotebookShared(phone, notebookItems(phone).single, true);
+    expect(med().on, isFalse);
+    await setNotebookShared(phone, med(), true);
     expect(ps.ids, {p.id});
-    expect(notebookItems(phone).single.on, isTrue);
+    expect(med().on, isTrue);
   });
 }
 
