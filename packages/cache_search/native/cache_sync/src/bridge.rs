@@ -65,9 +65,15 @@ pub struct Bridge {
     served: Mutex<HashMap<Hash, Instant>>,
     /// Downloads moved out into the store whose view entry is not gone yet (it points at a file that is not there).
     landed: Arc<Mutex<HashSet<Hash>>>,
-    /// One change to the view at a time.
-    one: tokio::sync::Mutex<()>,
+    /// One add (or drop) at a time for each hash; different hashes run in parallel. The map is locked only to find or make a
+    /// hash's lock, never across work.
+    locks: Mutex<HashMap<Hash, Arc<tokio::sync::Mutex<()>>>>,
     closed: std::sync::atomic::AtomicBool,
+    /// Test hooks: a pause before each add of a store-owned file (milliseconds), and how many adds were made.
+    #[cfg(feature = "test-hooks")]
+    pub add_delay_ms: std::sync::atomic::AtomicU64,
+    #[cfg(feature = "test-hooks")]
+    pub adds: std::sync::atomic::AtomicUsize,
 }
 
 impl Bridge {
@@ -82,8 +88,12 @@ impl Bridge {
             wanted,
             served: Mutex::new(HashMap::new()),
             landed: Arc::default(),
-            one: tokio::sync::Mutex::new(()),
+            locks: Mutex::new(HashMap::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "test-hooks")]
+            add_delay_ms: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(feature = "test-hooks")]
+            adds: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -94,6 +104,20 @@ impl Bridge {
 
     fn store(&self) -> Result<&Store> {
         self.store.get().ok_or_else(|| anyhow!("the file store is not open"))
+    }
+
+    /// The lock for `hash`'s changes to the view.
+    fn lock_of(&self, hash: &Hash) -> Arc<tokio::sync::Mutex<()>> {
+        self.locks.lock().unwrap().entry(*hash).or_default().clone()
+    }
+
+    /// Forgets `hash`'s lock when nobody else holds or waits on it.
+    fn release(&self, hash: &Hash, mine: Arc<tokio::sync::Mutex<()>>) {
+        let mut m = self.locks.lock().unwrap();
+        // The map's copy and ours: no one else has it.
+        if Arc::strong_count(&mine) == 2 {
+            m.remove(hash);
+        }
     }
 
     /// Whether the view has been built.
@@ -170,7 +194,18 @@ impl Bridge {
     /// copy where it is inline. Errors when the store does not hold it (the provider then answers "not found" itself).
     pub async fn ensure(self: &Arc<Self>, hash: Hash) -> Result<()> {
         let view = self.view().await?.clone();
-        let _one = self.one.lock().await;
+        // One add at a time for this hash: a second request waits for the first and then finds the entry made. Other hashes
+        // are not held up by it.
+        let lock = self.lock_of(&hash);
+        let result = {
+            let _one = lock.lock().await;
+            self.ensure_locked(&view, hash).await
+        };
+        self.release(&hash, lock);
+        result
+    }
+
+    async fn ensure_locked(self: &Arc<Self>, view: &FsStore, hash: Hash) -> Result<()> {
         if let Some(t) = self.served.lock().unwrap().get_mut(&hash) {
             *t = Instant::now();
             return Ok(());
@@ -178,7 +213,7 @@ impl Bridge {
         // A download that was moved out is still in the view until the collection takes it; the file it names is not there.
         if self.landed.lock().unwrap().contains(&hash) {
             let until = Instant::now() + STALE_WAIT;
-            while self.in_view(&view, &hash).await {
+            while self.in_view(view, &hash).await {
                 if Instant::now() > until {
                     bail!("an old copy of {} is still leaving the view", hash.fmt_short());
                 }
@@ -198,7 +233,16 @@ impl Bridge {
                 if owned {
                     // Lent before the view can read it, and until the entry is gone.
                     self.lent.lock().unwrap().insert(hash);
+                    #[cfg(feature = "test-hooks")]
+                    {
+                        let ms = self.add_delay_ms.load(std::sync::atomic::Ordering::Relaxed);
+                        if ms > 0 {
+                            tokio::time::sleep(Duration::from_millis(ms)).await;
+                        }
+                    }
                 }
+                #[cfg(feature = "test-hooks")]
+                self.adds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let added = view
                     .add_path_with_opts(AddPathOptions { path, format: BlobFormat::Raw, mode: ImportMode::TryReference })
                     .with_named_tag(name.as_bytes())
@@ -208,11 +252,11 @@ impl Bridge {
                     Ok(t) if ours(t.hash) == hash => {}
                     Ok(_) => {
                         // The file is not what the store has recorded (a person's file edited since): not served.
-                        self.drop_entry(&view, &hash, &name).await;
+                        self.drop_entry(view, &hash, &name).await;
                         bail!("the file for {} changed", hash.fmt_short());
                     }
                     Err(e) => {
-                        self.drop_entry(&view, &hash, &name).await;
+                        self.drop_entry(view, &hash, &name).await;
                         return Err(e);
                     }
                 }
@@ -257,13 +301,19 @@ impl Bridge {
     /// Drops every entry nobody asked for in [`IDLE`] (and so unlends the files).
     pub async fn prune(self: &Arc<Self>, idle: Duration) -> usize {
         let Some(view) = self.view.get().cloned() else { return 0 };
-        let _one = self.one.lock().await;
         let old: Vec<Hash> = self.served.lock().unwrap().iter().filter(|(_, t)| t.elapsed() >= idle).map(|(h, _)| *h).collect();
         let mut n = 0;
         for h in old {
-            if self.drop_entry(&view, &h, &format!("view/{}", h.to_hex())).await {
-                n += 1;
+            let lock = self.lock_of(&h);
+            {
+                let _one = lock.lock().await;
+                // Asked for again while this waited: it stays.
+                let idle_still = self.served.lock().unwrap().get(&h).is_some_and(|t| t.elapsed() >= idle);
+                if idle_still && self.drop_entry(&view, &h, &format!("view/{}", h.to_hex())).await {
+                    n += 1;
+                }
             }
+            self.release(&h, lock);
         }
         let gone: Vec<Hash> = self.landed.lock().unwrap().iter().copied().collect();
         for h in gone {

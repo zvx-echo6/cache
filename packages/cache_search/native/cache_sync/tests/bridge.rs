@@ -194,3 +194,38 @@ async fn nothing_is_built_until_it_is_needed() {
     assert!(r.bridge.is_open());
     assert!(r.dir.path().join("blobs-iroh-view").exists());
 }
+
+/// A big file whose first add is slow does not hold up other requests on the device, and two requests for it make one add.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_add_does_not_hold_up_other_files_and_one_hash_is_added_once() {
+    let r = rig();
+    let big = r.store.add_bytes(&bytes(5, 500_000)).unwrap().hash;
+    let small = r.store.add_bytes(b"a note").unwrap().hash;
+    let other = r.store.add_bytes(&bytes(6, 300_000)).unwrap().hash;
+    r.bridge.view().await.unwrap();
+    // Every add of a store-owned file takes three seconds (iroh-blobs hashing a multi-gigabyte file, in effect).
+    r.bridge.add_delay_ms.store(3000, std::sync::atomic::Ordering::Relaxed);
+    let t = std::time::Instant::now();
+    let (b1, b2) = (r.bridge.clone(), r.bridge.clone());
+    let first = tokio::spawn(async move { b1.ensure(big).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let second = tokio::spawn(async move { b2.ensure(big).await });
+
+    // While that is running: an inline file is served at once...
+    let started = std::time::Instant::now();
+    r.bridge.ensure(small).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1), "a small file waited {:?} behind a big one", started.elapsed());
+    // ...and a different big file is added in parallel, not after the first one.
+    r.bridge.ensure(other).await.unwrap();
+    assert!(t.elapsed() < Duration::from_millis(5500), "different hashes run in parallel, took {:?}", t.elapsed());
+
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert!(t.elapsed() >= Duration::from_secs(3), "the slow add really was slow");
+    // The two store-owned files were added once each (the second request for `big` joined the first's add); the inline one is
+    // a copy and is not counted.
+    assert_eq!(r.bridge.adds.load(std::sync::atomic::Ordering::Relaxed), 2);
+    let view = r.bridge.view().await.unwrap().clone();
+    let ib = iroh_blobs::Hash::from_bytes(*big.as_bytes());
+    assert!(matches!(view.blobs().status(ib).await.unwrap(), iroh_blobs::api::blobs::BlobStatus::Complete { .. }));
+}
