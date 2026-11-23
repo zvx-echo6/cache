@@ -53,6 +53,21 @@ void main() {
     await closePage(tester, r);
   });
 
+  testWidgets('the icon follows the device kind: computer, tablet, phone, and phone when not known', (tester) async {
+    final r = await openCodePage(tester, script: (r) {
+      r.sync.nearbyDevices.addAll([
+        {'id': 'a', 'name': 'Laptop', 'via': 'wifi', 'kind': 'computer'},
+        {'id': 'b', 'name': 'Slate', 'via': 'wifi', 'kind': 'tablet'},
+        {'id': 'c', 'name': 'Pixel 8', 'via': 'wifi', 'kind': 'phone'},
+        {'id': 'd', 'name': 'Other', 'via': 'wifi', 'kind': null},
+      ]);
+    });
+    expect(find.byIcon(Icons.laptop_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.tablet_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.smartphone_outlined), findsNWidgets(2));
+    await closePage(tester, r);
+  });
+
   testWidgets('nothing nearby: it says so; an engine with no Nearby shows no list', (tester) async {
     var r = await openCodePage(tester);
     expect(find.text('No devices found yet.'), findsOneWidget);
@@ -64,7 +79,7 @@ void main() {
     await closePage(tester, r);
   });
 
-  testWidgets('Link goes to getting the words, then the words with Cancel and Link; Link then waiting, then linked and Done', (tester) async {
+  testWidgets('Link goes to getting the words, then the words with Cancel and Link; Link then waiting, then linked, then it closes by itself', (tester) async {
     final r = await openCodePage(tester, script: (r) => r.sync.nearbyDevices.add({'id': 'a', 'name': 'Pixel 8', 'via': 'wifi'}));
     await tester.tap(find.byKey(const ValueKey('nearby-link-a')));
     await tick(tester);
@@ -89,10 +104,13 @@ void main() {
     await tick(tester);
     expect(find.text('Linked with Pixel 8'), findsOneWidget);
     expect(find.byType(LinkQr), findsOneWidget, reason: 'the page stays until Done');
-    await tester.tap(find.byKey(const ValueKey('nearby-done')));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    expect(find.byKey(const ValueKey('nearby-done')), findsNothing, reason: 'it closes by itself');
+    await tick(tester, 2000);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     await tick(tester);
+    await tick(tester);
+    expect(find.text('Linked with Pixel 8'), findsOneWidget, reason: 'now the snackbar');
+    expect(find.byType(AlertDialog), findsNothing);
     expect(find.byType(LinkQr), findsNothing, reason: 'back on Sharing and sync');
     expect(r.sync.pairingOpen, isFalse);
     await tester.pumpWidget(const SizedBox.shrink());

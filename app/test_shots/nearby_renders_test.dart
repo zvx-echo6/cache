@@ -35,8 +35,8 @@ void main() {
         r.sync
           ..nearbyDevices.clear()
           ..nearbyDevices.addAll([
-            {'id': 'a', 'name': 'Pixel 8', 'via': 'wifi'},
-            {'id': 'b', 'name': null, 'via': 'wifi'},
+            {'id': 'a', 'name': 'Pixel 8', 'via': 'wifi', 'kind': 'phone'},
+            {'id': 'b', 'name': 'Laptop', 'via': 'wifi', 'kind': 'computer'},
           ])
           ..nearbyState = {'state': 'idle'};
         // opened from Sharing and sync as the app does, so the page has its back arrow

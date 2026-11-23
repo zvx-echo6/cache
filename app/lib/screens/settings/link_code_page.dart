@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
@@ -35,6 +37,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
   BuildContext? _dialog;
   bool _dialogUp = false; // set the moment it is asked for, before it has a context
   bool _closing = false, _refreshedForLink = false;
+  Timer? _linkedTimer;
 
   @override
   void initState() {
@@ -48,6 +51,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
 
   @override
   void dispose() {
+    _linkedTimer?.cancel();
     widget.sharing.removeListener(_sharingChanged);
     _nearby.removeListener(_changed);
     _nearby.onDropped = null;
@@ -81,6 +85,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
     if (st.phase == NearbyPhase.linked && !_refreshedForLink) {
       _refreshedForLink = true;
       widget.sharing.refresh(); // the new device is in Linked devices when this page closes
+      _linkedTimer = Timer(const Duration(seconds: 2), _done);
     }
     if (st.phase != NearbyPhase.linked) _refreshedForLink = false;
     if (st.active && !_dialogUp) {
@@ -90,7 +95,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
         barrierDismissible: false,
         builder: (ctx) {
           _dialog = ctx;
-          return _NearbyDialog(_nearby, onDone: _done);
+          return _NearbyDialog(_nearby);
         },
       ).then((_) {
         _dialog = null;
@@ -102,8 +107,9 @@ class _LinkCodePageState extends State<LinkCodePage> {
     }
   }
 
-  /// Done on "Linked": back to Linked devices, where the new device is.
+  /// A moment after "Linked": the dialog goes and the page closes on Linked devices (which says "Linked with X"), where the new device is.
   Future<void> _done() async {
+    if (!mounted || _closing) return;
     _nearby.acknowledge();
     await widget.sharing.refresh();
     if (!mounted || _closing) return;
@@ -176,7 +182,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
       for (final d in _nearby.devices)
         SettingsRow(
           key: ValueKey('nearby-${d.id}'),
-          leading: Icon(Icons.smartphone_outlined, size: 24, color: context.t.secondary),
+          leading: Icon(_icon(d.kind), size: 24, color: context.t.secondary),
           title: d.name ?? 'Device nearby',
           statusWidget: Text('${_via(d.via)} · not linked', style: TextStyle(fontSize: 13, color: context.t.secondary)),
           trailing: _nearby.linking == d.id
@@ -195,6 +201,12 @@ class _LinkCodePageState extends State<LinkCodePage> {
     );
   }
 
+  static IconData _icon(String? kind) => switch (kind) {
+    'computer' => Icons.laptop_outlined,
+    'tablet' => Icons.tablet_outlined,
+    _ => Icons.smartphone_outlined,
+  };
+
   static String _via(String via) => switch (via) {
     'bluetooth' => 'Bluetooth',
     'wifi' => 'Same Wi-Fi',
@@ -205,12 +217,9 @@ class _LinkCodePageState extends State<LinkCodePage> {
 /// The question over the page: "Link with Pixel 8?", through getting the words, the words with Cancel and Link, waiting for the
 /// other device, and "Linked". It follows the controller, so it is the same on the device that tapped Link and the one that was asked.
 class _NearbyDialog extends StatelessWidget {
-  const _NearbyDialog(this.nearby, {required this.onDone});
+  const _NearbyDialog(this.nearby);
 
   final NearbyController nearby;
-
-  /// Done on "Linked".
-  final VoidCallback onDone;
 
   @override
   Widget build(BuildContext context) {
@@ -244,7 +253,7 @@ class _NearbyDialog extends StatelessWidget {
               ];
             case NearbyPhase.linked:
               body = Text('It is now in your linked devices.', key: const ValueKey('nearby-linked'), style: TextStyle(color: k.secondary, fontSize: 16, height: 1.4));
-              actions = [TextButton(key: const ValueKey('nearby-done'), onPressed: onDone, child: const Text('Done'))];
+              actions = const []; // it closes by itself a moment later (see _done)
             default:
               body = Column(
                 mainAxisSize: MainAxisSize.min,

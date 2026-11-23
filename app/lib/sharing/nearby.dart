@@ -4,18 +4,21 @@ import 'package:flutter/foundation.dart';
 
 /// A device heard nearby (`nearby_list`). [name] is null until the engine has asked for it.
 class NearbyDevice {
-  const NearbyDevice({required this.id, this.name, this.via = 'wifi'});
+  const NearbyDevice({required this.id, this.name, this.via = 'wifi', this.kind});
 
   final String id;
   final String? name;
   final String via;
+
+  /// phone, tablet or computer; null when the engine does not know (drawn as a phone).
+  final String? kind;
 }
 
 /// Where a Nearby link stands (`nearby_state`).
 enum NearbyPhase { idle, incoming, exchanging, words, waiting, linked, dropped }
 
 class NearbyState {
-  const NearbyState(this.phase, {this.name, this.words = const [], this.reason});
+  const NearbyState(this.phase, {this.name, this.kind, this.words = const [], this.reason});
 
   static const idle = NearbyState(NearbyPhase.idle);
 
@@ -23,6 +26,9 @@ class NearbyState {
 
   /// The other device's name, when the engine knows it.
   final String? name;
+
+  /// The other device's kind (see [NearbyDevice.kind]).
+  final String? kind;
 
   /// The three words ([NearbyPhase.words]).
   final List<String> words;
@@ -35,17 +41,18 @@ class NearbyState {
 
   static NearbyState parse(Map<String, dynamic> m) {
     final name = m['name'] as String?;
+    final kind = m['kind'] as String?;
     switch (m['state']) {
       case 'incoming':
-        return NearbyState(NearbyPhase.incoming, name: name);
+        return NearbyState(NearbyPhase.incoming, name: name, kind: kind);
       case 'exchanging':
-        return NearbyState(NearbyPhase.exchanging, name: name);
+        return NearbyState(NearbyPhase.exchanging, name: name, kind: kind);
       case 'words':
-        return NearbyState(NearbyPhase.words, name: name, words: [for (final w in (m['words'] as List? ?? const [])) '$w']);
+        return NearbyState(NearbyPhase.words, name: name, kind: kind, words: [for (final w in (m['words'] as List? ?? const [])) '$w']);
       case 'waiting':
-        return NearbyState(NearbyPhase.waiting, name: name);
+        return NearbyState(NearbyPhase.waiting, name: name, kind: kind);
       case 'linked':
-        return NearbyState(NearbyPhase.linked, name: name);
+        return NearbyState(NearbyPhase.linked, name: name, kind: kind);
       case 'dropped':
         return NearbyState(NearbyPhase.dropped, reason: m['reason'] as String?);
     }
@@ -101,7 +108,7 @@ class NearbyController extends ChangeNotifier {
   /// The state as the page shows it: what the person already answered or closed is not shown again.
   NearbyState get state {
     if (_hidden && (_raw.phase == NearbyPhase.linked || _raw.active)) return NearbyState.idle;
-    if (_answered && _raw.phase == NearbyPhase.words) return NearbyState(NearbyPhase.waiting, name: _raw.name);
+    if (_answered && _raw.phase == NearbyPhase.words) return NearbyState(NearbyPhase.waiting, name: _raw.name, kind: _raw.kind);
     return _raw;
   }
 
@@ -142,7 +149,7 @@ class NearbyController extends ChangeNotifier {
       if (_closed) return;
       devices = [
         for (final d in (list['devices'] as List? ?? const []))
-          if (d is Map && d['id'] is String) NearbyDevice(id: d['id'] as String, name: d['name'] as String?, via: (d['via'] as String?) ?? 'wifi'),
+          if (d is Map && d['id'] is String) NearbyDevice(id: d['id'] as String, name: d['name'] as String?, via: (d['via'] as String?) ?? 'wifi', kind: d['kind'] as String?),
       ];
       looked = true;
       final before = _raw.phase;

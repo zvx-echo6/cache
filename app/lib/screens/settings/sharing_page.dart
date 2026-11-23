@@ -170,7 +170,10 @@ class _SharingPageState extends State<SharingPage> {
       if (!mounted) return;
       linked = await Navigator.of(context).push<String>(MaterialPageRoute<String>(builder: (_) => LinkCodePage(sharing: s, code: code, share: widget.share)));
     });
-    if (linked != null) await _ask(linked!);
+    if (linked != null) {
+      if (mounted) say(context, 'Linked with ${s.peerOf(linked!)?['name'] ?? 'the other device'}');
+      await _ask(linked!);
+    }
   }
 
   /// "Enter a link code". [initial] fills the box (a code that came in as a link). The clipboard is read only when Paste is tapped.
