@@ -166,7 +166,7 @@ pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(
 
 /// The grids of the two columns the off-road pack rebuild adds: the dirt bike (MVUM motorcycle) and vehicles wider than 50 in
 /// (the side-by-side). Each is `None` when no feature of the box carries that column (a pack from before the rebuild): the
-/// caller then uses the ATV grid for the dirt bike and the quad's for the side-by-side.
+/// caller then uses the ATV grid for the dirt bike and the high-clearance-vehicle grid for the side-by-side.
 pub fn access_grids_ext(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Option<Vec<u8>>; 2] {
     let mut out: [Option<Vec<u8>>; 2] = [None, None];
     for (k, slot) in out.iter_mut().enumerate() {

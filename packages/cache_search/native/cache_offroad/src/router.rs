@@ -24,7 +24,7 @@ pub const DEFAULT_MAX_CELLS: usize = 20_000_000;
 
 /// Notes a route can carry (plain words, shown with the route).
 pub const NOTE_MOTO_FALLBACK: &str = "This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.";
-pub const NOTE_SXS_FALLBACK: &str = "This off-road data has no side-by-side trail rules yet, so Quad trail rules were used.";
+pub const NOTE_SXS_FALLBACK: &str = "No side-by-side trail rules yet, so roads open to full-size vehicles were used.";
 pub const NOTE_NO_LAND_RULES: &str = "Cache has no land rules for this area. Check local access before you go.";
 
 const PAVED: [&str; 9] = [
@@ -495,10 +495,11 @@ impl<'a> Router<'a> {
             if let Some(mv) = &mvum_by_mode {
                 if *mode != Mode::Foot && req.boundary != Boundary::Emergency {
                     // the dirt bike reads the motorcycle column and the side-by-side the over-50-in one; without them (a pack from
-                    // before the rebuild) the dirt bike reads the ATV rules and the side-by-side the quad's
+                    // before the rebuild) the dirt bike reads the ATV rules and the side-by-side the high-clearance-vehicle rules
+                    // (ATV trails are for vehicles 50 in wide or less, and most side-by-sides are wider)
                     let grid = match (req.variant, mode) {
                         (Variant::Moto, Mode::TwoW) => mvum_ext[0].as_ref().unwrap_or(&mv[1]),
-                        (Variant::Sxs, Mode::FourW) => mvum_ext[1].as_ref().unwrap_or(&mv[1]),
+                        (Variant::Sxs, Mode::FourW) => mvum_ext[1].as_ref().unwrap_or(&mv[2]),
                         (_, Mode::TwoW) => &mv[0],
                         (_, Mode::FourW) => &mv[1],
                         _ => &mv[2],

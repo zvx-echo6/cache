@@ -80,7 +80,7 @@ pub struct MvumFeature {
     pub access: [(Option<String>, Option<String>); 3],
     /// (status, dates) for the dirt bike (MVUM motorcycle) and for vehicles wider than 50 in (the side-by-side), in that order;
     /// `None` where the pack has no such column yet (before the off-road pack rebuild): the routes then use the ATV rules for the
-    /// dirt bike and the quad's for the side-by-side.
+    /// dirt bike and the high-clearance-vehicle rules for the side-by-side.
     pub ext: [Option<(Option<String>, Option<String>)>; 2],
     /// parts of the (Multi)LineString as (lon, lat)
     pub lines: Vec<Vec<(f64, f64)>>,

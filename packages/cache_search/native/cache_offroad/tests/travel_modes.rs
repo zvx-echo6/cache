@@ -208,6 +208,7 @@ fn a_pack_without_the_new_columns_says_which_rules_were_used_instead() {
     assert!(!moto.contains(&NOTE_SXS_FALLBACK.to_string()));
     let sxs = notes(&world, TravelMode::OffroadSxs, Boundary::Strict);
     assert!(sxs.contains(&NOTE_SXS_FALLBACK.to_string()), "{sxs:?}");
+    assert_eq!(NOTE_SXS_FALLBACK, "No side-by-side trail rules yet, so roads open to full-size vehicles were used.");
     // the quad, the foot and the assistant's modes have nothing to say about it
     for m in [TravelMode::OffroadFourW, TravelMode::OffroadFoot, TravelMode::OffroadVehicle] {
         let n = notes(&world, m, Boundary::Pragmatic);
@@ -417,4 +418,43 @@ fn the_assistants_off_road_modes_get_no_road_legs_from_the_trail_cells() {
     let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot));
     assert!(d.ok, "{:?}", d.errors);
     assert!(road_leg_calls(&v).is_empty());
+}
+
+/// A line across the whole world between the trip's ends, with what MVUM says of it: (ATV, high-clearance vehicle) open or closed.
+fn mvum_wall(atv_open: bool, veh_open: bool) -> MvumFeature {
+    let s = |x: &str| Some(x.to_string());
+    let st = |open: bool| (s(if open { "open" } else { "closed" }), None);
+    let lat = (FROM.0 + TO.0) / 2.0;
+    MvumFeature {
+        is_trail: true,
+        symbol: s("1"),
+        seasonal: s("yearlong"),
+        access: [st(true), st(atv_open), st(veh_open)],
+        ext: [None, None],
+        lines: vec![vec![(-114.60, lat), (-114.35, lat)]],
+    }
+}
+
+/// On a pack without the over-50-in column the side-by-side reads the high-clearance-vehicle rules, not the ATV's (ATV trails are for
+/// vehicles 50 in wide or less): it cannot cross a trail open only to ATVs, and can cross a road open to high-clearance vehicles. The quad
+/// is the other way round.
+#[test]
+fn without_the_wide_vehicle_column_the_side_by_side_follows_the_vehicle_rules() {
+    let route = |wall: MvumFeature, mode: TravelMode| {
+        let mut world = flat_world();
+        world.mvum = vec![wall];
+        let v = Recorder(Mutex::new(vec![]));
+        let mut r = DirectionsRequest::new(FROM, TO, mode);
+        r.boundary = Boundary::Strict;
+        env(&world, &v).directions(&r)
+    };
+    // open only to ATVs
+    assert!(route(mvum_wall(true, false), TravelMode::OffroadFourW).ok, "the quad may use an ATV trail");
+    assert!(!route(mvum_wall(true, false), TravelMode::OffroadSxs).ok, "the side-by-side may not");
+    // open to high-clearance vehicles
+    let sxs = route(mvum_wall(false, true), TravelMode::OffroadSxs);
+    assert!(sxs.ok, "the side-by-side may use a road open to full-size vehicles: {:?}", sxs.errors);
+    assert!(!route(mvum_wall(false, true), TravelMode::OffroadFourW).ok, "the quad may not");
+    // the dirt bike keeps the ATV rules (and its own note)
+    assert!(route(mvum_wall(true, false), TravelMode::OffroadMoto).ok);
 }
