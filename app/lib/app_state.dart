@@ -437,10 +437,13 @@ class AppState extends ChangeNotifier {
   /// A browser: the chat models on the server.
   Future<void> _refreshServerModels() async {
     try {
+      final listed = await _server!.chatModels();
       final found = [
-        for (final m in await _server!.chatModels()) ModelEntry(path: m.id, size: m.size),
+        for (final m in listed) ModelEntry(path: m.id, size: m.size),
       ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       models = found;
+      final on = listed.where((m) => m.loaded).firstOrNull;
+      await _followServerLoaded(on?.id, on?.info);
       if (failed != null && !found.any((m) => m.path == failed!.path)) {
         failed = null;
         failure = null;
@@ -450,6 +453,57 @@ class AppState extends ChangeNotifier {
       logInfo('The server\'s chat models could not be read', detail: e.message);
     }
     notifyListeners();
+  }
+
+  /// A browser: the server has one model loaded for every tab, so what this tab shows follows the server, not only this tab's own
+  /// load. [loadedId] is the file the server reports loaded (null: none). Another tab's load is adopted without loading anything here. Not while this
+  /// tab is loading or unloading, which settle it themselves.
+  Future<void> _followServerLoaded(String? loadedId, Map<String, dynamic>? loadedInfo) async {
+    if (loading != null || _unloading != null) return;
+    if (loadedId == null) {
+      if (active == null) return;
+      active = null;
+      activeInfo = null;
+      modelGeneration++;
+      return;
+    }
+    if (active?.path == loadedId) return;
+    final e = models.where((m) => m.path == loadedId).firstOrNull;
+    if (e == null || isUnsupported(e)) return;
+    // Display only, never a load: a load at another context size would cut off the answer another tab is running. The state is set
+    // as a finished load sets it, from what the server reports, and the session is told the id without any request.
+    final info = ModelInfo.fromJson(loadedInfo ?? const {});
+    if (!info.supportsTools) return;
+    session.adopt(e.path);
+    _nameFrom(e, info);
+    active = e;
+    activeInfo = info;
+    activeSettings = settingsFor?.call(e) ?? ModelSettings.none;
+    resting = null;
+    failed = null;
+    failure = null;
+    _clearHeld();
+    modelGeneration++;
+  }
+
+  /// Stores the model's name and quantisation label from its [info] (see [displayName]).
+  void _nameFrom(ModelEntry entry, ModelInfo info) {
+    // Only a model the list is known not to name takes its own name; unknown counts as recommended (the name as before).
+    final recommended = isRecommended?.call(entry) ?? true;
+    // A browser's model is the server's: it sends the file's name in the load answer. On a device the file is read here (only the
+    // header's pairs up to the name), and only for a model that will use it.
+    final ownName = recommended ? null : (info.generalName ?? (kIsWeb ? null : readGgufGeneralName(entry.path)));
+    final parts = modelNameParts(info.description, fileName: entry.fileName, generalName: ownName, recommended: recommended);
+    if (parts != null) {
+      _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
+      _plainNames[entry.key] = parts.name;
+      if (parts.label != null) _labels[entry.key] = parts.label!;
+    }
+  }
+
+  /// A browser tab came back to the front, or Ask opened: read the server's loaded model again so this tab shows the true state.
+  Future<void> syncServerModel() async {
+    if (_server != null) await _refreshServerModels();
   }
 
   /// Deletes a model file from the models folder. The model in use (or one being loaded) is kept: false.
@@ -500,17 +554,7 @@ class AppState extends ChangeNotifier {
       try {
         await recommendedReady?.call();
       } catch (_) {}
-      // Only a model the list is known not to name takes its own name; unknown counts as recommended (the name as before).
-      final recommended = isRecommended?.call(entry) ?? true;
-      // A browser's model is the server's: it sends the file's name in the load answer. On a device the file is read here (only the
-      // header's pairs up to the name), and only for a model that will use it.
-      final ownName = recommended ? null : (info.generalName ?? (kIsWeb ? null : readGgufGeneralName(entry.path)));
-      final parts = modelNameParts(info.description, fileName: entry.fileName, generalName: ownName, recommended: recommended);
-      if (parts != null) {
-        _names[entry.key] = parts.label == null ? parts.name : '${parts.name} · ${parts.label}';
-        _plainNames[entry.key] = parts.name;
-        if (parts.label != null) _labels[entry.key] = parts.label!;
-      }
+      _nameFrom(entry, info);
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
         await _writeSettings();
@@ -690,6 +734,7 @@ class AppState extends ChangeNotifier {
   /// more than the memory free now ([memory]), it stays resting (Ask shows "No model is loaded" with its Load button), and the log
   /// says why. [force] is the person's own tap on that button: it loads whatever the room.
   Future<void> wake({bool force = false}) async {
+    await syncServerModel();
     final r = resting;
     if (r == null || active != null || loading != null) return;
     // A release in progress finishes first (and the memory it frees is there to be read below).

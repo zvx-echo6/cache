@@ -1,10 +1,13 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
 import 'app_fs_base.dart';
 import 'files.dart' as files;
+import 'platform/app_log.dart';
+import 'platform/backup_scope.dart';
 import 'platform.dart' as plat;
 
 AppFs createAppFs({Directory? supportOverride, Directory? docsOverride}) =>
@@ -19,10 +22,27 @@ Future<String> appTempPath() async => (await getTemporaryDirectory()).path;
 /// The phone (and desktop) side: today's dart:io code. The roots are found the way the app always found them (the application
 /// support folder; the external-storage folder on Android, else the documents folder), and files are written with files.dart.
 class IoAppFs implements AppFs {
-  IoAppFs({this.supportOverride, this.docsOverride});
+  /// [flagger] and [onIOS] are the tests' stand-ins: the iPhone backup flag (see backup_scope.dart) and whether this is an iPhone.
+  IoAppFs({this.supportOverride, this.docsOverride, BackupFlagger? flagger, bool? onIOS})
+      : _flagger = (onIOS ?? plat.isIOS) ? (flagger ?? const ChannelBackupFlagger()) : null;
 
   final Directory? supportOverride;
   final Directory? docsOverride;
+
+  /// iPhone only: a write that replaces a file drops its backup-exclusion flag, so a file that is not on the backup allow-list is
+  /// flagged again after the write. A flag that fails is logged and never fails the write.
+  final BackupFlagger? _flagger;
+
+  Future<void> _flagAfter(AppRoot root, String path, String full) async {
+    final f = _flagger;
+    if (f == null) return;
+    if (root == AppRoot.support && isBackedUp(path)) return;
+    try {
+      await f.flagIfPresent(full);
+    } catch (e) {
+      logError('Backup: a file could not be kept out of phone backups', error: e, detail: full);
+    }
+  }
   Directory? _support;
   Directory? _docs;
 
@@ -56,16 +76,25 @@ class IoAppFs implements AppFs {
   }
 
   @override
-  Future<void> writeStringAtomic(AppRoot root, String path, String text) async =>
-      files.writeStringAtomic(File(await _path(root, path)), text);
+  Future<void> writeStringAtomic(AppRoot root, String path, String text) async {
+    final full = await _path(root, path);
+    await files.writeStringAtomic(File(full), text);
+    await _flagAfter(root, path, full);
+  }
 
   @override
-  Future<void> writeBytesAtomic(AppRoot root, String path, List<int> bytes) async =>
-      files.writeBytesAtomic(File(await _path(root, path)), bytes);
+  Future<void> writeBytesAtomic(AppRoot root, String path, List<int> bytes) async {
+    final full = await _path(root, path);
+    await files.writeBytesAtomic(File(full), bytes);
+    await _flagAfter(root, path, full);
+  }
 
   @override
-  Future<void> writeString(AppRoot root, String path, String text) async =>
-      File(await _path(root, path)).writeAsStringSync(text);
+  Future<void> writeString(AppRoot root, String path, String text) async {
+    final full = await _path(root, path);
+    File(full).writeAsStringSync(text);
+    await _flagAfter(root, path, full);
+  }
 
   @override
   Future<void> writeStringViaTmp(AppRoot root, String path, String text) async {
@@ -73,19 +102,25 @@ class IoAppFs implements AppFs {
     final tmp = File('${f.path}.tmp');
     await tmp.writeAsString(text, flush: true);
     await tmp.rename(f.path);
+    await _flagAfter(root, path, f.path);
   }
 
   @override
   Future<void> copy(AppRoot root, String from, String to) async {
     final src = File(await _path(root, from));
-    if (src.existsSync()) src.copySync(await _path(root, to));
+    if (!src.existsSync()) return;
+    final dst = await _path(root, to);
+    src.copySync(dst);
+    await _flagAfter(root, to, dst);
   }
 
   @override
   void writeStringAtomicSync(AppRoot root, String path, String text) {
     final dir = _resolved(root);
     if (dir == null) throw StateError('The ${root.name} folder has not been used yet');
-    files.writeStringAtomicSync(File(_join(dir, path)), text);
+    final full = _join(dir, path);
+    files.writeStringAtomicSync(File(full), text);
+    if (_flagger != null) unawaited(_flagAfter(root, path, full));
   }
 
   @override

@@ -8,6 +8,7 @@ import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import com.happylittlellc.cache.BuildConfig
+import com.happylittlellc.cache.InstallMarker
 import com.happylittlellc.cache.MemoryAnswers
 
 /**
@@ -51,6 +52,7 @@ object SharedEngine {
         CarLink.attach(engine)
         answerBuild(engine.dartExecutor.binaryMessenger)
         MemoryAnswers.attach(engine.dartExecutor.binaryMessenger, context)
+        InstallMarker.attach(engine.dartExecutor.binaryMessenger, context)
         return engine
     }
 

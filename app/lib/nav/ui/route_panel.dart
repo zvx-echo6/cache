@@ -61,27 +61,59 @@ class DirectionsHeader extends StatelessWidget {
                       ),
                     ],
                   ),
-                for (final (i, stop) in nav.stops.indexed)
-                  Row(
-                    key: ValueKey('stop-$i'),
-                    children: [
-                      Expanded(
-                        child: InkWell(
-                          key: ValueKey('stop-show-$i'),
-                          onTap: () => nav.showOnMap(stop.point),
-                          child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
-                        ),
-                      ),
-                      IconButton(
-                        key: ValueKey('stop-remove-$i'),
-                        tooltip: 'Remove stop ${i + 1}',
-                        visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                        icon: Icon(Icons.close, size: 18, color: k.secondary),
-                        onPressed: () => nav.removeStop(i),
-                      ),
-                    ],
+                // The intermediate stops: dragged by their handle (not while guiding); From and the destination stay put.
+                ReorderableListView(
+                  shrinkWrap: true,
+                  buildDefaultDragHandles: false,
+                  physics: const NeverScrollableScrollPhysics(),
+                  padding: EdgeInsets.zero,
+                  proxyDecorator: (child, index, animation) => Material(
+                    color: k.surface,
+                    elevation: 4,
+                    shape: Border(left: BorderSide(color: k.accent, width: 3)),
+                    child: child,
                   ),
+                  onReorderItem: (from, end) {
+                    // [end] is the place the stop ends up in, which is what the nav state takes.
+                    if (end == from) return;
+                    nav.reorderStop(from, end);
+                    ScaffoldMessenger.maybeOf(context)
+                      ?..hideCurrentSnackBar()
+                      ..showSnackBar(const SnackBar(content: Text('Stop order changed')));
+                  },
+                  children: [
+                    for (final (i, stop) in nav.stops.indexed)
+                      Row(
+                        key: ValueKey('stop-$i'),
+                        children: [
+                          if (!nav.guiding)
+                            ReorderableDragStartListener(
+                              key: ValueKey('stop-handle-$i'),
+                              index: i,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.grab,
+                                child: SizedBox(width: 44, height: 44, child: Icon(Icons.drag_handle, size: 18, color: k.secondary)),
+                              ),
+                            ),
+                          Expanded(
+                            child: InkWell(
+                              key: ValueKey('stop-show-$i'),
+                              onTap: () => nav.showOnMap(stop.point),
+                              child: Text('Stop ${i + 1}: ${stop.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.text)),
+                            ),
+                          ),
+                          IconButton(
+                            key: ValueKey('stop-remove-$i'),
+                            tooltip: 'Remove stop ${i + 1}',
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                            icon: Icon(Icons.close, size: 18, color: k.secondary),
+                            onPressed: () => nav.removeStop(i),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
