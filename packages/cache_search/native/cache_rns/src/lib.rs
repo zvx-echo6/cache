@@ -843,6 +843,12 @@ impl RnsNode {
         find_path(&self.handle, &self.state, *peer.as_bytes(), destination).await
     }
 
+    /// Sends a standard path request for a destination that is not a stored device (the destination a short link code names)
+    /// and says whether a path is known after it: `wait` is how long a routed answer may take.
+    pub async fn find_path_dest(&self, destination: DestinationHash, wait: Duration) -> bool {
+        matches!(tokio::time::timeout(wait, self.handle.request_path(destination)).await, Ok(Ok(_)))
+    }
+
     /// What `peer`'s route comes in on (its first hop's interface): [`Via::Wifi`] only for Wi-Fi auto interfaces.
     pub fn via(&self, peer: &PublicKey) -> Option<Via> {
         self.state.lock().unwrap().heard.get(peer.as_bytes()).copied()

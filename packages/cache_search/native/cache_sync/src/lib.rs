@@ -664,6 +664,10 @@ struct Inner {
     refused: Mutex<HashMap<String, Instant>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
+    /// The short code being shown (only one code is live at a time: showing one ends the other kind).
+    short: Mutex<Option<ShortCode>>,
+    /// Tests only: how far the short code's clock is moved on.
+    code_skew_ms: AtomicU64,
     run: Mutex<Run>,
     /// Hashes being fetched or about to be: kept from garbage collection so an interrupted transfer resumes.
     wanted: Arc<Mutex<HashSet<Hash>>>,
@@ -804,6 +808,78 @@ pub fn error_kind(e: &anyhow::Error) -> Option<&'static str> {
     e.downcast_ref::<LinkCodeError>().map(LinkCodeError::kind)
 }
 
+/// What a link code holds: an old `CACHE1-` code (the other device's iroh address, a token and its name), or a short one (its
+/// Reticulum destination and a one-time secret).
+#[derive(Debug)]
+enum Code {
+    Old(LinkCode),
+    Short { dest: [u8; 16], secret: [u8; 5] },
+}
+
+/// The short code's prefix, and how long its base32 body is (21 bytes: the 16 byte destination, the 5 byte secret).
+const SHORT_PREFIX: &str = "CACHE";
+const SHORT_LEN: usize = 34;
+
+/// `CACHE-` then base32 of the destination and the secret, in groups of four.
+fn encode_short(dest: &[u8; 16], secret: &[u8; 5]) -> String {
+    let mut raw = dest.to_vec();
+    raw.extend_from_slice(secret);
+    let body = data_encoding::BASE32_NOPAD.encode(&raw);
+    let groups: Vec<&str> = body.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or("")).collect();
+    format!("{SHORT_PREFIX}-{}", groups.join("-"))
+}
+
+/// Reads either kind of code. Case, spaces and dashes do not matter; the short prefix may come with or without its dash.
+fn decode_any(s: &str) -> Result<Code> {
+    let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
+    if s.starts_with(CODE_PREFIX) || made_by_newer(&s) {
+        return Ok(Code::Old(decode_code(&s)?));
+    }
+    let Some(rest) = s.strip_prefix(SHORT_PREFIX) else { return Err(LinkCodeError::NotACode.into()) };
+    let body: String = rest.chars().filter(|c| *c != '-').collect();
+    if body.len() != SHORT_LEN {
+        return Err(LinkCodeError::NotACode.into());
+    }
+    let raw = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| LinkCodeError::NotACode)?;
+    let (Ok(dest), Ok(secret)) = (<[u8; 16]>::try_from(&raw[..16]), <[u8; 5]>::try_from(&raw[16..])) else {
+        return Err(LinkCodeError::NotACode.into());
+    };
+    Ok(Code::Short { dest, secret })
+}
+
+/// Equal bytes, taking the same time whatever they hold.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// The short code being shown: its secret, until when, and how many wrong secrets it has met.
+struct ShortCode {
+    secret: [u8; 5],
+    expires_ms: u64,
+    strikes: u8,
+}
+
+/// Wrong secrets a short code takes before it is burned.
+const SHORT_STRIKES: u8 = 3;
+
+/// A short code's pairing request.
+#[derive(Serialize, Deserialize)]
+struct ShortPair {
+    /// The one-time secret, base32.
+    secret: String,
+    hello: ShortHello,
+}
+
+/// What each side tells the other in a short code's pairing: who it is, where iroh finds it, and its Reticulum destination.
+#[derive(Serialize, Deserialize)]
+struct ShortHello {
+    key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    iroh: Option<EndpointAddr>,
+    name: String,
+    rns: RnsProof,
+}
+
 fn decode_code(s: &str) -> Result<LinkCode> {
     let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
     let Some(body) = s.strip_prefix(CODE_PREFIX) else {
@@ -818,6 +894,22 @@ fn made_by_newer(s: &str) -> bool {
     let Some(rest) = s.strip_prefix("CACHE") else { return false };
     let Some((n, _)) = rest.split_once('-') else { return false };
     !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().map_or(true, |n| n > 1)
+}
+
+/// A Reticulum destination (32 hex characters) as bytes.
+fn rns_dest_bytes(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 || !hex.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+fn dest_hex_of(d: &[u8; 16]) -> String {
+    d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn token() -> String {
@@ -2346,6 +2438,53 @@ impl Serve for Inner {
         reply.to_string().into_bytes()
     }
 
+    fn pair_short(self: Arc<Self>, body: Vec<u8>) -> transport::BoxFut<'static, Vec<u8>> {
+        Box::pin(async move {
+            let refuse = |why: &str| json!({"ok": false, "error": why}).to_string().into_bytes();
+            let Ok(req) = serde_json::from_slice::<ShortPair>(&body) else { return refuse("not a pairing request") };
+            let secret = data_encoding::BASE32_NOPAD.decode(req.secret.as_bytes()).unwrap_or_default();
+            // The checks, in order: a code is being shown and has not run out; the secret is right (three wrong ones burn the
+            // code); the requester's signature checks out. Only a good one uses the code up.
+            {
+                let mut live = self.short.lock().unwrap();
+                let now = self.code_now();
+                match live.as_mut() {
+                    Some(c) if now < c.expires_ms => {
+                        if !ct_eq(&c.secret, &secret) {
+                            c.strikes += 1;
+                            if c.strikes >= SHORT_STRIKES {
+                                *live = None;
+                            }
+                            return refuse("that code is not right");
+                        }
+                    }
+                    _ => {
+                        *live = None;
+                        return refuse("that code is not being shown any more");
+                    }
+                }
+                if !self.net.verify_rns(&req.hello.key, &req.hello.rns.dest, &req.hello.rns.sig) {
+                    return refuse("the hello's signature does not check out");
+                }
+                *live = None; // one use
+            }
+            let h = req.hello;
+            if let Some(a) = h.iroh.clone() {
+                self.net.learn_iroh(a);
+            }
+            // Not confirmed until the other device comes back: this answer may never reach it.
+            add_peer(&self, &h.key, &h.name, true);
+            self.learn_rns(&h.key, &h.rns);
+            self.note(format!("Linked with {}", h.name));
+            self.wake.notify_one();
+            let Some((dest, sig)) = self.rns_info() else { return refuse("Reticulum is not running here") };
+            let net = self.net.clone();
+            let iroh = self.hello_iroh(net.link_addr().await.0);
+            let hello = ShortHello { key: self.me.clone(), iroh, name: self.saved.lock().unwrap().name.clone(), rns: RnsProof { dest, sig } };
+            json!({"ok": true, "hello": hello}).to_string().into_bytes()
+        })
+    }
+
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> transport::BoxFut<'static, Vec<u8>> {
         Box::pin(async move {
             // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
@@ -2378,6 +2517,21 @@ impl Serve for Inner {
 }
 
 impl Inner {
+    /// The iroh address this device puts in a short code's hello. With `<dir>/no-iroh-in-hello` present (test hook) it gives none,
+    /// so the other device can only reach it over Reticulum.
+    fn hello_iroh(&self, addr: EndpointAddr) -> Option<EndpointAddr> {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-iroh-in-hello").exists() {
+            return None;
+        }
+        Some(addr)
+    }
+
+    /// The clock a short code runs on (tests move it on).
+    fn code_now(&self) -> u64 {
+        now_ms() + self.code_skew_ms.load(Ordering::Relaxed)
+    }
+
     /// The name and kind this device gives a device that asks over Nearby.
     fn nearby_self(&self) -> (String, Option<String>) {
         (self.saved.lock().unwrap().name.clone(), self.device_kind.clone())
@@ -2588,6 +2742,8 @@ impl SyncEngine {
             gate: gate.clone(),
             refused: Mutex::new(HashMap::new()),
             pairing: Mutex::new(None),
+            short: Mutex::new(None),
+            code_skew_ms: AtomicU64::new(0),
             run: Mutex::new(Run::default()),
             wanted,
             wake: Notify::new(),
@@ -2645,6 +2801,51 @@ impl SyncEngine {
         Ok(inner)
     }
 
+    /// Entering a short code: a path request to its destination, a link, and the pairing request with the secret and this
+    /// device's hello; the shower's hello comes back and is checked the same way.
+    fn link_short(&self, dest: [u8; 16], secret: [u8; 5]) -> Result<Value> {
+        let inner = &self.inner;
+        let dest_hex = dest_hex_of(&dest);
+        let Some((my_dest, my_sig)) = inner.rns_info() else { bail!(transport::NO_REACH) };
+        if my_dest == dest_hex {
+            bail!("that is this device's own code");
+        }
+        let name = inner.saved.lock().unwrap().name.clone();
+        let net = inner.net.clone();
+        let me = net.id();
+        let to = dest_hex.clone();
+        let inner2 = inner.clone();
+        let reply: Result<Value> = self.rt.block_on(async move {
+            let iroh = inner2.hello_iroh(net.link_addr().await.0);
+            let body = ShortPair {
+                secret: data_encoding::BASE32_NOPAD.encode(&secret),
+                hello: ShortHello { key: me, iroh, name, rns: RnsProof { dest: my_dest, sig: my_sig } },
+            };
+            let bytes = net.pair_short(&to, serde_json::to_vec(&body)?).await?;
+            Ok(serde_json::from_slice(&bytes)?)
+        });
+        let reply = reply?;
+        if reply.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
+        }
+        let hello: ShortHello = serde_json::from_value(reply.get("hello").cloned().unwrap_or(Value::Null)).map_err(|_| anyhow!("the other device's answer could not be read"))?;
+        // Its hello must be signed by the key it names, over the destination the code named.
+        if hello.rns.dest.to_lowercase() != dest_hex || !inner.net.verify_rns(&hello.key, &hello.rns.dest, &hello.rns.sig) {
+            bail!("the other device's answer did not check out");
+        }
+        if hello.key == inner.me {
+            bail!("that is this device's own code");
+        }
+        if let Some(a) = hello.iroh.clone() {
+            inner.net.learn_iroh(a);
+        }
+        add_peer(inner, &hello.key, &hello.name, false);
+        inner.learn_rns(&hello.key, &hello.rns);
+        inner.note(format!("Linked with {}", hello.name));
+        inner.wake.notify_one();
+        Ok(json!({"ok": true, "peer": hello.key, "name": hello.name}))
+    }
+
     /// The whole interface: `method` with JSON `args`, a JSON answer. Errors come back as `{"error": "..."}` from the C ABI.
     pub fn call(&self, method: &str, args: &Value) -> Result<Value> {
         let inner = &self.inner;
@@ -2657,7 +2858,31 @@ impl SyncEngine {
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
+            "link_code" if inner.rns_info().is_some() => {
+                // The short code: this device's Reticulum destination and a one-time secret. Where iroh finds this device, its
+                // name and its signature travel inside the pairing, never in the code.
+                let (dest, _) = inner.rns_info().ok_or_else(|| anyhow!("Reticulum is not running"))?;
+                let dest = rns_dest_bytes(&dest).ok_or_else(|| anyhow!("bad Reticulum destination"))?;
+                let secret: [u8; 5] = rand::Rng::random(&mut rand::rng());
+                *inner.pairing.lock().unwrap() = None;
+                *inner.short.lock().unwrap() = Some(ShortCode { secret, expires_ms: inner.code_now() + LINK_WINDOW.as_millis() as u64, strikes: 0 });
+                Ok(json!({"code": encode_short(&dest, &secret), "valid_secs": LINK_WINDOW.as_secs()}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_skew_code_clock" => {
+                inner.code_skew_ms.store(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0), Ordering::Relaxed);
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_pair_short_raw" => {
+                // A short pairing request as written by the caller (to try what a real device would not send).
+                let body = serde_json::to_vec(args.get("body").unwrap_or(&Value::Null))?;
+                let inner2 = inner.clone();
+                let reply = self.rt.block_on(async move { Serve::pair_short(inner2, body).await });
+                Ok(serde_json::from_slice(&reply)?)
+            }
             "link_code" => {
+                *inner.short.lock().unwrap() = None;
                 let tok = token();
                 *inner.pairing.lock().unwrap() = Some((tok.clone(), Instant::now() + LINK_WINDOW));
                 let net = inner.net.clone();
@@ -2666,7 +2891,10 @@ impl SyncEngine {
                 Ok(json!({"code": code, "valid_secs": LINK_WINDOW.as_secs()}))
             }
             "link" => {
-                let code = decode_code(&s("code").ok_or_else(|| anyhow!("code is required"))?)?;
+                let code = match decode_any(&s("code").ok_or_else(|| anyhow!("code is required"))?)? {
+                    Code::Old(c) => c,
+                    Code::Short { dest, secret } => return self.link_short(dest, secret),
+                };
                 if code.a.id.to_string() == inner.net.id() {
                     bail!("that is this device's own code");
                 }
@@ -3168,7 +3396,10 @@ impl SyncEngine {
             "network": inner.network.load(Ordering::Relaxed),
             "reserve_bytes": inner.reserve.load(Ordering::Relaxed),
             "free_bytes": Inner::free_bytes(&inner.dir),
-            "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()),
+            "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()).or_else(|| {
+                let now = inner.code_now();
+                inner.short.lock().unwrap().as_ref().filter(|c| c.expires_ms > now).map(|c| (c.expires_ms - now) / 1000)
+            }),
             "peers": peers,
             "shares": shares,
             "offers": offers,
@@ -3465,5 +3696,49 @@ mod link_code_tests {
         assert!(code.starts_with("CACHE1-"));
         let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();
         assert_eq!((back.t, back.n, back.a.id), ("TOK".to_string(), "Desk".to_string(), c.a.id));
+    }
+}
+
+#[cfg(test)]
+mod short_code_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_code_reads_back_with_any_spelling() {
+        let (dest, secret) = ([0xA5u8; 16], [1u8, 2, 3, 4, 5]);
+        let code = encode_short(&dest, &secret);
+        assert!(code.starts_with("CACHE-"));
+        assert_eq!(code.matches('-').count(), 9);
+        assert_eq!(code.replace('-', "").len(), "CACHE".len() + SHORT_LEN);
+        for s in [code.clone(), code.to_lowercase(), format!("  {} ", code.replace('-', " ")), code.replace("CACHE-", "CACHE"), code.replace('-', "")] {
+            match decode_any(&s).unwrap() {
+                Code::Short { dest: d, secret: k } => assert_eq!((d, k), (dest, secret), "{s}"),
+                c => panic!("{s}: {c:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_code_of_the_wrong_length_or_alphabet_is_not_a_code() {
+        let code = encode_short(&[9; 16], &[7; 5]);
+        for s in [code[..code.len() - 1].to_string(), format!("{code}A"), format!("CACHE-1{}", &code[7..]), "CACHE-".to_string(), "CACHE-!!!!".to_string()] {
+            assert_eq!(decode_any(&s).err().as_ref().and_then(error_kind), Some("link_code_not_a_code"), "{s}");
+        }
+    }
+
+    #[test]
+    fn old_and_newer_codes_are_still_told_apart() {
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into(), r: None };
+        assert!(matches!(decode_any(&encode_code(&c).unwrap()).unwrap(), Code::Old(_)));
+        assert_eq!(decode_any("CACHE2-ABC").err().as_ref().and_then(error_kind), Some("link_code_newer"));
+        assert_eq!(decode_any("CACHE1-!!!").err().as_ref().and_then(error_kind), Some("link_code_damaged"));
+        assert_eq!(decode_any("HELLO").err().as_ref().and_then(error_kind), Some("link_code_not_a_code"));
+    }
+
+    #[test]
+    fn the_secret_compare() {
+        assert!(ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 5]));
+        assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 6]));
+        assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4]));
     }
 }

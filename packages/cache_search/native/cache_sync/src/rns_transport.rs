@@ -19,7 +19,7 @@ use n0_future::Stream;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::transport::{Ask, BoxFut, BoxStream, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
+use crate::transport::{Ask, BoxFut, BoxStream, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
 use crate::MAX_INDEX;
 
 /// How long iroh waits before it starts when Reticulum has a path to the device: Reticulum answers first when it can, and
@@ -27,6 +27,8 @@ use crate::MAX_INDEX;
 const IROH_HEAD_START: Duration = Duration::from_millis(1500);
 /// How long a pairing waits for a path to the code's Reticulum destination before it goes over iroh instead.
 const PAIR_PATH_WAIT: Duration = Duration::from_secs(6);
+/// How long a short code's pairing waits for a path to its destination (a routed answer may be slow).
+const SHORT_PATH_WAIT: Duration = Duration::from_secs(20);
 /// The longest one 16 MiB window of a file may take over Reticulum (the Reticulum fetch's own stall timeout; see
 /// [`MultiTransport::fetch`]).
 const WINDOW_TIMEOUT: Duration = Duration::from_secs(120);
@@ -249,6 +251,30 @@ impl Transport for MultiTransport {
             }
             self.iroh.pair(to, hello).await
         })
+    }
+
+    fn pair_short(&self, dest_hex: &str, body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
+        let dest_hex = dest_hex.to_string();
+        Box::pin(async move {
+            let node = self.node().ok_or_else(|| anyhow!(NO_REACH))?;
+            let dest = cache_rns::dest_from_hex(&dest_hex).ok_or_else(|| anyhow!(NO_REACH))?;
+            // A standard path request, answered through however many transport nodes lie between.
+            if !node.find_path_dest(dest, SHORT_PATH_WAIT).await {
+                bail!(NO_REACH);
+            }
+            node.request_unlinked(dest, PATH_PAIR, &body, Duration::from_secs(30)).await.map_err(|_| anyhow!(NO_REACH))
+        })
+    }
+
+    fn verify_rns(&self, key: &str, dest: &str, sig: &str) -> bool {
+        match (key.parse::<PublicKey>(), cache_rns::dest_from_hex(dest), unhex(sig)) {
+            (Ok(k), Some(d), Some(s)) => cache_rns::check_vouch_destination(&k, &d, &s),
+            _ => false,
+        }
+    }
+
+    fn learn_iroh(&self, addr: iroh::EndpointAddr) {
+        self.iroh.learn_iroh(addr);
     }
 
     fn link_addr(&self) -> BoxFut<'_, (iroh::EndpointAddr, Option<String>)> {
@@ -477,6 +503,11 @@ impl Handler for Serving {
                     // Reticulum destination it comes from, so what is stored for it is its own.
                     let refuse = |why: &str| Ok(json!({"ok": false, "error": why}).to_string().into_bytes());
                     let Ok(v) = serde_json::from_slice::<Value>(&body) else { return refuse("not a pairing hello") };
+                    // A short link code's pairing: `{secret, hello}`, every check made by the engine (the code being shown, the
+                    // secret, the signature).
+                    if v.get("secret").is_some() {
+                        return Ok(serve.clone().pair_short(body).await);
+                    }
                     let key = v.get("key").and_then(|k| k.as_str()).and_then(|k| k.parse::<PublicKey>().ok().map(|p| (k.to_string(), p)));
                     let proof = v.get("rns").and_then(|r| Some((r.get("dest")?.as_str()?.to_string(), r.get("sig")?.as_str()?.to_string())));
                     let (Some((id, key)), Some((dest, sig))) = (key, proof) else { return refuse("the hello does not say who it is from") };

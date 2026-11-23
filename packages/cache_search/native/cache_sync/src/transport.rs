@@ -86,6 +86,17 @@ pub trait Transport: Send + Sync + 'static {
     fn learn_rns(&self, _peer: &str, _dest: &str, _sig: &str) -> bool {
         false
     }
+    /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
+    /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
+    fn pair_short(&self, _dest_hex: &str, _body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
+        Box::pin(async { Err(anyhow!(NO_REACH)) })
+    }
+    /// Whether `sig` (hex) is the device key `key`'s signature over the Reticulum destination `dest` (hex). Stores nothing.
+    fn verify_rns(&self, _key: &str, _dest: &str, _sig: &str) -> bool {
+        false
+    }
+    /// Lets iroh reach a device at the address it gave in a pairing (a short code carries none).
+    fn learn_iroh(&self, _addr: EndpointAddr) {}
     /// Lets a device connect (linked, or about to be).
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
@@ -128,10 +139,15 @@ pub trait Transport: Send + Sync + 'static {
     }
 }
 
+/// What a person is told when a short code's other device cannot be reached.
+pub const NO_REACH: &str = "Could not reach the other device. Check both are on the same network, or connected to the internet through the same hub.";
+
 /// What the network asks of the engine.
 pub trait Serve: Send + Sync + 'static {
     /// A pairing hello from `peer` (any device, not linked yet): the answer to send back.
     fn pair_hello(&self, peer: &str, hello: &[u8]) -> Vec<u8>;
+    /// A pairing request over Reticulum with a short link code's secret (`{secret, hello}`): the answer to send back.
+    fn pair_short(self: Arc<Self>, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// A linked device asks (it holds the link, so this confirms it): the answer to send back.
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> BoxFut<'static, Vec<u8>>;
     /// After an index answer has been taken: the asking device may have changes too.
@@ -161,6 +177,8 @@ impl EndpointHooks for Gate {
 /// iroh: the network Cache has used since 1.0.
 pub struct IrohTransport {
     endpoint: Endpoint,
+    /// Addresses given in a pairing (a short link code has none), for iroh to connect with later.
+    known: iroh::address_lookup::MemoryLookup,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
     router: Mutex<Option<Router>>,
 }
@@ -175,7 +193,11 @@ impl IrohTransport {
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(allowed.into_iter().filter_map(|p| p.parse().ok()).collect()));
         let endpoint = builder.hooks(Gate { allowed: allowed.clone(), state: gate }).bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
-        Ok(Arc::new(IrohTransport { endpoint, allowed, router: Mutex::new(None) }))
+        let known = iroh::address_lookup::MemoryLookup::new();
+        if let Ok(l) = endpoint.address_lookup() {
+            l.add(known.clone());
+        }
+        Ok(Arc::new(IrohTransport { endpoint, known, allowed, router: Mutex::new(None) }))
     }
 
     /// The iroh address for a link code (waits a few seconds for the endpoint to be online).
@@ -263,6 +285,10 @@ impl Transport for IrohTransport {
 
     fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)> {
         Box::pin(async move { (self.iroh_addr().await, None) })
+    }
+
+    fn learn_iroh(&self, addr: EndpointAddr) {
+        self.known.add_endpoint_info(addr);
     }
 
     fn allow(&self, peer: &str) {

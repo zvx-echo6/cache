@@ -1,5 +1,5 @@
-//! Link codes between build 54 and later builds: the format stays `CACHE1-` and base32 JSON; a code from a new build still
-//! decodes as build 54 reads it, and a new build reads a code from build 54 and links over iroh.
+//! Link codes between build 54 and later builds: a device with Reticulum shows a short code, which build 54 rejects (accepted);
+//! a new build still reads a `CACHE1-` code from build 54 and links over iroh.
 #![cfg(any(target_os = "linux", target_os = "android"))]
 
 mod common;
@@ -30,20 +30,14 @@ fn decode_code(s: &str) -> Result<LinkCode, String> {
 }
 
 #[test]
-fn build_54_reads_a_new_code() {
+fn build_54_rejects_a_short_code() {
+    // Accepted: a build before 55 cannot link by a short code (its links carry over through iroh).
     let tmp = tempfile::tempdir().unwrap();
     let port = free_port();
     let a = engine(&tmp.path().join("a"), "Desk", Some(port), None, None);
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
-    assert!(code.starts_with("CACHE1-"));
-    // The new code does carry the Reticulum destination...
-    let body = data_encoding::BASE32_NOPAD.decode(code.trim_start_matches("CACHE1-").as_bytes()).unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["r"]["d"].as_str().map(str::len), Some(32), "{v}");
-    // ...and build 54's decoder still reads it (the unknown field is ignored).
-    let old = decode_code(&code).expect("build 54 decodes a new code");
-    assert_eq!(old.n, "Desk");
-    assert!(!old.t.is_empty());
+    assert!(code.starts_with("CACHE-") && !code.starts_with("CACHE1-"), "{code}");
+    assert!(decode_code(&code).is_err(), "build 54 does not read a short code");
     a.close();
 }
 

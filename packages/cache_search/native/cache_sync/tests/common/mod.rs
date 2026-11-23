@@ -49,19 +49,20 @@ pub fn call(e: &SyncEngine, m: &str, a: Value) -> Value {
     e.call(m, &a).unwrap_or_else(|err| panic!("{m}: {err:#}"))
 }
 
-/// The link code with the iroh address taken out (only the device id stays): iroh cannot find that device, so a link made
-/// with it, and everything after, can only go over Reticulum.
-pub fn rns_only(code: &str) -> String {
-    let body = code.strip_prefix("CACHE1-").expect("a CACHE1 code");
-    let mut v: Value = serde_json::from_slice(&data_encoding::BASE32_NOPAD.decode(body.as_bytes()).unwrap()).unwrap();
-    assert!(v.get("r").is_some(), "a new code carries the Reticulum destination: {v}");
-    let a = v["a"].as_object_mut().unwrap();
-    for (k, v) in a.iter_mut() {
-        if k != "id" {
-            *v = if v.is_array() { json!([]) } else { Value::Null };
-        }
-    }
-    format!("CACHE1-{}", data_encoding::BASE32_NOPAD.encode(&serde_json::to_vec(&v).unwrap()))
+/// A short link code's parts: the 16 byte destination and the 5 byte secret.
+pub fn short_parts(code: &str) -> (Vec<u8>, Vec<u8>) {
+    let body: String = code.strip_prefix("CACHE-").expect("a short code").chars().filter(|c| *c != '-').collect();
+    assert_eq!(body.len(), 34, "{code}");
+    let raw = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).unwrap();
+    assert_eq!(raw.len(), 21);
+    (raw[..16].to_vec(), raw[16..].to_vec())
+}
+
+/// A short code from its parts, written the way a device shows it.
+pub fn short_code(dest: &[u8], secret: &[u8]) -> String {
+    let body = data_encoding::BASE32_NOPAD.encode(&[dest, secret].concat());
+    let groups: Vec<&str> = body.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect();
+    format!("CACHE-{}", groups.join("-"))
 }
 
 /// What the file `sync.json` in `dir` says about its first linked device.
@@ -160,4 +161,13 @@ pub fn wait_dbg(what: &str, secs: u64, mut ok: impl FnMut() -> bool, diag: impl 
 pub fn brief(e: &SyncEngine) -> String {
     let st = call(e, "status", json!({}));
     format!("peers={} log={}", st["peers"], st["log"].to_string().chars().take(1500).collect::<String>())
+}
+
+/// Makes both devices leave their iroh address out of a short code's pairing (iroh then cannot find the other device, so
+/// everything after the link can only go over Reticulum).
+pub fn rns_only_dirs(dirs: &[&Path]) {
+    for d in dirs {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join("no-iroh-in-hello"), b"").unwrap();
+    }
 }

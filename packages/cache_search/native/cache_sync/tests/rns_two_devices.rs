@@ -1,5 +1,5 @@
-//! Two engines with Reticulum on over loopback TCP, linked with a new code over Reticulum only (the code's iroh address is
-//! taken out, iroh has no relay or lookup): a file syncs, then a 150 MB file is cut off half way and resumes from the windows
+//! Two engines with Reticulum on over loopback TCP, linked with a short code over Reticulum only (the code has no iroh address;
+//! iroh has no relay or lookup): a file syncs, then a 150 MB file is cut off half way and resumes from the windows
 //! already verified.
 #![cfg(any(target_os = "linux", target_os = "android"))]
 
@@ -17,11 +17,12 @@ fn link_sync_cut_and_resume_over_reticulum() {
     std::fs::write(fa.join("notes.txt"), "first").unwrap();
 
     let port = free_port();
+    rns_only_dirs(&[&da, &db]);
     let a = engine(&da, "Desk", Some(port), None, None);
     let b = engine(&db, "Phone", None, Some(port), None);
 
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
-    let linked = call(&b, "link", json!({"code": rns_only(&code)}));
+    let linked = call(&b, "link", json!({"code": code}));
     assert_eq!(linked["name"], "Desk");
     // Both saved the other's Reticulum address from the pairing.
     wait("both sides to hold the address", 20, || saved_peer(&da)["rns"]["dest"].is_string() && saved_peer(&db)["rns"]["dest"].is_string());
