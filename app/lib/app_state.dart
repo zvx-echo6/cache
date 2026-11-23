@@ -437,10 +437,12 @@ class AppState extends ChangeNotifier {
   /// A browser: the chat models on the server.
   Future<void> _refreshServerModels() async {
     try {
+      final listed = await _server!.chatModels();
       final found = [
-        for (final m in await _server!.chatModels()) ModelEntry(path: m.id, size: m.size),
+        for (final m in listed) ModelEntry(path: m.id, size: m.size),
       ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       models = found;
+      await _followServerLoaded(listed.where((m) => m.loaded).map((m) => m.id).firstOrNull);
       if (failed != null && !found.any((m) => m.path == failed!.path)) {
         failed = null;
         failure = null;
@@ -450,6 +452,29 @@ class AppState extends ChangeNotifier {
       logInfo('The server\'s chat models could not be read', detail: e.message);
     }
     notifyListeners();
+  }
+
+  /// A browser: the server has one model loaded for every tab, so what this tab shows follows the server, not only this tab's own
+  /// load. [loadedId] is the file the server reports loaded (null: none). Another tab's load is adopted by loading the same id here:
+  /// the server answers at once (the same model again is a no-op) and this tab's session then knows the model too. Not while this
+  /// tab is loading or unloading, which settle it themselves.
+  Future<void> _followServerLoaded(String? loadedId) async {
+    if (loading != null || _unloading != null) return;
+    if (loadedId == null) {
+      if (active == null) return;
+      active = null;
+      activeInfo = null;
+      modelGeneration++;
+      return;
+    }
+    if (active?.path == loadedId) return;
+    final e = models.where((m) => m.path == loadedId).firstOrNull;
+    if (e != null) await activate(e);
+  }
+
+  /// A browser tab came back to the front, or Ask opened: read the server's loaded model again so this tab shows the true state.
+  Future<void> syncServerModel() async {
+    if (_server != null) await _refreshServerModels();
   }
 
   /// Deletes a model file from the models folder. The model in use (or one being loaded) is kept: false.
@@ -690,6 +715,7 @@ class AppState extends ChangeNotifier {
   /// more than the memory free now ([memory]), it stays resting (Ask shows "No model is loaded" with its Load button), and the log
   /// says why. [force] is the person's own tap on that button: it loads whatever the room.
   Future<void> wake({bool force = false}) async {
+    await syncServerModel();
     final r = resting;
     if (r == null || active != null || loading != null) return;
     // A release in progress finishes first (and the memory it frees is there to be read below).
