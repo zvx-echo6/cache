@@ -297,10 +297,10 @@ void main() {
 
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
-    expect(find.text('Link code for Cache Server'), findsOneWidget);
+    expect(find.text('Show my link code'), findsOneWidget, reason: 'its own page now, with a back arrow');
     expect(find.text('CACHE1-TESTCODE'), findsOneWidget);
     expect(find.text('Copy code'), findsOneWidget);
-    await tester.tapAt(const Offset(5, 5));
+    await tester.pageBack();
     await _settle(tester);
     expect(find.text('Copy code'), findsNothing);
 
