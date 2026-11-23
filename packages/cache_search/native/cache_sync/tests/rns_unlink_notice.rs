@@ -53,17 +53,20 @@ fn rounds(e: &cache_sync::SyncEngine, n: usize) {
 #[test]
 fn an_unlinked_device_learns_it_over_reticulum_and_drops_the_link() {
     let p = linked();
-    // Linked: B checks in fine and keeps A.
-    rounds(&p.b, 2);
+    // Linked: B checks in fine and keeps A. These successful rounds open the Reticulum link that B then reuses after the
+    // unlink (a hello is only sent on a new link), so the "not linked" answer has to reach B on that already-open link.
+    rounds(&p.b, 3);
     assert_eq!(peers(&p.b).len(), 1);
     call(&p.a, "unlink", json!({"peer": p.b_id}));
     assert!(saved(&p.da)["former"].as_array().is_some_and(|f| f.len() == 1 && f[0]["id"] == p.b_id.as_str()), "A records B as a former device");
     // One round is not enough; two at least the interval apart drop it.
-    wait("B dropping A", 60, || {
+    // A wall-clock limit (a round itself can block): on the already-open link this takes well under a minute.
+    let end = std::time::Instant::now() + Duration::from_secs(45);
+    while !peers(&p.b).is_empty() {
+        assert!(std::time::Instant::now() < end, "B drops A within 45 s on the link that was already open");
         call(&p.b, "sync_now", json!({}));
         std::thread::sleep(Duration::from_secs(2));
-        peers(&p.b).is_empty()
-    });
+    }
     p.a.close();
     p.b.close();
 }

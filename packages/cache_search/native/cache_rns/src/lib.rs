@@ -717,8 +717,17 @@ impl RnsNode {
                                     .unwrap_or(Asker::Unlinked)
                             };
                             if asker == Asker::Unlinked && !open.contains(&name) {
-                                // No hello from a linked device, and not an open path: no answer at all, as the iroh gate
-                                // refuses the connection.
+                                // A device whose hello verified on this link but that has since been unlinked is told
+                                // "not linked" (its link predates the unlink, so no new hello will come).
+                                let former = {
+                                    let s = state.lock().unwrap();
+                                    verified_former_device(&s, &token.link_id, identity)
+                                };
+                                if former {
+                                    let _ = handle.respond_bytes(token, NOT_LINKED);
+                                }
+                                // Otherwise no hello from a linked device, and not an open path: no answer at all, as the
+                                // iroh gate refuses the connection.
                                 continue;
                             }
                             if name == blobs::BLOB_PATH {
@@ -842,13 +851,17 @@ impl RnsNode {
         s.destination_of.retain(|k, _| keep.contains(k));
         *self.peers_dest.lock().unwrap() = s.destination_of.values().copied().collect();
         s.heard.retain(|k, _| keep.contains(k));
-        s.verified.retain(|_, (d, _)| keep.contains(d));
+        // `verified` is kept: `verified_device` checks the peer list, and an unlinked device's open link must still be
+        // recognised (to answer it "not linked") until `set_former` says whether it is remembered.
         s.link_to.retain(|k, _| keep.contains(k));
     }
 
     /// Replaces the list of devices that used to be linked (not linked now): a signed hello from one is answered "not linked".
     pub fn set_former(&self, former: &[PublicKey]) {
-        self.state.lock().unwrap().former = former.iter().map(|p| *p.as_bytes()).collect();
+        let mut s = self.state.lock().unwrap();
+        s.former = former.iter().map(|p| *p.as_bytes()).collect();
+        let (peers, former) = (s.peers.clone(), s.former.clone());
+        s.verified.retain(|_, (d, _)| peers.contains(d) || former.contains(d));
     }
 
     /// Whether a path to `peer`'s stored destination is known: its announce was heard (from any number of hops away), or a
@@ -998,7 +1011,13 @@ impl RnsNode {
         )
         .await;
         match r {
-            Ok(Ok((reply, _rtt))) => unpack_bin(reply),
+            Ok(Ok((reply, _rtt))) => {
+                let body = unpack_bin(reply)?;
+                if body == NOT_LINKED {
+                    bail!(NOT_LINKED_ERROR);
+                }
+                Ok(body)
+            }
             Ok(Err(e)) => {
                 self.forget_link(peer);
                 Err(anyhow!("the request failed: {e:?}"))
@@ -1144,6 +1163,14 @@ fn verified_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> 
         return None;
     }
     PublicKey::from_bytes(device).ok()
+}
+
+/// True when the hello on `link` verified a device that is no longer linked but is in the former set.
+fn verified_former_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> bool {
+    let Some((device, hello_id)) = s.verified.get(link) else {
+        return false;
+    };
+    identity == Some(*hello_id) && !s.peers.contains(device) && s.former.contains(device)
 }
 
 /// Responses travel as a msgpack value, as RNS packs them; `respond_bytes` sends a msgpack bin. Unwraps it.
