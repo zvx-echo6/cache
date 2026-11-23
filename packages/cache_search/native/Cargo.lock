@@ -1110,6 +1110,7 @@ dependencies = [
  "prns-config",
  "rand 0.10.3",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "x25519-dalek",
