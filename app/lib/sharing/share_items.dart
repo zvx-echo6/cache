@@ -2,8 +2,8 @@ import 'dart:io';
 
 import '../app_state.dart';
 import '../maps/layers/layer_engine.dart';
-import '../notebook/notebook_model.dart' show FieldType;
 import '../notebook/notebook_state.dart';
+import '../notebook/sync/photo_gate.dart';
 import '../notebook/sync/sync_engine.dart' show NotebookSync;
 import '../regions/regions_state.dart';
 import '../settings/data_kinds.dart';
@@ -94,28 +94,10 @@ List<ShareItem> notebookItems(NotebookState notebooks) => [
     ),
 ];
 
-/// The photos notebook sync may send: those an entry that goes out refers to. An entry goes out when its notebook is not
-/// switched off ([off]: the folder names the engine is given) and notebook sync writes it for sharing (not a draft; not private
-/// unless its notebook is included). A photo no such entry refers to stays on this device, whichever notebook holds it.
-Future<List<String>> notebookPhotosToSend(NotebookState notebooks, List<String> off) async {
-  final out = <String>{};
-  for (final n in notebooks.notebooks) {
-    if (off.contains(NotebookSync.folderNameOf(n))) continue;
-    final included = notebooks.privateSharing?.included(n.id) ?? false;
-    final photoFields = {for (final f in n.def.fields) if (f.type == FieldType.photo && f.fid != null) f.fid!};
-    for (final e in await notebooks.entries(n.id)) {
-      if (e.draft || (e.private && !included)) continue;
-      for (final p in e.photos) {
-        out.add(NotebookSync.photoPath(p.id));
-      }
-      for (final fid in photoFields) {
-        final v = e.values[fid];
-        if (v is List) out.addAll([for (final id in v.whereType<String>()) NotebookSync.photoPath(id)]);
-      }
-    }
-  }
-  return out.toList()..sort();
-}
+/// The photos notebook sync may send: those an entry that goes out refers to (see [notebookPhotosToSendFrom]; [off] is the folder
+/// names the engine is given).
+Future<List<String>> notebookPhotosToSend(NotebookState notebooks, List<String> off) =>
+    notebookPhotosToSendFrom(notebooks, off, included: (id) => notebooks.privateSharing?.included(id) ?? false);
 
 /// A notebook on a linked device only; the photos folder every notebook uses travels with the kind.
 ShareItem? notebookRemoteItem(String share, String path, int bytes) =>

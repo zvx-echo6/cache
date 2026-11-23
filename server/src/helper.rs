@@ -40,6 +40,10 @@ pub struct HelperConfig {
     /// contours, the elevation layer, imagery), handed to the helper as `CACHE_STARTER_LAYERS` when the folder is there; the helper
     /// puts them in the core's definition folder before the core opens, as the phone does at every start.
     pub starter_layers: Option<PathBuf>,
+    /// The notebook templates and starter logs the app bundles (`<web>/assets/assets/notebook` in the web build: `templates.json`,
+    /// `starters.json`), handed to the helper as `CACHE_NOTEBOOK_TEMPLATES` when the folder is there; notebook sync makes a notebook
+    /// that arrives from a phone without its definition from the template its files name.
+    pub notebook_templates: Option<PathBuf>,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -61,6 +65,7 @@ impl HelperConfig {
             data_dir: None,
             guide_package: None,
             starter_layers: None,
+            notebook_templates: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -258,6 +263,9 @@ impl Helper {
         }
         if let Some(layers) = self.cfg.starter_layers.as_ref().filter(|d| d.is_dir()) {
             cmd.env("CACHE_STARTER_LAYERS", layers);
+        }
+        if let Some(templates) = self.cfg.notebook_templates.as_ref().filter(|d| d.is_dir()) {
+            cmd.env("CACHE_NOTEBOOK_TEMPLATES", templates);
         }
         // Installs the public-address guard in the core crates the helper hosts (cache_netguard): a tab reaches their network paths
         // through /api/core, and they must not be a way to a LAN or metadata address. Phones never set it.

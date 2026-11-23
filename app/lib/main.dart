@@ -108,6 +108,7 @@ import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'nav/open_maps.dart';
 import 'sharing/share_items.dart';
+import 'sharing/server_private_sharing.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
 import 'sharing/synced_settings.dart';
@@ -1268,7 +1269,8 @@ class _CacheAppState extends State<CacheApp> {
         before?.call();
         if (!plat.isWeb) connections.changed();
       };
-      notebooks.privateSharing = connections;
+      // A browser's switches are the server's (its notebook sync keeps them); a phone's are NotebookConnections'.
+      notebooks.privateSharing = plat.isWeb ? ServerPrivateSharing(sharing) : connections;
       // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
       if (!plat.isWeb) {
         unawaited(connections.syncAll());

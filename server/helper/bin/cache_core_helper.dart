@@ -17,13 +17,15 @@ import 'pdf_zim_indexer.dart';
 import 'starter_layers.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
+import 'core_notebook_store.dart';
+import 'notebook_sync_host.dart';
 import 'regions_ops.dart';
 import 'server_settings_sync.dart';
 import 'sharing_host.dart';
 import 'video_ops.dart';
 
 /// Cache for Linux's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
-/// CACHE_STARTER_LAYERS is the web build's folder of starter map layer definitions (see starter_layers.dart). /// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
+/// CACHE_STARTER_LAYERS is the web build's folder of starter map layer definitions (see starter_layers.dart). CACHE_NOTEBOOK_TEMPLATES is the web build's folder of notebook templates (`templates.json`, `starters.json`; see notebook_sync_host.dart). /// CACHE_KEYSTORE is the keystore file (see keystore.dart). CACHE_APP_SUPPORT and CACHE_APP_DOCS are the app's support and documents folders on the server (both required); `fs.*` ops and
 /// the core's config work on them. CACHE_DATA is the server's data folder: with it the helper runs the sharing host (bin/sharing_host.dart:
 /// the sync engine, on `<data>/sync`), which starts here when sharing was set up and stops when stdin ends. CACHE_VALHALLA_SHIM is the full path of libvalhalla_shim.so (the core's road router).
 /// Speaks the line protocol of bin/line_protocol.dart on stdin/stdout; logs go to stderr only.
@@ -123,6 +125,26 @@ Future<void> main() async {
     host.setKeyOn = settingsSync.setKeyOnFromBrowser;
     unawaited(settingsSync.start());
   }
+  // Notebook sync with the linked devices, run here with no tab open: the notebooks in the core and `<support>/notebook-share` are
+  // kept the same by the phone's engine; a browser's change to the notebooks (the write hook below) exports.
+  NotebookSyncHost? notebookSync;
+  if (sharing != null) {
+    final host = sharing;
+    final nb = NotebookSyncHost(
+      support: dirs.support,
+      store: CoreNotebookStore(
+        call: (op, args) async => (dispatcher.handle('notebook', {'op': op, 'args': args}) as Map).cast<String, dynamic>(),
+        mediaDir: Directory('${dirs.support.path}/notebook'),
+      ),
+      shareOn: () => host.running && host.shareOf('notebooks') != null,
+      prepareShare: host.refreshGate,
+      offChanged: host.refreshOff,
+      templates: serverTemplates(Platform.environment['CACHE_NOTEBOOK_TEMPLATES'], log: log),
+      log: log,
+    );
+    attachNotebookSync(host, nb);
+    notebookSync = nb;
+  }
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
   if (sharing != null) {
     indexesSync = IndexesSync(host: sharing, dispatcher: dispatcher, savedVideos: () => videoOps.savedVideos(), log: log);
@@ -138,9 +160,14 @@ Future<void> main() async {
       indexesArrived(ids);
       final s = settingsSync;
       if (s != null) unawaited(s.shareChanged(ids));
+      final n = notebookSync;
+      if (n != null) unawaited(n.shareChanged(ids));
     };
-    unawaited(sharing.init());
+    // The share engine starts first (the notebook pass needs it); the first pass follows, and the core opens a moment after start,
+    // so a pass that cannot read the notebooks yet is only logged and the next trigger (a share change, a write) does it again.
+    unawaited(sharing.init().then((_) => notebookSync?.start()));
   }
+  final nbSync = notebookSync;
   await serveLines(
     stdin,
     (line) async {
@@ -152,6 +179,7 @@ Future<void> main() async {
     handlers: [
       OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, given: givenSources, onOpened: () {
         updateIndexes();
+        unawaited(notebookSync?.start() ?? Future<void>.value());
         regionsOps.afterOpen();
         keys.replay(dispatcher);
       }),
@@ -167,9 +195,10 @@ Future<void> main() async {
       keys,
       if (sharing != null) SharingOps(sharing),
     ],
-    hook: keys,
+    hook: nbSync == null ? keys : NotebookWriteHook(nbSync.changed, then: keys),
     onEnd: () {
       settingsSync?.stop();
+      notebookSync?.stop();
       return sharing?.stop();
     },
   );
