@@ -3,6 +3,7 @@ import Flutter
 import Darwin
 import MapLibre
 import os
+import Security
 import UIKit
 import UniformTypeIdentifiers
 import UserNotifications
@@ -162,6 +163,10 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
+    // The install marker (lib/sharing/install_marker.dart): the device-only install id in the Keychain, and the backup-exclusion flag on
+    // the sync folder.
+    let installMarker = FlutterMethodChannel(name: "co.cache/install_marker", binaryMessenger: messenger)
+    installMarker.setMethodCallHandler { call, result in InstallMarker.handle(call, result: result) }
     // The log's device identifier and fresh app memory readings for guards and PDF diagnostics.
     let memory = FlutterMethodChannel(name: "co.cache/memory", binaryMessenger: messenger)
     memory.setMethodCallHandler { call, result in
@@ -435,5 +440,75 @@ final class RouteSnapshot {
     active = nil
     activeResult?(FlutterError(code: "cancelled", message: "a newer picture was asked for", details: nil))
     activeResult = nil
+  }
+}
+
+/// The device-only half of the install marker (lib/sharing/install_marker.dart), and the sync folder's backup flag.
+/// - "read" / "write": one Keychain item (a generic password) with kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, which neither
+///   an iCloud or computer backup restored onto another iPhone nor a phone-to-phone transfer carries. After first unlock, so a
+///   background sync round (which can run with the phone locked) can read it.
+/// - "excludeFromBackup": creates the folder if needed and sets NSURLIsExcludedFromBackupKey on it. The app calls it at every start.
+enum InstallMarker {
+  private static let service = "co.cache.install-marker"
+  private static let account = "install-id"
+
+  private static func query() -> [String: Any] {
+    [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+  }
+
+  static func handle(_ call: FlutterMethodCall, result: FlutterResult) {
+    switch call.method {
+    case "read":
+      var q = query()
+      q[kSecReturnData as String] = true
+      q[kSecMatchLimit as String] = kSecMatchLimitOne
+      var item: CFTypeRef?
+      let status = SecItemCopyMatching(q as CFDictionary, &item)
+      if status == errSecItemNotFound {
+        result(nil)
+      } else if status == errSecSuccess, let data = item as? Data, let id = String(data: data, encoding: .utf8) {
+        result(id)
+      } else {
+        result(FlutterError(code: "keychain_read", message: "Keychain read failed (\(status))", details: nil))
+      }
+    case "write":
+      guard let args = call.arguments as? [String: Any], let id = args["id"] as? String, !id.isEmpty,
+        let data = id.data(using: .utf8)
+      else {
+        result(FlutterError(code: "bad_id", message: "no id given", details: nil))
+        return
+      }
+      SecItemDelete(query() as CFDictionary)
+      var add = query()
+      add[kSecValueData as String] = data
+      add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      let status = SecItemAdd(add as CFDictionary, nil)
+      if status == errSecSuccess {
+        result(nil)
+      } else {
+        result(FlutterError(code: "keychain_write", message: "Keychain write failed (\(status))", details: nil))
+      }
+    case "excludeFromBackup":
+      guard let args = call.arguments as? [String: Any], let path = args["path"] as? String, !path.isEmpty else {
+        result(FlutterError(code: "bad_path", message: "no path given", details: nil))
+        return
+      }
+      do {
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        var url = URL(fileURLWithPath: path, isDirectory: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+        result(nil)
+      } catch {
+        result(FlutterError(code: "exclude_failed", message: error.localizedDescription, details: nil))
+      }
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 }
