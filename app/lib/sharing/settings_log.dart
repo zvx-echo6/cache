@@ -258,6 +258,11 @@ class SettingsLogState {
   /// The keys ticked for each device, by device (their secure-storage names).
   final Map<String, Set<String>> keysFor = {};
 
+  /// "Include API keys" is on for a device (present here), and the keys left out of it, by device. A key saved later is not in the
+  /// set, so it follows the switch. [keysFor] holds the single ticks of before this switch existed until [SettingsSync.migrateKeys]
+  /// has turned them into this.
+  final Map<String, Set<String>> keysAll = {};
+
   /// The note of the change each setting last took from another device, by key.
   final Map<String, Object?> notes = {};
 
@@ -283,6 +288,7 @@ class SettingsLogState {
     'last': last,
     'seen': seen,
     'keys': {for (final e in keysFor.entries) e.key: e.value.toList()..sort()},
+    if (keysAll.isNotEmpty) 'keysAll': {for (final e in keysAll.entries) e.key: e.value.toList()..sort()},
     'notes': notes,
     'waiting': {for (final e in waiting.entries) e.key: e.value.toLine()},
     if (removed.isNotEmpty) 'removed': removed,
@@ -303,6 +309,9 @@ class SettingsLogState {
     }
     for (final e in ((j['keys'] as Map?) ?? const {}).entries) {
       if (e.value is List) keysFor['${e.key}'] = {for (final x in e.value as List) '$x'};
+    }
+    for (final e in ((j['keysAll'] as Map?) ?? const {}).entries) {
+      if (e.value is List) keysAll['${e.key}'] = {for (final x in e.value as List) '$x'};
     }
     for (final e in ((j['notes'] as Map?) ?? const {}).entries) {
       notes['${e.key}'] = e.value;

@@ -70,12 +70,22 @@ class DeviceSettingsSection extends StatelessWidget {
                     status: [Part(groups == total ? '$total groups of settings' : (groups == 0 ? 'Nothing included' : '$groups of $total groups'))],
                     onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WhatsIncludedPage(sync: sync, peer: peer, name: name))),
                   ),
-                  if (!receiving)
+                  if (receiving)
+                    SettingsRow(
+                      key: const ValueKey('link-keys'),
+                      icon: Icons.key_outlined,
+                      title: 'API keys',
+                      status: [Part('Keys come from $name if $name includes them')],
+                      statusLines: null,
+                      chevron: false,
+                    )
+                  else
                     SettingsRow(
                       key: const ValueKey('link-keys'),
                       icon: Icons.key_outlined,
                       title: 'API keys',
                       status: [Part(keys.isEmpty ? 'No keys saved here' : (keysOn == 0 ? 'None included' : '$keysOn of ${keys.length} included'))],
+                      statusLines: null,
                       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ApiKeysPage(sync: sync, peer: peer, name: name))),
                     ),
                 ],
@@ -343,7 +353,8 @@ class _SettingsGroupPageState extends State<SettingsGroupPage> {
   }
 }
 
-/// Settings > Sharing and sync > a device > API keys: each key saved here, ticked on its own (all off at first).
+/// Settings > Sharing and sync > a device > API keys: one "Include API keys" switch (off for a newly linked device), and under it each key
+/// that can be left out. Keys saved later follow the switch. Keys are never written to a synced folder.
 class ApiKeysPage extends StatelessWidget {
   const ApiKeysPage({super.key, required this.sync, required this.peer, required this.name});
 
@@ -357,9 +368,21 @@ class ApiKeysPage extends StatelessWidget {
       listenable: sync,
       builder: (context, _) {
         final keys = sync.keys();
+        final on = sync.includeKeys(peer);
         return SettingsPage(
           title: 'API keys',
           children: [
+            SettingsGroup(
+              rows: [
+                SwitchRow(
+                  key: const ValueKey('include-keys'),
+                  title: 'Include API keys',
+                  status: [Part(on ? 'All keys go to $name' : 'No keys go to $name')],
+                  value: on,
+                  onChanged: (v) => sync.setIncludeKeys(peer, v),
+                ),
+              ],
+            ),
             if (keys.isEmpty)
               const NoteText('No keys are saved on this device.')
             else
@@ -375,8 +398,8 @@ class ApiKeysPage extends StatelessWidget {
                 ],
               ),
             NoteText(
-              'A key you tick goes to $name alone, encrypted for it, and is kept in its secure storage. Keys are never written to a '
-              'synced folder.',
+              '${on ? 'Keys you add later are included too. ' : ''}A key that goes to $name is encrypted for it alone and kept in its secure '
+              'storage. Keys are never written to a synced folder.',
             ),
           ],
         );
