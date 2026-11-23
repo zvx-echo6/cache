@@ -257,7 +257,7 @@ class _SharingPageState extends State<SharingPage> {
               autofocus: true,
               minLines: 3,
               maxLines: 6,
-              decoration: const InputDecoration(hintText: 'CACHE1-…', border: OutlineInputBorder()),
+              decoration: const InputDecoration(hintText: 'CACHE-…', border: OutlineInputBorder()),
             ),
             if (scanner != null) ...[
               const SizedBox(height: 12),

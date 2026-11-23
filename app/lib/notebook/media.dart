@@ -64,9 +64,13 @@ Future<NbPhoto?> storePhoto(NotebookState nb, Uint8List bytes, {String? id}) asy
   return NbPhoto(id: id, width: out.width, height: out.height, bytes: out.photo.length);
 }
 
-/// "Take photo" ([camera]) or "Choose from phone"; null when nothing was taken or chosen.
+/// The system camera or photo picker. A test gives its own.
+Future<XFile?> Function(ImageSource source) pickPhoto = (source) => ImagePicker().pickImage(source: source);
+
+/// "Take photo" ([camera]) or "Choose from phone"; null when nothing was taken or chosen. A refused camera throws the picker's
+/// PlatformException (code `camera_access_denied`, or `camera_access_restricted` on an iPhone).
 Future<NbPhoto?> addPhoto(NotebookState nb, {required bool camera}) async {
-  final x = await ImagePicker().pickImage(source: camera ? ImageSource.camera : ImageSource.gallery);
+  final x = await pickPhoto(camera ? ImageSource.camera : ImageSource.gallery);
   if (x == null) return null;
   return storePhoto(nb, await x.readAsBytes());
 }
