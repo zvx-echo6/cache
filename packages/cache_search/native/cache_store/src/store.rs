@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::{Error, Hash, Result, BLOCK_BYTES, INLINE_MAX};
 
 const BLOCK: BlockSize = BlockSize::from_chunk_log(4);
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// A function that gives a set of hashes, called when the store needs the current set.
 pub type SetFn = Arc<dyn Fn() -> HashSet<Hash> + Send + Sync>;
@@ -187,6 +187,9 @@ fn stamp_of(m: &fs::Metadata) -> Stamp {
 struct Row {
     size: u64,
     partial: bool,
+    /// For a partial entry: the last chunk group has verified, which is what proves the size. Until then the size is only what
+    /// a sender said.
+    size_verified: bool,
     inline: Option<Vec<u8>>,
     have: ChunkRanges,
 }
@@ -266,6 +269,8 @@ impl OutboardMut for NoOutboard {
 struct Track {
     file: File,
     seen: Arc<Mutex<ChunkRanges>>,
+    size: u64,
+    last: Arc<AtomicBool>,
 }
 
 impl WriteAt for Track {
@@ -275,6 +280,9 @@ impl WriteAt for Track {
     fn write_all_at(&mut self, pos: u64, buf: &[u8]) -> io::Result<()> {
         self.file.write_all_at(pos, buf)?;
         if !buf.is_empty() {
+            if pos + buf.len() as u64 == self.size {
+                self.last.store(true, Ordering::SeqCst);
+            }
             let r = ChunkRanges::from(ChunkNum(pos / 1024)..ChunkNum((pos + buf.len() as u64).div_ceil(1024)));
             let mut s = self.seen.lock().unwrap_or_else(|e| e.into_inner());
             *s = s.union(&r);
@@ -359,13 +367,17 @@ impl Store {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS files(
                 hash BLOB PRIMARY KEY, size INTEGER NOT NULL, state INTEGER NOT NULL, location INTEGER NOT NULL,
-                inline_data BLOB, inline_outboard BLOB, have BLOB) WITHOUT ROWID;
+                inline_data BLOB, inline_outboard BLOB, have BLOB, size_verified INTEGER NOT NULL DEFAULT 1) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS external(
                 hash BLOB NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
                 PRIMARY KEY(hash, path)) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS external_path ON external(path);
              CREATE TABLE IF NOT EXISTS tags(name BLOB PRIMARY KEY, hash BLOB NOT NULL) WITHOUT ROWID;",
         )?;
+        if version == 1 {
+            // Version 1 had no record of whether a partial entry's size was proven.
+            conn.execute_batch("ALTER TABLE files ADD COLUMN size_verified INTEGER NOT NULL DEFAULT 1; UPDATE files SET size_verified=0 WHERE state=1;")?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Store {
             inner: Arc::new(Inner {
@@ -465,7 +477,13 @@ impl Store {
         let c = self.db()?;
         let Some(row) = load_row(&c, hash)? else { return Ok(Status::Absent) };
         if row.partial {
-            return Ok(if self.partial_files_ok(hash, row.size) { Status::Partial { size: row.size, have: row.have } } else { Status::Absent });
+            // The size may still be a sender's claim (see `size_verified`); the held chunks are verified either way, so a fetch
+            // can resume. A different size from a later piece replaces an unproven one.
+            return Ok(if self.partial_files_ok(hash, row.size) {
+                Status::Partial { size: row.size, have: row.have }
+            } else {
+                Status::Absent
+            });
         }
         Ok(match self.source(&c, hash, &row)? {
             Some(_) => Status::Complete { size: row.size },
@@ -854,7 +872,9 @@ impl Store {
                         return Ok(());
                     }
                 }
-                Some(r) if r.size != size => return Err(Error::Verify("the size differs from the partial file's".into())),
+                // A size that was never proven gives way to a different one: what is held starts over.
+                Some(r) if r.size != size && !r.size_verified => {}
+                Some(r) if r.size != size => return Err(Error::Verify("the size differs from the proven size of the partial file".into())),
                 Some(r) if self.partial_files_ok(hash, size) => fresh = r.have.is_empty(),
                 _ => {}
             }
@@ -869,7 +889,7 @@ impl Store {
             pobao.set_len(tree.outboard_size())?;
             if fresh || existing.is_none() {
                 tx.execute(
-                    "INSERT OR REPLACE INTO files(hash, size, state, location, have) VALUES(?1, ?2, 1, 1, ?3)",
+                    "INSERT OR REPLACE INTO files(hash, size, state, location, have, size_verified) VALUES(?1, ?2, 1, 1, ?3, 0)",
                     params![hash.as_bytes().as_slice(), size as i64, encode_have(&ChunkRanges::empty())],
                 )?;
             }
@@ -879,25 +899,34 @@ impl Store {
         let seen = Arc::new(Mutex::new(ChunkRanges::empty()));
         let part_sync = part.try_clone()?;
         let mut ob = PreOrderOutboard { root: (*hash).into(), tree, data: pobao };
-        let res = decode_ranges(body, ranges, Track { file: part, seen: seen.clone() }, &mut ob);
+        let last = Arc::new(AtomicBool::new(false));
+        let res = decode_ranges(body, ranges, Track { file: part, seen: seen.clone(), size, last: last.clone() }, &mut ob);
         // What verified is flushed and recorded whether or not the rest did.
         part_sync.sync_all()?;
         ob.data.sync_all()?;
         let seen = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        self.record_have(hash, size, &seen)?;
+        self.record_have(hash, size, &seen, last.load(Ordering::SeqCst))?;
         res.map_err(|e| Error::Verify(e.to_string()))
     }
 
-    fn record_have(&self, hash: &Hash, size: u64, seen: &ChunkRanges) -> Result<()> {
+    fn record_have(&self, hash: &Hash, size: u64, seen: &ChunkRanges, last_verified: bool) -> Result<()> {
         let mut c = self.db()?;
         let tx = c.transaction()?;
         let row = load_row(&tx, hash)?.ok_or_else(|| Error::Missing(format!("{} was swept while it was fetched", hash.fmt_short())))?;
         if !row.partial {
             return Ok(());
         }
+        if row.size != size {
+            // Another piece restarted the entry under a different size while this one was being written.
+            return Err(Error::Verify("the size changed while the piece was written".into()));
+        }
         let have = row.have.union(seen);
-        if !have.is_superset(&all_chunks(size)) {
-            tx.execute("UPDATE files SET have=?2 WHERE hash=?1", params![hash.as_bytes().as_slice(), encode_have(&have)])?;
+        let verified = row.size_verified || last_verified;
+        if !(verified && have.is_superset(&all_chunks(size))) {
+            tx.execute(
+                "UPDATE files SET have=?2, size_verified=?3 WHERE hash=?1",
+                params![hash.as_bytes().as_slice(), encode_have(&have), verified],
+            )?;
             tx.commit()?;
             return Ok(());
         }
@@ -1005,11 +1034,12 @@ fn hash_from_blob(b: &[u8]) -> Result<Hash> {
 }
 
 fn load_row(c: &Connection, h: &Hash) -> Result<Option<Row>> {
-    Ok(c.query_row("SELECT size, state, inline_data, have FROM files WHERE hash=?1", [h.as_bytes().as_slice()], |r| {
+    Ok(c.query_row("SELECT size, state, inline_data, have, size_verified FROM files WHERE hash=?1", [h.as_bytes().as_slice()], |r| {
         let have: Option<Vec<u8>> = r.get(3)?;
         Ok(Row {
             size: r.get::<_, i64>(0)? as u64,
             partial: r.get::<_, i64>(1)? == 1,
+            size_verified: r.get::<_, i64>(4)? != 0,
             inline: r.get(2)?,
             have: have.map(|b| decode_have(&b)).unwrap_or_else(ChunkRanges::empty),
         })

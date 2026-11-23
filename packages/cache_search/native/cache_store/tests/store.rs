@@ -598,3 +598,41 @@ fn nothing_works_after_shutdown() {
     assert!(c.status(&Hash::EMPTY).is_err());
     let _ = SystemTime::now();
 }
+
+#[test]
+fn a_false_size_on_a_window_without_the_end_does_not_stick() {
+    let d = TempDir::new().unwrap();
+    let src = open(&d.path().join("src"));
+    let dst = open(&d.path().join("dst"));
+    let size = 1_000_000usize;
+    let data = bytes(96, size);
+    let h = src.add_bytes(&data).unwrap().hash;
+
+    // A window of the first four chunk groups with a size that is 10,000 bytes too small. The tree has the same shape for both
+    // sizes at that depth, so the leaves verify; only the last chunk group could prove the size.
+    let w = window(0, 64);
+    let mut liar = src.encode_ranges_to_vec(&h, &w).unwrap();
+    liar[..8].copy_from_slice(&(size as u64 - 10_000).to_le_bytes());
+    dst.import_ranges(&h, &w, &liar).unwrap();
+    // Honest windows follow: the unproven size gives way, and the file ends byte-identical with its true size.
+    transfer(&src, &dst, &h, size as u64, 160);
+    assert_eq!(dst.status(&h).unwrap(), Status::Complete { size: size as u64 });
+    assert_eq!(dst.get_bytes(&h).unwrap(), data);
+
+    // After the last chunk group has verified the size is proven: a window with another size is rejected, and nothing changes.
+    let dst2 = open(&d.path().join("dst2"));
+    let last = ChunkRanges::from(ChunkNum(900)..ChunkNum(1000));
+    dst2.import_ranges(&h, &last, &src.encode_ranges_to_vec(&h, &last).unwrap()).unwrap();
+    let mut liar2 = src.encode_ranges_to_vec(&h, &w).unwrap();
+    liar2[..8].copy_from_slice(&(size as u64 - 10_000).to_le_bytes());
+    assert!(dst2.import_ranges(&h, &w, &liar2).is_err());
+    match dst2.status(&h).unwrap() {
+        Status::Partial { size: s, have } => {
+            assert_eq!(s, size as u64);
+            assert!(have.is_superset(&ChunkRanges::from(ChunkNum(900)..ChunkNum(977))));
+        }
+        other => panic!("{other:?}"),
+    }
+    transfer(&src, &dst2, &h, size as u64, 160);
+    assert_eq!(dst2.get_bytes(&h).unwrap(), data);
+}
