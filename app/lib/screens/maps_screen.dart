@@ -17,6 +17,7 @@ import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
 import '../maps/area_tap.dart';
+import '../maps/map_hover.dart';
 import '../maps/map_tap.dart';
 import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
@@ -28,6 +29,7 @@ import '../regions/area_lookup.dart' show AreaHit, AreaSource;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
+import '../maps/web/map_mouse.dart' show listenMapHover, setMapCursor;
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_mouse_ring.dart';
 import '../maps/ui/map_pointer_gate.dart';
@@ -693,6 +695,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _elevation.addListener(_onElevation);
     widget.drive?.carConnected.addListener(_onCarLink);
     _lifecycle;
+    _stopHover = listenMapHover(_onMouseMove);
     // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
     // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
     final c = maps.savedCamera;
@@ -740,6 +743,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   void dispose() {
     final c = _controller;
     if (c != null) phoneMapRest.remove(c);
+    _stopHover?.call();
+    setMapCursor(false);
     _lifecycle.dispose();
     _driveBuilt = false;
     _reportDrive();
@@ -813,6 +818,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _appliedKey = key;
     _styleReady = false;
     _styleJson = json;
+    _hover.forget();
     await c.setStyle(json);
   }
 
@@ -1943,6 +1949,84 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Offset _localOf(Offset global) {
     final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     return stack != null && stack.hasSize ? stack.globalToLocal(global) : global;
+  }
+
+  // ---- mouse hover (browser and Linux desktop) ----------------------------------------------------------
+
+  late final MapHover _hover = MapHover(apply: (id, paint) async => _controller?.setLayerProperties(id, RawPaint(paint)));
+  void Function()? _stopHover;
+  bool _hoverBusy = false;
+  math.Point<double>? _hoverAt;
+  bool _hoverOver = false;
+  int _hoverGen = 0;
+
+  /// The mouse moved over the map ([x], [y] in its own box), or is not over it (null). Only the latest spot is asked about, one
+  /// query at a time, so a fast mouse never queues work.
+  void _onMouseMove(double? x, double? y) {
+    if (!mounted) return;
+    if (!mouseHoverOn(web: plat.isWeb, linuxDesktop: isLinuxDesktop(context))) return;
+    if (x == null || y == null) {
+      _hoverAt = null;
+      _hoverGen++;
+      if (_hoverOver) _hoverEnd();
+      return;
+    }
+    _hoverAt = math.Point<double>(x, y);
+    if (!_hoverBusy) _hoverRun();
+  }
+
+  void _hoverEnd() {
+    _hoverOver = false;
+    setMapCursor(false);
+    _hover.show(null, styleLayersById(_styleJson), '');
+  }
+
+  Future<void> _hoverRun() async {
+    _hoverBusy = true;
+    try {
+      while (mounted) {
+        final at = _hoverAt;
+        _hoverAt = null;
+        if (at == null) break;
+        await _hoverAsk(at);
+      }
+    } finally {
+      _hoverBusy = false;
+    }
+  }
+
+  Future<void> _hoverAsk(math.Point<double> at) async {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    final gen = _hoverGen;
+    final layers = styleLayersById(_styleJson);
+    List<String> present(Iterable<String> ids) => [for (final id in ids) if (layers.containsKey(id)) id];
+    // What a click opens, in the order a tap ranks it: the app's own pins, the public places' chips, the base map's labels, then
+    // the lines and areas of imported files.
+    final groups = [
+      present(const [kNotebookPins, kUserRepeaters, kPinResults]),
+      present(poiLayerIds),
+      present([for (final l in _basemapLabels()) if (!poiLayerIds.contains(l)) l]),
+      present(const [kUserLines, kUserAreas]),
+    ];
+    HoverTarget? found;
+    for (final g in groups) {
+      if (g.isEmpty) continue;
+      final hits = await _query(c, at, g);
+      if (!mounted) return;
+      if (hits.isNotEmpty) {
+        final raw = hits.first;
+        found = HoverTarget(g, featureName(raw is Map ? raw['properties'] : null));
+        break;
+      }
+    }
+    // The mouse left the map while the query ran.
+    if (gen != _hoverGen) return;
+    if ((found != null) != _hoverOver) {
+      _hoverOver = found != null;
+      setMapCursor(_hoverOver);
+    }
+    await _hover.show(found, layers, _palette.css('pin'));
   }
 
   /// A browser's right-click or mouse hold on the map (its long click is a double click): the same ring as a press and hold.
