@@ -549,6 +549,8 @@ void main() {
     await tester.scrollUntilVisible(find.byKey(const ValueKey('sync-all')), 200);
     await tapAndRead(find.byKey(const ValueKey('sync-all')));
     expect(find.text('Up to date'), findsOneWidget, reason: 'Sync all now on the main page says it too');
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 2000));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
 
