@@ -232,6 +232,46 @@ void main() {
       expect(e.road, 'I-84');
     });
 
+    test('a feed\'s placeholders are not shown as facts: "No Data" lanes and "none" severity are dropped, real values kept', () {
+      final e = roadEventFrom511(
+        item511('ph', app: {'type': 'roadwork', 'road': 'US-20', 'line': kLine}, fields: {
+          'Lanes affected': 'No Data',
+          'Severity': 'none',
+          'Direction': 'Westbound',
+          'Cause': '  UNKNOWN ',
+          'Comment': '',
+          'Detail': 'None',
+          'Details': 'Work on the shoulder on US-20 Westbound.',
+          'Starts': '2026-10-01 08:00',
+        }),
+        sourceId: 'idaho511-events',
+        credit: 'Road events: Idaho 511',
+      )!;
+      expect(e.fields.keys.toSet(), {'Direction', 'Details', 'Starts'});
+      final d = roadCardData(e);
+      expect(d.lines.map((l) => l.text), ['Starts 2026-10-01 08:00', 'Work on the shoulder on US-20 Westbound.']);
+      expect(d.subtitle, 'Road work · Westbound');
+      final real = roadEventFrom511(item511('rv', app: {'type': 'roadwork', 'line': kLine}, fields: {'Lanes affected': 'Right lane', 'Severity': 'major', 'Details': 'No data was lost; none of the lanes are closed.'}), sourceId: 's', credit: '')!;
+      expect(real.fields, {'Lanes affected': 'Right lane', 'Severity': 'major', 'Details': 'No data was lost; none of the lanes are closed.'});
+      expect(roadCardData(real).lines.map((l) => l.text), ['Right lane', 'major', 'No data was lost; none of the lanes are closed.']);
+    });
+
+    test('the same markers are dropped for a WZDx work zone, and the set is whole-value and case-insensitive', () {
+      final w = roadEventFromWzdx(
+        LiveItem(address: 'live:wz/at:1/a', label: 'I-84', fields: {'Lanes': 'undefined', 'Details': 'Paving.'}, app: {'geom': {'type': 'Point', 'coordinates': [-116.28, 43.6]}}, point: (lat: 43.6, lon: -116.28)),
+        sourceId: 'wz',
+        credit: '',
+      )!;
+      expect(w.fields, {'Details': 'Paving.'});
+      for (final m in ['No Data', 'NO DATA', ' none ', 'None', 'Unknown', 'undefined', '', '  ']) {
+        expect(isNoValue(m), isTrue, reason: '"$m"');
+      }
+      for (final r in ['Right lane', 'All lanes', 'Major', 'Moderate', 'No data available for the east side', 'None of the lanes']) {
+        expect(isNoValue(r), isFalse, reason: r);
+      }
+      expect(isNoValue(null), isTrue);
+    });
+
     test('the field variations: a string detour, a zero end, "true" or 1 for full, a polyline that does not decode, no direction, a new type', () {
       final nl = roadEventFrom511(item511('nl', app: {'type': 'roadwork', 'full': 'true', 'steps': 'One string.', 'until': 0, 'line': kLine}, fields: const {}), sourceId: 's', credit: '')!;
       expect(nl.detourSteps, ['One string.']);
