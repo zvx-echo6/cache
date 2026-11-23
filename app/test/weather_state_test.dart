@@ -16,6 +16,9 @@ import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/roads/rate_limiter.dart';
+import 'package:cache/roads/road_dedupe.dart';
+import 'package:cache/roads/road_geo.dart';
+import 'package:cache/roads/road_events_state.dart';
 import 'package:cache/roads/road_state.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_files.dart';
@@ -826,6 +829,58 @@ void main() {
       h.core.fetchedNew = false;
       await h.weather.updateNow(force: true);
       expect(h.roads!.limiter.used('511.idaho.gov'), 2, reason: 'nothing new was downloaded');
+    });
+
+    test('the map reads what is stored: 511 events and WZDx zones, once each, the same work zone once, conditions not drawn', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'idaho511-winter-roads', 'wzdx-idaho'}, true);
+        },
+      );
+      const line = 'kabiGpg}dU?etBXqYVaG|@cL`@gD';
+      Map<String, dynamic> stored(String source, List<Map<String, dynamic>> items, {bool expired = false}) => {
+        'age': expired ? '5 hours old' : '40 minutes old',
+        'age_seconds': expired ? 18000 : 2400,
+        'fetched_at': '2026-10-26T11:00:00-06:00',
+        'expired': expired,
+        'items': [for (final i in items) {...i, 'address': 'live:$source/x/${i['key']}'}],
+      };
+      h.core.stored['idaho511-events'] = stored('idaho511-events', [
+        {'key': 'e1', 'label': 'I-84: Bridge repair', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': {'Direction': 'Westbound'}, 'app': {'type': 'closures', 'full': true, 'road': 'I-84', 'line': line, 'start': 1795370000, 'until': 1795456400}},
+        {'key': 'e2', 'label': 'US-20: Crash', 'point': {'lat': 43.7, 'lon': -116.3}, 'fields': <String, String>{}, 'app': {'type': 'accidentsAndIncidents', 'full': false, 'road': 'US-20'}},
+      ]);
+      h.core.stored['idaho511-winter-roads'] = stored('idaho511-winter-roads', [
+        {'key': 'c1', 'label': 'I-84: Sample section', 'point': {'lat': 43.6, 'lon': -116.3}, 'fields': {'Details': 'dry'}, 'app': <String, dynamic>{}},
+      ]);
+      h.core.stored['wzdx-idaho'] = stored('wzdx-idaho', [
+        // the same stretch and dates as the 511 closure: drawn once, the 511 one
+        {'key': 'z1', 'label': 'I-84 westbound', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': <String, String>{}, 'app': {'geom': {'type': 'LineString', 'coordinates': [for (final p in decodePolyline(line)) [p.lon, p.lat]]}, 'start': '2026-11-20T12:00:00Z', 'until': '2026-11-30T12:00:00Z', 'dir': 'westbound', 'impact': 'some-lanes-closed', 'road': ['I-84']}},
+        // a different zone, far away
+        {'key': 'z2', 'label': 'SH-55', 'point': {'lat': 44.5, 'lon': -116.1}, 'fields': <String, String>{}, 'app': {'geom': {'type': 'Point', 'coordinates': [-116.1, 44.5]}, 'road': ['SH-55']}},
+      ]);
+      final events = await readRoadEvents(h.weather, h.roads!);
+      expect(events.map((e) => e.id).toSet(), {'idaho511-events/e1', 'idaho511-events/e2', 'wzdx-idaho/z2'}, reason: 'z1 is the same work zone as e1; the conditions are a list, not drawn');
+      expect(events.firstWhere((e) => e.id == 'idaho511-events/e1').credit, 'Road events: Idaho 511');
+      expect(events.firstWhere((e) => e.id == 'wzdx-idaho/z2').credit, 'Road work: Idaho DOT');
+      expect(events.every((e) => !e.stale), isTrue);
+      expect(kDedupeRules.bufferM, 50);
+      // a copy past its validity is flagged, not dropped
+      h.core.stored['idaho511-events'] = stored('idaho511-events', [
+        {'key': 'e1', 'label': 'I-84: Bridge repair', 'point': {'lat': 43.6049, 'lon': -116.2809}, 'fields': <String, String>{}, 'app': {'type': 'closures', 'full': true, 'line': line}},
+      ], expired: true);
+      final late = await readRoadEvents(h.weather, h.roads!);
+      final e1 = late.firstWhere((e) => e.id == 'idaho511-events/e1');
+      expect(e1.stale, isTrue);
+      expect(e1.age, '5 hours old');
+      // the state wraps the read and drops a chosen event that is gone
+      final state = RoadEventsState.fromWeather(h.weather, h.roads!);
+      await state.refresh();
+      expect(state.events.length, 2);
+      state.select('idaho511-events/e1');
+      expect(state.selected, isNotNull);
+      state.dispose();
     });
 
     test('without road sources the catalogue sources are as they were', () async {

@@ -38,6 +38,8 @@ class RoadEvent {
     this.detourSteps = const [],
     this.updated,
     this.credit = '',
+    this.stale = false,
+    this.age,
   });
 
   /// A stable id: the source's id and the event's key.
@@ -67,6 +69,12 @@ class RoadEvent {
 
   /// "Road events: Idaho 511".
   final String credit;
+
+  /// The stored copy it came from is out of date (past its validity): drawn dimmed, never hidden.
+  final bool stale;
+
+  /// How old the stored copy is, as the core words it ("40 minutes old").
+  final String? age;
 
   /// Every point of the geometry the event has (the line, or its point).
   List<LL> get geometry => line.isEmpty ? [point] : line;

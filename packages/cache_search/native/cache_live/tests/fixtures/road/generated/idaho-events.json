@@ -97,7 +97,7 @@
       "app": {
         "type": "EventType",
         "full": "IsFullClosure",
-        "dir": "DirectionOfTravel",
+        "road": "RoadwayName",
         "line": "EncodedPolyline",
         "detour": "DetourPolyline",
         "steps": "DetourInstructions",

@@ -153,7 +153,8 @@ fn idaho_events_give_the_model_what_the_published_definition_gave_it_and_give_th
     let closure = item(&a, "sample-1");
     assert_eq!(closure["app"]["type"], "closures");
     assert_eq!(closure["app"]["full"], true);
-    assert_eq!(closure["app"]["dir"], "Westbound");
+    assert_eq!(closure["app"]["road"], "I-84");
+    assert_eq!(closure["fields"]["Direction"], "Westbound");
     assert_eq!(closure["app"]["line"], "kabiGpg}dU?etBXqYVaG|@cL`@gD");
     assert_eq!(closure["app"]["detour"], "kabiG||_eU^ijBfKh@t\\FJi@E}L?mtCRgz@MY{IO");
     assert_eq!(closure["app"]["steps"].as_array().unwrap().len(), 2);

@@ -54,7 +54,7 @@ String eventsIdOf(RoadSite site) => legacyNamesFor(site)?.eventsId ?? site.sourc
 String conditionsIdOf(RoadSite site) => legacyNamesFor(site)?.conditionsId ?? site.conditionsId;
 
 /// The definition of [site]'s events. The names the app reads back for the map are in `app` (never in what the assistant reads):
-/// `type`, `full`, `dir`, `line`, `detour`, `steps`, `start`, `until`.
+/// `type`, `full`, `road`, `line`, `detour`, `steps`, `start`, `until` (the direction is read from the item's "Direction" field).
 Map<String, dynamic> road511EventsDef(RoadSite site) {
   final l = legacyNamesFor(site);
   final tolerant = l == null;
@@ -113,7 +113,7 @@ Map<String, dynamic> road511EventsDef(RoadSite site) {
         'app': {
           'type': 'EventType',
           'full': 'IsFullClosure',
-          'dir': 'DirectionOfTravel',
+          'road': 'RoadwayName',
           'line': 'EncodedPolyline',
           'detour': 'DetourPolyline',
           'steps': 'DetourInstructions',
