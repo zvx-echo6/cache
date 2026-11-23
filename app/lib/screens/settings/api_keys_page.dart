@@ -103,7 +103,7 @@ class _ApiKeysScreenState extends State<ApiKeysScreen> {
     final k = context.t;
     final st = keys.statusOf(p);
     final open = _open.contains(p.id);
-    final word = p.available ? keyWord(st.state) : 'Not available yet';
+    final word = keyWord(st.state);
     final header = SettingsRow(
       key: ValueKey('api-key-${p.id}'),
       title: p.title,
@@ -143,7 +143,7 @@ class _ApiKeysScreenState extends State<ApiKeysScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (p.available) ...[
+          ...[
             if (line.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(line, key: ValueKey('key-status-${p.id}'), style: TextStyle(fontSize: 15, color: st.state == KeyState.refused ? k.warning : (st.state == KeyState.working ? k.ok : k.secondary)))),
             const SizedBox(height: 10),
             Wrap(
@@ -164,15 +164,14 @@ class _ApiKeysScreenState extends State<ApiKeysScreen> {
             if (p.uses.isEmpty) fact('', 'Nothing yet'),
             for (final u in p.uses) fact(u.label, u.on ? 'On' : 'Off'),
             ...sharedWith(context, p),
-          ] else
-            Padding(padding: const EdgeInsets.only(top: 8), child: Text('Cache cannot take a Google key yet.', style: TextStyle(fontSize: 15, color: k.secondary))),
+          ],
           label('ABOUT'),
           fact('Provider', p.provider),
           fact('Key page', p.getKeyUrl),
           if (p.rate != null) fact('Limit', p.rate!),
           if (p.costLine != null) fact('Cost', p.costLine!),
           if (p.creditText != null) fact('Credit', p.creditText!),
-          if (p.available) fact('Stored', widget.deps.hub.sharing?.onServer == true ? 'On the computer running Cache' : 'On this device'),
+          fact('Stored', widget.deps.hub.sharing?.onServer == true ? 'On the computer running Cache' : 'On this device'),
           if (has) ...[
             const SizedBox(height: 8),
             TextButton(
@@ -231,7 +230,7 @@ class ApiKeyShortcutRow extends StatelessWidget {
         return SettingsRow(
           key: ValueKey('key-shortcut-$providerId'),
           title: p.title,
-          trailing: Text(p.available ? keyWord(st.state) : 'Not available yet', style: TextStyle(fontSize: 15, color: context.t.secondary)),
+          trailing: Text(keyWord(st.state), style: TextStyle(fontSize: 15, color: context.t.secondary)),
           chevron: true,
           onTap: () => openApiKeys(context, deps, providerId: providerId),
         );

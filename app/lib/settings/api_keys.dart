@@ -11,9 +11,9 @@ import 'web_search_setup.dart';
 /// The one key registry: every provider a person can give a key to, with its steps, page, what uses it, its check and its rate. The master
 /// list (Settings > API keys), the shortcut rows, the key sheet, "Used by" and the sync list are all made from these records, so a new keyed
 /// source is a record and shows up everywhere. The records come from the connector catalogue (a source's `key_alias`), the road sources
-/// (one key per 511 site and WZDx feed), Kagi, the person's own sources, and the Google placeholder.
+/// (one key per 511 site and WZDx feed), Kagi, the person's own sources.
 
-enum KeyKind { catalogue, road, kagi, own, google }
+enum KeyKind { catalogue, road, kagi, own }
 
 /// A feature that uses a key.
 class KeyUse {
@@ -40,7 +40,6 @@ class KeyProvider {
     this.costLine,
     this.rate,
     this.creditText,
-    this.available = true,
     this.canSync = true,
     this.sourceId,
   });
@@ -67,8 +66,6 @@ class KeyProvider {
   final String? rate;
   final String? creditText;
 
-  /// False for a provider that cannot take a key yet (Google).
-  final bool available;
   final bool canSync;
 
   /// A connector id that checks the key (catalogue, road and own sources).
@@ -148,7 +145,7 @@ class ApiKeys extends ChangeNotifier {
     ),
   };
 
-  /// Every provider: Kagi, the catalogue's keyed sources by key name, the road sites and keyed feeds, the person's own sources, Google.
+  /// Every provider: Kagi, the catalogue's keyed sources by key name, the road sites and keyed feeds, the person's own sources.
   List<KeyProvider> get providers {
     final out = <KeyProvider>[];
     out.add(KeyProvider(
@@ -252,26 +249,12 @@ class ApiKeys extends ChangeNotifier {
         sourceId: c.id,
       ));
     }
-    // Google: a placeholder until its terms have been read. Nothing is asked of Google.
-    out.add(const KeyProvider(
-      id: 'google',
-      kind: KeyKind.google,
-      provider: 'Google',
-      title: 'Google API key',
-      getKeyUrl: 'https://developers.google.com/maps/documentation/places/web-service/get-api-key',
-      steps: ['Not available yet.'],
-      stepsChecked: false,
-      uses: [KeyUse('Place details and fuel prices')],
-      storageName: 'live.key.google',
-      available: false,
-      canSync: false,
-    ));
     return out;
   }
 
   KeyProvider? providerById(String id) => providers.where((p) => p.id == id).firstOrNull;
 
-  bool hasKey(KeyProvider p) => p.kind == KeyKind.kagi ? webSearch.hasKey : (p.available && weather.hasKey(p.id));
+  bool hasKey(KeyProvider p) => p.kind == KeyKind.kagi ? webSearch.hasKey : weather.hasKey(p.id);
 
   KeyStatus statusOf(KeyProvider p) {
     if (!hasKey(p)) return const KeyStatus(KeyState.notSet);
@@ -298,7 +281,7 @@ class ApiKeys extends ChangeNotifier {
     return ok != null ? KeyStatus(KeyState.working, at: ok) : const KeyStatus(KeyState.savedUnchecked);
   }
 
-  /// Providers with a key saved, then those without; the Google placeholder is last of the second.
+  /// Providers with a key saved, then those without.
   List<KeyProvider> get saved => [for (final p in providers) if (hasKey(p)) p];
   List<KeyProvider> get available => [for (final p in providers) if (!hasKey(p)) p];
 

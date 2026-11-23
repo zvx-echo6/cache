@@ -99,7 +99,7 @@ class _SourceRow extends StatelessWidget {
   }
 }
 
-/// Plain key rows for Map settings: NASA FIRMS and TomTom, Google (not available yet), and one key row for each road source that takes a
+/// Plain key rows for Map settings: NASA FIRMS and TomTom and one key row for each road source that takes a
 /// key. Each opens the master list at that provider.
 List<Widget> mapKeyRows(BuildContext context, SettingsDeps d) {
   final roads = d.hub.weather.roads;
@@ -110,7 +110,6 @@ List<Widget> mapKeyRows(BuildContext context, SettingsDeps d) {
         ApiKeyShortcutRow(deps: d, providerId: 'firms'),
         ApiKeyShortcutRow(deps: d, providerId: 'tomtom'),
         if (roads != null) for (final s in roads.sources) if (s.keyAlias != null) ApiKeyShortcutRow(deps: d, providerId: s.keyAlias!),
-        ApiKeyShortcutRow(deps: d, providerId: 'google'),
       ],
     ),
     const NoteText('Keys are added in Settings > API keys. Without one, the map shows what is in your downloaded regions.'),

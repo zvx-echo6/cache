@@ -19,10 +19,10 @@ const String secret = 'SENTINEL-KEY-api-keys-do-not-leak';
 
 void main() {
   group('the key registry', () {
-    testWidgets('has a record for every keyed provider: the catalogue\'s, Kagi, every 511 site, Google as a placeholder; each with steps and a page', (tester) async {
+    testWidgets('has a record for every keyed provider: the catalogue\'s, Kagi, every 511 site; each with steps and a page', (tester) async {
       final r = await SettingsRig.create(tester, roadSources: true);
       final ps = r.hub.apiKeys.providers;
-      expect(ps.map((p) => p.id), containsAll(['kagi', 'firms', 'google', 'road511.511.idaho.gov', 'road511.az511.com']));
+      expect(ps.map((p) => p.id), containsAll(['kagi', 'firms', 'road511.511.idaho.gov', 'road511.az511.com']));
       expect(ps.where((p) => p.kind == KeyKind.road && p.id.startsWith('road511.')).length, 16, reason: 'one key per 511 site');
       for (final p in ps) {
         expect(p.steps, isNotEmpty, reason: '${p.id} has its steps');
@@ -32,9 +32,8 @@ void main() {
       expect(r.hub.apiKeys.providerById('firms')!.title, 'NASA FIRMS API key');
       expect(r.hub.apiKeys.providerById('road511.511.idaho.gov')!.title, '511 key (511.idaho.gov)');
       expect(r.hub.apiKeys.providerById('road511.511.idaho.gov')!.steps, contains('Request a Developer API key.'));
-      final g = r.hub.apiKeys.providerById('google')!;
-      expect(g.available, isFalse);
-      expect(g.canSync, isFalse);
+      expect(r.hub.apiKeys.providerById('google'), isNull);
+      expect(ps.any((p) => p.title.contains('Google') || p.provider.contains('Google')), isFalse);
       expect(r.hub.apiKeys.providerById('kagi')!.usesWords, 'Web search for Ask');
       await r.dispose(tester);
     });
@@ -59,7 +58,7 @@ void main() {
   });
 
   group('the API keys list', () {
-    testWidgets('Your keys and Keys Cache can use; a row opens in place; Google is listed as not available yet with nothing to add', (tester) async {
+    testWidgets('Your keys and Keys Cache can use; a row opens in place; Google is not in the list', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() => r.hub.apiKeys.save(r.hub.apiKeys.providerById('firms')!, secret));
       await r.show(tester, ApiKeysScreen(deps: r.deps));
@@ -69,7 +68,8 @@ void main() {
       expect(find.text('KEYS CACHE CAN USE'), findsOneWidget);
       expect(find.text('NASA FIRMS API key'), findsOneWidget);
       expect(find.text('Kagi API key'), findsOneWidget);
-      expect(find.text('Not available yet'), findsOneWidget, reason: 'Google');
+      expect(find.textContaining('Google'), findsNothing);
+      expect(find.text('Not available yet'), findsNothing);
       // open the saved one: status, Replace, Test key, Used by, About, Remove
       await tester.tap(find.byKey(const ValueKey('api-key-firms')));
       await tester.pumpAndSettle();
@@ -85,11 +85,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Works, checked just now'), findsOneWidget);
       expect(r.liveCore.previews.length, greaterThanOrEqualTo(2), reason: 'the save check and the Test');
-      // Google: opens, offers no Add key
-      await tester.tap(find.byKey(const ValueKey('api-key-google')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('add-google')), findsNothing);
-      expect(find.text('Cache cannot take a Google key yet.'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -154,11 +149,11 @@ void main() {
   });
 
   group('shortcut rows', () {
-    testWidgets('Map settings: plain rows for NASA FIRMS and Google that open the list at that key, open; Back returns', (tester) async {
+    testWidgets('Map settings: a plain row for NASA FIRMS (and none for Google) that opens the list at that key, open; Back returns', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, MapsPage(deps: r.deps));
       expect(find.text('NASA FIRMS API key'), findsOneWidget);
-      expect(find.text('Google API key'), findsOneWidget);
+      expect(find.textContaining('Google'), findsNothing);
       expect(find.byType(FilledButton), findsNothing, reason: 'no coloured button for a key outside the list');
       await tester.ensureVisible(find.byKey(const ValueKey('key-shortcut-firms')));
       await tester.tap(find.byKey(const ValueKey('key-shortcut-firms')));
