@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:ui' show PlatformDispatcher;
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
@@ -554,7 +553,7 @@ class _PhoneDriver implements SharingDriver {
         if (s._phone) 'dht': false,
         // Reticulum's Wi-Fi discovery (the engine's `reticulum`; a peer it finds says `via: 'wifi'`).
         'reticulum': s._reticulum,
-        if (s._deviceKind() case final kind?) 'device_kind': kind,
+        'device_kind': ?s._deviceKind(),
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': s._reserveBytes((await s.supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
