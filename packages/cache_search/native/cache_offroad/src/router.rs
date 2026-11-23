@@ -22,6 +22,11 @@ pub const CORRIDOR_PAD_KM: f64 = 10.0;
 pub const CORRIDOR_ENDPOINT_PAD_KM: f64 = 5.0;
 pub const DEFAULT_MAX_CELLS: usize = 20_000_000;
 
+/// Notes a route can carry (plain words, shown with the route).
+pub const NOTE_MOTO_FALLBACK: &str = "This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.";
+pub const NOTE_SXS_FALLBACK: &str = "This off-road data has no side-by-side trail rules yet, so Quad trail rules were used.";
+pub const NOTE_NO_LAND_RULES: &str = "Cache has no land rules for this area. Check local access before you go.";
+
 const PAVED: [&str; 9] = [
     "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "service_other",
 ];
@@ -80,10 +85,12 @@ pub struct RouteRequest {
     pub mvum_on_date: Option<(u32, u32)>,
     /// Record per-cell path detail (elevation, class, trail, step time) for directions.
     pub collect_detail: bool,
+    /// Which profile fills the 2w or 4w slot of a single-mode search (dirt bike, side-by-side); standard everywhere else.
+    pub variant: Variant,
 }
 impl RouteRequest {
     pub fn new(start: (f64, f64), end: (f64, f64), mode: RequestMode, boundary: Boundary) -> Self {
-        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None, collect_detail: false }
+        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None, collect_detail: false, variant: Variant::Standard }
     }
 }
 
@@ -181,6 +188,8 @@ pub struct RouteResult {
     /// per-cell detail of the travelled path (when requested): the reference server's `path_detail["unified"]`
     pub detail: Option<PathDetail>,
     pub stats: RouteStats,
+    /// Plain-words notes for the person about how the route was made (data that was missing and what was used instead).
+    pub notes: Vec<String>,
 }
 
 /// Per-cell detail of a travelled path (`OffrouteRouter._path_detail`).
@@ -423,6 +432,7 @@ impl<'a> Router<'a> {
                     meta: None,
                     detail: None,
                     stats: RouteStats::default(),
+                    notes: vec![],
                 });
             }
         }
@@ -459,9 +469,12 @@ impl<'a> Router<'a> {
         let trails = rd(Layer::Trails).map_err(terr)?;
         let wilderness = if self.pack.has_layer(Layer::Wilderness) { Some(rd(Layer::Wilderness).map_err(terr)?) } else { None };
         // MVUM per mode: 2w=mtb, 4w=atv, vehicle=vehicle (best effort, like the reference server)
-        let mvum_by_mode: Option<[Vec<u8>; 3]> = match self.pack.mvum_in_box(south, north, west, east) {
-            Ok(f) => Some(mvum::access_grids(&f, &meta, req.mvum_on_date)),
-            Err(_) => None,
+        let mvum_feats = self.pack.mvum_in_box(south, north, west, east).ok();
+        let mvum_by_mode: Option<[Vec<u8>; 3]> = mvum_feats.as_ref().map(|f| mvum::access_grids(f, &meta, req.mvum_on_date));
+        // the dirt bike and over-50-in columns of the rebuilt pack; None until the pack has them
+        let mvum_ext: [Option<Vec<u8>>; 2] = match (&mvum_feats, req.variant) {
+            (Some(f), Variant::Moto | Variant::Sxs) => mvum::access_grids_ext(f, &meta, req.mvum_on_date),
+            _ => [None, None],
         };
         let ms_rasters = t0.elapsed().as_millis();
 
@@ -477,13 +490,17 @@ impl<'a> Router<'a> {
         let aff = |m: Mode| req.network_affinity.as_ref().and_then(|a| a.get(&m).copied()).unwrap_or(1.0);
         let mut stack = vec![0f32; rows * cols * N_MODES];
         for (mi, mode) in Mode::ALL.iter().enumerate() {
-            let mut m = compute_cost_multiplier_grid(&elevation, rows, cols, meta.cell_size_m, Some(&friction_mult),
-                class.as_deref(), wilderness.as_deref(), *mode);
+            let mut m = compute_cost_multiplier_grid_with(&elevation, rows, cols, meta.cell_size_m, Some(&friction_mult),
+                class.as_deref(), wilderness.as_deref(), *mode, req.variant.profile_for(*mode));
             if let Some(mv) = &mvum_by_mode {
                 if *mode != Mode::Foot && req.boundary != Boundary::Emergency {
-                    let grid = match mode {
-                        Mode::TwoW => &mv[0],
-                        Mode::FourW => &mv[1],
+                    // the dirt bike reads the motorcycle column and the side-by-side the over-50-in one; without them (a pack from
+                    // before the rebuild) the dirt bike reads the ATV rules and the side-by-side the quad's
+                    let grid = match (req.variant, mode) {
+                        (Variant::Moto, Mode::TwoW) => mvum_ext[0].as_ref().unwrap_or(&mv[1]),
+                        (Variant::Sxs, Mode::FourW) => mvum_ext[1].as_ref().unwrap_or(&mv[1]),
+                        (_, Mode::TwoW) => &mv[0],
+                        (_, Mode::FourW) => &mv[1],
                         _ => &mv[2],
                     };
                     for (v, &g) in m.iter_mut().zip(grid) {
@@ -530,7 +547,7 @@ impl<'a> Router<'a> {
         let mut sfid = [0i64; N_MODES];
         let mut base = [0f64; N_MODES];
         for (mi, mode) in Mode::ALL.iter().enumerate() {
-            let p = mode.profile();
+            let p = req.variant.profile_for(*mode);
             let a = aff(*mode);
             for &(tv, fr) in p.trail_friction {
                 trail_friction_stack[mi * 256 + tv as usize] = fr.map_or(f64::INFINITY, |f| f * a);
@@ -579,6 +596,19 @@ impl<'a> Router<'a> {
             ms_rasters, ms_layers, ms_transitions, ms_search,
         };
         let mut out = render_unified_path(&res.path, res.cost, &meta, req.boundary, stats);
+        // what the person is told about the data this route was made from
+        if req.boundary != Boundary::Emergency && mvum_by_mode.is_some() {
+            if req.variant == Variant::Moto && mvum_ext[0].is_none() {
+                out.notes.push(NOTE_MOTO_FALLBACK.into());
+            }
+            if req.variant == Variant::Sxs && mvum_ext[1].is_none() {
+                out.notes.push(NOTE_SXS_FALLBACK.into());
+            }
+        }
+        let has_land_rules = self.pack.land_rules().unwrap_or_else(|| mvum_feats.as_ref().is_some_and(|f| !f.is_empty()) || barriers.iter().any(|b| *b != 0));
+        if !has_land_rules {
+            out.notes.push(NOTE_NO_LAND_RULES.into());
+        }
         if req.collect_detail {
             let mp = |mi: usize| (max_grade[mi], sfid[mi], base[mi]);
             let trans_cost_map: HashMap<(i64, i64, usize, usize), f64> = tc.iter().map(|t| ((t.0, t.1, t.2, t.3), t.4)).collect();
@@ -647,6 +677,7 @@ pub fn render_unified_path(path: &[[i64; 3]], total_cost: f64, meta: &GridMeta, 
         meta: Some(meta.clone()),
         detail: None,
         stats,
+        notes: vec![],
     }
 }
 

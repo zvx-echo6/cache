@@ -355,34 +355,45 @@ Directions plan a route from where you are to a place.
 
 1. In "Maps", open a place's card. Or press and hold the map and choose "To here".
 2. Tap "Directions".
-3. Choose "Drive", "Walk", "Bike" or "Off-road".
-4. Check the route, its distance and time.
-5. Tap "Start".
+3. Choose "Drive", "Walk", "Bike" or "ATV".
+4. Under it, choose one of its two options:
+   - "Drive": "Avoid highways" and "Avoid tolls". Turn either, both or neither on. They avoid highways or tolls where there is a reasonable way round; they do not forbid them.
+   - "Walk": "Pedestrian" or "Off-road".
+   - "Bike": "Bicycle" or "Dirt bike".
+   - "ATV": "Quad" or "Side-by-side".
+5. Under "Off-road", "Dirt bike" or "ATV" a third row appears: "Standard" or "Emergency". See Leaving the road.
+6. Check the route, its distance and time.
+7. Tap "Start".
+
+Cache remembers the way of travel and its options, also after a restart. Changing a choice plans the route again.
 
 Road directions work offline if the region is downloaded.
 
 - If you see "Your position is not known yet. Turn on location to get directions from where you are.", tap "Find me" and allow location.
 - If you see "No way found between these places" or "One of these places is outside the downloaded maps", try another way of travel or download the region.
 - If part of a route has no road, that part is dashed.
+- If Ask planned the route, "Open navigation" shows it with the choices that fit it. A route that goes by any vehicle, and on foot where none can go, shows nothing chosen in the first row and says "Ask's route: by any vehicle, on foot where none can go." A route that stays on open land shows neither "Standard" nor "Emergency" chosen and says "Ask's route stays on open land." Tap any choice to plan the route again with it.
 
-## Off-road directions
+## Leaving the road
 
-Off-road plans a route away from roads.
+"Off-road" (under "Walk"), "Dirt bike" (under "Bike") and "ATV" plan a route away from roads, over trails and open ground. They need off-road data for the area. "Drive", "Pedestrian" and "Bicycle" follow roads and paths only.
 
-![Off-road directions](shot:directions-offroad)
+![Leaving the road](shot:directions-offroad)
 
 1. Open a place's card and tap "Directions".
-2. Tap "Off-road".
-3. Choose "On foot" or "Vehicle".
-4. Choose land access:
-   - "Stay on open land": public land only;
-   - "Usual": the normal choice;
-   - "Emergency: any land": ignores land rules.
-5. Tap "Start".
+2. Choose "Walk" and "Off-road", "Bike" and "Dirt bike", or "ATV" and "Quad" or "Side-by-side".
+3. Choose how the route treats land rules:
+   - "Standard": the usual land rules;
+   - "Emergency": any land.
+4. Tap "Start".
 
-"Emergency: any land" warns "Ignores land rules: the route may cross private or closed land." Use it only in an emergency.
+"Emergency" warns "Emergency routing ignores land-access rules. The route may cross private or closed land." Use it only in an emergency.
 
-Changing a choice plans the route again. Choices reset on restart: "Drive", then "On foot" with "Usual".
+Land rules come from US public-land data. Where Cache has none for the area, "Standard" and "Emergency" route the same and the route says "Cache has no land rules for this area. Check local access before you go."
+
+Until the off-road data is updated, "Dirt bike" follows the ATV trail rules and "Side-by-side" follows the "Quad" ones, and a note under the route says so.
+
+Changing a choice plans the route again. Cache remembers the way of travel and its options, also after a restart. At first it is "Drive", then "Standard".
 
 - If you see "Off-road needs off-road data for this area", download the region, or choose "Walk" or "Drive".
 

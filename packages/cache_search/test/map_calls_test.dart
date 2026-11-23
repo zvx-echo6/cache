@@ -310,6 +310,16 @@ void main() {
       await core.close();
     });
 
+    test('the screen\'s avoid toggles and notes: sent only when on, read when present', () async {
+      final n = MapFake()..mapReplies['route'] = jsonEncode({...(jsonDecode(fixture('route-drive-challis.json')) as Map<String, dynamic>), 'notes': ['one', '', 'two']});
+      final e = SearchEngine.open(n, const []);
+      final r = e.mapRoute({'to': {'lat': 44.2, 'lon': -114.9}, 'mode': 'drive', 'avoid_highways': true});
+      expect(jsonDecode(n.mapCalls.last.substring('route:'.length))['avoid_highways'], isTrue);
+      expect(r.notes, ['one', 'two'], reason: 'empty notes are dropped');
+      n.mapReplies['route'] = fixture('route-drive-challis.json');
+      expect(e.mapRoute({'to': {'lat': 44.2, 'lon': -114.9}}).notes, isEmpty);
+    });
+
     test('a local time is sent with its UTC offset, so the core can work out the arrival time', () {
       final local = DateTime(2026, 10, 29, 14, 44, 5);
       final s = rfc3339(local);

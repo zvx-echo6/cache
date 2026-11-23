@@ -8,7 +8,7 @@
 //! (a terminal, an emergency entrance, a main door, a parking) is never moved: it is already where people go.
 //!
 //! Only driving does this; walking and cycling keep Valhalla's own snapping (service roads and paths are where people walk).
-use crate::valhalla::{EdgeCandidate, EndOptions, RouteEnd, Trip, Valhalla, ValhallaError};
+use crate::valhalla::{CostingOpts, EdgeCandidate, EndOptions, RouteEnd, Trip, Valhalla, ValhallaError};
 
 /// How far an end may move past service roads to reach a public road.
 pub const PUBLIC_ROAD_M: f64 = 600.0;
@@ -55,20 +55,25 @@ pub fn plan_end(v: &dyn Valhalla, p: (f64, f64), costing: &str, to_public: bool)
 
 /// The road route between two planned ends. Falls back to Valhalla's own snapping when the planned ends find no route.
 pub fn route_planned(v: &dyn Valhalla, from: &EndPlan, to: &EndPlan, costing: &str) -> Result<(Trip, EndPlan, EndPlan), ValhallaError> {
-    match v.route_ends(&from.end, &to.end, costing) {
+    route_planned_with(v, from, to, costing, &CostingOpts::default())
+}
+
+/// [`route_planned`] with costing options.
+pub fn route_planned_with(v: &dyn Valhalla, from: &EndPlan, to: &EndPlan, costing: &str, opts: &CostingOpts) -> Result<(Trip, EndPlan, EndPlan), ValhallaError> {
+    match v.route_with(&from.end, &to.end, costing, opts) {
         Ok(trip) => Ok((trip, from.clone(), to.clone())),
         Err(e) => {
             // a start that asked for a heading and found no route is tried again without it
             if from.end.opts.heading_deg.is_some() {
                 let mut f = from.clone();
                 f.end.opts.heading_deg = None;
-                return route_planned(v, &f, to, costing);
+                return route_planned_with(v, &f, to, costing, opts);
             }
             if !(from.public_road || to.public_road) {
                 return Err(e);
             }
             let (pf, pt) = (EndPlan::plain(from.end.point()), EndPlan::plain(to.end.point()));
-            let trip = v.route_ends(&pf.end, &pt.end, costing).map_err(|_| e)?;
+            let trip = v.route_with(&pf.end, &pt.end, costing, opts).map_err(|_| e)?;
             Ok((trip, pf, pt))
         }
     }

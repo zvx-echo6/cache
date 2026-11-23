@@ -7,6 +7,7 @@ import '../nav_state.dart';
 import '../street_names.dart';
 import '../units.dart';
 import 'route_steps.dart';
+import 'travel_rows.dart';
 
 /// The top pill while choosing how to go: where to, and the way back to the map.
 class DirectionsHeader extends StatelessWidget {
@@ -116,10 +117,6 @@ class RoutePanel extends StatelessWidget {
   /// The most the panel may take (the map's side column); null: the choices take up to half the window, as a bottom panel.
   final double? maxHeight;
 
-  static const _modes = [('drive', Icons.directions_car, 'Drive'), ('walk', Icons.directions_walk, 'Walk'), ('bike', Icons.directions_bike, 'Bike')];
-  static const _offroadModes = [('offroad_foot', 'On foot'), ('offroad_vehicle', 'Vehicle')];
-  static const _landAccess = [('strict', 'Stay on open land'), ('pragmatic', 'Usual'), ('emergency', 'Emergency: any land')];
-
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -142,57 +139,7 @@ class RoutePanel extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        for (final m in _modes)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 3),
-                              child: _ModeButton(
-                                key: ValueKey('mode-${m.$1}'),
-                                icon: m.$2,
-                                label: m.$3,
-                                selected: nav.mode == m.$1,
-                                onTap: () => nav.setMode(m.$1),
-                              ),
-                            ),
-                          ),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 3),
-                            child: _ModeButton(
-                              key: const ValueKey('mode-offroad'),
-                              icon: Icons.terrain,
-                              label: 'Off-road',
-                              selected: nav.offroad,
-                              onTap: () => nav.setMode(nav.offroadMode),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (nav.offroad) ...[
-                      const SizedBox(height: 8),
-                      _Choices(
-                        choices: _offroadModes,
-                        selected: nav.mode,
-                        keyPrefix: 'offroad-mode',
-                        onSelected: nav.setMode,
-                      ),
-                      const SizedBox(height: 6),
-                      _Choices(
-                        choices: _landAccess,
-                        selected: nav.landAccess,
-                        keyPrefix: 'land',
-                        onSelected: nav.setLandAccess,
-                      ),
-                      if (nav.landAccess == 'emergency')
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text('Ignores land rules: the route may cross private or closed land.',
-                              key: const ValueKey('land-emergency-warning'), style: TextStyle(fontSize: 14, color: k.warning)),
-                        ),
-                    ],
+                    TravelChoicesView(nav: nav),
                     const SizedBox(height: 10),
                     if (nav.routing)
                       Padding(
@@ -269,6 +216,7 @@ class RoutePanel extends StatelessWidget {
                         ),
                       if (nav.routes.isNotEmpty && elevation != null) elevation!,
                       if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
+                      if (nav.route case final r? when r.notes.isNotEmpty) _RouteNotes(notes: r.notes),
                     ],
                   ],
                 ),
@@ -347,81 +295,6 @@ class _ChoicesScrollState extends State<_ChoicesScroll> {
           child: widget.child,
         ),
       ),
-    );
-  }
-}
-
-class _ModeButton extends StatelessWidget {
-  const _ModeButton({super.key, required this.icon, required this.label, required this.selected, required this.onTap});
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: Material(
-        color: selected ? k.accent.withValues(alpha: 0.2) : Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: selected ? k.accent : k.secondary.withValues(alpha: 0.5))),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: onTap,
-          child: SizedBox(
-            height: 48,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(icon, size: 22, color: selected ? k.accent : k.secondary),
-                    const SizedBox(width: 6),
-                    Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: selected ? k.accent : k.text)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A row of choices, one selected (the off-road way of travel, the land access).
-class _Choices extends StatelessWidget {
-  const _Choices({required this.choices, required this.selected, required this.keyPrefix, required this.onSelected});
-
-  final List<(String, String)> choices;
-  final String selected;
-  final String keyPrefix;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
-      children: [
-        for (final c in choices)
-          ChoiceChip(
-            key: ValueKey('$keyPrefix-${c.$1}'),
-            label: Text(c.$2, style: TextStyle(fontSize: 15, color: selected == c.$1 ? k.accent : k.text)),
-            selected: selected == c.$1,
-            showCheckmark: false,
-            selectedColor: k.accent.withValues(alpha: 0.2),
-            side: BorderSide(color: selected == c.$1 ? k.accent : k.secondary.withValues(alpha: 0.5)),
-            onSelected: (_) => onSelected(c.$1),
-          ),
-      ],
     );
   }
 }
@@ -515,6 +388,28 @@ class _OffroadNote extends StatelessWidget {
           Icon(Icons.terrain, size: 20, color: k.warning),
           const SizedBox(width: 8),
           Expanded(child: Text(parts.join(' '), key: const ValueKey('offroad-note'), style: TextStyle(fontSize: 14, height: 1.3, color: k.secondary))),
+        ],
+      ),
+    );
+  }
+}
+
+/// How the route was made, in plain words: what the area's data lacks and what was used instead.
+class _RouteNotes extends StatelessWidget {
+  const _RouteNotes({required this.notes});
+
+  final List<String> notes;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final n in notes)
+            Text(n, key: const ValueKey('route-note'), style: TextStyle(fontSize: 14, height: 1.3, color: k.secondary)),
         ],
       ),
     );

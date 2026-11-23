@@ -169,7 +169,7 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     }
 
     await settle();
-    expect(find.byKey(const ValueKey('land-strict')), findsOneWidget, reason: 'Off-road is not chosen');
+    expect(find.byKey(const ValueKey('land-pragmatic')), findsOneWidget, reason: 'Off-road is not chosen');
     expect(find.byKey(const ValueKey('preview-elevation-chart')), findsOneWidget, reason: 'the elevation chart is not shown');
 
     // The map as the screen's last fit leaves it.

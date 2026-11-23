@@ -190,7 +190,11 @@ impl Valhalla for ShimValhalla {
     }
 
     fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
-        let r = self.call(self.route, &route_request(from, to, costing, None))?;
+        self.route_with(from, to, costing, &CostingOpts::default())
+    }
+
+    fn route_with(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, opts: &CostingOpts) -> Result<Trip, ValhallaError> {
+        let r = self.call(self.route, &route_request_with(from, to, costing, None, opts))?;
         let trip = r.get("trip").ok_or_else(|| ValhallaError::msg("no trip in reply"))?;
         parse_trip(trip)
     }
@@ -200,7 +204,11 @@ impl Valhalla for ShimValhalla {
     }
 
     fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
-        let Ok(r) = self.call(self.route, &route_request(from, to, costing, Some(count))) else {
+        self.alternatives_with(from, to, costing, count, &CostingOpts::default())
+    }
+
+    fn alternatives_with(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize, opts: &CostingOpts) -> Vec<Trip> {
+        let Ok(r) = self.call(self.route, &route_request_with(from, to, costing, Some(count), opts)) else {
             return Vec::new();
         };
         r.get("alternates")
@@ -238,13 +246,22 @@ impl Valhalla for ShimValhalla {
 }
 
 /// The `/route` request. Driving asks for turn lanes (`turn_lanes`, off by default in Valhalla); walking and cycling have none.
+#[cfg(test)]
 fn route_request(from: &RouteEnd, to: &RouteEnd, costing: &str, alternates: Option<usize>) -> Value {
+    route_request_with(from, to, costing, alternates, &CostingOpts::default())
+}
+
+/// [`route_request`] with `costing_options` (highways, tolls, trails, tracks) when any is set.
+fn route_request_with(from: &RouteEnd, to: &RouteEnd, costing: &str, alternates: Option<usize>, opts: &CostingOpts) -> Value {
     let mut r = json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"});
     if let Some(n) = alternates {
         r["alternates"] = json!(n);
     }
     if costing == "auto" {
         r["turn_lanes"] = json!(true);
+    }
+    if let Some(o) = opts.to_json(costing) {
+        r["costing_options"] = o;
     }
     r
 }
@@ -354,6 +371,20 @@ mod tests {
             assert!(route_request(&a, &b, c, None).get("turn_lanes").is_none(), "{c}");
         }
         assert!(route_request(&a, &b, "auto", None).get("alternates").is_none());
+    }
+
+    #[test]
+    fn costing_options_ride_the_request_only_when_set() {
+        let (a, b) = (end(42.5, -113.8), end(42.6, -113.7));
+        assert!(route_request(&a, &b, "auto", None).get("costing_options").is_none());
+        let o = CostingOpts { use_highways: Some(0.0), use_tolls: Some(0.0), ..Default::default() };
+        let r = route_request_with(&a, &b, "auto", None, &o);
+        assert_eq!(r["costing_options"], json!({"auto": {"use_highways": 0.0, "use_tolls": 0.0}}));
+        let m = CostingOpts { use_trails: Some(1.0), ..Default::default() };
+        let r = route_request_with(&a, &b, "motorcycle", None, &m);
+        assert_eq!(r["costing"], "motorcycle");
+        assert!(r.get("turn_lanes").is_none());
+        assert_eq!(r["costing_options"], json!({"motorcycle": {"use_trails": 1.0}}));
     }
 
     #[test]

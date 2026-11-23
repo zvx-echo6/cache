@@ -192,6 +192,39 @@ pub struct EdgeCandidate {
     pub use_: Option<String>,
 }
 
+/// Costing options of a `/route` call (Valhalla `costing_options`): preferences from 0 (avoid) to 1 (prefer). `None` leaves
+/// Valhalla's default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CostingOpts {
+    /// `use_highways` (auto): 0 avoids highways where there is a reasonable alternative; it does not forbid them.
+    pub use_highways: Option<f64>,
+    /// `use_tolls` (auto): 0 avoids tolls where there is a reasonable alternative.
+    pub use_tolls: Option<f64>,
+    /// `use_trails` (motorcycle): 1 prefers dirt and rough roads.
+    pub use_trails: Option<f64>,
+    /// `use_tracks` (auto): 1 prefers track roads.
+    pub use_tracks: Option<f64>,
+}
+
+impl CostingOpts {
+    pub fn is_empty(&self) -> bool {
+        *self == CostingOpts::default()
+    }
+    /// The `costing_options` object for `costing`, or None when nothing is set.
+    pub fn to_json(&self, costing: &str) -> Option<serde_json::Value> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut o = serde_json::Map::new();
+        for (k, v) in [("use_highways", self.use_highways), ("use_tolls", self.use_tolls), ("use_trails", self.use_trails), ("use_tracks", self.use_tracks)] {
+            if let Some(v) = v {
+                o.insert(k.into(), serde_json::json!(v));
+            }
+        }
+        Some(serde_json::json!({ costing: o }))
+    }
+}
+
 pub trait Valhalla: Send + Sync {
     /// `costing` is "auto", "pedestrian" or "bicycle". None = the call failed (the reference server: snap distance inf).
     fn locate(&self, lat: f64, lon: f64, costing: &str) -> Option<LocateSnap>;
@@ -206,6 +239,10 @@ pub trait Valhalla: Send + Sync {
     fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
         self.route(from.point(), to.point(), costing)
     }
+    /// `route_ends` with costing options. The default ignores the options.
+    fn route_with(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, _opts: &CostingOpts) -> Result<Trip, ValhallaError> {
+        self.route_ends(from, to, costing)
+    }
     /// `/trace_attributes` of a polyline6 shape with auto costing and the attributes the reference server filters for.
     fn trace_attributes(&self, encoded_polyline6: &str) -> Result<Trace, ValhallaError>;
     /// Up to `count` alternative routes besides the best one (Valhalla's `alternates`), best first; none when the router gives
@@ -216,6 +253,10 @@ pub trait Valhalla: Send + Sync {
     /// `alternatives` with snapping options per end. The default ignores the options.
     fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
         self.alternatives(from.point(), to.point(), costing, count)
+    }
+    /// `alternatives_ends` with costing options. The default ignores the options.
+    fn alternatives_with(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize, _opts: &CostingOpts) -> Vec<Trip> {
+        self.alternatives_ends(from, to, costing, count)
     }
 }
 

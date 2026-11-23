@@ -258,7 +258,8 @@ In the directions panel:
 - "The off-road part of this trip is too long to work out": move the end nearer a road.
 - "Working out the route took too long. Try again"
 - "Could not get directions" or "Directions are not available in this build yet": try "Drive" or "Walk", or try later.
-- "Ignores land rules: the route may cross private or closed land.": shown with "Emergency: any land". Use only in an emergency.
+- "Emergency routing ignores land-access rules. The route may cross private or closed land.": shown with "Emergency". Use only in an emergency.
+- "Cache has no land rules for this area. Check local access before you go.": the off-road data for this area has no land rules, so "Standard" and "Emergency" route the same. Find out who allows access before you go.
 
 ## Guidance messages
 

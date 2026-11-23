@@ -139,6 +139,70 @@ pub static PROFILES: [ModeProfile; 4] = [
     },
 ];
 
+/// Dirt bike (`offroad_moto`): the 2w slot of the search with this profile instead of the mountain-bike one. Terrain like the
+/// mountain bike but faster (Herzog, 30 km/h base, 30 degrees), forest and shrub cost less than for a bicycle, wilderness
+/// impassable (motor vehicles are barred there). Not part of [`PROFILES`] (so the pack's profile hash and the Auto search are unchanged).
+pub static PROFILE_MOTO: ModeProfile = ModeProfile {
+    name: "moto",
+    speed_function: SpeedFn::Herzog,
+    base_speed_kmh: 30.0,
+    max_slope_deg: 30.0,
+    trail_friction: &[(5, Some(0.1)), (15, Some(0.2)), (25, Some(0.5))],
+    terrain_override: &[
+        (30, Ovr::Mul(2.0)),
+        (20, Ovr::Mul(2.0)),
+        (10, Ovr::Mul(4.0)),
+        (60, Ovr::Mul(3.0)),
+        (90, Ovr::Inf),
+        (95, Ovr::Inf),
+        (80, Ovr::Inf),
+    ],
+    wilderness_impassable: true,
+    off_trail_flat_threshold_deg: 0.0,
+    off_trail_flat_friction: f32::INFINITY,
+};
+
+/// Side-by-side (`offroad_sxs`): the Quad profile in the 4w slot, but dense vegetation costs more (a wider machine). The trails
+/// closed to vehicles wider than 50 in are closed to it through the MVUM data (see `mvum`), where the pack has that column.
+pub static PROFILE_SXS: ModeProfile = ModeProfile {
+    name: "sxs",
+    speed_function: SpeedFn::Herzog,
+    base_speed_kmh: 25.0,
+    max_slope_deg: 30.0,
+    trail_friction: &[(5, Some(0.1)), (15, Some(0.3)), (25, None)],
+    terrain_override: &[
+        (30, Ovr::Mul(1.5)),
+        (20, Ovr::Mul(4.0)),
+        (10, Ovr::Inf),
+        (60, Ovr::Mul(2.0)),
+        (90, Ovr::Inf),
+        (95, Ovr::Inf),
+        (80, Ovr::Inf),
+    ],
+    wilderness_impassable: true,
+    off_trail_flat_threshold_deg: 0.0,
+    off_trail_flat_friction: f32::INFINITY,
+};
+
+/// Which profile fills the 2w or 4w slot of a single-mode search: the standard one, or a variant (dirt bike in 2w, side-by-side in 4w).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Variant {
+    #[default]
+    Standard,
+    Moto,
+    Sxs,
+}
+impl Variant {
+    /// The profile the slot of `mode` uses under this variant.
+    pub fn profile_for(self, mode: Mode) -> &'static ModeProfile {
+        match (self, mode) {
+            (Variant::Moto, Mode::TwoW) => &PROFILE_MOTO,
+            (Variant::Sxs, Mode::FourW) => &PROFILE_SXS,
+            _ => mode.profile(),
+        }
+    }
+}
+
 pub const PRAGMATIC_BARRIER_MULTIPLIER: f32 = 5.0;
 pub const TRANSITION_COST_PARKING_S: f64 = 60.0;
 pub const TRANSITION_COST_TRAILHEAD_S: f64 = 30.0;
@@ -231,7 +295,15 @@ pub fn compute_cost_multiplier_grid(
     elev: &[f32], rows: usize, cols: usize, cell_m: f64,
     friction: Option<&[f32]>, class: Option<&[u8]>, wilderness: Option<&[u8]>, mode: Mode,
 ) -> Vec<f32> {
-    let p = mode.profile();
+    compute_cost_multiplier_grid_with(elev, rows, cols, cell_m, friction, class, wilderness, mode, mode.profile())
+}
+
+/// [`compute_cost_multiplier_grid`] with an explicit profile for the mode's slot (a variant: dirt bike, side-by-side).
+#[allow(clippy::too_many_arguments)]
+pub fn compute_cost_multiplier_grid_with(
+    elev: &[f32], rows: usize, cols: usize, cell_m: f64,
+    friction: Option<&[f32]>, class: Option<&[u8]>, wilderness: Option<&[u8]>, mode: Mode, p: &ModeProfile,
+) -> Vec<f32> {
     let mut mult = vec![1f32; rows * cols];
     if let Some(f) = friction {
         for (m, &fv) in mult.iter_mut().zip(f) {

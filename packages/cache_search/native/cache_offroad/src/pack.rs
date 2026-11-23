@@ -78,6 +78,10 @@ pub struct MvumFeature {
     pub seasonal: Option<String>,
     /// (status, dates) for modes mtb (e_bike_class1), atv, vehicle (highclearancevehicle) in that order.
     pub access: [(Option<String>, Option<String>); 3],
+    /// (status, dates) for the dirt bike (MVUM motorcycle) and for vehicles wider than 50 in (the side-by-side), in that order;
+    /// `None` where the pack has no such column yet (before the off-road pack rebuild): the routes then use the ATV rules for the
+    /// dirt bike and the quad's for the side-by-side.
+    pub ext: [Option<(Option<String>, Option<String>)>; 2],
     /// parts of the (Multi)LineString as (lon, lat)
     pub lines: Vec<Vec<(f64, f64)>>,
 }
@@ -100,6 +104,10 @@ pub trait PackSource: Send + Sync {
     /// Whether the pack's data covers the point (a pack that does not know its extent says yes).
     fn covers(&self, _lat: f64, _lon: f64) -> bool {
         true
+    }
+    /// Whether the pack says it carries land-access rules: `Some(true)` (US data), `Some(false)` (none), `None` when it does not say.
+    fn land_rules(&self) -> Option<bool> {
+        None
     }
 }
 
@@ -145,6 +153,16 @@ pub fn line_box(a: (f64, f64), b: (f64, f64), buffer_m: f64) -> (f64, f64, f64, 
 pub struct SqlitePack {
     conn: Mutex<Connection>,
     pub info: PackInfo,
+    /// The `mvum` table has the dirt bike columns (`moto_status`, `moto_dates`) / the over-50-in columns (`gt50_status`, `gt50_dates`).
+    has_moto: bool,
+    has_gt50: bool,
+}
+
+/// The column names of the `mvum` table (none when there is no such table).
+fn mvum_columns(conn: &Connection) -> Vec<String> {
+    let Ok(mut st) = conn.prepare("PRAGMA table_info(mvum)") else { return vec![] };
+    let Ok(rows) = st.query_map([], |r| r.get::<_, String>(1)) else { return vec![] };
+    rows.flatten().collect()
 }
 
 impl SqlitePack {
@@ -167,7 +185,10 @@ impl SqlitePack {
         };
         let bbox = (f("bbox_south")?, f("bbox_north")?, f("bbox_west")?, f("bbox_east")?);
         let layers = meta.get("layers").map(|s| s.split(',').map(|x| x.to_string()).collect()).unwrap_or_default();
-        Ok(SqlitePack { conn: Mutex::new(conn), info: PackInfo { bbox, layers, meta } })
+        let cols = mvum_columns(&conn);
+        let has = |a: &str, b: &str| cols.iter().any(|c| c == a) && cols.iter().any(|c| c == b);
+        let (has_moto, has_gt50) = (has("moto_status", "moto_dates"), has("gt50_status", "gt50_dates"));
+        Ok(SqlitePack { conn: Mutex::new(conn), info: PackInfo { bbox, layers, meta }, has_moto, has_gt50 })
     }
 
     fn tile_blobs(&self, layer: Layer, tx0: i64, tx1: i64, ty0: i64, ty1: i64) -> PResult<Vec<(i64, i64, Vec<u8>)>> {
@@ -263,20 +284,47 @@ impl PackSource for SqlitePack {
     fn trailheads_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
         self.points("trailheads", a, b, c, d)
     }
+    fn land_rules(&self) -> Option<bool> {
+        match self.info.meta.get("land_access").map(|s| s.as_str()) {
+            Some("us") => Some(true),
+            Some("none") => Some(false),
+            _ => None,
+        }
+    }
     fn mvum_in_box(&self, south: f64, north: f64, west: f64, east: f64) -> PResult<Vec<MvumFeature>> {
         let conn = self.conn.lock().unwrap();
-        let mut st = conn.prepare_cached(
-            "SELECT m.is_trail, m.symbol, m.seasonal, m.mtb_status, m.mtb_dates, m.atv_status, m.atv_dates, \
-             m.veh_status, m.veh_dates, m.geom FROM mvum_idx i JOIN mvum m ON m.id=i.id \
-             WHERE i.max_lon >= ?1 AND i.min_lon <= ?2 AND i.max_lat >= ?3 AND i.min_lat <= ?4",
-        )?;
+        // the new columns are read when the pack has them, and left out of the query when it does not
+        let mut sql = String::from(
+            "SELECT m.is_trail, m.symbol, m.seasonal, m.mtb_status, m.mtb_dates, m.atv_status, m.atv_dates, m.veh_status, m.veh_dates, m.geom",
+        );
+        if self.has_moto {
+            sql.push_str(", m.moto_status, m.moto_dates");
+        }
+        if self.has_gt50 {
+            sql.push_str(", m.gt50_status, m.gt50_dates");
+        }
+        sql.push_str(" FROM mvum_idx i JOIN mvum m ON m.id=i.id WHERE i.max_lon >= ?1 AND i.min_lon <= ?2 AND i.max_lat >= ?3 AND i.min_lat <= ?4");
+        let mut st = conn.prepare_cached(&sql)?;
+        let (has_moto, has_gt50) = (self.has_moto, self.has_gt50);
         let rows = st.query_map(params![west, east, south, north], |r| {
             let g: Vec<u8> = r.get(9)?;
+            let mut next = 10;
+            let mut pair = |present: bool| -> rusqlite::Result<Option<(Option<String>, Option<String>)>> {
+                if !present {
+                    return Ok(None);
+                }
+                let v = (r.get(next)?, r.get(next + 1)?);
+                next += 2;
+                Ok(Some(v))
+            };
+            let moto = pair(has_moto)?;
+            let gt50 = pair(has_gt50)?;
             Ok(MvumFeature {
                 is_trail: r.get::<_, i64>(0)? != 0,
                 symbol: r.get(1)?,
                 seasonal: r.get(2)?,
                 access: [(r.get(3)?, r.get(4)?), (r.get(5)?, r.get(6)?), (r.get(7)?, r.get(8)?)],
+                ext: [moto, gt50],
                 lines: decode_lines(&g),
             })
         })?;
