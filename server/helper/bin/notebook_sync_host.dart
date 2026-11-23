@@ -267,17 +267,17 @@ const Set<String> kNotebookReadOps = {'notebooks', 'notebook', 'entries', 'entry
 /// A look at the core's ops that tells the host when the notebooks were written (a browser's `notebook` op that is not a read), so
 /// it exports. The sync's own writes go through [CoreNotebookStore] and never reach here.
 class NotebookWriteHook implements CoreHook {
-  NotebookWriteHook(this._changed, {CoreHook? then}) : _then = then;
+  NotebookWriteHook(this._changed, {this.then});
 
   final void Function() _changed;
-  final CoreHook? _then;
+  final CoreHook? then;
 
   @override
-  Map<String, dynamic> before(String op, Map<String, dynamic> args) => _then?.before(op, args) ?? args;
+  Map<String, dynamic> before(String op, Map<String, dynamic> args) => then?.before(op, args) ?? args;
 
   @override
   void after(String op, Map<String, dynamic> args) {
-    _then?.after(op, args);
+    then?.after(op, args);
     if (op != 'notebook') return;
     final inner = args['op'];
     if (inner is String && !kNotebookReadOps.contains(inner)) _changed();

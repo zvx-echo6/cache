@@ -145,7 +145,9 @@ class CoreNotebookStore implements NotebookStore {
           })));
 
   @override
-  Future<void> deleteEntry(String id) => _change(() => call('entry_delete', {'id': id}));
+  Future<void> deleteEntry(String id) => _change(() async {
+        await call('entry_delete', {'id': id});
+      });
 
   // ---- photos ----
 
