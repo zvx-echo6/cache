@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 9 to 11 (the same rule as data_extraction_rules.xml, which Android 12 and later read instead): the sync folder
-     (files/sync/) stays on this device. Everything else is backed up as before. -->
+     (files/sync/) stays on this device. A copy moved aside after a restore (files/sync-restored/) stays too. Everything else is backed up as before. -->
 <full-backup-content>
     <exclude domain="file" path="sync/"/>
+    <exclude domain="file" path="sync-restored/"/>
 </full-backup-content>

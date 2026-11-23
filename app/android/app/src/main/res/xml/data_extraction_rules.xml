@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 12 and later. The sync folder (files/sync/: the device's key, its linked devices and sync state) stays on this device:
-     it is left out of cloud backup and of phone-to-phone transfer. Everything else is backed up as before. -->
+     it is left out of cloud backup and of phone-to-phone transfer. A copy moved aside after a restore (files/sync-restored/) stays too. Everything else is backed up as before. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="sync/"/>
+        <exclude domain="file" path="sync-restored/"/>
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="sync/"/>
+        <exclude domain="file" path="sync-restored/"/>
     </device-transfer>
 </data-extraction-rules>

@@ -61,12 +61,13 @@ void main() {
     final store = FakeMarkerStore();
     final r = await checkInstallMarker(syncDir: sync, store: store, now: () => DateTime.utc(2026, 11, 23, 1, 2, 3), makeId: () => 'NEW');
     expect(r.state, MarkerState.restored);
-    expect(r.movedTo, '${tmp.path}/sync.restored-20261123T010203Z');
+    expect(r.movedTo, '${tmp.path}/sync-restored/20261123T010203Z');
     expect(File('${r.movedTo}/identity.key').readAsStringSync(), 'old-key', reason: 'kept, not deleted');
     expect(File('${sync.path}/identity.key').existsSync(), isFalse, reason: 'the engine finds no key: it makes a new one');
     expect(File('${sync.path}/sync.json').existsSync(), isFalse, reason: 'no linked devices');
     expect(idFile().readAsStringSync(), 'NEW');
     expect(store.value, 'NEW');
+    expect(store.excluded, ['${tmp.path}/sync-restored'], reason: 'the parent is flagged right after it is made');
   });
 
   test('folder has id X, marker is a different id: same as missing', () async {
@@ -122,7 +123,10 @@ void main() {
     final store = FakeMarkerStore();
     await prepareSyncFolder(syncDir: sync, store: store);
     await prepareSyncFolder(syncDir: sync, store: store);
-    expect(store.excluded, [sync.path, sync.path]);
+    expect(store.excluded, [sync.path, sync.path], reason: 'no sync-restored folder yet, so nothing to flag');
+    Directory('${tmp.path}/sync-restored').createSync();
+    await prepareSyncFolder(syncDir: sync, store: store);
+    expect(store.excluded.last, '${tmp.path}/sync-restored');
     store.excludeFails = true;
     expect((await prepareSyncFolder(syncDir: sync, store: store)).state, MarkerState.normal);
   });
@@ -152,9 +156,9 @@ void main() {
       expect(keyAtOpen, 'no old key', reason: 'the engine must never open the old folder');
       expect(s.running, isTrue);
       expect(s.newDevice, isTrue);
-      expect(Directory(r.dir.path).listSync().whereType<Directory>().any((d) => d.path.contains('sync.restored-')), isTrue);
+      expect(Directory(r.dir.path).listSync().whereType<Directory>().any((d) => d.path.endsWith('/sync-restored')), isTrue);
       expect(jsonDecode(File('${r.dir.path}/sharing.json').readAsStringSync())['new_device'], isTrue);
-      expect(store.excluded, [dir.path]);
+      expect(store.excluded, containsAll([dir.path, '${r.dir.path}/sync-restored']));
 
       // The page tells it, and leaving the page marks it told.
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
@@ -173,7 +177,7 @@ void main() {
       final again = open();
       await tester.runAsync(again.init);
       expect(again.newDevice, isFalse);
-      expect(Directory(r.dir.path).listSync().whereType<Directory>().where((d) => d.path.contains('sync.restored-')).length, 1);
+      expect(Directory('${r.dir.path}/sync-restored').listSync().length, 1, reason: 'nothing moved again');
       again.dispose();
       await r.dispose(tester);
     });

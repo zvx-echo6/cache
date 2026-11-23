@@ -60,6 +60,18 @@ class MarkerResult {
 /// The id kept inside the sync folder, next to the device's key.
 const String kInstallIdFile = 'install-id';
 
+/// Beside the sync folder: where a restored copy is moved to, one folder per move, named by its UTC time.
+const String kRestoredDir = 'sync-restored';
+
+/// iPhone's backup-exclusion flag; a flag that cannot be set is logged and stops nothing.
+Future<void> _keepOutOfBackups(InstallMarkerStore store, String path) async {
+  try {
+    await store.excludeFromBackup(path);
+  } catch (e) {
+    logError('Sharing: a sync folder could not be kept out of phone backups', error: e, detail: path);
+  }
+}
+
 String _newId() {
   final r = Random.secure();
   return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
@@ -75,7 +87,7 @@ String _stamp(DateTime t) {
 /// with the one only this device keeps:
 /// - both there and equal: nothing;
 /// - the folder has an id and the device's is missing or different: the folder came from another phone (a restore). It is moved
-///   aside as `sync.restored-<UTC time>` (never deleted), a new folder with a new id is made, and the engine then makes a new key
+///   aside as `sync-restored/<UTC time>` (never deleted), a new folder with a new id is made, and the engine then makes a new key
 ///   in it. The old key is never opened;
 /// - no id in the folder: nothing is moved, and both are written (the device's first if it had none, so a stop in between leaves
 ///   a state this check treats as a first start, never as a restore).
@@ -98,7 +110,10 @@ Future<MarkerResult> checkInstallMarker({
   if (inFolder != null && inFolder == mark) return const MarkerResult(MarkerState.normal);
 
   if (inFolder != null) {
-    final aside = '${syncDir.path}.restored-${_stamp(now())}';
+    // Under one fixed folder that is kept out of backups like the sync folder, so the old key does not travel again.
+    final parent = Directory('${syncDir.parent.path}${Platform.pathSeparator}$kRestoredDir')..createSync(recursive: true);
+    await _keepOutOfBackups(store, parent.path);
+    final aside = '${parent.path}${Platform.pathSeparator}${_stamp(now())}';
     syncDir.renameSync(aside);
     final id = makeId();
     await store.write(id);
@@ -119,10 +134,8 @@ Future<MarkerResult> checkInstallMarker({
 /// marker still catches a restored copy.
 Future<MarkerResult> prepareSyncFolder({required Directory syncDir, required InstallMarkerStore store}) async {
   final result = await checkInstallMarker(syncDir: syncDir, store: store);
-  try {
-    await store.excludeFromBackup(syncDir.path);
-  } catch (e) {
-    logError('Sharing: the sync folder could not be kept out of phone backups', error: e);
-  }
+  await _keepOutOfBackups(store, syncDir.path);
+  final restored = Directory('${syncDir.parent.path}${Platform.pathSeparator}$kRestoredDir');
+  if (restored.existsSync()) await _keepOutOfBackups(store, restored.path);
   return result;
 }
