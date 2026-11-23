@@ -217,6 +217,8 @@ class _ShellState extends State<Shell> {
   /// Back in front with Ask shown: the chosen model, let go while Cache was in the back, loads again, under the same memory gate
   /// as opening Ask (not forced). Nothing else loads on resume.
   void _onResume() {
+    // A browser tab back in front: another tab may have loaded or unloaded the model since.
+    unawaited(widget.app.syncServerModel());
     if (_module == ModuleId.ask) unawaited(_wakeAsk());
   }
 

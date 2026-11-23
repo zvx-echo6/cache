@@ -22,6 +22,9 @@ class LlamaSession {
 
   bool get isLoaded => _modelId != null;
 
+  /// Takes [id] as the loaded model without asking the server to load anything: another tab loaded it there.
+  void adopt(String id) => _modelId = id;
+
   /// Where this session's generation waits: how many are ahead of it (1 is next), null when it is running or none waits.
   Stream<int?> get queuePosition => _queue.stream;
 
