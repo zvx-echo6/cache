@@ -19,6 +19,23 @@ Heading? headingOf(Object? v) {
   return words[t];
 }
 
+/// The feeds' own "no value" markers: text a feed sends where it has nothing to say (a placeholder, not a fact). Seen in the 511 v2
+/// events API: "No Data" (Lanes affected on Idaho's US-20 shoulder work, seen on the Pixel), "None" (DirectionOfTravel in the saved Idaho
+/// events fixtures, and a Severity the card lowercased to "none"), "Unknown" (DirectionOfTravel, Severity) and an empty string. WZDx
+/// feeds add "undefined" (the WZDx definition already omits "unknown" and "undefined"). Compared whole, case-insensitively, after
+/// trimming; a real value that merely contains one of these words is kept. Kept in lower case.
+const Set<String> kNoValueMarkers = {'', 'no data', 'none', 'unknown', 'undefined'};
+
+/// True when [v] is empty or one of the feed's own [kNoValueMarkers].
+bool isNoValue(String? v) => v == null || kNoValueMarkers.contains(v.trim().toLowerCase());
+
+/// [fields] without the entries that hold no value (see [kNoValueMarkers]), so no consumer shows a placeholder as a fact. This is
+/// display only: it is applied when a stored item becomes a [RoadEvent]; the stored item the assistant reads is not touched.
+Map<String, String> withoutNoValue(Map<String, String> fields) => {
+  for (final e in fields.entries)
+    if (!isNoValue(e.value)) e.key: e.value,
+};
+
 /// One road event as the map draws it, read from what a source stored (a 511 event's `app` values, or a WZDx feature's).
 class RoadEvent {
   const RoadEvent({
