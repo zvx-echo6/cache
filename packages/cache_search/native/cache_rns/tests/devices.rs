@@ -640,6 +640,62 @@ async fn a_request_to_a_device_that_unlinked_it_fails_as_not_linked() {
     assert!(cache_rns::is_not_linked(&e), "told not linked: {e:#}");
 }
 
+/// The real case: the link is already open (a request worked on it) when A unlinks B. B's next request on the SAME link
+/// is told "not linked", for blobs too; a device neither linked nor former still gets no answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_on_an_open_link_after_the_unlink_fails_as_not_linked() {
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    let port = free_port();
+    let dir = tempfile::tempdir().unwrap();
+    let store = iroh_blobs::store::fs::FsStore::load(dir.path().join("blobs")).await.unwrap();
+    let mut c = cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), vec![&kb]);
+    c.blobs = Some((*store).clone());
+    let a = Arc::new(RnsNode::start(c, Arc::new(Rec::default())).await.unwrap());
+    let b = Arc::new(RnsNode::start(cfg(&kb, Iface::TcpConnect(format!("127.0.0.1:{port}")), vec![&ka]), Arc::new(Rec::default())).await.unwrap());
+    let (a2, b2) = (a.clone(), b.clone());
+    until(
+        "B hears A",
+        20,
+        || b.reachable(&ka.public()),
+        move || {
+            let (a2, b2) = (a2.clone(), b2.clone());
+            Box::pin(async move {
+                let _ = a2.announce().await;
+                let _ = b2.announce().await;
+            })
+        },
+    )
+    .await;
+    // A successful request first: the link is open and reused.
+    b.request(&ka.public(), "/cache/index", b"x", Duration::from_secs(10)).await.expect("linked: answered");
+    // A unlinks B.
+    a.set_peers(&[]);
+    a.set_former(&[kb.public()]);
+    let e = b.request(&ka.public(), "/cache/index", b"x", Duration::from_secs(5)).await.unwrap_err();
+    assert!(cache_rns::is_not_linked(&e), "told not linked on the open link: {e:#}");
+    let e = b.request(&ka.public(), cache_rns::blobs::BLOB_PATH, b"x", Duration::from_secs(5)).await.unwrap_err();
+    assert!(cache_rns::is_not_linked(&e), "a blob request is told not linked too: {e:#}");
+}
+
+/// A device whose hello verified but that is neither linked nor former, and a stranger, get no answer on an open link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_link_of_a_device_neither_linked_nor_former_gets_nothing() {
+    let g = gate().await;
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &g.kb, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, 10).await, Some(bin(b"ok")));
+    assert!(r.ask(link, "/cache/index", b"x", 10).await, "linked: answered");
+    g.a.set_peers(&[]);
+    assert!(!r.ask(link, "/cache/index", b"x", NOT_ANSWERED).await, "neither linked nor former: no answer");
+    g.a.set_former(&[g.kb.public()]);
+    assert_eq!(r.reply(link, "/cache/index", b"x", 10).await, Some(bin(b"not linked")), "former: told");
+    let kx = SecretKey::generate();
+    let rx = g.client(&kx).await;
+    let lx = rx.link(g.dest()).await;
+    assert!(!rx.ask(lx, "/cache/index", b"x", NOT_ANSWERED).await, "a stranger gets no answer");
+}
+
 // ---- Wi-Fi auto discovery ----
 
 /// Two nodes on this host, each with only `Iface::WifiAuto` and no address anywhere, find each other and talk.
