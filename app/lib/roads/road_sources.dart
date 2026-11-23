@@ -90,6 +90,17 @@ class RoadSite {
     conditionsNote: j['conditionsNote'] as String?,
   );
 
+  /// A 511 site that is not in the data file ("Enter another site"): the same field list is assumed and anything missing is ignored.
+  factory RoadSite.unlisted(String host) => RoadSite(
+    id: host,
+    name: host,
+    country: 'US',
+    host: host,
+    keyPage: 'https://$host/developers/doc',
+    rateLimit: const RateLimit(10, Duration(seconds: 60)),
+    lacks: const [],
+  );
+
   final String id;
   final String name;
 
@@ -286,4 +297,15 @@ class RoadSourcesFile {
     }
     return downloaded;
   }
+}
+
+/// The host of a 511 site from what a person typed or pasted ("https://511.example.gov/", "511.example.gov/developers"): lower case, no
+/// scheme, path or port; null when it is not a host name with a dot in it.
+String? parseSiteHost(String text) {
+  var t = text.trim().toLowerCase();
+  t = t.replaceFirst(RegExp(r'^https?://'), '');
+  t = t.split(RegExp(r'[/?#]')).first;
+  t = t.replaceFirst(RegExp(r':\d+$'), '');
+  if (t.startsWith('www.')) t = t.substring(4);
+  return RegExp(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$').hasMatch(t) ? t : null;
 }

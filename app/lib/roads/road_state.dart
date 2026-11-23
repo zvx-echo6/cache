@@ -23,7 +23,7 @@ const String kOldIdahoAlias = 'idaho511';
 
 /// A road source the person has.
 class RoadSourceRecord {
-  const RoadSourceRecord.site(String host) : kind = 'k511', id = host, url = null, name = null;
+  const RoadSourceRecord.site(String host, {this.name}) : kind = 'k511', id = host, url = null;
   const RoadSourceRecord.feed(this.id, {this.url, this.name}) : kind = 'wzdx';
 
   /// `k511` or `wzdx`.
@@ -35,7 +35,7 @@ class RoadSourceRecord {
   /// A WZDx feed's address without credentials.
   final String? url;
 
-  /// A pasted feed's name.
+  /// A pasted feed's name; for a 511 site that is not in the data file ("Enter another site"), set (the site's own host stands for the name).
   final String? name;
 
   bool get isSite => kind == 'k511';
@@ -45,7 +45,7 @@ class RoadSourceRecord {
   static RoadSourceRecord? fromJson(Map<String, dynamic> j) {
     final id = j['id'];
     if (id is! String || id.isEmpty) return null;
-    if (j['k'] == '511') return RoadSourceRecord.site(id);
+    if (j['k'] == '511') return RoadSourceRecord.site(id, name: j['name'] is String ? j['name'] as String : null);
     if (j['k'] == 'wzdx') return RoadSourceRecord.feed(id, url: j['url'] is String ? j['url'] as String : null, name: j['name'] is String ? j['name'] as String : null);
     return null;
   }
@@ -125,6 +125,19 @@ class RoadSources {
     }
   }
 
+  RoadRegistry _registry = RoadRegistry.empty;
+
+  /// The WZDx registry as last read (empty until [loadRegistry] has answered).
+  RoadRegistry get registry => _registry;
+
+  /// Reads the registry through [fetch] (the app's own fetch). Addresses are stripped of credentials as they are read. Keeps what it had
+  /// when the read fails, and rethrows.
+  Future<RoadRegistry> loadRegistry(Future<List<int>> Function(Uri url) fetch) async {
+    final r = await RoadRegistry.load(fetch);
+    _registry = r;
+    return r;
+  }
+
   List<RoadSourceRecord> get records => [for (final m in settings.roadSources) ?RoadSourceRecord.fromJson(m)];
 
   /// Adds a source (one is added once). Adding turns nothing on.
@@ -144,6 +157,26 @@ class RoadSources {
     if (records.any((h) => h.kind == r.kind && h.id == r.id)) return AddFeedResult.already;
     add(r);
     return AddFeedResult.added;
+  }
+
+  /// Adds a 511 site from the data file. Adds nothing on.
+  void addSite(RoadSite site) => add(RoadSourceRecord.site(site.host));
+
+  /// Adds a 511 site that is not in the data file ("Enter another site"); returns its host, or null when the text is not a host name.
+  String? addUnlistedSite(String text) {
+    final host = parseSiteHost(text);
+    if (host == null) return null;
+    final listed = _file.siteByHost(host);
+    add(listed != null ? RoadSourceRecord.site(listed.host) : RoadSourceRecord.site(host, name: host));
+    return host;
+  }
+
+  /// The source of a host or feed id the person added, or null.
+  RoadSource? sourceOf(String kindAndId) {
+    for (final s in sources) {
+      if ('${s.record.kind}:${s.record.id}' == kindAndId) return s;
+    }
+    return null;
   }
 
   /// Adds a pasted feed address (credentials removed first); null when the text is not a usable address (see [readPastedFeed]).
@@ -192,7 +225,7 @@ class RoadSources {
   }
 
   RoadSource? _site(RoadSourceRecord r) {
-    final site = _file.siteByHost(r.id);
+    final site = _file.siteByHost(r.id) ?? (r.name != null ? RoadSite.unlisted(r.id) : null);
     if (site == null) return null;
     const origin = Origin.catalogue('roads', 'Road events');
     Connector make(Map<String, dynamic> def, String title) => Connector.parse(

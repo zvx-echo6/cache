@@ -12,6 +12,7 @@ import '../../theme.dart';
 import '../../regions/ui/region_page.dart';
 import '../../regions/ui/regions_screen.dart';
 import 'deps.dart';
+import 'road_pages.dart';
 import 'widgets.dart';
 
 /// Settings > Maps: one line per region on the phone (map downloads from before regions are part of their region, or one line per
@@ -60,7 +61,7 @@ class _MapsPageState extends State<MapsPage> {
         ? openLayers()
         : Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: tab)));
     return ListenableBuilder(
-      listenable: Listenable.merge([maps, ?regions]),
+      listenable: Listenable.merge([maps, ?regions, if (widget.deps.hub.weather.roads != null) widget.deps.hub.weather]),
       builder: (context, _) {
         final layers = maps.catalogueLayers;
         final on = layers.where((l) => maps.isOn(l.id)).length;
@@ -120,6 +121,7 @@ class _MapsPageState extends State<MapsPage> {
               ],
             ),
             const NoteText('On the map, in places and in the long-press ring. Kept on this device.'),
+            ...roadEventsSection(context, widget.deps),
             SettingsGroup(
               label: 'Layers',
               rows: [
