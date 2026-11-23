@@ -10,6 +10,10 @@ const _info = ModelInfo(description: 'Gemma 4 E2B', nCtx: 8192, chatFormat: 'gem
 
 class _Session implements LlamaSession {
   final loads = <String>[];
+  final adopted = <String>[];
+
+  @override
+  void adopt(String id) => adopted.add(id);
 
   @override
   Future<ModelInfo> load(String path, {int nCtx = 8192, bool repackWeights = false, String? prefixDir, int prereadMbps = 0, int nUbatch = 0}) async {
@@ -25,6 +29,7 @@ class _Session implements LlamaSession {
 class _Server {
   String? loaded;
   int reads = 0;
+  final posts = <String>[];
 
   Future<({int status, String body})> call(String method, String path, String? body) async {
     if (method == 'GET' && path.startsWith('/api/llm/models')) {
@@ -36,12 +41,16 @@ class _Server {
           'result': {
             'v': 1,
             'models': [
-              for (final id in ['a.gguf', 'b.gguf']) {'id': id, 'size': 100, 'loaded': id == loaded},
+              for (final id in ['a.gguf', 'b.gguf']) {
+                'id': id, 'size': 100, 'loaded': id == loaded,
+                if (id == loaded) ...{'n_ctx': 4096, 'info': {'description': 'Gemma 4 E2B', 'n_ctx': 4096, 'chat_format': 'gemma', 'supports_tools': true}},
+              },
             ],
           },
         }),
       );
     }
+    if (method == 'POST') posts.add('$method $path');
     return (status: 404, body: '{}');
   }
 }
@@ -74,10 +83,13 @@ void main() {
     await app.syncServerModel();
     expect(app.active?.fileName, 'a.gguf');
     expect(app.activeInfo, isNotNull);
-    expect(session.loads, ['a.gguf'], reason: 'this tab\'s own session learns the model too');
+    expect(app.activeInfo?.nCtx, 4096, reason: 'the server\'s own numbers, not this tab\'s');
+    expect(session.adopted, ['a.gguf'], reason: 'this tab\'s own session learns the model too');
+    expect(session.loads, isEmpty, reason: 'adopting never loads');
+    expect(fake.posts, isEmpty, reason: 'no POST /api/llm/load: another tab may be mid answer');
 
     await app.syncServerModel();
-    expect(session.loads, ['a.gguf'], reason: 'nothing changed: no second load');
+    expect(session.adopted, ['a.gguf'], reason: 'nothing changed');
 
     fake.loaded = 'b.gguf';
     await app.syncServerModel();

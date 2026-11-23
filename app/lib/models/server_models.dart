@@ -134,13 +134,13 @@ class ServerModels {
   }
 
   /// The chat models on the server: (file name, size, whether it is the one loaded now). The server has one model loaded for every tab.
-  Future<List<({String id, int size, bool loaded})>> chatModels() async {
+  Future<List<({String id, int size, bool loaded, Map<String, dynamic>? info})>> chatModels() async {
     final r = await _result('GET', '/api/llm/models?v=1');
     final list = r is Map ? r['models'] : null;
     return [
       if (list is List)
         for (final m in list)
-          if (m is Map && m['id'] is String) (id: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0, loaded: m['loaded'] == true),
+          if (m is Map && m['id'] is String) (id: m['id'] as String, size: (m['size'] as num?)?.toInt() ?? 0, loaded: m['loaded'] == true, info: m['info'] is Map ? {...(m['info'] as Map).cast<String, dynamic>(), if (m['n_ctx'] is int) 'n_ctx': m['n_ctx']} : null),
     ];
   }
 
