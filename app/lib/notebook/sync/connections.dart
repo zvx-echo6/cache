@@ -91,6 +91,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   final Map<String, String> _status = {};
   final Map<String, List<SyncConflict>> _conflicts = {};
   final Map<String, List<String>> _merged = {};
+  final Map<String, List<String>> _keptTwo = {};
   final Map<String, int> _notAdded = {};
   final Map<String, ({Set<String> imported, Set<String> stopped})> _links = {};
 
@@ -108,6 +109,10 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Entries changed in both places whose changes were merged in the last run (told, not asked).
   List<String> merged(String id) => _merged[id] ?? const [];
+
+  /// Entries both places changed in the same words in the last run: one version stays, the other is kept as a new entry (told, not
+  /// asked).
+  List<String> keptAsTwo(String id) => _keptTwo[id] ?? const [];
 
   /// Tagged notes the last sync could not import (Cache could not write its id into them).
   int notAdded(String id) => _notAdded[id] ?? 0;
@@ -251,6 +256,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     _targets = [for (final x in _targets) if (x.id != id) x];
     _status.remove(id);
     _conflicts.remove(id);
+    _merged.remove(id);
+    _keptTwo.remove(id);
     _links.remove(id);
     _notAdded.remove(id);
     await _saveTargets();
@@ -340,6 +347,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             final r = await e.run();
             _conflicts[t.id] = e.conflicts;
             _merged[t.id] = r.merged;
+            _keptTwo[t.id] = r.keptAsTwo;
             if (t.kind != SyncKind.share) {
               _notAdded[t.id] = r.notAdded;
               _links[t.id] = await NotebookSync.links(e.stateFile);
@@ -372,6 +380,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       if (r.arrived > 0) 'Notebooks: ${entries(r.arrived)} arrived from your other devices',
       if (changed > 0) 'Notebooks: ${entries(changed)} updated from your other devices',
       if (r.removedHere > 0) 'Notebooks: ${entries(r.removedHere)} removed by your other devices',
+      if (r.merged.isNotEmpty) 'Notebooks: ${entries(r.merged.length)} combined with changes from your other devices',
+      for (final t in r.keptAsTwo) 'Notebooks: $t: both devices changed the same words; the other version is kept as a new entry',
     ]) {
       logInfo(line);
       onActivity?.call(line);

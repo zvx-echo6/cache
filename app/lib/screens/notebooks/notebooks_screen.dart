@@ -201,7 +201,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                 if (c == 'search') return openSearch();
                 final d = widget.deps;
                 Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false, deps: d),
+                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
                 ));
               },
               itemBuilder: (_) => [

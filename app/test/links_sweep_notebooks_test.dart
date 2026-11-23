@@ -9,7 +9,6 @@ import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/sync_engine.dart';
 import 'package:cache/notebook/templates.dart';
-import 'package:cache/screens/notebooks/connections_screen.dart';
 import 'package:cache/screens/notebooks/entry_editor.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/notebooks_screen.dart';
@@ -217,20 +216,6 @@ void main() {
     await r.pump(tester, NotebooksScreen(deps: r.deps, templates: _templates()));
     expect(find.text('Added from Obsidian: Stove.'), findsOneWidget);
     await tester.tap(find.widgetWithText(SnackBarAction, 'Show'));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pumpAndSettle();
-    expect(find.byType(EntryEditor), findsOneWidget);
-  });
-
-  testWidgets('22. A "Changed in two places" card opens that entry', (tester) async {
-    final r = _Rig();
-    await r.nb.start();
-    final journal = r.nb.journal!;
-    final e = await r.nb.saveEntry(notebookId: journal.id, occurredAt: '2026-11-14T10:00:00-07:00', title: 'Water cache restocked');
-    r.conn = _Conn(r.nb)..found = [SyncConflict(entryId: e.id, kind: ConflictKind.bothChanged, title: 'Water cache restocked', path: 'Water.md', cacheText: 'a', fileText: 'b')];
-    await r.pump(tester, ConnectionsScreen(connections: r.conn!, folders: false, shareAvailable: true, deps: r.deps));
-    expect(find.text('Changed in two places: Water cache restocked'), findsOneWidget);
-    await tester.tap(find.byKey(ValueKey('conflict-open-${e.id}')));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pumpAndSettle();
     expect(find.byType(EntryEditor), findsOneWidget);

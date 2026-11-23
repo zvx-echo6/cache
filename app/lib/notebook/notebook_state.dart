@@ -352,6 +352,28 @@ class NotebookState extends ChangeNotifier {
     return f.existsSync() ? f.readAsBytes() : null;
   }
 
+  /// Gives photo [to] its own copy of photo [from]'s bytes and thumbnail (a photo belongs to one entry). False when [from] is not
+  /// on this device.
+  Future<bool> copyPhoto(String from, String to) async {
+    final bytes = await photoBytes(from);
+    if (bytes == null) return false;
+    final thumb = await thumbBytes(from);
+    if (plat.isWeb) {
+      await webFs.writeBytesAtomic(AppRoot.support, photoRel(to), bytes);
+      if (thumb != null) await webFs.writeBytesAtomic(AppRoot.support, thumbRel(to), thumb);
+      return true;
+    }
+    final f = await photoFile(to);
+    await f.parent.create(recursive: true);
+    await f.writeAsBytes(bytes, flush: true);
+    if (thumb != null) {
+      final t = await thumbFile(to);
+      await t.parent.create(recursive: true);
+      await t.writeAsBytes(thumb, flush: true);
+    }
+    return true;
+  }
+
   /// An attached file's bytes, null when it is not there.
   Future<Uint8List?> attachedBytes(String id) async {
     if (plat.isWeb) return webFs.readBytes(AppRoot.support, attachedRel(id));
