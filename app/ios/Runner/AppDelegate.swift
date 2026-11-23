@@ -448,6 +448,7 @@ final class RouteSnapshot {
 ///   an iCloud or computer backup restored onto another iPhone nor a phone-to-phone transfer carries. After first unlock, so a
 ///   background sync round (which can run with the phone locked) can read it.
 /// - "excludeFromBackup": creates the folder if needed and sets NSURLIsExcludedFromBackupKey on it. The app calls it at every start.
+/// - "excludeIfPresent": sets the same flag on a file or folder that exists (true), or does nothing when it is missing (false).
 enum InstallMarker {
   private static let service = "co.cache.install-marker"
   private static let account = "install-id"
@@ -504,6 +505,25 @@ enum InstallMarker {
         values.isExcludedFromBackup = true
         try url.setResourceValues(values)
         result(nil)
+      } catch {
+        result(FlutterError(code: "exclude_failed", message: error.localizedDescription, details: nil))
+      }
+    case "excludeIfPresent":
+      // The backup sweep (lib/platform/backup_scope.dart): flags a file or folder that is already there, creates nothing.
+      guard let args = call.arguments as? [String: Any], let path = args["path"] as? String, !path.isEmpty else {
+        result(FlutterError(code: "bad_path", message: "no path given", details: nil))
+        return
+      }
+      guard FileManager.default.fileExists(atPath: path) else {
+        result(false)
+        return
+      }
+      do {
+        var url = URL(fileURLWithPath: path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+        result(true)
       } catch {
         result(FlutterError(code: "exclude_failed", message: error.localizedDescription, details: nil))
       }
