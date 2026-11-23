@@ -40,6 +40,18 @@ fn unlinked_device_drops_the_link_with_iroh_and_reticulum_both_on() {
         call(&b, "sync_now", json!({}));
         std::thread::sleep(Duration::from_secs(2));
     }
+    // B says so once in its Activity, with the name B had saved for A, and once in the app's log buffer; later rounds do not repeat it
+    let said = |e: &cache_sync::SyncEngine| {
+        call(e, "status", json!({}))["log"].as_array().unwrap().iter().filter(|l| l["text"] == "Desk unlinked this device").count()
+    };
+    assert_eq!(said(&b), 1, "{}", brief(&b));
+    for _ in 0..2 {
+        call(&b, "sync_now", json!({}));
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    assert_eq!(said(&b), 1, "{}", brief(&b));
+    let buf = cache_sync::take_log();
+    assert_eq!(buf.iter().filter(|l| l.as_str() == "Desk unlinked this device").count(), 1, "{buf:?}");
     a.close();
     b.close();
 }
