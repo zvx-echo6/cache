@@ -65,6 +65,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - async 2.13.1: BSD-3-Clause (Copyright 2015, the Dart project authors.)
 - boolean_selector 2.1.2: BSD-3-Clause (Copyright 2016, the Dart project authors.)
 - characters 1.4.1: BSD-3-Clause (Copyright 2019, the Dart project authors.)
+- charcode 1.4.0: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - clock 1.1.2: Apache-2.0
 - code_assets 1.2.1: BSD-3-Clause (Copyright 2025, the Dart project authors.)
 - collection 1.19.1: BSD-3-Clause (Copyright 2015, the Dart project authors.)
@@ -226,6 +227,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - xdg_directories 1.1.0: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - xml 7.0.1: MIT (Copyright (c) 2006-2026 Lukas Renggli.)
 - yaml 3.1.4: MIT (Copyright (c) 2014, the Dart project authors.)
+- zxing2 0.2.4: BSD-3-Clause (Copyright (c) 2023, zxing-dart.) Used only by the tests, to read the link-code QR back; not in the app.
 
 ## Rust crates
 

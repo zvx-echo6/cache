@@ -12,8 +12,8 @@ import 'shot_kit.dart';
 
 const _out = 'nearby';
 
-// a code as long as the engine's real ones
-const _code = 'CACHE1-PMRGSZBCHIRDOYRTMYZGGZTFMJRWIYLCGM3TKNBVGEZDGNZRGYYTCOJYGQ4DKMRTGIYTEOBQHE3DIMJSGU2TGMBXGM';
+// a short link code, as the engine makes them now
+const _code = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
 
 void main() {
   setUpAll(loadShotFonts);

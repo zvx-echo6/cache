@@ -134,9 +134,10 @@ class _LinkCodePageState extends State<LinkCodePage> {
               decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(20)),
               child: Column(
                 children: [
-                  Container(color: Colors.white, padding: const EdgeInsets.all(10), child: LinkQr(link: buildLinkUrl(code))),
+                  // the white square carries its own quiet zone (see LinkQr)
+                  LinkQr(link: buildLinkUrl(code)),
                   const SizedBox(height: 14),
-                  Text(code, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: 'monospace', fontSize: 14)),
+                  _CodeText(code),
                   const SizedBox(height: 4),
                   Text('Works once, for 15 minutes', style: TextStyle(color: k.secondary)),
                 ],
@@ -212,6 +213,48 @@ class _LinkCodePageState extends State<LinkCodePage> {
     'wifi' => 'Same Wi-Fi',
     _ => 'Nearby',
   };
+}
+
+/// The whole link code, centred, in monospace and selectable, never cut short. It is one line when it fits; when it does not, it
+/// is split after a dash into two lines of about the same length (`CACHE-7KQF-M2XD-P4WN-R7TA-` over `H3JC-V6YB-Q5LE-W2FS-ZQ`). A code with
+/// no dash to split at (or lines still too wide) wraps wherever the text must.
+class _CodeText extends StatelessWidget {
+  const _CodeText(this.code);
+
+  final String code;
+
+  static const _style = TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.35);
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DefaultTextStyle.of(context).style.merge(_style);
+    return LayoutBuilder(
+      builder: (context, box) {
+        double width(String t) =>
+            (TextPainter(text: TextSpan(text: t, style: style), textDirection: TextDirection.ltr, textScaler: MediaQuery.textScalerOf(context))..layout()).width;
+        var lines = [code];
+        if (width(code) > box.maxWidth) {
+          // the dash that leaves the two lines most even (the dash stays at the end of the first line)
+          String best = '';
+          var bestW = double.infinity;
+          for (var i = code.indexOf('-'); i >= 0 && i < code.length - 1; i = code.indexOf('-', i + 1)) {
+            final w = [width(code.substring(0, i + 1)), width(code.substring(i + 1))].reduce((a, b) => a > b ? a : b);
+            if (w < bestW) {
+              bestW = w;
+              best = code.substring(0, i + 1);
+            }
+          }
+          if (best.isNotEmpty && bestW <= box.maxWidth) lines = [best, code.substring(best.length)];
+        }
+        return SelectionArea(
+          child: Column(
+            key: const ValueKey('link-code-text'),
+            children: [for (final l in lines) Text(l, textAlign: TextAlign.center, style: _style)],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// The question over the page: "Link with Pixel 8?", through getting the words, the words with Cancel and Link, waiting for the

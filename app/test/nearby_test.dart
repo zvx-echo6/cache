@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
+import 'support/sync_fake.dart' show linkCodeLines;
 
 /// Lets the page's half-second polls run, without waiting for the dialog's endless bar.
 Future<void> tick(WidgetTester tester, [int ms = 600]) async {
@@ -29,6 +30,22 @@ void main() {
     return r;
   }
 
+  testWidgets('the code under the QR: one line where it fits, two at a dash on a phone, never cut short', (tester) async {
+    final r = await SettingsRig.create(tester);
+    // the test font draws every letter 14 wide (a phone's monospace draws about 8), so this is a width where 26 letters fit and 48 do not
+    tester.view.physicalSize = const Size(460 * 3, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.runAsync(() => r.sharing.setUp());
+    await r.show(tester, SharingPage(sharing: r.sharing, share: (_) async {}));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('show-code')));
+    await tick(tester);
+    expect(linkCodeLines(tester), ['CACHE-7KQF-M2XD-P4WN-R7TA-', 'H3JC-V6YB-Q5LE-W2FS-ZQ'], reason: 'split after a dash, as in the mock-up');
+    expect(find.byType(SelectionArea), findsWidgets, reason: 'selectable');
+    await r.dispose(tester);
+  });
+
   Future<void> closePage(WidgetTester tester, SettingsRig r) async {
     await r.dispose(tester);
   }
@@ -42,7 +59,7 @@ void main() {
     });
     expect(find.text('Show my link code'), findsWidgets);
     expect(find.byType(LinkQr), findsOneWidget);
-    expect(find.text('CACHE1-TESTCODE'), findsOneWidget);
+    expect(linkCodeLines(tester).join(), 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
     expect(find.text('Copy code'), findsOneWidget);
     expect(find.text('Share link'), findsOneWidget);
     expect(find.text('Nearby'.toUpperCase()), findsOneWidget);

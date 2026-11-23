@@ -42,14 +42,39 @@ class SharingPage extends StatefulWidget {
 }
 
 /// The QR of a device's link (see link_url.dart): what a system camera reads and opens in Cache.
+///
+/// Made to scan: error correction Q, every module [kQrModulePx] logical pixels wide (a whole number of device pixels on a phone) and a
+/// quiet zone of [kQrQuietModules] modules, all inside the white square, black on white in light and dark. A link too long for that
+/// width (an old, long code) is drawn smaller, never refused.
+const kQrModulePx = 6.0;
+const kQrQuietModules = 4;
+
 class LinkQr extends StatelessWidget {
   const LinkQr({super.key, required this.link});
 
   final String link;
 
+  /// The modules along one side, for [link] at error correction Q.
+  static int modulesFor(String link) =>
+      QrValidator.validate(data: link, errorCorrectionLevel: QrErrorCorrectLevel.Q).qrCode?.moduleCount ?? 21;
+
   @override
-  Widget build(BuildContext context) =>
-      QrImageView(data: link, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L);
+  Widget build(BuildContext context) {
+    final modules = modulesFor(link);
+    final whole = modules + 2 * kQrQuietModules;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final px = box.maxWidth.isFinite && box.maxWidth < whole * kQrModulePx ? box.maxWidth / whole : kQrModulePx;
+        return QrImageView(
+          data: link,
+          size: whole * px,
+          padding: EdgeInsets.all(kQrQuietModules * px),
+          backgroundColor: Colors.white,
+          errorCorrectionLevel: QrErrorCorrectLevel.Q,
+        );
+      },
+    );
+  }
 }
 
 String _ago(int? ms) {
@@ -116,6 +141,8 @@ class _SharingPageState extends State<SharingPage> {
   /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
+    // A short code carries no device in it to read here; the engine says whose it is, and its own messages.
+    if (isShortLinkCode(code)) return code;
     try {
       info = decodeLinkCode(code);
     } on BadLinkCode catch (e) {

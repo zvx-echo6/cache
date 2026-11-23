@@ -1,4 +1,12 @@
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// The lines of the link code under the QR on "Show my link code" (one line, or two when it does not fit one).
+List<String> linkCodeLines(WidgetTester tester) => tester
+    .widgetList<Text>(find.descendant(of: find.byKey(const ValueKey('link-code-text')), matching: find.byType(Text)))
+    .map((t) => t.data!)
+    .toList();
 
 /// A sync engine with no network: remembers shares and peers, and answers like the real one.
 class FakeSync implements SyncCoreLike {
@@ -14,7 +22,7 @@ class FakeSync implements SyncCoreLike {
   Object? linkError;
 
   /// The code `link_code` answers (a test of the QR gives a real-sized one).
-  String codeOverride = 'CACHE1-TESTCODE';
+  String codeOverride = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
 
   /// The free space and the kept-free reserve `status` answers.
   int freeBytes = 10 << 30;
