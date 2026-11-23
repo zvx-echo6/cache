@@ -1,7 +1,9 @@
 package com.happylittlellc.cache
 
 import android.Manifest
+import android.app.Activity
 import android.app.ActivityManager
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.Context
@@ -189,6 +191,7 @@ class MainActivity : FlutterActivity() {
     private var routeSnapshot: RouteSnapshot? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
+    private var pendingLock: MethodChannel.Result? = null
 
     // Recent Android versions let the user switch network access (INTERNET) off, and an app updated from a build
     // that never asked for it does not get it; opening even the map's tile server port on this phone then fails.
@@ -251,6 +254,15 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        // The phone's own screen lock, asked before a device is unlinked (lib/platform/device_lock.dart): "ok", "cancelled", or
+        // "none" when no lock is set. The system's confirm-credential screen, so no extra package.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/device_lock")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "confirm" -> confirmDeviceLock(call.argument<String>("title"), call.argument<String>("description"), result)
+                    else -> result.notImplemented()
+                }
+            }
         FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         // The Wi-Fi multicast lock: Android drops multicast packets unless an app holds one, and Reticulum's local discovery
         // (sharing_state.dart) needs them. Taken just before the sharing engine opens and let go when it stops.
@@ -343,6 +355,9 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/multicast").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/device_lock").setMethodCallHandler(null)
+        pendingLock?.success("cancelled")
+        pendingLock = null
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
@@ -383,6 +398,33 @@ class MainActivity : FlutterActivity() {
 
     // Battery and heat (co.cache/battery) are answered by the cache_device plugin, in every engine.
 
+    @Suppress("DEPRECATION") // the intent still works on every API; androidx.biometric is not in this app, and none is added
+    private fun confirmDeviceLock(title: String?, description: String?, result: MethodChannel.Result) {
+        if (pendingLock != null) {
+            result.success("cancelled")
+            return
+        }
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val intent = if (keyguard.isDeviceSecure) keyguard.createConfirmDeviceCredentialIntent(title, description) else null
+        if (intent == null) {
+            result.success("none")
+            return
+        }
+        pendingLock = result
+        // startActivityForResult below already tells FgsAddArm this leave is the app's own.
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_CODE_LOCK)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_LOCK) {
+            pendingLock?.success(if (resultCode == Activity.RESULT_OK) "ok" else "cancelled")
+            pendingLock = null
+        }
+    }
+
     private fun notificationsGranted() =
         checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
@@ -404,5 +446,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val REQUEST_CODE = 4210
         private const val REQUEST_CODE_NOTIFICATIONS = 4211
+        private const val REQUEST_CODE_LOCK = 4212
     }
 }
