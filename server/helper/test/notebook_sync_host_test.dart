@@ -23,7 +23,7 @@ class FakeNotebookCore {
   final Map<String, Map<String, dynamic>> books = {};
   final Map<String, Map<String, dynamic>> entries = {};
   final List<String> ops = [];
-  int _n = 0;
+  static int _next = 0;
 
   Map<String, dynamic> call(String op, Map<String, dynamic> a) {
     ops.add(op);
@@ -33,7 +33,7 @@ class FakeNotebookCore {
       case 'notebook':
         return books[a['id']] ?? (throw const CacheSearchException('not_found', 'no such notebook'));
       case 'notebook_save':
-        final id = (a['id'] as String?) ?? 'nb${++_n}';
+        final id = (a['id'] as String?) ?? 'nb${++_next}';
         final old = books[id];
         return books[id] = {
           'id': id,
@@ -48,7 +48,7 @@ class FakeNotebookCore {
       case 'entry':
         return entries[a['id']] ?? (throw const CacheSearchException('not_found', 'no such entry'));
       case 'entry_save':
-        final id = (a['id'] as String?) ?? 'e${++_n}';
+        final id = (a['id'] as String?) ?? 'e${++_next}';
         return entries[id] = {
           'id': id,
           'notebook_id': a['notebook_id'],
@@ -450,7 +450,9 @@ void main() {
       await r.sharing.setUp();
       await r.nb.start();
       await r.sharing.setKind('notebooks', true);
-      await until(() => files(shareDir()).any((p) => p.endsWith('.md')));
+      await until(() => r.nb.last != null);
+      await r.nb.run();
+      expect(files(shareDir()).where((p) => p.endsWith('.md')), hasLength(1));
       final c = opened.single;
       final record = File('${support.path}/notebook-sync/share.json');
       expect(record.existsSync(), isTrue);
