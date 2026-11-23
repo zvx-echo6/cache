@@ -96,17 +96,21 @@ pub fn take_log() -> Vec<String> {
     std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
+/// Puts one line into [`take_log`]'s buffer (the oldest go first when it is full).
+fn say(line: String) {
+    let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+    if b.len() >= LOG_KEEP {
+        b.remove(0);
+    }
+    b.push(line);
+}
+
 /// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
 impl OpenSteps {
     fn step(&self, name: &str) {
-        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
-        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
-        if b.len() >= LOG_KEEP {
-            b.remove(0);
-        }
-        b.push(line);
+        say(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis()));
     }
 }
 
@@ -1871,7 +1875,18 @@ impl Inner {
                 false
             }
         };
-        drop_it && self.remove_peer(peer).is_ok()
+        if !drop_it {
+            return false;
+        }
+        // The name this device had saved for it, read before the entry goes.
+        let name = self.peer_name(peer);
+        if self.remove_peer(peer).is_err() {
+            return false;
+        }
+        let line = format!("{name} unlinked this device");
+        self.note(line.clone());
+        say(line);
+        true
     }
 
     /// Removes the links made here by showing a code that the other device still has not confirmed [`CONFIRM_WINDOW`] after

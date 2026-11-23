@@ -788,6 +788,7 @@ class _PhoneDriver implements SharingDriver {
     if (c == null) return;
     try {
       s.status = await c.call('status');
+      s._drainNow();
       s._noteShareChanges();
       s._changed();
     } catch (_) {}
@@ -1109,6 +1110,7 @@ class _WebDriver implements SharingDriver {
       ..addAll({if (off is Map) for (final o in off.entries) if (o.value is List) '${o.key}': {for (final k in o.value as List) '$k'}});
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
+    s._drainNow();
     s._noteShareChanges();
     s._noteSettingsApplied(snap['settings_applied']);
     s._changed();
