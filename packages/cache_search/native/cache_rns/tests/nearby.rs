@@ -127,3 +127,25 @@ async fn a_page_left_open_closes_after_fifteen_minutes() {
     assert_eq!(a.pair_status().state, "idle");
     a.stop();
 }
+
+/// Only a `cache.pair.v1` announce is taken for one: a device's ordinary announce (its main destination) is heard but is
+/// not a pairing announce, so it is never counted, listed or contacted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_ordinary_announce_is_not_a_pairing_announce() {
+    let port = free_port();
+    let a = node(Iface::TcpListen(format!("127.0.0.1:{port}")), true).await;
+    let b = node(Iface::TcpConnect(format!("127.0.0.1:{port}")), true).await;
+    a.pair_open(me("Desk", "computer")).await.unwrap();
+    let main = b.destination();
+    b.announce().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(a.nearby().announces_heard(&main), 0, "B's main announce is not a pairing announce");
+    assert!(a.pair_list().is_empty());
+    // A real pairing announce, in the same conditions, is recognised.
+    b.pair_open(me("Phone", "phone")).await.unwrap();
+    let pair = b.nearby().active().unwrap();
+    let n = a.nearby().clone();
+    until("the pairing announce to be heard", 20, || n.announces_heard(&pair) > 0).await;
+    a.stop();
+    b.stop();
+}

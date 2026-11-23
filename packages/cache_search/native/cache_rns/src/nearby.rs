@@ -9,9 +9,10 @@
 //!   unused one and registers its two request paths; closing the page (or 15 minutes) unregisters them, and the member is
 //!   never used again. Prns cannot register a destination once the node runs, so a used-up pool is rebuilt when the node
 //!   next starts.
-//! - **Listing.** Prns does not say which aspect an announce was for, so a `cache.pair.v1` announce cannot be told from
-//!   any other announce. While our own page is open, an unknown destination heard on a local interface is asked
-//!   `/cache/pair/name` over a short link; only one that answers is listed, with the name and kind it gave.
+//! - **Listing.** A `cache.pair.v1` announce is recognised before anything is sent: Prns's accepted-announce observer gives
+//!   the identity a validated announce was made by, and the destination hash recomputed from it for `cache.pair.v1` must
+//!   equal the announced one. Only on a match, heard on a local interface while our own page is open, is the device asked
+//!   `/cache/pair/name` over a short link; it is listed with the name and kind it gave.
 //! - **Linking.** The initiator opens a link to the other device's pairing destination, asks `/cache/pair/start`, and then
 //!   [`crate::pair_core`] runs as Channel messages of type [`PAIR_TYPE`] on that link. Nothing is stored until both
 //!   people have confirmed and the other side's signature over its permanent destination has checked out.
@@ -47,7 +48,7 @@ use crate::{check_vouch_destination, dest_from_hex, dest_hex, vouch_destination,
 /// The pairing destination's aspects, beside the app name `cache`: `cache.pair.v1`.
 pub const PAIR_ASPECTS: &[&str] = &["pair", "v1"];
 /// How many pairing addresses a node holds (each page uses one, and a member is never reused).
-pub const POOL_SIZE: usize = 6;
+pub const POOL_SIZE: usize = 32;
 /// Asked on a short link: answers `{name, kind}` while that destination's page is open.
 pub const NAME_PATH: &str = "/cache/pair/name";
 /// Asked on the pairing link before the exchange: answers `ok`, or `busy`.
@@ -275,6 +276,12 @@ impl Nearby {
         self.pool.contains(&d)
     }
 
+    /// Whether every pairing address has been used and no page is open: the node must be rebuilt for a fresh pool.
+    pub fn pool_used_up(&self) -> bool {
+        let i = self.inner.lock().unwrap();
+        i.page.is_none() && i.next_free >= self.pool.len()
+    }
+
     /// The destination being announced now, while a page is open.
     pub fn active(&self) -> Option<DestinationHash> {
         self.inner.lock().unwrap().page.as_ref().map(|p| p.dest)
@@ -306,7 +313,7 @@ impl Nearby {
                 return Ok(());
             }
             if i.next_free >= self.pool.len() {
-                bail!("no pairing address is left on this run: restart Cache to link more devices nearby");
+                bail!("no pairing address is left on this node");
             }
             let m = i.next_free;
             i.next_free += 1;

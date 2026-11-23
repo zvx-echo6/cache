@@ -223,3 +223,29 @@ fn sixty_seconds_without_an_answer_drops_with_timeout() {
     a.close();
     b.close();
 }
+
+#[test]
+fn opening_past_the_pool_size_rebuilds_the_node_and_still_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let port = free_port();
+    let a = nearby_engine(&da, "Desk", "computer", Some(port), None);
+    // More pages than the pool holds (32): the node is rebuilt with a fresh pool at the next open, and no open fails.
+    for n in 0..40 {
+        call(&a, "pairing_open", json!({}));
+        call(&a, "pairing_close", json!({}));
+        let _ = n;
+    }
+    call(&a, "pairing_open", json!({}));
+    let b = nearby_engine(&db, "Phone", "phone", None, Some(port));
+    call(&b, "pairing_open", json!({}));
+    let desk = listed(&b, "Desk", "computer");
+    call(&b, "nearby_link", json!({"id": desk}));
+    wait("words on both", 60, || state_is(&a, "words") && state_is(&b, "words"));
+    assert_eq!(words(&a), words(&b));
+    call(&a, "nearby_answer", json!({"ok": true}));
+    call(&b, "nearby_answer", json!({"ok": true}));
+    wait("both linked", 20, || state_is(&a, "linked") && state_is(&b, "linked"));
+    a.close();
+    b.close();
+}

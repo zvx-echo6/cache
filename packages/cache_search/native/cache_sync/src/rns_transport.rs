@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -44,6 +44,15 @@ enum Net {
     Iroh,
 }
 
+#[derive(Clone)]
+struct StartArgs {
+    device: SecretKey,
+    blobs: iroh_blobs::api::Store,
+    serve: Arc<dyn Serve>,
+    interfaces: Vec<Iface>,
+    pair_local_tcp: bool,
+}
+
 struct Rns {
     node: Arc<RnsNode>,
     dest_hex: String,
@@ -53,7 +62,9 @@ struct Rns {
 /// iroh with Reticulum beside it.
 pub struct MultiTransport {
     iroh: Arc<IrohTransport>,
-    rns: OnceLock<Rns>,
+    rns: RwLock<Option<Rns>>,
+    /// What the node was started with, to start it again (a used-up Nearby pairing pool).
+    start_args: Mutex<Option<StartArgs>>,
     /// Linked devices (iroh ids) and the Reticulum destination of each, when known (hex).
     peers: Mutex<HashMap<String, Option<String>>>,
     last_via: Mutex<HashMap<String, Net>>,
@@ -73,32 +84,55 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: OnceLock::new(), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default() })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default() })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
     /// requests answered by `serve`. `interfaces` are the test block's; none means Wi-Fi auto.
     pub async fn start_rns(&self, device: SecretKey, store: &FsStore, serve: Arc<dyn Serve>, interfaces: Vec<Iface>, pair_local_tcp: bool) -> Result<()> {
+        *self.start_args.lock().unwrap() = Some(StartArgs { device, blobs: (**store).clone(), serve, interfaces, pair_local_tcp });
+        self.launch().await
+    }
+
+    async fn launch(&self) -> Result<()> {
+        let a = self.start_args.lock().unwrap().clone().ok_or_else(|| anyhow!("Reticulum was not set up"))?;
         let cfg = RnsConfig {
-            device: device.clone(),
-            interfaces,
+            device: a.device.clone(),
+            interfaces: a.interfaces.clone(),
             peers: self.peer_list(),
             wifi_group: None,
             paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into()],
             open_paths: vec![PATH_PAIR.into()],
             max_bytes: MAX_INDEX as u64,
-            blobs: Some((**store).clone()),
-            pair_local_tcp,
+            blobs: Some(a.blobs.clone()),
+            pair_local_tcp: a.pair_local_tcp,
         };
-        let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve })).await?);
+        let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve: a.serve.clone() })).await?);
         let dest = node.destination();
-        let sig = cache_rns::vouch_destination(&device, &dest);
-        let _ = self.rns.set(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
+        let sig = cache_rns::vouch_destination(&a.device, &dest);
+        *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
         Ok(())
     }
 
-    fn node(&self) -> Option<&Arc<RnsNode>> {
-        self.rns.get().map(|r| &r.node)
+    /// Builds the Reticulum node again, with a fresh pairing pool (the old one is used up). Sync links drop and come back;
+    /// iroh carries them meanwhile. The old node's listeners may take a moment to let go, so the start is retried.
+    async fn restart(&self) -> Result<()> {
+        if let Some(old) = self.rns.write().unwrap().take() {
+            old.node.stop();
+        }
+        let mut last = anyhow!("not started");
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            match self.launch().await {
+                Ok(()) => return Ok(()),
+                Err(e) => last = e,
+            }
+        }
+        Err(last.context("could not start Reticulum again"))
+    }
+
+    fn node(&self) -> Option<Arc<RnsNode>> {
+        self.rns.read().unwrap().as_ref().map(|r| r.node.clone())
     }
 
     fn peer_list(&self) -> Vec<(PublicKey, Option<cache_rns::DestinationHash>)> {
@@ -144,7 +178,7 @@ impl Transport for MultiTransport {
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
         Box::pin(async move {
             let key: Option<PublicKey> = peer.parse().ok();
-            let node = self.node().cloned().zip(key).filter(|(n, k)| n.reachable(k));
+            let node = self.node().zip(key).filter(|(n, k)| n.reachable(k));
             let Some((node, key)) = node else {
                 let r = self.iroh.ask(peer, ask, closed).await;
                 if r.is_ok() {
@@ -203,7 +237,7 @@ impl Transport for MultiTransport {
 
     fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
         Box::pin(async move {
-            if let (Some(node), Some(dest)) = (self.node().cloned(), to.rns.clone()) {
+            if let (Some(node), Some(dest)) = (self.node(), to.rns.clone()) {
                 match self.pair_rns(&node, &to, &dest, &hello).await {
                     Ok(r) => return Ok(r),
                     Err(_) => {
@@ -218,18 +252,18 @@ impl Transport for MultiTransport {
     }
 
     fn link_addr(&self) -> BoxFut<'_, (iroh::EndpointAddr, Option<String>)> {
-        Box::pin(async move { (self.iroh.iroh_addr().await, self.rns.get().map(|r| r.dest_hex.clone())) })
+        Box::pin(async move { (self.iroh.iroh_addr().await, self.rns.read().unwrap().as_ref().map(|r| r.dest_hex.clone())) })
     }
 
     fn rns_info(&self) -> Option<(String, String)> {
-        self.rns.get().map(|r| (r.dest_hex.clone(), r.sig_hex.clone()))
+        self.rns.read().unwrap().as_ref().map(|r| (r.dest_hex.clone(), r.sig_hex.clone()))
     }
 
     fn learn_rns(&self, peer: &str, dest: &str, sig: &str) -> bool {
         let (Ok(key), Some(d), Some(sig)) = (peer.parse::<PublicKey>(), cache_rns::dest_from_hex(dest), unhex(sig)) else {
             return false;
         };
-        if self.rns.get().is_none() || !cache_rns::check_vouch_destination(&key, &d, &sig) {
+        if self.rns.read().unwrap().is_none() || !cache_rns::check_vouch_destination(&key, &d, &sig) {
             return false;
         }
         self.peers.lock().unwrap().insert(peer.to_string(), Some(cache_rns::dest_hex(&d)));
@@ -264,7 +298,7 @@ impl Transport for MultiTransport {
         Box::pin(async move {
             let via_rns = |p: &String| self.last_via.lock().unwrap().get(p) == Some(&Net::Reticulum);
             let (rns_providers, iroh_providers): (Vec<String>, Vec<String>) = providers.iter().cloned().partition(via_rns);
-            let node = self.node().cloned();
+            let node = self.node();
             match node {
                 Some(node) if iroh_providers.is_empty() && !rns_providers.is_empty() => {
                     let keys: Vec<PublicKey> = rns_providers.iter().filter_map(|p| p.parse().ok()).collect();
@@ -277,7 +311,11 @@ impl Transport for MultiTransport {
 
     fn pairing_open(&self, name: String, kind: Option<String>) -> BoxFut<'_, Result<()>> {
         Box::pin(async move {
-            let node = self.node().ok_or_else(|| anyhow!("Nearby linking needs Reticulum, which is not running on this device"))?;
+            let mut node = self.node().ok_or_else(|| anyhow!("Nearby linking needs Reticulum, which is not running on this device"))?;
+            if node.nearby().pool_used_up() {
+                self.restart().await?;
+                node = self.node().ok_or_else(|| anyhow!("Reticulum did not come back"))?;
+            }
             node.pair_open(cache_rns::PairSelf { name, kind }).await
         })
     }

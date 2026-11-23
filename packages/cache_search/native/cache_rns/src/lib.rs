@@ -247,7 +247,6 @@ enum Ev {
     Announce {
         destination: DestinationHash,
         via: Via,
-        hops: u8,
     },
     Identified {
         link: LinkId,
@@ -266,6 +265,11 @@ enum Ev {
     Notify {
         link: LinkId,
         data: Vec<u8>,
+    },
+    PairAnnounce {
+        destination: DestinationHash,
+        local: bool,
+        hops: u8,
     },
     Pair {
         link: LinkId,
@@ -339,6 +343,7 @@ impl RnsNode {
             destinations.push(d);
         }
         let (tx, mut rx) = mpsc::unbounded_channel::<Ev>();
+        let observer_tx = tx.clone();
         let clients: Vec<String> = cfg
             .interfaces
             .iter()
@@ -427,10 +432,8 @@ impl RnsNode {
                                 PrnsEvent::Diagnostic(Diagnostic::AnnounceHeard {
                                     destination,
                                     source_interface,
-                                    hops,
                                     ..
                                 }) => Ev::Announce {
-                                    hops,
                                     destination,
                                     via: match source_interface.kind() {
                                         Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
@@ -496,6 +499,23 @@ impl RnsNode {
                             }
                         },
                         persistence: NoPersistence,
+                    })
+                    // A validated announce, with the identity it was made by: a `cache.pair.v1` destination is recognised
+                    // by recomputing its hash from that identity, so nothing is contacted until it matches.
+                    .with_accepted_announce_observer(move |obs| {
+                        let is_pair = personal_rns::routing::announce::derive_single_destination_hash(
+                            &obs.announced_identity,
+                            APP_NAME,
+                            nearby::PAIR_ASPECTS,
+                        )
+                        .is_ok_and(|d| d == obs.destination);
+                        if is_pair {
+                            let _ = observer_tx.send(Ev::PairAnnounce {
+                                destination: obs.destination,
+                                local: matches!(obs.source_interface.kind(), Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer)),
+                                hops: obs.hops.0,
+                            });
+                        }
                     });
                     let handle = node.handle();
                     let mut guards = Vec::new();
@@ -597,8 +617,7 @@ impl RnsNode {
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
-                        Ev::Announce { destination, via, hops } => {
-                            nearby.on_announce(destination, via == Via::Wifi, hops);
+                        Ev::Announce { destination, via } => {
                             if destination == me {
                                 continue;
                             }
@@ -621,6 +640,7 @@ impl RnsNode {
                                 .identity_on_link
                                 .insert(link, identity);
                         }
+                        Ev::PairAnnounce { destination, local, hops } => nearby.on_announce(destination, local, hops),
                         Ev::Pair { link, data } => nearby.on_message(link, &data),
                         Ev::Closed { link } => {
                             nearby.on_link_closed(link);
