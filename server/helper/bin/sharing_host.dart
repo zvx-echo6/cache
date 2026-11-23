@@ -37,6 +37,8 @@ class SharingHost {
     this.engineConfig = const {},
     this.pollEvery = const Duration(seconds: 2),
     this.log,
+    this.drainLog,
+    this.engineLog,
   }) : table = ShareTable.forServer(dataDir: dataDir, supportDir: supportDir, docsDir: docsDir);
 
   final Directory dataDir;
@@ -52,6 +54,13 @@ class SharingHost {
   final Map<String, Object?> engineConfig;
   final Duration pollEvery;
   final void Function(String message)? log;
+
+  /// Takes the engine's buffered lines ([SyncCore.takeLog]; the real one when null). The engine never calls into Dart, so the lines
+  /// are asked for: after the open and on every status refresh (the phone does the same, app/lib/sharing/sharing_state.dart).
+  final List<String> Function()? drainLog;
+
+  /// Where the engine's lines go (the server's app log, through the helper's stderr); [log] when null.
+  final void Function(String line)? engineLog;
   final ShareTable table;
 
   SyncCoreLike? _core;
@@ -173,6 +182,7 @@ class SharingHost {
     try {
       syncDir.createSync(recursive: true);
       final open = opener ?? _openReal;
+      // The engine's lines about this open reach the log whether the open works or not.
       // What each device builds for itself inside a shared folder never syncs (a library's search index).
       final core = await open({
         'dir': syncDir.path,
@@ -191,7 +201,7 @@ class SharingHost {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
         ...engineConfig,
-      });
+      }).whenComplete(_drain);
       _core = core;
       // The server is always online: sync uses the network (the phone's rule for Wi-Fi).
       await core.call('set_policy', {'network': true});
@@ -293,7 +303,19 @@ class SharingHost {
       status = await c.call('status');
       _noteShareChanges();
     } catch (_) {}
+    _drain();
   }
+
+  /// Takes the engine's buffered lines and writes each to the log (the same lines, one each, as the phone's app log).
+  void _drain() {
+    try {
+      for (final l in (drainLog ?? _drainReal)()) {
+        (engineLog ?? log)?.call(l);
+      }
+    } catch (_) {}
+  }
+
+  List<String> _drainReal() => SyncCore.takeLog(libraryPath: libraryPath);
 
   /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
   final Map<String, (int, int)> _settled = {};

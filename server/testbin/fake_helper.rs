@@ -8,6 +8,7 @@
 //!              not_found; else text/plain
 //!   layers  -> {port: FAKE_TILE_PORT} for op "server" (the core's tile server), else ok, null
 //!   crash   -> exits without replying the first time (the marker file FAKE_MARKER is created), then replies "back"
+//!   emitlog -> prints args.line on stderr behind the engine-log prefix, as the real helper does for the sync engine's lines
 //!   open    -> fails with ok:false when FAKE_OPEN_FAILS is set
 //! Every op it receives is appended to the file FAKE_LOG, one `op args` line each. FAKE_NO_READY makes it exit at once.
 
@@ -69,6 +70,10 @@ fn main() {
             "layers" if args["op"] == json!("server") => {
                 let port: u64 = std::env::var("FAKE_TILE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
                 json!({"id": id, "ok": true, "result": {"port": port, "online": false}})
+            }
+            "emitlog" => {
+                eprintln!("cache-log: {}", args["line"].as_str().unwrap_or(""));
+                json!({"id": id, "ok": true, "result": null})
             }
             "boom" => json!({"id": id, "ok": false, "error": {"code": "not_found", "message": "nothing here"}}),
             "crash" => {
