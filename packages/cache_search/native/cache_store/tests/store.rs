@@ -636,3 +636,46 @@ fn a_false_size_on_a_window_without_the_end_does_not_stick() {
     transfer(&src, &dst2, &h, size as u64, 160);
     assert_eq!(dst2.get_bytes(&h).unwrap(), data);
 }
+
+#[test]
+fn a_file_moved_in_leaves_its_place_and_is_checked_against_the_expected_id() {
+    let d = TempDir::new().unwrap();
+    let s = open(d.path());
+    let data = bytes(97, 200_000);
+    let h = Hash::new(&data);
+    let staged = write(d.path(), "staged.bin", &data);
+    let ino = file_id(&staged);
+
+    // A wrong expected id: nothing stored, the file stays.
+    assert!(s.add_path_move(&staged, Some(&Hash::new(b"other"))).is_err());
+    assert!(staged.exists());
+    assert_eq!(s.status(&h).unwrap(), Status::Absent);
+
+    // The right id: the same file now sits in the store, no copy.
+    let a = s.add_path_move(&staged, Some(&h)).unwrap();
+    assert_eq!(a.hash, h);
+    assert!(!staged.exists());
+    let (p, owned) = s.file_path(&h).unwrap();
+    assert!(owned);
+    assert_eq!(file_id(&p), ino, "renamed, not copied");
+    assert_eq!(s.get_bytes(&h).unwrap(), data);
+
+    // The store already holds the content: the staged file is still removed.
+    let again = write(d.path(), "again.bin", &data);
+    s.add_path_move(&again, None).unwrap();
+    assert!(!again.exists());
+    assert_eq!(file_id(&s.file_path(&h).unwrap().0), ino);
+
+    // Small files go inline.
+    let tiny = write(d.path(), "tiny.bin", b"tiny");
+    let t = s.add_path_move(&tiny, None).unwrap().hash;
+    assert!(!tiny.exists());
+    assert_eq!(s.get_bytes(&t).unwrap(), b"tiny");
+    assert!(s.file_path(&t).is_none());
+
+    // file_path says where an in-place file is.
+    let mine = write(d.path(), "mine.bin", &bytes(98, 100_000));
+    let m = s.add_path(&mine, ImportMode::Reference).unwrap().hash;
+    assert_eq!(s.file_path(&m).unwrap(), (mine, false));
+    assert!(s.staging_path().starts_with(d.path().join("store/tmp")));
+}

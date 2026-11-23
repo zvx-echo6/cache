@@ -307,12 +307,26 @@ fn a_file_that_fails_the_rehash_is_reported_and_left_out() {
     let store = s.store();
     let (r, _) = s.run(&store);
     let r = r.unwrap();
-    let mut failed: Vec<String> = r.failed.iter().map(|(h, _)| h.to_hex()).collect();
+    let mut failed: Vec<String> = r.failed.iter().map(|f| f.hash.to_hex()).collect();
     failed.sort();
     let mut want = vec![hex("b.bin"), hex("c.bin"), hex("ext1.bin")];
     want.sort();
     assert_eq!(failed, want, "{r:?}");
-    assert!(r.failed.iter().all(|(_, why)| !why.is_empty()));
+    assert!(r.failed.iter().all(|f| !f.reason.is_empty()));
+    let kinds: Vec<(String, String)> = {
+        let mut k: Vec<_> = r.failed.iter().map(|f| (f.hash.to_hex(), f.kind.clone())).collect();
+        k.sort();
+        k
+    };
+    let mut want_kinds = vec![(hex("b.bin"), "owned".to_string()), (hex("c.bin"), "owned".to_string()), (hex("ext1.bin"), "external".to_string())];
+    want_kinds.sort();
+    assert_eq!(kinds, want_kinds);
+    // The log: one line per file left out (id, kind, reason), then one total line.
+    let lines = r.log_lines();
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines[..3].iter().all(|l| l.starts_with("store move: left out ") && (l.contains("(owned)") || l.contains("(external)"))));
+    assert!(lines.iter().take(3).any(|l| l.contains(&hex("b.bin"))));
+    assert!(lines[3].starts_with("store move: done.") && lines[3].contains("3 left out"), "{}", lines[3]);
     assert_eq!((r.inline, r.owned, r.external), (2, 2, 1));
     // Left out: not in the store under its id, and not under any other (nothing in the store reads back to a different hash).
     for name in ["b.bin", "c.bin", "ext1.bin"] {

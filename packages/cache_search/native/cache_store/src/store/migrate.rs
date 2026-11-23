@@ -36,9 +36,40 @@ pub struct MoveReport {
     pub tags: usize,
     pub tags_dropped: usize,
     /// Files that were not moved, and why: a re-hash that gave another id, a missing or changed file.
-    pub failed: Vec<(Hash, String)>,
+    pub failed: Vec<MoveFailure>,
     /// The database was not closed cleanly and a repaired copy of it was read.
     pub repaired: bool,
+}
+
+/// A file the move left out.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MoveFailure {
+    pub hash: Hash,
+    /// `owned`, `inline`, `external` or `unknown` (the old entry could not be read).
+    pub kind: String,
+    pub reason: String,
+}
+
+impl MoveReport {
+    /// What to log: one line per file left out (id, kind, reason), then one total line.
+    pub fn log_lines(&self) -> Vec<String> {
+        let mut v: Vec<String> =
+            self.failed.iter().map(|f| format!("store move: left out {} ({}): {}", f.hash, f.kind, f.reason)).collect();
+        v.push(format!(
+            "store move: done. moved {} files ({} bytes): {} inline, {} owned, {} in place; {} partial downloads dropped; {} tags kept, {} dropped; {} left out{}",
+            self.inline + self.owned + self.external,
+            self.bytes,
+            self.inline,
+            self.owned,
+            self.external,
+            self.partials_dropped,
+            self.tags,
+            self.tags_dropped,
+            self.failed.len(),
+            if self.repaired { "; the old database was repaired from a copy" } else { "" }
+        ));
+        v
+    }
 }
 
 enum Outcome {
@@ -114,7 +145,7 @@ impl Store {
             }
             self.move_fault_before_entry(this_run)?;
             let outcome = match &e.state {
-                None => Outcome::Failed("the entry in the old database could not be read".into()),
+                None => Outcome::Failed("unknown: the entry in the old database could not be read".into()),
                 Some(EntryState::Partial { .. }) => Outcome::Partial,
                 Some(EntryState::Complete { data_location, .. }) => self.move_entry(old_dir, &old, &hash, data_location)?,
             };
@@ -184,7 +215,8 @@ impl Store {
                 "partial" => r.partials_dropped += 1,
                 other => {
                     let a: [u8; 32] = h.as_slice().try_into().map_err(|_| Error::Invalid("a journal hash is not 32 bytes".into()))?;
-                    r.failed.push((Hash::from_bytes(a), other.trim_start_matches("failed: ").to_string()));
+                    let (kind, reason) = other.trim_start_matches("failed: ").split_once(": ").unwrap_or(("unknown", other));
+                    r.failed.push(MoveFailure { hash: Hash::from_bytes(a), kind: kind.to_string(), reason: reason.to_string() });
                 }
             }
             r.bytes += bytes as u64;
@@ -197,7 +229,12 @@ impl Store {
 
     /// One complete entry. A problem with the file is an outcome; a problem with the new store is an error that stops the move.
     fn move_entry(&self, old_dir: &Path, old: &OldDb, hash: &Hash, loc: &DataLocation<(), u64>) -> Result<Outcome> {
-        let failed = |m: &str| Ok(Outcome::Failed(m.to_string()));
+        let kind = match loc {
+            DataLocation::Inline(()) => "inline",
+            DataLocation::Owned(_) => "owned",
+            DataLocation::External(..) => "external",
+        };
+        let failed = |m: &str| Ok(Outcome::Failed(format!("{kind}: {m}")));
         match loc {
             DataLocation::Inline(()) => {
                 let Some(data) = old.inline_data(hash.as_bytes())? else { return failed("the inline data is missing") };

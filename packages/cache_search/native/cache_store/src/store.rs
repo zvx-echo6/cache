@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::{Error, Hash, Result, BLOCK_BYTES, INLINE_MAX};
 
 mod migrate;
-pub use migrate::MoveReport;
+pub use migrate::{MoveFailure, MoveReport};
 
 const BLOCK: BlockSize = BlockSize::from_chunk_log(4);
 const SCHEMA_VERSION: i64 = 2;
@@ -442,6 +442,68 @@ impl Store {
         let c = self.db().ok()?;
         let row = load_row(&c, h).ok()??;
         (!row.partial && fs::metadata(&p).map(|m| m.len() == row.size).unwrap_or(false)).then_some(p)
+    }
+
+    /// Where the complete data of `hash` can be read now: the store's own data file (`true`) or the person's file in place
+    /// (`false`). `None` for inline data, a partial entry, or a file that went or changed.
+    pub fn file_path(&self, hash: &Hash) -> Option<(PathBuf, bool)> {
+        let c = self.db().ok()?;
+        let row = load_row(&c, hash).ok()??;
+        if row.partial {
+            return None;
+        }
+        match self.source(&c, hash, &row).ok()?? {
+            Source::Owned(p) => Some((p, true)),
+            Source::External(p) => Some((p, false)),
+            Source::Inline(_) => None,
+        }
+    }
+
+    /// A new path in the store's own temp folder (the same file system as its data files), for a file to be moved in with
+    /// [`Store::add_path_move`]. The folder is emptied when the store opens.
+    pub fn staging_path(&self) -> PathBuf {
+        self.tmp_path("staged")
+    }
+
+    /// Takes the file at `path` into the store by moving it: hashed once (which also writes its outboard), then renamed into the
+    /// store's data folder, or copied and removed where a rename cannot work. If `expect` is given and the content hashes to
+    /// something else, nothing is stored, the file is left where it is, and the error says so. The file is gone from `path`
+    /// after a success, even when the store already held the content.
+    pub fn add_path_move(&self, path: &Path, expect: Option<&Hash>) -> Result<Added> {
+        let path = absolute(path)?;
+        let size = fs::metadata(&path)?.len();
+        let wrong = |got: &Hash| Error::Verify(format!("the file hashes to {got}, not the expected id"));
+        if size <= self.inner.opts.inline_max {
+            let data = fs::read(&path)?;
+            let got = Hash::new(&data);
+            if expect.is_some_and(|e| *e != got) {
+                return Err(wrong(&got));
+            }
+            let added = self.commit_inline(data, None)?;
+            let _ = fs::remove_file(&path);
+            return Ok(added);
+        }
+        let reader = || -> Result<_> { Ok(io::BufReader::with_capacity(BLOCK_BYTES as usize, File::open(&path)?)) };
+        let mut p = self.prepare(reader()?, size, false)?;
+        if expect.is_some_and(|e| *e != p.hash) {
+            return Err(wrong(&p.hash));
+        }
+        p.data = Some(path.clone());
+        let added = match self.commit(p, None, None) {
+            Ok(a) => a,
+            Err(Error::Io(_)) => {
+                // The rename did not work (another file system): copy, then remove.
+                let p = self.prepare(reader()?, size, true)?;
+                if expect.is_some_and(|e| *e != p.hash) {
+                    return Err(wrong(&p.hash));
+                }
+                self.commit(p, None, None)?
+            }
+            Err(e) => return Err(e),
+        };
+        // Moved (or the store already held the content): either way it is not left at `path`.
+        let _ = fs::remove_file(&path);
+        Ok(added)
     }
 
     fn hold(&self, h: Hash) -> TempTag {
