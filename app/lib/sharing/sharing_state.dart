@@ -362,6 +362,26 @@ class SharingState extends ChangeNotifier {
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
 
+  /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
+  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
+  /// transfer running (then [working], the line the page already showed); or nothing new ("Up to date"). A folder with no `with`
+  /// goes to every linked device; otherwise `with` lists link kinds (a device's `link.mode`, "match" when it has none), and an
+  /// empty list goes to none.
+  String syncResult({Iterable<String>? shareIds, String? peer, required String working}) {
+    final ids = shareIds?.toSet();
+    final devices = [for (final p in peers) if (peer == null || p['id'] == peer) p];
+    String mode(Map<String, dynamic> p) => ((p['link'] as Map?)?['mode'] as String?) ?? 'match';
+    final scoped = [
+      for (final sh in shares)
+        if ((ids == null || ids.contains(sh['id'])) &&
+            devices.any((p) => sh['with'] is! List || (sh['with'] as List).contains(mode(p))))
+          sh,
+    ];
+    if (scoped.isEmpty) return 'Nothing is shared yet';
+    final pending = scoped.any((sh) => ((sh['pending_files'] as num?) ?? 0) > 0);
+    return pending || transfer != null ? working : 'Up to date';
+  }
+
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
   /// stops sharing it, and the files stay.
   Future<void> setShared(DataKind k, bool on) => _driver.setShared(k, on);
