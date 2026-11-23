@@ -334,7 +334,11 @@ void main() {
     expect(find.text('Unlink Desk?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
     // The screen-lock question goes through a platform channel (none answers here), which takes a real moment.
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(host.sync.argsOf['unlink'] != null); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
     await _settle(tester);
     expect(host.sync.argsOf['unlink']!.single, {'peer': 'peer1'});
     expect(s.peers, isEmpty);

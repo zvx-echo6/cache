@@ -355,7 +355,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(r.calls('unlink').isNotEmpty); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
     await tester.pumpAndSettle();
     expect(r.calls('unlink').last, {'peer': 'p1'});
     expect(find.byKey(const ValueKey('peer-p1')), findsNothing, reason: 'back on Sharing and sync, the device is gone');

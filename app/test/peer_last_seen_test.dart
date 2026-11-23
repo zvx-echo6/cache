@@ -83,7 +83,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('device-unlink-never')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(sync.argsOf['unlink'] != null); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
     await tester.pumpAndSettle();
     expect(sync.argsOf['unlink']!.last, {'peer': 'p1'}, reason: 'the same call the Unlink row makes');
     expect(sync.peers, isEmpty);
