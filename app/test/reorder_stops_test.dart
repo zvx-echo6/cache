@@ -109,7 +109,7 @@ void main() {
     Future<void> pump(WidgetTester tester) async {
       await tester.pumpWidget(MaterialApp(
         theme: buildTheme(CacheThemeId.light),
-        home: Scaffold(body: ListenableBuilder(listenable: nav, builder: (_, __) => DirectionsHeader(nav: nav))),
+        home: Scaffold(body: ListenableBuilder(listenable: nav, builder: (_, _) => DirectionsHeader(nav: nav))),
       ));
     }
 
@@ -141,7 +141,7 @@ void main() {
       await tester.pump();
       await g.moveBy(const Offset(0, 20));
       await tester.pump();
-      await g.moveBy(const Offset(0, 80));
+      await g.moveBy(const Offset(0, 130));
       await tester.pump();
       await g.up();
       await tester.pumpAndSettle();

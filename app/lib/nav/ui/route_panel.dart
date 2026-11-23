@@ -72,9 +72,8 @@ class DirectionsHeader extends StatelessWidget {
                     shape: Border(left: BorderSide(color: k.accent, width: 3)),
                     child: child,
                   ),
-                  onReorder: (from, to) {
-                    // Flutter gives the slot in the list as it was; the nav state takes the place the stop ends up in.
-                    final end = to > from ? to - 1 : to;
+                  onReorderItem: (from, end) {
+                    // [end] is the place the stop ends up in, which is what the nav state takes.
                     if (end == from) return;
                     nav.reorderStop(from, end);
                     ScaffoldMessenger.maybeOf(context)
