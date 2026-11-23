@@ -546,6 +546,7 @@ void main() {
     expect(find.text('Nothing is shared yet'), findsNothing);
     await tester.pageBack();
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('sync-all')), 200);
     await tapAndRead(find.byKey(const ValueKey('sync-all')));
     expect(find.text('Up to date'), findsOneWidget, reason: 'Sync all now on the main page says it too');
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
