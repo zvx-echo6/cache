@@ -568,4 +568,40 @@ void main() {
     s.dispose();
     await tester.runAsync(() => r.dir.delete(recursive: true));
   });
+
+  test('Sync now result: no linked device or a folder kept with none is Nothing is shared yet; one kept with a device is Up to date', () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    await s.setShared(r.kind('models'), true);
+    await s.refresh();
+    String result({String? peer}) => s.syncResult(peer: peer, working: 'Syncing');
+
+    expect(s.shares, isNotEmpty);
+    expect(result(), 'Nothing is shared yet', reason: 'a kind is on but no device is linked');
+
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'link': {'mode': 'match'}});
+    r.sync.peers.add({'id': 'p2', 'name': 'Shed', 'linked': 1});
+    r.sync.shares.first['with'] = <String>[];
+    await s.refresh();
+    expect(result(), 'Nothing is shared yet', reason: 'an empty list keeps the folder from every device');
+    expect(result(peer: 'p1'), 'Nothing is shared yet');
+
+    r.sync.shares.first['with'] = ['send'];
+    await s.refresh();
+    expect(result(), 'Nothing is shared yet', reason: 'no linked device has that kind of link');
+
+    r.sync.shares.first['with'] = ['match'];
+    await s.refresh();
+    expect(result(), 'Up to date');
+    expect(result(peer: 'p1'), 'Up to date');
+    expect(result(peer: 'p2'), 'Up to date', reason: 'a link with no mode counts as match');
+
+    r.sync.shares.first.remove('with');
+    r.sync.shares.first['pending_files'] = 1;
+    await s.refresh();
+    expect(result(peer: 'p1'), 'Syncing', reason: 'no list: every linked device');
+    s.dispose();
+    await r.dir.delete(recursive: true);
+  });
 }
