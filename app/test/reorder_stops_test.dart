@@ -25,6 +25,8 @@ class _Here implements PositionSource {
   Stream<Fix> stream() => const Stream.empty();
   @override
   Future<void> openAppSettings() async {}
+  @override
+  Future<void> openLocationSettings() async {}
 }
 
 MapPlace pin(String name, double lat, double lon) => MapPlace.pin(lat, lon, name: name);
