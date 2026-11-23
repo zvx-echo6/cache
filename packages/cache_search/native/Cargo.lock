@@ -1105,6 +1105,7 @@ dependencies = [
  "bytes",
  "cache_store",
  "iroh",
+ "iroh-blobs",
  "personal-rns",
  "prns-config",
  "tempfile",

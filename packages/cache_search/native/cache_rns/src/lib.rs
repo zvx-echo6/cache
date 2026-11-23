@@ -463,8 +463,9 @@ impl RnsNode {
                                 // Not linked, and not an open path: no answer at all, as the iroh gate refuses the connection.
                                 continue;
                             }
-                            if name == blobs::BLOB_PATH {
-                                // Built in: only for linked devices (the path is never open).
+                            if name == blobs::BLOB_PATH && store.is_some() {
+                                // Built in: only for linked devices (the path is never open). With no store given the path
+                                // goes to the handler like any other (the interop test serves it with the pre-6a code).
                                 let (Some(store), Asker::Linked(_)) = (store.clone(), asker) else {
                                     continue;
                                 };
