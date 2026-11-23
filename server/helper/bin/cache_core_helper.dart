@@ -19,6 +19,7 @@ import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'regions_ops.dart';
 import 'server_settings_sync.dart';
+import 'share_reactions.dart';
 import 'sharing_host.dart';
 import 'video_ops.dart';
 
@@ -132,9 +133,16 @@ Future<void> main() async {
       kick: indexer.kick,
       log: log,
     );
-    // a pack of My books that another device added arrives in the libraries share: made searchable here
+    // What a sync brought in is read here (share_reactions.dart): ZIMs and libraries listed again, a pack of My books made
+    // searchable, saved videos' captions indexed. Then the search indexes (a snapshot attached) and the settings log.
+    final reactions = ShareReactions(
+      rescanSources: () => rescanOp.rescanFolders(runOwn: false),
+      ownLibraries: () => unawaited(own.run()),
+      indexVideos: indexer.kick,
+      log: log,
+    );
     sharing.onShareChanged = (ids) {
-      if (ids.contains('libraries')) unawaited(own.run());
+      reactions.onChanged(ids);
       indexesArrived(ids);
       final s = settingsSync;
       if (s != null) unawaited(s.shareChanged(ids));

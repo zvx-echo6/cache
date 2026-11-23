@@ -113,16 +113,29 @@ class RescanOp implements OpHandler {
   Object? handle(String op, Map<String, dynamic> a) {
     final given = a['sources'];
     this.given?.value = given;
-    final List<Map<String, dynamic>> sources;
     if (given is List) {
-      sources = [for (final s in given) (s as Map).cast<String, dynamic>()];
-    } else {
-      sources = scanSources(dirs);
+      return _use([for (final s in given) (s as Map).cast<String, dynamic>()], runOwn: false);
     }
+    return _use(scanSources(dirs), runOwn: true);
+  }
+
+  /// Reads the app's folders again (what a sync brought in): the same as `sources.rescan` with no list, but a server with its own
+  /// `<data>/sources.json` keeps that list and nothing is read. Replies the number of sources, or null when nothing was read.
+  /// [runOwn]: also make the person's own libraries match their packs (the sharing host does that itself, once, for `libraries`).
+  int? rescanFolders({bool runOwn = true}) {
+    final data = dirs.data;
+    if (data != null && File('${data.path}/sources.json').existsSync()) {
+      log?.call('sources not rescanned after a sync: ${data.path}/sources.json is the list');
+      return null;
+    }
+    return _use(scanSources(dirs), runOwn: runOwn)['sources'] as int;
+  }
+
+  Map<String, Object?> _use(List<Map<String, dynamic>> sources, {required bool runOwn}) {
     dispatcher.handle('setSources', {'sources': sources, 'extra': serverCoreExtras(dirs)});
     indexer?.useSources(sources);
     final o = own;
-    if (o != null && given is! List) unawaited(o.run());
+    if (o != null && runOwn) unawaited(o.run());
     log?.call('sources rescanned (${sources.length})');
     onRescanned?.call();
     return {'sources': sources.length};
