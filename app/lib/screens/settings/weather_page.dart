@@ -8,36 +8,14 @@ import '../../weather/places.dart';
 import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
-import 'assistant_page.dart' show AssistantPage, setUpWebSearch;
 import 'own_source_pages.dart';
 import 'deps.dart';
-import 'key_sheet.dart';
 import 'source_page.dart';
 import 'widgets.dart';
 import '../../guide/place_link.dart' show LinkText;
 import '../../platform/app_log.dart';
 import '../../update/update_ui.dart' show updateCacheAction;
 import '../../weather/catalogue.dart' show kNewerCatalogueFormat;
-
-/// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
-Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool replace = false, String? title}) async {
-  final w = d.hub.weather;
-  final provider = c.provider.isEmpty ? 'the provider' : c.provider;
-  final saved = await showAddKeySheet(
-    context,
-    title: title ?? c.title,
-    gives: 'You need your own key from $provider.',
-    getKeyLabel: 'Get a key from $provider',
-    getKeyUrl: c.docs ?? w.catalogues.map((k) => k.catalogue.homepage).firstWhere((h) => h.startsWith('https://'), orElse: () => 'https://cached.info'),
-    steps: const ['Follow their steps to get a key, then copy it'],
-    onSave: (key) => w.saveKey(c, key, switchOn: !replace),
-    openUrl: d.hub.openUrl,
-    savedNote: replace
-        ? "Saving checks the new key with one real download and replaces the old one. The key stays on this device and isn't shown again."
-        : "Saving checks the key with one real download and turns on ${title ?? c.title}. The key stays on this device and isn't shown again.",
-  );
-  if (saved == true && context.mounted) say(context, replace ? 'Key replaced' : '${title ?? c.title} is on');
-}
 
 /// Settings > Weather and alerts: how many sources work and when Cache last checked (with a small refresh button), what weather
 /// watches (your location, the downloaded regions and the saved places, each with its switch), and the sources from the catalogue:
@@ -76,7 +54,7 @@ class _WeatherPageState extends State<WeatherPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([w, d.hub.settings, d.hub.webSearch]),
+      listenable: Listenable.merge([w, d.hub.settings]),
       builder: (context, _) {
         final all = w.sources;
         // The featured sources, then any other source that is on (it needs watching like the rest); off and not featured: More sources.
@@ -85,10 +63,9 @@ class _WeatherPageState extends State<WeatherPage> {
           for (final c in all) if (!c.featured && w.isOn(c.id)) c,
         ];
         final more = [for (final c in all) if (!listed.contains(c)) c];
-        // Every row with its state: the sources, then web search.
+        // Every row with its state.
         final entries = <(SourceRowState, Widget)>[
           for (final c in listed) (w.lastRowStateOf(c), SourceRow(deps: d, source: c)),
-          (d.hub.webSearch.rowState, WebSearchRow(deps: d)),
         ];
         final attention = [for (final e in entries) if (WeatherState.needsAttention(e.$1)) e.$2];
         final off = [for (final e in entries) if (e.$1 == SourceRowState.off) e.$2];
@@ -99,14 +76,14 @@ class _WeatherPageState extends State<WeatherPage> {
           children: [
             listed.isEmpty
                 ? StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh)
-                : SourcesStatusLine(weather: w, counts: sourceCountsOf(d), onRefresh: _refresh),
+                : SourcesStatusLine(weather: w, counts: w.sourceCounts, onRefresh: _refresh),
             WatchGroups(deps: d),
             if (all.isEmpty)
               w.refreshingCatalogues
                   ? const NoteText('Loading sources…')
                   : CatalogueErrorNote(w.catalogueErrors.values.firstOrNull ?? 'No sources downloaded yet. Connect to the internet and they load by themselves.')
             else ...[
-              const NoteText('What Cache watches for your places. All free; some need a free key you get from the provider.'),
+              const NoteText('What Cache watches for your places.'),
               if (attention.isNotEmpty) group(attention, 'Needs attention'),
               if (rest.isNotEmpty) group(rest, attention.isNotEmpty || off.isNotEmpty ? 'Working' : null),
               if (off.isNotEmpty) group(off, 'Off'),
@@ -293,16 +270,14 @@ String stateWord(SourceRowState s) => switch (s) {
 String? stateSentence(WeatherState w, Connector c, SourceRowState s) {
   final who = c.provider.isEmpty ? c.title : c.provider;
   switch (s) {
-    case SourceRowState.needsKey:
-      return '$who needs a free key.';
     case SourceRowState.keyRejected:
-      return '$who no longer accepts the saved key.';
+      return '$who no longer accepts the saved key. Replace it in Settings > API keys.';
     case SourceRowState.notAnswering:
       final ago = _ago(w, w.healthOf(c)?.lastOkAt);
       return ago.isEmpty ? "$who didn't answer." : "$who didn't answer. Showing what Cache saved $ago.";
     case SourceRowState.limitReached:
       return '$who says it has reached its limit. Cache tries again later.';
-    case SourceRowState.working || SourceRowState.updating || SourceRowState.off || SourceRowState.waitingForConnection:
+    case SourceRowState.working || SourceRowState.updating || SourceRowState.off || SourceRowState.waitingForConnection || SourceRowState.needsKey:
       return null;
   }
 }
@@ -330,53 +305,10 @@ class SourceRow extends StatelessWidget {
       state: s,
       ago: _ago(w, w.healthOf(c)?.lastOkAt),
       sentence: stateSentence(w, c, s),
-      onSwitch: (v) => w.keyReady(c) ? w.setSourceOn(c, v) : addKeyFor(context, deps, c),
-      onAddKey: () => addKeyFor(context, deps, c),
-      onReplaceKey: () => addKeyFor(context, deps, c, replace: true),
+      onSwitch: (v) => w.setSourceOn(c, v),
       // just this source
       onTryAgain: () => w.updateSource(c),
       onTap: open,
-    );
-  }
-}
-
-/// How many sources (and web search) work, need attention and are off.
-({int working, int attention, int off}) sourceCountsOf(SettingsDeps d) {
-  final n = d.hub.weather.sourceCounts;
-  return switch (d.hub.webSearch.rowState) {
-    SourceRowState.off => (working: n.working, attention: n.attention, off: n.off + 1),
-    final s when WeatherState.needsAttention(s) => (working: n.working, attention: n.attention + 1, off: n.off),
-    _ => (working: n.working + 1, attention: n.attention, off: n.off),
-  };
-}
-
-/// Web search (Kagi) in the same list: its state comes from its key, its switch and how the assistant's last search went. Tapping
-/// the row opens the web search settings.
-class WebSearchRow extends StatelessWidget {
-  const WebSearchRow({super.key, required this.deps});
-
-  final SettingsDeps deps;
-
-  @override
-  Widget build(BuildContext context) {
-    final web = deps.hub.webSearch;
-    final s = web.rowState;
-    return StateRow(
-      id: 'web-search',
-      icon: Icons.travel_explore,
-      title: 'Web search',
-      gives: 'Kagi searches the web for the assistant',
-      state: s,
-      sentence: switch (s) {
-        SourceRowState.needsKey => 'Kagi needs a key.',
-        SourceRowState.keyRejected => 'Kagi no longer accepts the saved key.',
-        SourceRowState.limitReached => 'Kagi says it has reached its limit. Cache tries again later.',
-        _ => null,
-      },
-      onSwitch: (v) => v && !web.hasKey ? setUpWebSearch(context, deps) : web.setEnabled(v),
-      onAddKey: () => setUpWebSearch(context, deps),
-      onReplaceKey: () => setUpWebSearch(context, deps),
-      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AssistantPage(deps: deps))),
     );
   }
 }
@@ -394,8 +326,6 @@ class StateRow extends StatelessWidget {
     this.ago = '',
     this.sentence,
     this.onSwitch,
-    this.onAddKey,
-    this.onReplaceKey,
     this.onTryAgain,
     this.onTap,
   });
@@ -409,8 +339,6 @@ class StateRow extends StatelessWidget {
   final String ago;
   final String? sentence;
   final void Function(bool on)? onSwitch;
-  final VoidCallback? onAddKey;
-  final VoidCallback? onReplaceKey;
   final VoidCallback? onTryAgain;
   final VoidCallback? onTap;
 
@@ -430,8 +358,8 @@ class StateRow extends StatelessWidget {
       SourceRowState.working => Switch(value: true, onChanged: onSwitch),
       SourceRowState.off => Switch(value: false, onChanged: onSwitch),
       SourceRowState.updating => const SizedBox(width: 48, height: 48, child: Padding(padding: EdgeInsets.all(13), child: CircularProgressIndicator(strokeWidth: 2.5))),
-      SourceRowState.needsKey => RowButton(key: ValueKey('add-key-$id'), label: 'Add key', onPressed: onAddKey),
-      SourceRowState.keyRejected => RowButton(key: ValueKey('replace-key-$id'), label: 'Replace key', onPressed: onReplaceKey),
+      SourceRowState.needsKey => Switch(value: true, onChanged: onSwitch),
+      SourceRowState.keyRejected => Switch(value: true, onChanged: onSwitch),
       SourceRowState.notAnswering => RowButton(key: ValueKey('try-again-$id'), label: 'Try again', onPressed: onTryAgain),
       SourceRowState.limitReached || SourceRowState.waitingForConnection => null,
     };

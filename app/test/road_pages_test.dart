@@ -71,27 +71,33 @@ void main() {
     expect(find.text('No site matches "zzz".'), findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('road-search')), '');
     await tester.pumpAndSettle();
-    // a tap adds it and opens its key sheet, with the steps from the data file and the site's own button
+    // a tap adds it and opens the API keys list at its key, open (never the sheet itself)
     await tester.tap(find.byKey(const ValueKey('site-511.idaho.gov')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('api-key-open-road511.511.idaho.gov')), findsOneWidget);
+    expect(find.byKey(const ValueKey('key-field')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('add-road511.511.idaho.gov')));
+    await tester.pumpAndSettle();
     expect(find.text('Add your 511 key (511.idaho.gov)'), findsOneWidget);
-    expect(find.text("Open 511.idaho.gov's developer page"), findsOneWidget);
+    expect(find.text('Get a key from Idaho'), findsOneWidget);
+    expect(find.text('https://511.idaho.gov/developers/doc'), findsWidgets);
     expect(find.text('Create an account on the site, or sign in.'), findsOneWidget);
     expect(find.text('Request a Developer API key.'), findsOneWidget);
-    expect(find.textContaining('Ten calls every 60 seconds'), findsOneWidget);
+    expect(find.textContaining('Ten calls every 60 seconds'), findsWidgets);
     expect(find.textContaining('Saving turns nothing on'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('get-key')));
     await tester.pump();
     expect(r.opened, ['https://511.idaho.gov/developers/doc']);
-    // Cancel: back on the Maps page, the source is there, off, and needs its key
     await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
     await tester.pumpAndSettle();
     expect(find.byType(MapsPage), findsOneWidget);
     expect(find.text('511 road events'), findsOneWidget);
     expect(find.textContaining('Idaho · 511.idaho.gov', findRichText: true), findsOneWidget);
-    expect(find.textContaining('Needs a key', findRichText: true), findsOneWidget);
+    expect(find.textContaining('Needs a key', findRichText: true), findsNothing, reason: 'a keyed source with no key is silent');
     expect(find.text('511 key (511.idaho.gov)'), findsOneWidget);
-    expect(find.text('Not set'), findsOneWidget);
+    expect(find.text('Not set'), findsWidgets);
     expect(r.settings.liveSourcesOn.where((id) => id.contains('idaho')), isEmpty, reason: 'adding a site turns nothing on');
     await r.dispose(tester);
   });
@@ -102,12 +108,18 @@ void main() {
     await _tapText(tester, 'Add a 511 site');
     await tester.tap(find.byKey(const ValueKey('site-511.idaho.gov')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('add-road511.511.idaho.gov')));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('key-field')), 'SENTINEL-511-KEY');
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('check-and-save')));
     await _brief(tester);
     expect(find.text('Key saved'), findsOneWidget);
     expect(r.secrets.values['live.key.road511.511.idaho.gov'], 'SENTINEL-511-KEY');
-    expect(find.text('Set'), findsOneWidget);
+    expect(find.text('Set'), findsWidgets);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     expect(r.settings.liveSourcesOn.where((id) => id.contains('idaho')), isEmpty, reason: 'saving a key turns nothing on');
     expect(jsonEncode(r.liveCore.everythingSeen()), isNot(contains('SENTINEL-511-KEY')));
     // the switch
@@ -133,9 +145,14 @@ void main() {
     await tester.enterText(find.byKey(const ValueKey('other-site-field')), 'https://511.example.gov/developers');
     await tester.tap(find.byKey(const ValueKey('other-site-add')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('api-key-open-road511.511.example.gov')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('add-road511.511.example.gov')));
+    await tester.pumpAndSettle();
     expect(find.text('Add your 511 key (511.example.gov)'), findsOneWidget);
-    expect(find.text("Open 511.example.gov's developer page"), findsOneWidget);
+    expect(find.text('https://511.example.gov/developers/doc'), findsWidgets);
     await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
     await tester.pumpAndSettle();
     expect(find.text('511 key (511.example.gov)'), findsOneWidget);
     expect(r.settings.roadSources.single['id'], '511.example.gov');
@@ -185,6 +202,9 @@ void main() {
     await tester.enterText(find.byKey(const ValueKey('road-search')), 'ohio');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('feed-ohio')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('api-key-open-wzdx.ohio')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('add-wzdx.ohio')));
     await tester.pumpAndSettle();
     expect(find.text('Add your WZDx key (Ohio DOT)'), findsOneWidget);
     expect(find.text('Get a key from Ohio DOT'), findsOneWidget);

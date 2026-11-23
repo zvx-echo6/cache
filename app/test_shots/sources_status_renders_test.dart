@@ -84,7 +84,7 @@ Future<void> _show(WidgetTester tester, Widget page, Size size, {CacheThemeId th
 }
 
 Widget _desktop(SettingsRig r) {
-  final n = sourceCountsOf(r.deps);
+  final n = r.deps.hub.weather.sourceCounts;
   Widget list(BuildContext context) {
     Widget row(String key, IconData icon, String title, String status) =>
         SettingsRow(key: ValueKey(key), icon: icon, title: title, status: [Part(status)], selected: isPaneSelected(context, key), onTap: () {});

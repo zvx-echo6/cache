@@ -122,6 +122,7 @@ class _MapsPageState extends State<MapsPage> {
             ),
             const NoteText('On the map, in places and in the long-press ring. Kept on this device.'),
             ...roadEventsSection(context, widget.deps),
+            ...mapKeyRows(context, widget.deps),
             SettingsGroup(
               label: 'Layers',
               rows: [

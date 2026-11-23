@@ -7,7 +7,7 @@ import '../../roads/road_state.dart';
 import '../../theme.dart';
 import '../../weather/weather_state.dart';
 import 'deps.dart';
-import 'key_sheet.dart';
+import 'api_keys_page.dart';
 import 'widgets.dart';
 
 /// Settings > Maps > Road events: the road sources the person has (one row per 511 site or WZDx feed, each with its switch), the two ways
@@ -20,7 +20,6 @@ List<Widget> roadEventsSection(BuildContext context, SettingsDeps d) {
   final roads = w.roads;
   if (roads == null) return const [];
   final sources = roads.sources;
-  final withKey = [for (final s in sources) if (s.keyAlias != null) s];
   final file = roads.file;
   final feedCount = file.feeds.where((f) => f.usable).length;
   return [
@@ -45,12 +44,6 @@ List<Widget> roadEventsSection(BuildContext context, SettingsDeps d) {
       ],
     ),
     if (sources.isNotEmpty) const NoteText('Closures, crashes and road work are drawn on the map from what Cache has already downloaded for the places it watches. Press and hold a source to remove it.'),
-    if (withKey.isNotEmpty)
-      SettingsGroup(
-        label: 'Road event keys',
-        rows: [for (final s in withKey) _KeyRow(deps: d, source: s)],
-      ),
-    if (withKey.isNotEmpty) const NoteText('A source with no key shows nothing on the map. Saving a key does not turn a source on.'),
   ];
 }
 
@@ -107,60 +100,23 @@ class _SourceRow extends StatelessWidget {
   }
 }
 
-class _KeyRow extends StatelessWidget {
-  const _KeyRow({required this.deps, required this.source});
-
-  final SettingsDeps deps;
-  final RoadSource source;
-
-  @override
-  Widget build(BuildContext context) {
-    final w = deps.hub.weather;
-    final set = w.hasKey(source.keyAlias!);
-    return SettingsRow(
-      key: ValueKey('road-key-${source.keyAlias}'),
-      title: source.keyTitle!,
-      status: const [],
-      trailing: Text(set ? 'Set' : 'Not set', style: TextStyle(fontSize: 15, color: context.t.secondary)),
-      onTap: () => openRoadKeySheet(context, deps, source, replace: set),
-    );
-  }
+/// Plain key rows for Map settings: NASA FIRMS and TomTom, Google (not available yet), and one key row for each road source that takes a
+/// key. Each opens the master list at that provider.
+List<Widget> mapKeyRows(BuildContext context, SettingsDeps d) {
+  final roads = d.hub.weather.roads;
+  return [
+    SettingsGroup(
+      label: 'Online map data',
+      rows: [
+        ApiKeyShortcutRow(deps: d, providerId: 'firms'),
+        ApiKeyShortcutRow(deps: d, providerId: 'tomtom'),
+        if (roads != null) for (final s in roads.sources) if (s.keyAlias != null) ApiKeyShortcutRow(deps: d, providerId: s.keyAlias!),
+        ApiKeyShortcutRow(deps: d, providerId: 'google'),
+      ],
+    ),
+    const NoteText('Keys are added in Settings > API keys. Without one, the map shows what is in your downloaded regions.'),
+  ];
 }
-
-/// The key sheet of a road source: what it is used for, a button to the site's developer page, the steps from the data file, a field to
-/// paste the key. Saving checks the key with one real download and turns nothing on.
-Future<void> openRoadKeySheet(BuildContext context, SettingsDeps d, RoadSource s, {bool replace = false}) async {
-  final w = d.hub.weather;
-  final site = s.site, feed = s.feed;
-  final host = site?.host;
-  final who = site != null ? 'this site' : (feed?.publisher ?? 'the publisher');
-  final page = site?.keyPage ?? feed?.keyPage ?? 'https://cached.info';
-  final limit = site?.rateLimit ?? feed?.rateLimit;
-  final steps = site != null ? [...w.roads!.file.keySteps] : const ['Follow their steps to get a key, then copy it'];
-  final saved = await showAddKeySheet(
-    context,
-    title: 'Add your ${s.keyTitle}',
-    gives: 'Used for: ${site != null ? 'road events from $host' : 'road work from ${feed?.publisher ?? 'this feed'}'} on the map, in Weather and in Ask. You need your own key from $who.'
-        '${limit == null ? '' : '\n\n${_limitWords(limit)} Cache stays under it.'} This key works for ${host ?? 'this feed'} only.',
-    getKeyLabel: site != null ? "Open $host's developer page" : 'Get a key from $who',
-    getKeyUrl: page,
-    steps: steps,
-    onSave: (key) => w.saveKey(s.connectors.first, key, switchOn: false),
-    openUrl: d.hub.openUrl,
-    savedNote: replace
-        ? "The key stays on this device, is checked with one request, and isn't shown again. Saving replaces the old key and turns nothing on."
-        : "The key stays on this device, is checked with one request, and isn't shown again. Saving turns nothing on.",
-  );
-  if (saved == true && context.mounted) say(context, replace ? 'Key replaced' : 'Key saved');
-}
-
-String _limitWords(RateLimit l) {
-  final secs = l.window.inSeconds;
-  final per = secs == 3600 ? 'an hour' : (secs % 60 == 0 && secs != 60 ? '${secs ~/ 60} minutes' : '$secs seconds');
-  return secs == 60 ? '${_num(l.calls)} calls every 60 seconds on this site.' : '${l.calls} requests $per.';
-}
-
-String _num(int n) => switch (n) { 10 => 'Ten', _ => '$n' };
 
 // ------------------------------------------------------------------------------------------------ the pickers
 
@@ -217,10 +173,10 @@ class _Road511PickerPageState extends State<Road511PickerPage> {
 
   Future<void> _keyFor(String id) async {
     final s = _roads.sourceOf(id);
-    if (s != null && context.mounted) {
+    if (s?.keyAlias != null && context.mounted) {
       final nav = Navigator.of(context);
-      await openRoadKeySheet(context, widget.deps, s);
-      if (nav.mounted) nav.pop();
+      nav.pop();
+      await openApiKeys(nav.context, widget.deps, providerId: s!.keyAlias);
     }
   }
 
@@ -344,8 +300,8 @@ class _RoadWorkPickerPageState extends State<RoadWorkPickerPage> {
         final s = _roads.sourceOf('wzdx:${f.id}');
         if (s != null && s.keyAlias != null) {
           final nav = Navigator.of(context);
-          await openRoadKeySheet(context, widget.deps, s);
-          if (nav.mounted) nav.pop();
+          nav.pop();
+          await openApiKeys(nav.context, widget.deps, providerId: s.keyAlias);
         } else {
           Navigator.of(context).pop();
           say(context, '${f.publisher} added. Switch it on under Road events.');
