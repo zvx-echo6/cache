@@ -1103,8 +1103,8 @@ dependencies = [
  "bao-tree",
  "blake3",
  "bytes",
+ "cache_store",
  "iroh",
- "iroh-blobs",
  "personal-rns",
  "prns-config",
  "tempfile",
@@ -1249,6 +1249,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "cache_store",
  "cache_sync",
  "data-encoding",
  "fs4 1.1.0",

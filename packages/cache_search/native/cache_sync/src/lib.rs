@@ -15,6 +15,8 @@
 //! The engine runs on its own Tokio runtime; [`SyncEngine::call`] is the whole interface (JSON in, JSON out), the same one the C
 //! ABI (`cs_sync_*` in cache_search) and the `cache-sync` desktop binary use.
 
+pub mod blobs;
+pub mod bridge;
 pub mod identity;
 pub mod index;
 pub mod transport;
@@ -25,16 +27,8 @@ use iroh::{
     endpoint::{presets, VarInt},
     Endpoint, EndpointAddr, RelayMode, RelayUrl,
 };
-use iroh_blobs::{
-    api::{
-        blobs::{AddPathOptions, ExportMode, ExportOptions, ImportMode},
-    },
-    store::{
-        fs::{options::Options as StoreOptions, FsStore},
-        GcConfig, ProtectOutcome,
-    },
-    BlobFormat, Hash, HashAndFormat,
-};
+use blobs::Blobs;
+use cache_store::{Hash, Options as StoreOptions, Store};
 use n0_future::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -595,7 +589,7 @@ struct Inner {
     me: String,
     /// The network: iroh today, Reticulum beside it in 1.2 ([`transport`]).
     net: Arc<dyn Transport>,
-    store: FsStore,
+    store: Blobs,
     saved: Mutex<Saved>,
     /// What the Gate needs besides `allowed` ([`GateState`]).
     gate: Arc<GateState>,
@@ -649,6 +643,10 @@ struct Inner {
     /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
     received: Mutex<HashMap<String, Received>>,
+    /// The one-time move of an older store into the new one has finished (or there was none); rounds wait for it.
+    store_ready: AtomicBool,
+    /// While that move runs: bytes done and bytes in all.
+    store_move: Mutex<Option<(u64, u64)>>,
 }
 
 /// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
@@ -1104,7 +1102,7 @@ impl Inner {
     /// A file now whole at `full`: the store keeps it under its name, the index takes `entry`, and it is no longer being written.
     async fn written(&self, sh: &Share, path: &str, full: &Path, entry: Entry) -> Result<()> {
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
-        self.store.tags().set(Self::tag_name(&sh.id, path).as_bytes(), HashAndFormat::raw(hash)).await.map_err(|e| anyhow!("{e}"))?;
+        self.store.set_tag(Self::tag_name(&sh.id, path).as_bytes(), hash).await.map_err(|e| anyhow!("{e}"))?;
         let mut idx = self.load_index(&sh.id);
         let mut seen = self.load_seen(&sh.id);
         let m = std::fs::metadata(full)?;
@@ -1183,9 +1181,8 @@ impl Inner {
                 }
             }
             let Ok(hash) = entry.hash.parse::<Hash>() else { continue };
-            let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
-            let put = have
-                && self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await.is_ok();
+            let have = self.store.is_complete(hash).await;
+            let put = have && self.store.export_move(hash, full.clone()).await.is_ok();
             if put {
                 let _ = self.written(sh, &path, &full, entry).await;
                 self.note(format!("{}: {path} was cut off while being written; written again", sh.name));
@@ -1257,19 +1254,14 @@ impl Inner {
 
     async fn relocate(&self, hash: &str, target: &Path) -> Result<()> {
         let h: Hash = hash.parse().map_err(|_| anyhow!("bad hash"))?;
-        let added = self
-            .store
-            .add_path_with_opts(AddPathOptions { path: target.to_path_buf(), format: BlobFormat::Raw, mode: ImportMode::Copy })
-            .temp_tag()
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+        let added = self.store.add_path_copy_held(target).await.map_err(|e| anyhow!("{e}"))?;
         if added.hash() != h {
             bail!("{} changed meanwhile", target.display());
         }
         let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let aside = target.with_file_name(format!(".{name}{ASIDE_SUFFIX}"));
         std::fs::rename(target, &aside)?;
-        match self.store.export_with_opts(ExportOptions { hash: h, mode: ExportMode::TryReference, target: target.to_path_buf() }).finish().await {
+        match self.store.export_move(h, target.to_path_buf()).await {
             Ok(_) => {
                 let _ = std::fs::remove_file(&aside);
             }
@@ -1353,7 +1345,7 @@ impl Inner {
         for p in forget {
             idx.files.remove(&p);
             seen.remove(&p);
-            let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+            let _ = self.store.delete_tag(Self::tag_name(&share.id, &p).as_bytes()).await;
             changed = true;
         }
         let mut unsettled = false;
@@ -1397,11 +1389,10 @@ impl Inner {
             let tag = Self::tag_name(&share.id, &rel);
             let added = self
                 .store
-                .add_path_with_opts(AddPathOptions { path: full.clone(), format: BlobFormat::Raw, mode: ImportMode::TryReference })
-                .with_named_tag(tag.as_bytes())
+                .add_path_ref_tagged(full.clone(), tag.as_bytes())
                 .await
                 .map_err(|e| anyhow!("could not read {}: {e}", full.display()))?;
-            let hash = added.hash.to_hex().to_string();
+            let hash = added.to_hex().to_string();
             let entry = match idx.files.get(&rel) {
                 Some(old) if !old.deleted && old.hash == hash => None,
                 Some(old) => {
@@ -1435,7 +1426,7 @@ impl Inner {
                 stale.push(idx.files[&p].hash.clone());
                 idx.files.remove(&p);
                 seen.remove(&p);
-                let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+                let _ = self.store.delete_tag(Self::tag_name(&share.id, &p).as_bytes()).await;
                 changed = true;
                 continue;
             }
@@ -1449,7 +1440,7 @@ impl Inner {
             stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
             seen.remove(&p);
-            let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+            let _ = self.store.delete_tag(Self::tag_name(&share.id, &p).as_bytes()).await;
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
@@ -1675,6 +1666,10 @@ impl Inner {
     /// A round over what `scope` covers only (Sync now for one device, one kind or one item); the same steps as [`Inner::round`].
     async fn round_with(self: &Arc<Self>, scope: &Scope) {
         let _one = self.round.lock().await;
+        if !self.store_ready.load(Ordering::SeqCst) {
+            // The file store is being moved to its new format; nothing is scanned or fetched until it is done.
+            return;
+        }
         let all = self.saved.lock().unwrap().shares.clone();
         if !self.recovered.swap(true, Ordering::Relaxed) {
             for sh in &all {
@@ -1861,7 +1856,7 @@ impl Inner {
                             std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
                             prune_empty(&sh.path, &full, self.skip(&sh.id));
                         }
-                        let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
+                        let _ = self.store.delete_tag(Self::tag_name(&sh.id, &path).as_bytes()).await;
                         seen.remove(&path);
                         let gone = idx.files.get(&path).filter(|e| !e.deleted).map(|e| e.hash.clone());
                         idx.files.insert(path.clone(), entry);
@@ -1918,7 +1913,7 @@ impl Inner {
     /// `sh`): the room needed is checked where the store is and where `full` is.
     async fn ensure_blob(self: &Arc<Self>, sh: &Share, path: &str, full: &Path, entry: &Entry) -> Result<Hash> {
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
-        let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
+        let have = self.store.is_complete(hash).await;
         if !have {
             if !self.may_use_network() {
                 bail!("Paused: no network it may use");
@@ -1952,7 +1947,7 @@ impl Inner {
                 done: 0,
                 from: providers.iter().map(|p| self.peer_name(p)).collect(),
             });
-            let mut stream = self.net.fetch(&self.store, hash, providers).await?;
+            let mut stream = self.net.fetch(self.store.raw(), hash, providers).await?;
             let mut failed = None;
             let mut last_progress = Instant::now();
             loop {
@@ -2036,19 +2031,19 @@ impl Inner {
         #[cfg(feature = "test-hooks")]
         if std::env::var("CACHE_SYNC_CUT_WRITE").map(|v| v == path).unwrap_or(false) {
             // As if Cache were stopped half way through writing this file: half of it at the real path, nothing cleaned up.
-            let bytes = self.store.blobs().get_bytes(hash).await.map_err(|e| anyhow!("{e}"))?;
+            let bytes = self.store.get_bytes(hash).await.map_err(|e| anyhow!("{e}"))?;
             std::fs::write(&full, &bytes[..bytes.len() / 2])?;
             self.stop.store(true, Ordering::Relaxed);
             bail!("test: cut off writing {path}");
         }
         let size_of_entry = entry.size;
-        if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await {
+        if let Err(e) = self.store.export_move(hash, full.clone()).await {
             // Whatever part got written goes; the content stays in the store and the next round writes it again.
             if std::fs::remove_file(&full).is_err() && full.exists() {
                 // Left for the recovery a start does, before the next scan could take it for an edit.
                 self.recovered.store(false, Ordering::Relaxed);
             }
-            if is_no_space(&e) {
+            if is_no_space(e.as_ref()) {
                 bail!("Paused: no room to write {path} ({} needed). Free up space and it carries on.", human(size_of_entry));
             }
             bail!("could not write {path}: {e}");
@@ -2418,23 +2413,26 @@ impl SyncEngine {
         if let Some(port) = cfg.port.filter(|p| *p != 0) {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
-        let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone()).await?;
+        let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
+        // Hashes whose files in the store the iroh bridge reads (see `bridge`): the store never deletes or moves those.
+        let lent: Arc<Mutex<HashSet<Hash>>> = Arc::default();
+        let bridge = bridge::Bridge::new(cfg.dir.join("blobs-iroh-view"), wanted.clone(), lent.clone());
+        let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone(), bridge).await?;
         let net: Arc<dyn Transport> = iroh_net.clone();
         steps.step("endpoint bound");
 
-        let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
-        let w2 = wanted.clone();
-        let gc = GcConfig {
-            interval: Duration::from_secs(600),
-            add_protected: Some(Arc::new(move |live: &mut HashSet<Hash>| {
-                live.extend(w2.lock().unwrap().iter().copied());
-                Box::pin(async { ProtectOutcome::Continue })
-            })),
+        let (w2, l2) = (wanted.clone(), lent.clone());
+        let opts = StoreOptions {
+            protect: Some(Arc::new(move || w2.lock().unwrap().clone())),
+            lent: Some(Arc::new(move || l2.lock().unwrap().clone())),
+            ..StoreOptions::default()
         };
-        let store_dir = cfg.dir.join("blobs");
-        let mut opts = StoreOptions::new(&store_dir);
-        opts.gc = Some(gc);
-        let store = FsStore::load_with_opts(store_dir.join("blobs.db"), opts).await.map_err(|e| anyhow!("could not open the store: {e}"))?;
+        let store_dir = cfg.dir.join("store");
+        let raw = {
+            let dir = store_dir.clone();
+            tokio::task::spawn_blocking(move || Store::open(&dir, opts)).await?.map_err(|e| anyhow!("could not open the store: {e}"))?
+        };
+        let store = Blobs::new(raw);
         steps.step("blob store opened");
 
         let inner = Arc::new(Inner {
@@ -2469,12 +2467,45 @@ impl SyncEngine {
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
             received: Mutex::new(HashMap::new()),
+            store_ready: AtomicBool::new(false),
+            store_move: Mutex::new(None),
         });
         inner.save()?;
         steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
-        iroh_net.serve(&store, inner.clone());
+        // An older (iroh-blobs) store is moved into the new one first, in the background; rounds and serving wait for it.
+        let old_dir = cfg.dir.join("blobs");
+        if Store::has_old_store(&old_dir) {
+            inner.note("Moving the file store to its new format");
+            let (inner2, iroh2) = (inner.clone(), iroh_net.clone());
+            tokio::spawn(async move {
+                let (store, i3) = (inner2.store.raw().clone(), inner2.clone());
+                let moved = tokio::task::spawn_blocking(move || {
+                    store.move_old_store(&old_dir, &mut |done, total| {
+                        *i3.store_move.lock().unwrap() = Some((done, total));
+                    })
+                })
+                .await;
+                match moved {
+                    Ok(Ok(Some(report))) => {
+                        for l in report.log_lines() {
+                            inner2.note(l);
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) => inner2.note(format!("store move: stopped: {e} (it resumes at the next start)")),
+                    Err(e) => inner2.note(format!("store move: stopped: {e} (it resumes at the next start)")),
+                }
+                *inner2.store_move.lock().unwrap() = None;
+                inner2.store_ready.store(true, Ordering::SeqCst);
+                iroh2.serve(inner2.store.raw(), inner2.clone());
+                inner2.wake.notify_one();
+            });
+        } else {
+            inner.store_ready.store(true, Ordering::SeqCst);
+            iroh_net.serve(inner.store.raw(), inner.clone());
+        }
         inner.note("Started");
         if let Some(n) = saved_note {
             inner.note(n);
@@ -2715,13 +2746,9 @@ impl SyncEngine {
                 let store = inner.store.clone();
                 let prefix = format!("f/{id}/");
                 self.rt.block_on(async move {
-                    if let Ok(mut tags) = store.tags().list_prefix(prefix.as_bytes()).await {
-                        let mut names = Vec::new();
-                        while let Some(Ok(t)) = tags.next().await {
-                            names.push(t.name);
-                        }
+                    if let Ok(names) = store.tag_names(prefix.as_bytes()).await {
                         for n in names {
-                            let _ = store.tags().delete(n).await;
+                            let _ = store.delete_tag(&n).await;
                         }
                     }
                 });
@@ -2972,6 +2999,7 @@ impl SyncEngine {
             "offers": offers,
             "transfer": run.transfer,
             "paused": run.paused,
+            "store_move": inner.store_move.lock().unwrap().map(|(done, total)| json!({"done": done, "total": total})),
             "rounds": run.rounds,
             "last_round": run.last_round,
             "log": run.log.iter().rev().take(50).map(|(t, m)| json!({"at": t, "text": m})).collect::<Vec<_>>(),

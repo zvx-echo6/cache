@@ -114,7 +114,7 @@ pub struct Config {
     /// The largest request or response, in bytes.
     pub max_bytes: u64,
     /// Cache's blob store: when set, linked devices may fetch verified windows of its blobs ([`blobs`]).
-    pub blobs: Option<iroh_blobs::api::Store>,
+    pub blobs: Option<cache_store::Store>,
 }
 
 #[derive(Default)]
