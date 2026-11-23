@@ -28,7 +28,7 @@ void main() {
 
     test('no connection says so, and only a real 5xx says try again in a moment', () {
       for (final d in ['could not reach the web search server', 'web search timed out', 'the web search request failed']) {
-        expect(keyCheckFromToolContent(err('fetch_failed', d)).message, "Couldn't reach Kagi. Check your connection.");
+        expect(keyCheckFromToolContent(err('fetch_failed', d)).message, "Can't reach Kagi. Check your connection.");
       }
       expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 500)')).message, contains('Try again in a moment'));
       expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 503)')).message, contains('(HTTP 503)'));
@@ -72,6 +72,9 @@ void main() {
     final good = await w.saveKey('right');
     expect(good.ok, isTrue);
     expect(secrets.values[WebSearchSetup.keyName], 'right');
+    expect(s.webSearchOn, isFalse, reason: 'saving a key turns nothing on');
+    expect(calls.last.$1, isNull);
+    await w.setEnabled(true);
     expect(calls.last.$1, 'kagi');
     w.dispose();
   });

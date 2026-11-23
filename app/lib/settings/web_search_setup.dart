@@ -11,14 +11,20 @@ import '../platform/app_log.dart';
 
 /// The answer of checking a key with its provider.
 class KeyCheck {
-  const KeyCheck.ok() : ok = true, message = null;
-  const KeyCheck.failed(String this.message) : ok = false;
+  const KeyCheck.ok() : ok = true, message = null, kind = null;
+  const KeyCheck.failed(String this.message, {this.kind = KeyFailure.other}) : ok = false;
 
   final bool ok;
+
+  /// Why it failed, for the sheet's second button: [KeyFailure.limit] offers "Save anyway", [KeyFailure.offline] "Save without checking".
+  final KeyFailure? kind;
 
   /// Why the key was not accepted, in words for people (null when it was).
   final String? message;
 }
+
+/// The causes of a failed key check the sheet tells apart.
+enum KeyFailure { refused, limit, offline, other }
 
 typedef KeyChecker = Future<KeyCheck> Function(String key);
 
@@ -48,14 +54,14 @@ KeyCheck keyCheckFromToolContent(String content) {
   final detail = e is Map ? '${e['detail']}' : '';
   switch (type) {
     case 'key_missing':
-      return const KeyCheck.failed(_rejected);
+      return const KeyCheck.failed(_rejected, kind: KeyFailure.refused);
     case 'quota':
-      return const KeyCheck.failed('Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.');
+      return const KeyCheck.failed('Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.', kind: KeyFailure.limit);
     case 'bad_response':
       return const KeyCheck.failed("Kagi answered with something Cache couldn't read. Try again later.");
     case 'fetch_failed':
       final m = RegExp(r'HTTP (\d{3})').firstMatch(detail);
-      if (m == null) return const KeyCheck.failed("Couldn't reach Kagi. Check your connection.");
+      if (m == null) return const KeyCheck.failed("Can't reach Kagi. Check your connection.", kind: KeyFailure.offline);
       final code = int.parse(m.group(1)!);
       if (code >= 500) return KeyCheck.failed('Kagi had a problem (HTTP $code). Try again in a moment.');
       return KeyCheck.failed('Kagi answered with an error (HTTP $code).');
@@ -185,7 +191,7 @@ class WebSearchSetup extends ChangeNotifier {
     unawaited(apply());
   }
 
-  /// Checks [raw] with the provider and, only if it is accepted, saves it and switches web search on. A key that fails the check is
+  /// Checks [raw] with the provider and, only if it is accepted, saves it (turning nothing on). A key that fails the check is
   /// not saved. Returns the check, whose message says why when it failed.
   Future<KeyCheck> saveKey(String raw) async {
     final key = raw.trim();
@@ -208,7 +214,6 @@ class WebSearchSetup extends ChangeNotifier {
     }
     _hasKey = true;
     _lastFailure = SourceFailure.none;
-    settings.setWebSearchOn(true);
     notifyListeners();
     await apply();
     return r;
@@ -225,21 +230,19 @@ class WebSearchSetup extends ChangeNotifier {
     await apply();
   }
 
-  /// Forgets the key and switches web search off.
+  /// Forgets the key. The switch stays as it is: with no key Ask quietly uses what is on the device.
   Future<void> removeKey() async {
     try {
       await secrets.delete(keyName);
     } catch (_) {}
     _hasKey = false;
     _lastFailure = SourceFailure.none;
-    settings.setWebSearchOn(false);
     notifyListeners();
     await apply();
   }
 
-  /// Sets the person's switch (it does nothing until a key is saved).
+  /// Sets the person's switch. It is always usable; with no key web search stays silent ([active] needs both).
   Future<void> setEnabled(bool on) async {
-    if (on && !_hasKey) return;
     settings.setWebSearchOn(on);
     notifyListeners();
     await apply();

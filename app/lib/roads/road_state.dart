@@ -204,6 +204,15 @@ class RoadSources {
     return null;
   }
 
+  /// A 511 site as a source whether or not the person added it (a key can be saved for it first; its check needs the connector).
+  RoadSource? sourceForSite(RoadSite site) => _make(RoadSourceRecord.site(site.host));
+
+  /// The key names of every site in the data file and every feed that takes a key a person can get.
+  Set<String> get allKeyAliases => {
+    for (final s in _file.sites) s.keyAlias,
+    for (final f in _file.feeds) if (f.access == 'key') f.keyAlias,
+  };
+
   /// Every connector of every source.
   List<Connector> get connectors => [for (final s in sources) ...s.connectors];
 

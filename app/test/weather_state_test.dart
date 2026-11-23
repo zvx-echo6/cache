@@ -720,7 +720,7 @@ void main() {
       h.core.previewError = const CacheSearchException('fetch_failed', 'HTTP 503');
       expect((await h.weather.saveKey(firms, secret)).message, allOf(contains('had a problem'), isNot(contains('HTTP'))));
       h.core.previewError = const CacheSearchException('fetch_failed', 'Dns: failed');
-      expect((await h.weather.saveKey(firms, secret)).message, contains("Couldn't reach NASA FIRMS"));
+      expect((await h.weather.saveKey(firms, secret)).message, contains("Can't reach NASA FIRMS"));
       h.core.previewError = null;
       h.core.previewResult = {'valid': true, 'mapping_error': {'code': 'bad_response', 'message': 'x'}};
       expect((await h.weather.saveKey(firms, secret)).ok, isFalse);
@@ -770,7 +770,7 @@ void main() {
       expect(h.weather.sourcesUsingKey('idaho511').length, 2);
     });
 
-    test('replacing a key does not switch anything on; removing one forgets it everywhere and switches its sources off', () async {
+    test('replacing a key does not switch anything on; removing one forgets it everywhere and turns nothing off', () async {
       h = await Harness.create();
       final firms = h.weather.sourceById('firms-viirs-near')!;
       await h.weather.saveKey(firms, secret);
@@ -783,7 +783,7 @@ void main() {
       expect(h.secrets.values, isEmpty);
       expect(h.core.keys['firms-viirs-near'], isNull);
       expect(h.weather.hasKey('firms'), isFalse);
-      expect(h.weather.isOn('firms-viirs-near'), isFalse);
+      expect(h.weather.isOn('firms-viirs-near'), isTrue, reason: 'removing a key turns nothing off');
     });
   });
 
@@ -1606,14 +1606,14 @@ void main() {
 
     // Design read: a source that is on without its key is skipped by every update, and the Weather screen said "Not downloaded
     // yet. Update now to get it.", which could never come true.
-    test('a source that is on without its key says it needs a key, not that an update will get it', () async {
+    test('a source that is on without its key is silent: nothing downloaded, no "needs a key"', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Wildfires'), true);
       h.settings.setLiveSourcesOn({'firms-viirs-near'}, true);
       await h.weather.sourcesChanged();
       final views = await h.weather.viewFor((await h.weather.watchedPlaces()).single);
       final firms = views.firstWhere((v) => v.source.id == 'firms-viirs-near');
-      expect((firms.missing, firms.error), (true, 'needs a key'));
+      expect((firms.missing, firms.error), (true, null));
       // a source with nothing downloaded that needs no key (or has it) is as before
       final fires = views.firstWhere((v) => v.source.id == 'wfigs-incidents-near');
       expect((fires.missing, fires.error), (true, null));
@@ -2472,13 +2472,13 @@ void main() {
       expect(h.weather.statusOf(c), SourceRowState.working);
     });
 
-    test('off, needs a key, and no network is a notice of its own', () async {
+    test('off, no key (silent: working), and no network is a notice of its own', () async {
       h = await Harness.create();
       await h.only([forecast]);
       final firms = h.weather.sourceById('firms-viirs-near')!;
       expect(h.weather.statusOf(h.weather.sourceById('usgs-quakes-near')!), SourceRowState.off);
       await h.weather.setSourceOn(firms, true);
-      expect(h.weather.statusOf(firms), SourceRowState.needsKey);
+      expect(h.weather.statusOf(firms), SourceRowState.working, reason: 'a keyed source on with no key is silent');
       h.probe.change(ConnectionKind.none);
       await Future<void>.delayed(Duration.zero);
       expect(h.weather.noNetwork, isTrue);
