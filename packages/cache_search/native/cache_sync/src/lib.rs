@@ -233,6 +233,10 @@ pub struct Config {
     /// For tests: the Reticulum interfaces to use instead of Wi-Fi auto.
     #[serde(default)]
     pub rns_interfaces: Option<RnsInterfaces>,
+    /// What kind of device this is, as Nearby linking tells a device that asks: `"phone"`, `"tablet"` or `"computer"` (anything
+    /// else counts as not set).
+    #[serde(default)]
+    pub device_kind: Option<String>,
 }
 
 /// The Reticulum interfaces a test asks for ([`Config::rns_interfaces`]).
@@ -247,6 +251,10 @@ pub struct RnsInterfaces {
     /// Wi-Fi/LAN auto discovery as well.
     #[serde(default)]
     pub wifi: bool,
+    /// Test only: Nearby pairing announces go out on, and are listed from, TCP interfaces too (loopback has no Wi-Fi). Off in
+    /// production, where a pairing announce is only ever sent on local Wi-Fi/LAN interfaces.
+    #[serde(default)]
+    pub pair_local_tcp: bool,
 }
 
 /// A linked device's Reticulum address, as saved in `sync.json` (absent for links with no Reticulum address yet, and in files
@@ -698,6 +706,8 @@ struct Inner {
     /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
     /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
+    /// [`Config::device_kind`], when valid.
+    device_kind: Option<String>,
     /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
     received: Mutex<HashMap<String, Received>>,
@@ -2356,9 +2366,23 @@ impl Serve for Inner {
     fn asked(&self, _peer: &str) {
         self.wake.notify_one();
     }
+
+    fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str) {
+        // Both people confirmed and the signature checked out: stored exactly as a link made with a code is (the same
+        // add_peer, the Reticulum address learned the same way), and confirmed on both sides, since both were present.
+        add_peer(self, peer, name, false);
+        self.learn_rns(peer, &RnsProof { dest: dest.to_string(), sig: sig.to_string() });
+        self.note(format!("Linked with {name}"));
+        self.wake.notify_one();
+    }
 }
 
 impl Inner {
+    /// The name and kind this device gives a device that asks over Nearby.
+    fn nearby_self(&self) -> (String, Option<String>) {
+        (self.saved.lock().unwrap().name.clone(), self.device_kind.clone())
+    }
+
     /// This device's Reticulum destination and signature, for what it sends other devices. With `<dir>/no-rns-fields` present
     /// (test hook) it says nothing, like a build before Reticulum.
     fn rns_info(&self) -> Option<(String, String)> {
@@ -2586,6 +2610,7 @@ impl SyncEngine {
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
+            device_kind: cfg.device_kind.clone().filter(|k| matches!(k.as_str(), "phone" | "tablet" | "computer")),
             received: Mutex::new(HashMap::new()),
         });
         inner.save()?;
@@ -2607,7 +2632,8 @@ impl SyncEngine {
                 }
                 None => vec![cache_rns::Iface::WifiAuto],
             };
-            if let Err(e) = m.start_rns(secret.clone(), &store, inner.clone(), ifaces).await {
+            let pair_local_tcp = cfg.rns_interfaces.as_ref().is_some_and(|t| t.pair_local_tcp);
+            if let Err(e) = m.start_rns(secret.clone(), &store, inner.clone(), ifaces, pair_local_tcp).await {
                 inner.note(format!("Reticulum did not start: {e:#}"));
             }
         }
@@ -2680,6 +2706,39 @@ impl SyncEngine {
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
+            }
+            // Nearby linking (Android and Linux, with Reticulum on): the app drives it with these five calls and polls the
+            // list and the state while its link-code page is open.
+            "pairing_open" => {
+                let (name, kind) = inner.nearby_self();
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.pairing_open(name, kind).await })?;
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_skew_clock" => {
+                inner.net.skew_clock(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0));
+                Ok(json!({}))
+            }
+            "pairing_close" => {
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.pairing_close().await });
+                Ok(json!({}))
+            }
+            "nearby_list" => Ok(inner.net.nearby_list()),
+            "nearby_state" => Ok(inner.net.nearby_state()),
+            "nearby_link" => {
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let (name, kind) = inner.nearby_self();
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.nearby_link(id, name, kind).await })?;
+                Ok(json!({}))
+            }
+            "nearby_answer" => {
+                let ok = args.get("ok").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("ok is required"))?;
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.nearby_answer(ok).await })?;
+                Ok(json!({}))
             }
             "unlink" => {
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;

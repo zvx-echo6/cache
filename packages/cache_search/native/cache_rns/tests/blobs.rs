@@ -57,6 +57,7 @@ async fn pair() -> Pair {
         open_paths: vec![],
         max_bytes: 64 * 1024 * 1024,
         blobs: Some((**store).clone()),
+        pair_local_tcp: false,
     };
     let a = RnsNode::start(cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), &kb, &a_store), Arc::new(Nothing))
         .await

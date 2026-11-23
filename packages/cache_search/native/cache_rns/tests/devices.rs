@@ -63,6 +63,7 @@ fn cfg(device: &SecretKey, iface: Iface, peers: Vec<&SecretKey>) -> Config {
         open_paths: vec!["/cache/pair".into()],
         max_bytes: 64 * 1024 * 1024,
         blobs: None,
+        pair_local_tcp: false,
     }
 }
 

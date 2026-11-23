@@ -33,6 +33,7 @@ x25519-dalek = { version = "=3.0.0", features = ["static_secrets"] }
 rand = "0.10"
 zeroize = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 [dev-dependencies]

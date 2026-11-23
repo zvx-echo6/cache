@@ -100,6 +100,32 @@ pub trait Transport: Send + Sync + 'static {
     fn port(&self) -> Option<u16>;
     /// Stops accepting and closes connections.
     fn shutdown(&self) -> BoxFut<'_, ()>;
+    /// Nearby linking: the link-code page opened (this device's name and kind, as it tells a device that asks).
+    fn pairing_open(&self, _name: String, _kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
+    /// Nearby linking: the page closed.
+    fn pairing_close(&self) -> BoxFut<'_, ()> {
+        Box::pin(async {})
+    }
+    /// Nearby linking: `{"devices": [{id, name, kind, via}]}`.
+    fn nearby_list(&self) -> serde_json::Value {
+        serde_json::json!({"devices": []})
+    }
+    /// Nearby linking: `{state, name, kind, words, reason}`.
+    fn nearby_state(&self) -> serde_json::Value {
+        serde_json::json!({"state": "idle", "name": null, "kind": null, "words": [], "reason": null})
+    }
+    /// Nearby linking: Link was tapped on a listed device.
+    fn nearby_link(&self, _id: String, _name: String, _kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
+    /// Tests only: moves the clock Nearby's 60 second and one minute waits run on.
+    fn skew_clock(&self, _ms: u64) {}
+    /// Nearby linking: Link (`true`) or Cancel on the three words.
+    fn nearby_answer(&self, _ok: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
 }
 
 /// What the network asks of the engine.
@@ -110,6 +136,8 @@ pub trait Serve: Send + Sync + 'static {
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> BoxFut<'static, Vec<u8>>;
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
+    /// A Nearby link both people confirmed, with the other device's destination and signature (hex): keep it.
+    fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str);
 }
 
 /// Refuses every connection from a key that is not linked, except on the linking protocol (which wants the one-time code).

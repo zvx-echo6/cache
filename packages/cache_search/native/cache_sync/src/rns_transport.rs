@@ -78,7 +78,7 @@ impl MultiTransport {
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
     /// requests answered by `serve`. `interfaces` are the test block's; none means Wi-Fi auto.
-    pub async fn start_rns(&self, device: SecretKey, store: &FsStore, serve: Arc<dyn Serve>, interfaces: Vec<Iface>) -> Result<()> {
+    pub async fn start_rns(&self, device: SecretKey, store: &FsStore, serve: Arc<dyn Serve>, interfaces: Vec<Iface>, pair_local_tcp: bool) -> Result<()> {
         let cfg = RnsConfig {
             device: device.clone(),
             interfaces,
@@ -88,6 +88,7 @@ impl MultiTransport {
             open_paths: vec![PATH_PAIR.into()],
             max_bytes: MAX_INDEX as u64,
             blobs: Some((**store).clone()),
+            pair_local_tcp,
         };
         let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve })).await?);
         let dest = node.destination();
@@ -274,6 +275,60 @@ impl Transport for MultiTransport {
         })
     }
 
+    fn pairing_open(&self, name: String, kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async move {
+            let node = self.node().ok_or_else(|| anyhow!("Nearby linking needs Reticulum, which is not running on this device"))?;
+            node.pair_open(cache_rns::PairSelf { name, kind }).await
+        })
+    }
+
+    fn skew_clock(&self, ms: u64) {
+        if let Some(n) = self.node() {
+            n.nearby().skew_clock(ms);
+        }
+    }
+
+    fn pairing_close(&self) -> BoxFut<'_, ()> {
+        Box::pin(async move {
+            if let Some(n) = self.node() {
+                n.pair_close().await;
+            }
+        })
+    }
+
+    fn nearby_list(&self) -> Value {
+        let devices: Vec<Value> = self
+            .node()
+            .map(|n| n.pair_list())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| json!({"id": d.id, "name": d.name, "kind": d.kind, "via": "wifi"}))
+            .collect();
+        json!({"devices": devices})
+    }
+
+    fn nearby_state(&self) -> Value {
+        let Some(n) = self.node() else {
+            return json!({"state": "idle", "name": null, "kind": null, "words": [], "reason": null});
+        };
+        let s = n.pair_status();
+        json!({"state": s.state, "name": s.name, "kind": s.kind, "words": s.words.map(|w| w.to_vec()).unwrap_or_default(), "reason": s.reason})
+    }
+
+    fn nearby_link(&self, id: String, name: String, kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async move {
+            let node = self.node().ok_or_else(|| anyhow!("Nearby linking needs Reticulum, which is not running on this device"))?;
+            node.pair_link(&id, cache_rns::PairSelf { name, kind }).await
+        })
+    }
+
+    fn nearby_answer(&self, ok: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async move {
+            let node = self.node().ok_or_else(|| anyhow!("Nearby linking needs Reticulum, which is not running on this device"))?;
+            node.pair_answer(ok).await
+        })
+    }
+
     fn network_change(&self) -> BoxFut<'_, ()> {
         Box::pin(async move {
             if let Some(n) = self.node() {
@@ -402,5 +457,9 @@ impl Handler for Serving {
 
     fn notify(&self, from: PublicKey, _body: Vec<u8>) {
         self.serve.asked(&from.to_string());
+    }
+
+    fn pair_linked(&self, peer: PublicKey, name: String, destination: cache_rns::DestinationHash, sig: Vec<u8>) {
+        self.serve.nearby_linked(&peer.to_string(), &name, &cache_rns::dest_hex(&destination), &hex(&sig));
     }
 }

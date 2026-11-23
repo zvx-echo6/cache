@@ -36,6 +36,8 @@ pub mod rnode;
 #[cfg(feature = "rnode")]
 pub mod standin;
 pub mod pair_core;
+pub mod nearby;
+pub use nearby::{NearbyDevice, PairSelf, PairStatus};
 
 /// Cache's Reticulum destination name: `cache.sync.v1`.
 pub const APP_NAME: &str = "cache";
@@ -201,6 +203,9 @@ pub type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub trait Handler: Send + Sync + 'static {
     fn request(&self, asker: Asker, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>>;
     fn notify(&self, from: PublicKey, body: Vec<u8>);
+    /// Both people confirmed a Nearby link and the other device's signature over its destination checked out: keep it
+    /// (device key, name, Reticulum destination, and the device key's signature over it).
+    fn pair_linked(&self, _peer: PublicKey, _name: String, _destination: DestinationHash, _sig: Vec<u8>) {}
 }
 
 pub struct Config {
@@ -218,6 +223,9 @@ pub struct Config {
     pub max_bytes: u64,
     /// Cache's blob store: when set, linked devices may fetch verified windows of its blobs ([`blobs`]).
     pub blobs: Option<iroh_blobs::api::Store>,
+    /// For tests only, off in production: pairing announces are only ever sent on, and listed from, local Wi-Fi/LAN
+    /// interfaces; with this on, TCP interfaces count as local so a loopback test can run.
+    pub pair_local_tcp: bool,
 }
 
 #[derive(Default)]
@@ -239,6 +247,7 @@ enum Ev {
     Announce {
         destination: DestinationHash,
         via: Via,
+        hops: u8,
     },
     Identified {
         link: LinkId,
@@ -249,11 +258,16 @@ enum Ev {
     },
     Request {
         token: RespondToken,
+        destination: DestinationHash,
         requester: Option<IdentityHash>,
         path: RequestPathHash,
         data: Vec<u8>,
     },
     Notify {
+        link: LinkId,
+        data: Vec<u8>,
+    },
+    Pair {
         link: LinkId,
         data: Vec<u8>,
     },
@@ -266,6 +280,10 @@ pub struct RnsNode {
     device: SecretKey,
     /// Wi-Fi auto discovery's handle, when attached.
     wifi: Option<AutoWifiStatus>,
+    /// Nearby linking.
+    nearby: Arc<nearby::Nearby>,
+    /// The linked devices' stored destinations, as Nearby needs them (their announces are not pairing announces).
+    peers_dest: Arc<Mutex<Vec<DestinationHash>>>,
     /// The node's RNode interfaces (slow carriers), as Prns numbered them.
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
@@ -297,6 +315,29 @@ impl RnsNode {
         let me = destination
             .destination_hash()
             .map_err(|e| anyhow!("bad destination name: {e:?}"))?;
+        // The pairing pool (Nearby linking): random identities, never derived from the device key, each a destination
+        // `cache.pair.v1` with empty announce data. Prns registers destinations only at start, so they are made here.
+        let mut destinations = vec![destination];
+        let mut pool: Vec<DestinationHash> = Vec::new();
+        for _ in 0..nearby::POOL_SIZE {
+            let mut secret = [0u8; 64];
+            rand::Rng::fill_bytes(&mut rand::rng(), &mut secret);
+            let d = PreConfiguredDestination::Single {
+                resource_strategy: ResourceStrategy::AcceptNone,
+                maximum_request_bytes: Default::default(),
+                app_name: APP_NAME,
+                aspects: nearby::PAIR_ASPECTS,
+                identity: Zeroizing::new(secret),
+                announce_app_data: b"",
+                proof: ProofStrategy::ProveAll,
+                link_requests: LinkRequestPolicy::AcceptAll,
+                ratchet: RatchetPolicy::NoRatchets,
+                request_endpoints: ServeMyRequestEndpoints::No,
+            };
+            zeroize::Zeroize::zeroize(&mut secret);
+            pool.push(d.destination_hash().map_err(|e| anyhow!("bad pairing destination name: {e:?}"))?);
+            destinations.push(d);
+        }
         let (tx, mut rx) = mpsc::unbounded_channel::<Ev>();
         let clients: Vec<String> = cfg
             .interfaces
@@ -377,7 +418,7 @@ impl RnsNode {
                     let node = PrnsNode::new(PrnsNodeRecipe {
                         transport_identity: None,
                         remote_control: RemoteControlService::Unavailable.into(),
-                        pre_configured_destinations: [destination],
+                        pre_configured_destinations: destinations,
                         app_state: personal_rns::runtime::NoRemoteControlHostControls,
                         storage: GrowableHeap,
                         request_endpoints: request_endpoints![],
@@ -386,8 +427,10 @@ impl RnsNode {
                                 PrnsEvent::Diagnostic(Diagnostic::AnnounceHeard {
                                     destination,
                                     source_interface,
+                                    hops,
                                     ..
                                 }) => Ev::Announce {
+                                    hops,
                                     destination,
                                     via: match source_interface.kind() {
                                         Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
@@ -405,6 +448,7 @@ impl RnsNode {
                                     link_id, ..
                                 }) => Ev::Closed { link: link_id },
                                 PrnsEvent::Message(Message::Request {
+                                    destination: request_destination,
                                     link_id,
                                     request_id,
                                     requester,
@@ -413,6 +457,7 @@ impl RnsNode {
                                     data,
                                     ..
                                 }) => Ev::Request {
+                                    destination: request_destination,
                                     token: RespondToken {
                                         link_id,
                                         request_id,
@@ -427,6 +472,14 @@ impl RnsNode {
                                     message_type,
                                     data,
                                 }) if message_type == NOTIFY_TYPE => Ev::Notify {
+                                    link: link_id,
+                                    data: data.to_vec(),
+                                },
+                                PrnsEvent::Message(Message::ChannelMessage {
+                                    link_id,
+                                    message_type,
+                                    data,
+                                }) if message_type == nearby::PAIR_TYPE => Ev::Pair {
                                     link: link_id,
                                     data: data.to_vec(),
                                 },
@@ -512,6 +565,20 @@ impl RnsNode {
         }
         let my_identity = identity_hash_for(&cfg.device);
 
+        let peers_dest: Arc<Mutex<Vec<DestinationHash>>> =
+            Arc::new(Mutex::new(cfg.peers.iter().filter_map(|(_, d)| *d).collect()));
+        let nearby = nearby::Nearby::new(
+            handle.clone(),
+            cfg.device.clone(),
+            me,
+            handler.clone(),
+            wifi_status.clone(),
+            cfg.pair_local_tcp,
+            pool,
+            peers_dest.clone(),
+        );
+        tasks.push(nearby.start_tick());
+
         let state = Arc::new(Mutex::new(State {
             peers: cfg.peers.iter().map(|(p, _)| *p.as_bytes()).collect(),
             destination_of: cfg
@@ -526,10 +593,12 @@ impl RnsNode {
         {
             let state = state.clone();
             let handle = handle.clone();
+            let nearby = nearby.clone();
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
-                        Ev::Announce { destination, via } => {
+                        Ev::Announce { destination, via, hops } => {
+                            nearby.on_announce(destination, via == Via::Wifi, hops);
                             if destination == me {
                                 continue;
                             }
@@ -552,7 +621,9 @@ impl RnsNode {
                                 .identity_on_link
                                 .insert(link, identity);
                         }
+                        Ev::Pair { link, data } => nearby.on_message(link, &data),
                         Ev::Closed { link } => {
+                            nearby.on_link_closed(link);
                             let mut s = state.lock().unwrap();
                             s.identity_on_link.remove(&link);
                             s.verified.remove(&link);
@@ -560,10 +631,15 @@ impl RnsNode {
                         }
                         Ev::Request {
                             token,
+                            destination,
                             requester,
                             path,
                             data,
                         } => {
+                            if nearby.owns(destination) {
+                                nearby.on_request(token, destination, path, data);
+                                continue;
+                            }
                             let Some(name) = paths
                                 .iter()
                                 .find(|(h, _)| *h == path)
@@ -692,6 +768,8 @@ impl RnsNode {
             wifi: wifi_status,
             #[cfg(feature = "rnode")]
             rnode_ifaces: rnode_ids,
+            nearby,
+            peers_dest,
             state,
             tasks,
             stop: Mutex::new(Some(stop_tx)),
@@ -722,6 +800,7 @@ impl RnsNode {
             }
         }
         s.destination_of.retain(|k, _| keep.contains(k));
+        *self.peers_dest.lock().unwrap() = s.destination_of.values().copied().collect();
         s.heard.retain(|k, _| keep.contains(k));
         s.verified.retain(|_, (d, _)| keep.contains(d));
         s.link_to.retain(|k, _| keep.contains(k));
@@ -941,6 +1020,41 @@ impl RnsNode {
         }
     }
 
+    /// Nearby linking: the page opened. Takes an unused pairing address and answers for it ([`nearby`]).
+    pub async fn pair_open(&self, me: PairSelf) -> Result<()> {
+        self.nearby.open(me).await
+    }
+
+    /// Nearby linking: the page closed. Stops announcing and answering; nothing in progress is kept.
+    pub async fn pair_close(&self) {
+        self.nearby.close().await
+    }
+
+    /// Nearby linking: the devices heard nearby that gave their name, while our page is open.
+    pub fn pair_list(&self) -> Vec<NearbyDevice> {
+        self.nearby.list()
+    }
+
+    /// Nearby linking: Link was tapped on the device `id` of [`RnsNode::pair_list`].
+    pub async fn pair_link(&self, id: &str, me: PairSelf) -> Result<()> {
+        self.nearby.link(id, me).await
+    }
+
+    /// Nearby linking: where it stands.
+    pub fn pair_status(&self) -> PairStatus {
+        self.nearby.status()
+    }
+
+    /// Nearby linking: Link (`true`) or Cancel on the words.
+    pub async fn pair_answer(&self, ok: bool) -> Result<()> {
+        self.nearby.answer(ok).await
+    }
+
+    /// The Nearby state itself (tests: the pool, the clock, who was heard).
+    pub fn nearby(&self) -> &Arc<nearby::Nearby> {
+        &self.nearby
+    }
+
     /// Stops the node and its thread.
     pub fn stop(&self) {
         for t in &self.tasks {
@@ -981,7 +1095,7 @@ fn verified_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> 
 }
 
 /// Responses travel as a msgpack value, as RNS packs them; `respond_bytes` sends a msgpack bin. Unwraps it.
-fn unpack_bin(packed: Vec<u8>) -> Result<Vec<u8>> {
+pub(crate) fn unpack_bin(packed: Vec<u8>) -> Result<Vec<u8>> {
     let (len, head) = match packed.first() {
         Some(0xc4) if packed.len() >= 2 => (packed[1] as usize, 2),
         Some(0xc5) if packed.len() >= 3 => (u16::from_be_bytes([packed[1], packed[2]]) as usize, 3),
