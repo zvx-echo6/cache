@@ -276,6 +276,7 @@ void main() {
       await r.sharing.setUp();
       await r.sharing.setKind('notebooks', true);
       await until(() => r.nb.passes >= 1);
+      await r.nb.run();
       final phone = Device(tmp, name: 'phone');
       final b = await phone.book('Trail log');
       await phone.entry(b, 'Arrived');
