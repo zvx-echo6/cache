@@ -1699,6 +1699,8 @@ class WeatherState extends ChangeNotifier {
       logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
       return (got, null);
     } on CacheSearchException catch (e) {
+      // A keyed source with no key is silent: nothing was downloaded and nothing is said about it.
+      if (_failureOf(c, e) == SourceFailure.keyMissing && !keyReady(c)) return (false, null);
       logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
       logError('Live update failed (${e.code})', error: e.message, detail: c.id);
       final who = c.provider.isEmpty ? c.title : c.provider;

@@ -758,7 +758,7 @@ void main() {
       expect(h.core.everythingSeen(), isNot(contains(secret)));
       // the fake core refuses as the real one does when it holds no key
       h.core.keys.remove('firms-viirs-near');
-      expect((await h.weather.updateNow()).failures.single, 'NASA FIRMS for Current location failed: needs a key');
+      expect((await h.weather.updateNow()).failures.single, "NASA FIRMS for Current location failed: couldn't update", reason: 'never "needs a key"');
     });
 
     test('one key serves every source that uses it', () async {

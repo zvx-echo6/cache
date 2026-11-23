@@ -68,11 +68,10 @@ class _SourceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final w = deps.hub.weather;
     final isSite = source.record.isSite;
-    final ready = source.keyAlias == null || w.hasKey(source.keyAlias!);
     return SettingsRow(
       key: ValueKey('road-source-${source.record.kind}-${source.record.id}'),
       title: isSite ? '511 road events' : 'Road work (WZDx)',
-      status: joinParts([_subtitle(source), if (!ready) const [Part('Needs a key', Tone.warn)]]),
+      status: _subtitle(source),
       trailing: Switch(value: _on(w, source), onChanged: (v) => w.setSourcesOn(source.connectors, v)),
       onTap: () => w.setSourcesOn(source.connectors, !_on(w, source)),
       holdLabel: 'Remove',
