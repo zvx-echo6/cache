@@ -41,7 +41,10 @@ class NotebookSyncHost {
     this.debounce = const Duration(seconds: 2),
     this.every = const Duration(minutes: 2),
     this.log,
-  });
+  }) {
+    // The switches are read at once (a file of a few ids): the sharing host asks for them as soon as it starts, before any pass.
+    _readTargets();
+  }
 
   final Directory support;
   final NotebookStore store;
@@ -92,10 +95,10 @@ class NotebookSyncHost {
   /// The folder names (in the share) of the private notebooks that are not switched on: what the engine leaves out.
   List<String> privateOff() => _privateOff;
 
-  Future<void> _readTargets() async {
+  void _readTargets() {
     try {
-      if (!await _targets.exists()) return;
-      final j = jsonDecode(await _targets.readAsString());
+      if (!_targets.existsSync()) return;
+      final j = jsonDecode(_targets.readAsStringSync());
       if (j is Map && j['private_included'] is List) {
         _included
           ..clear()
@@ -115,7 +118,6 @@ class NotebookSyncHost {
   /// A private notebook's "Include in sync and sharing", on or off. Kept; the engine is told which notebooks are left out; a pass
   /// follows. A notebook that is not private is always in, so the switch is only kept.
   Future<void> setIncluded(String notebookId, bool on) async {
-    await _readOnce();
     on ? _included.add(notebookId) : _included.remove(notebookId);
     await _saveTargets();
     await _refreshPrivate();
@@ -153,14 +155,6 @@ class NotebookSyncHost {
   }
 
   // ---- the passes ----
-
-  bool _read = false;
-
-  Future<void> _readOnce() async {
-    if (_read) return;
-    _read = true;
-    await _readTargets();
-  }
 
   /// The pass at start (the notebooks and the share folder are made the same): the helper calls it once sharing is up and again
   /// each time the core has opened, whichever comes last finds both ready; passes that find the kind off or the core not open yet
@@ -214,7 +208,6 @@ class NotebookSyncHost {
     if (!shareOn()) return;
     passes++;
     try {
-      await _readOnce();
       await _refreshPrivate();
       try {
         await prepareShare?.call();

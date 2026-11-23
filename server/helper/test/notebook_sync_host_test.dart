@@ -107,7 +107,12 @@ class Device {
   }
 
   /// This device runs the notebook sync with [share] (as the phone does): everything but the private notebooks.
-  Future<SyncReport> run(Directory share, {Set<String> include = const {}}) => NotebookSyncCore(
+  Future<SyncReport> run(Directory share, {Set<String> include = const {}}) {
+    share.createSync(recursive: true);
+    return _run(share, include);
+  }
+
+  Future<SyncReport> _run(Directory share, Set<String> include) => NotebookSyncCore(
         notebook: store,
         kind: SyncKind.share,
         folder: IoFolder(share.path),
@@ -433,7 +438,6 @@ void main() {
 
       // a restart (a new host over the same folders) reads both again
       final again = rig(server: r.server);
-      await again.nb.start();
       expect(again.nb.included(health.id), isTrue);
       await again.sharing.init();
       expect(opened.last.config['off'], containsPair('notebooks', ['Quokka Log']));
