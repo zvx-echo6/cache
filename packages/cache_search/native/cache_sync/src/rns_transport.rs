@@ -212,6 +212,9 @@ impl Transport for MultiTransport {
             tokio::pin!(over_rns, over_iroh);
             let (mut rns_done, mut iroh_done) = (false, false);
             let mut failure = None;
+            // The other device said "not linked" over Reticulum. That answer is given only to a device it unlinked itself, so
+            // iroh's own refusal (a Gate that says 409 "links reset" for 7 days after a fresh start, or 503) must not replace it.
+            let mut rns_not_linked = false;
             // The first good answer wins and the other is dropped. `closed` (the 403 that can unlink) is set by iroh's Gate and,
             // over Reticulum, by the other device answering the hello "not linked" (the engine still waits for two, 10 minutes apart).
             loop {
@@ -225,6 +228,7 @@ impl Transport for MultiTransport {
                             }
                             Err(e) => {
                                 if cache_rns::is_not_linked(&e) {
+                                    rns_not_linked = true;
                                     closed.store(403, Ordering::Relaxed);
                                 }
                                 failure = failure.or(Some(e));
@@ -244,6 +248,9 @@ impl Transport for MultiTransport {
                     }
                 }
                 if rns_done && iroh_done {
+                    if rns_not_linked {
+                        closed.store(403, Ordering::Relaxed);
+                    }
                     return Err(failure.unwrap_or_else(|| anyhow!("not reachable")));
                 }
             }
