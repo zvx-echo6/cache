@@ -53,12 +53,30 @@ void main() {
     expect(find.text('Add to Library'), findsOneWidget);
     expect(find.text('READY-MADE COLLECTIONS · FREE FROM KIWIX'), findsOneWidget);
     expect(find.text('Wikivoyage - Europe'), findsNWidgets(2));
-    expect(find.text('Selection of Europe destinations from Wikivoyage · 367 MB'), findsOneWidget);
-    expect(find.text('Selection of Europe destinations from Wikivoyage · 79.7 MB'), findsOneWidget);
+    expect(find.text('Selection of Europe destinations from Wikivoyage · Full · 367 MB'), findsOneWidget);
+    expect(find.text('Selection of Europe destinations from Wikivoyage · No pictures · 79.7 MB'), findsOneWidget);
     expect(find.byTooltip('Download Wikivoyage - Europe'), findsNWidgets(2));
     expect(find.text('English'), findsOneWidget); // language chip
     expect(find.text('Stack Exchange'), findsOneWidget);
     expect(find.text('Medicine'), findsOneWidget);
+  });
+
+  testWidgets('Add to Library: a Kiwix row shows its flavour before the size, and a row with no flavour shows none', (tester) async {
+    wide(tester);
+    final b = make(recorded);
+    await tester.runAsync(b.init);
+    await tester.pumpWidget(app(AddToLibraryScreen(browse: b)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Full · 367 MB'), findsOneWidget);
+    expect(find.textContaining('No pictures · 79.7 MB'), findsOneWidget);
+
+    Future<String> noFlavour(Uri u) async => (await recorded(u)).replaceAll('<flavour>maxi</flavour>', '<flavour></flavour>');
+    final b2 = make(noFlavour);
+    await tester.runAsync(b2.init);
+    await tester.pumpWidget(app(AddToLibraryScreen(browse: b2)));
+    await tester.pumpAndSettle();
+    expect(find.text('Selection of Europe destinations from Wikivoyage · 367 MB'), findsOneWidget);
+    expect(find.textContaining('Full'), findsNothing);
   });
 
   testWidgets('a collection\'s download button opens the download pop-up with its size and the storage after', (tester) async {
