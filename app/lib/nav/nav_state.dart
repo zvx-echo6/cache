@@ -362,6 +362,17 @@ class NavState extends ChangeNotifier {
     if (phase == NavPhase.previewing) await _fetchRoutes();
   }
 
+  /// Move the stop at [from] to the place [to] in the list (the place it ends up in, after it is taken out). The route is worked
+  /// out again at once, as after [removeStop]. Not while guiding, and a move to the same place or out of range changes nothing.
+  Future<void> reorderStop(int from, int to) async {
+    if (guiding || from == to || from < 0 || to < 0 || from >= stops.length || to >= stops.length) return;
+    final next = [...stops];
+    next.insert(to, next.removeAt(from));
+    stops = next;
+    notifyListeners();
+    if (phase == NavPhase.previewing) await _fetchRoutes();
+  }
+
   List<Map<String, dynamic>> _via({bool skipPassed = false}) => [
         for (final (i, s) in stops.indexed)
           if (!skipPassed || !_passedStops.contains(i)) s.toEnd(),
