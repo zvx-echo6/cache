@@ -9,8 +9,7 @@ import 'road_sources.dart';
 ///
 /// The Idaho definitions keep every word the model reads exactly as the published ones (id, title, provider, description, the item label
 /// and fields, the order, the limit): the assistant's tool definition lists source ids and descriptions, so nothing there may change.
-/// The only differences from the published Idaho winter roads definition are the address (the v3 resource, decided) and one added
-/// "Details" field the v3 resource gives. See [kLegacyIdaho].
+/// Idaho's winter roads definition is the published one exactly (the v2 address and fields). See [kLegacyIdaho].
 
 /// What the assistant already knows Idaho's 511 sources as. The published catalogue's entries, kept so the model's tool definition is
 /// the same word for word.
@@ -163,6 +162,8 @@ Map<String, dynamic>? road511ConditionsDef(RoadSite site) {
   if (res == null) return null;
   final l = legacyNamesFor(site);
   final name = site.name;
+  // Idaho keeps today's published winter roads definition exactly (the v2 address and its fields): the model reads it.
+  if (l != null) return _idahoWinterRoads(site);
   return {
     'format': 1,
     'id': conditionsIdOf(site),
@@ -242,10 +243,8 @@ Map<String, dynamic>? road511ConditionsDef(RoadSite site) {
               {'path': 'Special Conditions'},
             ],
           },
-          if (l == null) ...[
-            {'label': 'Condition', 'path': 'Condition'},
-            {'label': 'Visibility', 'path': 'Visibility'},
-          ],
+          {'label': 'Condition', 'path': 'Condition'},
+          {'label': 'Visibility', 'path': 'Visibility'},
           {'label': 'Area', 'path': 'AreaName'},
           {'label': 'Details', 'path': 'Description', 'max_chars': 300},
           {'label': 'Updated', 'path': 'LastUpdated', 'time': {'in': 'unix', 'zone': 'place', 'out': '%Y-%m-%d %H:%M'}},
@@ -254,6 +253,66 @@ Map<String, dynamic>? road511ConditionsDef(RoadSite site) {
     ],
   };
 }
+
+/// The published Idaho winter roads definition (idaho511-winter-roads), word for word, on the one Idaho key.
+Map<String, dynamic> _idahoWinterRoads(RoadSite site) => {
+  'format': 1,
+  'id': kLegacyIdaho.conditionsId,
+  'title': kLegacyIdaho.conditionsTitle,
+  'provider': kLegacyIdaho.provider,
+  'description': kLegacyIdaho.conditionsDescription,
+  'attribution': kLegacyIdaho.conditionsAttribution,
+  'request': {'url': 'https://${site.host}/api/v2/get/winterroads?key={api_key}&format=json'},
+  'api_key': {'alias': site.keyAlias, 'required': true},
+  'refresh_minutes': 15,
+  'quota': {'per_minute': 4, 'per_day': 400, 'per_month': 8000},
+  'validity': {'fixed_hours': 3},
+  'require': ['[0]'],
+  'items': [
+    {
+      'each': '^',
+      'key': {
+        'first_of': [
+          {'path': 'Id'},
+          {'path': 'ID'},
+        ],
+      },
+      'label': {
+        'template': '{road}: {loc}',
+        'vars': {
+          'road': {'path': 'RoadwayName'},
+          'loc': {'path': 'LocationDescription'},
+        },
+      },
+      'time': {'path': 'LastUpdated', 'time': {'in': 'unix', 'out': 'datetime'}},
+      'fields': [
+        {
+          'label': 'Overall status',
+          'first_of': [
+            {'path': 'OverallStatus'},
+            {'path': 'Overall Status'},
+          ],
+        },
+        {
+          'label': 'Weather',
+          'first_of': [
+            {'path': 'WeatherConditions'},
+            {'path': 'Weather Conditions'},
+          ],
+        },
+        {
+          'label': 'Special conditions',
+          'first_of': [
+            {'path': 'SpecialConditions'},
+            {'path': 'Special Conditions'},
+          ],
+        },
+        {'label': 'Area', 'path': 'AreaName'},
+        {'label': 'Updated', 'path': 'LastUpdated', 'time': {'in': 'unix', 'zone': 'place', 'out': '%Y-%m-%d %H:%M'}},
+      ],
+    },
+  ],
+};
 
 /// [def] as the text the core reads.
 String defText(Map<String, dynamic> def) => jsonEncode(def);

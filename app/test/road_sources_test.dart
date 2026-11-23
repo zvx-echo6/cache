@@ -168,7 +168,7 @@ void main() {
       expect((ev['request'] as Map)['url'], 'https://511.idaho.gov/api/v2/get/event?key={api_key}&format=json');
       final cond = road511ConditionsDef(f.siteByHost('511.idaho.gov')!)!;
       expect(cond['id'], 'idaho511-winter-roads');
-      expect((cond['request'] as Map)['url'], 'https://511.idaho.gov/api/v3/get/winterroads?key={api_key}&format=json');
+      expect((cond['request'] as Map)['url'], 'https://511.idaho.gov/api/v2/get/winterroads?key={api_key}&format=json');
     });
 
     test('every site gets an events definition on its own host and key; conditions only where the data file names them', () {
@@ -181,7 +181,7 @@ void main() {
         expect(app.length, lessThanOrEqualTo(8), reason: 'the core allows 8 app names');
         final cond = road511ConditionsDef(s);
         expect(cond == null, s.conditions == null);
-        if (cond != null) expect((cond['request'] as Map)['url'], 'https://${s.host}/api/v3/get/${s.conditions}?key={api_key}&format=json');
+        if (cond != null) expect((cond['request'] as Map)['url'], 'https://${s.host}/api/${s.host == '511.idaho.gov' ? 'v2' : 'v3'}/get/${s.conditions}?key={api_key}&format=json');
         if (s.host != '511.idaho.gov') {
           expect(jsonEncode(ev).toLowerCase(), isNot(contains('free')), reason: 'no word "free" outside the published Idaho text');
           if (cond != null) expect(jsonEncode(cond).toLowerCase(), isNot(contains('free')));

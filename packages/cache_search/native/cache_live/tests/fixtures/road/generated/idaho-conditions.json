@@ -6,7 +6,7 @@
   "description": "statewide Idaho winter road conditions from 511 (dry, wet, snow, ice, closed) by road section; the same list for every place; needs a free 511 developer key",
   "attribution": "Road condition data from Idaho 511 (511.idaho.gov), Idaho Transportation Department; use is subject to the 511 developer terms",
   "request": {
-    "url": "https://511.idaho.gov/api/v3/get/winterroads?key={api_key}&format=json"
+    "url": "https://511.idaho.gov/api/v2/get/winterroads?key={api_key}&format=json"
   },
   "api_key": {
     "alias": "road511.511.idaho.gov",
@@ -34,59 +34,19 @@
           },
           {
             "path": "ID"
-          },
-          {
-            "template": "{road}: {loc}",
-            "vars": {
-              "road": {
-                "path": "RoadwayName"
-              },
-              "loc": {
-                "path": "LocationDescription"
-              }
-            }
-          },
-          {
-            "template": "{area}: {loc}",
-            "vars": {
-              "area": {
-                "path": "AreaName"
-              },
-              "loc": {
-                "path": "LocationDescription"
-              }
-            }
           }
         ]
       },
       "label": {
-        "first_of": [
-          {
-            "template": "{road}: {loc}",
-            "vars": {
-              "road": {
-                "path": "RoadwayName"
-              },
-              "loc": {
-                "path": "LocationDescription"
-              }
-            }
+        "template": "{road}: {loc}",
+        "vars": {
+          "road": {
+            "path": "RoadwayName"
           },
-          {
-            "template": "{area}: {loc}",
-            "vars": {
-              "area": {
-                "path": "AreaName"
-              },
-              "loc": {
-                "path": "LocationDescription"
-              }
-            }
-          },
-          {
+          "loc": {
             "path": "LocationDescription"
           }
-        ]
+        }
       },
       "time": {
         "path": "LastUpdated",
@@ -132,11 +92,6 @@
         {
           "label": "Area",
           "path": "AreaName"
-        },
-        {
-          "label": "Details",
-          "path": "Description",
-          "max_chars": 300
         },
         {
           "label": "Updated",

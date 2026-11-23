@@ -189,22 +189,20 @@ fn idaho_work_zone_feed_gives_the_model_what_the_published_definition_gave_it() 
 }
 
 #[test]
-fn idaho_winter_roads_differ_from_the_published_definition_by_one_added_details_field() {
-    let port = serve(fixture("conditions-v3.json"));
-    let published = Env::new("wr-pub", &json_fixture("idaho511-winter-roads.published.json"), port);
-    let now = Env::new("wr-new", &generated("idaho-conditions.json"), port);
-    let (a, b) = (now.fetch(), published.fetch());
-    let (ms, _) = now.model();
-    let (ps, _) = published.model();
-    assert_eq!(ms, ps, "the tool definition the model reads");
-    assert_eq!(a["items"].as_array().unwrap().len(), 2);
-    for (x, y) in a["items"].as_array().unwrap().iter().zip(b["items"].as_array().unwrap()) {
-        assert_eq!(x["label"], y["label"]);
-        let mut fx = x["fields"].as_object().unwrap().clone();
-        let details = fx.remove("Details");
-        assert!(details.is_some(), "the v3 resource gives a description");
-        assert_eq!(&Value::Object(fx), &y["fields"]);
+fn idaho_winter_roads_give_the_model_what_the_published_definition_gave_it_byte_for_byte() {
+    // answers in both the v2 shape the published definition reads and the v3 shape; the definitions read them the same
+    for file in ["conditions-v3.json", "conditions-idaho-v2.json"] {
+        let port = serve(fixture(file));
+        let published = Env::new("wr-pub", &json_fixture("idaho511-winter-roads.published.json"), port);
+        let now = Env::new("wr-new", &generated("idaho-conditions.json"), port);
+        let (a, b) = (now.fetch(), published.fetch());
+        assert_eq!(a["items"], b["items"], "{file}");
+        let (ms, mr) = now.model();
+        let (ps, pr) = published.model();
+        assert_eq!(ms, ps, "the tool definition the model reads");
+        assert_eq!(mr, pr, "the tool result the model reads");
     }
+    assert_eq!(generated("idaho-conditions.json")["request"]["url"], "https://511.idaho.gov/api/v2/get/winterroads?key={api_key}&format=json");
 }
 
 #[test]
@@ -255,8 +253,7 @@ fn winter_road_conditions_read_with_and_without_an_id_an_area_name_or_geometry()
     let env = Env::new("c-full", &generated("idaho-conditions.json"), serve(fixture("conditions-v3.json")));
     let got = env.fetch();
     assert_eq!(item(&got, "c1")["label"], "I-84: Sample section");
-    assert!(item(&got, "c2")["fields"].get("Visibility").is_none(), "Idaho's published fields stay as they were");
-    assert_eq!(item(&got, "c2")["fields"]["Details"], "Sample: snow packed.");
+    assert!(item(&got, "c2")["fields"].get("Details").is_none(), "Idaho's published fields stay as they were");
     // Ontario: no Id and no AreaName, a Condition: the key is made from the road and the place
     let on = Env::new("c-on", &generated("ontario-conditions.json"), serve(fixture("conditions-ontario.json")));
     let got = on.fetch();
