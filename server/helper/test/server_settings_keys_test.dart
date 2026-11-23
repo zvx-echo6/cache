@@ -352,10 +352,9 @@ void main() {
   });
 
   test('setKeyOnFromBrowser: a tick whose key has left the keystore can still be cleared, and nothing else can be unticked blind', () async {
-    store.set('live.key.owm', 'OWM-SECRET-2');
     await sync.start();
-    await sync.setKeyOnFromBrowser('peerA', 'live.key.owm', true);
-    store.delete('live.key.owm');
+    // a single tick kept for a key that is not in the keystore (the keystore never held it, or it has left)
+    await sync.setKeyOn('peerA', 'live.key.owm', true);
     expect(sync.keyNames(), isEmpty);
     await sync.setKeyOnFromBrowser('peerA', 'live.key.owm', false);
     expect(sync.keyOn('peerA', 'live.key.owm'), isFalse);

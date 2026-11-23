@@ -242,11 +242,11 @@ class ServerSettingsSync {
   }
 
   /// A browser's tick: [setKeyOn] for a linked device and a key this server holds that can sync, answered with [keyNames] (names and
-  /// ticks only). A tick that is already on for a key no longer held can still be cleared; any other name is refused.
+  /// ticks only). A single tick kept for a key no longer held can still be cleared (a device with every key ticked has no such ticks); any other name is refused.
   Future<List<Map<String, Object?>>> setKeyOnFromBrowser(String peer, String name, bool on) async {
     if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
     final held = keyNames().any((k) => k['name'] == name);
-    if (!held && !(!on && keyOn(peer, name))) throw CacheSearchException('bad_args', 'No such key to send: ${_shown(name)}');
+    if (!held && !(!on && (_kept.keysFor[peer]?.contains(name) ?? false))) throw CacheSearchException('bad_args', 'No such key to send: ${_shown(name)}');
     await setKeyOn(peer, name, on);
     return keyNames();
   }
