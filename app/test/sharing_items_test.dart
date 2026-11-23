@@ -530,9 +530,7 @@ void main() {
       await tester.pump();
     }
 
-    // Nothing is shared with anyone: every Sync now says so, on the main page and on the device's page.
-    await tapAndRead(find.byKey(const ValueKey('sync-all')));
-    expect(find.text('Nothing is shared yet'), findsOneWidget);
+    // Nothing is shared with anyone: Sync now says so on the device's page.
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
     await tapAndRead(find.byKey(const ValueKey('device-sync')));
@@ -546,6 +544,12 @@ void main() {
     await tapAndRead(find.byKey(const ValueKey('device-sync')));
     expect(find.text('Up to date'), findsOneWidget);
     expect(find.text('Nothing is shared yet'), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tapAndRead(find.byKey(const ValueKey('sync-all')));
+    expect(find.text('Up to date'), findsOneWidget, reason: 'Sync all now on the main page says it too');
+    await tester.tap(find.byKey(const ValueKey('peer-p1')));
+    await tester.pumpAndSettle();
 
     // Something to fetch from the other device: the existing line.
     r.sync.shares.first['pending_files'] = 2;
