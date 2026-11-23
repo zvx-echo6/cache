@@ -40,6 +40,7 @@ import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
 import '../nav/elevation/route_elevation.dart';
+import '../nav/point_facts/point_facts.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
@@ -456,6 +457,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   // ---- guidance: the elevation panel and the route mini map ----
 
+  late final PointFacts _pointFacts = PointFacts.fromEngine(maps.engine);
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
   RouteSnapshotter get _snapshotter => widget.snapshotter ?? platformRouteSnapshotter();
 
@@ -2757,7 +2759,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final VoidCallback? onOpen = entry != null
           ? () => open!(entry)
           : (book != null && openBook != null ? () => openBook(book) : null);
-      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null, facts: _pointFacts);
     }
     if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
     return null;
