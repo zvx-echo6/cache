@@ -57,6 +57,18 @@ const hospital = MapPlace(
   matched: 'name',
 );
 
+const clinic = MapPlace(
+  id: 'place:osm:n5',
+  type: 'place',
+  name: 'Minidoka Clinic',
+  kind: 'Clinic',
+  category: 'clinic',
+  address: '1 Main St, Rupert, ID',
+  lat: 42.6,
+  lon: -113.7,
+  matched: 'name',
+);
+
 Widget _panel(NavState nav, {double scale = 1.0}) => MaterialApp(
       theme: buildTheme(CacheThemeId.light),
       home: Builder(
@@ -378,13 +390,28 @@ void main() {
       final b = fresh();
       await b.restored;
       expect(b.mode, 'offroad_moto');
-      expect(b.landAccess, 'emergency');
+      expect(b.landAccess, 'pragmatic', reason: 'Emergency is for one trip: a restart is Standard');
       expect(b.avoidHighways, isTrue);
       expect(b.avoidTolls, isFalse);
       // ATV comes back to the side-by-side, Walk to Pedestrian
       expect(b.modeFor('atv'), 'offroad_sxs');
       expect(b.modeFor('walk'), 'walk');
       expect(b.modeFor('bike'), 'offroad_moto');
+      b.dispose();
+    });
+
+    test('Emergency does not survive a restart, even from a file that says it does', () async {
+      final a = fresh();
+      await a.restored;
+      await a.setMode('offroad_4w');
+      await a.setLandAccess('emergency');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(File('${prefsDir.path}/${TravelPrefs.fileName}').readAsStringSync(), contains('"land_access":"pragmatic"'));
+      a.dispose();
+      File('${prefsDir.path}/${TravelPrefs.fileName}').writeAsStringSync('{"mode": "offroad_4w", "land_access": "emergency"}');
+      final b = fresh();
+      await b.restored;
+      expect((b.mode, b.landAccess), ('offroad_4w', 'pragmatic'));
       b.dispose();
     });
 
@@ -427,6 +454,39 @@ void main() {
       expect((b.mode, b.landAccess, b.avoidTolls), ('drive', 'pragmatic', true));
       a.dispose();
       b.dispose();
+    });
+  });
+
+  group('Emergency lasts for one trip', () {
+    test('a new destination goes back to Standard; the same trip and a change of mode keep Emergency', () async {
+      final nav = _Nav(backend, location);
+      await nav.openDirections(hospital);
+      await nav.setMode('offroad_4w');
+      await nav.setLandAccess('emergency');
+      expect(nav.landAccess, 'emergency');
+      // another way of travel in the same trip keeps it
+      await nav.setMode('offroad_moto');
+      expect(nav.landAccess, 'emergency');
+      // the same destination opened again, while still previewing it: the same trip
+      await nav.openDirections(hospital);
+      expect(nav.landAccess, 'emergency');
+      // a different destination is a new trip
+      await nav.openDirections(clinic);
+      expect(nav.landAccess, 'pragmatic');
+      expect(nav.mode, 'offroad_moto', reason: 'the way of travel is still remembered');
+      expect(backend.landAccesses.last, 'pragmatic');
+      nav.dispose();
+    });
+
+    test('after the trip is closed, asking for directions again starts on Standard', () async {
+      final nav = _Nav(backend, location);
+      await nav.openDirections(hospital);
+      await nav.setMode('offroad_4w');
+      await nav.setLandAccess('emergency');
+      nav.cancelDirections();
+      await nav.openDirections(hospital);
+      expect(nav.landAccess, 'pragmatic');
+      nav.dispose();
     });
   });
 }

@@ -758,7 +758,13 @@ class NavState extends ChangeNotifier {
   /// the route first); if this is reached while guiding all the same, guidance is ended first, so its position service is
   /// never left running behind a preview.
   Future<void> openDirections(MapPlace to) async {
+    // Emergency routing lasts for one trip: a destination that is not the one being previewed starts a trip on Standard.
+    final sameTrip = phase == NavPhase.previewing && selected?.id == to.id;
     if (guiding) await end();
+    if (!sameTrip && landAccess != 'pragmatic') {
+      landAccess = 'pragmatic';
+      _keptLand = 'pragmatic';
+    }
     selected = to;
     phase = NavPhase.previewing;
     searchOpen = false;
@@ -789,7 +795,8 @@ class NavState extends ChangeNotifier {
   Future<void> setTravel(String t) => setMode(modeFor(t));
 
   /// The land access of off-road routes (Standard is `pragmatic`, Emergency `emergency`); routes again when an off-road route is
-  /// shown. Remembered across restarts.
+  /// shown. Lasts for the current trip: a new destination and a restart both go back to Standard (the way of travel and its options are
+  /// what is remembered).
   Future<void> setLandAccess(String l) async {
     if (l == landAccess) return;
     landAccess = l;
@@ -821,7 +828,7 @@ class NavState extends ChangeNotifier {
       mode: _keptMode,
       avoidHighways: avoidHighways,
       avoidTolls: avoidTolls,
-      landAccess: _keptLand,
+      landAccess: 'pragmatic', // Emergency is for one trip: never kept for the next start
       walkOffroad: _walkOffroad,
       bikeDirt: _bikeDirt,
       atvSideBySide: _atvSideBySide,
@@ -839,8 +846,8 @@ class NavState extends ChangeNotifier {
     _atvSideBySide = c.atvSideBySide;
     avoidHighways = c.avoidHighways;
     avoidTolls = c.avoidTolls;
-    landAccess = c.landAccess;
-    _keptLand = c.landAccess;
+    landAccess = 'pragmatic'; // a file from before Emergency became per-trip may still say emergency: not carried over
+    _keptLand = 'pragmatic';
     mode = c.mode;
     _keptMode = c.mode;
     notifyListeners();
