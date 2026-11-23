@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -251,6 +252,26 @@ class MainActivity : FlutterActivity() {
             }
         }
         FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
+        // The Wi-Fi multicast lock: Android drops multicast packets unless an app holds one, and Reticulum's local discovery
+        // (sharing_state.dart) needs them. Taken just before the sharing engine opens and let go when it stops.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/multicast")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "acquire" -> {
+                        try {
+                            acquireMulticast()
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "release" -> {
+                        releaseMulticast()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -321,11 +342,36 @@ class MainActivity : FlutterActivity() {
         openChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/multicast").setMethodCallHandler(null)
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
         SharedEngine.activityEnded()
+    }
+
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    private fun acquireMulticast() {
+        val held = multicastLock
+        if (held != null && held.isHeld) return
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val lock = wifi.createMulticastLock("cache-rns")
+        lock.setReferenceCounted(false)
+        lock.acquire()
+        multicastLock = lock
+    }
+
+    private fun releaseMulticast() {
+        val held = multicastLock
+        if (held != null && held.isHeld) held.release()
+        multicastLock = null
+    }
+
+    // A backstop: the lock never outlives the screen that took it.
+    override fun onDestroy() {
+        releaseMulticast()
+        super.onDestroy()
     }
 
     // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not

@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:cache/platform/multicast_lock.dart';
 
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
@@ -121,6 +123,48 @@ void main() {
     expect(configs[true]!['dht'], false);
     // Elsewhere there is no key: the engine's default (on) stands.
     expect(configs[false]!.containsKey('dht'), false);
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
+
+  testWidgets('Reticulum Wi-Fi discovery is on where the engine has it, and Android holds the multicast lock while the engine runs', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final calls = <String>[];
+    final channel = MethodChannel('test/multicast');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (c) async {
+      calls.add(c.method);
+      return true;
+    });
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    Future<Map<String, Object?>> open({required bool reticulum, MulticastLock? lock}) async {
+      late Map<String, Object?> config;
+      final s = SharingState(
+        policy: r.policy,
+        supportDir: () async => r.dir,
+        kinds: const [],
+        phone: true,
+        reticulum: reticulum,
+        multicast: lock,
+        opener: (c) async {
+          config = c;
+          // the lock is held before the engine opens
+          if (lock != null) expect(calls, ['acquire']);
+          return r.sync;
+        },
+      );
+      await tester.runAsync(s.setUp);
+      s.dispose();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      return config;
+    }
+
+    // Android: on, the lock taken before the engine opens and let go when it stops.
+    expect((await open(reticulum: true, lock: MulticastLock(channel: channel)))['reticulum'], true);
+    expect(calls, ['acquire', 'release']);
+    // iOS and the browser: off, no lock.
+    calls.clear();
+    expect((await open(reticulum: false))['reticulum'], false);
+    expect(calls, isEmpty);
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });

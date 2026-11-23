@@ -425,18 +425,19 @@ class _SharingPageState extends State<SharingPage> {
   }
 }
 
-/// "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
+/// "Same Wi-Fi · Last seen just now", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
 /// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
 /// via a relay"), not as a connection.
 List<Part> peerStatus(Map<String, dynamic> p) {
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
   final relay = p['via'] == 'relay';
+  final wifi = p['via'] == 'wifi';
   final lastSeen = seen == null ? 'Never connected since linking' : 'Last seen ${_ago(seen)}';
   if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · $lastSeen')];
   if (seen == null) return const [Part('Checking…')];
-  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : 'direct'}')];
-  return [Part(relay ? 'Connected through a relay' : 'Connected directly', Tone.ok), Part(' · $lastSeen')];
+  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : (wifi ? 'Wi-Fi' : 'direct')}')];
+  return [Part(relay ? 'Connected through a relay' : (wifi ? 'Same Wi-Fi' : 'Connected directly'), Tone.ok), Part(' · $lastSeen')];
 }
 
 /// Asks before a linked device is unlinked. True when the person said Unlink.

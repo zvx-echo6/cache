@@ -187,6 +187,8 @@ class SharingHost {
         'off': {for (final k in table.kinds) for (final id in k.shares.keys) id: _sentOff[id] = _offOf(k, id)},
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
+        // Reticulum's Wi-Fi discovery on Cache on Linux (a peer it finds says `via: 'wifi'`); needs no lock and no open port.
+        'reticulum': true,
         ...engineConfig,
       });
       _core = core;

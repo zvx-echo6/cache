@@ -96,7 +96,7 @@ void main() {
   void appLeaves({bool linked = true, bool folder = true, bool enabled = true}) {
     File('${support.path}/sharing.json').writeAsStringSync(jsonEncode({'enabled': enabled}));
     Directory('${support.path}/background').createSync(recursive: true);
-    File('${support.path}/background/sync-config.json').writeAsStringSync(jsonEncode({'dir': '/old/place/sync', 'name': 'Phone', 'dht': false, 'only': {'indexes': <String>[]}}));
+    File('${support.path}/background/sync-config.json').writeAsStringSync(jsonEncode({'dir': '/old/place/sync', 'name': 'Phone', 'dht': false, 'reticulum': true, 'only': {'indexes': <String>[]}}));
     final shared = Directory('${support.path}/models')..createSync();
     if (folder) File('${shared.path}/a.gguf').writeAsStringSync('x');
     Directory('${support.path}/sync').createSync();
@@ -279,6 +279,7 @@ void main() {
       expect(opened!['interval_secs'], 3600, reason: 'one round, not one every 30 seconds');
       expect(opened!['lifetime_secs'], 240 + 90, reason: 'the engine ends itself if the run is cut off');
       expect(opened!['dht'], false);
+      expect(opened!['reticulum'], false, reason: 'no multicast runs without the lock, which only the app holds');
       expect(opened!['only'], {'indexes': <String>[]});
       expect(core.calls, contains('set_policy'));
       expect(core.closed, isTrue);
