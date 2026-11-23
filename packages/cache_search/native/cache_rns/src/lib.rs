@@ -2,11 +2,13 @@
 //!
 //! - **Identity.** A device's Reticulum identity is derived from its iroh secret key, so there is nothing new to keep or back
 //!   up, and reinstalling with the same key gives the same Reticulum address.
-//! - **Vouching.** A device announces its destination with a signature by its iroh key over that destination. Only a device
-//!   that already holds the key in its link list can check it, so the announce tells no one else which Cache device it is.
+//! - **Empty announces.** A device's announce carries no app data: no name and no signature (owner, 2026-11-22). Each linked
+//!   device is stored with its Reticulum destination; hearing an announce only marks that destination reachable, and on what.
+//! - **The hello.** The device key's signature moved from the announce into the first message inside a link: right after it
+//!   identifies, the opener sends `/cache/hello` with its device key and a signature over its Reticulum identity. Nothing
+//!   else is answered on a link until a hello from a linked device has checked out.
 //! - **Requests.** Cache's requests (pairing, the index, secrets) are Reticulum link requests on paths the caller names.
-//!   A request is answered only for a requester that identified itself on the link with the identity of a linked device,
-//!   except on the paths the caller marks as open (pairing).
+//!   A request is answered only on a hello-verified link, except on the paths the caller marks as open (pairing).
 //! - **Notify.** "Something changed" goes over the link's Channel, which is acknowledged and ordered. Raw link packets are
 //!   never used: they are not proven by the side that opened a link and are not retried (trial R1).
 
@@ -20,7 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use iroh::{PublicKey, SecretKey, Signature};
 use personal_rns::identity::IdentityHash;
 use personal_rns::prelude::*;
-use personal_rns::routing::announce::emit::AnnounceAppDataBytes;
+use personal_rns::wifi_auto::AutoWifiStatus;
 use personal_rns::routing::links::channel::MessageType;
 use personal_rns::routing::links::LinkId;
 use personal_rns::routing::request_handlers::{RequestPathHash, RequestPolicy};
@@ -40,8 +42,11 @@ pub const NOTIFY_TYPE: MessageType = MessageType(0x0C01);
 
 const IDENTITY_CONTEXT: &str =
     "cache_rns 2026-11-14 reticulum identity from the iroh device key v1";
-const VOUCH_PREFIX: &[u8] = b"cache_rns vouch v1";
+const VOUCH_PREFIX: &[u8] = b"cache_rns vouch v2: hello on a link, signed over the Reticulum identity";
+/// The always-open path for the first message on a link ([`hello`]).
+pub const HELLO_PATH: &str = "/cache/hello";
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
+const PATH_EVERY: Duration = Duration::from_secs(5);
 
 /// The 64-byte Reticulum identity secret (X25519 then Ed25519, RNS's layout) for a device's iroh key.
 pub fn identity_secret_for(device: &SecretKey) -> [u8; 64] {
@@ -53,24 +58,73 @@ pub fn identity_secret_for(device: &SecretKey) -> [u8; 64] {
     out
 }
 
-fn vouch_message(destination: &DestinationHash) -> Vec<u8> {
+fn vouch_message(identity: &IdentityHash) -> Vec<u8> {
     let mut m = VOUCH_PREFIX.to_vec();
-    m.extend_from_slice(destination.as_bytes());
+    m.extend_from_slice(identity.as_bytes());
     m
 }
 
-/// The announce data: the device key's signature over this destination.
-pub fn vouch(device: &SecretKey, destination: &DestinationHash) -> [u8; 64] {
-    device.sign(&vouch_message(destination)).to_bytes()
+/// The device key's signature over the Reticulum identity a link proved (the hello's proof).
+pub fn vouch(device: &SecretKey, identity: &IdentityHash) -> [u8; 64] {
+    device.sign(&vouch_message(identity)).to_bytes()
 }
 
-/// Whether `app_data` is `peer`'s vouch for `destination`.
-pub fn check_vouch(peer: &PublicKey, destination: &DestinationHash, app_data: &[u8]) -> bool {
-    let Ok(bytes) = <[u8; 64]>::try_from(app_data) else {
+/// Whether `sig` is `peer`'s vouch for `identity`.
+pub fn check_vouch(peer: &PublicKey, identity: &IdentityHash, sig: &[u8]) -> bool {
+    let Ok(bytes) = <[u8; 64]>::try_from(sig) else {
         return false;
     };
-    peer.verify(&vouch_message(destination), &Signature::from_bytes(&bytes))
+    peer.verify(&vouch_message(identity), &Signature::from_bytes(&bytes))
         .is_ok()
+}
+
+/// The hello body: the device's public key then its vouch (32 + 64 bytes).
+fn hello_body(device: &SecretKey, identity: &IdentityHash) -> Vec<u8> {
+    let mut b = device.public().as_bytes().to_vec();
+    b.extend_from_slice(&vouch(device, identity));
+    b
+}
+
+fn parse_hello(body: &[u8]) -> Option<(PublicKey, [u8; 64])> {
+    if body.len() != 96 {
+        return None;
+    }
+    let key = PublicKey::from_bytes(<&[u8; 32]>::try_from(&body[..32]).ok()?).ok()?;
+    let sig = <[u8; 64]>::try_from(&body[32..]).ok()?;
+    Some((key, sig))
+}
+
+/// The Reticulum identity hash of a device (derived from its iroh key).
+pub fn identity_hash_for(device: &SecretKey) -> IdentityHash {
+    personal_rns::identity::PrivateIdentityMaterial::from_bytes(identity_secret_for(device))
+        .identity_hash()
+}
+
+/// The Reticulum destination of a device (what its linked devices store, and what a link code carries).
+pub fn destination_for(device: &SecretKey) -> Result<DestinationHash> {
+    let d = PreConfiguredDestination::Single {
+        resource_strategy: ResourceStrategy::AcceptNone,
+        maximum_request_bytes: Default::default(),
+        app_name: APP_NAME,
+        aspects: ASPECTS,
+        identity: Zeroizing::new(identity_secret_for(device)),
+        announce_app_data: b"",
+        proof: ProofStrategy::ProveAll,
+        link_requests: LinkRequestPolicy::AcceptAll,
+        ratchet: RatchetPolicy::NoRatchets,
+        request_endpoints: ServeMyRequestEndpoints::No,
+    };
+    d.destination_hash()
+        .map_err(|e| anyhow!("bad destination name: {e:?}"))
+}
+
+/// How a heard announce reached us.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Via {
+    /// Over Wi-Fi/LAN discovery (auto Wi-Fi, or one of its peers).
+    Wifi,
+    /// Over anything else (TCP, hubs, radio).
+    Other,
 }
 
 /// One network attachment.
@@ -80,6 +134,9 @@ pub enum Iface {
     TcpListen(String),
     /// Connect to a TCP listener at this address.
     TcpConnect(String),
+    /// Wi-Fi/LAN auto-discovery (Prns's `AutoWifi`): finds other devices on the local network with no address typed.
+    /// Which discovery group it uses is [`Config::wifi_group`].
+    WifiAuto,
     #[cfg(feature = "rnode")]
     /// An RNode (LoRa), by a name for the interface, where it is, and its radio settings ([`rnode`]).
     RNode { name: String, port: rnode::RNodePort, radio: rnode::Radio },
@@ -105,8 +162,10 @@ pub trait Handler: Send + Sync + 'static {
 pub struct Config {
     pub device: SecretKey,
     pub interfaces: Vec<Iface>,
-    /// Linked devices.
-    pub peers: Vec<PublicKey>,
+    /// Linked devices, each with its Reticulum destination when known (given when linking, over iroh or by the link code).
+    pub peers: Vec<(PublicKey, Option<DestinationHash>)>,
+    /// The Wi-Fi auto discovery group: `None` is Prns's default group.
+    pub wifi_group: Option<Vec<u8>>,
     /// Paths this device answers.
     pub paths: Vec<String>,
     /// Of those, the ones an unlinked device may ask (pairing).
@@ -120,12 +179,14 @@ pub struct Config {
 #[derive(Default)]
 struct State {
     peers: HashSet<[u8; 32]>,
-    /// Linked device -> its vouched destination.
+    /// Linked device -> its stored destination.
     destination_of: HashMap<[u8; 32], DestinationHash>,
-    /// Reticulum identity -> linked device.
-    device_of_identity: HashMap<[u8; 16], PublicKey>,
+    /// Linked devices whose announce has been heard, and how.
+    heard: HashMap<[u8; 32], Via>,
     /// Link -> the identity the other end proved on it.
     identity_on_link: HashMap<LinkId, IdentityHash>,
+    /// Link -> the linked device whose hello checked out on it, and the identity that hello was for.
+    verified: HashMap<LinkId, ([u8; 32], IdentityHash)>,
     /// Our open link to each device.
     link_to: HashMap<[u8; 32], LinkId>,
 }
@@ -133,7 +194,7 @@ struct State {
 enum Ev {
     Announce {
         destination: DestinationHash,
-        app_data: Vec<u8>,
+        via: Via,
     },
     Identified {
         link: LinkId,
@@ -158,7 +219,9 @@ pub struct RnsNode {
     handle: PrnsNodeHandle,
     me: DestinationHash,
     my_identity: IdentityHash,
-    app_data: AnnounceAppDataBytes,
+    device: SecretKey,
+    /// Wi-Fi auto discovery's handle, when attached.
+    wifi: Option<AutoWifiStatus>,
     /// The node's RNode interfaces (slow carriers), as Prns numbered them.
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
@@ -223,6 +286,17 @@ impl RnsNode {
         let rnode_ids: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>> = Arc::default();
         #[cfg(feature = "rnode")]
         let rnode_ids_thread = rnode_ids.clone();
+        let wifi_auto = cfg
+            .interfaces
+            .iter()
+            .any(|i| matches!(i, Iface::WifiAuto))
+            .then(AutoWifi::new);
+        let wifi_status = wifi_auto.as_ref().map(|w| w.status());
+        if let (Some(status), Some(group)) = (&wifi_status, &cfg.wifi_group) {
+            if !status.set_group_id(group) {
+                bail!("the Wi-Fi discovery group is not valid");
+            }
+        }
         let listens: Vec<String> = cfg
             .interfaces
             .iter()
@@ -267,11 +341,14 @@ impl RnsNode {
                             let ev = match event {
                                 PrnsEvent::Diagnostic(Diagnostic::AnnounceHeard {
                                     destination,
-                                    app_data,
+                                    source_interface,
                                     ..
                                 }) => Ev::Announce {
                                     destination,
-                                    app_data: app_data.to_vec(),
+                                    via: match source_interface.kind() {
+                                        Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+                                        _ => Via::Other,
+                                    },
                                 },
                                 PrnsEvent::Diagnostic(Diagnostic::PeerIdentified {
                                     link_id,
@@ -316,6 +393,9 @@ impl RnsNode {
                         interfaces: move |node: &PrnsNodeHandle| {
                             for a in &clients {
                                 node.attach(TcpClientInterface::new(a.clone()));
+                            }
+                            if let Some(w) = wifi_auto {
+                                node.attach(w);
                             }
                         },
                         persistence: NoPersistence,
@@ -369,12 +449,13 @@ impl RnsNode {
         let open: HashSet<String> = cfg.open_paths.iter().cloned().collect();
         let mut paths: Vec<(RequestPathHash, String)> = Vec::new();
         let mut all_paths = cfg.paths.clone();
+        all_paths.push(HELLO_PATH.to_string());
         if cfg.blobs.is_some() {
             all_paths.push(blobs::BLOB_PATH.to_string());
         }
         let store = cfg.blobs.clone();
         for p in &all_paths {
-            let policy = if open.contains(p) {
+            let policy = if open.contains(p) || p == HELLO_PATH {
                 RequestPolicy::AllowAll
             } else {
                 RequestPolicy::RequireIdentified
@@ -385,44 +466,39 @@ impl RnsNode {
                 .map_err(|e| anyhow!("cannot register {p}: {e:?}"))?;
             paths.push((RequestPathHash::of(p), p.clone()));
         }
-        let my_identity = personal_rns::identity::PrivateIdentityMaterial::from_bytes(
-            identity_secret_for(&cfg.device),
-        )
-        .identity_hash();
+        let my_identity = identity_hash_for(&cfg.device);
 
         let state = Arc::new(Mutex::new(State {
-            peers: cfg.peers.iter().map(|p| *p.as_bytes()).collect(),
+            peers: cfg.peers.iter().map(|(p, _)| *p.as_bytes()).collect(),
+            destination_of: cfg
+                .peers
+                .iter()
+                .filter_map(|(p, d)| d.map(|d| (*p.as_bytes(), d)))
+                .collect(),
             ..Default::default()
         }));
 
-        // Events: vouched announces, identities on links, requests, notifications.
+        // Events: heard announces, identities on links, hellos, requests, notifications.
         {
             let state = state.clone();
             let handle = handle.clone();
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
-                        Ev::Announce {
-                            destination,
-                            app_data,
-                        } => {
+                        Ev::Announce { destination, via } => {
                             if destination == me {
                                 continue;
                             }
-                            let peers: Vec<[u8; 32]> =
-                                state.lock().unwrap().peers.iter().copied().collect();
-                            let Some(peer) = peers
-                                .iter()
-                                .filter_map(|b| PublicKey::from_bytes(b).ok())
-                                .find(|p| check_vouch(p, &destination, &app_data))
-                            else {
-                                continue;
-                            };
-                            let identity = handle.destination_identity_hash(destination).await;
+                            // An announce proves nothing about who sent it (it is empty): it only says a stored
+                            // destination can be reached, and on what.
                             let mut s = state.lock().unwrap();
-                            s.destination_of.insert(*peer.as_bytes(), destination);
-                            if let Some(id) = identity {
-                                s.device_of_identity.insert(*id.as_bytes(), peer);
+                            let hit = s
+                                .destination_of
+                                .iter()
+                                .find(|(_, d)| **d == destination)
+                                .map(|(k, _)| *k);
+                            if let Some(k) = hit {
+                                s.heard.insert(k, via);
                             }
                         }
                         Ev::Identified { link, identity } => {
@@ -435,6 +511,7 @@ impl RnsNode {
                         Ev::Closed { link } => {
                             let mut s = state.lock().unwrap();
                             s.identity_on_link.remove(&link);
+                            s.verified.remove(&link);
                             s.link_to.retain(|_, l| *l != link);
                         }
                         Ev::Request {
@@ -450,17 +527,38 @@ impl RnsNode {
                             else {
                                 continue;
                             };
+                            let identity = {
+                                let s = state.lock().unwrap();
+                                requester.or_else(|| s.identity_on_link.get(&token.link_id).copied())
+                            };
+                            if name == HELLO_PATH {
+                                // The first message on a link: the device key and its signature over the identity the
+                                // link proved. Anything that does not check out gets no answer at all.
+                                let verified = identity.and_then(|id| {
+                                    let (device, sig) = parse_hello(&data)?;
+                                    let mut s = state.lock().unwrap();
+                                    if !s.peers.contains(device.as_bytes())
+                                        || !check_vouch(&device, &id, &sig)
+                                    {
+                                        return None;
+                                    }
+                                    s.verified.insert(token.link_id, (*device.as_bytes(), id));
+                                    Some(())
+                                });
+                                if verified.is_some() {
+                                    let _ = handle.respond_bytes(token, b"ok");
+                                }
+                                continue;
+                            }
                             let asker = {
                                 let s = state.lock().unwrap();
-                                let id = requester
-                                    .or_else(|| s.identity_on_link.get(&token.link_id).copied());
-                                id.and_then(|i| s.device_of_identity.get(i.as_bytes()).copied())
-                                    .filter(|p| s.peers.contains(p.as_bytes()))
+                                verified_device(&s, &token.link_id, identity)
                                     .map(Asker::Linked)
                                     .unwrap_or(Asker::Unlinked)
                             };
                             if asker == Asker::Unlinked && !open.contains(&name) {
-                                // Not linked, and not an open path: no answer at all, as the iroh gate refuses the connection.
+                                // No hello from a linked device, and not an open path: no answer at all, as the iroh gate
+                                // refuses the connection.
                                 continue;
                             }
                             if name == blobs::BLOB_PATH {
@@ -488,10 +586,8 @@ impl RnsNode {
                         Ev::Notify { link, data } => {
                             let from = {
                                 let s = state.lock().unwrap();
-                                s.identity_on_link
-                                    .get(&link)
-                                    .and_then(|i| s.device_of_identity.get(i.as_bytes()).copied())
-                                    .filter(|p| s.peers.contains(p.as_bytes()))
+                                let id = s.identity_on_link.get(&link).copied();
+                                verified_device(&s, &link, id)
                             };
                             if let Some(from) = from {
                                 handler.notify(from, data);
@@ -502,10 +598,33 @@ impl RnsNode {
             }));
         }
 
-        // Announces: at start, then every 30 s.
+        // Paths: a stored destination with no path yet gets a standard path request (so a routed destination, behind
+        // ordinary transport nodes, is reachable without its announce having reached us directly).
         {
             let handle = handle.clone();
-            let app_data = announce_data(&cfg.device, &me)?;
+            let state = state.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(PATH_EVERY);
+                loop {
+                    tick.tick().await;
+                    let missing: Vec<([u8; 32], DestinationHash)> = {
+                        let s = state.lock().unwrap();
+                        s.destination_of
+                            .iter()
+                            .filter(|(k, _)| !s.heard.contains_key(*k))
+                            .map(|(k, d)| (*k, *d))
+                            .collect()
+                    };
+                    for (k, d) in missing {
+                        find_path(&handle, &state, k, d).await;
+                    }
+                }
+            }));
+        }
+
+        // Announces (empty app data): at start, then every 30 s.
+        {
+            let handle = handle.clone();
             tasks.push(tokio::spawn(async move {
                 let mut tick = tokio::time::interval(ANNOUNCE_EVERY);
                 loop {
@@ -514,19 +633,19 @@ impl RnsNode {
                         .announce_now(AnnounceNow {
                             destination: me,
                             target: AnnounceTarget::AllInterfaces,
-                            app_data: AnnounceAppData::Data(app_data.clone()),
+                            app_data: AnnounceAppData::Data(Default::default()),
                         })
                         .await;
                 }
             }));
         }
 
-        let app_data = announce_data(&cfg.device, &me)?;
         Ok(RnsNode {
             handle,
             me,
             my_identity,
-            app_data,
+            device: cfg.device.clone(),
+            wifi: wifi_status,
             #[cfg(feature = "rnode")]
             rnode_ifaces: rnode_ids,
             state,
@@ -545,39 +664,70 @@ impl RnsNode {
         self.me
     }
 
-    /// Replaces the list of linked devices.
-    pub fn set_peers(&self, peers: &[PublicKey]) {
+    /// Replaces the list of linked devices (each with its stored destination, when known).
+    pub fn set_peers(&self, peers: &[(PublicKey, Option<DestinationHash>)]) {
         let mut s = self.state.lock().unwrap();
-        s.peers = peers.iter().map(|p| *p.as_bytes()).collect();
+        s.peers = peers.iter().map(|(p, _)| *p.as_bytes()).collect();
         let keep = s.peers.clone();
+        // A destination already stored stays when the caller does not know it (None); a changed one is not heard yet.
+        for (p, d) in peers {
+            if let Some(d) = d {
+                if s.destination_of.insert(*p.as_bytes(), *d) != Some(*d) {
+                    s.heard.remove(p.as_bytes());
+                }
+            }
+        }
         s.destination_of.retain(|k, _| keep.contains(k));
-        s.device_of_identity
-            .retain(|_, p| keep.contains(p.as_bytes()));
+        s.heard.retain(|k, _| keep.contains(k));
+        s.verified.retain(|_, (d, _)| keep.contains(d));
         s.link_to.retain(|k, _| keep.contains(k));
     }
 
-    /// Whether a vouched announce from `peer` has been heard.
-    pub fn knows(&self, peer: &PublicKey) -> bool {
-        self.state
-            .lock()
-            .unwrap()
-            .destination_of
-            .contains_key(peer.as_bytes())
+    /// Whether a path to `peer`'s stored destination is known: its announce was heard (from any number of hops away), or a
+    /// standard path request for it was answered.
+    pub fn reachable(&self, peer: &PublicKey) -> bool {
+        self.state.lock().unwrap().heard.contains_key(peer.as_bytes())
     }
 
-    /// Announces now (for example after a network change).
+    /// What `peer`'s route comes in on (its first hop's interface): [`Via::Wifi`] only for Wi-Fi auto interfaces.
+    pub fn via(&self, peer: &PublicKey) -> Option<Via> {
+        self.state.lock().unwrap().heard.get(peer.as_bytes()).copied()
+    }
+
+    /// Announces now (for example after a network change). The app data is empty.
     pub async fn announce(&self) -> Result<()> {
         self.handle
             .announce_now(AnnounceNow {
                 destination: self.me,
                 target: AnnounceTarget::AllInterfaces,
-                app_data: AnnounceAppData::Data(self.app_data.clone()),
+                app_data: AnnounceAppData::Data(Default::default()),
             })
             .await
             .map_err(|e| anyhow!("{e:?}"))
     }
 
-    async fn link_to(&self, peer: &PublicKey) -> Result<LinkId> {
+    /// Wi-Fi auto discovery's current members (interfaces to other devices found on the local network).
+    pub fn wifi_members(&self) -> usize {
+        self.wifi.as_ref().map_or(0, |w| w.members().len())
+    }
+
+    /// The local addresses Wi-Fi auto discovery is using.
+    pub fn wifi_local_addresses(&self) -> Vec<(std::net::IpAddr, u32)> {
+        self.wifi.as_ref().map(|w| w.local_addresses()).unwrap_or_default()
+    }
+
+    /// Turns Wi-Fi auto discovery on or off (when attached).
+    pub fn set_wifi_enabled(&self, on: bool) {
+        if let Some(w) = &self.wifi {
+            if on {
+                w.enable()
+            } else {
+                w.disable()
+            }
+        }
+    }
+
+    async fn link_to(&self, peer: &PublicKey, timeout: Duration) -> Result<LinkId> {
         let (existing, destination) = {
             let s = self.state.lock().unwrap();
             if !s.peers.contains(peer.as_bytes()) {
@@ -592,7 +742,10 @@ impl RnsNode {
             return Ok(l);
         }
         let destination = destination
-            .ok_or_else(|| anyhow!("not reachable over Reticulum (no announce heard)"))?;
+            .ok_or_else(|| anyhow!("no Reticulum destination stored for this device"))?;
+        if !self.reachable(peer) {
+            find_path(&self.handle, &self.state, *peer.as_bytes(), destination).await;
+        }
         let link = self
             .handle
             .establish_link(destination)
@@ -602,12 +755,37 @@ impl RnsNode {
             .identify(link, self.my_identity)
             .await
             .map_err(|e| anyhow!("could not identify on the link: {e:?}"))?;
+        if let Err(e) = self.hello(link, timeout).await {
+            let _ = self.handle.close_link(link);
+            return Err(e);
+        }
         self.state
             .lock()
             .unwrap()
             .link_to
             .insert(*peer.as_bytes(), link);
         Ok(link)
+    }
+
+    /// The first message on a link: who we are (device key), signed over the identity the link proved.
+    async fn hello(&self, link: LinkId, timeout: Duration) -> Result<()> {
+        let body = hello_body(&self.device, &self.my_identity);
+        let r = tokio::time::timeout(
+            timeout + Duration::from_secs(1),
+            self.handle.request_with_response_timeout(
+                link,
+                RequestPathHash::of(HELLO_PATH),
+                &body,
+                exact(timeout),
+            ),
+        )
+        .await;
+        match r {
+            Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == b"ok") => Ok(()),
+            Ok(Ok(_)) => bail!("the other device did not accept the hello"),
+            Ok(Err(e)) => bail!("no answer to the hello: {e:?}"),
+            Err(_) => bail!("the hello timed out"),
+        }
     }
 
     fn forget_link(&self, peer: &PublicKey) {
@@ -622,7 +800,7 @@ impl RnsNode {
         body: &[u8],
         timeout: Duration,
     ) -> Result<Vec<u8>> {
-        let link = self.link_to(peer).await?;
+        let link = self.link_to(peer, timeout).await?;
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
             self.handle.request_with_response_timeout(
@@ -663,6 +841,17 @@ impl RnsNode {
             .identify(link, self.my_identity)
             .await
             .map_err(|e| anyhow!("could not identify: {e:?}"))?;
+        // The hello of a device the other end does not list is not answered, and pairing does not need it: send it and
+        // do not wait.
+        {
+            let handle = self.handle.clone();
+            let body = hello_body(&self.device, &self.my_identity);
+            tokio::spawn(async move {
+                let _ = handle
+                    .request_with_response_timeout(link, RequestPathHash::of(HELLO_PATH), &body, exact(Duration::from_secs(5)))
+                    .await;
+            });
+        }
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
             self.handle.request_with_response_timeout(
@@ -683,7 +872,7 @@ impl RnsNode {
 
     /// Tells a linked device something changed (acknowledged, in order).
     pub async fn notify(&self, peer: &PublicKey, body: &[u8]) -> Result<()> {
-        let link = self.link_to(peer).await?;
+        let link = self.link_to(peer, Duration::from_secs(10)).await?;
         match self
             .handle
             .send_channel_message(link, NOTIFY_TYPE, body)
@@ -708,9 +897,32 @@ impl RnsNode {
     }
 }
 
-fn announce_data(device: &SecretKey, me: &DestinationHash) -> Result<AnnounceAppDataBytes> {
-    AnnounceAppDataBytes::from_slice(&vouch(device, me))
-        .map_err(|_| anyhow!("the vouch does not fit in an announce"))
+/// A standard Reticulum path request for a stored destination; a returned path makes it reachable (over whatever
+/// transport nodes carry it: nothing here needs a direct neighbour). The interface it came in on is learned from the
+/// announce that answers, so until then it counts as [`Via::Other`].
+async fn find_path(
+    handle: &PrnsNodeHandle,
+    state: &Arc<Mutex<State>>,
+    peer: [u8; 32],
+    destination: DestinationHash,
+) -> bool {
+    match tokio::time::timeout(Duration::from_secs(10), handle.request_path(destination)).await {
+        Ok(Ok(_)) => {
+            state.lock().unwrap().heard.entry(peer).or_insert(Via::Other);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The linked device whose hello checked out on `link`, if it still does: the identity on the link is the one the hello
+/// was for, and the device is still in the list.
+fn verified_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> Option<PublicKey> {
+    let (device, hello_id) = s.verified.get(link)?;
+    if identity != Some(*hello_id) || !s.peers.contains(device) {
+        return None;
+    }
+    PublicKey::from_bytes(device).ok()
 }
 
 /// Responses travel as a msgpack value, as RNS packs them; `respond_bytes` sends a msgpack bin. Unwraps it.

@@ -14,7 +14,7 @@ rnode = ["personal-rns/rnode"]
 [dependencies]
 # Prns, pinned to a git tag: crates.io still serves 0.3.7, which hangs on two request paths fixed in 0.3.8 (Prns #286, #287).
 # MIT OR Apache-2.0. Its provenance (how closely it follows the Python reference) is the owner's decision before anything ships.
-personal-rns = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1", features = ["tokio-host", "tcp", "config", "serial", "udp", "pipe", "i2p"] }
+personal-rns = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1", features = ["tokio-host", "tcp", "config", "serial", "udp", "pipe", "i2p", "wifi-auto"] }
 # serial, udp, pipe and i2p are not used: Prns 0.3.8's config path does not compile without them (a feature-combination bug, worth reporting upstream).
 # Plans RNode interfaces from RNS-style entries (the only public way in to Prns's RNode over Bluetooth). Same tag.
 prns-config = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1" }

@@ -6310,6 +6310,7 @@ dependencies = [
  "getrandom 0.2.17",
  "heapless 0.8.0",
  "if-addrs",
+ "netdev 0.45.1",
  "prns-config",
  "prns-core",
  "prns-runtime-tokio",
