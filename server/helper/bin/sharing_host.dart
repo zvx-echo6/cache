@@ -38,6 +38,7 @@ class SharingHost {
     this.pollEvery = const Duration(seconds: 2),
     this.log,
     this.drainLog,
+    this.engineLog,
   }) : table = ShareTable.forServer(dataDir: dataDir, supportDir: supportDir, docsDir: docsDir);
 
   final Directory dataDir;
@@ -57,6 +58,9 @@ class SharingHost {
   /// Takes the engine's buffered lines ([SyncCore.takeLog]; the real one when null). The engine never calls into Dart, so the lines
   /// are asked for: after the open and on every status refresh (the phone does the same, app/lib/sharing/sharing_state.dart).
   final List<String> Function()? drainLog;
+
+  /// Where the engine's lines go (the server's app log, through the helper's stderr); [log] when null.
+  final void Function(String line)? engineLog;
   final ShareTable table;
 
   SyncCoreLike? _core;
@@ -301,7 +305,7 @@ class SharingHost {
   void _drain() {
     try {
       for (final l in (drainLog ?? _drainReal)()) {
-        log?.call(l);
+        (engineLog ?? log)?.call(l);
       }
     } catch (_) {}
   }
