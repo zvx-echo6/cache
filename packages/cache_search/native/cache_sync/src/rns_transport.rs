@@ -19,7 +19,7 @@ use n0_future::Stream;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::transport::{Ask, BoxFut, BoxStream, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
+use crate::transport::{Ask, BoxFut, BoxStream, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
 use crate::MAX_INDEX;
 
 /// How long iroh waits before it starts when Reticulum has a path to the device: Reticulum answers first when it can, and
@@ -37,6 +37,10 @@ const HEARTBEAT: Duration = Duration::from_secs(5);
 
 const PATH_INDEX: &str = "/cache/index";
 const PATH_SECRETS: &str = "/cache/secrets";
+/// A summary of the file list, and the changes of one folder since a cursor (step 3). A build without them does not answer these
+/// paths at all, so the engine asks only a device whose file list said it does.
+const PATH_SUMMARY: &str = "/cache/summary";
+const PATH_DIFF: &str = "/cache/diff";
 const PATH_PAIR: &str = "/cache/pair";
 
 /// The network that last answered a device.
@@ -105,7 +109,7 @@ impl MultiTransport {
             interfaces: a.interfaces.clone(),
             peers: self.peer_list(),
             wifi_group: None,
-            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into()],
+            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into()],
             open_paths: vec![PATH_PAIR.into()],
             max_bytes: MAX_INDEX as u64,
             blobs: Some(a.blobs.clone()),
@@ -252,6 +256,32 @@ impl Transport for MultiTransport {
                         closed.store(403, Ordering::Relaxed);
                     }
                     return Err(failure.unwrap_or_else(|| anyhow!("not reachable")));
+                }
+            }
+        })
+    }
+
+    fn ask_delta<'a>(&'a self, peer: &'a str, what: Delta, body: Vec<u8>, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
+        Box::pin(async move {
+            let key: Option<PublicKey> = peer.parse().ok();
+            let Some((node, key)) = self.node().zip(key).filter(|(n, k)| n.reachable(k)) else {
+                bail!("no Reticulum path to the device");
+            };
+            let (path, wait) = match what {
+                Delta::Summary => (PATH_SUMMARY, Duration::from_secs(30)),
+                Delta::Diff => (PATH_DIFF, Duration::from_secs(60)),
+            };
+            match node.request(&key, path, &body, wait).await {
+                Ok(reply) => {
+                    self.note(peer, Net::Reticulum);
+                    let via = if node.via(&key) == Some(Via::Wifi) { "wifi" } else { "reticulum" };
+                    Ok((reply, via.to_string()))
+                }
+                Err(e) => {
+                    if cache_rns::is_not_linked(&e) {
+                        closed.store(403, Ordering::Relaxed);
+                    }
+                    Err(e)
                 }
             }
         })
@@ -521,6 +551,17 @@ impl Handler for Serving {
                     let reply = serve.clone().answer(peer.clone(), ask).await;
                     if ask == Ask::Index {
                         // A peer asking means it may have changes too: compare soon.
+                        serve.asked(&peer);
+                    }
+                    Ok(reply)
+                }
+                PATH_SUMMARY | PATH_DIFF => {
+                    let Asker::Linked(peer) = asker else { bail!("not a linked device") };
+                    let peer = peer.to_string();
+                    let what = if path == PATH_SUMMARY { Delta::Summary } else { Delta::Diff };
+                    let reply = serve.clone().answer_delta(peer.clone(), what, body).await;
+                    if what == Delta::Summary {
+                        // Asking means it may have changes too, as with the whole list.
                         serve.asked(&peer);
                     }
                     Ok(reply)

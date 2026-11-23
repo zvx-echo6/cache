@@ -18,7 +18,7 @@ pub struct Ver {
     pub by: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub hash: String,
     pub size: u64,
@@ -28,6 +28,20 @@ pub struct Entry {
     /// The versions this one replaced, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hist: Vec<Ver>,
+    /// The counter of the folder when this entry last changed here ([`crate::delta`]). Set only by `store_index`, and never part
+    /// of what two entries are equal on: an entry taken from another device is the same entry whatever counter it carried.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ctr: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, o: &Entry) -> bool {
+        self.hash == o.hash && self.size == o.size && self.deleted == o.deleted && self.ver == o.ver && self.hist == o.hist
+    }
 }
 
 impl Entry {
@@ -38,7 +52,7 @@ impl Entry {
         if hist.len() > HIST {
             hist.drain(..hist.len() - HIST);
         }
-        Entry { hash, size, deleted, ver: Ver { at: now.max(self.ver.at + 1), by: me.to_string() }, hist }
+        Entry { hash, size, deleted, ver: Ver { at: now.max(self.ver.at + 1), by: me.to_string() }, hist, ctr: 0 }
     }
 
     /// True when this entry's history includes `v` (it was made by someone who had seen `v`).
@@ -51,6 +65,13 @@ impl Entry {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Index {
     pub files: BTreeMap<String, Entry>,
+    /// Which history of the folder the counters belong to: new when an entry is removed outright ([`crate::delta::stamp`]).
+    /// Empty in an index saved before counters, and in a view that has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub epoch: String,
+    /// The last counter given to a change in this folder.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub counter: u64,
 }
 
 /// What to do with one path after comparing with a peer.
@@ -118,11 +139,11 @@ mod tests {
     use super::*;
 
     fn e(hash: &str, at: u64, by: &str) -> Entry {
-        Entry { hash: hash.into(), size: 1, deleted: false, ver: Ver { at, by: by.into() }, hist: vec![] }
+        Entry { hash: hash.into(), size: 1, deleted: false, ver: Ver { at, by: by.into() }, hist: vec![], ctr: 0 }
     }
 
     fn idx(entries: &[(&str, Entry)]) -> Index {
-        Index { files: entries.iter().map(|(p, e)| (p.to_string(), e.clone())).collect() }
+        Index { files: entries.iter().map(|(p, e)| (p.to_string(), e.clone())).collect(), ..Index::default() }
     }
 
     #[test]

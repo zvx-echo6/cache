@@ -48,6 +48,15 @@ impl Ask {
     }
 }
 
+/// The two requests that replace asking for a whole file list (Reticulum only; iroh's `SYNC_ALPN` is as it was).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delta {
+    /// Everything the file list says except the entries, and for each shared folder its epoch, counter and fingerprint.
+    Summary,
+    /// The changes of one folder after a cursor, in a page (the request is a [`crate::delta::DiffAsk`]).
+    Diff,
+}
+
 /// One step of a file fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchEvent {
@@ -85,6 +94,11 @@ pub trait Transport: Send + Sync + 'static {
     /// device's own. False when it is not (or Reticulum is not running on this device).
     fn learn_rns(&self, _peer: &str, _dest: &str, _sig: &str) -> bool {
         false
+    }
+    /// A summary or differences request to a linked device (`body`: empty for a summary); the answer and how it was reached. Only
+    /// where the network can carry it (Reticulum): anywhere else it fails at once, and the engine asks for the whole list.
+    fn ask_delta<'a>(&'a self, _peer: &'a str, _what: Delta, _body: Vec<u8>, _closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
+        Box::pin(async { Err(anyhow!("not carried on this network")) })
     }
     /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
     /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
@@ -153,6 +167,8 @@ pub trait Serve: Send + Sync + 'static {
     fn pair_short(self: Arc<Self>, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// A linked device asks (it holds the link, so this confirms it): the answer to send back.
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> BoxFut<'static, Vec<u8>>;
+    /// A linked device asks for a summary or differences: the answer to send back.
+    fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
     /// A Nearby link both people confirmed, with the other device's destination and signature (hex): keep it.

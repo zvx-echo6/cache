@@ -15,6 +15,7 @@
 //! The engine runs on its own Tokio runtime; [`SyncEngine::call`] is the whole interface (JSON in, JSON out), the same one the C
 //! ABI (`cs_sync_*` in cache_search) and the `cache-sync` desktop binary use.
 
+pub mod delta;
 pub mod identity;
 pub mod index;
 pub mod transport;
@@ -50,7 +51,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
-use transport::{Ask, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
+use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -111,6 +112,54 @@ struct OpenSteps(Instant);
 impl OpenSteps {
     fn step(&self, name: &str) {
         say(format!("sync open: {name} +{} ms", self.0.elapsed().as_millis()));
+    }
+}
+
+/// Everything the view of a share that a linked device gets depends on, read at one moment ([`Inner::offered_with`]): the patterns
+/// that never sync, what is switched off (the kinds and items the person turned off, the private items, which the app sends as
+/// patterns), the photos held back, the waiting deletes (`again`, which change the view while they wait) and the deletes that
+/// stay on this device. What a device does not fetch (`only`, `never_fetch`) is its own and is applied to the mirror, not here.
+#[derive(Debug, Clone, Default)]
+struct ViewInputs {
+    skip: Vec<String>,
+    off: Vec<String>,
+    gate: Option<SendGate>,
+    again: HashSet<String>,
+    local_deletes: Vec<String>,
+}
+
+impl ViewInputs {
+    fn admits(&self, path: &str, e: &Entry) -> bool {
+        !excluded(&self.skip, path)
+            && !excluded(&self.off, path)
+            && !self.gate.as_ref().is_some_and(|g| g.holds_back(path))
+            && !(e.deleted && (self.again.contains(path) || excluded(&self.local_deletes, path)))
+    }
+
+    /// A hash of the inputs, each part sorted so the same inputs always give the same fingerprint.
+    fn fingerprint(&self) -> String {
+        let sorted = |v: &[String]| {
+            let mut v = v.to_vec();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let gate = match &self.gate {
+            Some(g) => {
+                let mut v = vec![g.dir.trim_matches('/').to_string()];
+                v.extend(sorted(&g.allow));
+                v
+            }
+            None => Vec::new(),
+        };
+        let again: Vec<String> = self.again.iter().cloned().collect();
+        delta::fingerprint(&[
+            ("skip", sorted(&self.skip)),
+            ("off", sorted(&self.off)),
+            ("gate", gate),
+            ("again", sorted(&again)),
+            ("local_deletes", sorted(&self.local_deletes)),
+        ])
     }
 }
 
@@ -529,6 +578,10 @@ struct RemoteShare {
     id: String,
     name: String,
     index: Index,
+    /// The fingerprint of what decides the view of this folder the sender gives the device it sends this to
+    /// ([`ViewInputs::fingerprint`]); older versions do not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -554,6 +607,10 @@ struct RemoteIndex {
     /// The devices the sender has unlinked, signed by it, so this one unlinks them too (older versions do not say).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     removed: Vec<Removal>,
+    /// The sender answers the summary and differences requests ([`Delta`]); older versions do not say. A summary is this same
+    /// structure with no entries in its shares (only each share's id, name, epoch, counter and fingerprint).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    summary: bool,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -582,7 +639,7 @@ impl Scope {
     fn narrow(&self, remote: &Index) -> Index {
         match &self.paths {
             None => remote.clone(),
-            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect() },
+            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect(), ..Index::default() },
         }
     }
 }
@@ -781,6 +838,13 @@ struct Inner {
     /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
     received: Mutex<HashMap<String, Received>>,
+    /// Linked devices whose file list said they answer summaries and differences ([`RemoteIndex::summary`]); in memory only
+    /// (a saved mirror also says so, see [`Inner::peer_has_summary`]).
+    summary_peers: Mutex<HashSet<String>>,
+    /// How many summary, differences and whole-list requests this device has made: for the tests.
+    asked_summary: AtomicU64,
+    asked_diff: AtomicU64,
+    asked_full: AtomicU64,
 }
 
 /// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
@@ -1226,7 +1290,7 @@ impl Inner {
         if skip.is_empty() {
             return idx.clone();
         }
-        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
+        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect(), ..Index::default() }
     }
 
     /// A deletion of `rel` in `share` stays on this device ([`Config::local_deletes`]).
@@ -1256,6 +1320,7 @@ impl Inner {
                 .filter(|(p, e)| !excluded(skip, p) && self.wants(share, p) && !(e.deleted && self.delete_stays_here(share, p)))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
+            ..Index::default()
         }
     }
 
@@ -1265,20 +1330,28 @@ impl Inner {
     /// the other devices never take it meanwhile. The waiting deletes are read before the index: a rescan stores the index
     /// without them first and only then stops holding them back, so whichever index is read here, a delete in it that is
     /// waiting to be forgotten is in `again`.
-    fn offered(&self, share: &str) -> Index {
-        let skip = self.skip(share);
-        let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
-        let gate = self.send_gate.lock().unwrap().get(share).cloned();
-        let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
-        let idx = self.load_index(share);
-        Index {
-            files: idx
-                .files
-                .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !gate.as_ref().is_some_and(|g| g.holds_back(p)) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
-                .map(|(p, e)| (p.clone(), e.clone()))
-                .collect(),
+    /// Everything that decides what this device offers of `share`, read once (the waiting deletes first, see [`Inner::offered_with`]).
+    fn view_inputs(&self, share: &str) -> ViewInputs {
+        ViewInputs {
+            skip: self.skip(share).to_vec(),
+            off: self.off.lock().unwrap().get(share).cloned().unwrap_or_default(),
+            gate: self.send_gate.lock().unwrap().get(share).cloned(),
+            again: self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default(),
+            local_deletes: self.local_deletes.get(share).cloned().unwrap_or_default(),
         }
+    }
+
+    /// [`Inner::offered_with`], and the fingerprint of the inputs it was made with. The index carries the epoch and counter it was
+    /// read at.
+    fn offered_with(&self, share: &str) -> (Index, String) {
+        let inputs = self.view_inputs(share);
+        let idx = self.load_index(share);
+        let view = Index {
+            files: idx.files.iter().filter(|(p, e)| inputs.admits(p, e)).map(|(p, e)| (p.clone(), e.clone())).collect(),
+            epoch: idx.epoch.clone(),
+            counter: idx.counter,
+        };
+        (view, inputs.fingerprint())
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -1289,8 +1362,11 @@ impl Inner {
         read_json(&self.seen_path(share)).unwrap_or_default()
     }
 
+    /// The only writer of the index, and so the one place that counts changes: every entry that differs from the saved one
+    /// takes the folder's next counter, and an entry gone from the index starts a new epoch ([`delta::stamp`]).
     fn store_index(&self, share: &str, idx: &Index, seen: &Seen) -> Result<()> {
-        write_json(&self.index_path(share), idx)?;
+        let stamped = delta::stamp(&self.load_index(share), idx);
+        write_json(&self.index_path(share), &stamped)?;
         write_json(&self.seen_path(share), seen)
     }
 
@@ -1525,7 +1601,7 @@ impl Inner {
                 refetched = true;
             }
         }
-        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered`]): until the index without
+        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered_with`]): until the index without
         // them is on disk, an answer to another device reads the one with them, and must still leave them out.
         if refetched {
             self.store_index(&share.id, &idx, &seen)?;
@@ -1633,7 +1709,7 @@ impl Inner {
                     }
                     Some(old.next(&self.me, now_ms(), hash, m.len(), false))
                 }
-                None => Some(Entry { hash, size: m.len(), deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![] }),
+                None => Some(Entry { hash, size: m.len(), deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![], ctr: 0 }),
             };
             if let Some(e) = entry {
                 idx.files.insert(rel.clone(), e);
@@ -1696,24 +1772,209 @@ impl Inner {
     /// This device's file list as `peer` gets it: only the shares kept with it ([`Config::with`]), with this device's copy of
     /// their link and whether there are secrets for it.
     fn our_index_for(&self, peer: &str) -> RemoteIndex {
+        self.index_for(peer, true)
+    }
+
+    /// [`Inner::our_index_for`] (`full`), or its summary: the same, with the shares carrying no entries, only their epoch,
+    /// counter and fingerprint.
+    fn index_for(&self, peer: &str, full: bool) -> RemoteIndex {
         let s = self.saved.lock().unwrap().clone();
         let link = s.peers.iter().find(|p| p.id == peer).and_then(|p| p.link.clone());
         let secrets = self.secrets.lock().unwrap().get(peer).filter(|m| !m.is_empty()).map(secrets_digest);
-        RemoteIndex {
+        let mut out = RemoteIndex {
             free_bytes: Self::free_bytes(&self.dir),
             name: s.name.clone(),
             shares: s
                 .shares
                 .iter()
                 .filter(|sh| self.shares_with(&sh.id, peer))
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
+                .map(|sh| {
+                    let (index, fp) = if full {
+                        self.offered_with(&sh.id)
+                    } else {
+                        let idx = self.load_index(&sh.id);
+                        (Index { epoch: idx.epoch, counter: idx.counter, ..Index::default() }, self.view_inputs(&sh.id).fingerprint())
+                    };
+                    RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index, fp: Some(fp) }
+                })
                 .collect(),
             link,
             links: true,
             secrets,
             rns: self.rns_info().map(|(dest, sig)| RnsProof { dest, sig }),
             removed: self.removals_to_offer(&s),
+            summary: true,
+        };
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-summary").exists() {
+            // Acts as an older build: no counters, no fingerprints, and it does not say it answers summaries.
+            out.summary = false;
+            for sh in &mut out.shares {
+                sh.fp = None;
+                sh.index.epoch.clear();
+                sh.index.counter = 0;
+                for e in sh.index.files.values_mut() {
+                    e.ctr = 0;
+                }
+            }
         }
+        out
+    }
+
+    /// The answer to a request for differences from `peer` ([`delta::DiffAsk`]): a page, or "full" when it cannot follow.
+    fn diff_answer(&self, peer: &str, body: &[u8]) -> Vec<u8> {
+        let full = || serde_json::to_vec(&delta::Page { full: true, ..delta::Page::default() }).unwrap_or_default();
+        let Ok(ask) = serde_json::from_slice::<delta::DiffAsk>(body) else { return full() };
+        if !self.shares_with(&ask.share, peer) || !self.saved.lock().unwrap().shares.iter().any(|x| x.id == ask.share) {
+            return full();
+        }
+        let inputs = self.view_inputs(&ask.share);
+        // Another filter than the one the asking device was told: it asks for the whole list.
+        if inputs.fingerprint() != ask.fp {
+            return full();
+        }
+        #[allow(unused_mut)]
+        let mut cap = delta::PAGE_BYTES;
+        #[cfg(feature = "test-hooks")]
+        if let Some(n) = std::fs::read_to_string(self.dir.join("diff-page-bytes")).ok().and_then(|t| t.trim().parse::<usize>().ok()) {
+            cap = n;
+        }
+        let page = delta::diff_page(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap);
+        serde_json::to_vec(&page).unwrap_or_default()
+    }
+
+    fn mirror_path(&self, peer: &str, share: &str) -> PathBuf {
+        let clean = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect::<String>();
+        self.dir.join("mirror").join(format!("{}-{}.json", clean(peer), clean(share)))
+    }
+
+    fn load_mirror(&self, peer: &str, share: &str) -> Option<delta::Mirror> {
+        read_json(&self.mirror_path(peer, share))
+    }
+
+    /// The saved mirror files of `peer`, except those of the shares in `keep`.
+    fn mirror_files(&self, peer: &str, keep: &[String]) -> Vec<PathBuf> {
+        let prefix = self.mirror_path(peer, "").file_name().and_then(|n| n.to_str()).map(|n| n.trim_end_matches(".json").to_string()).unwrap_or_default();
+        let Ok(rd) = std::fs::read_dir(self.dir.join("mirror")) else { return Vec::new() };
+        rd.flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json") && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix)))
+            .filter(|p| !keep.iter().any(|k| *p == self.mirror_path(peer, k)))
+            .collect()
+    }
+
+    /// Whether `peer` is known to answer summaries: its file list said so, or a mirror of it was saved.
+    fn peer_has_summary(&self, peer: &str) -> bool {
+        self.summary_peers.lock().unwrap().contains(peer) || !self.mirror_files(peer, &[]).is_empty()
+    }
+
+    /// What `peer` last offered, as a file list: its summary, and for each shared folder the mirror brought up to what the summary
+    /// says (nothing asked when all is equal; the differences when only the counter moved; the folder's whole list otherwise).
+    /// Any failure ends in [`Inner::fetch_index`], today's request, which also replaces the mirrors.
+    async fn fetch_remote(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
+        if self.peer_has_summary(peer) {
+            match self.fetch_by_summary(peer, closed).await {
+                Ok(v) => return Ok(v),
+                #[cfg(feature = "test-hooks")]
+                Err(e) if format!("{e:#}").starts_with("test: killed") => return Err(e),
+                Err(_) => {}
+            }
+        }
+        let (idx, via) = self.fetch_index(peer, closed).await?;
+        self.take_full(peer, &idx);
+        Ok((idx, via))
+    }
+
+    /// A whole file list was taken from `peer`: what it says of summaries is noted, and each folder's list becomes its mirror.
+    fn take_full(&self, peer: &str, idx: &RemoteIndex) {
+        if !idx.summary {
+            self.summary_peers.lock().unwrap().remove(peer);
+            for f in self.mirror_files(peer, &[]) {
+                let _ = std::fs::remove_file(f);
+            }
+            return;
+        }
+        self.summary_peers.lock().unwrap().insert(peer.to_string());
+        let mut keep = Vec::new();
+        for rs in &idx.shares {
+            keep.push(rs.id.clone());
+            if let Some(fp) = rs.fp.as_deref().filter(|_| !rs.index.epoch.is_empty()) {
+                if let Err(e) = write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&rs.index, fp)) {
+                    self.note(format!("{}: {e:#}", rs.name));
+                }
+            }
+        }
+        for f in self.mirror_files(peer, &keep) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    async fn fetch_by_summary(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
+        let (bytes, via) = self.net.ask_delta(peer, Delta::Summary, Vec::new(), closed).await?;
+        self.asked_summary.fetch_add(1, Ordering::Relaxed);
+        let mut sum: RemoteIndex = serde_json::from_slice(&bytes).context("the summary from the device is not valid")?;
+        if !sum.summary {
+            bail!("the device did not send a summary");
+        }
+        let mut full = None;
+        for rs in sum.shares.iter_mut() {
+            rs.index = self.catch_up(peer, rs, closed, &mut full).await?;
+        }
+        let ids: Vec<String> = sum.shares.iter().map(|x| x.id.clone()).collect();
+        for f in self.mirror_files(peer, &ids) {
+            let _ = std::fs::remove_file(f);
+        }
+        Ok((sum, via))
+    }
+
+    /// The view `peer` has of the folder `rs` summarises: the mirror when it already is at the summary's counter, the mirror
+    /// followed to it page by page (each page applied and saved in one write before the next is asked for), or the folder's
+    /// whole list (asked once for all the folders that need it, in `full`), which replaces the mirror.
+    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Index> {
+        let fp = rs.fp.clone().ok_or_else(|| anyhow!("the summary has no fingerprint for {}", rs.name))?;
+        let (epoch, counter) = (rs.index.epoch.clone(), rs.index.counter);
+        if let Some(mut m) = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter)) {
+          loop {
+            if m.is_at(counter) {
+                return Ok(m.index());
+            }
+            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone() };
+            let (bytes, _) = self.net.ask_delta(peer, Delta::Diff, serde_json::to_vec(&ask)?, closed).await?;
+            self.asked_diff.fetch_add(1, Ordering::Relaxed);
+            let page: delta::Page = serde_json::from_slice(&bytes).context("the differences from the device are not valid")?;
+            if page.full {
+                break;
+            }
+            let before = (m.ctr, m.after.clone());
+            m.take(&page);
+            if page.more && (m.ctr, m.after.clone()) == before {
+                bail!("the differences from the device do not move on");
+            }
+            #[cfg(feature = "test-hooks")]
+            {
+                // The process is stopped after the page was taken and before it was saved: half the file reaches the temporary
+                // name, and the saved mirror stays as it was.
+                let marker = self.dir.join("kill-before-mirror-save");
+                if marker.exists() {
+                    let _ = std::fs::remove_file(&marker);
+                    let path = self.mirror_path(peer, &rs.id);
+                    let bytes = serde_json::to_vec(&m)?;
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    std::fs::write(path.with_extension("tmp"), &bytes[..bytes.len() / 2])?;
+                    bail!("test: killed before the mirror was saved");
+                }
+            }
+            write_json(&self.mirror_path(peer, &rs.id), &m)?;
+          }
+        }
+        if full.is_none() {
+            *full = Some(self.fetch_index(peer, closed).await?.0);
+        }
+        let f = full.as_ref().and_then(|f| f.shares.iter().find(|x| x.id == rs.id)).ok_or_else(|| anyhow!("{} is not in the device's file list", rs.name))?;
+        if let Some(fp) = f.fp.as_deref().filter(|_| !f.index.epoch.is_empty()) {
+            write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&f.index, fp))?;
+        }
+        Ok(f.index.clone())
     }
 
     /// The unlinks this device offers in its file list: the kept ones, newer than [`REMOVAL_KEEP_MS`].
@@ -1792,6 +2053,10 @@ impl Inner {
         self.push_former();
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
+        self.summary_peers.lock().unwrap().remove(id);
+        for f in self.mirror_files(id, &[]) {
+            let _ = std::fs::remove_file(f);
+        }
         self.secrets.lock().unwrap().remove(id);
         self.received.lock().unwrap().remove(id);
         self.refused.lock().unwrap().remove(id);
@@ -2022,7 +2287,7 @@ impl Inner {
                 continue;
             }
             let closed = AtomicU32::new(0);
-            let res = self.fetch_index(&p.id, &closed).await;
+            let res = self.fetch_remote(&p.id, &closed).await;
             // Whether the other device has unlinked this one (see check_in_ended): then there is nothing more to do with it.
             let code = Some(closed.load(Ordering::Relaxed)).filter(|c| *c != 0);
             if self.check_in_ended(&p.id, code, res.is_ok()) {
@@ -2122,6 +2387,7 @@ impl Inner {
 
     async fn fetch_index(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
         let (bytes, via) = self.net.ask(peer, Ask::Index, closed).await?;
+        self.asked_full.fetch_add(1, Ordering::Relaxed);
         Ok((serde_json::from_slice(&bytes).context("the file list from the device is not valid")?, via))
     }
 
@@ -2671,6 +2937,22 @@ impl Serve for Inner {
         })
     }
 
+    fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> transport::BoxFut<'static, Vec<u8>> {
+        Box::pin(async move {
+            self.confirm_peer(&peer);
+            #[cfg(feature = "test-hooks")]
+            if self.dir.join("no-delta").exists() {
+                return b"error: test: not answered".to_vec();
+            }
+            tokio::task::spawn_blocking(move || match what {
+                Delta::Summary => serde_json::to_vec(&self.index_for(&peer, false)).unwrap_or_default(),
+                Delta::Diff => self.diff_answer(&peer, &body),
+            })
+            .await
+            .unwrap_or_default()
+        })
+    }
+
     fn asked(&self, _peer: &str) {
         self.wake.notify_one();
     }
@@ -2942,6 +3224,10 @@ impl SyncEngine {
             secrets: Mutex::new(HashMap::new()),
             device_kind: cfg.device_kind.clone().filter(|k| matches!(k.as_str(), "phone" | "tablet" | "computer")),
             received: Mutex::new(HashMap::new()),
+            summary_peers: Mutex::new(HashSet::new()),
+            asked_summary: AtomicU64::new(0),
+            asked_diff: AtomicU64::new(0),
+            asked_full: AtomicU64::new(0),
         });
         inner.save()?;
         steps.step("state saved");
@@ -3043,6 +3329,30 @@ impl SyncEngine {
                 *inner.short.lock().unwrap() = Some(ShortCode { secret, expires_ms: inner.code_now() + LINK_WINDOW.as_millis() as u64, strikes: 0 });
                 Ok(json!({"code": encode_short(&dest, &secret), "valid_secs": LINK_WINDOW.as_secs()}))
             }
+            #[cfg(feature = "test-hooks")]
+            "test_round" => {
+                // One whole round now, and back when it is over.
+                let inner2 = inner.clone();
+                self.rt.block_on(async move { inner2.round().await });
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_view" => {
+                // What `peer` gets as this device's whole file list (today's request), without counters on its entries.
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(serde_json::to_value(inner.our_index_for(&peer))?)
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_mirror" => {
+                let (peer, share) = (s("peer").ok_or_else(|| anyhow!("peer is required"))?, s("share").ok_or_else(|| anyhow!("share is required"))?);
+                Ok(serde_json::to_value(inner.load_mirror(&peer, &share))?)
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_asked" => Ok(json!({
+                "summary": inner.asked_summary.load(Ordering::Relaxed),
+                "diff": inner.asked_diff.load(Ordering::Relaxed),
+                "full": inner.asked_full.load(Ordering::Relaxed),
+            })),
             #[cfg(feature = "test-hooks")]
             "test_skew_code_clock" => {
                 inner.code_skew_ms.store(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0), Ordering::Relaxed);
