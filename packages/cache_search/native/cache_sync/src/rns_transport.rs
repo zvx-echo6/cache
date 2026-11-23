@@ -559,3 +559,44 @@ impl Handler for Serving {
         self.serve.nearby_linked(&peer.to_string(), &name, &cache_rns::dest_hex(&destination), &hex(&sig));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Serve that must never be reached: an unknown path has to be refused before the engine is asked anything.
+    struct Unreached;
+
+    impl Serve for Unreached {
+        fn pair_hello(&self, _: &str, _: &[u8]) -> Vec<u8> {
+            panic!("pair_hello reached")
+        }
+        fn pair_short(self: Arc<Self>, _: Vec<u8>) -> BoxFut<'static, Vec<u8>> {
+            panic!("pair_short reached")
+        }
+        fn answer(self: Arc<Self>, _: String, _: Ask) -> BoxFut<'static, Vec<u8>> {
+            panic!("answer reached")
+        }
+        fn asked(&self, _: &str) {
+            panic!("asked reached")
+        }
+        fn nearby_linked(&self, _: &str, _: &str, _: &str, _: &str) {
+            panic!("nearby_linked reached")
+        }
+    }
+
+    /// The node hands the app Handler any path it has no store for (such as the blob path); the Handler must answer a path it
+    /// does not know with an error, which cache_rns sends to the asker as an `error: ...` reply.
+    #[tokio::test]
+    async fn unknown_path_is_refused() {
+        let serving = Serving { serve: Arc::new(Unreached) };
+        let linked = Asker::Linked(SecretKey::generate().public());
+        for asker in [linked, Asker::Unlinked] {
+            for path in [blobs::BLOB_PATH, "/no/such/path", ""] {
+                let r = serving.request(asker, path, b"body".to_vec()).await;
+                let e = r.expect_err(&format!("path {path:?} must be refused"));
+                assert_eq!(e.to_string(), "unknown path");
+            }
+        }
+    }
+}
