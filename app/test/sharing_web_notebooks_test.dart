@@ -28,12 +28,12 @@ class _Rig {
   final host = FakeSharingHost(table: {'notebooks': {'notebooks': '/srv/nb'}})..enabled = true;
   late final NotebookState nb;
   late final SharingState s;
-  late Notebook journal, health;
+  late Notebook camp, health;
 
   Future<void> start() async {
     nb = fakeNotebook(FakeNotebookBackend());
     await nb.start();
-    journal = await _book(nb, 'Journal');
+    camp = await _book(nb, 'Camp notes');
     health = await _book(nb, 'Health log', private: true);
     final kind = DataKind(
       id: 'notebooks',
@@ -69,9 +69,8 @@ void main() {
   test('the Notebooks kind is listed in a browser, with every notebook and the private one\'s switch off', () {
     expect(r.s.shareKinds.map((k) => k.id), ['notebooks']);
     final items = notebookItems(r.nb);
-    expect(items.map((i) => i.name), ['Journal', 'Health log']);
-    expect(items.map((i) => i.private), [false, true]);
-    expect(items.map((i) => i.on), [null, false], reason: 'a notebook that is not private has no switch of this kind; a private one starts off');
+    expect({for (final i in items) i.name: (i.private, i.on)}, {'Camp notes': (false, null), 'Health log': (true, false)},
+        reason: 'a notebook that is not private has no switch of this kind; a private one starts off');
   });
 
   test('the private notebook\'s switch is the server\'s: it comes back with the state, and a switch is sent as sharing.set_private', () async {
@@ -83,7 +82,7 @@ void main() {
     expect(r.host.opArgs[i], {'notebook': r.health.id, 'on': true});
     expect(r.host.privateIncluded, {r.health.id});
     expect(r.s.itemOn(r.kind, r.item(r.health)), isTrue, reason: 'read back from the server\'s state');
-    expect(notebookItems(r.nb).last.on, isTrue);
+    expect(r.item(r.health).on, isTrue);
     expect(r.host.count('sharing.set_item'), 0, reason: 'a private item is not in the host\'s off list: its own switch is');
 
     await r.s.setItem(r.kind, r.item(r.health), false);
@@ -96,10 +95,10 @@ void main() {
     await r.s.setItem(r.kind, r.item(r.health), true);
     expect(r.host.privateIncluded, {r.health.id});
     final i = r.host.ops.lastIndexOf('sharing.set_item');
-    expect(r.host.opArgs[i]['all'], [r.item(r.journal).key], reason: 'every item of the kind but the private ones');
+    expect(r.host.opArgs[i]['all'], [r.item(r.camp).key], reason: 'every item of the kind but the private ones');
     expect(r.s.kindOn(r.kind), isTrue);
     expect(r.s.itemOn(r.kind, r.item(r.health)), isTrue);
-    expect(r.s.itemOn(r.kind, r.item(r.journal)), isFalse, reason: 'the kind was switched on with that item alone');
+    expect(r.s.itemOn(r.kind, r.item(r.camp)), isFalse, reason: 'the kind was switched on with that item alone');
   });
 
   test('the notebook editor\'s "Include in sync and sharing" works in a browser: it reaches the server', () async {
