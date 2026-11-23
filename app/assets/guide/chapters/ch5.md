@@ -326,7 +326,7 @@ To keep a note private in Cache, add `private: true` to its properties in Obsidi
 
 On a phone, Obsidian sends and receives changes only while the Obsidian app is open. The connection says "On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync." A change made in Cache goes out the next time Obsidian is open on the phone. You do not need to restart anything. Logseq does not show this line.
 
-Do not edit the same note on two devices before it has synced. A change made on a computer can overwrite one made in Cache.
+If a note is changed both in Cache and in Obsidian or Logseq before it syncs, Cache combines the two changes. If both changed the same words, the entry keeps one version and the other is kept as a new entry in the same notebook, titled `<title> (other version)`. Nothing is lost, and Cache never asks you to pick one.
 
 ## Stop syncing a note
 
@@ -358,7 +358,7 @@ The folder's row shows its name and a status: Synced and the time, "Syncing...",
 
 The row's menu has "Sync now", "Pause" or "Resume", and "Disconnect".
 
-- If an entry changed in both places, a card appears. Pick "Keep Cache's version" or "Keep the file's version". The other is kept as a copy.
+- If an entry changed in both places, Cache combines the changes. If both changed the same words, the other version is kept as a new entry, `<title> (other version)`, with its own copies of the photos. The folder's row says `Changed in the same words in both places; the other version is kept as a new entry:` and the titles.
 - If a file was removed in the folder, pick "Keep in Cache" or "Delete here too".
 - If Cache can't read a file, it leaves it alone. Tap "Ignore".
 
