@@ -101,6 +101,9 @@ pub trait Transport: Send + Sync + 'static {
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
     fn disallow(&self, peer: &str);
+    /// The devices this one used to be linked with and is not linked with now (ids): over Reticulum, one of them that asks is told
+    /// "not linked" instead of not being answered at all. The whole list each time. iroh has its own Gate and ignores it.
+    fn set_former(&self, _ids: &[String]) {}
     /// Fetches `hash` into `store` from any of `providers`. Dropping the stream ends the fetch; what arrived stays in the store.
     fn fetch<'a>(&'a self, store: &'a FsStore, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>>;
     /// The phone moved between networks: find new paths.

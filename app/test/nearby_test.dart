@@ -66,7 +66,7 @@ void main() {
     expect(find.text('Pixel 8'), findsOneWidget);
     expect(find.text('Device nearby'), findsOneWidget, reason: 'a name not known yet');
     expect(find.text('Link'), findsNWidgets(2));
-    expect(find.text('Same Wi-Fi · not linked'), findsNWidgets(2));
+    expect(find.text('Same Wi-Fi'), findsNWidgets(2));
     await closePage(tester, r);
   });
 

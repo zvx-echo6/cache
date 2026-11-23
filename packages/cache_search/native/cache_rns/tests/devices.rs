@@ -418,6 +418,18 @@ mod raw {
                 Ok(Ok(_))
             )
         }
+        /// The answer's bytes (as sent: a msgpack byte string), or None when it was not answered within `secs`.
+        pub async fn reply(&self, link: LinkId, path: &str, body: &[u8], secs: u64) -> Option<Vec<u8>> {
+            match tokio::time::timeout(
+                Duration::from_secs(secs + 1),
+                self.handle.request_with_response_timeout(link, RequestPathHash::of(path), body, exact(Duration::from_secs(secs))),
+            )
+            .await
+            {
+                Ok(Ok((r, _))) => Some(r.to_vec()),
+                _ => None,
+            }
+        }
         pub async fn notify(&self, link: LinkId, body: &[u8]) {
             let _ = self.handle.send_channel_message(link, cache_rns::NOTIFY_TYPE, body).await;
         }
@@ -549,6 +561,83 @@ async fn a_correct_hello_opens_everything() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(g.rec.notes.lock().unwrap()[0], (g.kb.public(), b"changed".to_vec()));
+}
+
+/// A msgpack byte string, as an answer travels.
+fn bin(b: &[u8]) -> Vec<u8> {
+    let mut v = vec![0xc4, b.len() as u8];
+    v.extend_from_slice(b);
+    v
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hello_of_a_former_device_is_told_not_linked() {
+    let g = gate().await;
+    // Linked: "ok".
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &g.kb, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, 10).await, Some(bin(b"ok")), "a linked device gets ok");
+    // Unlinked (and remembered as a former device): "not linked", and nothing else is opened.
+    g.a.set_peers(&[]);
+    g.a.set_former(&[g.kb.public()]);
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &g.kb, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, 10).await, Some(bin(b"not linked")));
+    assert!(!r.ask(link, "/cache/index", b"x", NOT_ANSWERED).await, "no answer on /cache/index after not linked");
+    // A bad signature from the former device still gets nothing.
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &SecretKey::generate(), &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, NOT_ANSWERED).await, None, "a bad signature gets no answer");
+    // A truncated hello gets nothing.
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &g.kb, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h[..90], NOT_ANSWERED).await, None, "a short hello gets no answer");
+    // A stranger with a valid signature over its own key gets nothing.
+    let kx = SecretKey::generate();
+    let r = g.client(&kx).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&kx, &kx, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, NOT_ANSWERED).await, None, "a stranger gets no answer");
+    // Linked again: "ok" again.
+    g.a.set_peers(&[(g.kb.public(), Some(destination_for(&g.kb).unwrap()))]);
+    g.a.set_former(&[]);
+    let r = g.client(&g.kb).await;
+    let link = r.link(g.dest()).await;
+    let h = hello(&g.kb, &g.kb, &r.identity);
+    assert_eq!(r.reply(link, cache_rns::HELLO_PATH, &h, 10).await, Some(bin(b"ok")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_to_a_device_that_unlinked_it_fails_as_not_linked() {
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    let port = free_port();
+    let a = Arc::new(RnsNode::start(cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), vec![]), Arc::new(Rec::default())).await.unwrap());
+    let b = Arc::new(RnsNode::start(cfg(&kb, Iface::TcpConnect(format!("127.0.0.1:{port}")), vec![&ka]), Arc::new(Rec::default())).await.unwrap());
+    let (a2, b2) = (a.clone(), b.clone());
+    until(
+        "B hears A",
+        20,
+        || b.reachable(&ka.public()),
+        move || {
+            let (a2, b2) = (a2.clone(), b2.clone());
+            Box::pin(async move {
+                let _ = a2.announce().await;
+                let _ = b2.announce().await;
+            })
+        },
+    )
+    .await;
+    // A has never linked B: the request gets no answer, and is not "not linked".
+    let e = b.request(&ka.public(), "/cache/index", b"x", Duration::from_secs(3)).await.unwrap_err();
+    assert!(!cache_rns::is_not_linked(&e), "a stranger is not told: {e:#}");
+    // A used to be linked with B.
+    a.set_former(&[kb.public()]);
+    let e = b.request(&ka.public(), "/cache/index", b"x", Duration::from_secs(5)).await.unwrap_err();
+    assert!(cache_rns::is_not_linked(&e), "told not linked: {e:#}");
 }
 
 // ---- Wi-Fi auto discovery ----

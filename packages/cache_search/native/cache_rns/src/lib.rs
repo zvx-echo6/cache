@@ -50,6 +50,18 @@ const IDENTITY_CONTEXT: &str =
 const VOUCH_PREFIX: &[u8] = b"cache_rns vouch v2: hello on a link, signed over the Reticulum identity";
 /// The always-open path for the first message on a link ([`hello`]).
 pub const HELLO_PATH: &str = "/cache/hello";
+
+/// What a device answers to the hello of a device it used to be linked with and is not linked with now.
+pub const NOT_LINKED: &[u8] = b"not linked";
+
+/// The text of the error a request fails with when the hello was answered [`NOT_LINKED`]: the caller looks for it
+/// (see [`is_not_linked`]).
+const NOT_LINKED_ERROR: &str = "the other device says this device is not linked";
+
+/// Whether `e` is the failure of a hello the other device answered "not linked".
+pub fn is_not_linked(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.to_string() == NOT_LINKED_ERROR)
+}
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
 const PATH_EVERY: Duration = Duration::from_secs(5);
 
@@ -231,6 +243,8 @@ pub struct Config {
 #[derive(Default)]
 struct State {
     peers: HashSet<[u8; 32]>,
+    /// Devices that used to be linked and are not now: their signed hello is answered "not linked".
+    former: HashSet<[u8; 32]>,
     /// Linked device -> its stored destination.
     destination_of: HashMap<[u8; 32], DestinationHash>,
     /// Linked devices whose announce has been heard, and how.
@@ -674,19 +688,25 @@ impl RnsNode {
                             if name == HELLO_PATH {
                                 // The first message on a link: the device key and its signature over the identity the
                                 // link proved. Anything that does not check out gets no answer at all.
-                                let verified = identity.and_then(|id| {
+                                // The one exception: a device that used to be linked and whose hello is signed correctly
+                                // is told "not linked" (so it can learn it was unlinked).
+                                let reply = identity.and_then(|id| {
                                     let (device, sig) = parse_hello(&data)?;
                                     let mut s = state.lock().unwrap();
-                                    if !s.peers.contains(device.as_bytes())
-                                        || !check_vouch(&device, &id, &sig)
-                                    {
+                                    if !check_vouch(&device, &id, &sig) {
                                         return None;
                                     }
-                                    s.verified.insert(token.link_id, (*device.as_bytes(), id));
-                                    Some(())
+                                    if s.peers.contains(device.as_bytes()) {
+                                        s.verified.insert(token.link_id, (*device.as_bytes(), id));
+                                        Some(&b"ok"[..])
+                                    } else if s.former.contains(device.as_bytes()) {
+                                        Some(NOT_LINKED)
+                                    } else {
+                                        None
+                                    }
                                 });
-                                if verified.is_some() {
-                                    let _ = handle.respond_bytes(token, b"ok");
+                                if let Some(reply) = reply {
+                                    let _ = handle.respond_bytes(token, reply);
                                 }
                                 continue;
                             }
@@ -826,6 +846,11 @@ impl RnsNode {
         s.link_to.retain(|k, _| keep.contains(k));
     }
 
+    /// Replaces the list of devices that used to be linked (not linked now): a signed hello from one is answered "not linked".
+    pub fn set_former(&self, former: &[PublicKey]) {
+        self.state.lock().unwrap().former = former.iter().map(|p| *p.as_bytes()).collect();
+    }
+
     /// Whether a path to `peer`'s stored destination is known: its announce was heard (from any number of hops away), or a
     /// standard path request for it was answered.
     pub fn reachable(&self, peer: &PublicKey) -> bool {
@@ -942,6 +967,7 @@ impl RnsNode {
         .await;
         match r {
             Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == b"ok") => Ok(()),
+            Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == NOT_LINKED) => bail!(NOT_LINKED_ERROR),
             Ok(Ok(_)) => bail!("the other device did not accept the hello"),
             Ok(Err(e)) => bail!("no answer to the hello: {e:?}"),
             Err(_) => bail!("the hello timed out"),
