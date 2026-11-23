@@ -400,7 +400,7 @@ class EntryTile extends StatelessWidget {
       title: entry.title,
       state: s,
       actions: zimActions(context, browse, entry, download: installed != null && !newer ? null : () => downloadZim(context, browse, entry, replaces: newer ? installed : null)),
-      idleLine: [if (entry.summary.isNotEmpty) entry.summary, formatBytes(entry.size)].join(' · '),
+      idleLine: [if (entry.summary.isNotEmpty) entry.summary, if (entry.flavour.isNotEmpty) entry.flavourText, formatBytes(entry.size)].join(' · '),
       idleAction: idleAction,
     );
   }

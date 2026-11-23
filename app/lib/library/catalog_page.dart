@@ -205,10 +205,13 @@ List<CatalogEntry> catalogEntries(LibraryDeps d) {
 /// Catalog: every search index on this device, grouped, each with its state and how it syncs. The one place for Pause, Resume,
 /// Try again and Free space (the scheduler's and the PDF state's own controls). [focus] marks one entry (from ZIM Collections).
 class CatalogPage extends StatelessWidget {
-  const CatalogPage({super.key, required this.deps, this.focus});
+  const CatalogPage({super.key, required this.deps, this.focus, this.debugWeb});
 
   final LibraryDeps deps;
   final String? focus;
+
+  /// Tests only: act as the browser build (plat.isWeb is a compile-time constant).
+  final bool? debugWeb;
 
   /// How the search indexes sync, from Sharing: off, or nothing linked yet. Per-index sync (which devices have which index) is
   /// not reported by sync yet, so with devices linked no line is shown rather than a guess.
@@ -244,7 +247,7 @@ class CatalogPage extends StatelessWidget {
               if (!nav.compact) const LibraryCrumbs(crumbs: [Crumb('Library', []), Crumb('Catalog')]),
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-                child: Text(plat.isWeb ? 'Every search index on this device. Pause and Resume are also on the Library\'s indexing line.' : 'Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                child: Text((debugWeb ?? plat.isWeb) ? 'Every search index on this device. Pause and Resume are also on the Library\'s indexing line.' : 'Every search index on this device. Pause, resume and fixes live here.', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
               if (indexSchedulerShared case final s? when s.busy)
                 Align(
@@ -257,7 +260,7 @@ class CatalogPage extends StatelessWidget {
                   ),
                 ),
               // In a browser the server does the index work; its Pause all and Resume are the same buttons.
-              if (plat.isWeb && d.sources.serverIndexBusy)
+              if ((debugWeb ?? plat.isWeb) && (d.sources.serverIndexBusy || d.sources.serverIndex.busy))
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(

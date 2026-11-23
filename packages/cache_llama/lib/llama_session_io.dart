@@ -51,6 +51,9 @@ class LlamaSession {
 
   bool get isLoaded => _handleAddress != 0;
 
+  /// A browser's call (the model there is the server's); a device loads its own model, so nothing to take.
+  void adopt(String id) {}
+
   /// Where a generation waits on a server; the phone runs the model itself, so it never waits: always null.
   Stream<int?> get queuePosition => const Stream<int?>.empty();
 

@@ -391,6 +391,7 @@ The Shared folder of Cache 1.0 is gone. Its files stay where they were; they are
 - If sharing waits, "Mobile data downloads" may be off. Sync waits for Wi-Fi.
 - If the other device offers more than fits, Cache fetches what fits and pauses.
 - Private notebooks are left out by default. See Private notebooks in chapter 5.
+- If a notebook entry changed on two devices, for example while one had "Notebooks" off, Cache combines the changes when they sync again. If both changed the same words, the other version is kept as a new entry, `<title> (other version)`. "Activity" says `Notebooks: <title>: both devices changed the same words; the other version is kept as a new entry`.
 
 ## Sharing and sync: settings between devices
 

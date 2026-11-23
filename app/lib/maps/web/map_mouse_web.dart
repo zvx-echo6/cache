@@ -90,3 +90,37 @@ void Function() listenMapMouse(void Function(double clientX, double clientY, dou
     web.document.removeEventListener('wheel', end, capture.toJS);
   };
 }
+
+/// Tells [onMove] where the mouse is in the map's own box while it moves over the map with no button down, and null when it is not
+/// over the map (or is dragging it, or has left the page). Returns a function that stops listening.
+void Function() listenMapHover(void Function(double? localX, double? localY) onMove) {
+  final move = ((web.PointerEvent e) {
+    if (e.pointerType != 'mouse') return;
+    final t = e.target;
+    final map = t.isA<web.Element>() ? (t as web.Element).closest('.maplibregl-map') : null;
+    if (map == null || e.buttons != 0) {
+      onMove(null, null);
+      return;
+    }
+    final r = map.getBoundingClientRect();
+    onMove(e.clientX - r.left, e.clientY - r.top);
+  }).toJS;
+  final out = ((web.MouseEvent e) {
+    if (e.relatedTarget == null) onMove(null, null);
+  }).toJS;
+  const capture = true;
+  web.document.addEventListener('pointermove', move, capture.toJS);
+  web.document.addEventListener('mouseout', out, capture.toJS);
+  return () {
+    web.document.removeEventListener('pointermove', move, capture.toJS);
+    web.document.removeEventListener('mouseout', out, capture.toJS);
+  };
+}
+
+/// The cursor over the map: the pointing hand while the mouse is on something that can be clicked, the map's own otherwise.
+void setMapCursor(bool pointer) {
+  final canvases = web.document.querySelectorAll('.maplibregl-canvas');
+  for (var i = 0; i < canvases.length; i++) {
+    (canvases.item(i) as web.HTMLElement).style.cursor = pointer ? 'pointer' : '';
+  }
+}
