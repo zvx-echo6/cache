@@ -69,6 +69,15 @@ fn mode_names_and_router_modes() {
         assert_eq!(m.name(), name);
         assert!(m.offroad_only());
     }
+    for (name, m) in [("offroad_2w", TravelMode::OffroadTwoW), ("offroad_4w", TravelMode::OffroadFourW)] {
+        assert_eq!(TravelMode::from_name(name), Some(m));
+        assert_eq!(m.name(), name);
+        assert!(m.offroad_only());
+    }
+    // each choice on the directions screen asks the engine for a different profile
+    assert_eq!(TravelMode::OffroadTwoW.router_mode(), RequestMode::Single(Mode::TwoW));
+    assert_eq!(TravelMode::OffroadFourW.router_mode(), RequestMode::Single(Mode::FourW));
+    assert_eq!((TravelMode::OffroadTwoW.costing(), TravelMode::OffroadFourW.costing()), ("bicycle", "auto"));
     assert_eq!(TravelMode::OffroadFoot.router_mode(), RequestMode::Single(Mode::Foot));
     assert_eq!(TravelMode::OffroadVehicle.router_mode(), RequestMode::Auto);
     assert_eq!((TravelMode::OffroadFoot.costing(), TravelMode::OffroadVehicle.costing()), ("pedestrian", "auto"));
@@ -131,4 +140,45 @@ fn land_access_other_than_pragmatic_is_part_of_the_route_id() {
     assert_eq!(id(Boundary::Pragmatic), "61ce886a582d8e20");
     assert_eq!(id(Boundary::Strict), "1e00fd99935a3eb1");
     assert_eq!(id(Boundary::Emergency), "0336559888cf300f");
+}
+
+/// Every off-road choice is routed with its own profile: the same trip takes a different time in each, and each leg is labeled
+/// with the mode that was asked for (Auto may mix them).
+#[test]
+fn each_offroad_mode_routes_differently() {
+    let world = flat_world();
+    let v = Counting(AtomicUsize::new(0));
+    let e = env(&world, &world, &v);
+    let mut secs = std::collections::BTreeMap::new();
+    for (m, tag) in [(TravelMode::OffroadFoot, "foot"), (TravelMode::OffroadTwoW, "2w"), (TravelMode::OffroadFourW, "4w")] {
+        let d = e.directions(&DirectionsRequest::new(FROM, TO, m));
+        assert!(d.ok, "{:?}: {:?}", m, d.errors);
+        assert_eq!(d.routing, "offroad");
+        assert_eq!(d.to_json()["mode"], m.name());
+        assert!(d.steps.iter().all(|s| s.kind.starts_with("offroad") && s.mode.as_deref() == Some(tag)), "{:?}: {:?}", m, d.steps);
+        eprintln!("EVIDENCE {} -> {} s, {} km", m.name(), d.duration_s, d.distance_km);
+        secs.insert(tag, d.duration_s);
+    }
+    let auto = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadVehicle));
+    assert!(auto.ok, "{:?}", auto.errors);
+    eprintln!("EVIDENCE offroad_vehicle(Auto) -> {} s", auto.duration_s);
+    // slower to faster over open ground: foot 6 km/h, 2-wheel 12 km/h (grass x2), 4-wheel 25 km/h (grass x1.5)
+    assert!(secs["foot"] > secs["2w"] && secs["2w"] > secs["4w"], "{secs:?}");
+}
+
+/// Land a 4-wheel machine cannot cross (class 10) is crossed on foot and, slowly, on two wheels: so the choice changes whether a
+/// route exists, not only how long it takes.
+#[test]
+fn four_wheel_cannot_cross_what_foot_and_two_wheel_can() {
+    let mut world = flat_world();
+    world.class = Some(vec![10; world.rows * world.cols]);
+    let v = Counting(AtomicUsize::new(0));
+    let e = env(&world, &world, &v);
+    let foot = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot));
+    let two = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadTwoW));
+    let four = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFourW));
+    eprintln!("EVIDENCE class10: foot ok={} {} s; 2w ok={} {} s; 4w ok={} {:?}", foot.ok, foot.duration_s, two.ok, two.duration_s, four.ok, four.errors.first().map(|x| x.message.clone()));
+    assert!(foot.ok, "{:?}", foot.errors);
+    assert!(two.ok, "{:?}", two.errors);
+    assert!(!four.ok);
 }

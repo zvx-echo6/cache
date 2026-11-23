@@ -117,7 +117,7 @@ class RoutePanel extends StatelessWidget {
   final double? maxHeight;
 
   static const _modes = [('drive', Icons.directions_car, 'Drive'), ('walk', Icons.directions_walk, 'Walk'), ('bike', Icons.directions_bike, 'Bike')];
-  static const _offroadModes = [('offroad_foot', 'On foot'), ('offroad_vehicle', 'Vehicle')];
+  static const _offroadModes = [('offroad_foot', 'On foot'), ('offroad_vehicle', 'Auto'), ('offroad_2w', '2-wheel'), ('offroad_4w', '4-wheel')];
   static const _landAccess = [('strict', 'Stay on open land'), ('pragmatic', 'Usual'), ('emergency', 'Emergency: any land')];
 
   @override

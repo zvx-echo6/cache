@@ -311,6 +311,36 @@ void main() {
       expect(nav.route!.routeId, 'r-drive');
     });
 
+    test('off-road: Auto, 2-wheel and 4-wheel are each sent as their own mode, with land access, and the last one is remembered', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-$mode', mode: mode, offroad: true));
+      await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
+      // the default is unchanged: Off-road starts on foot, and the road modes do not count as off-road
+      expect(nav.offroadMode, 'offroad_foot');
+      for (final m in ['drive', 'walk', 'bike']) {
+        expect(NavState.isOffroadMode(m), isFalse);
+      }
+      for (final m in ['offroad_2w', 'offroad_4w', 'offroad_vehicle']) {
+        await nav.setMode(m);
+        expect(nav.offroad, isTrue);
+        expect(nav.offroadMode, m);
+        expect(nav.route!.routeId, 'r-$m');
+      }
+      // back to a road mode and on again: Off-road comes back to the last off-road choice
+      await nav.setMode('drive');
+      expect(nav.offroadMode, 'offroad_vehicle');
+      await nav.setMode('offroad_2w');
+      await nav.setMode('walk');
+      await nav.setMode(nav.offroadMode);
+      expect(nav.mode, 'offroad_2w');
+      expect(backend.calls.where((c) => c.startsWith('route:offroad_')).toSet(), {
+        'route:offroad_2w:Cassia Regional Hospital:from',
+        'route:offroad_4w:Cassia Regional Hospital:from',
+        'route:offroad_vehicle:Cassia Regional Hospital:from',
+      });
+      expect(backend.landAccesses.last, 'pragmatic');
+    });
+
     test('off-road without off-road data for the area says what is needed', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson({

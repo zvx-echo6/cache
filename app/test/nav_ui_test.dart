@@ -391,10 +391,28 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('mode-offroad')));
         await tester.pump();
         expect(nav.mode, 'offroad_foot');
-        for (final t in ['On foot', 'Vehicle', 'Stay on open land', 'Usual', 'Emergency: any land']) {
+        for (final t in ['On foot', 'Auto', '2-wheel', '4-wheel', 'Stay on open land', 'Usual', 'Emergency: any land']) {
           expect(find.text(t), findsOneWidget);
         }
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('offroad-mode-offroad_vehicle')));
+        await tester.pump();
+        expect(nav.mode, 'offroad_vehicle');
+        // 2-wheel and 4-wheel: each tap picks the mode, shows it chosen, and asks for the route again
+        final asked = <String>[];
+        backend.onRoute = (to, mode, from) async {
+          asked.add(mode);
+          return MapRoute.fromJson(fakeRouteJson(offroad: true, mode: mode));
+        };
+        for (final m in ['offroad_2w', 'offroad_4w']) {
+          await tester.tap(find.byKey(ValueKey('offroad-mode-$m')));
+          await tester.pump();
+          expect(nav.mode, m);
+          final chip = tester.widget<ChoiceChip>(find.byKey(ValueKey('offroad-mode-$m')));
+          expect(chip.selected, isTrue, reason: '$m is not shown as chosen');
+          expect(tester.widget<ChoiceChip>(find.byKey(const ValueKey('offroad-mode-offroad_foot'))).selected, isFalse);
+        }
+        expect(asked, ['offroad_2w', 'offroad_4w']);
         await tester.tap(find.byKey(const ValueKey('offroad-mode-offroad_vehicle')));
         await tester.pump();
         expect(nav.mode, 'offroad_vehicle');
