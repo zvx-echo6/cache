@@ -13,6 +13,7 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
+import '../platform/multicast_lock.dart';
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -37,6 +38,8 @@ class SharingState extends ChangeNotifier {
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
     bool? phone,
+    bool? reticulum,
+    MulticastLock? multicast,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
     List<String> Function()? drainLog,
@@ -47,6 +50,10 @@ class SharingState extends ChangeNotifier {
        _drainLog = drainLog ?? drainSyncLog,
        _every = every ?? ((d, run) => Timer.periodic(d, (_) => run())),
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
+       // Reticulum's local discovery runs on Android and Linux for now (not in a browser, not on iOS).
+       _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux)),
+       // Android needs a multicast lock held while it runs; nothing else does.
+       _multicast = multicast ?? (!kIsWeb && Platform.isAndroid ? MulticastLock() : null),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
        // ignore: prefer_initializing_formals
@@ -80,6 +87,12 @@ class SharingState extends ChangeNotifier {
   /// A phone (Android or iOS). The Mainline DHT is off there: its socket can fail and spin a CPU, burning the battery on a drive, and
   /// linked devices are still found by mDNS, n0's lookup and the relay. Anywhere else (the server, the desktop) the engine's default (on) stands.
   final bool _phone;
+
+  /// The engine runs Reticulum's Wi-Fi discovery (the config key `reticulum`): Android and Linux. Peers found that way say `via: 'wifi'`.
+  final bool _reticulum;
+
+  /// The Android multicast lock, taken just before the engine opens and let go when it stops; null where none is needed.
+  final MulticastLock? _multicast;
 
   /// What Cache leaves free on the phone, for the volume holding a folder: the same rule Storage shows ([reserveFor]).
   final int Function(String dir) _reserveBytes;
@@ -518,6 +531,8 @@ class _PhoneDriver implements SharingDriver {
         'dir': dir.path,
         'name': s.deviceName,
         if (s._phone) 'dht': false,
+        // Reticulum's Wi-Fi discovery (the engine's `reticulum`; a peer it finds says `via: 'wifi'`).
+        'reticulum': s._reticulum,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': s._reserveBytes((await s.supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
@@ -537,6 +552,11 @@ class _PhoneDriver implements SharingDriver {
         'quiet': s.quiet,
       };
       _lastConfig = config;
+      // Android hears multicast only while the lock is held; a lock that can't be taken leaves Wi-Fi discovery quiet, not sharing stopped.
+      if (s._reticulum && s._multicast != null) {
+        _holdsMulticast = true;
+        await s._multicast!.acquire();
+      }
       _core = await s._opener(config);
       lock.engineStarted(kSyncWork);
       await _writeSnapshot();
@@ -560,6 +580,7 @@ class _PhoneDriver implements SharingDriver {
       s._log('Sharing: started in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
     } catch (e) {
       s.error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
+      if (_core == null) _releaseMulticast();
       // The kind of failure only: the text can carry paths, and this log is shared.
       s._log('Sharing: start failed after ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (${e is CacheSearchException ? e.code : e.runtimeType})');
     } finally {
@@ -954,6 +975,15 @@ class _PhoneDriver implements SharingDriver {
     if (_core != null) policy.settings.removeListener(_onSettings);
     _lock?.engineStopped(kSyncWork);
     _core?.close();
+    _releaseMulticast();
+  }
+
+  bool _holdsMulticast = false;
+
+  void _releaseMulticast() {
+    if (!_holdsMulticast) return;
+    _holdsMulticast = false;
+    unawaited(s._multicast?.release());
   }
 }
 

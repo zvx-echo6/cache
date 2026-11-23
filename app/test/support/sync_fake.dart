@@ -36,6 +36,14 @@ class FakeSync implements SyncCoreLike {
   /// The items switched off, by share id, as `set_off` last left them.
   final off = <String, List<String>>{};
 
+  /// Makes a peer report how it is reached now: `via` is 'direct', 'relay' or 'wifi' (Reticulum's local discovery), and it was just seen.
+  void reach(String peer, String via) {
+    final p = peers.firstWhere((p) => p['id'] == peer);
+    p['via'] = via;
+    p['last_seen'] = DateTime.now().millisecondsSinceEpoch;
+    p['error'] = null;
+  }
+
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
     calls.add(method);
