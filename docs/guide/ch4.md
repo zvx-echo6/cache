@@ -15,12 +15,13 @@ To get a key:
 
 To add it to Cache:
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
-2. Under "Web search", tap "Set up" next to "Search service".
-3. Paste the key into "Key" and tap "Check and save".
+2. Under "Web search", tap "Kagi API key". It opens "Settings" > "API keys" at Kagi.
+3. Tap "Add key", paste the key into "Key" and tap "Check and save".
+4. Back on "Cache model and web search", turn on "Search the web when online".
 
-Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this device and is never shown again.
+Cache checks the key with one real search and says "Key saved". Saving a key turns nothing on: the switch does. The key stays on this device and is never shown again.
 
-- If saving fails, Cache says why. For example, "Kagi didn't accept this key. Check you copied all of it." or "Couldn't reach Kagi. Check your connection."
+- If saving fails, Cache says why and keeps what you typed. For example, "Kagi didn't accept this key. Check you copied all of it." or "Can't reach Kagi. Check your connection." With no connection, "Save without checking" keeps the key anyway."
 - If it says "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.", add credit.
 
 Kagi's API terms: https://kagi.com/privacy/api
@@ -28,8 +29,8 @@ Kagi's API terms: https://kagi.com/privacy/api
 ## Change or turn off web search
 
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
-2. To keep the key but stop searching, turn off "Search the web when online".
-3. To replace or remove the key, tap "Change" on "Search service" and choose "Replace the key" or "Remove the key".
+2. To stop searching, turn off "Search the web when online". The switch works with or without a key; with no key, Ask quietly uses your offline sources.
+3. To replace or remove the key, tap "Kagi API key", then "Replace" or "Remove the key". Removing the key turns nothing off.
 
 ## Satellite fire hotspots with NASA FIRMS
 
@@ -44,9 +45,9 @@ To get a key:
 One email address gets one key. To resend or change it, log in at the FIRMS download page.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
-2. Tap "Get key" on "Satellite fire detections near the place (NASA FIRMS)".
-3. Paste the key and tap "Check and save".
+1. Go to ["Settings" > "Maps"](cache://settings/maps) and tap "NASA FIRMS API key". It opens "Settings" > "API keys" at NASA FIRMS.
+2. Tap "Add key", paste the key and tap "Check and save". Saving turns nothing on.
+3. Turn on "Satellite fire detections near the place (NASA FIRMS)" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 Limits: 5,000 transactions in any 10 minutes (NASA FIRMS, checked 2026-10-29). Cache stays far below that.
 
@@ -69,9 +70,9 @@ To get a key:
 2. Create an API key and copy it.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
-2. Tap "Get key" on "Traffic flow at the place (TomTom)".
-3. Paste the key and tap "Check and save".
+1. Go to ["Settings" > "Maps"](cache://settings/maps) and tap "TomTom API key". It opens "Settings" > "API keys" at TomTom.
+2. Tap "Add key", paste the key and tap "Check and save". Saving turns nothing on.
+3. Turn on "Traffic flow at the place (TomTom)" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 ## Weather forecasts with Open-Meteo
 
@@ -184,7 +185,7 @@ What the map draws is what Cache has already downloaded for the places it watche
 
 1. Go to ["Settings" > "Maps"](cache://settings/maps).
 2. Under "Road events", tap "Add a 511 site", then tap your state or province. Use the search box, or "Enter another site" for a 511 site that is not listed.
-3. In the same place, open the key row named for the site, for example "511 key (511.idaho.gov)".
+3. In "Maps", tap the key row named for the site, for example "511 key (511.idaho.gov)", or open "Settings" > "API keys". Tap "Add key".
 4. Create an account on the site, or sign in.
 5. Open the site's developer page.
 6. Request a Developer API key.
@@ -195,7 +196,7 @@ Every site needs its own key. Each site allows ten calls every 60 seconds, and C
 ### Add road work (WZDx)
 
 1. Under "Road events" in ["Settings" > "Maps"](cache://settings/maps), tap "Add a road work feed".
-2. Tap a feed from the list, or tap "Paste a feed URL". Cache removes any key or token from a pasted address; a feed that needs a key gets its own key row there, for example "WZDx key (Ohio DOT)".
+2. Tap a feed from the list, or tap "Paste a feed URL". Cache removes any key or token from a pasted address; a feed that needs a key gets its own key row in "Maps", for example "WZDx key (Ohio DOT)".
 
 Feeds that are by request or not supported yet are listed but cannot be added. The list in Cache can be longer than the tables here.
 

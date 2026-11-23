@@ -76,9 +76,8 @@ Keys aren't shared between devices. Add them on each device.
 
 ## Remove a key
 
-1. Kagi: go to "Settings" > "Cache model and web search", tap "Change" next to "Search service", then "Remove the key".
-2. Data sources: tap the source's row in "Settings" > "Weather and alerts", then "Remove the key". Its sources turn off.
-3. Video sites: open the site in "Videos", tap the account button, then "Sign out". To drop the site too, tap "Remove this video site".
+1. Any API key: go to "Settings" > "API keys", tap the key's row, then "Remove the key". It turns nothing off; the features go back to the data on this device. This removes the key on this device only.
+2. Video sites: open the site in "Videos", tap the account button, then "Sign out". To drop the site too, tap "Remove this video site".
 
 ## The assistant and web search
 
