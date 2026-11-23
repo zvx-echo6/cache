@@ -205,7 +205,6 @@ class NavState extends ChangeNotifier {
 
   // What is remembered: the person's last choices (never an assistant route's mode or strict land access).
   String _keptMode = 'drive';
-  String _keptLand = 'pragmatic';
   bool _touched = false;
 
   /// The way of travel is one of the off-road modes (they leave the roads: Walk > Off-road, Bike > Dirt bike, ATV, and the
@@ -774,7 +773,6 @@ class NavState extends ChangeNotifier {
     if (guiding) await end();
     if (!sameTrip && landAccess != 'pragmatic') {
       landAccess = 'pragmatic';
-      _keptLand = 'pragmatic';
     }
     selected = to;
     phase = NavPhase.previewing;
@@ -811,7 +809,6 @@ class NavState extends ChangeNotifier {
   Future<void> setLandAccess(String l) async {
     if (l == landAccess) return;
     landAccess = l;
-    if (l != 'strict') _keptLand = l;
     _remember();
     notifyListeners();
     if (phase == NavPhase.previewing && offroad) await _fetchRoutes();
@@ -858,7 +855,6 @@ class NavState extends ChangeNotifier {
     avoidHighways = c.avoidHighways;
     avoidTolls = c.avoidTolls;
     landAccess = 'pragmatic'; // a file from before Emergency became per-trip may still say emergency: not carried over
-    _keptLand = 'pragmatic';
     mode = c.mode;
     _keptMode = c.mode;
     notifyListeners();
