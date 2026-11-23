@@ -133,6 +133,7 @@ import 'platform/battery.dart' show kBatteryChannel, readBattery;
 import 'search/index_throttle.dart';
 import 'search/core_index_calls.dart';
 import 'platform/app_log.dart';
+import 'platform/backup_scope.dart';
 import 'platform/launch_clock.dart';
 import 'platform/app_log_io.dart';
 import 'platform/memory.dart';
@@ -1019,11 +1020,15 @@ class _CacheAppState extends State<CacheApp> {
 
   final IgnoreRoutePushes _noRoutePushes = IgnoreRoutePushes();
 
+  /// iPhone: keeps everything but Cache's settings out of phone backups (platform/backup_scope.dart). Nothing on other platforms.
+  final BackupSweeper _backupSweeper = BackupSweeper(support: appSupportPath, docs: appDocumentsPath);
+
   @override
   void initState() {
     super.initState();
     // Before the app's own navigator starts listening: a page address from the platform is never pushed as a route.
     WidgetsBinding.instance.addObserver(_noRoutePushes);
+    _backupSweeper.start();
     ModelDownloads.shared = modelDownloads;
     // A download is named as its row in Models names it (the recommended list's name, once the list is read), not only while
     // Models is open: Settings says "Downloading Gemma 4 E2B", not the file name. Without the list, the file name without .gguf.
@@ -1539,6 +1544,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(_noRoutePushes);
+    _backupSweeper.stop();
     _lifecycle.dispose();
     _foregroundUpdates.dispose();
     _modelRelease.dispose();

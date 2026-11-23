@@ -68,6 +68,9 @@ class _SharingPageState extends State<SharingPage> {
   bool _busy = false;
   bool _incomingOpen = false;
 
+  /// The new-device message was on screen: it is told once, so leaving the page marks it shown.
+  bool _sawNewDevice = false;
+
   @override
   void initState() {
     super.initState();
@@ -83,6 +86,7 @@ class _SharingPageState extends State<SharingPage> {
     _inbox.take(); // a link still waiting (sharing never started) is dropped, not shown later out of the blue
     _inbox.removeListener(_incomingSoon);
     s.removeListener(_incomingSoon);
+    if (_sawNewDevice) s.dismissNewDevice();
     super.dispose();
   }
 
@@ -324,6 +328,7 @@ class _SharingPageState extends State<SharingPage> {
             ],
           );
         }
+        if (s.newDevice) _sawNewDevice = true;
         final st = s.status;
         final relay = st['relay'] as String?;
         final online = st['network'] == true;
@@ -331,6 +336,7 @@ class _SharingPageState extends State<SharingPage> {
         return SettingsPage(
           title: 'Sharing and sync',
           children: [
+            if (s.newDevice) const NoteText('This is a new device: link it to your other devices again'),
             SettingsGroup(
               label: 'This device',
               rows: [

@@ -242,6 +242,8 @@ This page shows what Cache uses and lets you free space.
 
 The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below. At the foot, "Advanced" shows the background indexing speed and the log level, for example `Background indexing: Gentle · Log: Standard`. See Background indexing speed, and The log.
 
+Your phone's automatic backup keeps Cache's settings only: theme, layout, weather choices and map layers. Your library, notebooks, chats, maps and linked devices are not in it. On an iPhone, API keys come back with an iCloud backup; on Android they must be entered again.
+
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
 ## Clean up

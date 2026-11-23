@@ -10,12 +10,14 @@ import '../../screens/settings/places_page.dart' show confirmRemovePlace;
 import '../../theme.dart';
 import '../hours_text.dart';
 import '../nav_state.dart';
+import '../point_facts/point_facts.dart';
 import '../units.dart';
+import 'place_card_facts.dart';
 import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry, this.area});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry, this.area, this.facts});
 
   final NavState nav;
   final MapPlace place;
@@ -33,6 +35,9 @@ class PlaceCard extends StatelessWidget {
 
   /// The place is a tapped town or county of the region catalogue: its facts, and whether it has Directions (a county has none).
   final AreaCardInfo? area;
+
+  /// Where the card looks up the elevation and the land manager of its point; null leaves those rows out.
+  final PointFacts? facts;
 
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
@@ -56,9 +61,11 @@ class PlaceCard extends StatelessWidget {
       if (a?.people != null) _line(context, Icons.groups_outlined, a!.people!),
       if (a?.squareArea != null) _line(context, Icons.square_foot, a!.squareArea!),
       if (a?.largestTowns != null) _line(context, Icons.location_city, a!.largestTowns!),
-      if (place.phone != null) _line(context, Icons.phone_outlined, place.phone!, copy: place.phone),
+      if (place.phone != null)
+        ActionLine(key: const ValueKey('place-phone'), icon: Icons.phone_outlined, text: place.phone!, hint: 'Call', onTap: () => callPhone(context, place.phone!), copyText: place.phone!, copyLabel: 'Copy number'),
       if (hours != null) _hoursLine(context, hours),
-      if (place.website != null) _line(context, Icons.public, place.website!, copy: place.website),
+      if (place.website != null)
+        ActionLine(key: const ValueKey('place-website'), icon: Icons.public, text: place.website!, hint: 'Open website', onTap: () => openWebsite(context, place.website!), copyText: place.website!, copyLabel: 'Copy link'),
     ];
     return Container(
       // Fully solid: at 0.98 the map's labels and chips showed faintly through the title.
@@ -113,6 +120,11 @@ class PlaceCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                ],
+                // A point or a place (not a whole town or county): its elevation, and who manages the land there.
+                if (a == null && facts != null) ...[
+                  const SizedBox(height: 6),
+                  PointFactRows(key: ValueKey('point-facts-${place.lat}-${place.lon}'), facts: facts!, lat: place.lat, lon: place.lon, fmt: fmt),
                 ],
                 if (detail.isNotEmpty) ...[const SizedBox(height: 6), ...detail],
                 if (place.matched == kPoiMatched && detail.isEmpty && place.summary == null) ...[
@@ -196,9 +208,9 @@ class PlaceCard extends StatelessWidget {
     );
   }
 
-  Widget _line(BuildContext context, IconData icon, String text, {String? copy}) {
+  Widget _line(BuildContext context, IconData icon, String text) {
     final k = context.t;
-    final row = Padding(
+    return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -209,7 +221,6 @@ class PlaceCard extends StatelessWidget {
         ],
       ),
     );
-    return copy == null ? row : InkWell(onTap: () => _copy(context, copy), child: row);
   }
 
   /// The opening hours: "Open now" or "Closed now" first, only when it is known for sure, then the hours in plain words (or the
