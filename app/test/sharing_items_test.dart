@@ -559,6 +559,8 @@ void main() {
     await tester.runAsync(s.refresh);
     await tester.pump();
     await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    await tester.pump(const Duration(seconds: 1)); // the earlier message finishes leaving, this one comes in
+    await tester.pump(const Duration(seconds: 1));
     expect(find.text('Syncing with Desk'), findsOneWidget);
     expect(find.text('Up to date'), findsNothing);
 
