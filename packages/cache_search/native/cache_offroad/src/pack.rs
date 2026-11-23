@@ -285,11 +285,13 @@ impl PackSource for SqlitePack {
         self.points("trailheads", a, b, c, d)
     }
     fn land_rules(&self) -> Option<bool> {
-        match self.info.meta.get("land_access").map(|s| s.as_str()) {
-            Some("us") => Some(true),
+        // `land_access` says it outright; the older Alberta/BC packs carry `cov_land_access`. A pack that says neither says nothing.
+        let says = |k: &str| match self.info.meta.get(k).map(|s| s.as_str()) {
             Some("none") => Some(false),
+            Some("us") => Some(true),
             _ => None,
-        }
+        };
+        says("land_access").or_else(|| says("cov_land_access"))
     }
     fn mvum_in_box(&self, south: f64, north: f64, west: f64, east: f64) -> PResult<Vec<MvumFeature>> {
         let conn = self.conn.lock().unwrap();
@@ -408,6 +410,8 @@ pub struct MemPack {
     pub parking: Vec<PointRec>,
     pub trailheads: Vec<PointRec>,
     pub mvum: Vec<MvumFeature>,
+    /// What the pack says about land rules: "us", "none", or nothing.
+    pub land_access: Option<String>,
 }
 
 impl MemPack {
@@ -443,6 +447,13 @@ impl MemPack {
 }
 
 impl PackSource for MemPack {
+    fn land_rules(&self) -> Option<bool> {
+        match self.land_access.as_deref() {
+            Some("us") => Some(true),
+            Some("none") => Some(false),
+            _ => None,
+        }
+    }
     fn has_layer(&self, layer: Layer) -> bool {
         match layer {
             Layer::Class => self.class.is_some(),

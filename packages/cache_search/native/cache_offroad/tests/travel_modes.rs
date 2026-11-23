@@ -235,14 +235,17 @@ fn the_new_columns_become_their_own_grids() {
 }
 
 #[test]
-fn where_the_data_has_no_land_rules_the_route_says_so() {
-    // a world with no MVUM and no barriers anywhere: nothing says land rules exist here
-    let world = flat_world();
-    assert!(notes(&world, TravelMode::OffroadFoot, Boundary::Pragmatic).contains(&NOTE_NO_LAND_RULES.to_string()));
-    // a world with a barrier cell has rules
-    let mut ruled = flat_world();
-    ruled.barriers[300 * 600 + 300] = 255;
-    assert!(!notes(&ruled, TravelMode::OffroadFoot, Boundary::Pragmatic).contains(&NOTE_NO_LAND_RULES.to_string()));
+fn the_no_land_rules_note_shows_only_when_the_pack_says_none() {
+    let note = NOTE_NO_LAND_RULES.to_string();
+    let with = |land: Option<&str>| {
+        let mut w = flat_world();
+        w.land_access = land.map(str::to_string);
+        notes(&w, TravelMode::OffroadFoot, Boundary::Pragmatic)
+    };
+    assert!(with(Some("none")).contains(&note), "the pack says none");
+    assert!(!with(Some("us")).contains(&note), "the pack says us");
+    // silent: no MVUM and no barriers anywhere used to be read as "no rules"; now it says nothing
+    assert!(!with(None).contains(&note), "the pack is silent");
 }
 
 /// Where a point falls in the synthetic world's own cells: (row, col) into its arrays.

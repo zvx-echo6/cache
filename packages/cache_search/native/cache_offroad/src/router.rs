@@ -622,8 +622,8 @@ impl<'a> Router<'a> {
                 out.notes.push(NOTE_SXS_FALLBACK.into());
             }
         }
-        let has_land_rules = self.pack.land_rules().unwrap_or_else(|| mvum_feats.as_ref().is_some_and(|f| !f.is_empty()) || barriers.iter().any(|b| *b != 0));
-        if !has_land_rules {
+        // only when the pack says outright that it has none; a pack that says nothing gets no note
+        if self.pack.land_rules() == Some(false) {
             out.notes.push(NOTE_NO_LAND_RULES.into());
         }
         if req.collect_detail {

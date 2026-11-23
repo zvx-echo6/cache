@@ -59,6 +59,17 @@ fn sqlite_pack_round_trip() {
     // a pack from before the rebuild has no dirt bike or over-50-in columns: the features say so
     assert_eq!(m[0].ext, [None, None]);
     assert_eq!(p.land_rules(), None);
+    // the older Alberta/BC packs say it as `cov_land_access`
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("INSERT INTO meta VALUES ('cov_land_access', 'none');").unwrap();
+    }
+    assert_eq!(SqlitePack::open(&path).unwrap().land_rules(), Some(false));
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("INSERT INTO meta VALUES ('land_access', 'us');").unwrap();
+    }
+    assert_eq!(SqlitePack::open(&path).unwrap().land_rules(), Some(true), "land_access wins");
     std::fs::remove_dir_all(&dir).ok();
 }
 
