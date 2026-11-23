@@ -25,7 +25,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use index::{Action, Entry, Index, Ver};
 use iroh::{
     endpoint::{presets, VarInt},
-    Endpoint, EndpointAddr, RelayMode, RelayUrl,
+    Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, Signature,
 };
 use iroh_blobs::{
     api::{
@@ -421,6 +421,51 @@ struct Saved {
     /// The links made before new links started Off have been given `"match"` ([`migrate_links`]); done once, never again.
     #[serde(default)]
     links_migrated: bool,
+    /// The devices this one has unlinked, signed, kept [`REMOVAL_KEEP_MS`] and offered to every linked device in its file list
+    /// ([`Removal`]). Absent in files saved by builds before this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removals: Vec<Removal>,
+}
+
+/// How long an unlink is kept and offered to the other linked devices: 30 days.
+const REMOVAL_KEEP_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+/// The start of what a Removal signs.
+const REMOVAL_PREFIX: &[u8] = b"cache remove v1";
+
+/// "`by` unlinked `target` at `t`", signed with `by`'s device key. A device that unlinks another hands this to the devices it is
+/// still linked with, in its file list, so they unlink it too. Older builds do not know the field and ignore it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Removal {
+    /// The unlinked device's id.
+    target: String,
+    /// The id of the device that unlinked it (and signed).
+    by: String,
+    /// When (ms since 1970, on `by`'s clock).
+    t: u64,
+    /// `by`'s signature over [`removal_message`], hex.
+    sig: String,
+}
+
+/// What a Removal's signature covers: the prefix, the target's id and the time (8 bytes, big endian).
+fn removal_message(target: &str, t: u64) -> Vec<u8> {
+    let mut m = REMOVAL_PREFIX.to_vec();
+    m.extend_from_slice(target.as_bytes());
+    m.extend_from_slice(&t.to_be_bytes());
+    m
+}
+
+fn sign_removal(key: &SecretKey, target: &str, t: u64) -> Removal {
+    let sig = data_encoding::HEXLOWER.encode(&key.sign(&removal_message(target, t)).to_bytes());
+    Removal { target: target.to_string(), by: key.public().to_string(), t, sig }
+}
+
+/// Whether `r.sig` is `r.by`'s signature over the removal.
+fn removal_checks_out(r: &Removal) -> bool {
+    let Ok(by) = r.by.parse::<PublicKey>() else { return false };
+    let Ok(bytes) = data_encoding::HEXLOWER.decode(r.sig.as_bytes()) else { return false };
+    let Ok(bytes) = <[u8; 64]>::try_from(bytes.as_slice()) else { return false };
+    by.verify(&removal_message(&r.target, r.t), &Signature::from_bytes(&bytes)).is_ok()
 }
 
 /// A link as it is made: Off, waiting for the person's answer (`ask`), until either device sets it. Its time is 0, so any
@@ -482,6 +527,9 @@ struct RemoteIndex {
     /// before Reticulum learns where to reach the sender.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rns: Option<RnsProof>,
+    /// The devices the sender has unlinked, signed by it, so this one unlinks them too (older versions do not say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<Removal>,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -654,6 +702,8 @@ struct Inner {
     /// Devices whose Gate refused the last check-in with 403 "not linked", and when the first of those was (see
     /// [`Inner::refused_by`]). In memory only: a restart starts the count again, which can only keep a link longer.
     refused: Mutex<HashMap<String, Instant>>,
+    /// The unlinks refused as older than their link (target, by, time), so the line is said once ([`Inner::apply_removals`]).
+    refused_removals: Mutex<std::collections::HashSet<(String, String, u64)>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
     run: Mutex<Run>,
@@ -1544,7 +1594,25 @@ impl Inner {
             links: true,
             secrets,
             rns: self.rns_info().map(|(dest, sig)| RnsProof { dest, sig }),
+            removed: self.removals_to_offer(&s),
         }
+    }
+
+    /// The unlinks this device offers in its file list: the kept ones, newer than [`REMOVAL_KEEP_MS`].
+    fn removals_to_offer(&self, s: &Saved) -> Vec<Removal> {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self.dir.join("no-removed-field").exists() {
+                // Acts as build 54, which says nothing about unlinks.
+                return Vec::new();
+            }
+            if let Some(v) = read_json::<Vec<Removal>>(&self.dir.join("inject-removals.json")) {
+                // Exactly these, signed or not as the test made them.
+                return v;
+            }
+        }
+        let now = now_ms();
+        s.removals.iter().filter(|r| now.saturating_sub(r.t) < REMOVAL_KEEP_MS).cloned().collect()
     }
 
     /// `share` is kept with the linked device `peer` ([`Config::with`]).
@@ -1600,6 +1668,53 @@ impl Inner {
         self.received.lock().unwrap().remove(id);
         self.refused.lock().unwrap().remove(id);
         self.save()
+    }
+
+    /// The person unlinks `id` here: [`Inner::remove_peer`], then a signed [`Removal`] kept for the other linked devices
+    /// ([`REMOVAL_KEEP_MS`]), which unlink it too when they next see this device's file list. A device that is not linked is only
+    /// cleaned up, and nothing is offered.
+    fn remove_device(&self, id: &str) -> Result<()> {
+        let linked = self.saved.lock().unwrap().peers.iter().any(|p| p.id == id);
+        if linked && id != self.me {
+            let (key, _) = identity::load_or_create(&self.dir)?;
+            let now = now_ms();
+            let mut sv = self.saved.lock().unwrap();
+            sv.removals.retain(|r| r.target != id && now.saturating_sub(r.t) < REMOVAL_KEEP_MS);
+            sv.removals.push(sign_removal(&key, id, now));
+        }
+        self.remove_peer(id)
+    }
+
+    /// A linked device's file list carries unlinks: applies each that holds up, as a local unlink without a new Removal (so
+    /// nothing echoes). It holds up when `by` is linked here, the signature is `by`'s, the target is linked here and is not this
+    /// device, and `t` is after this device linked with the target (a link with no time saved counts as older).
+    fn apply_removals(&self, list: &[Removal]) {
+        for r in list {
+            if r.target == self.me || r.by == self.me {
+                continue;
+            }
+            let (by, target) = {
+                let sv = self.saved.lock().unwrap();
+                (sv.peers.iter().find(|p| p.id == r.by).cloned(), sv.peers.iter().find(|p| p.id == r.target).cloned())
+            };
+            let (Some(by), Some(target)) = (by, target) else { continue };
+            if !removal_checks_out(r) {
+                continue;
+            }
+            if r.t <= target.linked {
+                // Said once for each, not on every round: the sender keeps offering it.
+                if self.refused_removals.lock().unwrap().insert((r.target.clone(), r.by.clone(), r.t)) {
+                    self.note(format!(
+                        "Not unlinked {}: the request from {} is older than this link (check the clocks on both devices)",
+                        target.name, by.name
+                    ));
+                }
+                continue;
+            }
+            if self.remove_peer(&target.id).is_ok() {
+                self.note(format!("{} unlinked {}", by.name, target.name));
+            }
+        }
     }
 
     /// Notes how a check-in with `peer` ended, and drops the link when the other device has refused it as "not linked" (403) in
@@ -1754,6 +1869,10 @@ impl Inner {
             if !self.may_use_network() {
                 break;
             }
+            if !self.saved.lock().unwrap().peers.iter().any(|x| x.id == p.id) {
+                // Unlinked meanwhile (a linked device's unlink of it, in this round).
+                continue;
+            }
             let closed = AtomicU32::new(0);
             let res = self.fetch_index(&p.id, &closed).await;
             // Whether the other device has unlinked this one (see check_in_ended): then there is nothing more to do with it.
@@ -1763,6 +1882,10 @@ impl Inner {
             }
             let mut asks = None;
             let mut learned = None;
+            // The device unlinked others and says so (signed): this one unlinks them too.
+            if let Some(list) = res.as_ref().ok().map(|(idx, _)| idx.removed.clone()).filter(|l| !l.is_empty()) {
+                self.apply_removals(&list);
+            }
             // A file list from a device linked before Reticulum (or from build 54) tells where to reach it.
             if let Some(r) = res.as_ref().ok().and_then(|(idx, _)| idx.rns.clone()) {
                 if p.rns.as_ref().map(|x| x.dest.as_str()) != Some(r.dest.as_str()) {
@@ -2394,6 +2517,8 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
+        // Linked again: an unlink offered before no longer holds.
+        s.removals.retain(|r| r.target != id);
         s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, rns: None });
     }
     inner.net.allow(id);
@@ -2563,6 +2688,7 @@ impl SyncEngine {
             saved: Mutex::new(saved),
             gate: gate.clone(),
             refused: Mutex::new(HashMap::new()),
+            refused_removals: Mutex::new(Default::default()),
             pairing: Mutex::new(None),
             run: Mutex::new(Run::default()),
             wanted,
@@ -2683,7 +2809,7 @@ impl SyncEngine {
             }
             "unlink" => {
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
-                inner.remove_peer(&id)?;
+                inner.remove_device(&id)?;
                 Ok(json!({"ok": true}))
             }
             "set_link" => {
