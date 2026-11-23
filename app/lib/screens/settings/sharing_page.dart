@@ -7,11 +7,13 @@ import '../../maps/ui/format.dart';
 import '../../platform.dart' as plat;
 import '../../settings/data_kinds.dart';
 import '../../sharing/link_inbox.dart';
+import '../../sharing/link_scan.dart';
 import '../../sharing/link_url.dart';
 import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
 import 'link_code_page.dart';
+import 'link_scan_screen.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
 import '../../update/update_ui.dart' show updateCacheSnackAction;
@@ -19,7 +21,7 @@ import '../../platform/device_lock.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.onOpenItem});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.onOpenItem, this.scanner});
 
   /// What an item's row opens (see [ShareItemOpener]); null: rows only toggle sharing.
   final ShareItemOpener? onOpenItem;
@@ -37,6 +39,9 @@ class SharingPage extends StatefulWidget {
 
   /// Sends text through the phone's share sheet; the real one unless a test gives one.
   final Future<void> Function(String text)? share;
+
+  /// Reads a link code from the camera ("Scan a code"); null: this platform's own (none on Linux and the web, where the button is hidden).
+  final LinkScanner? scanner;
 
   @override
   State<SharingPage> createState() => _SharingPageState();
@@ -207,16 +212,41 @@ class _SharingPageState extends State<SharingPage> {
   /// "Enter a link code". [initial] fills the box (a code that came in as a link). The clipboard is read only when Paste is tapped.
   Future<void> _enterCode({String? initial}) async {
     final ctl = TextEditingController(text: initial ?? '');
+    final scanner = widget.scanner ?? defaultLinkScanner();
     final code = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Enter a link code'),
-        content: TextField(
-          controller: ctl,
-          autofocus: true,
-          minLines: 3,
-          maxLines: 6,
-          decoration: const InputDecoration(hintText: 'CACHE1-…', border: OutlineInputBorder()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctl,
+              autofocus: true,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(hintText: 'CACHE-…', border: OutlineInputBorder()),
+            ),
+            if (scanner != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const ValueKey('scan-code'),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan a code'),
+                // A code read is linked as if typed and Link tapped.
+                onPressed: () async {
+                  final read = await Navigator.of(ctx).push<String>(MaterialPageRoute(builder: (_) => LinkScanScreen(scanner: scanner)));
+                  if (read != null && ctx.mounted) {
+                    ctl.text = read;
+                    Navigator.pop(ctx, read);
+                  }
+                },
+              ),
+              const SizedBox(height: 4),
+              const Text('Cache uses the camera only to read the link code.', style: TextStyle(fontSize: 12)),
+            ],
+          ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
