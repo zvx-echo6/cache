@@ -12,6 +12,11 @@ import 'dart:convert';
 /// The code is Base32 (case-insensitive), so even a payload whose case was changed still decodes in the core.
 /// `cachelink:<payload>` (no slashes, no host) is accepted too.
 
+/// Short code (the form the engine makes now): `CACHE-` and groups of four letters and digits split by dashes, for example
+/// `CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ`. The link is `cachelink://link/CACHE-7KQF-...`, dashes kept (the engine ignores
+/// case, spaces and dashes, so it reads the same with or without them; kept, the link is what the person sees under the QR).
+/// A long `CACHE1-` code still works the same way.
+
 /// The scheme registered with the phone (AndroidManifest.xml, Info.plist).
 const kLinkScheme = 'cachelink';
 
@@ -45,7 +50,10 @@ class BadLinkCode implements Exception {
   String toString() => message;
 }
 
-/// The link to show in a QR and to share, for [code] (a `CACHE1-…` link code).
+/// Whether [code] is a short link code (`CACHE-`, then groups; not the `CACHE1-` form). Case, spaces and dashes do not matter, as in the engine.
+bool isShortLinkCode(String code) => RegExp(r'^CACHE-[A-Z0-9-]+$').hasMatch(code.replaceAll(RegExp(r'\s'), '').toUpperCase());
+
+/// The link to show in a QR and to share, for [code] (a short `CACHE-…` or a long `CACHE1-…` link code).
 String buildLinkUrl(String code) => '$kLinkPrefix${code.replaceAll(RegExp(r'\s'), '')}';
 
 final _payload = RegExp(r'^[A-Za-z0-9-]+$');

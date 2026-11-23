@@ -502,7 +502,10 @@ class SharingHost {
   /// `key_names` and `set_key_on` are not the engine's: the host answers them itself, from [keyNames] and [setKeyOn] (the settings
   /// sync's key list and tick). They give a browser the names of the keys that can go to a linked device and which are ticked, and
   /// take a tick; a key's value is in neither.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on', ...nearbyMethods};
+
+  /// The Nearby linking calls (while a browser's "Show my link code" page is open): the device's own say, like the rest.
+  static const Set<String> nearbyMethods = {'pairing_open', 'pairing_close', 'nearby_list', 'nearby_link', 'nearby_state', 'nearby_answer'};
 
   /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
   List<Map<String, Object?>> Function()? keyNames;

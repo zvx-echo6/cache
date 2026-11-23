@@ -2,7 +2,6 @@ import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../maps/ui/format.dart';
 import '../../platform.dart' as plat;
@@ -12,10 +11,10 @@ import '../../sharing/link_url.dart';
 import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
+import 'link_code_page.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
 import '../../update/update_ui.dart' show updateCacheSnackAction;
-import '../../platform/share_or_copy.dart' show shareOrCopy;
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
@@ -43,14 +42,39 @@ class SharingPage extends StatefulWidget {
 }
 
 /// The QR of a device's link (see link_url.dart): what a system camera reads and opens in Cache.
+///
+/// Made to scan: error correction Q, every module [kQrModulePx] logical pixels wide (a whole number of device pixels on a phone) and a
+/// quiet zone of [kQrQuietModules] modules, all inside the white square, black on white in light and dark. A link too long for that
+/// width (an old, long code) is drawn smaller, never refused.
+const kQrModulePx = 6.0;
+const kQrQuietModules = 4;
+
 class LinkQr extends StatelessWidget {
   const LinkQr({super.key, required this.link});
 
   final String link;
 
+  /// The modules along one side, for [link] at error correction Q.
+  static int modulesFor(String link) =>
+      QrValidator.validate(data: link, errorCorrectionLevel: QrErrorCorrectLevel.Q).qrCode?.moduleCount ?? 21;
+
   @override
-  Widget build(BuildContext context) =>
-      QrImageView(data: link, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L);
+  Widget build(BuildContext context) {
+    final modules = modulesFor(link);
+    final whole = modules + 2 * kQrQuietModules;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final px = box.maxWidth.isFinite && box.maxWidth < whole * kQrModulePx ? box.maxWidth / whole : kQrModulePx;
+        return QrImageView(
+          data: link,
+          size: whole * px,
+          padding: EdgeInsets.all(kQrQuietModules * px),
+          backgroundColor: Colors.white,
+          errorCorrectionLevel: QrErrorCorrectLevel.Q,
+        );
+      },
+    );
+  }
 }
 
 String _ago(int? ms) {
@@ -117,6 +141,8 @@ class _SharingPageState extends State<SharingPage> {
   /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
+    // A short code carries no device in it to read here; the engine says whose it is, and its own messages.
+    if (isShortLinkCode(code)) return code;
     try {
       info = decodeLinkCode(code);
     } on BadLinkCode catch (e) {
@@ -162,78 +188,20 @@ class _SharingPageState extends State<SharingPage> {
     );
   }
 
-  /// Shows the link code until the other device links with it (the sheet then closes and the question follows) or it is closed.
+  /// Opens the "Show my link code" page, which stays until the other device links with the code or a Nearby link is made (the
+  /// question about settings then follows) or it is closed.
   Future<void> _showCode() async {
     String? linked;
     await _run(() async {
       final code = await s.linkCode();
       if (!mounted) return;
-      final before = {for (final p in s.peers) p['id']: p['linked']};
-      BuildContext? sheet;
-      void onSharing() {
-        if (linked != null || sheet == null) return;
-        final fresh = s.peers.where((p) => !before.containsKey(p['id']) || before[p['id']] != p['linked']).firstOrNull;
-        if (fresh == null || fresh['id'] is! String) return;
-        linked = fresh['id'] as String;
-        Navigator.of(sheet!).pop();
-      }
-
-      s.addListener(onSharing);
-      try {
-        await _codeSheet(code, (ctx) => sheet = ctx);
-      } finally {
-        s.removeListener(onSharing);
-      }
+      linked = await Navigator.of(context).push<String>(MaterialPageRoute<String>(builder: (_) => LinkCodePage(sharing: s, code: code, share: widget.share)));
     });
-    if (linked != null) await _ask(linked!);
+    if (linked != null) {
+      if (mounted) say(context, 'Linked with ${s.peerOf(linked!)?['name'] ?? 'the other device'}');
+      await _ask(linked!);
+    }
   }
-
-  Future<void> _codeSheet(String code, void Function(BuildContext) opened) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) {
-        opened(ctx);
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Link code for ${s.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text('Works once, for 15 minutes', style: TextStyle(color: ctx.t.secondary)),
-                const SizedBox(height: 14),
-                Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(10),
-                  child: LinkQr(link: buildLinkUrl(code)),
-                ),
-                const SizedBox(height: 12),
-                SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy code'),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: code));
-                    say(ctx, 'Copied');
-                  },
-                ),
-                TextButton.icon(
-                  key: const ValueKey('share-link'),
-                  icon: const Icon(Icons.share),
-                  label: const Text('Share link'),
-                  // a browser with no share sheet copies it instead, and says so
-                  onPressed: () => shareOrCopy(context, buildLinkUrl(code), share: widget.share ?? _systemShare, copied: 'Link copied'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-  static Future<void> _systemShare(String text) => SharePlus.instance.share(ShareParams(text: text)).then((_) {});
 
   /// "Enter a link code". [initial] fills the box (a code that came in as a link). The clipboard is read only when Paste is tapped.
   Future<void> _enterCode({String? initial}) async {

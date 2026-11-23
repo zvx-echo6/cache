@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart' show testPolicy;
 import 'support/sharing_host_fake.dart';
+import 'support/sync_fake.dart' show linkCodeLines;
 
 /// What a browser knows of the kinds: the phone's own list, whose folders are not the browser's (every folder is null).
 List<DataKind> _kinds() => [
@@ -297,10 +298,10 @@ void main() {
 
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
-    expect(find.text('Link code for Cache Server'), findsOneWidget);
-    expect(find.text('CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ'), findsOneWidget);
+    expect(find.text('Show my link code'), findsOneWidget, reason: 'its own page now, with a back arrow');
+    expect(linkCodeLines(tester).join(), 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
     expect(find.text('Copy code'), findsOneWidget);
-    await tester.tapAt(const Offset(5, 5));
+    await tester.pageBack();
     await _settle(tester);
     expect(find.text('Copy code'), findsNothing);
 

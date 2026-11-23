@@ -345,6 +345,9 @@ class SharingState extends ChangeNotifier {
   /// What linked devices offer for [k]'s folders.
   List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
 
+  /// An engine call that does not refresh the status after it: what the Nearby page asks every half second (see nearby.dart).
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]) => _driver.callQuiet(method, args);
+
   Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
 
   /// Links with the device that showed [code]: its key and its name.
@@ -404,6 +407,9 @@ abstract class SharingDriver {
 
   /// One engine method, then the status read again. Throws when sharing is not set up.
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]);
+
+  /// [call] without the status refresh after it (the Nearby page's 500 ms polling).
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]);
   Future<({String peer, String name})> link(String code);
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
@@ -933,6 +939,13 @@ class _PhoneDriver implements SharingDriver {
   }
 
   @override
+  Future<Map<String, dynamic>> callQuiet(String m, [Map<String, Object?> a = const {}]) async {
+    final c = _core;
+    if (c == null) throw const CacheSearchException('sync', 'Sharing is not set up');
+    return c.call(m, a);
+  }
+
+  @override
   Future<({String peer, String name})> link(String code) async {
     final r = await call('link', {'code': code});
     return (peer: r['peer'] as String? ?? '', name: r['name'] as String? ?? 'the other device');
@@ -1115,6 +1128,12 @@ class _WebDriver implements SharingDriver {
     final r = await _op('sharing.call', {'method': method, 'args': args});
     await refresh();
     return r;
+  }
+
+  @override
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]) async {
+    if (!_running) throw const CacheSearchException('sync', 'Sharing is not set up');
+    return _op('sharing.call', {'method': method, 'args': args});
   }
 
   /// Starts the link on the server (which returns at once) and reads its progress until it is done or has failed.

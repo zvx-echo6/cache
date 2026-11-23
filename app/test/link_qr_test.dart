@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
+import 'support/sync_fake.dart' show linkCodeLines;
 import 'package:cache/update/app_update.dart' show AppUpdate, AppUpdateSource;
 import 'package:cache/update/update_ui.dart' show AppUpdates, currentAppUpdates;
 import 'package:cache/platform/share_or_copy.dart' show systemShareAvailable;
@@ -40,6 +41,8 @@ void tall(WidgetTester tester) {
   addTearDown(tester.view.reset);
 }
 
+const _short = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
+
 void main() {
   final code = codeFor('aa11bb22');
 
@@ -47,6 +50,19 @@ void main() {
     test('builds cachelink://link/<code>', () {
       expect(buildLinkUrl('CACHE1-ABC234'), 'cachelink://link/CACHE1-ABC234');
       expect(kLinkPrefix, 'cachelink://link/');
+    });
+
+    test('the short code: the link keeps it as it is, and reads back the same', () {
+      expect(buildLinkUrl(_short), 'cachelink://link/$_short');
+      expect(buildLinkUrl(_short).startsWith('cachelink://'), isTrue, reason: 'lower-case scheme, which Android matches');
+      expect(linkCodeFrom('cachelink://link/$_short'), _short);
+      expect(linkCodeFrom('CACHELINK://LINK/$_short'), _short);
+      expect(linkCodeFrom('cachelink:$_short'), _short);
+      expect(linkCodeFrom(' $_short\n'), _short);
+      expect(linkCodeFrom('cachelink://link/CACHE-7KQF-M2XD-P4WN-\nR7TA-H3JC-V6YB-Q5LE-W2FS-ZQ'), _short, reason: 'a line break from a wrapped paste');
+      expect(isShortLinkCode(_short), isTrue);
+      expect(isShortLinkCode('cache-7kqf m2xd'), isTrue, reason: 'case and spaces do not matter, as in the engine');
+      expect(isShortLinkCode(code), isFalse, reason: 'a CACHE1 code is the long form');
     });
 
     test('parses both forms, and a bare code', () {
@@ -322,13 +338,13 @@ void main() {
       final r = await openPage(tester, fresh(), shared: shared);
       await tester.tap(find.byKey(const ValueKey('show-code')));
       await tester.pumpAndSettle();
-      expect(tester.widget<LinkQr>(find.byType(LinkQr)).link, 'cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
-      expect(find.text('CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ'), findsOneWidget, reason: 'the code stays under the QR');
+      expect(tester.widget<LinkQr>(find.byType(LinkQr)).link, 'cachelink://link/$_short');
+      expect(linkCodeLines(tester).join(), _short, reason: 'the whole code stays under the QR, never cut short');
       expect(find.text('Copy code'), findsOneWidget);
       expect(find.text('Share link'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('share-link')));
       await tester.pump();
-      expect(shared, ['cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ']);
+      expect(shared, ['cachelink://link/$_short']);
       expect(clipReads, isEmpty);
       await r.dispose(tester);
     });
@@ -344,7 +360,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('share-link')));
       await tester.pump();
       expect(shared, isEmpty, reason: 'nothing to hand it to');
-      expect(clipWrites, ['cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ']);
+      expect(clipWrites, ['cachelink://link/$_short']);
       expect(find.text('Link copied'), findsOneWidget);
       await r.dispose(tester);
     });

@@ -1,4 +1,12 @@
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// The lines of the link code under the QR on "Show my link code" (one line, or two when it does not fit one).
+List<String> linkCodeLines(WidgetTester tester) => tester
+    .widgetList<Text>(find.descendant(of: find.byKey(const ValueKey('link-code-text')), matching: find.byType(Text)))
+    .map((t) => t.data!)
+    .toList();
 
 /// A sync engine with no network: remembers shares and peers, and answers like the real one.
 class FakeSync implements SyncCoreLike {
@@ -43,6 +51,25 @@ class FakeSync implements SyncCoreLike {
     p['last_seen'] = DateTime.now().millisecondsSinceEpoch;
     p['error'] = null;
   }
+  // Nearby linking (the engine's `pairing_*` and `nearby_*` calls). A test sets [nearbyDevices] and [nearbyState] by hand to walk the
+  // states the engine goes through; the three `nearbyAfter` fields are what the person's own taps leave behind.
+
+  /// True between `pairing_open` and `pairing_close`.
+  bool pairingOpen = false;
+
+  /// When set, `pairing_open` fails with it (an engine with no Nearby here).
+  Object? pairingOpenError;
+
+  /// What `nearby_list` answers: `{id, name (null: not known yet), via}`.
+  final nearbyDevices = <Map<String, Object?>>[];
+
+  /// What `nearby_state` answers.
+  Map<String, Object?> nearbyState = {'state': 'idle'};
+
+  /// The state after `nearby_link`, after `nearby_answer` with ok true, and with ok false.
+  Map<String, Object?> nearbyAfterLink = {'state': 'exchanging', 'name': 'Pixel 8'};
+  Map<String, Object?> nearbyAfterYes = {'state': 'waiting', 'name': 'Pixel 8'};
+  Map<String, Object?> nearbyAfterNo = {'state': 'dropped', 'reason': 'cancelled'};
 
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
@@ -125,6 +152,24 @@ class FakeSync implements SyncCoreLike {
         final out = {for (final e in inbox.entries) e.key: Map.of(e.value)};
         inbox.clear();
         return {'secrets': out};
+      case 'pairing_open':
+        if (pairingOpenError != null) throw pairingOpenError!;
+        pairingOpen = true;
+        return {};
+      case 'pairing_close':
+        pairingOpen = false;
+        nearbyState = {'state': 'idle'};
+        return {};
+      case 'nearby_list':
+        return {'devices': [for (final d in nearbyDevices) Map<String, Object?>.of(d)]};
+      case 'nearby_state':
+        return Map<String, Object?>.of(nearbyState);
+      case 'nearby_link':
+        nearbyState = Map.of(nearbyAfterLink);
+        return {};
+      case 'nearby_answer':
+        nearbyState = Map.of(args['ok'] == true ? nearbyAfterYes : nearbyAfterNo);
+        return {};
       case 'share_items':
         return {'items': items[args['id']] ?? const []};
       default:
