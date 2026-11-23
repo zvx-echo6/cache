@@ -105,6 +105,22 @@ void main() {
       expect(() => decodeLinkCode('CACHE1-'), throwsA(isA<BadLinkCode>()));
     });
 
+    test('a short code (build 55) passes the link form and decodes without a device; an old code still does too', () {
+      const short = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
+      expect(linkCodeFrom('cachelink://link/$short'), short);
+      expect(linkCodeFrom('cachelink:$short'), short);
+      expect(linkCodeFrom(buildLinkUrl(short)), short);
+      expect(buildLinkUrl(short).length, lessThan(70), reason: 'a small QR');
+      for (final c in [short, short.toLowerCase(), ' ${short.replaceAll('-', ' ')} ', short.replaceFirst('CACHE-', 'CACHE')]) {
+        final i = decodeLinkCode(c);
+        expect((i.id, i.name), ('', ''), reason: c);
+      }
+      for (final c in [short.substring(0, short.length - 1), '${short}A', 'CACHE-7KQF-1111-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ']) {
+        expect(() => decodeLinkCode(c), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', kNotACode)), reason: c);
+      }
+      expect(decodeLinkCode(code).id, 'aa11bb22', reason: 'an old code still reads');
+    });
+
     test('a code from a newer Cache (CACHE2- and up, any case) says so; other codes keep their messages', () {
       for (final c in ['CACHE2-ABC', 'cache3-abc', ' CACHE12-\nAB ', 'CACHE2-', 'CACHE99999999999999999999999-X']) {
         expect(() => decodeLinkCode(c), throwsA(isA<BadLinkCode>().having((e) => e.message, 'm', _newer)), reason: c);
@@ -306,13 +322,13 @@ void main() {
       final r = await openPage(tester, fresh(), shared: shared);
       await tester.tap(find.byKey(const ValueKey('show-code')));
       await tester.pumpAndSettle();
-      expect(tester.widget<LinkQr>(find.byType(LinkQr)).link, 'cachelink://link/CACHE1-TESTCODE');
-      expect(find.text('CACHE1-TESTCODE'), findsOneWidget, reason: 'the code stays under the QR');
+      expect(tester.widget<LinkQr>(find.byType(LinkQr)).link, 'cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
+      expect(find.text('CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ'), findsOneWidget, reason: 'the code stays under the QR');
       expect(find.text('Copy code'), findsOneWidget);
       expect(find.text('Share link'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('share-link')));
       await tester.pump();
-      expect(shared, ['cachelink://link/CACHE1-TESTCODE']);
+      expect(shared, ['cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ']);
       expect(clipReads, isEmpty);
       await r.dispose(tester);
     });
@@ -328,7 +344,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('share-link')));
       await tester.pump();
       expect(shared, isEmpty, reason: 'nothing to hand it to');
-      expect(clipWrites, ['cachelink://link/CACHE1-TESTCODE']);
+      expect(clipWrites, ['cachelink://link/CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ']);
       expect(find.text('Link copied'), findsOneWidget);
       await r.dispose(tester);
     });

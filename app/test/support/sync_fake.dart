@@ -14,7 +14,7 @@ class FakeSync implements SyncCoreLike {
   Object? linkError;
 
   /// The code `link_code` answers (a test of the QR gives a real-sized one).
-  String codeOverride = 'CACHE1-TESTCODE';
+  String codeOverride = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
 
   /// The free space and the kept-free reserve `status` answers.
   int freeBytes = 10 << 30;

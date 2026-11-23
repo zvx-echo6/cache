@@ -6,7 +6,8 @@ import 'dart:convert';
 /// camera or a browser may lowercase one, which would damage a payload. The scheme and the host ("link") are matched without
 /// regard to case; the payload keeps its case.
 ///
-/// Phase 1 payload: the link code the app shows today, `CACHE1-<Base32>`, unchanged. Its characters are A to Z, 2 to 7 and the
+/// Phase 1 payload: the link code the app shows, `CACHE1-<Base32>` (builds before 55) or the short `CACHE-XXXX-XXXX-…` (build 55:
+/// 34 base32 characters in groups of four), unchanged. Its characters are A to Z, 2 to 7 and the
 /// hyphen, all unreserved in an address, so it needs no escaping and the link carries exactly the code the person could type.
 /// The code is Base32 (case-insensitive), so even a payload whose case was changed still decodes in the core.
 /// `cachelink:<payload>` (no slashes, no host) is accepted too.
@@ -113,6 +114,13 @@ List<int>? _base32(String s) {
 /// The device a `CACHE1-` link code belongs to. Throws [BadLinkCode] with the engine's own messages when it is not one.
 LinkCodeInfo decodeLinkCode(String code) {
   final s = code.replaceAll(RegExp(r'\s'), '').toUpperCase();
+  if (!s.startsWith('CACHE1-') && s.startsWith('CACHE') && !RegExp(r'^CACHE\d+-').hasMatch(s)) {
+    // A short code (build 55): `CACHE-` and 34 base32 characters, in groups of four; the prefix's dash may be missing. It names
+    // no device the app can read (the engine knows the destination; the name and key come back in the pairing).
+    final body = s.substring(5).replaceAll('-', '');
+    if (body.length != 34 || _base32(body) == null) throw const BadLinkCode(kNotACode);
+    return const LinkCodeInfo(id: '', name: '');
+  }
   if (!s.startsWith('CACHE1-')) {
     // `CACHE<n>-` with n above 1 is made by a newer Cache; a number too big to read is newer too.
     final n = RegExp(r'^CACHE(\d+)-').firstMatch(s)?.group(1);

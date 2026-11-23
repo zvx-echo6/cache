@@ -189,7 +189,7 @@ void main() {
     host.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null});
     final s = _web(host, dir);
     await s.init();
-    expect(await s.linkCode(), 'CACHE1-TESTCODE');
+    expect(await s.linkCode(), 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
     await s.rename('Basement');
     expect(s.name, 'Basement');
     await s.renamePeer('p1', 'Office');
@@ -298,7 +298,7 @@ void main() {
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
     expect(find.text('Link code for Cache Server'), findsOneWidget);
-    expect(find.text('CACHE1-TESTCODE'), findsOneWidget);
+    expect(find.text('CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ'), findsOneWidget);
     expect(find.text('Copy code'), findsOneWidget);
     await tester.tapAt(const Offset(5, 5));
     await _settle(tester);
