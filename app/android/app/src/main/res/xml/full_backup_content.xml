@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 9 to 11 (the same rule as data_extraction_rules.xml, which Android 12 and later read instead): backup keeps Cache's settings
+     only (owner decision, 2026-11-23), include-only. User data is not in phone backups and API keys are not restorable. The list is
+     kBackupAllowList in lib/platform/backup_scope.dart; a test keeps the two equal. -->
+<full-backup-content>
+    <include domain="file" path="settings.json"/>
+    <include domain="file" path="layout.json"/>
+    <include domain="file" path="preferences.json"/>
+    <include domain="file" path="maps.json"/>
+    <include domain="file" path="live-catalogues/473764f0fe8c"/>
+</full-backup-content>
