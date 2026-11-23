@@ -89,7 +89,10 @@ class DirectionsHeader extends StatelessWidget {
                             ReorderableDragStartListener(
                               key: ValueKey('stop-handle-$i'),
                               index: i,
-                              child: SizedBox(width: 44, height: 44, child: Icon(Icons.drag_handle, size: 18, color: k.secondary)),
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.grab,
+                                child: SizedBox(width: 44, height: 44, child: Icon(Icons.drag_handle, size: 18, color: k.secondary)),
+                              ),
                             ),
                           Expanded(
                             child: InkWell(

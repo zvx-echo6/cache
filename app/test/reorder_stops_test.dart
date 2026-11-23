@@ -133,6 +133,14 @@ void main() {
       expect(find.byKey(const ValueKey('stop-remove-0')), findsOneWidget);
     });
 
+    testWidgets('the handle shows a grab cursor on web and desktop', (tester) async {
+      setUpStops();
+      await pump(tester);
+      final region = find.descendant(of: find.byKey(const ValueKey('stop-handle-0')), matching: find.byType(MouseRegion));
+      expect(region, findsWidgets);
+      expect(tester.widgetList<MouseRegion>(region).any((m) => m.cursor == SystemMouseCursors.grab), isTrue);
+    });
+
     testWidgets('dragging a handle reorders at once, renumbers, and says so', (tester) async {
       setUpStops();
       await pump(tester);
