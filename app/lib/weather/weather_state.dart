@@ -23,6 +23,7 @@ import 'live_view.dart';
 import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
+import '../roads/road_state.dart';
 import 'places.dart';
 import 'source_health.dart';
 import '../notebook/places.dart' show distanceM;
@@ -198,6 +199,7 @@ class WeatherState extends ChangeNotifier {
     required this.builtIns,
     this.position,
     this.regions,
+    this.roads,
     this.notifier,
     this.told,
     this.onPlacesChanged,
@@ -257,6 +259,10 @@ class WeatherState extends ChangeNotifier {
   final Future<List<String>> Function() builtIns;
   final Position? Function()? position;
   final List<WatchRegion> Function()? regions;
+
+  /// The road sources (511 road events, WZDx road work): their connectors are listed with the others and their downloads count against
+  /// their site's rate limit. Null where there are none (tests that do not use them).
+  final RoadSources? roads;
   final FetchBytes _fetch;
   final OwnFetch _ownFetch;
 
@@ -457,8 +463,13 @@ class WeatherState extends ChangeNotifier {
   List<Connector> get sources {
     final out = <Connector>[];
     final seen = <String>{};
+    // Road sources first: they keep the ids of the catalogue's Idaho sources, which are left out (the model's tool lists the ids).
+    for (final k in roads?.connectors ?? const <Connector>[]) {
+      if (seen.add(k.id)) out.add(k);
+    }
     for (final c in [...catalogues, ?_own]) {
       for (final k in c.connectors) {
+        if (roads != null && kRetiredRoadIds.contains(k.id)) continue;
         if (seen.add(k.id)) out.add(k);
       }
     }
@@ -668,6 +679,12 @@ class WeatherState extends ChangeNotifier {
     }
     _catalogues = _store!.loadAll();
     _moveLinkedLists();
+    try {
+      await roads?.load();
+      await roads?.migrateIdaho(secrets);
+    } catch (e) {
+      logError('Road sources move', error: e);
+    }
     _readStatus();
     _readShown();
     _readHereData();
@@ -707,7 +724,7 @@ class WeatherState extends ChangeNotifier {
 
   Future<void> _readKeys() async {
     _keys.clear();
-    final aliases = <String>{for (final c in [..._builtIn, for (final k in _catalogues) ...k.connectors]) ?c.keyAlias};
+    final aliases = <String>{for (final c in [..._builtIn, for (final k in _catalogues) ...k.connectors, ...?roads?.connectors]) ?c.keyAlias};
     for (final a in aliases) {
       try {
         if ((await secrets.read(secretName(a)))?.isNotEmpty == true) _keys.add(a);
@@ -1463,7 +1480,7 @@ class WeatherState extends ChangeNotifier {
       for (final c in srcs)
         () async {
           try {
-            await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+            await _fetchCore(c, {'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
             _noteHere(c, here.first);
             _coreOffline = false;
             await _noteOutcome(c, SourceFailure.none);
@@ -1641,11 +1658,27 @@ class WeatherState extends ChangeNotifier {
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
+  /// A download through the core. A road source's download first asks its site's limiter (one budget per site, ten calls every 60
+  /// seconds on a 511 site): when the budget is used it waits for room. A download the core answered from its stored copy gives the call back.
+  Future<Map<String, dynamic>> _fetchCore(Connector c, Map<String, dynamic> request) async {
+    final host = c.rateHost, limiter = roads?.limiter;
+    if (host == null || limiter == null) return core.fetch(request);
+    for (var i = 0; i < 6; i++) {
+      final wait = limiter.tryAcquire(host);
+      if (wait == null) break;
+      logInfo('Road sources: ${c.id} waits ${wait.inSeconds + 1} s for room under the site\'s limit');
+      await Future<void>.delayed(wait + const Duration(milliseconds: 50));
+    }
+    final r = await core.fetch(request);
+    if (r['fetched'] != true) limiter.release(host);
+    return r;
+  }
+
   /// One download of [c] for [p]; the kind of a failure goes into [kinds], its words into [sourceErrors].
   Future<(bool, String?)> _fetchOne(Connector c, WatchPlace p, bool force, Map<String, SourceFailure> kinds) async {
     final took = Stopwatch()..start();
     try {
-      final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+      final r = await _fetchCore(c, {'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
       final got = r['fetched'] == true;
       _noteHere(c, p);
       logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');

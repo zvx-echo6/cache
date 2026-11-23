@@ -123,6 +123,8 @@ import 'weather/weather_files.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
+import 'roads/road_sources.dart' show kRoadSourcesAsset;
+import 'roads/road_state.dart';
 import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
@@ -327,6 +329,7 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
+    roads: RoadSources(settings: settings, loadShipped: () => rootBundle.loadString(kRoadSourcesAsset)),
     // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point (the `town` field of its coordinates result).
     townOf: (lat, lon) async {
       final core = sources.core;

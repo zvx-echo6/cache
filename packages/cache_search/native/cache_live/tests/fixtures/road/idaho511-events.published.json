@@ -1,0 +1,49 @@
+{
+  "format": 2,
+  "id": "idaho511-events",
+  "title": "Idaho 511 traffic events near the place",
+  "provider": "Idaho Transportation Department (511)",
+  "description": "Idaho road events from 511 within 75 miles of the place (default): closures, crashes, incidents and roadwork, full closures first then nearest; needs a free 511 developer key",
+  "attribution": "Road event data from Idaho 511 (511.idaho.gov), Idaho Transportation Department; use is subject to the 511 developer terms",
+  "params": [{"name": "radius_mi", "label": "Radius (miles)", "type": "integer", "default": 75, "min": 5, "max": 500}],
+  "request": {"url": "https://511.idaho.gov/api/v2/get/event?key={api_key}&format=json"},
+  "api_key": {"alias": "idaho511", "required": true},
+  "refresh_minutes": 10,
+  "quota": {"per_minute": 4, "per_day": 400, "per_month": 8000},
+  "validity": {"fixed_hours": 2},
+  "require": ["[0].ID"],
+  "items": [
+    {
+      "each": "^",
+      "key": {"path": "ID"},
+      "label": {
+        "template": "{road}: {type}",
+        "vars": {"road": {"path": "RoadwayName"}, "type": {"first_of": [{"path": "EventSubType"}, {"path": "EventType"}]}}
+      },
+      "time": {"path": "LastUpdated", "time": {"in": "unix", "out": "datetime"}},
+      "point": {"lat": {"path": "Latitude"}, "lon": {"path": "Longitude"}},
+      "near": {"max": {"param": "radius_mi"}, "unit": "mi"},
+      "sort": [{"by": {"path": "IsFullClosure"}, "rank": ["true", "false"]}, {"distance": true}],
+      "limit": 30,
+      "fields": [
+        {
+          "label": "Type",
+          "path": "EventType",
+          "lookup": {"roadwork": "roadwork", "closures": "closure", "accidentsAndIncidents": "crash or incident", "*": "other"}
+        },
+        {"label": "Detail", "path": "EventSubType"},
+        {"label": "From the place", "distance": {"point": {"lat": {"path": "Latitude"}, "lon": {"path": "Longitude"}}, "unit": "mi"}},
+        {"label": "Direction", "path": "DirectionOfTravel", "omit_if": ["unknown"]},
+        {"label": "All lanes blocked", "path": "IsFullClosure", "lookup": {"true": "yes"}},
+        {"label": "Lanes affected", "path": "LanesAffected"},
+        {"label": "Severity", "path": "Severity", "case": "lower", "omit_if": ["unknown"]},
+        {"label": "Cause", "path": "Cause"},
+        {"label": "Starts", "path": "StartDate", "time": {"in": "unix", "zone": "place", "out": "%Y-%m-%d %H:%M"}},
+        {"label": "Planned end", "path": "PlannedEndDate", "time": {"in": "unix", "zone": "place", "out": "%Y-%m-%d %H:%M"}},
+        {"label": "Details", "path": "Description", "max_chars": 300},
+        {"label": "Comment", "path": "Comment", "max_chars": 200},
+        {"label": "Detour", "path": "DetourInstructions", "max_chars": 200}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[
+ {
+  "Id": "c1",
+  "RoadwayName": "I-84",
+  "AreaName": "Boise",
+  "LocationDescription": "Sample section",
+  "Description": "Sample: dry and clear.",
+  "EncodedPolyline": "kabiGpg}dU?etBXqYVaG|@cL`@gD",
+  "LastUpdated": 1795373600
+ },
+ {
+  "Id": "c2",
+  "RoadwayName": "US-20",
+  "AreaName": "Mountain",
+  "LocationDescription": "Sample pass",
+  "Description": "Sample: snow packed.",
+  "EncodedPolyline": "",
+  "LastUpdated": 1795373600,
+  "Visibility": "Fair"
+ }
+]

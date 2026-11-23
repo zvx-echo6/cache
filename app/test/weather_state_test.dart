@@ -15,6 +15,8 @@ import 'package:cache/weather/own_source.dart';
 import 'package:cache/weather/catalogue_store.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/roads/rate_limiter.dart';
+import 'package:cache/roads/road_state.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_files.dart';
 import 'package:cache/weather/weather_state.dart';
@@ -37,13 +39,14 @@ class Harness {
   late FakeLiveCore core;
   late FakeWeb web;
   late WeatherState weather;
+  RoadSources? roads;
   Position? here = (lat: 42.54, lon: -113.79);
   DateTime clock = DateTime(2026, 10, 26, 12, 0);
   List<WatchRegion> regions = [];
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier, bool browser = false, bool withBuiltIns = true, bool roadSources = false, Future<void> Function(Harness h)? before}) async {
     final h = Harness();
     h.withBuiltIns = withBuiltIns;
     h.browser = browser;
@@ -57,7 +60,11 @@ class Harness {
     h.secrets = again?.secrets ?? MemoryTokenStore();
     h.core = FakeLiveCore(h.liveDir);
     h.web = FakeWeb();
+    if (roadSources) {
+      h.roads = RoadSources(settings: h.settings, loadShipped: () async => File('assets/roads/road_sources.json').readAsString(), limiter: HostRateLimiter(clock: () => h.clock));
+    }
     if (serve) h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
+    await before?.call(h);
     h.weather = h.build();
     if (start) {
       await h.weather.start();
@@ -104,6 +111,7 @@ class Harness {
     builtIns: () async => withBuiltIns ? builtInDefinitions() : [],
     position: () => here,
     regions: () => regions,
+    roads: roads,
     fetch: web.fetch,
     ownFetch: web.tryFetch,
     clock: () => clock,
@@ -773,6 +781,56 @@ void main() {
       expect(h.core.keys['firms-viirs-near'], isNull);
       expect(h.weather.hasKey('firms'), isFalse);
       expect(h.weather.isOn('firms-viirs-near'), isFalse);
+    });
+  });
+
+  group('road sources', () {
+    test('the Idaho sources and key move to the one Idaho 511 source at start; the catalogue copies are not listed again', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'wzdx-idaho'}, true);
+        },
+      );
+      expect(h.weather.hasKey('road511.511.idaho.gov'), isTrue, reason: 'no re-entry');
+      expect(h.secrets.values['live.key.road511.511.idaho.gov'], 'IDAHO-KEY');
+      final ev = h.weather.sourceById('idaho511-events')!;
+      expect(ev.origin.catalogueId, 'roads');
+      expect(ev.keyAlias, 'road511.511.idaho.gov');
+      expect(h.weather.sources.where((c) => c.id == 'idaho511-events').length, 1);
+      expect(h.weather.sourceById('wzdx-idaho')!.origin.catalogueId, 'roads');
+      expect(h.weather.isOn('idaho511-events'), isTrue);
+      expect(h.weather.isOn('idaho511-winter-roads'), isFalse, reason: 'what was off stays off');
+      // the fake core is handed the one key for both
+      expect(h.core.keys['idaho511-events'], 'IDAHO-KEY');
+      expect(h.core.keys['idaho511-winter-roads'], 'IDAHO-KEY');
+      // a second start changes nothing
+      final records = h.settings.roadSources.length;
+      final again = await Harness.create(again: h, roadSources: true);
+      expect(again.settings.roadSources.length, records);
+      expect(again.weather.sources.where((c) => c.id == 'idaho511-events').length, 1);
+      again.weather.dispose();
+    });
+
+    test('a download of a road source goes through its site\'s limiter; one answered from the stored copy gives the call back', () async {
+      h = await Harness.create(
+        roadSources: true,
+        before: (h) async {
+          h.secrets.values['live.key.idaho511'] = 'IDAHO-KEY';
+          h.settings.setLiveSourcesOn({'idaho511-events', 'idaho511-winter-roads'}, true);
+        },
+      );
+      await h.weather.updateNow();
+      expect(h.roads!.limiter.used('511.idaho.gov'), 2, reason: 'events and conditions share the one budget');
+      h.core.fetchedNew = false;
+      await h.weather.updateNow(force: true);
+      expect(h.roads!.limiter.used('511.idaho.gov'), 2, reason: 'nothing new was downloaded');
+    });
+
+    test('without road sources the catalogue sources are as they were', () async {
+      h = await Harness.create();
+      expect(h.weather.sourceById('idaho511-events')!.keyAlias, 'idaho511');
     });
   });
 
