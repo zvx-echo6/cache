@@ -28,6 +28,8 @@ use personal_rns::routing::links::LinkId;
 use personal_rns::routing::request_handlers::{RequestPathHash, RequestPolicy};
 use tokio::sync::mpsc;
 
+pub use personal_rns::prelude::DestinationHash;
+
 pub mod blobs;
 #[cfg(feature = "rnode")]
 pub mod rnode;
@@ -76,6 +78,47 @@ pub fn check_vouch(peer: &PublicKey, identity: &IdentityHash, sig: &[u8]) -> boo
     };
     peer.verify(&vouch_message(identity), &Signature::from_bytes(&bytes))
         .is_ok()
+}
+
+const DEST_VOUCH_PREFIX: &[u8] = b"cache_rns vouch v2: link, signed over the Reticulum destination";
+
+fn dest_vouch_message(destination: &DestinationHash) -> Vec<u8> {
+    let mut m = DEST_VOUCH_PREFIX.to_vec();
+    m.extend_from_slice(destination.as_bytes());
+    m
+}
+
+/// The device key's signature over its Reticulum destination: what a link code, a pairing and an index carry, so a device
+/// that knows only the destination (not the secret behind it) can check that the destination is the device's own. A
+/// destination is a hash of the identity, so this binds the device key to the identity the same way [`vouch`] does.
+pub fn vouch_destination(device: &SecretKey, destination: &DestinationHash) -> [u8; 64] {
+    device.sign(&dest_vouch_message(destination)).to_bytes()
+}
+
+/// Whether `sig` is `peer`'s vouch for `destination` ([`vouch_destination`]).
+pub fn check_vouch_destination(peer: &PublicKey, destination: &DestinationHash, sig: &[u8]) -> bool {
+    let Ok(bytes) = <[u8; 64]>::try_from(sig) else {
+        return false;
+    };
+    peer.verify(&dest_vouch_message(destination), &Signature::from_bytes(&bytes))
+        .is_ok()
+}
+
+/// A destination as 32 lowercase hex characters (what sync.json and link codes hold).
+pub fn dest_hex(d: &DestinationHash) -> String {
+    d.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The destination of 32 hex characters (either case), if it is one.
+pub fn dest_from_hex(s: &str) -> Option<DestinationHash> {
+    if s.len() != 32 || !s.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(DestinationHash::new(out))
 }
 
 /// The hello body: the device's public key then its vouch (32 + 64 bytes).
@@ -687,6 +730,17 @@ impl RnsNode {
     /// standard path request for it was answered.
     pub fn reachable(&self, peer: &PublicKey) -> bool {
         self.state.lock().unwrap().heard.contains_key(peer.as_bytes())
+    }
+
+    /// Sends a standard path request for `peer`'s stored destination now (without waiting for the next periodic one) and says
+    /// whether a path is known after it. False when no destination is stored.
+    pub async fn find_path_to(&self, peer: &PublicKey) -> bool {
+        let destination = self.state.lock().unwrap().destination_of.get(peer.as_bytes()).copied();
+        let Some(destination) = destination else { return false };
+        if self.reachable(peer) {
+            return true;
+        }
+        find_path(&self.handle, &self.state, *peer.as_bytes(), destination).await
     }
 
     /// What `peer`'s route comes in on (its first hop's interface): [`Via::Wifi`] only for Wi-Fi auto interfaces.

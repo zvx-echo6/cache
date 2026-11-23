@@ -57,6 +57,14 @@ pub enum FetchEvent {
     Failed(String),
 }
 
+/// Where a pairing hello goes: the iroh address from the link code, and the Reticulum destination (32 hex characters) when
+/// the code carries one.
+#[derive(Debug, Clone)]
+pub struct PairTarget {
+    pub iroh: EndpointAddr,
+    pub rns: Option<String>,
+}
+
 /// What the engine asks of the network.
 pub trait Transport: Send + Sync + 'static {
     /// This device's id (its iroh key), as the engine names devices.
@@ -65,9 +73,19 @@ pub trait Transport: Send + Sync + 'static {
     /// connection, `closed` is set to its close code (403 "not linked", 409, 503), whichever step met it.
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>>;
     /// Sends a pairing hello to the device at `to` (from its link code); its answer.
-    fn pair(&self, to: EndpointAddr, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>>;
-    /// The address that goes in this device's link code.
-    fn link_addr(&self) -> BoxFut<'_, EndpointAddr>;
+    fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>>;
+    /// The addresses that go in this device's link code: the iroh address and, when Reticulum runs, its destination (hex).
+    fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)>;
+    /// This device's Reticulum destination (hex) and the device key's signature over it (hex), when Reticulum runs. What
+    /// a pairing and an index carry, so the other device learns where to reach this one.
+    fn rns_info(&self) -> Option<(String, String)> {
+        None
+    }
+    /// A linked device's Reticulum destination and signature, as it gave them: stored for use when the signature is the
+    /// device's own. False when it is not (or Reticulum is not running on this device).
+    fn learn_rns(&self, _peer: &str, _dest: &str, _sig: &str) -> bool {
+        false
+    }
     /// Lets a device connect (linked, or about to be).
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
@@ -132,6 +150,12 @@ impl IrohTransport {
         Ok(Arc::new(IrohTransport { endpoint, allowed, router: Mutex::new(None) }))
     }
 
+    /// The iroh address for a link code (waits a few seconds for the endpoint to be online).
+    pub(crate) async fn iroh_addr(&self) -> EndpointAddr {
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
+        self.endpoint.addr()
+    }
+
     /// Starts accepting: the blob protocol from `store`, pairing and sync answered by `serve`.
     pub fn serve(&self, store: &FsStore, serve: Arc<dyn Serve>) {
         let blobs = BlobsProtocol::new(store, None);
@@ -194,9 +218,9 @@ impl Transport for IrohTransport {
         })
     }
 
-    fn pair(&self, to: EndpointAddr, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
+    fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
         Box::pin(async move {
-            let conn = tokio::time::timeout(Duration::from_secs(45), self.endpoint.connect(to, PAIR_ALPN))
+            let conn = tokio::time::timeout(Duration::from_secs(45), self.endpoint.connect(to.iroh, PAIR_ALPN))
                 .await
                 .map_err(|_| anyhow!("the other device did not answer"))?
                 .map_err(|e| anyhow!("could not reach the other device: {e}"))?;
@@ -209,11 +233,8 @@ impl Transport for IrohTransport {
         })
     }
 
-    fn link_addr(&self) -> BoxFut<'_, EndpointAddr> {
-        Box::pin(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
-            self.endpoint.addr()
-        })
+    fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)> {
+        Box::pin(async move { (self.iroh_addr().await, None) })
     }
 
     fn allow(&self, peer: &str) {

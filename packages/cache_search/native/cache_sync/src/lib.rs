@@ -18,6 +18,8 @@
 pub mod identity;
 pub mod index;
 pub mod transport;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod rns_transport;
 
 use anyhow::{anyhow, bail, Context, Result};
 use index::{Action, Entry, Index, Ver};
@@ -48,7 +50,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
-use transport::{Ask, FetchEvent, IrohTransport, Serve, Transport};
+use transport::{Ask, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -224,6 +226,49 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
+    /// Run Reticulum beside iroh (Android and Linux; ignored elsewhere). Off unless asked: with no `rns_interfaces`, it listens
+    /// and finds devices on the local network (Wi-Fi auto).
+    #[serde(default)]
+    pub reticulum: bool,
+    /// For tests: the Reticulum interfaces to use instead of Wi-Fi auto.
+    #[serde(default)]
+    pub rns_interfaces: Option<RnsInterfaces>,
+}
+
+/// The Reticulum interfaces a test asks for ([`Config::rns_interfaces`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RnsInterfaces {
+    /// Accept TCP connections on this address.
+    #[serde(default)]
+    pub tcp_listen: Option<String>,
+    /// Connect to a TCP listener at this address.
+    #[serde(default)]
+    pub tcp_connect: Option<String>,
+    /// Wi-Fi/LAN auto discovery as well.
+    #[serde(default)]
+    pub wifi: bool,
+}
+
+/// A linked device's Reticulum address, as saved in `sync.json` (absent for links with no Reticulum address yet, and in files
+/// saved by builds 48 to 54).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RnsPeer {
+    /// The destination, 32 hex characters.
+    dest: String,
+}
+
+/// A device's Reticulum destination and its device key's signature over it (both hex): what a pairing and an index carry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RnsProof {
+    dest: String,
+    sig: String,
+}
+
+/// The Reticulum part of a link code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RnsCode {
+    /// The destination, 32 hex characters.
+    d: String,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -282,6 +327,9 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
+    /// Where the device is on Reticulum, once known (from its link code, its pairing or its file list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsPeer>,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -430,6 +478,10 @@ struct RemoteIndex {
     /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
+    /// The sender's Reticulum destination and its device key's signature over it (older versions do not say), so a link made
+    /// before Reticulum learns where to reach the sender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsProof>,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -692,6 +744,9 @@ struct LinkCode {
     a: EndpointAddr,
     t: String,
     n: String,
+    /// The Reticulum destination (absent from codes of builds before 55, which ignore it when it is there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r: Option<RnsCode>,
 }
 
 const CODE_PREFIX: &str = "CACHE1-";
@@ -1488,6 +1543,7 @@ impl Inner {
             link,
             links: true,
             secrets,
+            rns: self.rns_info().map(|(dest, sig)| RnsProof { dest, sig }),
         }
     }
 
@@ -1707,6 +1763,12 @@ impl Inner {
             }
             let mut asks = None;
             let mut learned = None;
+            // A file list from a device linked before Reticulum (or from build 54) tells where to reach it.
+            if let Some(r) = res.as_ref().ok().and_then(|(idx, _)| idx.rns.clone()) {
+                if p.rns.as_ref().map(|x| x.dest.as_str()) != Some(r.dest.as_str()) {
+                    self.learn_rns(&p.id, &r);
+                }
+            }
             // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
             // enough: a device still waiting for the answer to a code already lets this one in.)
             if p.unconfirmed && res.as_ref().map(|(idx, _)| idx.link.is_some()).unwrap_or(false) {
@@ -2233,6 +2295,12 @@ fn links_grace_until(dir: &Path, recovered: bool) -> Result<u64> {
 struct PairHello {
     token: String,
     name: String,
+    /// The device key of the sender, for a pairing over Reticulum (over iroh the connection proves it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    /// The sender's Reticulum destination and signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsProof>,
 }
 
 /// What the network asks of the engine: answers linking requests that carry the code being shown, and the questions of linked devices.
@@ -2252,9 +2320,16 @@ impl Serve for Inner {
         let reply = if let (true, Some(h)) = (ok, hello) {
             // Not confirmed until the other device comes back: this answer may never reach it.
             add_peer(self, peer, &h.name, true);
+            if let Some(r) = &h.rns {
+                self.learn_rns(peer, r);
+            }
             self.note(format!("Linked with {}", h.name));
             self.wake.notify_one();
-            json!({"ok": true, "name": self.saved.lock().unwrap().name})
+            let mut reply = json!({"ok": true, "name": self.saved.lock().unwrap().name});
+            if let Some((dest, sig)) = self.rns_info() {
+                reply["rns"] = json!({"dest": dest, "sig": sig});
+            }
+            reply
         } else {
             json!({"ok": false, "error": "that code is not being shown any more"})
         };
@@ -2283,11 +2358,43 @@ impl Serve for Inner {
     }
 }
 
+impl Inner {
+    /// This device's Reticulum destination and signature, for what it sends other devices. With `<dir>/no-rns-fields` present
+    /// (test hook) it says nothing, like a build before Reticulum.
+    fn rns_info(&self) -> Option<(String, String)> {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-rns-fields").exists() {
+            return None;
+        }
+        self.net.rns_info()
+    }
+
+    /// Stores the Reticulum address `proof` gives for the linked device `peer`, when the device's own signature is on it.
+    fn learn_rns(&self, peer: &str, proof: &RnsProof) {
+        if !self.net.learn_rns(peer, &proof.dest, &proof.sig) {
+            return;
+        }
+        let changed = {
+            let mut s = self.saved.lock().unwrap();
+            match s.peers.iter_mut().find(|p| p.id == peer) {
+                Some(p) if p.rns.as_ref().map(|x| x.dest.as_str()) != Some(proof.dest.as_str()) => {
+                    p.rns = Some(RnsPeer { dest: proof.dest.clone() });
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            let _ = self.save();
+        }
+    }
+}
+
 fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, rns: None });
     }
     inner.net.allow(id);
     let _ = inner.save();
@@ -2419,6 +2526,17 @@ impl SyncEngine {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
         let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone()).await?;
+        // Reticulum beside iroh (Android and Linux), when asked: the saved links with the destination saved for each.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let multi = cfg.reticulum.then(|| {
+            rns_transport::MultiTransport::new(iroh_net.clone(), saved.peers.iter().map(|p| (p.id.clone(), p.rns.as_ref().map(|r| r.dest.clone()))))
+        });
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let net: Arc<dyn Transport> = match &multi {
+            Some(m) => m.clone(),
+            None => iroh_net.clone(),
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let net: Arc<dyn Transport> = iroh_net.clone();
         steps.step("endpoint bound");
 
@@ -2474,6 +2592,25 @@ impl SyncEngine {
         steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(m) = &multi {
+            // After the store has opened: the node serves from it. Without Reticulum the device carries on over iroh alone.
+            let ifaces = match &cfg.rns_interfaces {
+                Some(t) => {
+                    let mut v = Vec::new();
+                    v.extend(t.tcp_listen.iter().map(|a| cache_rns::Iface::TcpListen(a.clone())));
+                    v.extend(t.tcp_connect.iter().map(|a| cache_rns::Iface::TcpConnect(a.clone())));
+                    if t.wifi {
+                        v.push(cache_rns::Iface::WifiAuto);
+                    }
+                    v
+                }
+                None => vec![cache_rns::Iface::WifiAuto],
+            };
+            if let Err(e) = m.start_rns(secret.clone(), &store, inner.clone(), ifaces).await {
+                inner.note(format!("Reticulum did not start: {e:#}"));
+            }
+        }
         iroh_net.serve(&store, inner.clone());
         inner.note("Started");
         if let Some(n) = saved_note {
@@ -2498,8 +2635,8 @@ impl SyncEngine {
                 let tok = token();
                 *inner.pairing.lock().unwrap() = Some((tok.clone(), Instant::now() + LINK_WINDOW));
                 let net = inner.net.clone();
-                let addr = self.rt.block_on(async move { net.link_addr().await });
-                let code = encode_code(&LinkCode { a: addr, t: tok, n: inner.saved.lock().unwrap().name.clone() })?;
+                let (addr, rns) = self.rt.block_on(async move { net.link_addr().await });
+                let code = encode_code(&LinkCode { a: addr, t: tok, n: inner.saved.lock().unwrap().name.clone(), r: rns.filter(|_| inner.rns_info().is_some()).map(|d| RnsCode { d }) })?;
                 Ok(json!({"code": code, "valid_secs": LINK_WINDOW.as_secs()}))
             }
             "link" => {
@@ -2509,11 +2646,14 @@ impl SyncEngine {
                 }
                 let name = inner.saved.lock().unwrap().name.clone();
                 let net = inner.net.clone();
+                let inner2 = inner.clone();
                 let peer = code.a.id;
                 // Allowed before connecting: the reply comes back on our own connection, and from now on it may connect to us.
                 inner.net.allow(&peer.to_string());
                 let reply: Result<Value> = self.rt.block_on(async move {
-                    let bytes = net.pair(code.a, serde_json::to_vec(&PairHello { token: code.t, name })?).await?;
+                    let rns = inner2.rns_info().map(|(dest, sig)| RnsProof { dest, sig });
+                    let hello = PairHello { token: code.t, name, key: Some(net.id()), rns };
+                    let bytes = net.pair(PairTarget { iroh: code.a, rns: code.r.map(|r| r.d) }, serde_json::to_vec(&hello)?).await?;
                     Ok(serde_json::from_slice(&bytes)?)
                 });
                 let reply = match reply {
@@ -2534,6 +2674,9 @@ impl SyncEngine {
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
                 add_peer(inner, &peer.to_string(), &pname, false);
+                if let Some(r) = reply.get("rns").and_then(|v| serde_json::from_value::<RnsProof>(v.clone()).ok()) {
+                    inner.learn_rns(&peer.to_string(), &r);
+                }
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
@@ -3091,7 +3234,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, rns: None }
     }
 
     #[test]
@@ -3258,7 +3401,7 @@ mod link_code_tests {
 
     #[test]
     fn a_real_code_still_decodes() {
-        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into() };
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into(), r: None };
         let code = encode_code(&c).unwrap();
         assert!(code.starts_with("CACHE1-"));
         let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();

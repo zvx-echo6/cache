@@ -111,6 +111,9 @@ pub async fn fetch(
             let wanted = ChunkRanges::from(ChunkNum(start)..ChunkNum(((k + 1) * WINDOW_CHUNKS).min(last)));
             if have.ranges.is_superset(&wanted) {
                 f.skipped += 1;
+                // A resumed fetch says at once how much it already holds.
+                f.have = ((k + 1) * WINDOW_CHUNKS * CHUNK).min(f.size);
+                progress(&f);
                 k += 1;
                 continue;
             }

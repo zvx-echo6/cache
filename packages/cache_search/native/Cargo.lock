@@ -1229,6 +1229,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "cache_rns",
  "cache_sync",
  "data-encoding",
  "fs4 1.1.0",
@@ -1237,6 +1238,7 @@ dependencies = [
  "iroh-mainline-address-lookup",
  "iroh-mdns-address-lookup",
  "n0-future",
+ "personal-rns",
  "rand 0.9.5",
  "serde",
  "serde_json",
