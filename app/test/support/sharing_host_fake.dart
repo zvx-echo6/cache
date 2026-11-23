@@ -23,6 +23,9 @@ class FakeSharingHost implements CoreTransport {
   /// The `settings_applied` counter the host's snapshot carries (settings applied from a linked device).
   int settingsApplied = 0;
 
+  /// The private notebooks switched on (the server's notebook sync keeps them), by notebook id.
+  final Set<String> privateIncluded = {};
+
   /// How many `sharing.state` reads still answer "linking" after `sharing.link_start` before the engine's answer arrives.
   int linkingReads = 2;
   String? _linkCode;
@@ -65,6 +68,7 @@ class FakeSharingHost implements CoreTransport {
       'status': enabled ? await sync.call('status') : <String, dynamic>{},
       'ask_since': 1,
       'settings_applied': settingsApplied,
+      'private_included': privateIncluded.toList()..sort(),
       'kinds': [for (final e in table.entries) {'id': e.key, 'label': e.key, 'shares': e.value.keys.toList()}],
       'off': {for (final e in off.entries) if (e.value.isNotEmpty) e.key: ([...e.value]..sort())},
       'changed': <String, dynamic>{},
@@ -120,6 +124,9 @@ class FakeSharingHost implements CoreTransport {
           final set = off.putIfAbsent(kind, () => <String>{});
           on ? set.remove(key) : set.add(key);
         }
+        return _snapshot();
+      case 'sharing.set_private':
+        (args['on'] == true) ? privateIncluded.add(args['notebook'] as String) : privateIncluded.remove(args['notebook']);
         return _snapshot();
       case 'sharing.link_start':
         link = {'state': 'linking'};
