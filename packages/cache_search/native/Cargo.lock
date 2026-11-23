@@ -1234,6 +1234,7 @@ dependencies = [
  "data-encoding",
  "iroh-blobs",
  "postcard",
+ "redb",
  "reflink-copy",
  "rusqlite",
  "serde",

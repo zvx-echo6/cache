@@ -21,6 +21,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{Error, Hash, Result, BLOCK_BYTES, INLINE_MAX};
 
+mod migrate;
+pub use migrate::MoveReport;
+
 const BLOCK: BlockSize = BlockSize::from_chunk_log(4);
 const SCHEMA_VERSION: i64 = 2;
 
@@ -147,6 +150,12 @@ impl Added {
 pub enum Fault {
     /// Fail after files are renamed into place and before the index commit.
     BeforeCommit,
+    /// Kill the one-time move once this many entries have finished in this run.
+    MoveAfterEntries(usize),
+    /// Kill the move after entry n (0-based, in this run) is in the store and before its journal row.
+    MoveBeforeJournal(usize),
+    /// Kill the move after every entry and tag is in and before the old store is deleted.
+    MoveBeforeCleanup,
 }
 
 struct Inner {
@@ -372,7 +381,9 @@ impl Store {
                 hash BLOB NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
                 PRIMARY KEY(hash, path)) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS external_path ON external(path);
-             CREATE TABLE IF NOT EXISTS tags(name BLOB PRIMARY KEY, hash BLOB NOT NULL) WITHOUT ROWID;",
+             CREATE TABLE IF NOT EXISTS tags(name BLOB PRIMARY KEY, hash BLOB NOT NULL) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS move_journal(hash BLOB PRIMARY KEY, outcome TEXT NOT NULL, bytes INTEGER NOT NULL) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS move_state(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;",
         )?;
         if version == 1 {
             // Version 1 had no record of whether a partial entry's size was proven.
