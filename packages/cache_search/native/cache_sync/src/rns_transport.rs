@@ -70,6 +70,8 @@ pub struct MultiTransport {
     /// Linked devices (iroh ids) and the Reticulum destination of each, when known (hex).
     peers: Mutex<HashMap<String, Option<String>>>,
     last_via: Mutex<HashMap<String, Net>>,
+    /// Devices that used to be linked (iroh ids), for the node to answer "not linked" to.
+    former: Mutex<Vec<String>>,
 }
 
 fn hex(b: &[u8]) -> String {
@@ -86,7 +88,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default() })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default() })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
@@ -111,6 +113,7 @@ impl MultiTransport {
         };
         let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve: a.serve.clone() })).await?);
         let dest = node.destination();
+        node.set_former(&self.former_keys());
         let sig = cache_rns::vouch_destination(&a.device, &dest);
         *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
         Ok(())
@@ -144,6 +147,10 @@ impl MultiTransport {
             .iter()
             .filter_map(|(id, d)| Some((id.parse::<PublicKey>().ok()?, d.as_deref().and_then(cache_rns::dest_from_hex))))
             .collect()
+    }
+
+    fn former_keys(&self) -> Vec<PublicKey> {
+        self.former.lock().unwrap().iter().filter_map(|id| id.parse().ok()).collect()
     }
 
     fn push_peers(&self) {
@@ -205,7 +212,8 @@ impl Transport for MultiTransport {
             tokio::pin!(over_rns, over_iroh);
             let (mut rns_done, mut iroh_done) = (false, false);
             let mut failure = None;
-            // The first good answer wins and the other is dropped. `closed` (the 403 that can unlink) is only ever set by iroh.
+            // The first good answer wins and the other is dropped. `closed` (the 403 that can unlink) is set by iroh's Gate and,
+            // over Reticulum, by the other device answering the hello "not linked" (the engine still waits for two, 10 minutes apart).
             loop {
                 tokio::select! {
                     r = &mut over_rns, if !rns_done => {
@@ -215,7 +223,12 @@ impl Transport for MultiTransport {
                                 self.note(peer, Net::Reticulum);
                                 return Ok(v);
                             }
-                            Err(e) => failure = failure.or(Some(e)),
+                            Err(e) => {
+                                if cache_rns::is_not_linked(&e) {
+                                    closed.store(403, Ordering::Relaxed);
+                                }
+                                failure = failure.or(Some(e));
+                            }
                         }
                     }
                     r = &mut over_iroh, if !iroh_done => {
@@ -301,6 +314,13 @@ impl Transport for MultiTransport {
         self.iroh.allow(peer);
         self.peers.lock().unwrap().entry(peer.to_string()).or_insert(None);
         self.push_peers();
+    }
+
+    fn set_former(&self, ids: &[String]) {
+        *self.former.lock().unwrap() = ids.to_vec();
+        if let Some(n) = self.node() {
+            n.set_former(&self.former_keys());
+        }
     }
 
     fn disallow(&self, peer: &str) {

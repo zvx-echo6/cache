@@ -433,6 +433,18 @@ struct Saved {
     /// ([`Removal`]). Absent in files saved by builds before this one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     removals: Vec<Removal>,
+    /// The devices this one was linked with and no longer is (it unlinked them, or was told to, or the other device unlinked
+    /// this one), with when, kept [`REMOVAL_KEEP_MS`]. Over Reticulum a hello from one of them is answered "not linked"
+    /// ([`Transport::set_former`]), which is how it learns it was unlinked. Absent in files saved by builds before this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    former: Vec<Former>,
+}
+
+/// A device that used to be linked, and when it was dropped (ms since 1970).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Former {
+    id: String,
+    t: u64,
 }
 
 /// How long an unlink is kept and offered to the other linked devices: 30 days.
@@ -1763,13 +1775,30 @@ impl Inner {
     /// Takes the link to `id` out of everything this device holds about it: the saved links, who may connect, what was learned and
     /// received. The same for a link taken off here and for one the other device unlinked. Files already here stay.
     fn remove_peer(&self, id: &str) -> Result<()> {
-        self.saved.lock().unwrap().peers.retain(|p| p.id != id);
+        {
+            let mut sv = self.saved.lock().unwrap();
+            let was_linked = sv.peers.iter().any(|p| p.id == id);
+            sv.peers.retain(|p| p.id != id);
+            let now = now_ms();
+            sv.former.retain(|f| f.id != id && now.saturating_sub(f.t) < REMOVAL_KEEP_MS);
+            if was_linked && id != self.me {
+                sv.former.push(Former { id: id.to_string(), t: now });
+            }
+        }
+        self.push_former();
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
         self.secrets.lock().unwrap().remove(id);
         self.received.lock().unwrap().remove(id);
         self.refused.lock().unwrap().remove(id);
         self.save()
+    }
+
+    /// Tells the transport which devices used to be linked and are not now (the kept ones, newer than [`REMOVAL_KEEP_MS`]).
+    fn push_former(&self) {
+        let now = now_ms();
+        let ids: Vec<String> = self.saved.lock().unwrap().former.iter().filter(|f| now.saturating_sub(f.t) < REMOVAL_KEEP_MS).map(|f| f.id.clone()).collect();
+        self.net.set_former(&ids);
     }
 
     /// The person unlinks `id` here: [`Inner::remove_peer`], then a signed [`Removal`] kept for the other linked devices
@@ -1965,6 +1994,8 @@ impl Inner {
             return;
         }
         self.drop_unconfirmed();
+        // Also lets a former device that is past its 30 days go.
+        self.push_former();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
@@ -2697,9 +2728,11 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
         s.peers.retain(|p| p.id != id);
         // Linked again: an unlink offered before no longer holds.
         s.removals.retain(|r| r.target != id);
+        s.former.retain(|f| f.id != id);
         s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, rns: None });
     }
     inner.net.allow(id);
+    inner.push_former();
     let _ = inner.save();
 }
 
@@ -2915,6 +2948,7 @@ impl SyncEngine {
                 None => vec![cache_rns::Iface::WifiAuto],
             };
             let pair_local_tcp = cfg.rns_interfaces.as_ref().is_some_and(|t| t.pair_local_tcp);
+            inner.push_former();
             if let Err(e) = m.start_rns(secret.clone(), &store, inner.clone(), ifaces, pair_local_tcp).await {
                 inner.note(format!("Reticulum did not start: {e:#}"));
             }
@@ -3866,5 +3900,20 @@ mod short_code_tests {
         assert!(ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 5]));
         assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 6]));
         assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4]));
+    }
+}
+
+#[cfg(test)]
+mod former_tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_file_without_former_devices_loads_and_does_not_write_the_field() {
+        let old = r#"{"name":"Desk","peers":[],"shares":[]}"#;
+        let s: Saved = serde_json::from_str(old).unwrap();
+        assert!(s.former.is_empty());
+        assert!(!serde_json::to_string(&s).unwrap().contains("former"));
+        let with: Saved = serde_json::from_str(r#"{"name":"Desk","former":[{"id":"x","t":5}]}"#).unwrap();
+        assert_eq!(with.former.len(), 1);
     }
 }

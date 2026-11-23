@@ -185,7 +185,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
           key: ValueKey('nearby-${d.id}'),
           leading: Icon(_icon(d.kind), size: 24, color: context.t.secondary),
           title: d.name ?? 'Device nearby',
-          statusWidget: Text('${_via(d.via)} · not linked', style: TextStyle(fontSize: 13, color: context.t.secondary)),
+          statusWidget: Text(_via(d.via), style: TextStyle(fontSize: 13, color: context.t.secondary)),
           trailing: _nearby.linking == d.id
               ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
               : FilledButton(key: ValueKey('nearby-link-${d.id}'), onPressed: busy ? null : () => _nearby.link(d), child: const Text('Link')),
