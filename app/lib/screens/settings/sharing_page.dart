@@ -395,7 +395,7 @@ class _SharingPageState extends State<SharingPage> {
                       : () => _run(() async {
                           final result = s.syncResult(working: 'Syncing with your devices');
                           await s.syncNow();
-                          if (mounted) say(context, result);
+                          if (context.mounted) say(context, result);
                         }),
                 ),
               ],
