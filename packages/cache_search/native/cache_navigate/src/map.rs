@@ -91,7 +91,7 @@ pub fn parse_opts(v: &Value) -> Result<(TravelMode, Boundary, usize), ToolError>
     let bad = |m: String| ToolError::new(ToolError::BAD_ARGUMENTS, m);
     let mode = match v.get("mode") {
         None | Some(Value::Null) => TravelMode::Drive,
-        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle, offroad_2w, offroad_4w".into()))?,
+        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle, offroad_2w, offroad_4w, offroad_car".into()))?,
     };
     let land = match v.get("land_access") {
         None | Some(Value::Null) => Boundary::Pragmatic,

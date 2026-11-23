@@ -69,7 +69,7 @@ fn mode_names_and_router_modes() {
         assert_eq!(m.name(), name);
         assert!(m.offroad_only());
     }
-    for (name, m) in [("offroad_2w", TravelMode::OffroadTwoW), ("offroad_4w", TravelMode::OffroadFourW)] {
+    for (name, m) in [("offroad_2w", TravelMode::OffroadTwoW), ("offroad_4w", TravelMode::OffroadFourW), ("offroad_car", TravelMode::OffroadCar)] {
         assert_eq!(TravelMode::from_name(name), Some(m));
         assert_eq!(m.name(), name);
         assert!(m.offroad_only());
@@ -77,7 +77,10 @@ fn mode_names_and_router_modes() {
     // each choice on the directions screen asks the engine for a different profile
     assert_eq!(TravelMode::OffroadTwoW.router_mode(), RequestMode::Single(Mode::TwoW));
     assert_eq!(TravelMode::OffroadFourW.router_mode(), RequestMode::Single(Mode::FourW));
-    assert_eq!((TravelMode::OffroadTwoW.costing(), TravelMode::OffroadFourW.costing()), ("bicycle", "auto"));
+    assert_eq!(TravelMode::OffroadCar.router_mode(), RequestMode::Single(Mode::Vehicle));
+    assert_eq!((TravelMode::OffroadTwoW.costing(), TravelMode::OffroadFourW.costing(), TravelMode::OffroadCar.costing()), ("bicycle", "auto", "auto"));
+    // offroad_vehicle stays the mixed Auto search (the assistant's tool names it); the single vehicle mode has its own name
+    assert_ne!(TravelMode::OffroadCar.name(), TravelMode::OffroadVehicle.name());
     assert_eq!(TravelMode::OffroadFoot.router_mode(), RequestMode::Single(Mode::Foot));
     assert_eq!(TravelMode::OffroadVehicle.router_mode(), RequestMode::Auto);
     assert_eq!((TravelMode::OffroadFoot.costing(), TravelMode::OffroadVehicle.costing()), ("pedestrian", "auto"));
@@ -142,28 +145,59 @@ fn land_access_other_than_pragmatic_is_part_of_the_route_id() {
     assert_eq!(id(Boundary::Emergency), "0336559888cf300f");
 }
 
-/// Every off-road choice is routed with its own profile: the same trip takes a different time in each, and each leg is labeled
-/// with the mode that was asked for (Auto may mix them).
+/// The flat world with a straight track (trail value 5) joining both ends, thick enough for every profile to follow.
+fn world_with_track() -> MemPack {
+    track_world(1.0)
+}
+
+/// The same, but the track covers only the first `frac` of the way.
+fn track_world(frac: f64) -> MemPack {
+    let mut p = flat_world();
+    let (r0, c0) = cache_offroad::grid::global_pixel(FROM.0, FROM.1).unwrap();
+    let (r1, c1) = cache_offroad::grid::global_pixel(TO.0, TO.1).unwrap();
+    let n = (r1 - r0).abs().max((c1 - c0).abs()).max(1);
+    for i in 0..=((n as f64 * frac) as i64) {
+        let (r, c) = (r0 + (r1 - r0) * i / n - p.row0, c0 + (c1 - c0) * i / n - p.col0);
+        for dr in -1..=1 {
+            for dc in -1..=1 {
+                let idx = ((r + dr) as usize) * p.cols + (c + dc) as usize;
+                p.trails[idx] = 5;
+            }
+        }
+    }
+    p
+}
+
+/// All five off-road choices are routed with their own profile: the same trip takes a different time in each, and each
+/// leg is labeled with the mode that was asked for (Auto may mix them).
 #[test]
 fn each_offroad_mode_routes_differently() {
-    let world = flat_world();
+    let world = world_with_track();
     let v = Counting(AtomicUsize::new(0));
     let e = env(&world, &world, &v);
     let mut secs = std::collections::BTreeMap::new();
-    for (m, tag) in [(TravelMode::OffroadFoot, "foot"), (TravelMode::OffroadTwoW, "2w"), (TravelMode::OffroadFourW, "4w")] {
+    for (m, tag) in [(TravelMode::OffroadFoot, "foot"), (TravelMode::OffroadTwoW, "2w"), (TravelMode::OffroadFourW, "4w"), (TravelMode::OffroadCar, "vehicle")] {
         let d = e.directions(&DirectionsRequest::new(FROM, TO, m));
         assert!(d.ok, "{:?}: {:?}", m, d.errors);
         assert_eq!(d.routing, "offroad");
         assert_eq!(d.to_json()["mode"], m.name());
         assert!(d.steps.iter().all(|s| s.kind.starts_with("offroad") && s.mode.as_deref() == Some(tag)), "{:?}: {:?}", m, d.steps);
-        eprintln!("EVIDENCE {} -> {} s, {} km", m.name(), d.duration_s, d.distance_km);
+        eprintln!("EVIDENCE {} -> {} s, {} km, steps {:?}", m.name(), d.duration_s, d.distance_km, d.steps.iter().map(|s| s.mode.clone()).collect::<Vec<_>>());
         secs.insert(tag, d.duration_s);
     }
-    let auto = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadVehicle));
+    // Auto: start and end told to be a parking lot (all four modes may start and end there), so it mixes what is fastest
+    let mut req = DirectionsRequest::new(FROM, TO, TravelMode::OffroadVehicle);
+    req.from_category = Some("highway:residential".into());
+    req.to_category = Some("highway:residential".into());
+    let auto = e.directions(&req);
     assert!(auto.ok, "{:?}", auto.errors);
-    eprintln!("EVIDENCE offroad_vehicle(Auto) -> {} s", auto.duration_s);
-    // slower to faster over open ground: foot 6 km/h, 2-wheel 12 km/h (grass x2), 4-wheel 25 km/h (grass x1.5)
-    assert!(secs["foot"] > secs["2w"] && secs["2w"] > secs["4w"], "{secs:?}");
+    eprintln!("EVIDENCE offroad_vehicle(Auto) -> {} s, steps {:?}", auto.duration_s, auto.steps.iter().map(|s| s.mode.clone()).collect::<Vec<_>>());
+    // slower to faster: foot, bike, ATV, vehicle
+    assert!(secs["foot"] > secs["2w"] && secs["2w"] > secs["4w"] && secs["4w"] > secs["vehicle"], "{secs:?}");
+    // Auto is a search of its own: it is never slower than any single mode it may use
+    assert!(auto.duration_s <= secs["foot"]);
+    let all: std::collections::BTreeSet<i64> = [secs["foot"], secs["2w"], secs["4w"], secs["vehicle"], auto.duration_s].into_iter().collect();
+    assert!(all.len() >= 4, "{all:?}");
 }
 
 /// Land a 4-wheel machine cannot cross (class 10) is crossed on foot and, slowly, on two wheels: so the choice changes whether a
@@ -181,4 +215,26 @@ fn four_wheel_cannot_cross_what_foot_and_two_wheel_can() {
     assert!(foot.ok, "{:?}", foot.errors);
     assert!(two.ok, "{:?}", two.errors);
     assert!(!four.ok);
+    let car = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadCar));
+    eprintln!("EVIDENCE class10: vehicle ok={}", car.ok);
+    assert!(!car.ok);
+}
+
+/// Where the track ends short of the destination, Auto drives the track and walks the rest; the single Vehicle mode stays in
+/// the vehicle the whole way.
+#[test]
+fn auto_mixes_modes_where_the_vehicle_cannot_finish() {
+    let world = track_world(0.5);
+    let v = Counting(AtomicUsize::new(0));
+    let e = env(&world, &world, &v);
+    let car = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadCar));
+    let mut req = DirectionsRequest::new(FROM, TO, TravelMode::OffroadVehicle);
+    req.from_category = Some("highway:residential".into());
+    let auto = e.directions(&req);
+    let modes: std::collections::BTreeSet<String> = auto.steps.iter().filter_map(|s| s.mode.clone()).collect();
+    eprintln!("EVIDENCE half-track: vehicle-only {} s ok={} ; Auto ok={} {} s modes {:?}", car.duration_s, car.ok, auto.ok, auto.duration_s, modes);
+    assert!(auto.ok, "{:?}", auto.errors);
+    // Auto switches from the vehicle to walking where the track ends; the single Vehicle mode never does
+    assert!(modes.contains("vehicle") && modes.contains("foot"), "{modes:?}");
+    assert!(car.steps.iter().all(|s| s.mode.as_deref() == Some("vehicle")), "{:?}", car.steps);
 }

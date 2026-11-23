@@ -180,12 +180,13 @@ class NavState extends ChangeNotifier {
   /// Sent only with an off-road mode; drive, walk and bike keep the core's default.
   String landAccess = 'pragmatic';
 
-  /// The off-road mode the Off-road choice comes back to (on foot until the person picks another: Auto, 2-wheel or 4-wheel).
-  String offroadMode = 'offroad_foot';
+  /// The off-road mode the Off-road choice comes back to: Vehicle (a car or truck) until the person picks another (Auto, ATV,
+  /// Bike or On foot), and then the last one picked.
+  String offroadMode = 'offroad_car';
 
-  /// The way of travel is one of the off-road modes (offroad_foot, offroad_vehicle = Auto, offroad_2w, offroad_4w).
+  /// The way of travel is one of the off-road modes (offroad_car = Vehicle, offroad_vehicle = Auto (the mixed search), offroad_4w = ATV, offroad_2w = Bike, offroad_foot = On foot).
   bool get offroad => isOffroadMode(mode);
-  static const offroadModes = ['offroad_foot', 'offroad_vehicle', 'offroad_2w', 'offroad_4w'];
+  static const offroadModes = ['offroad_car', 'offroad_vehicle', 'offroad_4w', 'offroad_2w', 'offroad_foot'];
   static bool isOffroadMode(String m) => offroadModes.contains(m);
   bool routing = false;
   String? routeError;

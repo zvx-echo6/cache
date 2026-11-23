@@ -170,6 +170,7 @@ fn options_are_checked() {
     assert_eq!(parse_opts(&json!({"mode": "offroad_foot"})).unwrap().0, TravelMode::OffroadFoot);
     assert_eq!(parse_opts(&json!({"mode": "offroad_2w"})).unwrap().0, TravelMode::OffroadTwoW);
     assert_eq!(parse_opts(&json!({"mode": "offroad_4w"})).unwrap().0, TravelMode::OffroadFourW);
+    assert_eq!(parse_opts(&json!({"mode": "offroad_car"})).unwrap().0, TravelMode::OffroadCar);
     assert_eq!(parse_opts(&json!({})).unwrap().2, 2);
 }
 

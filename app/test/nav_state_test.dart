@@ -315,12 +315,12 @@ void main() {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-$mode', mode: mode, offroad: true));
       await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
-      // the default is unchanged: Off-road starts on foot, and the road modes do not count as off-road
-      expect(nav.offroadMode, 'offroad_foot');
+      // the default: Off-road starts on Vehicle (a car or truck), and the road modes do not count as off-road
+      expect(nav.offroadMode, 'offroad_car');
       for (final m in ['drive', 'walk', 'bike']) {
         expect(NavState.isOffroadMode(m), isFalse);
       }
-      for (final m in ['offroad_2w', 'offroad_4w', 'offroad_vehicle']) {
+      for (final m in ['offroad_2w', 'offroad_4w', 'offroad_foot', 'offroad_car', 'offroad_vehicle']) {
         await nav.setMode(m);
         expect(nav.offroad, isTrue);
         expect(nav.offroadMode, m);
@@ -336,6 +336,8 @@ void main() {
       expect(backend.calls.where((c) => c.startsWith('route:offroad_')).toSet(), {
         'route:offroad_2w:Cassia Regional Hospital:from',
         'route:offroad_4w:Cassia Regional Hospital:from',
+        'route:offroad_foot:Cassia Regional Hospital:from',
+        'route:offroad_car:Cassia Regional Hospital:from',
         'route:offroad_vehicle:Cassia Regional Hospital:from',
       });
       expect(backend.landAccesses.last, 'pragmatic');

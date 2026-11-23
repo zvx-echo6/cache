@@ -40,10 +40,14 @@ pub enum TravelMode {
     /// Off-road the whole way by vehicle: the reference server's unified Auto search over 4x4, ATV, two-wheeler and foot, switching at
     /// parking lots, trailheads and road ends (on foot for the last part where no vehicle can go).
     OffroadVehicle,
-    /// Off-road the whole way on a dirt bike or mountain bike: the unified search with only the two-wheel profile seeded.
+    /// Off-road the whole way by bike: the unified search with only the 2w profile seeded (MVUM's mountain-bike class, 12 km/h).
     OffroadTwoW,
-    /// Off-road the whole way on an ATV or 4x4: the unified search with only the four-wheel profile seeded.
+    /// Off-road the whole way by ATV: the unified search with only the 4w profile seeded.
     OffroadFourW,
+    /// Off-road the whole way by car or truck: the unified search with only the single `vehicle` profile seeded (roads and
+    /// tracks a car can drive, no leaving them). Named `offroad_car` so it never collides with `offroad_vehicle`, the mixed Auto
+    /// search, whose name the assistant's tool already uses.
+    OffroadCar,
 }
 impl TravelMode {
     pub fn name(self) -> &'static str {
@@ -55,6 +59,7 @@ impl TravelMode {
             TravelMode::OffroadVehicle => "offroad_vehicle",
             TravelMode::OffroadTwoW => "offroad_2w",
             TravelMode::OffroadFourW => "offroad_4w",
+            TravelMode::OffroadCar => "offroad_car",
         }
     }
     pub fn from_name(s: &str) -> Option<TravelMode> {
@@ -66,6 +71,7 @@ impl TravelMode {
             "offroad_vehicle" => Some(TravelMode::OffroadVehicle),
             "offroad_2w" => Some(TravelMode::OffroadTwoW),
             "offroad_4w" => Some(TravelMode::OffroadFourW),
+            "offroad_car" => Some(TravelMode::OffroadCar),
             _ => None,
         }
     }
@@ -77,7 +83,7 @@ impl TravelMode {
             TravelMode::OffroadFoot => "pedestrian",
             TravelMode::OffroadVehicle => "auto",
             TravelMode::OffroadTwoW => "bicycle",
-            TravelMode::OffroadFourW => "auto",
+            TravelMode::OffroadFourW | TravelMode::OffroadCar => "auto",
         }
     }
     /// Off-road router request mode: drive and offroad_vehicle mix vehicle/4w/2w/foot; walk and offroad_foot = foot; bike = 2w.
@@ -87,12 +93,13 @@ impl TravelMode {
             TravelMode::Walk | TravelMode::OffroadFoot => RequestMode::Single(Mode::Foot),
             TravelMode::Bike | TravelMode::OffroadTwoW => RequestMode::Single(Mode::TwoW),
             TravelMode::OffroadFourW => RequestMode::Single(Mode::FourW),
+            TravelMode::OffroadCar => RequestMode::Single(Mode::Vehicle),
         }
     }
     /// The off-road modes route the whole trip with the off-road router (no road route first), and only where the
     /// off-road data covers both ends.
     pub fn offroad_only(self) -> bool {
-        matches!(self, TravelMode::OffroadFoot | TravelMode::OffroadVehicle | TravelMode::OffroadTwoW | TravelMode::OffroadFourW)
+        matches!(self, TravelMode::OffroadFoot | TravelMode::OffroadVehicle | TravelMode::OffroadTwoW | TravelMode::OffroadFourW | TravelMode::OffroadCar)
     }
 }
 

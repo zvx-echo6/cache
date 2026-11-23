@@ -373,7 +373,7 @@ Off-road plans a route away from roads.
 
 1. Open a place's card and tap "Directions".
 2. Tap "Off-road".
-3. Choose "On foot" or "Vehicle".
+3. Choose how you travel: "Vehicle" (a car or truck), "Auto" (mixes vehicle, ATV, bike and walking, switching where each one stops), "ATV", "Bike" or "On foot".
 4. Choose land access:
    - "Stay on open land": public land only;
    - "Usual": the normal choice;

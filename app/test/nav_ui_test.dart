@@ -390,8 +390,16 @@ void main() {
         expect(find.byKey(const ValueKey('land-strict')), findsNothing);
         await tester.tap(find.byKey(const ValueKey('mode-offroad')));
         await tester.pump();
-        expect(nav.mode, 'offroad_foot');
-        for (final t in ['On foot', 'Auto', '2-wheel', '4-wheel', 'Stay on open land', 'Usual', 'Emergency: any land']) {
+        // Off-road opens on Vehicle (a car or truck), the default
+        expect(nav.mode, 'offroad_car');
+        expect(tester.widget<ChoiceChip>(find.byKey(const ValueKey('offroad-mode-offroad_car'))).selected, isTrue);
+        // the chips, in order (Bike is also a road mode above, so they are found by key, not by text)
+        for (final m in ['offroad_car', 'offroad_vehicle', 'offroad_4w', 'offroad_2w', 'offroad_foot']) {
+          expect(find.byKey(ValueKey('offroad-mode-$m')), findsOneWidget);
+        }
+        expect([for (final m in ['offroad_car', 'offroad_vehicle', 'offroad_4w', 'offroad_2w', 'offroad_foot']) tester.widget<Text>(find.descendant(of: find.byKey(ValueKey('offroad-mode-$m')), matching: find.byType(Text))).data],
+            ['Vehicle', 'Auto', 'ATV', 'Bike', 'On foot']);
+        for (final t in ['Stay on open land', 'Usual', 'Emergency: any land']) {
           expect(find.text(t), findsOneWidget);
         }
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsNothing);
@@ -404,15 +412,15 @@ void main() {
           asked.add(mode);
           return MapRoute.fromJson(fakeRouteJson(offroad: true, mode: mode));
         };
-        for (final m in ['offroad_2w', 'offroad_4w']) {
+        for (final m in ['offroad_2w', 'offroad_4w', 'offroad_foot', 'offroad_car']) {
           await tester.tap(find.byKey(ValueKey('offroad-mode-$m')));
           await tester.pump();
           expect(nav.mode, m);
           final chip = tester.widget<ChoiceChip>(find.byKey(ValueKey('offroad-mode-$m')));
           expect(chip.selected, isTrue, reason: '$m is not shown as chosen');
-          expect(tester.widget<ChoiceChip>(find.byKey(const ValueKey('offroad-mode-offroad_foot'))).selected, isFalse);
+          expect(tester.widgetList<ChoiceChip>(find.byType(ChoiceChip)).where((c) => c.key.toString().contains('offroad-mode-') && c.selected).length, 1);
         }
-        expect(asked, ['offroad_2w', 'offroad_4w']);
+        expect(asked, ['offroad_2w', 'offroad_4w', 'offroad_foot', 'offroad_car']);
         await tester.tap(find.byKey(const ValueKey('offroad-mode-offroad_vehicle')));
         await tester.pump();
         expect(nav.mode, 'offroad_vehicle');
