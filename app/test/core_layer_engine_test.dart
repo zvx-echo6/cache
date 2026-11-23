@@ -332,8 +332,9 @@ void main() {
   test('two downloads running together: when both jobs end every listing of both areas reads done at once, with the final size (web-region-progress)', () async {
     const other = GeoBounds(south: 42.70, west: -113.80, north: 42.80, east: -113.66);
     final a = await engine.download('hillshade', home, label: 'first');
-    final b = await engine.download('elevation', other, label: 'second');
     expect(a.phase, AreaPhase.running);
+    // Each area is checked right after its own start; by the time the second has started, the first may already have finished on a slow machine, which is correct.
+    final b = await engine.download('elevation', other, label: 'second');
     expect(b.phase, AreaPhase.running);
     // The engine says when it has something new (every look at the jobs ends with a notice, after the list is read again): the test
     // looks at the state then. It never polls and never keeps time, so a slow machine only makes it later, not wrong.
