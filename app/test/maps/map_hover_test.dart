@@ -84,7 +84,8 @@ void main() {
       await hover.show(const HoverTarget(['places'], 'Boise'), layers, '#f80');
       calls.clear();
       await hover.show(null, layers, '');
-      expect(calls, [('places', {'text-color': '#111111', 'text-halo-width': 1.5})]);
+      expect(calls.map((c) => c.$1), ['places']);
+      expect(calls.single.$2, {'text-color': '#111111', 'text-halo-width': 1.5});
       expect(hover.current, isNull);
     });
 
