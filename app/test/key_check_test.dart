@@ -14,7 +14,7 @@ void main() {
 
     test('a rejected key is the core\'s key_missing, and only that: a bare HTTP 400 is not taken for one', () {
       const m = "Kagi didn't accept this key. Check you copied all of it.";
-      expect(keyCheckFromToolContent(err('key_missing', 'web search key rejected')).message, m);
+      expect(keyCheckFromToolContent(err('key_missing', 'That source isn\'t available right now.')).message, m);
       final other = keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 400)')).message;
       expect(other, isNot(m), reason: 'the core says key_missing for a rejected key; a 400 without that is something else');
       expect(other, contains('HTTP 400'));
@@ -38,7 +38,7 @@ void main() {
 
     test('no message ever holds the key', () {
       final all = [
-        err('key_missing', 'web search key rejected'),
+        err('key_missing', 'That source isn\'t available right now.'),
         err('quota', 'q'),
         err('fetch_failed', 'web search failed (HTTP 400)'),
       ];
@@ -51,7 +51,7 @@ void main() {
   test('saving a key checks it with one search through the core, and puts the core back if it fails', () async {
     final calls = <(String?, String?, bool)>[];
     final probed = <String>[];
-    var answer = err('key_missing', 'web search key rejected');
+    var answer = err('key_missing', 'That source isn\'t available right now.');
     final s = AppSettings();
     final secrets = MemoryTokenStore();
     final w = WebSearchSetup(

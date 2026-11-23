@@ -339,7 +339,7 @@ void main() {
   });
 
   group('Web search', () {
-    const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
+    const rejected = '{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}';
 
     testWidgets('is not in the Weather and alerts list, and not in its counts', (tester) async {
       tall(tester);

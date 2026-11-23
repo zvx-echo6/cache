@@ -78,6 +78,34 @@ void main() {
     expect(lastGivenTo('peerA'), {'live.key.a~b': 'TILDE-SECRET'});
   });
 
+  test('push: with every key ticked (the switch on) a key saved later goes too, except the ones left out; off sends none', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    store.set('live.key.owm', 'OWM-SECRET-2');
+    await sync.start();
+    await sync.setKeyOn('peerA', 'search.kagi.key', true);
+    await sync.setKeyOn('peerA', 'live.key.owm', true);
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1', 'live.key.owm': 'OWM-SECRET-2'});
+    // a key saved afterwards follows the switch, at the next look, and shows ticked to the browser
+    store.set('live.key.later', 'LATER-SECRET-3');
+    expect(sync.keyOn('peerA', 'live.key.later'), isTrue);
+    expect(sync.keyNames().firstWhere((k) => k['name'] == 'live.key.later')['on'], ['peerA']);
+    await sync.tick();
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1', 'live.key.owm': 'OWM-SECRET-2', 'live.key.later': 'LATER-SECRET-3'});
+    // a key left out stays out, and a key saved after that still goes
+    await sync.setKeyOn('peerA', 'live.key.owm', false);
+    store.set('live.key.last', 'LAST-SECRET-4');
+    await sync.tick();
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1', 'live.key.later': 'LATER-SECRET-3', 'live.key.last': 'LAST-SECRET-4'});
+    // switching off (every key unticked) sends none, and a key saved after that does not go
+    for (final n in ['search.kagi.key', 'live.key.later', 'live.key.last']) {
+      await sync.setKeyOn('peerA', n, false);
+    }
+    store.set('live.key.after', 'AFTER-SECRET-5');
+    await sync.tick();
+    expect(lastGivenTo('peerA'), isEmpty);
+    expect(sync.keyOn('peerA', 'live.key.after'), isFalse);
+  });
+
   test('push: nothing goes for an Off link or a Take-only link', () async {
     store.set('search.kagi.key', 'KAGI-SECRET-1');
     peers = [
@@ -126,7 +154,8 @@ void main() {
     await sync.start();
     await sync.setKeyOn('peerA', 'search.kagi.key', true);
     final state = File('${support.path}/support/settings-sync/.local/state.json').readAsStringSync();
-    expect(state, contains('search.kagi.key'));
+    // every held key ticked is the switch on, kept as the (empty) list of keys left out; no key name or value needs keeping
+    expect(jsonDecode(state)['keysAll'], {'peerA': <Object?>[]});
     expect(state, isNot(contains('KAGI-SECRET-1')));
     sync.stop();
     given.clear();

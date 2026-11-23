@@ -158,7 +158,7 @@ void main() {
       await r.weather.updateNow(force: true);
       r.clock = r.clock.add(const Duration(minutes: 12));
     });
-    r.webSearch.noteSearch('{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}');
+    r.webSearch.noteSearch('{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}');
     await _show(tester, WeatherPage(deps: r.deps), const Size(390, 2300));
     await snap(tester, _out, 'more-1-mixed-light');
     debugLinuxUi = true;

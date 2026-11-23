@@ -707,7 +707,7 @@ void main() {
     test('a key the provider refuses is not saved, and the words never repeat it', () async {
       h = await Harness.create();
       final firms = h.weather.sourceById('firms-viirs-near')!;
-      h.core.previewError = const CacheSearchException('key_missing', 'web search key rejected');
+      h.core.previewError = const CacheSearchException('key_missing', 'That source isn\'t available right now.');
       final r = await h.weather.saveKey(firms, secret);
       expect(r.ok, isFalse);
       expect(r.message, "NASA FIRMS didn't accept this key. Check you copied all of it.");

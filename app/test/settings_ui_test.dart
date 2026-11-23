@@ -202,7 +202,7 @@ void main() {
 
     testWidgets('a key that fails the check is not saved, the typed key stays, and the error says why', (tester) async {
       final r = await SettingsRig.create(tester);
-      r.searchContent = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
+      r.searchContent = '{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}';
       await r.show(tester, ApiKeysScreen(deps: r.deps, openId: 'kagi'));
       await tester.tap(find.byKey(const ValueKey('add-kagi')));
       await tester.pumpAndSettle();

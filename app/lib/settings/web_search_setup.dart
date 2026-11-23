@@ -39,7 +39,7 @@ const String _rejected = "Kagi didn't accept this key. Check you copied all of i
 
 /// Turns what the core's web_search tool answered into the check: the tool's own error codes (key_missing, quota, fetch_failed,
 /// bad_response; docs/TOOLS.md) in words for people. A message that is not the error JSON is a set of results: the key works.
-/// A rejected key is the core's own `key_missing` ("web search key rejected": the core reads Kagi's `general.invalid_token` and a
+/// A rejected key is the core's own `key_missing` ("That source isn't available right now.": the core reads Kagi's `general.invalid_token` and a
 /// 401/403 as that), never a bare status code here. Any other bad status comes back as `fetch_failed` with "(HTTP n)" in its detail:
 /// 5xx is Kagi's own trouble; no status at all is a connection that did not work.
 KeyCheck keyCheckFromToolContent(String content) {
