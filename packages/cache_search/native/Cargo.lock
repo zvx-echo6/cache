@@ -1106,9 +1106,14 @@ dependencies = [
  "iroh",
  "iroh-blobs",
  "personal-rns",
+ "postcard",
  "prns-config",
+ "rand 0.10.3",
+ "serde",
  "tempfile",
  "tokio",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -9619,6 +9624,7 @@ checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
 dependencies = [
  "curve25519-dalek",
  "rand_core 0.10.1",
+ "zeroize",
 ]
 
 [[package]]

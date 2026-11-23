@@ -27,6 +27,13 @@ blake3 = "1.8"
 iroh-blobs = "=0.103.1"
 bao-tree = "0.16"
 bytes = "1"
+# Nearby linking core (pair_core): one-time X25519 exchange, versioned wire messages, secret wiping.
+# Versions already in Cargo.lock (x25519-dalek is pinned to the one Prns uses, so the lock gains no new version).
+x25519-dalek = { version = "=3.0.0", features = ["static_secrets"] }
+rand = "0.10"
+zeroize = "1"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }
