@@ -130,6 +130,9 @@ MarkdownStyleSheet guideStyle(CacheTokens k) {
     tableBody: text(),
     tableBorder: TableBorder.all(color: k.secondary, width: 0.5),
     tableCellsPadding: const EdgeInsets.all(8),
+    // Columns take the width their content needs (a host name never wraps in the middle of a word); a table wider than the screen scrolls
+    // sideways (the Markdown builder does that for this column width only). The reader's default gave every column the same width.
+    tableColumnWidth: const IntrinsicColumnWidth(),
   );
 }
 
