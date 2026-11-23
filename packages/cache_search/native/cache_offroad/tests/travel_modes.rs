@@ -244,3 +244,48 @@ fn where_the_data_has_no_land_rules_the_route_says_so() {
     ruled.barriers[300 * 600 + 300] = 255;
     assert!(!notes(&ruled, TravelMode::OffroadFoot, Boundary::Pragmatic).contains(&NOTE_NO_LAND_RULES.to_string()));
 }
+
+/// Where a point falls in the synthetic world's own cells: (row, col) into its arrays.
+fn cell_of(world: &MemPack, p: (f64, f64)) -> usize {
+    let (gr, gc) = cache_offroad::grid::global_pixel(p.0, p.1).unwrap();
+    (gr - world.row0) as usize * world.cols + (gc - world.col0) as usize
+}
+
+/// The cell and the ones around it are foot trail (a path a few cells wide, so the test does not depend on which cell the point falls in).
+fn on_foot_trail(world: &mut MemPack, cell: usize) {
+    for dr in -2i64..=2 {
+        for dc in -2i64..=2 {
+            world.trails[(cell as i64 + dr * world.cols as i64 + dc) as usize] = 25;
+        }
+    }
+}
+
+/// A quad standing on a foot trail (a path through a town: the pack marks it 25, which the quad may not ride) could never step off
+/// it onto open ground, so the trip had "no way found" from that point and from no other. It leaves the trail by the nearest open cell.
+#[test]
+fn a_quad_that_starts_or_ends_on_a_foot_trail_still_finds_its_way() {
+    let mut world = flat_world();
+    let (s, e) = (cell_of(&world, FROM), cell_of(&world, TO));
+    on_foot_trail(&mut world, s);
+    let v = Recorder(Mutex::new(vec![]));
+    for mode in [TravelMode::OffroadFourW, TravelMode::OffroadSxs] {
+        let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, mode));
+        assert!(d.ok, "{mode:?} from a foot trail: {:?}", d.errors);
+    }
+    on_foot_trail(&mut world, e);
+    let d = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFourW));
+    assert!(d.ok, "to a foot trail too: {:?}", d.errors);
+    // on foot the same trail is an ordinary way: that route is as it was
+    assert!(env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot)).ok);
+}
+
+/// The nudge finds a way off a trail, not a way along one: where every cell is foot trail there is nowhere for a quad to go.
+#[test]
+fn the_quad_still_cannot_ride_a_foot_trail() {
+    let mut world = flat_world();
+    world.trails = vec![25; world.rows * world.cols];
+    let v = Recorder(Mutex::new(vec![]));
+    let quad = env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFourW));
+    assert!(!quad.ok, "the quad rode a foot trail");
+    assert!(env(&world, &v).directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot)).ok);
+}

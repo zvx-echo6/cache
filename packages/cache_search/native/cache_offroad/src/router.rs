@@ -573,6 +573,23 @@ impl<'a> Router<'a> {
 
         let origin_modes: Vec<usize> = origin_set.iter().copied().collect();
         let goal_modes: Vec<usize> = goal_set.iter().copied().collect();
+        // A quad (or side-by-side) may not ride a foot trail, and cannot step from one onto open ground, so a start or an end on a path
+        // (the pack marks the paths of a town) had no way out. It starts and ends at the nearest cell it can leave by.
+        let (mut s_row, mut s_col, mut g_row, mut g_col) = (s_row, s_col, g_row, g_col);
+        if req.mode == RequestMode::Single(Mode::FourW) {
+            let mi = Mode::FourW.idx();
+            let mp = crate::astar::ModeParams {
+                cost_mult: &stack, stride: N_MODES, mode: mi, trail_friction: &trail_friction_stack[mi * 256..(mi + 1) * 256],
+                max_grade: max_grade[mi], speed_function_id: sfid[mi], base_speed_kmh: base[mi],
+            };
+            let open = |r: i64, c: i64| open_cell_near(r, c, rows, cols, &mp, &elevation, &trails, &barriers, req.boundary.id(), meta.cell_size_m);
+            if let Some(p) = open(s_row, s_col) {
+                (s_row, s_col) = p;
+            }
+            if let Some(p) = open(g_row, g_col) {
+                (g_row, g_col) = p;
+            }
+        }
         let t3 = Instant::now();
         let res = astar_multigoal_multimode(&MultiModeInput {
             rows, cols, n_modes: N_MODES,
@@ -619,6 +636,41 @@ impl<'a> Router<'a> {
         }
         Ok(out)
     }
+}
+
+/// How far (in cells, about 14 m each) a start or an end moves to reach a cell the mode can leave by.
+pub const OPEN_CELL_SEARCH_RADIUS: i64 = 12;
+
+/// The cell nearest to (row, col) that `mp`'s mode can step out of and back into (itself when it can), within
+/// [`OPEN_CELL_SEARCH_RADIUS`] cells; `None` when there is none.
+#[allow(clippy::too_many_arguments)]
+fn open_cell_near(
+    row: i64, col: i64, rows: usize, cols: usize, mp: &crate::astar::ModeParams, elevation: &[f32], trails: &[u8], barriers: &[u8],
+    boundary_id: i64, cell_m: f64,
+) -> Option<(i64, i64)> {
+    let inb = |r: i64, c: i64| r >= 0 && r < rows as i64 && c >= 0 && c < cols as i64;
+    let time = |r0: i64, c0: i64, r1: i64, c1: i64| {
+        crate::astar::movement_edge_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols, elevation, mp, trails, barriers, boundary_id, cell_m, cell_m)
+    };
+    let can_leave = |r: i64, c: i64| {
+        (-1i64..=1).any(|dr| {
+            (-1i64..=1).any(|dc| {
+                let (nr, nc) = (r + dr, c + dc);
+                (dr != 0 || dc != 0) && inb(nr, nc) && time(r, c, nr, nc).is_finite() && time(nr, nc, r, c).is_finite()
+            })
+        })
+    };
+    let mut near: Vec<(i64, i64, i64)> = Vec::new();
+    for dr in -OPEN_CELL_SEARCH_RADIUS..=OPEN_CELL_SEARCH_RADIUS {
+        for dc in -OPEN_CELL_SEARCH_RADIUS..=OPEN_CELL_SEARCH_RADIUS {
+            near.push((dr * dr + dc * dc, dr, dc));
+        }
+    }
+    near.sort();
+    near.into_iter()
+        .take_while(|(d2, _, _)| *d2 <= OPEN_CELL_SEARCH_RADIUS * OPEN_CELL_SEARCH_RADIUS)
+        .map(|(_, dr, dc)| (row + dr, col + dc))
+        .find(|&(r, c)| inb(r, c) && can_leave(r, c))
 }
 
 /// `_render_unified_path`.
