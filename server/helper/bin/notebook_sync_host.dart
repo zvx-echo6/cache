@@ -122,22 +122,27 @@ class NotebookSyncHost {
     unawaited(run());
   }
 
-  Future<void> _refreshPrivate() async {
+  /// Reads the notebooks again and works out which private ones are left out; true when that list changed. The engine is not told (see
+  /// [_refreshPrivate]): the sharing host calls this before it gives the engine the off list, from inside its own work.
+  Future<bool> readPrivate() async {
     try {
       await store.reload();
     } catch (e) {
       log?.call('notebook sync: could not read the notebooks: $e');
-      return;
+      return false;
     }
     final now = ({for (final n in store.notebooks) if (n.private && !_included.contains(n.id)) NotebookSyncCore.folderNameOf(n)}).toList()..sort();
     final same = now.length == _privateOff.length && [for (var i = 0; i < now.length; i++) now[i] == _privateOff[i]].every((x) => x);
     _privateOff = now;
-    if (!same) {
-      try {
-        await offChanged?.call();
-      } catch (e) {
-        log?.call('notebook sync: could not give the engine the notebooks left out: $e');
-      }
+    return !same;
+  }
+
+  Future<void> _refreshPrivate() async {
+    if (!await readPrivate()) return;
+    try {
+      await offChanged?.call();
+    } catch (e) {
+      log?.call('notebook sync: could not give the engine the notebooks left out: $e');
     }
   }
 
@@ -286,6 +291,7 @@ void attachNotebookSync(SharingHost sharing, NotebookSyncHost nb) {
   sharing.photosAllowed = (id, off) => nb.photosToSend(off);
   sharing.privateIncluded = () => nb.includedIds;
   sharing.setPrivateIncluded = nb.setIncluded;
+  sharing.beforeKindOn = (kind) => kind == 'notebooks' ? nb.readPrivate().then((_) {}) : Future<void>.value();
   sharing.kindSet = (kind, on) => kind == 'notebooks' && on ? nb.run() : Future<void>.value();
 }
 

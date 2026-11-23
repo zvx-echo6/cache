@@ -471,7 +471,7 @@ void main() {
     test('a private notebook stays out of the share until its switch is on, and the switch survives a restart', () async {
       final r = rig(shareOnAlways: true);
       final health = await r.server.book('Health', private: true);
-      await r.server.entry(health, 'Blood pressure', private: false);
+      await r.server.entry(health, 'Blood pressure', private: true);
       final notes = await r.server.book('Notes');
       await r.server.entry(notes, 'Public');
       await r.nb.run();

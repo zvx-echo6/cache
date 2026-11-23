@@ -474,7 +474,16 @@ class SharingHost {
   /// helper.
   Future<void> Function(String kind, bool on)? kindSet;
 
+  /// Run before a kind's off list is given to the engine and its folders are shared (notebook sync reads which private notebooks are
+  /// left out). Set by the helper; a failure is only logged.
+  Future<void> Function(String kind)? beforeKindOn;
+
   Future<void> _addKind(ShareKind k) async {
+    try {
+      await beforeKindOn?.call(k.id);
+    } catch (e) {
+      log?.call('sharing: could not prepare ${k.id}: $e');
+    }
     await _applyOff();
     await _addShares(k);
     final told = kindSet;
