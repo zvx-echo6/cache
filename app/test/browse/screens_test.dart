@@ -69,7 +69,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Full · 367 MB'), findsOneWidget);
     expect(find.textContaining('No pictures · 79.7 MB'), findsOneWidget);
+  });
 
+  testWidgets('Add to Library: a Kiwix row with no flavour shows none', (tester) async {
+    wide(tester);
     Future<String> noFlavour(Uri u) async => (await recorded(u)).replaceAll('<flavour>maxi</flavour>', '<flavour></flavour>');
     final b2 = make(noFlavour);
     await tester.runAsync(b2.init);
