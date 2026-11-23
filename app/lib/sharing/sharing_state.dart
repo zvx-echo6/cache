@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
@@ -40,6 +41,7 @@ class SharingState extends ChangeNotifier {
     bool? phone,
     bool? reticulum,
     MulticastLock? multicast,
+    String? Function()? deviceKind,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
     List<String> Function()? drainLog,
@@ -54,6 +56,8 @@ class SharingState extends ChangeNotifier {
        _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux)),
        // Android needs a multicast lock held while it runs; nothing else does.
        _multicast = multicast ?? (!kIsWeb && Platform.isAndroid ? MulticastLock() : null),
+       // The kind travels only in the Nearby name request: Android says phone or tablet; nothing else says.
+       _deviceKind = deviceKind ?? (!kIsWeb && Platform.isAndroid ? _androidKind : () => null),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
        // ignore: prefer_initializing_formals
@@ -90,6 +94,17 @@ class SharingState extends ChangeNotifier {
 
   /// The engine runs Reticulum's Wi-Fi discovery (the config key `reticulum`): Android and Linux. Peers found that way say `via: 'wifi'`.
   final bool _reticulum;
+
+  /// What this device calls itself in the Nearby name request (`phone`, `tablet`), or null to leave it out.
+  final String? Function() _deviceKind;
+
+  /// Android: a tablet when the shortest screen side is 600 dp or more, otherwise a phone.
+  static String? _androidKind() {
+    final views = PlatformDispatcher.instance.views;
+    if (views.isEmpty) return null;
+    final v = views.first;
+    return deviceKindForShortestSide(v.physicalSize.shortestSide / v.devicePixelRatio);
+  }
 
   /// The Android multicast lock, taken just before the engine opens and let go when it stops; null where none is needed.
   final MulticastLock? _multicast;
@@ -539,6 +554,7 @@ class _PhoneDriver implements SharingDriver {
         if (s._phone) 'dht': false,
         // Reticulum's Wi-Fi discovery (the engine's `reticulum`; a peer it finds says `via: 'wifi'`).
         'reticulum': s._reticulum,
+        if (s._deviceKind() case final kind?) 'device_kind': kind,
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': s._reserveBytes((await s.supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
@@ -1284,3 +1300,6 @@ class _RealCore implements SyncCoreLike {
   @override
   Future<void> close() => _c.close();
 }
+
+/// `tablet` when the shortest screen side is 600 dp or more, otherwise `phone` (Android's own rule of thumb).
+String deviceKindForShortestSide(double dp) => dp >= 600 ? 'tablet' : 'phone';

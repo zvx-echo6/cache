@@ -169,6 +169,35 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('the engine config carries device_kind only where the app has one (Android: phone or tablet)', (tester) async {
+    final r = await SettingsRig.create(tester);
+    Future<Map<String, Object?>> open(String? Function()? kind) async {
+      late Map<String, Object?> config;
+      final s = SharingState(
+        policy: r.policy,
+        supportDir: () async => r.dir,
+        kinds: const [],
+        deviceKind: kind,
+        opener: (c) async {
+          config = c;
+          return r.sync;
+        },
+      );
+      await tester.runAsync(s.setUp);
+      s.dispose();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      return config;
+    }
+
+    expect((await open(() => 'tablet'))['device_kind'], 'tablet');
+    expect((await open(() => 'phone'))['device_kind'], 'phone');
+    expect((await open(() => null)).containsKey('device_kind'), isFalse, reason: 'other platforms omit it');
+    expect(deviceKindForShortestSide(599.9), 'phone');
+    expect(deviceKindForShortestSide(600), 'tablet');
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
+
   testWidgets('the search indexes are always shared once sharing is set up, and fetch only what this device holds', (tester) async {
     final r = await SettingsRig.create(tester);
     final configs = <Map<String, Object?>>[];

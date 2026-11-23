@@ -189,6 +189,8 @@ class SharingHost {
         'with': {for (final l in table.links) l.id: l.modes},
         // Reticulum's Wi-Fi discovery on Cache on Linux (a peer it finds says `via: 'wifi'`); needs no lock and no open port.
         'reticulum': true,
+        // What the Nearby name request says this device is.
+        'device_kind': 'computer',
         ...engineConfig,
       });
       _core = core;

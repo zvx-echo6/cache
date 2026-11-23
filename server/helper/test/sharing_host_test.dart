@@ -167,6 +167,7 @@ void main() {
     expect(cfg['dir'], '${data.path}/sync');
     expect(cfg['name'], 'Test box');
     expect(cfg['reticulum'], true, reason: 'Cache on Linux discovers devices on the same Wi-Fi');
+    expect(cfg['device_kind'], 'computer');
     // the network settings are the engine's defaults, as on the phone: none of them is given
     for (final k in ['relay', 'relay_urls', 'dht', 'mdns', 'lookup', 'lookup_url', 'port', 'interval_secs', 'reserve_bytes']) {
       expect(cfg.containsKey(k), isFalse, reason: k);
