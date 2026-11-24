@@ -110,7 +110,9 @@ Future<void> main() async {
   if (data == null) log('CACHE_DATA is not set: no sharing host');
   final SharingHost? sharing = data == null
       ? null
-      : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log);
+      : SharingHost(dataDir: data, supportDir: dirs.support, docsDir: dirs.docs, deviceName: Platform.localHostname, libraryPath: path, log: log,
+          // the engine's own lines go to the server's app log (cache.log): the server reads this prefix on the helper's stderr
+          engineLog: (l) => stderr.writeln('cache-log: $l'));
   // The settings log, run here with no tab open: a browser's write of a settings file (FsOps) and a linked device's change
   // (the settings share) both end in it.
   ServerSettingsSync? settingsSync;
