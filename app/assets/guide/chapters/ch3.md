@@ -419,7 +419,7 @@ One choice sets both devices: when you send yours, the other device is set to ta
 
 "Never synced" lists what always stays on each device: its name, mobile data downloads, indexing speed, the space kept free, the log level, Obsidian and Logseq connections, and the permissions each device asks for itself.
 
-"API keys" lists each key saved on this device, each with its own switch. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match both ways", from you only when you send yours.
+"API keys" lists each key saved on this device, each with its own switch. They all start off for a newly linked device. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match both ways", from you only when you send yours.
 
 A setting changes on the other device at once. Nothing restarts.
 
