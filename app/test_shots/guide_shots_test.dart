@@ -1381,6 +1381,12 @@ void main() {
   /// where the map is, tells the screen the camera the map has (the scale bar and the compass follow it), and takes the picture.
   Future<void> mapShot(WidgetTester tester, _MapRig m, String id, String scene) async {
     await m.kit.loadChips(tester);
+    // The screen draws the map's own images (the pins, the routes' time labels) with real work after the state changes: let it finish
+    // before the scene is read, so the scene is the same in every run.
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
+      await tester.pump();
+    }
     final map = mapOf(tester);
     final size = tester.getSize(find.byType(MapLibreMap));
     final cam = m.kit.cameraOf(map, size);
