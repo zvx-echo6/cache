@@ -674,34 +674,36 @@ void main() {
     });
 
     test('E: both devices edited, the share file sync kept one text in the entry\'s file and renamed the other "(conflict, ...)": both end with the same two entries', () async {
-      final (a, b, nb, id) = await synced();
-      await edit(a, nb, id, 'Swapped eight jugs at the shed. Next rotation in April.');
-      await edit(b, nb, id, 'Swapped ten jugs at the shed. Next rotation in April.');
-      await a.engine.run();
-      // B's file is what B would have written; B itself has not synced yet (its record and folder stay as they were)
-      final stateBefore = b.state.readAsStringSync(), folderBefore = Map.of(b.folder.text), bytesBefore = Map.of(b.folder.bytes);
-      await b.engine.run();
-      final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
-      final ta = a.folder.text[path]!, tb = b.folder.text[path]!;
-      b.state.writeAsStringSync(stateBefore);
-      b.folder.text..clear()..addAll(folderBefore);
-      b.folder.bytes..clear()..addAll(bytesBefore);
-      expect(ta, isNot(tb));
-      final conflict = '${path.substring(0, path.length - 3)} (conflict, B, 2026-11-24 0543 UTC).md';
-      for (final r in [a, b]) {
-        r.folder.text[path] = ta;
-        r.folder.text[conflict] = tb;
-      }
-      for (var i = 0; i < 4; i++) {
+      for (final swap in [false, true]) {
+        final (a, b, nb, id) = await synced();
+        await edit(a, nb, id, 'Swapped ${swap ? 'ten' : 'eight'} jugs at the shed. Next rotation in April.');
+        await edit(b, nb, id, 'Swapped ${swap ? 'eight' : 'ten'} jugs at the shed. Next rotation in April.');
         await a.engine.run();
-        carry(a, b);
+        // B's file is what B would have written; B itself has not synced yet (its record and folder stay as they were)
+        final stateBefore = b.state.readAsStringSync(), folderBefore = Map.of(b.folder.text), bytesBefore = Map.of(b.folder.bytes);
         await b.engine.run();
-        carry(b, a);
+        final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+        final ta = a.folder.text[path]!, tb = b.folder.text[path]!;
+        b.state.writeAsStringSync(stateBefore);
+        b.folder.text..clear()..addAll(folderBefore);
+        b.folder.bytes..clear()..addAll(bytesBefore);
+        expect(ta, isNot(tb));
+        final conflict = '${path.substring(0, path.length - 3)} (conflict, B, 2026-11-24 0543 UTC).md';
+        for (final r in [a, b]) {
+          r.folder.text[path] = ta;
+          r.folder.text[conflict] = tb;
+        }
+        for (var i = 0; i < 4; i++) {
+          await a.engine.run();
+          carry(a, b);
+          await b.engine.run();
+          carry(b, a);
+        }
+        final va = await view(a, nb), vb = await view(b, nb);
+        expect(va, vb);
+        expect(va.map((x) => x.$2), ['Water cache restocked', 'Water cache restocked (other version)']);
+        expect(va.map((x) => x.$3).toSet(), {'Swapped eight jugs at the shed. Next rotation in April.', 'Swapped ten jugs at the shed. Next rotation in April.'});
       }
-      final va = await view(a, nb), vb = await view(b, nb);
-      expect(va, vb);
-      expect(va.map((x) => x.$2), ['Water cache restocked', 'Water cache restocked (other version)']);
-      expect(va.map((x) => x.$3).toSet(), {'Swapped eight jugs at the shed. Next rotation in April.', 'Swapped ten jugs at the shed. Next rotation in April.'});
     });
 
     test('an entry with photos: the other version gets photos of its own, and deleting either entry leaves the other\'s photo files', () async {
