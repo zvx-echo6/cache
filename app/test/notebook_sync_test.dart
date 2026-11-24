@@ -728,6 +728,36 @@ void main() {
       expect(copy.photos, isEmpty);
       expect(copy.body, anyOf(contains('eight'), contains('ten')));
     });
+
+    test('a file the share file sync renamed "(conflict, ...)" is the other version: "<title> (other version)", a new id, its own photos, and the original stays', () async {
+      final a = _Rig(SyncKind.share, ownMedia: true);
+      final j = await a.journal();
+      final media = a.media!;
+      const p = '5b1c0d2e-7a3f-4c11-8e45-0123456789ab';
+      for (final d in ['photos', 'thumbs']) {
+        File('${media.path}/$d/$p.jpg')
+          ..createSync(recursive: true)
+          ..writeAsBytesSync([1, 2, 3]);
+      }
+      final e = await a.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Ridge', body: first, photos: [const NbPhoto(id: p)]);
+      await a.engine.run();
+      final path = a.folder.text.keys.firstWhere((k) => k.endsWith('.md'));
+      final conflict = '${path.substring(0, path.length - 3)} (conflict, Android device, 2026-11-24 0543 UTC).md';
+      a.folder.text[conflict] = a.folder.text[path]!.replaceFirst('six', 'ten');
+      final rep = await a.engine.run();
+      expect(rep.conflicts, 0);
+      final all = await a.nb.entries(j.id);
+      expect(all.map((x) => x.title).toList()..sort(), ['Ridge', 'Ridge (other version)']);
+      final orig = all.firstWhere((x) => x.id == e.id), copy = all.firstWhere((x) => x.id != e.id);
+      expect(orig.body, first);
+      expect(copy.body, contains('ten'));
+      expect(orig.photos.map((x) => x.id), [p]);
+      expect(copy.photos, hasLength(1));
+      expect(copy.photos.single.id, isNot(p));
+      // another pass changes nothing: no third entry
+      await a.engine.run();
+      expect(await a.nb.entries(j.id), hasLength(2));
+    });
   });
 
   group('a notebook\'s fields are fixed (1.1: the field editor is gone)', () {
