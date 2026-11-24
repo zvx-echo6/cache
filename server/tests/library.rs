@@ -1167,6 +1167,24 @@ async fn the_app_log_is_signed_in_only_has_a_level_and_clears() {
     stop(&rig).await;
 }
 
+#[tokio::test]
+async fn the_sync_engines_log_lines_from_the_helper_reach_cache_log() {
+    let _g = LOCK.lock().await;
+    let rig = rig("enginelog", Setup::new()).await;
+    rig.call("POST", "/api/core", r#"{"op":"emitlog","args":{"line":"sync open: folder ready +12 ms"}}"#).await;
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = rig.call("GET", "/api/log", "").await.1["result"]["text"].as_str().unwrap_or("").to_string();
+        if text.contains("sync open: folder ready +12 ms") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(text.contains("SYNC sync open: folder ready +12 ms"), "{text}");
+    assert!(!text.contains("cache-log:"), "the prefix is not part of the line: {text}");
+    stop(&rig).await;
+}
+
 #[test]
 fn the_app_log_is_size_capped_and_redacts_secrets() {
     use cache_server::applog::{redact, AppLog, Level, FILES};
