@@ -78,10 +78,11 @@ pub struct MvumFeature {
     pub seasonal: Option<String>,
     /// (status, dates) for modes mtb (e_bike_class1), atv, vehicle (highclearancevehicle) in that order.
     pub access: [(Option<String>, Option<String>); 3],
-    /// (status, dates) for the dirt bike (MVUM motorcycle) and for vehicles wider than 50 in (the side-by-side), in that order;
+    /// (status, dates) for the dirt bike (MVUM `motorcycle`), then for vehicles over 50 in wide with four driven wheels
+    /// (`fourwd_gt50inches`) and with two driven wheels (`twowd_gt50inches`); the side-by-side may use a trail open to either.
     /// `None` where the pack has no such column yet (before the off-road pack rebuild): the routes then use the ATV rules for the
     /// dirt bike and the high-clearance-vehicle rules for the side-by-side.
-    pub ext: [Option<(Option<String>, Option<String>)>; 2],
+    pub ext: [Option<(Option<String>, Option<String>)>; 3],
     /// parts of the (Multi)LineString as (lon, lat)
     pub lines: Vec<Vec<(f64, f64)>>,
 }
@@ -153,9 +154,8 @@ pub fn line_box(a: (f64, f64), b: (f64, f64), buffer_m: f64) -> (f64, f64, f64, 
 pub struct SqlitePack {
     conn: Mutex<Connection>,
     pub info: PackInfo,
-    /// The `mvum` table has the dirt bike columns (`moto_status`, `moto_dates`) / the over-50-in columns (`gt50_status`, `gt50_dates`).
-    has_moto: bool,
-    has_gt50: bool,
+    /// The `mvum` table has the dirt bike columns (`moto_*`) / the over-50-in columns (`gt50_4wd_*`, `gt50_2wd_*`).
+    has_ext: [bool; 3],
 }
 
 /// The column names of the `mvum` table (none when there is no such table).
@@ -187,8 +187,12 @@ impl SqlitePack {
         let layers = meta.get("layers").map(|s| s.split(',').map(|x| x.to_string()).collect()).unwrap_or_default();
         let cols = mvum_columns(&conn);
         let has = |a: &str, b: &str| cols.iter().any(|c| c == a) && cols.iter().any(|c| c == b);
-        let (has_moto, has_gt50) = (has("moto_status", "moto_dates"), has("gt50_status", "gt50_dates"));
-        Ok(SqlitePack { conn: Mutex::new(conn), info: PackInfo { bbox, layers, meta }, has_moto, has_gt50 })
+        let has_ext = [
+            has("moto_status", "moto_dates"),
+            has("gt50_4wd_status", "gt50_4wd_dates"),
+            has("gt50_2wd_status", "gt50_2wd_dates"),
+        ];
+        Ok(SqlitePack { conn: Mutex::new(conn), info: PackInfo { bbox, layers, meta }, has_ext })
     }
 
     fn tile_blobs(&self, layer: Layer, tx0: i64, tx1: i64, ty0: i64, ty1: i64) -> PResult<Vec<(i64, i64, Vec<u8>)>> {
@@ -299,15 +303,14 @@ impl PackSource for SqlitePack {
         let mut sql = String::from(
             "SELECT m.is_trail, m.symbol, m.seasonal, m.mtb_status, m.mtb_dates, m.atv_status, m.atv_dates, m.veh_status, m.veh_dates, m.geom",
         );
-        if self.has_moto {
-            sql.push_str(", m.moto_status, m.moto_dates");
-        }
-        if self.has_gt50 {
-            sql.push_str(", m.gt50_status, m.gt50_dates");
+        for (present, cols) in self.has_ext.iter().zip([", m.moto_status, m.moto_dates", ", m.gt50_4wd_status, m.gt50_4wd_dates", ", m.gt50_2wd_status, m.gt50_2wd_dates"]) {
+            if *present {
+                sql.push_str(cols);
+            }
         }
         sql.push_str(" FROM mvum_idx i JOIN mvum m ON m.id=i.id WHERE i.max_lon >= ?1 AND i.min_lon <= ?2 AND i.max_lat >= ?3 AND i.min_lat <= ?4");
         let mut st = conn.prepare_cached(&sql)?;
-        let (has_moto, has_gt50) = (self.has_moto, self.has_gt50);
+        let has_ext = self.has_ext;
         let rows = st.query_map(params![west, east, south, north], |r| {
             let g: Vec<u8> = r.get(9)?;
             let mut next = 10;
@@ -319,14 +322,15 @@ impl PackSource for SqlitePack {
                 next += 2;
                 Ok(Some(v))
             };
-            let moto = pair(has_moto)?;
-            let gt50 = pair(has_gt50)?;
+            let moto = pair(has_ext[0])?;
+            let wide4 = pair(has_ext[1])?;
+            let wide2 = pair(has_ext[2])?;
             Ok(MvumFeature {
                 is_trail: r.get::<_, i64>(0)? != 0,
                 symbol: r.get(1)?,
                 seasonal: r.get(2)?,
                 access: [(r.get(3)?, r.get(4)?), (r.get(5)?, r.get(6)?), (r.get(7)?, r.get(8)?)],
-                ext: [moto, gt50],
+                ext: [moto, wide4, wide2],
                 lines: decode_lines(&g),
             })
         })?;
@@ -390,6 +394,11 @@ CREATE TABLE mvum(id INTEGER PRIMARY KEY, is_trail INTEGER NOT NULL, symbol TEXT
   mtb_status TEXT, mtb_dates TEXT, atv_status TEXT, atv_dates TEXT, veh_status TEXT, veh_dates TEXT, geom BLOB NOT NULL);
 CREATE VIRTUAL TABLE mvum_idx USING rtree(id, min_lon, max_lon, min_lat, max_lat);
 ";
+
+/// The `mvum` columns the off-road pack rebuild adds (run after [`SCHEMA`] by `offroad_pack build-sources`): the dirt bike (MVUM
+/// `motorcycle`) and the two over-50-in classes (`fourwd_gt50inches`, `twowd_gt50inches`), each a status and a dates-open text.
+/// Two pairs rather than one combined, because "open to either on a date" needs each class's own dates.
+pub const MVUM_EXT_COLUMNS: [&str; 6] = ["moto_status", "moto_dates", "gt50_4wd_status", "gt50_4wd_dates", "gt50_2wd_status", "gt50_2wd_dates"];
 
 // ---- in-memory pack (tests, parity harness) ------------------------------------------------------
 

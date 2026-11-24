@@ -164,19 +164,32 @@ pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(
     [it.next().unwrap(), it.next().unwrap(), it.next().unwrap()]
 }
 
-/// The grids of the two columns the off-road pack rebuild adds: the dirt bike (MVUM motorcycle) and vehicles wider than 50 in
-/// (the side-by-side). Each is `None` when no feature of the box carries that column (a pack from before the rebuild): the
-/// caller then uses the ATV grid for the dirt bike and the high-clearance-vehicle grid for the side-by-side.
+/// The grids of the columns the off-road pack rebuild adds: the dirt bike (MVUM `motorcycle`, index 0) and the side-by-side
+/// (index 1: a trail is open when `fourwd_gt50inches` OR `twowd_gt50inches` is open). Each is `None` when no feature of the box
+/// carries its column(s) (a pack from before the rebuild): the caller then uses the ATV grid for the dirt bike and the
+/// high-clearance-vehicle grid for the side-by-side.
 pub fn access_grids_ext(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Option<Vec<u8>>; 2] {
     let mut out: [Option<Vec<u8>>; 2] = [None, None];
     for (k, slot) in out.iter_mut().enumerate() {
-        if !feats.iter().any(|f| f.ext[k].is_some()) {
+        let cols: &[usize] = if k == 0 { &[0] } else { &[1, 2] };
+        if !feats.iter().any(|f| cols.iter().any(|&c| f.ext[c].is_some())) {
             continue;
         }
         let mut grids = vec![vec![0u8; meta.rows * meta.cols]];
         rasterize(feats, meta, &mut grids, &|f, _| {
-            let (st, dt) = f.ext[k].as_ref()?;
-            let a = check_access(st.as_deref(), dt.as_deref(), f.seasonal.as_deref(), check_date);
+            // each class on its own dates; the dirt bike has one class, the side-by-side two
+            let reads: Vec<Option<bool>> = cols
+                .iter()
+                .filter_map(|&c| f.ext[c].as_ref())
+                .map(|(st, dt)| check_access(st.as_deref(), dt.as_deref(), f.seasonal.as_deref(), check_date))
+                .collect();
+            let a = if reads.contains(&Some(true)) {
+                Some(true)
+            } else if reads.contains(&Some(false)) {
+                Some(false)
+            } else {
+                None
+            };
             // the MVUM symbol says the same for a motorcycle as for an ATV; for a wide vehicle the ATV's reading is the nearest
             if a.is_none() { symbol_to_access(f.symbol.as_deref(), if k == 0 { "motorcycle" } else { "atv" }) } else { a }
         });

@@ -300,6 +300,8 @@ fn build_sources(a: &Args) -> Result<(), String> {
     let parking = PathBuf::from(a.get("parking")?);
     let entry = PathBuf::from(a.get("entry-points")?);
     let mvum = PathBuf::from(a.get("mvum")?);
+    // which land-access rules the region has; written as both `land_access` and the older `cov_land_access`
+    let land_access = parse_land_access(a.opt("land-access"))?;
 
     let table = sources::ClassFriction::load(&table_path)?;
     let layers = Layers {
@@ -318,7 +320,7 @@ fn build_sources(a: &Args) -> Result<(), String> {
     eprintln!("parking {n_park}, trailheads {n_th}, mvum {n_mvum}");
 
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let meta: Vec<(&str, String)> = vec![
+    let mut meta: Vec<(&str, String)> = vec![
         ("format_version", FORMAT_VERSION.into()),
         ("grid", "web-mercator z12 pixel grid; tile=256 cells; origin top-left of the world; row = ty*256+r, col = tx*256+c".into()),
         ("grid_zoom", "12".into()),
@@ -350,12 +352,25 @@ fn build_sources(a: &Args) -> Result<(), String> {
         ("rows_trailheads", n_th.to_string()),
         ("rows_mvum", n_mvum.to_string()),
     ];
+    if let Some(l) = &land_access {
+        meta.push(("land_access", l.clone()));
+        meta.push(("cov_land_access", l.clone()));
+    }
     for (k, v) in meta {
         conn.execute("INSERT INTO meta VALUES (?1, ?2)", params![k, v]).map_err(|e| e.to_string())?;
     }
     drop(conn);
     eprintln!("built {} in {:.0}s", out.display(), t0.elapsed().as_secs_f64());
     inspect_path(&out)
+}
+
+/// `--land-access us|none`: whether the region has US-style land-access rules (MVUM and the like). Absent writes nothing.
+fn parse_land_access(v: Option<&str>) -> Result<Option<String>, String> {
+    match v {
+        None => Ok(None),
+        Some(v @ ("us" | "none")) => Ok(Some(v.to_string())),
+        Some(v) => Err(format!("--land-access must be us or none, not {v}")),
+    }
 }
 
 /// Point tables and MVUM from the recipe's files. Blocked parking (private, no, permit) is dropped here as in
@@ -385,8 +400,12 @@ fn write_points_sources(conn: &Connection, parking: &Path, entry: &Path, mvum: &
         ins_i.execute(params![conn.last_insert_rowid(), lon, lat]).map_err(e)?;
         n_th += 1;
     }
+    // the dirt bike and over-50-in columns: only packs built from the original sources carry them
+    for c in cache_offroad::pack::MVUM_EXT_COLUMNS {
+        conn.execute_batch(&format!("ALTER TABLE mvum ADD COLUMN {c} TEXT")).map_err(e)?;
+    }
     let mut ins = conn
-        .prepare("INSERT INTO mvum(is_trail, symbol, seasonal, maint, mtb_status, mtb_dates, atv_status, atv_dates, veh_status, veh_dates, geom) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)")
+        .prepare("INSERT INTO mvum(is_trail, symbol, seasonal, maint, mtb_status, mtb_dates, atv_status, atv_dates, veh_status, veh_dates, moto_status, moto_dates, gt50_4wd_status, gt50_4wd_dates, gt50_2wd_status, gt50_2wd_dates, geom) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)")
         .map_err(e)?;
     let mut ins_i = conn.prepare("INSERT INTO mvum_idx VALUES (?1,?2,?3,?4,?5)").map_err(e)?;
     let mut n_mvum = 0;
@@ -396,7 +415,8 @@ fn write_points_sources(conn: &Connection, parking: &Path, entry: &Path, mvum: &
             continue;
         }
         let [(ms, md), (as_, ad), (vs, vd)] = &m.access;
-        ins.execute(params![m.is_trail as i64, m.symbol, m.seasonal, m.maint, ms, md, as_, ad, vs, vd, encode_lines(&m.lines)]).map_err(e)?;
+        let [(os, od), (ws4, wd4), (ws2, wd2)] = &m.ext;
+        ins.execute(params![m.is_trail as i64, m.symbol, m.seasonal, m.maint, ms, md, as_, ad, vs, vd, os, od, ws4, wd4, ws2, wd2, encode_lines(&m.lines)]).map_err(e)?;
         ins_i.execute(params![conn.last_insert_rowid(), x0, x1, y0, y1]).map_err(e)?;
         n_mvum += 1;
     }
@@ -1003,6 +1023,14 @@ mod tests {
     }
 
     #[test]
+    fn land_access_argument() {
+        assert_eq!(parse_land_access(None), Ok(None));
+        assert_eq!(parse_land_access(Some("us")), Ok(Some("us".into())));
+        assert_eq!(parse_land_access(Some("none")), Ok(Some("none".into())));
+        assert!(parse_land_access(Some("yes")).is_err());
+    }
+
+    #[test]
     fn build_sources_end_to_end() {
         let dir = std::env::temp_dir().join(format!("offroad_pack_sources_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1031,7 +1059,7 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join("entry.tsv"), format!("lat\tlon\thighway\tname\n{clat}\t{clon}\ttrack\tFS 1\n")).unwrap();
         let mvum_in = format!(
-            r#"{{"properties":{{"is_trail":1,"symbol":"12","seasonal":"seasonal","atv":"open","atv_datesopen":"06/15-10/15"}},"geometry":{{"type":"MultiLineString","coordinates":[[[{w},{s}],[{e},{n}]]]}}}}"#,
+            r#"{{"properties":{{"is_trail":1,"symbol":"12","seasonal":"seasonal","atv":"open","atv_datesopen":"06/15-10/15","motorcycle":"open","motorcycle_datesopen":"06/01-09/30","fourwd_gt50inches":"closed","twowd_gt50inches":"open","twowd_gt50_datesopen":"07/01-07/31"}},"geometry":{{"type":"MultiLineString","coordinates":[[[{w},{s}],[{e},{n}]]]}}}}"#,
             w = west, s = south, e = east, n = north
         );
         let mvum_out = r#"{"properties":{"is_trail":0},"geometry":{"type":"LineString","coordinates":[[10,10],[11,11]]}}"#;
@@ -1043,6 +1071,7 @@ mod tests {
             "--out", &out.to_string_lossy(), "--bbox", &bbox, "--threads", "2", "--coverage-pmtiles", &s("elev.pmtiles"),
             "--class-dir", &s("class"), "--class-friction", &s("cf.tsv"), "--trails", &s("trails.tif"), "--barriers", &s("barriers.tif"),
             "--wilderness", &s("wild.tif"), "--parking", &s("parking.tsv"), "--entry-points", &s("entry.tsv"), "--mvum", &s("mvum.geojsonl"),
+            "--land-access", "us",
         ]
         .iter()
         .map(|x| x.to_string())
@@ -1073,6 +1102,13 @@ mod tests {
         assert_eq!(mv.len(), 1);
         assert!(mv[0].is_trail);
         assert_eq!(mv[0].access[1], (Some("open".into()), Some("06/15-10/15".into())));
+        // the rebuilt pack's columns: dirt bike, then four- and two-wheel-drive over 50 in, each with its own dates
+        assert_eq!(mv[0].ext[0], Some((Some("open".into()), Some("06/01-09/30".into()))));
+        assert_eq!(mv[0].ext[1], Some((Some("closed".into()), None)));
+        assert_eq!(mv[0].ext[2], Some((Some("open".into()), Some("07/01-07/31".into()))));
+        assert_eq!(p.land_rules(), Some(true));
+        assert_eq!(p.info.meta.get("land_access").map(String::as_str), Some("us"));
+        assert_eq!(p.info.meta.get("cov_land_access").map(String::as_str), Some("us"));
         assert_eq!(p.info.meta.get("rows_mvum").map(String::as_str), Some("1"));
         let sha = sources::ClassFriction::load(&dir.join("cf.tsv")).unwrap().sha256;
         assert_eq!(p.info.meta.get("class_friction_sha256"), Some(&sha));
