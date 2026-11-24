@@ -1,3 +1,4 @@
+import 'api_keys.dart';
 import '../search/index_scheduler.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -54,6 +55,9 @@ class SettingsHub {
 
   /// What a row of Sharing and sync opens (the shell sets it where it can reach the pages); null: rows only toggle.
   ShareItemOpener? openShareItem;
+
+  /// The key registry and what is done with each key (Settings > API keys, the shortcut rows, the sheet).
+  late final ApiKeys apiKeys = ApiKeys(weather: weather, webSearch: webSearch, settings: settings);
 
   Listenable get changes => Listenable.merge([settings, webSearch, storage, weather]);
 }

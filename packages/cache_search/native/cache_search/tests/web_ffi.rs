@@ -517,8 +517,8 @@ fn numbers_continue_after_a_library_search_and_a_repeated_url_keeps_its_number()
 #[test]
 fn http_statuses_map_to_tool_errors() {
     for (status, body, code, detail) in [
-        (401, "", "key_missing", "web search key rejected"),
-        (403, r#"{"error":[{"code":403,"msg":"Forbidden"}]}"#, "key_missing", "web search key rejected"),
+        (401, "", "key_missing", "That source isn't available right now."),
+        (403, r#"{"error":[{"code":403,"msg":"Forbidden"}]}"#, "key_missing", "That source isn't available right now."),
         (429, "", "quota", "web search limit reached"),
         (500, "oops", "fetch_failed", "web search failed (HTTP 500)"),
     ] {

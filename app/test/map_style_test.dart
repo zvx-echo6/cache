@@ -6,6 +6,7 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
+import 'package:cache/roads/road_map_layers.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -128,7 +129,7 @@ void main() {
   test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRoadEventCasing, kRoadEventClosure, kRoadEventWork, kRoadEventDetour, kRoadEventSelected, kRoadEventChips, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
   });
 
   test('a tapped area\'s outline is above the roads and buildings and under the labels (Protomaps layout)', () {

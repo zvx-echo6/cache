@@ -84,7 +84,7 @@ Future<void> _show(WidgetTester tester, Widget page, Size size, {CacheThemeId th
 }
 
 Widget _desktop(SettingsRig r) {
-  final n = sourceCountsOf(r.deps);
+  final n = r.deps.hub.weather.sourceCounts;
   Widget list(BuildContext context) {
     Widget row(String key, IconData icon, String title, String status) =>
         SettingsRow(key: ValueKey(key), icon: icon, title: title, status: [Part(status)], selected: isPaneSelected(context, key), onTap: () {});
@@ -158,7 +158,7 @@ void main() {
       await r.weather.updateNow(force: true);
       r.clock = r.clock.add(const Duration(minutes: 12));
     });
-    r.webSearch.noteSearch('{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}');
+    r.webSearch.noteSearch('{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}');
     await _show(tester, WeatherPage(deps: r.deps), const Size(390, 2300));
     await snap(tester, _out, 'more-1-mixed-light');
     debugLinuxUi = true;

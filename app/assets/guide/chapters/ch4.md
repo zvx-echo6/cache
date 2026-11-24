@@ -15,12 +15,13 @@ To get a key:
 
 To add it to Cache:
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
-2. Under "Web search", tap "Set up" next to "Search service".
-3. Paste the key into "Key" and tap "Check and save".
+2. Under "Web search", tap "Kagi API key". It opens "Settings" > "API keys" at Kagi.
+3. Tap "Add key", paste the key into "Key" and tap "Check and save".
+4. Back on "Cache model and web search", turn on "Search the web when online".
 
-Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this device and is never shown again.
+Cache checks the key with one real search and says "Key saved". Saving a key turns nothing on: the switch does. The key stays on this device and is never shown again.
 
-- If saving fails, Cache says why. For example, "Kagi didn't accept this key. Check you copied all of it." or "Couldn't reach Kagi. Check your connection."
+- If saving fails, Cache says why and keeps what you typed. For example, "Kagi didn't accept this key. Check you copied all of it." or "Can't reach Kagi. Check your connection." With no connection, "Save without checking" keeps the key anyway."
 - If it says "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.", add credit.
 
 Kagi's API terms: https://kagi.com/privacy/api
@@ -28,8 +29,8 @@ Kagi's API terms: https://kagi.com/privacy/api
 ## Change or turn off web search
 
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
-2. To keep the key but stop searching, turn off "Search the web when online".
-3. To replace or remove the key, tap "Change" on "Search service" and choose "Replace the key" or "Remove the key".
+2. To stop searching, turn off "Search the web when online". The switch works with or without a key; with no key, Ask quietly uses your offline sources.
+3. To replace or remove the key, tap "Kagi API key", then "Replace" or "Remove the key". Removing the key turns nothing off.
 
 ## Satellite fire hotspots with NASA FIRMS
 
@@ -44,9 +45,9 @@ To get a key:
 One email address gets one key. To resend or change it, log in at the FIRMS download page.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
-2. Tap "Get key" on "Satellite fire detections near the place (NASA FIRMS)".
-3. Paste the key and tap "Check and save".
+1. Go to ["Settings" > "Maps"](cache://settings/maps) and tap "NASA FIRMS API key". It opens "Settings" > "API keys" at NASA FIRMS.
+2. Tap "Add key", paste the key and tap "Check and save". Saving turns nothing on.
+3. Turn on "Satellite fire detections near the place (NASA FIRMS)" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 Limits: 5,000 transactions in any 10 minutes (NASA FIRMS, checked 2026-10-29). Cache stays far below that.
 
@@ -54,20 +55,9 @@ Detections are possible fires, not confirmed ones. Never wait for one before lea
 
 ## Idaho roads with Idaho 511
 
-Idaho 511 gives road events and winter road conditions for Idaho. Two Cache sources use it: "Idaho 511 traffic events near the place" and "Idaho 511 winter road conditions". One key serves both.
+Idaho 511 is one of the 511 sites Cache reads for road events. One Cache source covers it: closures, crashes, incidents and roadwork on the map and in the Weather screen's "Happening nearby" list, plus Idaho's winter road conditions (dry, wet, snow, ice or closed). One key serves both. A key you already saved for Idaho 511 keeps working.
 
-Events are closures, crashes, incidents and roadwork. Conditions are dry, wet, snow, ice or closed. The road work zones source (WZDx) needs no key.
-
-To get a key:
-1. Create an account at https://511.idaho.gov.
-2. Open https://511.idaho.gov/developers/doc and request a developer API key. It shows on that page.
-
-Limit: ten calls every 60 seconds (Idaho 511 developer page, checked 2026-10-29). The page states no price.
-
-To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
-2. Tap "Get key" on "Idaho 511 traffic events near the place".
-3. Paste the key and tap "Check and save".
+To add it, to get the key and to see the other 511 sites, see "Road events and road work on the map" in this chapter. Limit: ten calls every 60 seconds (Idaho 511 developer page, checked 2026-10-29). The page states no price.
 
 ## Traffic at a place with TomTom
 
@@ -80,9 +70,9 @@ To get a key:
 2. Create an API key and copy it.
 
 To add it to Cache:
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and open "More sources".
-2. Tap "Get key" on "Traffic flow at the place (TomTom)".
-3. Paste the key and tap "Check and save".
+1. Go to ["Settings" > "Maps"](cache://settings/maps) and tap "TomTom API key". It opens "Settings" > "API keys" at TomTom.
+2. Tap "Add key", paste the key and tap "Check and save". Saving turns nothing on.
+3. Turn on "Traffic flow at the place (TomTom)" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 ## Weather forecasts with Open-Meteo
 
@@ -178,11 +168,95 @@ Flow is in cubic feet per second (cfs; kcfs is thousands). Never judge a crossin
 
 ## Road work zones in Idaho (WZDx)
 
-Idaho publishes road work zones and lane closures in the Work Zone Data Exchange (WZDx) format. Cache's "Road work zones near the place, Idaho (WZDx)" source shows the most restrictive first, then the nearest. No key is needed.
+Idaho publishes road work zones and lane closures in the Work Zone Data Exchange (WZDx) format. Add the Idaho DOT feed under "WZDx road work"; no key is needed. It shows the most restrictive first, then the nearest. See "Road events and road work on the map" in this chapter.
 
-To switch it on:
-1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
-2. Turn on "Road work zones near the place, Idaho (WZDx)".
+## Road events and road work on the map
+
+Two sources draw closures, crashes and road work on the map. They also feed the Weather screen's "Happening nearby" list and what the assistant can tell you about the road.
+
+- "511 road events" works with 16 state and provincial 511 sites. It shows closures, crashes, incidents and planned road work, with the closed stretch and a detour when the site gives one. 10 of the sites also give winter road conditions, and one source covers both.
+- "WZDx road work" reads the US Department of Transportation's work zone feeds. It shows planned work zones and lane closures. 30 feeds work today and 5 of them need a key. 2 more are available by request from the publisher, and 4 need a key whose instructions are not verified yet, so they are not supported yet.
+
+Some places have both. A 511 site reports what is happening now; a WZDx feed reports planned work. When both describe the same work zone, the map draws it once, from the 511 site.
+
+What the map draws is what Cache has already downloaded for the places it watches and the maps on your device. Moving the map downloads nothing. Tap a closure, a crash or a work zone for its card. An event whose data is out of date is drawn faded, with its age on the card.
+
+### Add a 511 site
+
+1. Go to ["Settings" > "Maps"](cache://settings/maps).
+2. Under "Road events", tap "Add a 511 site", then tap your state or province. Use the search box, or "Enter another site" for a 511 site that is not listed.
+3. In "Maps", tap the key row named for the site, for example "511 key (511.idaho.gov)", or open "Settings" > "API keys". Tap "Add key".
+4. Create an account on the site, or sign in.
+5. Open the site's developer page.
+6. Request a Developer API key.
+7. Copy the key shown on that page.
+
+Every site needs its own key. Each site allows ten calls every 60 seconds, and Cache stays under that. Adding a key does not turn anything on: switch the source on under "Road events".
+
+### Add road work (WZDx)
+
+1. Under "Road events" in ["Settings" > "Maps"](cache://settings/maps), tap "Add a road work feed".
+2. Tap a feed from the list, or tap "Paste a feed URL". Cache removes any key or token from a pasted address; a feed that needs a key gets its own key row in "Maps", for example "WZDx key (Ohio DOT)".
+
+Feeds that are by request or not supported yet are listed but cannot be added. The list in Cache can be longer than the tables here.
+
+### Supported 511 sites
+
+| Site | Covers | Winter road conditions | Link |
+|---|---|---|---|
+| 511.idaho.gov | Idaho | Yes | [Key page](https://511.idaho.gov/developers/doc) |
+| 511wi.gov | Wisconsin | Yes | [Key page](https://511wi.gov/developers/doc) |
+| az511.com | Arizona | No | [Key page](https://az511.com/developers/doc) |
+| 511ga.org | Georgia | No | [Key page](https://511ga.org/developers/doc) |
+| 511.alaska.gov | Alaska | Yes | [Key page](https://511.alaska.gov/developers/doc) |
+| ctroads.org | Connecticut | No | [Key page](https://ctroads.org/developers/doc) |
+| 511la.org | Louisiana | No | [Key page](https://511la.org/developers/doc) |
+| nvroads.com | Nevada | Yes | [Key page](https://www.nvroads.com/developers/doc) |
+| udottraffic.utah.gov | Utah | No | [Key page](https://www.udottraffic.utah.gov/developers/doc) |
+| drivenc.gov | North Carolina | Yes | [Key page](https://www.drivenc.gov/developers/doc) |
+| 511.alberta.ca | Alberta (Canada) | Yes | [Key page](https://511.alberta.ca/developers/doc) |
+| 511on.ca | Ontario (Canada) | Yes | [Key page](https://511on.ca/developers/doc) |
+| manitoba511.ca | Manitoba (Canada) | No | [Key page](https://www.manitoba511.ca/developers/doc) |
+| 511.gnb.ca | New Brunswick (Canada) | Yes | [Key page](https://511.gnb.ca/developers/doc) |
+| 511nl.ca | Newfoundland and Labrador (Canada) | Yes | [Key page](https://511nl.ca/developers/doc) |
+| 511yukon.ca | Yukon (Canada) | Yes | [Key page](https://511yukon.ca/developers/doc) |
+
+### Supported road work feeds
+
+| Feed | Covers | Key needed | Link |
+|---|---|---|---|
+| Maricopa County DOT | Arizona | No | - |
+| Metropolitan Transportation Commission San Francisco | California | Yes | [Key page](https://511.org/open-data/token) |
+| Colorado DOT | Colorado | Yes | [Key page](https://maps.cotrip.org/help/section/for-developers.html) |
+| Delaware DOT | Delaware | No | - |
+| Florida DOT | Florida | No | - |
+| Florida DOT (second feed) | Florida | No | - |
+| Hawaii DOT | Hawaii | No | - |
+| Idaho DOT | Idaho | No | - |
+| Indiana DOT | Indiana | No | - |
+| Iowa DOT | Iowa | No | - |
+| Kansas DOT | Kansas | No | - |
+| Kentucky Transportation Cabinet | Kentucky | No | - |
+| Louisiana DOTD | Louisiana | No | - |
+| Maryland DOT | Maryland | No | - |
+| Michigan DOT | Michigan | By request | [Key page](https://www.michigan.gov/mdot/travel/safety/efforts/its/its-data) |
+| Minnesota DOT | Minnesota | No | - |
+| Mississippi DOT | Mississippi | No | - |
+| Missouri DOT | Missouri | No | - |
+| St. Charles County | Missouri | No | - |
+| CivicLink | United States (other) | No | - |
+| NHDOT, VTrans and MaineDOT | New Hampshire, Vermont, Maine | No | - |
+| New Jersey Institute of Technology | New Jersey | No | - |
+| New York DOT | New York | No | - |
+| North Carolina DOT | North Carolina | Yes | [Key page](https://www.drivenc.gov/developers/doc) |
+| North Dakota DOT | North Dakota | No | - |
+| National Park Service | National Park Service | Yes | [Key page](https://www.nps.gov/subjects/developer/get-started.htm) |
+| Ohio DOT | Ohio | Yes | [Key page](https://publicapi.ohgo.com/accounts/registration) |
+| Oklahoma DOT | Oklahoma | No | - |
+| Pennsylvania Turnpike Commission | Pennsylvania | By request | [Key page](https://datahub.transportation.gov/api/views/69qe-yiui/files/de6330ba-7e11-4335-9a3f-caf24015dc1a) |
+| City of Austin | Texas | No | - |
+| Washington State DOT | Washington | No | - |
+| Wisconsin DOT | Wisconsin | No | - |
 
 ## Adding more sources
 

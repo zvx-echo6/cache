@@ -16,10 +16,10 @@ class Origin {
 /// One live data source the app can use: its definition (data, never code) and what is known about it. The core reads the definition;
 /// the app reads the same file for the words it shows.
 class Connector {
-  Connector._(this.id, this.defText, this.def, this.entry, this.origin);
+  Connector._(this.id, this.defText, this.def, this.entry, this.origin, this.rateHost);
 
   /// Reads a definition. The id comes from the file; [entry] is the catalogue's own description of it, when there is one.
-  factory Connector.parse(String defText, {CatalogueEntry? entry, Origin origin = const Origin.builtIn()}) {
+  factory Connector.parse(String defText, {CatalogueEntry? entry, Origin origin = const Origin.builtIn(), String? rateHost}) {
     final Object? j;
     try {
       j = jsonDecode(defText);
@@ -29,7 +29,7 @@ class Connector {
     if (j is! Map<String, dynamic>) throw const CatalogueException('The definition is not readable.');
     final id = j['id'];
     if (id is! String || id.isEmpty) throw const CatalogueException('The definition has no id.');
-    return Connector._(id, defText, j, entry, origin);
+    return Connector._(id, defText, j, entry, origin, rateHost);
   }
 
   final String id;
@@ -37,6 +37,9 @@ class Connector {
   final Map<String, dynamic> def;
   final CatalogueEntry? entry;
   final Origin origin;
+
+  /// The site this source's downloads count against (roads/rate_limiter.dart: one budget per host); null for no per-host limit.
+  final String? rateHost;
 
   String _s(String k) => def[k] is String ? (def[k] as String).trim() : '';
 

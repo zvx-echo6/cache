@@ -1,0 +1,12 @@
+[
+ {
+  "Id": "c1",
+  "RoadwayName": "I-84",
+  "AreaName": "Boise",
+  "LocationDescription": "Sample section",
+  "OverallStatus": "Wet",
+  "WeatherConditions": "Light rain",
+  "SpecialConditions": "Chains",
+  "LastUpdated": 1795373600
+ }
+]

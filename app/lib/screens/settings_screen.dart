@@ -15,6 +15,7 @@ import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
 import '../video/format.dart';
 import 'settings/appearance_page.dart';
+import 'settings/api_keys_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
 import 'settings/maps_page.dart';
@@ -84,10 +85,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// "All 6 working" or "2 need attention" (a source that is off is not either).
   List<Part> _weather() {
-    final n = sourceCountsOf(d);
+    final n = d.hub.weather.sourceCounts;
     if (n.attention > 0) return [Part('${n.attention} need${n.attention == 1 ? 's' : ''} attention', Tone.warn)];
     if (n.working == 0) return const [Part('Nothing on')];
     return [Part('All ${n.working} working')];
+  }
+
+  /// "2 keys saved", "1 key needs attention", "No keys yet".
+  List<Part> _keys() {
+    final k = d.hub.apiKeys;
+    if (k.needAttention > 0) return [Part('${k.needAttention} ${k.needAttention == 1 ? 'key needs' : 'keys need'} attention', Tone.warn)];
+    final n = k.saved.length;
+    return [Part(n == 0 ? 'No keys yet' : '$n ${n == 1 ? 'key' : 'keys'} saved')];
   }
 
   /// "Serious alerts · quiet 10 PM–7 AM".
@@ -148,7 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, d.hub.weather, ?d.hub.regions, ?ModelDownloads.shared, ?d.carVoice]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, d.hub.weather, d.hub.apiKeys, ?d.hub.regions, ?ModelDownloads.shared, ?d.carVoice]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
@@ -171,6 +180,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   status: _weather(),
                   selected: isPaneSelected(context, 'settings-weather'),
                   onTap: () => _open(context, 'settings-weather', WeatherPage(deps: d)),
+                ),
+                SettingsRow(
+                  key: const ValueKey('settings-api-keys'),
+                  icon: Icons.key_outlined,
+                  title: 'API keys',
+                  status: _keys(),
+                  selected: isPaneSelected(context, 'settings-api-keys'),
+                  onTap: () => _open(context, 'settings-api-keys', ApiKeysScreen(deps: d)),
                 ),
                 SettingsRow(
                   key: const ValueKey('settings-notifications'),

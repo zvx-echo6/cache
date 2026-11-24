@@ -5,7 +5,8 @@ import '../../weather/weather_state.dart';
 import '../../weather/words.dart';
 import 'deps.dart';
 import 'own_source_pages.dart';
-import 'weather_page.dart' show addKeyFor, stateSentence;
+import 'api_keys_page.dart';
+import 'weather_page.dart' show stateSentence;
 import 'widgets.dart';
 
 /// One data source: what it gives, who provides it, how often it updates, how old the copy on this phone is, and its switch (or the
@@ -38,25 +39,6 @@ class _SourcePageState extends State<SourcePage> {
     if (mounted) setState(() => _info = i);
   }
 
-  /// Forgets the key after a confirm; the sources that need it turn off.
-  Future<void> _removeKey(String alias) async {
-    final users = w.sourcesUsingKey(alias);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove the key?'),
-        content: Text(users.isEmpty ? 'You can add a key again later.' : '${users.map((c) => c.title).join(' and ')} ${users.length == 1 ? 'turns' : 'turn'} off. You can add a key again later.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(key: const ValueKey('confirm-remove-key'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await w.removeKey(alias);
-    if (mounted) say(context, 'Key removed');
-  }
-
   SettingsRow _fact(String title, String value, {Tone tone = Tone.normal}) => SettingsRow(title: title, status: [Part(value, tone)], chevron: false, statusLines: null);
 
   @override
@@ -71,32 +53,17 @@ class _SourcePageState extends State<SourcePage> {
         }
         final i = _info;
         final on = w.isOn(c.id);
-        final hasKey = c.keyAlias != null && w.hasKey(c.keyAlias!);
         return SettingsPage(
           title: c.title,
           children: [
             if (c.description.isNotEmpty) NoteText(c.description),
             SettingsGroup(
               rows: [
-                if (c.needsKey && !hasKey)
-                  SettingsRow(
-                    title: 'Needs your own key',
-                    status: [Part(c.provider.isEmpty ? 'A free key switches this on' : 'A free key from ${c.provider}')],
-                    trailing: RowButton(label: 'Get key', onPressed: () => addKeyFor(context, d, c)),
-                  )
-                else
-                  SwitchRow(title: 'Use this source', status: [Part(on ? 'On' : 'Off', on ? Tone.ok : Tone.normal)], value: on, onChanged: (v) async {
-                    await w.setSourceOn(c, v);
-                    _load();
-                  }),
-                if (hasKey) ...[
-                  SettingsRow(
-                    title: 'Key',
-                    status: const [Part('Saved on this device, not shown again')],
-                    trailing: RowButton(label: 'Replace', onPressed: () => addKeyFor(context, d, c, replace: true)),
-                  ),
-                  SettingsRow(key: const ValueKey('remove-key'), title: 'Remove the key', danger: true, chevron: false, onTap: () => _removeKey(c.keyAlias!)),
-                ],
+                SwitchRow(title: 'Use this source', status: [Part(on ? 'On' : 'Off', on ? Tone.ok : Tone.normal)], value: on, onChanged: (v) async {
+                  await w.setSourceOn(c, v);
+                  _load();
+                }),
+                if (c.keyAlias != null) ApiKeyShortcutRow(deps: d, providerId: c.keyAlias!),
               ],
             ),
             if (w.isOwn(c)) OwnSourceActions(deps: d, source: c),

@@ -533,7 +533,7 @@ error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/searc
 `POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
 from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
 matches the request the reference assistant uses in production (Open WebUI kagi.py); live-verified for the invalid-key answer only (below). HTTP 401/403, an error code
-401/403, or the code `general.invalid_token` (what Kagi answers to an invalid key, with HTTP 400) is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+401/403, or the code `general.invalid_token` (what Kagi answers to an invalid key, with HTTP 400) is `key_missing` ("That source isn't available right now."); 402/429, or an error mentioning balance, quota or credit, is
 `quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
 used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
 top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
