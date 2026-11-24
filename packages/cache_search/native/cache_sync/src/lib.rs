@@ -894,6 +894,10 @@ struct Inner {
     /// Linked devices a round is due with (a notice came, or they are reachable again), and the wake that says so.
     due: Mutex<HashSet<String>>,
     wake_due: Notify,
+    /// Why each due device is due, for the line a round says ("notice from <name>"); and why the loop was woken for a whole round
+    /// (the first cause that woke it since it last ran).
+    due_why: Mutex<HashMap<String, String>>,
+    wake_why: Mutex<Option<String>>,
     /// When each linked device was last asked in a round (the safety round counts from it).
     last_contact: Mutex<HashMap<String, Instant>>,
     /// Folders whose counter or epoch moved and whose linked devices have not been told yet, and the wake that says so.
@@ -1964,7 +1968,8 @@ impl Inner {
         let mut at = self.asked_at.lock().unwrap();
         if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
             at.insert(peer.to_string(), now);
-            self.wake.notify_one();
+            drop(at);
+            self.wake_for(&format!("asked by {}", self.peer_name(peer)));
             true
         } else {
             false
@@ -1974,18 +1979,49 @@ impl Inner {
     /// A round with `peer` is due (a notice from it came, or it is reachable again).
     fn make_due(&self, peer: &str) {
         self.due.lock().unwrap().insert(peer.to_string());
+        self.due_why.lock().unwrap().entry(peer.to_string()).or_insert_with(|| format!("notice from {}", self.peer_name(peer)));
         self.wake_due.notify_one();
+    }
+
+    /// A shared folder's name for the log (its id when no name is known).
+    fn share_name(&self, id: &str) -> String {
+        if let Some(s) = self.saved.lock().unwrap().shares.iter().find(|s| s.id == id) {
+            return s.name.clone();
+        }
+        self.run.lock().unwrap().peers.values().filter_map(|p| p.index.as_ref()).flat_map(|i| i.shares.iter()).find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_else(|| id.to_string())
+    }
+
+    /// Wakes the loop for a whole round, remembering the first cause that did so (it is said when the round runs).
+    fn wake_for(&self, why: &str) {
+        self.wake_why.lock().unwrap().get_or_insert_with(|| why.to_string());
+        self.wake.notify_one();
+    }
+
+    /// Says why a round that asks `n` devices runs (nothing when it asks none: a loop tick that only rescans is silent).
+    fn say_round(&self, causes: &[String], n: usize) {
+        if n == 0 || !self.network.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut list: Vec<&str> = Vec::new();
+        for c in causes {
+            if !list.contains(&c.as_str()) {
+                list.push(c);
+            }
+        }
+        say(&format!("sync round: {} ({n} device{})", list.join(", "), if n == 1 { "" } else { "s" }));
     }
 
     /// What the loop's next round covers when no one asked for a round: the devices that are due, the quiet ones not asked for a
     /// safety interval, and every other device not asked for an interval. All of them: a whole round, as before.
-    fn loop_scope(&self) -> Scope {
+    fn loop_scope(&self) -> (Scope, Vec<String>, usize) {
         let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
         let mut due = std::mem::take(&mut *self.due.lock().unwrap());
+        let mut why = std::mem::take(&mut *self.due_why.lock().unwrap());
         let now = Instant::now();
         self.reach_pending.lock().unwrap().retain(|p, t| {
             if *t <= now {
                 due.insert(p.clone());
+                why.entry(p.clone()).or_insert_with(|| format!("{} reachable again", self.peer_name(p)));
                 false
             } else {
                 true
@@ -1999,10 +2035,17 @@ impl Inner {
             })
             .cloned()
             .collect();
-        if list.len() == ids.len() {
-            Scope::default()
+        let causes: Vec<String> = list
+            .iter()
+            .map(|id| {
+                why.get(id).cloned().unwrap_or_else(|| if self.quiet_peer(id) { "safety round".to_string() } else { "timer".to_string() })
+            })
+            .collect();
+        let n = list.len();
+        if n == ids.len() {
+            (Scope::default(), causes, n)
         } else {
-            Scope { peers: Some(list), ..Scope::default() }
+            (Scope { peers: Some(list), ..Scope::default() }, causes, n)
         }
     }
 
@@ -2077,9 +2120,12 @@ impl Inner {
                 if idx.epoch.is_empty() {
                     continue;
                 }
-                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share, e: idx.epoch, c: idx.counter }) else { continue };
+                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share.clone(), e: idx.epoch, c: idx.counter }) else { continue };
                 self.notice_sent.fetch_add(1, Ordering::Relaxed);
-                let _ = self.net.send_notice(peer, body).await;
+                let (name, sh, c) = (self.peer_name(peer), self.share_name(&share), idx.counter);
+                if self.net.send_notice(peer, body).await.is_ok() {
+                    say(&format!("notice sent to {name}: {sh} at {c}"));
+                }
             }
         }
     }
@@ -3222,6 +3268,7 @@ impl Serve for Inner {
     fn notice(&self, peer: &str, body: &[u8]) -> Vec<u8> {
         // The network lets only a linked device's notice through; the engine checks again, since a notice starts a round.
         if !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+            say("notice from a device that is no longer linked: refused");
             return b"not linked".to_vec();
         }
         let Ok(n) = serde_json::from_slice::<delta::Notice>(body) else { return b"not a notice".to_vec() };
@@ -3229,6 +3276,7 @@ impl Serve for Inner {
         self.heard_from.lock().unwrap().insert(peer.to_string());
         // Caught up already (the saved mirror is at this epoch and counter or past it): nothing to ask.
         let behind = self.load_mirror(peer, &n.s).is_none_or(|m| m.epoch != n.e || n.c > m.ctr || m.after.is_some());
+        say(&format!("notice from {}: {} at {}{}", self.peer_name(peer), self.share_name(&n.s), n.c, if behind { "" } else { " (already up to date)" }));
         if behind {
             self.make_due(peer);
         }
@@ -3378,16 +3426,21 @@ impl SyncEngine {
             // What woke the loop: a round asked for (the first, a change, Sync now, a device that asked) covers every device; the
             // timer and a due device cover those that need a round ([`Inner::loop_scope`]).
             let mut asked_for = true;
+            let mut first = true;
             loop {
                 if inner2.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                let scope = if asked_for {
+                let (scope, causes, asks) = if asked_for {
                     inner2.due.lock().unwrap().clear();
-                    Scope::default()
+                    inner2.due_why.lock().unwrap().clear();
+                    let why = inner2.wake_why.lock().unwrap().take().unwrap_or_else(|| if first { "start".into() } else { "a change here".into() });
+                    (Scope::default(), vec![why], inner2.saved.lock().unwrap().peers.len())
                 } else {
                     inner2.loop_scope()
                 };
+                first = false;
+                inner2.say_round(&causes, asks);
                 // The round runs as a task of its own: if it panics, only that round ends, and the next one comes after the usual
                 // wait (in the loop itself a panic would end every later round until the app is started again).
                 let inner3 = inner2.clone();
@@ -3576,6 +3629,8 @@ impl SyncEngine {
             safety: Duration::from_secs(cfg.safety_secs.unwrap_or(900).max(1)),
             due: Mutex::new(HashSet::new()),
             wake_due: Notify::new(),
+            due_why: Mutex::new(HashMap::new()),
+            wake_why: Mutex::new(None),
             last_contact: Mutex::new(HashMap::new()),
             notice_dirty: Mutex::new(HashSet::new()),
             notice_wake: Notify::new(),
@@ -4069,7 +4124,7 @@ impl SyncEngine {
                 };
                 let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")?, ..Scope::default() };
                 if scope.whole() {
-                    inner.wake.notify_one();
+                    inner.wake_for("Sync now");
                     return Ok(json!({"ok": true}));
                 }
                 {
@@ -4085,6 +4140,8 @@ impl SyncEngine {
                         }
                     }
                 }
+                let asks = if scope.peer.is_some() { 1 } else { inner.saved.lock().unwrap().peers.len() };
+                inner.say_round(&["Sync now".to_string()], asks);
                 let inner2 = inner.clone();
                 self.rt.spawn(async move { inner2.round_with(&scope).await });
                 Ok(json!({"ok": true}))
