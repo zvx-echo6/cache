@@ -795,6 +795,10 @@ struct Inner {
     /// Hashes being fetched or about to be: kept from garbage collection so an interrupted transfer resumes.
     wanted: Arc<Mutex<HashSet<Hash>>>,
     wake: Notify,
+    /// The round interval, and when each asking device last woke a round: a device that asks may have changes, so a round comes
+    /// soon, but at most once per interval per device (two idle devices asking each other must not keep each other awake).
+    every: Duration,
+    asked_at: Mutex<HashMap<String, Instant>>,
     network: AtomicBool,
     reserve: AtomicU64,
     round: tokio::sync::Mutex<()>,
@@ -2951,8 +2955,13 @@ impl Serve for Inner {
         })
     }
 
-    fn asked(&self, _peer: &str) {
-        self.wake.notify_one();
+    fn asked(&self, peer: &str) {
+        let now = Instant::now();
+        let mut at = self.asked_at.lock().unwrap();
+        if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
+            at.insert(peer.to_string(), now);
+            self.wake.notify_one();
+        }
     }
 
     fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str) {
@@ -3201,6 +3210,8 @@ impl SyncEngine {
             run: Mutex::new(Run::default()),
             wanted,
             wake: Notify::new(),
+            every: Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5)),
+            asked_at: Mutex::new(HashMap::new()),
             network: AtomicBool::new(true),
             reserve: AtomicU64::new(cfg.reserve_bytes.unwrap_or(1024 * 1024 * 1024)),
             round: tokio::sync::Mutex::new(()),
