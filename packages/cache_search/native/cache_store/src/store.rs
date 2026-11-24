@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::{Error, Hash, Result, BLOCK_BYTES, INLINE_MAX};
 
 mod migrate;
-pub use migrate::{MoveFailure, MoveReport};
+pub use migrate::{DroppedTag, MoveFailure, MoveReport};
 
 const BLOCK: BlockSize = BlockSize::from_chunk_log(4);
 const SCHEMA_VERSION: i64 = 2;
@@ -383,7 +383,8 @@ impl Store {
              CREATE INDEX IF NOT EXISTS external_path ON external(path);
              CREATE TABLE IF NOT EXISTS tags(name BLOB PRIMARY KEY, hash BLOB NOT NULL) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS move_journal(hash BLOB PRIMARY KEY, outcome TEXT NOT NULL, bytes INTEGER NOT NULL) WITHOUT ROWID;
-             CREATE TABLE IF NOT EXISTS move_state(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;",
+             CREATE TABLE IF NOT EXISTS move_state(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS move_tag_drops(name BLOB NOT NULL, hash BLOB NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(name, hash)) WITHOUT ROWID;",
         )?;
         if version == 1 {
             // Version 1 had no record of whether a partial entry's size was proven.

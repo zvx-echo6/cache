@@ -39,6 +39,18 @@ pub struct MoveReport {
     pub failed: Vec<MoveFailure>,
     /// The database was not closed cleanly and a repaired copy of it was read.
     pub repaired: bool,
+    /// Every tag that was not kept, with why.
+    pub dropped_tags: Vec<DroppedTag>,
+}
+
+/// A tag the move did not carry over.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DroppedTag {
+    pub name: Vec<u8>,
+    pub hash: Hash,
+    /// Why: the old store has no entry for the hash (an orphan), the entry was a partial download, or its file was left out
+    /// (with the reason).
+    pub reason: String,
 }
 
 /// A file the move left out.
@@ -55,6 +67,9 @@ impl MoveReport {
     pub fn log_lines(&self) -> Vec<String> {
         let mut v: Vec<String> =
             self.failed.iter().map(|f| format!("store move: left out {} ({}): {}", f.hash, f.kind, f.reason)).collect();
+        v.extend(
+            self.dropped_tags.iter().map(|t| format!("store move: dropped tag {} -> {}: {}", String::from_utf8_lossy(&t.name), t.hash, t.reason)),
+        );
         v.push(format!(
             "store move: done. moved {} files ({} bytes): {} inline, {} owned, {} in place; {} partial downloads dropped; {} tags kept, {} dropped; {} left out{}",
             self.inline + self.owned + self.external,
@@ -111,7 +126,7 @@ impl Store {
         let db_path = old_dir.join("blobs.db");
         if !db_path.exists() {
             // A move that was killed after the database went: nothing is left to do but the journal.
-            self.db()?.execute_batch("DELETE FROM move_journal; DELETE FROM move_state;")?;
+            self.db()?.execute_batch("DELETE FROM move_journal; DELETE FROM move_state; DELETE FROM move_tag_drops;")?;
             return Ok(None);
         }
         let old = OldDb::open(&db_path, &self.inner.dir.join("tmp").join("old-blobs-repair.db"))?;
@@ -170,14 +185,35 @@ impl Store {
             })?;
         if tags_done.is_none() {
             let mut kept = Vec::new();
+            let mut dropped: Vec<(&Vec<u8>, Hash, String)> = Vec::new();
             for (name, h) in &tags {
                 let h = Hash::from_bytes(*h);
                 if self.has(&h)? {
                     kept.push((name, h));
+                    continue;
                 }
+                let outcome: Option<String> = {
+                    let c = self.db()?;
+                    c.query_row("SELECT outcome FROM move_journal WHERE hash=?1", [h.as_bytes().as_slice()], |r| r.get(0))
+                        .map(Some)
+                        .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?
+                };
+                let reason = match outcome.as_deref() {
+                    None => "orphan: the old store has no entry for this hash".to_string(),
+                    Some("partial") => "it belonged to a partial download, which is not moved".to_string(),
+                    Some(o) if o.starts_with("failed: ") => format!("its file was left out ({})", o.trim_start_matches("failed: ")),
+                    Some(o) => format!("the file is not in the store ({o})"),
+                };
+                dropped.push((name, h, reason));
             }
             let mut c = self.db()?;
             let tx = c.transaction()?;
+            for (name, h, reason) in &dropped {
+                tx.execute(
+                    "INSERT OR REPLACE INTO move_tag_drops(name, hash, reason) VALUES(?1, ?2, ?3)",
+                    params![name, h.as_bytes().as_slice(), reason],
+                )?;
+            }
             for (name, h) in &kept {
                 tx.execute("INSERT OR REPLACE INTO tags(name, hash) VALUES(?1, ?2)", params![name, h.as_bytes().as_slice()])?;
             }
@@ -197,7 +233,7 @@ impl Store {
         }
         fs::remove_file(&db_path)?;
         let _ = fs::remove_dir(old_dir);
-        self.db()?.execute_batch("DELETE FROM move_journal; DELETE FROM move_state;")?;
+        self.db()?.execute_batch("DELETE FROM move_journal; DELETE FROM move_state; DELETE FROM move_tag_drops;")?;
         progress(total, total);
         Ok(Some(report))
     }
@@ -224,6 +260,13 @@ impl Store {
         r.tags = c.query_row("SELECT value FROM move_state WHERE key='tags'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
         r.tags_dropped = tags_in_old.saturating_sub(r.tags);
         r.failed.sort();
+        let mut q = c.prepare("SELECT name, hash, reason FROM move_tag_drops")?;
+        for row in q.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, String>(2)?)))? {
+            let (name, h, reason) = row?;
+            let a: [u8; 32] = h.as_slice().try_into().map_err(|_| Error::Invalid("a dropped tag's hash is not 32 bytes".into()))?;
+            r.dropped_tags.push(DroppedTag { name, hash: Hash::from_bytes(a), reason });
+        }
+        r.dropped_tags.sort();
         Ok(r)
     }
 

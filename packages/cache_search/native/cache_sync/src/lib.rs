@@ -81,7 +81,7 @@ fn t() -> bool {
 static LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The most lines kept: an app that never asks must not grow it without end (the oldest go first).
-const LOG_KEEP: usize = 200;
+const LOG_KEEP: usize = 2000;
 
 /// Returns the lines said since the last call, oldest first, and clears them.
 pub fn take_log() -> Vec<String> {
@@ -90,6 +90,15 @@ pub fn take_log() -> Vec<String> {
 
 /// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
+
+/// Says a line into [`take_log`]'s buffer, so it reaches the app's own log (cache.log) as well as the Activity.
+fn say(line: &str) {
+    let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
+    if b.len() >= LOG_KEEP {
+        b.remove(0);
+    }
+    b.push(line.to_string());
+}
 
 impl OpenSteps {
     fn step(&self, name: &str) {
@@ -2477,6 +2486,7 @@ impl SyncEngine {
         // An older (iroh-blobs) store is moved into the new one first, in the background; rounds and serving wait for it.
         let old_dir = cfg.dir.join("blobs");
         if Store::has_old_store(&old_dir) {
+            say("store move: moving the file store to its new format");
             inner.note("Moving the file store to its new format");
             let (inner2, iroh2) = (inner.clone(), iroh_net.clone());
             tokio::spawn(async move {
@@ -2489,13 +2499,23 @@ impl SyncEngine {
                 .await;
                 match moved {
                     Ok(Ok(Some(report))) => {
+                        // The summary, each file left out and each tag dropped: to the Activity and to cache.log.
                         for l in report.log_lines() {
+                            say(&l);
                             inner2.note(l);
                         }
                     }
                     Ok(Ok(None)) => {}
-                    Ok(Err(e)) => inner2.note(format!("store move: stopped: {e} (it resumes at the next start)")),
-                    Err(e) => inner2.note(format!("store move: stopped: {e} (it resumes at the next start)")),
+                    Ok(Err(e)) => {
+                        let l = format!("store move: stopped: {e} (it resumes at the next start)");
+                        say(&l);
+                        inner2.note(l);
+                    }
+                    Err(e) => {
+                        let l = format!("store move: stopped: {e} (it resumes at the next start)");
+                        say(&l);
+                        inner2.note(l);
+                    }
                 }
                 *inner2.store_move.lock().unwrap() = None;
                 inner2.store_ready.store(true, Ordering::SeqCst);

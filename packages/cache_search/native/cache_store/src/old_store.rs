@@ -310,3 +310,17 @@ pub fn rewrite_external_prefix(db_path: &Path, from: &Path, to: &Path) -> Result
     tx.commit().map_err(db_err)?;
     Ok(changed)
 }
+
+/// Test support: adds a tag (name, raw blob hash) to an old database, to make one whose hash no entry holds.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub fn add_raw_tag(db_path: &Path, name: &[u8], hash: [u8; 32]) -> Result<()> {
+    let db = Database::open(db_path).map_err(db_err)?;
+    let tx = db.begin_write().map_err(db_err)?;
+    {
+        let mut t = tx.open_table(TAGS_TABLE).map_err(db_err)?;
+        t.insert(OldTag(name.to_vec()), Some(HashAndFormat { hash, format: BlobFormat::Raw })).map_err(db_err)?;
+    }
+    tx.commit().map_err(db_err)?;
+    Ok(())
+}

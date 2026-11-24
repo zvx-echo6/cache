@@ -44,7 +44,7 @@ pub use error::{Error, Result};
 pub use hash::{Hash, ParseHashError};
 #[cfg(feature = "test-hooks")]
 pub use store::Fault;
-pub use store::{Added, MoveFailure, MoveReport, ExportHow, ExportMode, Exported, GcReport, ImportMode, Options, SetFn, Status, Store, TempTag};
+pub use store::{Added, DroppedTag, MoveFailure, MoveReport, ExportHow, ExportMode, Exported, GcReport, ImportMode, Options, SetFn, Status, Store, TempTag};
 
 /// Complete data up to this many bytes is kept inline in the index (the iroh-blobs default, 16 KiB).
 pub const INLINE_MAX: u64 = 16 * 1024;

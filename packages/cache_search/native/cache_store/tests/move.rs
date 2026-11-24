@@ -133,6 +133,9 @@ fn every_file_moves_and_is_read_back_to_its_old_id() {
     assert!(r.failed.is_empty(), "{r:?}");
     assert!(!r.repaired);
     assert_eq!((r.tags, r.tags_dropped), (5, 1), "the partial's tag is left out");
+    assert_eq!(r.dropped_tags.len(), 1);
+    assert_eq!(r.dropped_tags[0].name, b"share3/partial.bin");
+    assert!(r.dropped_tags[0].reason.contains("partial download"), "{:?}", r.dropped_tags[0]);
 
     // Every complete file, read back, hashes to its old id, and its verified pieces serve and verify.
     let scratch = TempDir::new().unwrap();
@@ -323,10 +326,16 @@ fn a_file_that_fails_the_rehash_is_reported_and_left_out() {
     assert_eq!(kinds, want_kinds);
     // The log: one line per file left out (id, kind, reason), then one total line.
     let lines = r.log_lines();
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    // Then one line per tag not kept (the three left-out files' tags and the partial's), then the total.
+    assert_eq!(lines.len(), 8, "{lines:?}");
     assert!(lines[..3].iter().all(|l| l.starts_with("store move: left out ") && (l.contains("(owned)") || l.contains("(external)"))));
     assert!(lines.iter().take(3).any(|l| l.contains(&hex("b.bin"))));
-    assert!(lines[3].starts_with("store move: done.") && lines[3].contains("3 left out"), "{}", lines[3]);
+    assert!(lines[3..7].iter().all(|l| l.starts_with("store move: dropped tag ")), "{lines:?}");
+    let tag_line = |name: &str| lines.iter().find(|l| l.contains(&format!("dropped tag {name} -> "))).unwrap_or_else(|| panic!("{name}: {lines:?}"));
+    assert!(tag_line("share1/b.bin").contains(&hex("b.bin")) && tag_line("share1/b.bin").contains("its file was left out (owned:"), "{}", tag_line("share1/b.bin"));
+    assert!(tag_line("share2/ext1.bin").contains("its file was left out (external:"));
+    assert!(tag_line("share3/partial.bin").contains("partial download"));
+    assert!(lines[7].starts_with("store move: done.") && lines[7].contains("3 left out"), "{}", lines[7]);
     assert_eq!((r.inline, r.owned, r.external), (2, 2, 1));
     // Left out: not in the store under its id, and not under any other (nothing in the store reads back to a different hash).
     for name in ["b.bin", "c.bin", "ext1.bin"] {
@@ -351,4 +360,20 @@ fn no_old_store_means_nothing_to_do() {
     let store = Store::open(&d.path().join("store"), Options::default()).unwrap();
     assert!(!Store::has_old_store(&d.path().join("blobs")));
     assert!(store.move_old_store(&d.path().join("blobs"), &mut |_, _| panic!("no progress without a store")).unwrap().is_none());
+}
+
+#[test]
+fn a_tag_whose_hash_the_old_store_does_not_hold_is_logged_as_an_orphan() {
+    let s = Setup::new("clean");
+    let orphan = Hash::new(b"nobody holds this");
+    cache_store::old_store::add_raw_tag(&s.old().join("blobs.db"), b"share9/ghost.bin", *orphan.as_bytes()).unwrap();
+    let store = s.store();
+    let (r, _) = s.run(&store);
+    let r = r.unwrap();
+    let t = r.dropped_tags.iter().find(|t| t.name == b"share9/ghost.bin").expect("the orphan tag is reported");
+    assert_eq!(t.hash, orphan);
+    assert!(t.reason.starts_with("orphan"), "{t:?}");
+    assert_eq!(r.tags_dropped, 2, "the partial's and the orphan");
+    assert!(r.log_lines().iter().any(|l| l.contains("dropped tag share9/ghost.bin") && l.contains(&orphan.to_hex()) && l.contains("orphan")));
+    assert!(store.tags_with_prefix(b"share9/").unwrap().is_empty());
 }
