@@ -618,6 +618,9 @@ mod tests {
         fn answer(self: Arc<Self>, _: String, _: Ask) -> BoxFut<'static, Vec<u8>> {
             panic!("answer reached")
         }
+        fn answer_delta(self: Arc<Self>, _: String, _: Delta, _: Vec<u8>) -> BoxFut<'static, Vec<u8>> {
+            panic!("answer_delta reached")
+        }
         fn asked(&self, _: &str) {
             panic!("asked reached")
         }
