@@ -95,6 +95,7 @@ import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
 import '../platform.dart' as plat;
+import '../platform/app_log.dart' show logInfo;
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -522,8 +523,16 @@ class _ShellState extends State<Shell> {
 
   /// "What's new" once after an update, on Home only, never over another screen or pop-up (it waits until Home is back).
   Future<void> _whatsNew() async {
-    if (_whatsNewAsked || !mounted || _module != null || _onModules || !(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    if (_whatsNewAsked || !mounted) return;
+    final guard = whatsNewGuard(moduleOpen: _module != null, onModules: _onModules, homeIsCurrent: ModalRoute.of(context)?.isCurrent ?? true);
+    if (guard != null) {
+      logInfo('whats-new: guard: $guard');
+      return;
+    }
     _whatsNewAsked = true;
+    // The shell is built before the models folder is read: wait for the start, or every phone looks like a first install.
+    await whenStarted(widget.app, () => widget.app.started);
+    if (!mounted) return;
     await maybeShowWhatsNew(context, seen: WhatsNewSeen(), firstInstall: widget.app.models.isEmpty);
   }
 
