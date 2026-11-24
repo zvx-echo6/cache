@@ -350,6 +350,29 @@ void main() {
     expect((jsonDecode(out) as Map)['error'], containsPair('code', 'forbidden'));
   });
 
+  test('a browser may switch Include API keys; the answer lists the devices with it on; an unlink tells the settings sync', () async {
+    final h = host();
+    final on = <String>{};
+    final unlinked = <String>[];
+    h.keyNames = () => [
+      {'name': 'live.key.owm', 'on': <String>[]},
+    ];
+    h.includeKeys = () => on.toList()..sort();
+    h.setIncludeKeys = (peer, v) async => v ? on.add(peer) : on.remove(peer);
+    h.onUnlinked = (peer) async => unlinked.add(peer);
+    await h.setUp();
+    final c = opened.single;
+    expect(SharingHost.browserMethods, contains('set_include_keys'));
+    final r = await h.invoke('sharing.call', {'method': 'set_include_keys', 'args': {'peer': 'peer-1', 'on': true}});
+    expect(r, containsPair('include', ['peer-1']));
+    expect(await h.invoke('sharing.call', {'method': 'key_names', 'args': {}}), containsPair('include', ['peer-1']));
+    expect(c.names('set_include_keys'), isEmpty, reason: 'answered by the host, never the engine');
+    await expectLater(h.invoke('sharing.call', {'method': 'set_include_keys', 'args': {'peer': 'peer-1', 'on': 'yes'}}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')));
+    await h.invoke('sharing.call', {'method': 'unlink', 'args': {'peer': 'peer-1'}});
+    expect(c.argsOf('unlink').last, {'peer': 'peer-1'});
+    expect(unlinked, ['peer-1']);
+  });
+
   test('a browser may ask the key names and tick one: names and ticks only, answered by the host and never by the engine', () async {
     final h = host();
     final asked = <String>[];

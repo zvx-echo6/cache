@@ -96,10 +96,8 @@ void main() {
     store.set('live.key.last', 'LAST-SECRET-4');
     await sync.tick();
     expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1', 'live.key.later': 'LATER-SECRET-3', 'live.key.last': 'LAST-SECRET-4'});
-    // switching off (every key unticked) sends none, and a key saved after that does not go
-    for (final n in ['search.kagi.key', 'live.key.later', 'live.key.last']) {
-      await sync.setKeyOn('peerA', n, false);
-    }
+    // switching off sends none, and a key saved after that does not go
+    await sync.setIncludeKeys('peerA', false);
     store.set('live.key.after', 'AFTER-SECRET-5');
     await sync.tick();
     expect(lastGivenTo('peerA'), isEmpty);
@@ -359,5 +357,56 @@ void main() {
     await sync.setKeyOnFromBrowser('peerA', 'live.key.owm', false);
     expect(sync.keyOn('peerA', 'live.key.owm'), isFalse);
     await expectLater(sync.setKeyOnFromBrowser('peerA', 'live.key.never', false), throwsA(isA<CacheSearchException>()));
+  });
+
+  File stateFile() => File('${support.path}/support/settings-sync/.local/state.json');
+
+  test('include switch on with no key saved is recorded, so a key saved later goes (the Linux "does nothing" bug)', () async {
+    await sync.start();
+    expect(sync.includeKeys('peerA'), isFalse);
+    await sync.setIncludeKeys('peerA', true);
+    expect(sync.includeKeys('peerA'), isTrue);
+    expect(sync.includeKeyDevices(), ['peerA']);
+    expect(jsonDecode(stateFile().readAsStringSync())['keysAll'], {'peerA': <Object?>[]});
+    store.set('live.key.firms', 'FIRMS-SECRET-1');
+    await sync.tick();
+    expect(sync.keyOn('peerA', 'live.key.firms'), isTrue);
+    expect(lastGivenTo('peerA'), {'live.key.firms': 'FIRMS-SECRET-1'});
+    await sync.setIncludeKeys('peerA', false);
+    expect(sync.includeKeys('peerA'), isFalse);
+    expect(lastGivenTo('peerA'), isEmpty);
+    await expectLater(sync.setIncludeKeys('nobody', true), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')));
+  });
+
+  test('include switch stays on while one key is left out, and while every key is left out (as on a phone)', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    store.set('live.key.owm', 'OWM-SECRET-2');
+    await sync.start();
+    await sync.setIncludeKeys('peerA', true);
+    await sync.setKeyOn('peerA', 'live.key.owm', false);
+    expect(sync.includeKeys('peerA'), isTrue);
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1'});
+    await sync.setKeyOn('peerA', 'search.kagi.key', false);
+    expect(sync.includeKeys('peerA'), isTrue);
+    expect(lastGivenTo('peerA'), isEmpty);
+    expect(jsonDecode(stateFile().readAsStringSync())['keysAll'], {'peerA': ['live.key.owm', 'search.kagi.key']});
+  });
+
+  test('forgetPeer (an unlink) clears the device\'s keysAll and single ticks from state.json, and a device linked again starts off', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    peers = [peer('peerA', {'mode': 'match'}), peer('peerB', {'mode': 'match'})];
+    await sync.start();
+    await sync.setIncludeKeys('peerA', true);
+    await sync.setIncludeKeys('peerB', true);
+    await sync.setKeyOn('peerA', 'search.kagi.key', false);
+    expect(jsonDecode(stateFile().readAsStringSync())['keysAll'], containsPair('peerA', ['search.kagi.key']));
+    peers = [peer('peerB', {'mode': 'match'})];
+    await sync.forgetPeer('peerA');
+    final j = jsonDecode(stateFile().readAsStringSync()) as Map;
+    expect(j['keysAll'], {'peerB': <Object?>[]}, reason: 'only the unlinked device is cleared');
+    expect(sync.includeKeys('peerA'), isFalse);
+    expect(sync.keyOn('peerA', 'search.kagi.key'), isFalse);
+    await sync.forgetPeer('peerB');
+    expect((jsonDecode(stateFile().readAsStringSync()) as Map).containsKey('keysAll'), isFalse);
   });
 }

@@ -214,12 +214,42 @@ class ServerSettingsSync {
             _kept.keysFor[peer] = ticked..add(name);
           }
         } else {
+          // as on a phone, leaving every key out does not turn the switch off: only the switch does
           on ? out.remove(name) : out.add(name);
-          // every key held is left out: the switch is off
-          if (held.isNotEmpty && held.every(out.contains)) _kept.keysAll.remove(peer);
         }
         await _save();
         await _pushKeys();
+      });
+
+  /// "Include API keys" is on for [peer] (the phone's `includeKeys`): the device has a `keysAll` entry, whatever keys are saved or left out.
+  bool includeKeys(String peer) => _kept.keysAll.containsKey(peer);
+
+  /// The devices with the switch on, sorted (what a browser reads to show the switch).
+  List<String> includeKeyDevices() => _kept.keysAll.keys.toList()..sort();
+
+  /// The "Include API keys" switch for [peer] (the phone's `setIncludeKeys`): on records the choice with nothing left out, so every key
+  /// saved now or later goes, even when none is saved yet; off sends none. Refused for a device that is not linked.
+  Future<void> setIncludeKeys(String peer, bool on) async {
+    if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
+    await _locked(() async {
+      if (on) {
+        _kept.keysAll[peer] = <String>{};
+      } else {
+        _kept.keysAll.remove(peer);
+      }
+      _kept.keysFor.remove(peer);
+      await _save();
+      await _pushKeys();
+    });
+  }
+
+  /// A device was unlinked: what is kept about its keys goes, so nothing is left of it in state.json and a device that links again
+  /// starts with the switch off.
+  Future<void> forgetPeer(String peer) => _locked(() async {
+        final had = _kept.keysAll.remove(peer) != null;
+        final hadTicks = _kept.keysFor.remove(peer) != null;
+        _pushed.remove(peer);
+        if (had || hadTicks) await _save();
       });
 
   /// What a browser may see of the keys: the names of the keys this server holds that can sync (in the phone's form, decoded from the

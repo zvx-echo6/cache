@@ -511,6 +511,7 @@ class SettingsSync extends ChangeNotifier {
       final id = p['id'];
       if (id is String && (p['link'] as Map?)?['mode'] == null && sharing.linkedSinceAsking(id)) unawaited(markNew(id));
     }
+    unawaited(_forgetUnlinked());
     final sig = _linkSignature();
     if (sig == _links) return;
     _links = sig;
@@ -519,6 +520,22 @@ class SettingsSync extends ChangeNotifier {
       await pull();
       _tell();
     }());
+  }
+
+  /// A device that is no longer linked takes its key choices with it ("Include API keys" and the keys left out), so a device that
+  /// links again starts with the switch off. Not in a browser: the server forgets them when the device is unlinked.
+  Future<void> _forgetUnlinked() async {
+    if (sharing.onServer || !sharing.running) return;
+    final linked = {for (final p in sharing.peers) if (p['id'] is String) p['id'] as String};
+    final gone = {..._keysAll.keys, ..._keysFor.keys}.where((id) => !linked.contains(id)).toList();
+    if (gone.isEmpty) return;
+    for (final id in gone) {
+      _keysAll.remove(id);
+      _keysFor.remove(id);
+      _pushed.remove(id);
+    }
+    await _saveState();
+    _tell();
   }
 
   /// Applies what the devices whose settings this one takes changed since the last look.
@@ -625,15 +642,9 @@ class SettingsSync extends ChangeNotifier {
 
   // ---------------------------------------------------------------- keys
 
-  /// "Include API keys" is on for [peer]. Off for a newly linked device. In a browser the server holds the ticks: on when every key it can
-  /// send is ticked for [peer].
-  bool includeKeys(String peer) {
-    if (sharing.onServer) {
-      final ks = keys();
-      return ks.isNotEmpty && ks.every((k) => keyOn(peer, k.name));
-    }
-    return _keysAll.containsKey(peer);
-  }
+  /// "Include API keys" is on for [peer]. Off for a newly linked device. The switch is its own choice, as on a phone: it stays on while a
+  /// key is left out, and on with no key saved. In a browser the server holds it.
+  bool includeKeys(String peer) => sharing.onServer ? _serverInclude.contains(peer) : _keysAll.containsKey(peer);
 
   /// The key [name] goes to [peer]: the switch is on and the key is not left out. A key saved later follows the switch.
   bool keyOn(String peer, String name) {
@@ -650,9 +661,13 @@ class SettingsSync extends ChangeNotifier {
   /// sends none.
   Future<void> setIncludeKeys(String peer, bool on) async {
     if (sharing.onServer) {
-      for (final k in keys()) {
-        await _setServerKeyOn(peer, k.name, on);
+      try {
+        _takeServerKeys(await sharing.setServerIncludeKeys(peer, on));
+      } catch (e) {
+        logError('Settings sync: the server did not take the Include API keys switch', error: e);
+        await refreshServerKeys();
       }
+      _tell();
       return;
     }
     if (on) {
@@ -703,6 +718,7 @@ class SettingsSync extends ChangeNotifier {
   // The server's keys, in a browser (the server is the device: it keeps the keys and the ticks, and sends them itself).
   List<String> _serverNames = const [];
   Map<String, Set<String>> _serverOn = const {};
+  Set<String> _serverInclude = const {};
   Timer? _serverTimer;
   bool _serverKeysBusy = false;
   bool _serverKeysRead = false;
@@ -734,13 +750,14 @@ class SettingsSync extends ChangeNotifier {
     }
   }
 
-  void _takeServerKeys(List<({String name, Set<String> on})> list) {
+  void _takeServerKeys(ServerKeys got) {
     _serverKeysRead = true;
-    final names = [for (final k in list) k.name];
-    final on = {for (final k in list) k.name: k.on};
-    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n]));
+    final names = [for (final k in got.keys) k.name];
+    final on = {for (final k in got.keys) k.name: k.on};
+    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
     _serverNames = names;
     _serverOn = on;
+    _serverInclude = got.include;
     if (!same) _tell();
   }
 
