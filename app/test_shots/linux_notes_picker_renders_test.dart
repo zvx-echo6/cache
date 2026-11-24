@@ -79,7 +79,7 @@ Future<DeviceListing> _list(String? path) async {
   if (p.contains('Private')) throw const FileSystemException('Permission denied');
   final e = _tree[p];
   if (e == null) throw const FileSystemException('No such folder');
-  return DeviceListing(path: p, parent: _parent(p), kind: e.$1, folders: e.$2);
+  return DeviceListing(path: p, home: _home, parent: _parent(p), kind: e.$1, folders: e.$2);
 }
 
 const _rows = [
@@ -169,7 +169,7 @@ void main() {
     });
 
     testWidgets('2 picker ($tag)', (tester) async {
-      await draw(tester, DeviceFolderPicker(list: _list));
+      await draw(tester, DeviceFolderPicker(list: _list, home: _home));
       await shot(tester, '2a-picker-home');
       await tester.tap(find.byKey(const ValueKey('folder-Documents')));
       await settle(tester);
@@ -177,9 +177,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('folder-Vault')));
       await settle(tester);
       await shot(tester, '2c-picker-inside-vault');
-      await draw(tester, DeviceFolderPicker(list: _list, start: '$_home/Documents/Trip planning'));
+      await draw(tester, DeviceFolderPicker(list: _list, home: _home, start: '$_home/Documents/Trip planning'));
       await shot(tester, '2d-picker-empty');
-      await draw(tester, DeviceFolderPicker(list: _list, start: '$_home/Private'));
+      await draw(tester, DeviceFolderPicker(list: _list, home: _home, start: '$_home/Private'));
       await shot(tester, '2e-picker-unreadable');
     });
 
