@@ -496,6 +496,8 @@ class SettingsSync extends ChangeNotifier {
       _wasRunning = true;
       _pushed.clear();
       _links = _linkSignature();
+      // choices kept for a device that is no longer linked (an unlink while this was not watching) go before the keys are given
+      await _forgetUnlinked();
       await pushKeys();
     }
     await takeKeys();

@@ -407,6 +407,24 @@ void main() {
     b.dispose();
   });
 
+  test('Include API keys: at start, choices kept for a device that is no longer linked are swept; a linked one is kept', () async {
+    final a = Dev('A', 'B', otherName: 'Phone');
+    final state = File('${a.dir.path}/.local/state.json')..parent.createSync(recursive: true);
+    state.writeAsStringSync(jsonEncode({
+      'keys': {'GONE2': ['live.key.owm']},
+      'keysAll': {'GONE': <String>[], 'B': ['live.key.owm']},
+    }));
+    await a.start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(a.sync.includeKeys('GONE'), isFalse);
+    expect(a.sync.keyOn('GONE2', 'live.key.owm'), isFalse);
+    expect(a.sync.includeKeys('B'), isTrue);
+    final j = jsonDecode(state.readAsStringSync()) as Map;
+    expect(j['keysAll'], {'B': ['live.key.owm']});
+    expect((j['keys'] as Map).containsKey('GONE2'), isFalse);
+    a.dispose();
+  });
+
   test('existing per-key ticks become the switch with exactly the same keys, with no re-entry; running it twice changes nothing', () async {
     final (a, b) = await pair();
     a.keys['live.key.owm'] = 'OWM-SECRET-1234';

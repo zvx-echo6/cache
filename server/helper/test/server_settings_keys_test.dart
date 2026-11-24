@@ -409,4 +409,24 @@ void main() {
     await sync.forgetPeer('peerB');
     expect((jsonDecode(stateFile().readAsStringSync()) as Map).containsKey('keysAll'), isFalse);
   });
+
+  test('the sweep at start: keysAll and single ticks of a device that is no longer linked go once sharing runs; linked ones stay', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    final dir = File('${support.path}/support/settings-sync/.local/state.json')..parent.createSync(recursive: true);
+    dir.writeAsStringSync(jsonEncode({
+      'keys': {'8d837bf5': ['search.kagi.key'], 'peerA': <String>[]},
+      'keysAll': {'gone': <String>[], 'peerA': ['live.key.owm']},
+    }));
+    running = false;
+    await sync.start();
+    await sync.tick();
+    expect(jsonDecode(stateFile().readAsStringSync())['keysAll'], containsPair('gone', <Object?>[]), reason: 'not swept while sharing is not running: the list of devices is not known yet');
+    running = true;
+    await sync.tick();
+    final j = jsonDecode(stateFile().readAsStringSync()) as Map;
+    expect(j['keysAll'], {'peerA': ['live.key.owm']});
+    expect((j['keys'] as Map).containsKey('8d837bf5'), isFalse);
+    expect(sync.includeKeys('gone'), isFalse);
+    expect(sync.includeKeys('peerA'), isTrue);
+  });
 }

@@ -368,6 +368,15 @@ class ServerSettingsSync {
           _wasRunning = true;
           _pushed.clear();
           _links = sig;
+          // the one sweep per start: choices kept for a device that is no longer linked go (an unlink made while this was not running,
+          // or by an older version). Only here, once the host reports its linked devices: before that the list is empty and not true.
+          final linked = {for (final p in peers()) if (p['id'] is String) p['id'] as String};
+          final gone = {..._kept.keysAll.keys, ..._kept.keysFor.keys}.where((id) => !linked.contains(id)).toList();
+          for (final id in gone) {
+            _kept.keysAll.remove(id);
+            _kept.keysFor.remove(id);
+          }
+          if (gone.isNotEmpty) await _save();
           await _pushKeys();
         } else if (sig != _links) {
           // a link changed (here, or the other device's choice arrived)
