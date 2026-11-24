@@ -49,6 +49,15 @@ pub fn stamp(old: &Index, new: &Index) -> Index {
     out
 }
 
+/// "Folder `s` is at counter `c` of epoch `e`": what a device sends the linked devices that keep a folder when it changes it. The
+/// receiver asks for a summary when the epoch differs from the one it has caught up to, or the counter is above it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notice {
+    pub s: String,
+    pub e: String,
+    pub c: u64,
+}
+
 /// One path that changed: its entry in the asking device's view, or `None` when it is not in that view now (it left the view
 /// without leaving the index, for instance a delete that stays on this device), and the counter of the change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -100,6 +100,15 @@ pub trait Transport: Send + Sync + 'static {
     fn ask_delta<'a>(&'a self, _peer: &'a str, _what: Delta, _body: Vec<u8>, _closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
         Box::pin(async { Err(anyhow!("not carried on this network")) })
     }
+    /// "Folder F is at counter N" (`body`) to a linked device, over Reticulum only: the device that gets it asks for a summary.
+    /// Fails at once where the network cannot carry it (iroh: no notices) or the device is not reachable.
+    fn send_notice<'a>(&'a self, _peer: &'a str, _body: Vec<u8>) -> BoxFut<'a, Result<()>> {
+        Box::pin(async { Err(anyhow!("not carried on this network")) })
+    }
+    /// Whether the device was last reached over Reticulum and a path to it is known now.
+    fn reached_over_rns(&self, _peer: &str) -> bool {
+        false
+    }
     /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
     /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
     fn pair_short(&self, _dest_hex: &str, _body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
@@ -171,6 +180,14 @@ pub trait Serve: Send + Sync + 'static {
     fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
+    /// A linked device says a folder changed (`body`: [`crate::delta::Notice`]); the answer to send back.
+    fn notice(&self, _peer: &str, _body: &[u8]) -> Vec<u8> {
+        b"ok".to_vec()
+    }
+    /// A linked device is reachable again over Reticulum.
+    fn reachable(&self, _peer: &str) {}
+    /// A linked device asked for a window of the blob `hash`: the byte just past the window.
+    fn served(&self, _peer: &str, _hash: &str, _end: u64) {}
     /// A Nearby link both people confirmed, with the other device's destination and signature (hex): keep it.
     fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str);
 }

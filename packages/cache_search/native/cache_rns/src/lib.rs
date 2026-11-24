@@ -64,6 +64,8 @@ pub fn is_not_linked(e: &anyhow::Error) -> bool {
 }
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
 const PATH_EVERY: Duration = Duration::from_secs(5);
+/// A linked device whose announce is heard again after this long without one (three of its announces missed) is reachable again.
+pub const REACHABLE_GAP: Duration = Duration::from_secs(95);
 
 /// The 64-byte Reticulum identity secret (X25519 then Ed25519, RNS's layout) for a device's iroh key.
 pub fn identity_secret_for(device: &SecretKey) -> [u8; 64] {
@@ -215,6 +217,12 @@ pub type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub trait Handler: Send + Sync + 'static {
     fn request(&self, asker: Asker, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>>;
     fn notify(&self, from: PublicKey, body: Vec<u8>);
+    /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
+    /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
+    fn reachable(&self, _peer: PublicKey) {}
+    /// A linked device asked for a window of a blob: the blob's hash and the byte just past the last one the window covers. Called
+    /// when the request arrives and again when the answer has been made; do not block.
+    fn served(&self, _peer: PublicKey, _hash: iroh_blobs::Hash, _end: u64) {}
     /// Both people confirmed a Nearby link and the other device's signature over its destination checked out: keep it
     /// (device key, name, Reticulum destination, and the device key's signature over it).
     fn pair_linked(&self, _peer: PublicKey, _name: String, _destination: DestinationHash, _sig: Vec<u8>) {}
@@ -255,6 +263,11 @@ struct State {
     verified: HashMap<LinkId, ([u8; 32], IdentityHash)>,
     /// Our open link to each device.
     link_to: HashMap<[u8; 32], LinkId>,
+    /// When each linked device's announce was last heard.
+    last_announce: HashMap<[u8; 32], std::time::Instant>,
+    /// Linked devices a link to which closed, or a request to which failed, since their announce was last heard: the next
+    /// announce says they are reachable again ([`Handler::reachable`]).
+    down: HashSet<[u8; 32]>,
 }
 
 enum Ev {
@@ -306,6 +319,8 @@ pub struct RnsNode {
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
     state: Arc<Mutex<State>>,
+    /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
+    reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -623,8 +638,10 @@ impl RnsNode {
             ..Default::default()
         }));
 
+        let reach_gap_ms = Arc::new(std::sync::atomic::AtomicU64::new(REACHABLE_GAP.as_millis() as u64));
         // Events: heard announces, identities on links, hellos, requests, notifications.
         {
+            let reach_gap_ms = reach_gap_ms.clone();
             let state = state.clone();
             let handle = handle.clone();
             let nearby = nearby.clone();
@@ -643,8 +660,19 @@ impl RnsNode {
                                 .iter()
                                 .find(|(_, d)| **d == destination)
                                 .map(|(k, _)| *k);
+                            let mut again = None;
                             if let Some(k) = hit {
-                                s.heard.insert(k, via);
+                                let first = s.heard.insert(k, via).is_none();
+                                let now = std::time::Instant::now();
+                                let late = s.last_announce.insert(k, now).is_some_and(|t| now.duration_since(t).as_millis() as u64 > reach_gap_ms.load(std::sync::atomic::Ordering::Relaxed));
+                                let was_down = s.down.remove(&k);
+                                if first || late || was_down {
+                                    again = Some(k);
+                                }
+                            }
+                            drop(s);
+                            if let Some(k) = again.and_then(|k| PublicKey::from_bytes(&k).ok()) {
+                                handler.reachable(k);
                             }
                         }
                         Ev::Identified { link, identity } => {
@@ -660,7 +688,11 @@ impl RnsNode {
                             nearby.on_link_closed(link);
                             let mut s = state.lock().unwrap();
                             s.identity_on_link.remove(&link);
-                            s.verified.remove(&link);
+                            if let Some((d, _)) = s.verified.remove(&link) {
+                                s.down.insert(d);
+                            }
+                            let gone: Vec<[u8; 32]> = s.link_to.iter().filter(|(_, l)| **l == link).map(|(k, _)| *k).collect();
+                            s.down.extend(gone);
                             s.link_to.retain(|_, l| *l != link);
                         }
                         Ev::Request {
@@ -736,8 +768,19 @@ impl RnsNode {
                                     continue;
                                 };
                                 let handle = handle.clone();
+                                let (handler, from) = (handler.clone(), match asker {
+                                    Asker::Linked(p) => p,
+                                    Asker::Unlinked => continue,
+                                });
                                 tokio::spawn(async move {
+                                    let want = blobs::decode_want(&data);
+                                    if let Some((hash, _, end)) = want {
+                                        handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
+                                    }
                                     let reply = blobs::serve_window(&store, &data).await;
+                                    if let Some((hash, _, end)) = want {
+                                        handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
+                                    }
                                     let _ = handle.respond_owned_bytes(token, reply);
                                 });
                                 continue;
@@ -820,6 +863,7 @@ impl RnsNode {
             nearby,
             peers_dest,
             state,
+            reach_gap_ms,
             tasks,
             stop: Mutex::new(Some(stop_tx)),
         })
@@ -854,6 +898,11 @@ impl RnsNode {
         // `verified` is kept: `verified_device` checks the peer list, and an unlinked device's open link must still be
         // recognised (to answer it "not linked") until `set_former` says whether it is remembered.
         s.link_to.retain(|k, _| keep.contains(k));
+    }
+
+    /// Tests only: how long without an announce makes a linked device reachable again.
+    pub fn set_reach_gap(&self, d: Duration) {
+        self.reach_gap_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Replaces the list of devices that used to be linked (not linked now): a signed hello from one is answered "not linked".
@@ -988,7 +1037,9 @@ impl RnsNode {
     }
 
     fn forget_link(&self, peer: &PublicKey) {
-        self.state.lock().unwrap().link_to.remove(peer.as_bytes());
+        let mut s = self.state.lock().unwrap();
+        s.link_to.remove(peer.as_bytes());
+        s.down.insert(*peer.as_bytes());
     }
 
     /// Asks a linked device on `path`.

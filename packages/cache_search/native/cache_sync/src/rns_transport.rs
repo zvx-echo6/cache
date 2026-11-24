@@ -32,6 +32,8 @@ const SHORT_PATH_WAIT: Duration = Duration::from_secs(20);
 /// The longest one 16 MiB window of a file may take over Reticulum (the Reticulum fetch's own stall timeout; see
 /// [`MultiTransport::fetch`]).
 const WINDOW_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a notice waits for the other device's answer.
+const NOTICE_TIMEOUT: Duration = Duration::from_secs(8);
 /// While a window is on its way, the fetch says so this often.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
@@ -41,6 +43,8 @@ const PATH_SECRETS: &str = "/cache/secrets";
 /// paths at all, so the engine asks only a device whose file list said it does.
 const PATH_SUMMARY: &str = "/cache/summary";
 const PATH_DIFF: &str = "/cache/diff";
+/// "Folder F is at counter N", from a linked device that changed it (step 3 part 2); never open to an unlinked device.
+const PATH_NOTICE: &str = "/cache/notice";
 const PATH_PAIR: &str = "/cache/pair";
 
 /// The network that last answered a device.
@@ -76,6 +80,8 @@ pub struct MultiTransport {
     last_via: Mutex<HashMap<String, Net>>,
     /// Devices that used to be linked (iroh ids), for the node to answer "not linked" to.
     former: Mutex<Vec<String>>,
+    /// Tests only: how long without an announce makes a device reachable again, in ms (0: the node's own).
+    reach_gap_ms: AtomicU64,
 }
 
 fn hex(b: &[u8]) -> String {
@@ -92,7 +98,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default() })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0) })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
@@ -109,7 +115,7 @@ impl MultiTransport {
             interfaces: a.interfaces.clone(),
             peers: self.peer_list(),
             wifi_group: None,
-            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into()],
+            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into(), PATH_NOTICE.into()],
             open_paths: vec![PATH_PAIR.into()],
             max_bytes: MAX_INDEX as u64,
             blobs: Some(a.blobs.clone()),
@@ -118,6 +124,9 @@ impl MultiTransport {
         let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve: a.serve.clone() })).await?);
         let dest = node.destination();
         node.set_former(&self.former_keys());
+        if let Some(ms) = Some(self.reach_gap_ms.load(Ordering::Relaxed)).filter(|ms| *ms > 0) {
+            node.set_reach_gap(Duration::from_millis(ms));
+        }
         let sig = cache_rns::vouch_destination(&a.device, &dest);
         *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
         Ok(())
@@ -138,6 +147,11 @@ impl MultiTransport {
             }
         }
         Err(last.context("could not start Reticulum again"))
+    }
+
+    /// Tests only: how long without an announce makes a device reachable again.
+    pub fn set_reach_gap(&self, d: Duration) {
+        self.reach_gap_ms.store(d.as_millis() as u64, Ordering::Relaxed);
     }
 
     fn node(&self) -> Option<Arc<RnsNode>> {
@@ -285,6 +299,26 @@ impl Transport for MultiTransport {
                 }
             }
         })
+    }
+
+    fn send_notice<'a>(&'a self, peer: &'a str, body: Vec<u8>) -> BoxFut<'a, Result<()>> {
+        Box::pin(async move {
+            let key: Option<PublicKey> = peer.parse().ok();
+            let Some((node, key)) = self.node().zip(key).filter(|(n, k)| n.reachable(k)) else {
+                bail!("no Reticulum path to the device");
+            };
+            // A short wait: a notice that does not arrive is covered by the reconnect round and the safety round.
+            let reply = node.request(&key, PATH_NOTICE, &body, NOTICE_TIMEOUT).await?;
+            if reply != b"ok" {
+                bail!("the device did not take the notice");
+            }
+            Ok(())
+        })
+    }
+
+    fn reached_over_rns(&self, peer: &str) -> bool {
+        let reached = self.last_via.lock().unwrap().get(peer) == Some(&Net::Reticulum);
+        reached && peer.parse::<PublicKey>().ok().zip(self.node()).is_some_and(|(k, n)| n.reachable(&k))
     }
 
     fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
@@ -566,6 +600,10 @@ impl Handler for Serving {
                     }
                     Ok(reply)
                 }
+                PATH_NOTICE => {
+                    let Asker::Linked(peer) = asker else { bail!("not a linked device") };
+                    Ok(serve.notice(&peer.to_string(), &body))
+                }
                 PATH_PAIR => {
                     // Not a linked device yet: the hello names its device key and carries that key's signature over the
                     // Reticulum destination it comes from, so what is stored for it is its own.
@@ -594,6 +632,14 @@ impl Handler for Serving {
 
     fn notify(&self, from: PublicKey, _body: Vec<u8>) {
         self.serve.asked(&from.to_string());
+    }
+
+    fn reachable(&self, peer: PublicKey) {
+        self.serve.reachable(&peer.to_string());
+    }
+
+    fn served(&self, peer: PublicKey, hash: iroh_blobs::Hash, end: u64) {
+        self.serve.served(&peer.to_string(), &hash.to_string(), end);
     }
 
     fn pair_linked(&self, peer: PublicKey, name: String, destination: cache_rns::DestinationHash, sig: Vec<u8>) {

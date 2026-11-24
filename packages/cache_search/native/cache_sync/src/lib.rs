@@ -212,6 +212,11 @@ pub struct Config {
     /// Seconds between sync rounds (a change or Sync now starts one at once).
     #[serde(default)]
     pub interval_secs: Option<u64>,
+    /// Seconds between safety rounds: a device that answers summaries and is reached over Reticulum has no timer round (a notice,
+    /// being reachable again, or Sync now starts one), but is asked for a summary this often in case a notice was lost. Default
+    /// 900 (15 minutes).
+    #[serde(default)]
+    pub safety_secs: Option<u64>,
     /// Bind to this port (tests and fixed firewall rules); 0 or absent picks one.
     #[serde(default)]
     pub port: Option<u16>,
@@ -611,7 +616,36 @@ struct RemoteIndex {
     /// structure with no entries in its shares (only each share's id, name, epoch, counter and fingerprint).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     summary: bool,
+    /// In a summary: the file the sender is fetching right now (from this device or another): the shared folder's id and how far it
+    /// has got, no path. It is how a device that only sends sees a transfer to the other one (older versions do not say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fetching: Option<Fetching>,
 }
+
+/// What a device says of the file it is fetching at the moment: no path, only the folder and the progress.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Fetching {
+    share: String,
+    size: u64,
+    done: u64,
+}
+
+/// What a device last served of one file to a linked device that fetches it from this one ([`Inner::serving`]).
+#[derive(Debug, Clone)]
+struct Serving {
+    hash: String,
+    /// The folder holding the file, and its size there; none when no folder of this device lists the hash.
+    share: Option<String>,
+    size: u64,
+    /// The highest byte offset a window served reached.
+    high: u64,
+    at: Instant,
+}
+
+/// A device that is served windows is "fetching from this one" until this long after the last window.
+const SERVING_FOR: Duration = Duration::from_secs(10);
+/// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
+const NOTICE_EVERY: Duration = Duration::from_millis(800);
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
 /// one linked device, some shared folders, and within them the paths `paths` covers (patterns as for [`Config::exclude`]).
@@ -620,11 +654,13 @@ struct Scope {
     peer: Option<String>,
     shares: Option<Vec<String>>,
     paths: Option<Vec<String>>,
+    /// The rounds of the loop between Sync nows: only these devices (those that are due), the rest left alone.
+    peers: Option<Vec<String>>,
 }
 
 impl Scope {
     fn whole(&self) -> bool {
-        self.peer.is_none() && self.shares.is_none() && self.paths.is_none()
+        self.peer.is_none() && self.shares.is_none() && self.paths.is_none() && self.peers.is_none()
     }
 
     fn has_share(&self, id: &str) -> bool {
@@ -632,7 +668,12 @@ impl Scope {
     }
 
     fn has_peer(&self, id: &str) -> bool {
-        self.peer.as_deref().map(|p| p == id).unwrap_or(true)
+        self.peer.as_deref().map(|p| p == id).unwrap_or(true) && self.peers.as_ref().map(|l| l.iter().any(|p| p == id)).unwrap_or(true)
+    }
+
+    /// A round of the loop that asked at least one device counts as a round; one that only rescanned does not.
+    fn counts(&self) -> bool {
+        self.whole() || (self.peer.is_none() && self.shares.is_none() && self.paths.is_none() && self.peers.as_ref().is_some_and(|l| !l.is_empty()))
     }
 
     /// `remote` narrowed to the paths of the scope.
@@ -654,6 +695,8 @@ struct PeerState {
 
 #[derive(Debug, Clone, Serialize)]
 struct Transfer {
+    /// The shared folder's id (`share` is its name).
+    share_id: String,
     share: String,
     path: String,
     size: u64,
@@ -849,6 +892,23 @@ struct Inner {
     asked_summary: AtomicU64,
     asked_diff: AtomicU64,
     asked_full: AtomicU64,
+    /// Step 3 part 2. How often a device that answers summaries and is reached over Reticulum is asked for a summary when nothing
+    /// else asked (the safety round).
+    safety: Duration,
+    /// Linked devices a round is due with (a notice came, or they are reachable again), and the wake that says so.
+    due: Mutex<HashSet<String>>,
+    wake_due: Notify,
+    /// When each linked device was last asked in a round (the safety round counts from it).
+    last_contact: Mutex<HashMap<String, Instant>>,
+    /// Folders whose counter or epoch moved and whose linked devices have not been told yet, and the wake that says so.
+    notice_dirty: Mutex<HashSet<String>>,
+    notice_wake: Notify,
+    /// Per linked device, the folders a notice is waiting to be sent for, and whether a task is sending to it now.
+    notice_out: Mutex<HashMap<String, (HashSet<String>, bool)>>,
+    notice_sent: AtomicU64,
+    notice_got: AtomicU64,
+    /// What each linked device is being served from this device's files (the windows it asks for), by device.
+    serving: Mutex<HashMap<String, Serving>>,
 }
 
 /// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
@@ -1369,9 +1429,16 @@ impl Inner {
     /// The only writer of the index, and so the one place that counts changes: every entry that differs from the saved one
     /// takes the folder's next counter, and an entry gone from the index starts a new epoch ([`delta::stamp`]).
     fn store_index(&self, share: &str, idx: &Index, seen: &Seen) -> Result<()> {
-        let stamped = delta::stamp(&self.load_index(share), idx);
+        let old = self.load_index(share);
+        let stamped = delta::stamp(&old, idx);
         write_json(&self.index_path(share), &stamped)?;
-        write_json(&self.seen_path(share), seen)
+        write_json(&self.seen_path(share), seen)?;
+        if (stamped.epoch.as_str(), stamped.counter) != (old.epoch.as_str(), old.counter) {
+            // Never blocks or fails the write: the linked devices are told by a task of their own.
+            self.notice_dirty.lock().unwrap().insert(share.to_string());
+            self.notice_wake.notify_one();
+        }
+        Ok(())
     }
 
     fn writes_path(&self, share: &str) -> PathBuf {
@@ -1808,7 +1875,15 @@ impl Inner {
             rns: self.rns_info().map(|(dest, sig)| RnsProof { dest, sig }),
             removed: self.removals_to_offer(&s),
             summary: true,
+            fetching: None,
         };
+        if !full {
+            out.fetching = self.run.lock().unwrap().transfer.as_ref().map(|t| Fetching { share: t.share_id.clone(), size: t.size, done: t.done });
+            #[cfg(feature = "test-hooks")]
+            if self.dir.join("no-summary-fetching").exists() {
+                out.fetching = None;
+            }
+        }
         #[cfg(feature = "test-hooks")]
         if self.dir.join("no-summary").exists() {
             // Acts as an older build: no counters, no fingerprints, and it does not say it answers summaries.
@@ -1870,6 +1945,149 @@ impl Inner {
     /// Whether `peer` is known to answer summaries: its file list said so, or a mirror of it was saved.
     fn peer_has_summary(&self, peer: &str) -> bool {
         self.summary_peers.lock().unwrap().contains(peer) || !self.mirror_files(peer, &[]).is_empty()
+    }
+
+    /// Whether `peer` needs no timer round: it answers summaries, was last reached over Reticulum (so it sends notices and is
+    /// found again when reachable), and its last round was good. Any other device keeps today's round every interval.
+    fn quiet_peer(&self, peer: &str) -> bool {
+        if !self.peer_has_summary(peer) || !self.net.reached_over_rns(peer) {
+            return false;
+        }
+        self.run.lock().unwrap().peers.get(peer).is_some_and(|s| s.error.is_none() && s.last_seen.is_some())
+    }
+
+    /// A device that asked for our list may have changes too, so a round comes soon, at most once per interval per device. Not for
+    /// a [`Inner::quiet_peer`]: its notice replaces this. Whether a round was woken.
+    fn asked_wakes(&self, peer: &str) -> bool {
+        if self.quiet_peer(peer) {
+            return false;
+        }
+        let now = Instant::now();
+        let mut at = self.asked_at.lock().unwrap();
+        if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
+            at.insert(peer.to_string(), now);
+            self.wake.notify_one();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A round with `peer` is due (a notice from it came, or it is reachable again).
+    fn make_due(&self, peer: &str) {
+        self.due.lock().unwrap().insert(peer.to_string());
+        self.wake_due.notify_one();
+    }
+
+    /// What the loop's next round covers when no one asked for a round: the devices that are due, the quiet ones not asked for a
+    /// safety interval, and every other device not asked for an interval. All of them: a whole round, as before.
+    fn loop_scope(&self) -> Scope {
+        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+        let due = std::mem::take(&mut *self.due.lock().unwrap());
+        let now = Instant::now();
+        let list: Vec<String> = ids
+            .iter()
+            .filter(|id| {
+                let since = self.last_contact.lock().unwrap().get(*id).map(|t| now.duration_since(*t));
+                due.contains(*id) || since.is_none_or(|d| d >= if self.quiet_peer(id) { self.safety } else { self.every })
+            })
+            .cloned()
+            .collect();
+        if list.len() == ids.len() {
+            Scope::default()
+        } else {
+            Scope { peers: Some(list), ..Scope::default() }
+        }
+    }
+
+    /// How long until a quiet device is next due its safety round (the loop wakes for it).
+    fn next_safety_in(&self) -> Option<Duration> {
+        if !self.network.load(Ordering::Relaxed) {
+            return None;
+        }
+        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+        let now = Instant::now();
+        ids.iter()
+            .filter(|id| self.quiet_peer(id))
+            .filter_map(|id| self.last_contact.lock().unwrap().get(id).map(|t| (*t + self.safety).saturating_duration_since(now)))
+            .min()
+            .map(|d| d.max(Duration::from_secs(1)))
+    }
+
+    /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
+    /// and folder for a burst of writes, carrying the latest counter. Runs for as long as the engine does.
+    async fn notice_loop(self: Arc<Self>) {
+        loop {
+            self.notice_wake.notified().await;
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(NOTICE_EVERY).await;
+            let dirty: Vec<String> = std::mem::take(&mut *self.notice_dirty.lock().unwrap()).into_iter().collect();
+            let peers: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+            for peer in peers {
+                let wanted: Vec<String> = dirty.iter().filter(|sh| self.shares_with(sh, &peer)).cloned().collect();
+                if !wanted.is_empty() && self.peer_has_summary(&peer) {
+                    self.queue_notices(&peer, wanted);
+                }
+            }
+        }
+    }
+
+    fn queue_notices(self: &Arc<Self>, peer: &str, shares: Vec<String>) {
+        let start = {
+            let mut out = self.notice_out.lock().unwrap();
+            let e = out.entry(peer.to_string()).or_default();
+            e.0.extend(shares);
+            !std::mem::replace(&mut e.1, true)
+        };
+        if start {
+            let (me, peer) = (self.clone(), peer.to_string());
+            tokio::spawn(async move { me.send_notices(&peer).await });
+        }
+    }
+
+    /// Sends what is queued for `peer`, folder by folder, until nothing is. A notice that fails is let go: the round when the
+    /// device is reachable again, and the safety round, cover it.
+    async fn send_notices(self: Arc<Self>, peer: &str) {
+        loop {
+            let batch: Vec<String> = {
+                let mut out = self.notice_out.lock().unwrap();
+                let Some(e) = out.get_mut(peer) else { return };
+                if e.0.is_empty() || self.stop.load(Ordering::Relaxed) {
+                    e.1 = false;
+                    return;
+                }
+                e.0.drain().collect()
+            };
+            for share in batch {
+                #[cfg(feature = "test-hooks")]
+                if self.dir.join("no-notice").exists() {
+                    continue;
+                }
+                let idx = self.load_index(&share);
+                if idx.epoch.is_empty() {
+                    continue;
+                }
+                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share, e: idx.epoch, c: idx.counter }) else { continue };
+                self.notice_sent.fetch_add(1, Ordering::Relaxed);
+                let _ = self.net.send_notice(peer, body).await;
+            }
+        }
+    }
+
+    /// What `peer` is doing with this device's files, for the status: what this device serves it (the windows it asks for, until
+    /// [`SERVING_FOR`] after the last one), else what its last summary said it fetches (while that summary is fresh).
+    fn fetching_by(&self, peer: &str, summary: Option<&RemoteIndex>, last_seen: Option<u64>) -> Option<Value> {
+        let served = {
+            let mut sv = self.serving.lock().unwrap();
+            sv.retain(|_, s| s.at.elapsed() < SERVING_FOR * 6);
+            sv.get(peer).filter(|s| s.at.elapsed() < SERVING_FOR).and_then(|s| s.share.as_ref().map(|sh| json!({"share": sh, "size": s.size, "done": s.high})))
+        };
+        served.or_else(|| {
+            let fresh = last_seen.is_some_and(|t| now_ms().saturating_sub(t) < 2 * self.every.as_millis() as u64);
+            summary.filter(|_| fresh).and_then(|i| i.fetching.as_ref()).map(|f| json!({"share": f.share, "size": f.size, "done": f.done}))
+        })
     }
 
     /// What `peer` last offered, as a file list: its summary, and for each shared folder the mirror brought up to what the summary
@@ -2059,6 +2277,10 @@ impl Inner {
         for f in self.mirror_files(id, &[]) {
             let _ = std::fs::remove_file(f);
         }
+        self.due.lock().unwrap().remove(id);
+        self.last_contact.lock().unwrap().remove(id);
+        self.serving.lock().unwrap().remove(id);
+        self.notice_out.lock().unwrap().remove(id);
         self.secrets.lock().unwrap().remove(id);
         self.received.lock().unwrap().remove(id);
         self.refused.lock().unwrap().remove(id);
@@ -2279,6 +2501,13 @@ impl Inner {
         // Also lets a former device that is past its 30 days go.
         self.push_former();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
+        {
+            // Every device this round covers has been asked as of now (the safety round counts from it).
+            let (mut lc, now) = (self.last_contact.lock().unwrap(), Instant::now());
+            for p in &peers {
+                lc.insert(p.id.clone(), now);
+            }
+        }
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
@@ -2381,7 +2610,7 @@ impl Inner {
         }
         let mut run = self.run.lock().unwrap();
         run.paused = if self.network.load(Ordering::Relaxed) { paused } else { Some("Sync is paused: no network it may use".into()) };
-        if scope.whole() {
+        if scope.counts() {
             run.rounds += 1;
             run.last_round = Some(now_ms());
         }
@@ -2547,6 +2776,7 @@ impl Inner {
             }
             self.wanted.lock().unwrap().insert(hash);
             self.run.lock().unwrap().transfer = Some(Transfer {
+                share_id: sh.id.clone(),
                 share: sh.name.clone(),
                 path: path.to_string(),
                 size: entry.size,
@@ -2565,6 +2795,20 @@ impl Inner {
                             last_progress = Instant::now();
                             if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
                                 t.done = n;
+                            }
+                            #[cfg(feature = "test-hooks")]
+                            {
+                                // A fetch caught part way (after its first window): held while `<dir>/hold-fetch-mid` exists, and
+                                // it says so with `<dir>/hold-fetch.held`.
+                                let hold = self.dir.join("hold-fetch-mid");
+                                if n > 0 && hold.exists() {
+                                    let _ = std::fs::write(self.dir.join("hold-fetch.held"), b"");
+                                    while hold.exists() {
+                                        tokio::time::sleep(Duration::from_millis(50)).await;
+                                    }
+                                    let _ = std::fs::remove_file(self.dir.join("hold-fetch.held"));
+                                    last_progress = Instant::now();
+                                }
                             }
                         }
                         FetchEvent::Failed(m) => failed = Some(m),
@@ -2956,12 +3200,52 @@ impl Serve for Inner {
     }
 
     fn asked(&self, peer: &str) {
-        let now = Instant::now();
-        let mut at = self.asked_at.lock().unwrap();
-        if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
-            at.insert(peer.to_string(), now);
-            self.wake.notify_one();
+        self.asked_wakes(peer);
+    }
+
+    fn notice(&self, peer: &str, body: &[u8]) -> Vec<u8> {
+        // The network lets only a linked device's notice through; the engine checks again, since a notice starts a round.
+        if !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+            return b"not linked".to_vec();
         }
+        let Ok(n) = serde_json::from_slice::<delta::Notice>(body) else { return b"not a notice".to_vec() };
+        self.notice_got.fetch_add(1, Ordering::Relaxed);
+        // Caught up already (the saved mirror is at this epoch and counter or past it): nothing to ask.
+        let behind = self.load_mirror(peer, &n.s).is_none_or(|m| m.epoch != n.e || n.c > m.ctr || m.after.is_some());
+        if behind {
+            self.make_due(peer);
+        }
+        b"ok".to_vec()
+    }
+
+    fn reachable(&self, peer: &str) {
+        if self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+            self.make_due(peer);
+        }
+    }
+
+    fn served(&self, peer: &str, hash: &str, end: u64) {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-serve-signal").exists() {
+            return;
+        }
+        let now = Instant::now();
+        {
+            let mut sv = self.serving.lock().unwrap();
+            if let Some(s) = sv.get_mut(peer).filter(|s| s.hash == hash) {
+                s.high = s.high.max(if s.size > 0 { end.min(s.size) } else { end });
+                s.at = now;
+                return;
+            }
+        }
+        // The first window of a file: which folder of ours lists it, and its size there (our own index).
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let found = shares.iter().filter(|sh| self.shares_with(&sh.id, peer)).find_map(|sh| {
+            self.load_index(&sh.id).files.values().find(|e| !e.deleted && e.hash == hash).map(|e| (sh.id.clone(), e.size))
+        });
+        let (share, size) = found.map(|(a, b)| (Some(a), b)).unwrap_or((None, 0));
+        let high = if size > 0 { end.min(size) } else { end };
+        self.serving.lock().unwrap().insert(peer.to_string(), Serving { hash: hash.to_string(), share, size, high, at: now });
     }
 
     fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str) {
@@ -3064,10 +3348,19 @@ impl SyncEngine {
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
         rt.spawn(async move {
+            // What woke the loop: a round asked for (the first, a change, Sync now, a device that asked) covers every device; the
+            // timer and a due device cover those that need a round ([`Inner::loop_scope`]).
+            let mut asked_for = true;
             loop {
                 if inner2.stop.load(Ordering::Relaxed) {
                     break;
                 }
+                let scope = if asked_for {
+                    inner2.due.lock().unwrap().clear();
+                    Scope::default()
+                } else {
+                    inner2.loop_scope()
+                };
                 // The round runs as a task of its own: if it panics, only that round ends, and the next one comes after the usual
                 // wait (in the loop itself a panic would end every later round until the app is started again).
                 let inner3 = inner2.clone();
@@ -3081,7 +3374,7 @@ impl SyncEngine {
                             panic!("test: a round panicked");
                         }
                     }
-                    inner3.round().await
+                    inner3.round_with(&scope).await
                 });
                 if let Err(e) = one.await {
                     if e.is_panic() {
@@ -3092,9 +3385,16 @@ impl SyncEngine {
                     }
                 }
                 let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
-                let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
+                let wait = inner2.next_safety_in().map(|d| d.min(wait)).unwrap_or(wait);
+                asked_for = tokio::select! {
+                    _ = tokio::time::sleep(wait) => false,
+                    _ = inner2.wake.notified() => true,
+                    _ = inner2.wake_due.notified() => false,
+                };
             }
         });
+        let inner5 = inner.clone();
+        rt.spawn(async move { inner5.notice_loop().await });
         if let Some(secs) = cfg.lifetime_secs {
             let inner4 = inner.clone();
             let net4 = inner.net.clone();
@@ -3237,6 +3537,16 @@ impl SyncEngine {
             asked_summary: AtomicU64::new(0),
             asked_diff: AtomicU64::new(0),
             asked_full: AtomicU64::new(0),
+            safety: Duration::from_secs(cfg.safety_secs.unwrap_or(900).max(1)),
+            due: Mutex::new(HashSet::new()),
+            wake_due: Notify::new(),
+            last_contact: Mutex::new(HashMap::new()),
+            notice_dirty: Mutex::new(HashSet::new()),
+            notice_wake: Notify::new(),
+            notice_out: Mutex::new(HashMap::new()),
+            notice_sent: AtomicU64::new(0),
+            notice_got: AtomicU64::new(0),
+            serving: Mutex::new(HashMap::new()),
         });
         inner.save()?;
         steps.step("state saved");
@@ -3259,6 +3569,10 @@ impl SyncEngine {
             };
             let pair_local_tcp = cfg.rns_interfaces.as_ref().is_some_and(|t| t.pair_local_tcp);
             inner.push_former();
+            #[cfg(feature = "test-hooks")]
+            if let Some(ms) = std::fs::read_to_string(cfg.dir.join("reach-gap-ms")).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                m.set_reach_gap(Duration::from_millis(ms));
+            }
             if let Err(e) = m.start_rns(secret.clone(), &store, inner.clone(), ifaces, pair_local_tcp).await {
                 inner.note(format!("Reticulum did not start: {e:#}"));
             }
@@ -3362,7 +3676,20 @@ impl SyncEngine {
                 "summary": inner.asked_summary.load(Ordering::Relaxed),
                 "diff": inner.asked_diff.load(Ordering::Relaxed),
                 "full": inner.asked_full.load(Ordering::Relaxed),
+                "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
+                "notice_got": inner.notice_got.load(Ordering::Relaxed),
             })),
+            #[cfg(feature = "test-hooks")]
+            "test_quiet" => {
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(json!({"quiet": inner.quiet_peer(&peer)}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_ask" => {
+                // `peer` asked for this device's list: whether that woke a round (the rate limit counts as it does for a real ask).
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(json!({"wakes": inner.asked_wakes(&peer)}))
+            }
             #[cfg(feature = "test-hooks")]
             "test_skew_code_clock" => {
                 inner.code_skew_ms.store(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0), Ordering::Relaxed);
@@ -3662,7 +3989,7 @@ impl SyncEngine {
                         Some(_) => bail!("{k} must be a list"),
                     }
                 };
-                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")? };
+                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")?, ..Scope::default() };
                 if scope.whole() {
                     inner.wake.notify_one();
                     return Ok(json!({"ok": true}));
@@ -3846,6 +4173,7 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "fetching": inner.fetching_by(&p.id, st.index.as_ref(), st.last_seen),
                 })
             })
             .collect();
@@ -3916,6 +4244,7 @@ impl SyncEngine {
     pub fn close(self) {
         self.inner.stop.store(true, Ordering::Relaxed);
         self.inner.wake.notify_one();
+        self.inner.notice_wake.notify_one();
         let net = self.inner.net.clone();
         let store = self.inner.store.clone();
         self.rt.block_on(async move {

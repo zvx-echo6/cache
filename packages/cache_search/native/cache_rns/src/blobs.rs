@@ -22,7 +22,7 @@ use crate::RnsNode;
 pub const BLOB_PATH: &str = "/cache/blob/window";
 /// 16 MiB of 1 KiB chunks.
 pub const WINDOW_CHUNKS: u64 = 16 * 1024;
-const CHUNK: u64 = 1024;
+pub(crate) const CHUNK: u64 = 1024;
 
 const OK: u8 = 0;
 const MISSING: u8 = 1;
