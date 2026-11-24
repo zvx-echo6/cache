@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cache/theme.dart';
 import 'package:cache/update/update_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,7 +22,7 @@ void main() {
 
   Future<BuildContext> host(WidgetTester t) async {
     late BuildContext ctx;
-    await t.pumpWidget(MaterialApp(home: Builder(builder: (c) {
+    await t.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: Builder(builder: (c) {
       ctx = c;
       return const Scaffold(body: Text('Home'));
     })));
