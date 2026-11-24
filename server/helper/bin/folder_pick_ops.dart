@@ -16,15 +16,10 @@ import 'line_protocol.dart';
 /// name, hidden ones (a name that starts with ".") left out, each with its own kind and whether Cache can open it. Errors: bad_path
 /// (not absolute), not_found, io_error (the folder cannot be read).
 class FolderPickOps implements OpHandler {
-  FolderPickOps({String? home}) : _home = home;
+  FolderPickOps({String? home}) : home = _clean(home ?? Platform.environment['HOME'] ?? '/');
 
-  final String? _home;
-
-  /// The home folder of the user Cache runs as.
-  String get home {
-    final h = _home ?? Platform.environment['HOME'];
-    return h == null || h.isEmpty ? '/' : _clean(h);
-  }
+  /// The home folder of the user Cache runs as ("/" when it has none).
+  final String home;
 
   @override
   bool handles(String op) => op == 'devfs.list';
@@ -67,8 +62,11 @@ class FolderPickOps implements OpHandler {
     return 'none';
   }
 
-  /// Whether Cache can open the folder (list it): checked by listing up to its first entry.
+  /// Whether Cache can open the folder (list it). A folder anyone may read and enter is; for the others (a home folder of another
+  /// user, /root) it is tried by listing up to the first entry. (Listing every folder of "/" to find out would take seconds:
+  /// /proc and /sys are huge.)
   static Future<bool> _readable(String path) async {
+    if (FileStat.statSync(path).mode & 5 == 5) return true;
     try {
       await Directory(path).list(followLinks: false).isEmpty;
       return true;

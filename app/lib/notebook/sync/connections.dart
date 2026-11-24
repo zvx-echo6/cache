@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show BuildContext;
 
 import '../../chat/ask_focus.dart';
 import '../../files.dart';
@@ -50,10 +51,37 @@ class SyncTargetConfig {
   }
 }
 
+/// What the Connections page needs of the notebooks' connections: the phone's [NotebookConnections] (folders on the phone, synced
+/// by the app) or, in a browser, [ServerConnections] (folders of the computer Cache runs on, synced by Cache there).
+abstract interface class SyncConnections implements Listenable {
+  List<SyncTargetConfig> get targets;
+  SyncTargetConfig? target(SyncKind kind);
+  bool get syncing;
+
+  /// "Synced 4:20 PM", "Syncing...", "Can't reach the folder.", "Paused.", "2 changes need a decision".
+  String? status(String id);
+  List<SyncConflict> conflicts(String id);
+  List<String> merged(String id);
+  List<String> keptAsTwo(String id);
+  int notAdded(String id);
+
+  /// Null when connected, else what is wrong ("Cache can write to Markdown graphs only.").
+  Future<String?> connect(SyncKind kind, String path, {String? display});
+  Future<void> disconnect(String id);
+  Future<void> setPaused(String id, bool paused);
+  Future<void> setImportTag(String id, String tag);
+  Future<void> syncAll();
+  Future<void> resolve(String id, SyncConflict c, {required bool keepCache});
+
+  /// Cache's own folder picker, when the system has none to offer (a browser): opens in the page's navigator and gives the folder
+  /// chosen, or null. Null here: the phone's system picker is used.
+  Future<({String path, String display})?> Function(BuildContext context)? get ownPicker;
+}
+
 /// The notebooks' connections: the folders they are kept in step with, when they sync (on opening Notebooks, 2 s after a
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
-class NotebookConnections extends ChangeNotifier implements PrivateSharing {
+class NotebookConnections extends ChangeNotifier implements PrivateSharing, SyncConnections {
   NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor, this.onActivity, this.prepareShare, DateTime Function()? clock})
     : _now = clock ?? DateTime.now;
 
@@ -80,6 +108,9 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   /// Stores a photo that came from a folder under its own id.
   final Future<void> Function(String id, Uint8List bytes)? storePhoto;
 
+  @override
+  Future<({String path, String display})?> Function(BuildContext context)? get ownPicker => null;
+
   /// The folder object for a path (tests give an in-memory one).
   final SyncFolder Function(String path)? folderFor;
 
@@ -99,22 +130,30 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   /// [takeImported] (the snack bar "2 notes added from Obsidian").
   final List<({String app, String target, List<String> titles, Set<String> books, List<String> ids})> _news = [];
 
+  @override
   List<SyncTargetConfig> get targets => [for (final t in _targets) if (t.kind != SyncKind.share) t];
+  @override
   SyncTargetConfig? target(SyncKind kind) => _targets.where((t) => t.kind == kind || (kind == SyncKind.logseq && t.kind == SyncKind.logseqExport)).firstOrNull;
+  @override
   bool get syncing => _running;
 
   /// "Synced 4:20 PM", "Syncing...", "Can't reach the folder.", "Paused.", "2 changes need a decision".
+  @override
   String? status(String id) => _status[id];
+  @override
   List<SyncConflict> conflicts(String id) => _conflicts[id] ?? const [];
 
   /// Entries changed in both places whose changes were merged in the last run (told, not asked).
+  @override
   List<String> merged(String id) => _merged[id] ?? const [];
 
   /// Entries both places changed in the same words in the last run: one version stays, the other is kept as a new entry (told, not
   /// asked).
+  @override
   List<String> keptAsTwo(String id) => _keptTwo[id] ?? const [];
 
   /// Tagged notes the last sync could not import (Cache could not write its id into them).
+  @override
   int notAdded(String id) => _notAdded[id] ?? 0;
 
   /// The app's name of a connection kind.
@@ -143,6 +182,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Sets a connection's import tag (`#cachesync` when [tag] is the default). Notes already in Cache keep syncing; the next
   /// sync looks for the new tag.
+  @override
   Future<void> setImportTag(String id, String tag) async {
     await init();
     if (!validImportTag(tag)) return;
@@ -227,6 +267,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   Future<SyncFolder> _folder(String path) async => folderFor?.call(path) ?? await openSyncFolder(path);
 
   /// Connects a folder for [kind]. Null when connected, else what is wrong ("Cache can write to Markdown graphs only.").
+  @override
   Future<String?> connect(SyncKind kind, String path, {String? display}) async {
     await init();
     final SyncFolder folder;
@@ -248,6 +289,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     return null;
   }
 
+  @override
   Future<void> disconnect(String id) async {
     await init();
     final t = _targets.where((x) => x.id == id).firstOrNull;
@@ -264,6 +306,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     notifyListeners();
   }
 
+  @override
   Future<void> setPaused(String id, bool paused) async {
     _targets = [for (final t in _targets) t.id == id ? t.copyWith(paused: paused) : t];
     await _saveTargets();
@@ -315,6 +358,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   }
 
   /// Syncs every connected folder that is not paused, one after the other (a call while one runs runs again after it).
+  @override
   Future<void> syncAll() async {
     await init();
     if (_running) {
@@ -388,6 +432,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     }
   }
 
+  @override
   Future<void> resolve(String id, SyncConflict c, {required bool keepCache}) async {
     final t = _targets.where((x) => x.id == id).firstOrNull;
     if (t == null) return;

@@ -80,6 +80,7 @@ import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
 import 'notebook/media.dart' show storePhoto;
 import 'notebook/sync/connections.dart';
+import 'notebook/sync/connections_web.dart';
 import 'screens/notebooks/icon_picker.dart' show MapIconSetup;
 import 'screens/pin_screen.dart';
 import 'settings/app_pin.dart';
@@ -929,8 +930,11 @@ class _CacheAppState extends State<CacheApp> {
     },
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
-      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
+      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, deviceConnections: deviceConnections, pin: kAppLockEnabled ? appPin : null,
       shareAvailable: () => sharing.enabled, icons: MapIconSetup.of(maps));
+  // In a browser, Obsidian and Logseq are folders of the computer Cache runs on, which Cache there keeps in step with the notebooks
+  // (Notebooks > Connections); the phone's connections below are folders of the phone.
+  late final ServerConnections? deviceConnections = plat.isWeb ? ServerConnections(HttpTransport()) : null;
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
@@ -1553,6 +1557,7 @@ class _CacheAppState extends State<CacheApp> {
     _askIdleRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
+    deviceConnections?.dispose();
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
