@@ -404,6 +404,15 @@ impl Library {
             wake: tokio::sync::Notify::new(),
             worker_started: AtomicBool::new(false),
         });
+        // The sync engine's log lines (from the helper) go to the app log, as the phone's go to its own.
+        if let Some(h) = &lib.helper {
+            let weak = Arc::downgrade(&lib);
+            h.set_engine_log(move |line| {
+                if let Some(l) = weak.upgrade() {
+                    l.log.add(crate::applog::Level::Standard, "SYNC", line);
+                }
+            });
+        }
         lib.ensure_worker();
         lib
     }
