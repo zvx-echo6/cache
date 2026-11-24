@@ -138,9 +138,9 @@ impl Mirror {
         !epoch.is_empty() && self.epoch == epoch && self.fp == fp && self.ctr <= counter
     }
 
-    /// Caught up to `counter`.
+    /// Caught up to `counter` (or past it: the folder moved on while the pages were being taken).
     pub fn is_at(&self, counter: u64) -> bool {
-        self.ctr == counter && self.after.is_none()
+        self.ctr >= counter && self.after.is_none()
     }
 
     /// Takes a page: the changes, then the cursor moves to the last one (more follow) or to the page's counter (caught up).
@@ -346,6 +346,15 @@ mod tests {
         }
         assert!(pages > 2, "split over several pages: {pages}");
         assert_eq!(m.files, s.files);
+    }
+
+    #[test]
+    fn a_mirror_that_took_a_page_made_after_the_summary_is_caught_up() {
+        let mut m = Mirror { epoch: "e".into(), fp: "fp".into(), ctr: 3, ..Mirror::default() };
+        m.take(&Page { counter: 5, ..Page::default() });
+        assert!(m.is_at(4) && m.is_at(5) && !m.is_at(6));
+        m.after = Some("x".into());
+        assert!(!m.is_at(4), "mid-paging is not caught up");
     }
 
     #[test]
