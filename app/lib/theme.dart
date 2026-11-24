@@ -259,7 +259,7 @@ ThemeData buildTheme(CacheThemeId id) {
         titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text),
         titleMedium: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text),
         labelLarge: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text),
-      );
+      ).apply(fontFamilyFallback: const ['Cache Okina']);
 
   return base.copyWith(
     colorScheme: scheme,
