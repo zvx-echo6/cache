@@ -799,22 +799,24 @@ void main() {
       expect(marks(r), isEmpty);
     });
 
-    // R1 (build 57): a delete made in Cache can come back on every device. The share sync scans each folder into an index that
-    // the other device fetches, and a scan holds back a file changed less than SETTLE (5 s) ago while it lists a removal at
-    // once. The delete writes the marker and then removes the file, so the removal can go out one scan ahead of the marker.
-    // This models that sync per path (each change gets a version, and a fetch takes every path that is newer on the other
-    // device), so a scan can hold the marker back the way the real one does.
-    Future<void> r1Delete({required bool markerHeldBack}) async {
+    // R1 (build 57): a delete made in Cache came back on every device. The delete writes the marker and then removes the
+    // file; the share sync's scan listed the removal at once but held the just-written marker back as still settling, so a
+    // device that fetched in between got the removal alone and wrote the file back. Since the fix the share sync never
+    // delivers the removal ahead of the marker (cache_sync tests/delete_after_marker.rs): the two come together, or the
+    // removal after. This models that sync per path (each change gets a version, and a fetch takes every path that is newer
+    // on the other device), so a scan can hold the removal back a round, and pins the end state for both orders.
+    Future<void> r1Delete({required bool removalAfterMarker}) async {
       final (a, b, nb, ids) = await pair();
       final mk = '_deleted/${ids[0]}.json';
       var ver = 0;
       final index = {a: <String, (String?, int)>{}, b: <String, (String?, int)>{}};
-      void scan(_Rig r, {Set<String> hold = const {}}) {
+      void scan(_Rig r, {bool holdDeletes = false}) {
         final idx = index[r]!;
         for (final e in r.folder.text.entries) {
-          if (hidden(e.key) || hold.contains(e.key)) continue;
+          if (hidden(e.key)) continue;
           if (idx[e.key]?.$1 != e.value) idx[e.key] = (e.value, ++ver);
         }
+        if (holdDeletes) return;
         for (final p in [for (final x in idx.entries) if (x.value.$1 != null && !r.folder.text.containsKey(x.key)) x.key]) {
           idx[p] = (null, ++ver);
         }
@@ -835,14 +837,13 @@ void main() {
       scan(a);
       fetch(b, a);
       scan(b);
-      // A deletes X: marker written, then the file removed; A's next scan lists the removal and, when the marker is still
-      // settling, holds the marker back.
+      // A deletes X: marker written, then the file removed; A's next scan lists both, or the marker and not yet the removal.
       await a.nb.deleteEntry(ids[0]);
       await a.engine.run();
       expect(marks(a), [mk]);
       expect(mds(a), hasLength(1));
-      scan(a, hold: markerHeldBack ? {mk} : const {});
-      // B fetches in between and runs its pass; then A's marker is listed.
+      scan(a, holdDeletes: removalAfterMarker);
+      // B fetches in between and runs its pass; then A's next scan lists the rest.
       fetch(b, a);
       await b.engine.run();
       scan(b);
@@ -864,11 +865,11 @@ void main() {
     }
 
     test('R1-delete control: the file removal and the marker go out in the same scan: X stays deleted on both', () async {
-      await r1Delete(markerHeldBack: false);
+      await r1Delete(removalAfterMarker: false);
     });
 
-    test('R1-delete (FAILS until fixed): the file removal goes out one scan ahead of the marker and the other device fetches in between: X stays deleted on both and the marker stays', () async {
-      await r1Delete(markerHeldBack: true);
+    test('R1-delete: the marker goes out one scan ahead of the file removal and the other device fetches in between: X stays deleted on both and the marker stays', () async {
+      await r1Delete(removalAfterMarker: true);
     });
   });
 
