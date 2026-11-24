@@ -98,6 +98,7 @@ When "Use my location" is on, your position goes to the assistant on the device,
 "Private" leaves a notebook or entry out of sharing and sync by default. It doesn't hide it from the assistant.
 
 - A private notebook isn't sent to your other devices unless you include it. Open "Edit notebook" and turn on "Include in sync and sharing". It's off by default.
+- Marking something private after it was shared stops further updates; the copies already on your other devices stay.
 - Once Cache is open, the assistant can read everything in your notebooks, private ones too. It does this on your device.
 - Private is not encryption or a lock. Keep a screen lock on.
 
