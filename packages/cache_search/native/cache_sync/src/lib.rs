@@ -646,6 +646,8 @@ struct Serving {
 const SERVING_FOR: Duration = Duration::from_secs(10);
 /// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
 const NOTICE_EVERY: Duration = Duration::from_millis(800);
+/// A device heard reachable again is asked this long after: a round at that very instant can ask before the link can be made.
+const REACHABLE_DELAY: Duration = Duration::from_secs(2);
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
 /// one linked device, some shared folders, and within them the paths `paths` covers (patterns as for [`Config::exclude`]).
@@ -909,6 +911,11 @@ struct Inner {
     notice_got: AtomicU64,
     /// What each linked device is being served from this device's files (the windows it asks for), by device.
     serving: Mutex<HashMap<String, Serving>>,
+    /// Linked devices that have asked this device something since it started: they can reach it, so they can send it notices.
+    /// (A device only this one can reach has to be polled, as before.)
+    heard_from: Mutex<HashSet<String>>,
+    /// Linked devices heard reachable again, and when a round with each becomes due ([`REACHABLE_DELAY`]).
+    reach_pending: Mutex<HashMap<String, Instant>>,
 }
 
 /// A file dated in the future as a rescan last saw it: its size and modification time, and since when they have not changed.
@@ -1950,7 +1957,7 @@ impl Inner {
     /// Whether `peer` needs no timer round: it answers summaries, was last reached over Reticulum (so it sends notices and is
     /// found again when reachable), and its last round was good. Any other device keeps today's round every interval.
     fn quiet_peer(&self, peer: &str) -> bool {
-        if !self.peer_has_summary(peer) || !self.net.reached_over_rns(peer) {
+        if !self.peer_has_summary(peer) || !self.net.reached_over_rns(peer) || !self.heard_from.lock().unwrap().contains(peer) {
             return false;
         }
         self.run.lock().unwrap().peers.get(peer).is_some_and(|s| s.error.is_none() && s.last_seen.is_some())
@@ -1983,8 +1990,16 @@ impl Inner {
     /// safety interval, and every other device not asked for an interval. All of them: a whole round, as before.
     fn loop_scope(&self) -> Scope {
         let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
-        let due = std::mem::take(&mut *self.due.lock().unwrap());
+        let mut due = std::mem::take(&mut *self.due.lock().unwrap());
         let now = Instant::now();
+        self.reach_pending.lock().unwrap().retain(|p, t| {
+            if *t <= now {
+                due.insert(p.clone());
+                false
+            } else {
+                true
+            }
+        });
         let list: Vec<String> = ids
             .iter()
             .filter(|id| {
@@ -2005,13 +2020,15 @@ impl Inner {
         if !self.network.load(Ordering::Relaxed) {
             return None;
         }
-        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
         let now = Instant::now();
-        ids.iter()
+        let pending = self.reach_pending.lock().unwrap().values().map(|t| t.saturating_duration_since(now)).min();
+        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+        let safety = ids
+            .iter()
             .filter(|id| self.quiet_peer(id))
             .filter_map(|id| self.last_contact.lock().unwrap().get(id).map(|t| (*t + self.safety).saturating_duration_since(now)))
-            .min()
-            .map(|d| d.max(Duration::from_secs(1)))
+            .min();
+        [pending, safety].into_iter().flatten().min().map(|d| d.max(Duration::from_millis(500)))
     }
 
     /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
@@ -2278,6 +2295,8 @@ impl Inner {
             let _ = std::fs::remove_file(f);
         }
         self.due.lock().unwrap().remove(id);
+        self.heard_from.lock().unwrap().remove(id);
+        self.reach_pending.lock().unwrap().remove(id);
         self.last_contact.lock().unwrap().remove(id);
         self.serving.lock().unwrap().remove(id);
         self.notice_out.lock().unwrap().remove(id);
@@ -3170,6 +3189,7 @@ impl Serve for Inner {
         Box::pin(async move {
             // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
             self.confirm_peer(&peer);
+            self.heard_from.lock().unwrap().insert(peer.clone());
             match ask {
                 Ask::Secrets => {
                     // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
@@ -3186,6 +3206,7 @@ impl Serve for Inner {
     fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> transport::BoxFut<'static, Vec<u8>> {
         Box::pin(async move {
             self.confirm_peer(&peer);
+            self.heard_from.lock().unwrap().insert(peer.clone());
             #[cfg(feature = "test-hooks")]
             if self.dir.join("no-delta").exists() {
                 return b"error: test: not answered".to_vec();
@@ -3210,6 +3231,7 @@ impl Serve for Inner {
         }
         let Ok(n) = serde_json::from_slice::<delta::Notice>(body) else { return b"not a notice".to_vec() };
         self.notice_got.fetch_add(1, Ordering::Relaxed);
+        self.heard_from.lock().unwrap().insert(peer.to_string());
         // Caught up already (the saved mirror is at this epoch and counter or past it): nothing to ask.
         let behind = self.load_mirror(peer, &n.s).is_none_or(|m| m.epoch != n.e || n.c > m.ctr || m.after.is_some());
         if behind {
@@ -3220,7 +3242,9 @@ impl Serve for Inner {
 
     fn reachable(&self, peer: &str) {
         if self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
-            self.make_due(peer);
+            // A moment later: a round the instant an announce is heard can ask before the link to the device can be made.
+            self.reach_pending.lock().unwrap().insert(peer.to_string(), Instant::now() + REACHABLE_DELAY);
+            self.wake_due.notify_one();
         }
     }
 
@@ -3374,7 +3398,11 @@ impl SyncEngine {
                             panic!("test: a round panicked");
                         }
                     }
-                    inner3.round_with(&scope).await
+                    if scope.whole() {
+                        inner3.round().await
+                    } else {
+                        inner3.round_with(&scope).await
+                    }
                 });
                 if let Err(e) = one.await {
                     if e.is_panic() {
@@ -3385,7 +3413,9 @@ impl SyncEngine {
                     }
                 }
                 let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
-                let wait = inner2.next_safety_in().map(|d| d.min(wait)).unwrap_or(wait);
+                // Also never longer than the safety interval: which devices are quiet can change while the loop sleeps (a device that
+                // asks this one becomes quiet), and the safety round must not wait on a wake-up computed before that.
+                let wait = inner2.next_safety_in().map(|d| d.min(wait)).unwrap_or(wait).min(inner2.safety);
                 asked_for = tokio::select! {
                     _ = tokio::time::sleep(wait) => false,
                     _ = inner2.wake.notified() => true,
@@ -3547,6 +3577,8 @@ impl SyncEngine {
             notice_sent: AtomicU64::new(0),
             notice_got: AtomicU64::new(0),
             serving: Mutex::new(HashMap::new()),
+            heard_from: Mutex::new(HashSet::new()),
+            reach_pending: Mutex::new(HashMap::new()),
         });
         inner.save()?;
         steps.step("state saved");

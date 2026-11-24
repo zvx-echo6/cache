@@ -251,7 +251,8 @@ fn a_device_that_is_reachable_again_is_asked_when_its_notice_was_lost() {
     t.a = Some(eng(&t.da, "Desk", Some(t.port), None, 600, 600));
     wait("B to catch up", 60, || read(&fb.join("late.txt")).as_deref() == Some("late"));
     let after = asked(t.b());
-    assert!(after.0 > before.0, "B asked for a summary: {before:?} {after:?}");
+    // The link B held to A died with A, so the summary may fail on it and the whole list come on the new one: either way B asked.
+    assert!(after.0 + after.1 + after.2 > before.0 + before.1 + before.2, "B asked A: {before:?} {after:?}");
     close(t);
 }
 
@@ -267,7 +268,7 @@ fn a_lost_notice_is_covered_by_the_safety_round_with_a_summary_and_no_whole_list
     let before = asked(t.b());
     put(&t.fa.join("second.txt"), b"two");
     call(t.a(), "sync_now", json!({}));
-    wait("the second file on B", 25, || read(&fb.join("second.txt")).as_deref() == Some("two"));
+    wait_dbg("the second file on B", 25, || read(&fb.join("second.txt")).as_deref() == Some("two"), || format!("asked {before:?} {:?} quiet {}\nA: {}\nB: {}", asked(t.b()), quiet(t.b(), &peer_id(&t.db)), brief(t.a()), brief(t.b())));
     let after = asked(t.b());
     assert!(after.0 > before.0, "a summary was asked for: {before:?} {after:?}");
     assert!(after.1 > before.1, "and the differences: {before:?} {after:?}");

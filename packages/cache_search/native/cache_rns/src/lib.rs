@@ -662,11 +662,13 @@ impl RnsNode {
                                 .map(|(k, _)| *k);
                             let mut again = None;
                             if let Some(k) = hit {
-                                let first = s.heard.insert(k, via).is_none();
+                                // A device heard for the first time is not "again": the round every device makes at its start, and the
+                                // notices, cover it (and a round at that instant can ask before the link can be made).
+                                s.heard.insert(k, via);
                                 let now = std::time::Instant::now();
                                 let late = s.last_announce.insert(k, now).is_some_and(|t| now.duration_since(t).as_millis() as u64 > reach_gap_ms.load(std::sync::atomic::Ordering::Relaxed));
                                 let was_down = s.down.remove(&k);
-                                if first || late || was_down {
+                                if late || was_down {
                                     again = Some(k);
                                 }
                             }
