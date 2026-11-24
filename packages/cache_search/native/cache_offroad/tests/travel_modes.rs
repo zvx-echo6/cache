@@ -177,7 +177,7 @@ fn directions_by_dirt_bike_quad_and_side_by_side_are_off_road_all_the_way() {
 }
 
 /// A closed-to-motorcycles line along the trip.
-fn mvum_line(ext: [Option<(Option<String>, Option<String>)>; 2]) -> MvumFeature {
+fn mvum_line(ext: [Option<(Option<String>, Option<String>)>; 3]) -> MvumFeature {
     let s = |x: &str| Some(x.to_string());
     MvumFeature {
         is_trail: true,
@@ -202,7 +202,7 @@ fn notes(world: &MemPack, mode: TravelMode, boundary: Boundary) -> Vec<String> {
 #[test]
 fn a_pack_without_the_new_columns_says_which_rules_were_used_instead() {
     let mut world = flat_world();
-    world.mvum = vec![mvum_line([None, None])];
+    world.mvum = vec![mvum_line([None, None, None])];
     let moto = notes(&world, TravelMode::OffroadMoto, Boundary::Pragmatic);
     assert!(moto.contains(&NOTE_MOTO_FALLBACK.to_string()), "{moto:?}");
     assert!(!moto.contains(&NOTE_SXS_FALLBACK.to_string()));
@@ -222,7 +222,7 @@ fn a_pack_without_the_new_columns_says_which_rules_were_used_instead() {
 fn a_pack_with_the_new_columns_uses_them_and_stays_quiet() {
     let mut world = flat_world();
     let col = |s: &str| Some((Some(s.to_string()), None));
-    world.mvum = vec![mvum_line([col("open"), col("open")])];
+    world.mvum = vec![mvum_line([col("open"), col("open"), col("open")])];
     assert!(notes(&world, TravelMode::OffroadMoto, Boundary::Pragmatic).iter().all(|n| n != NOTE_MOTO_FALLBACK));
     assert!(notes(&world, TravelMode::OffroadSxs, Boundary::Pragmatic).iter().all(|n| n != NOTE_SXS_FALLBACK));
 }
@@ -231,12 +231,23 @@ fn a_pack_with_the_new_columns_uses_them_and_stays_quiet() {
 fn the_new_columns_become_their_own_grids() {
     let meta = GridMeta::from_bbox(42.55, 42.57, -114.48, -114.45);
     let col = |s: &str| Some((Some(s.to_string()), None));
-    let none = access_grids_ext(&[mvum_line([None, None])], &meta, None);
+    let none = access_grids_ext(&[mvum_line([None, None, None])], &meta, None);
     assert!(none[0].is_none() && none[1].is_none(), "no column, no grid: the caller falls back");
-    let g = access_grids_ext(&[mvum_line([col("closed"), col("open")])], &meta, None);
+    let g = access_grids_ext(&[mvum_line([col("closed"), col("open"), col("closed")])], &meta, None);
     let (moto, wide) = (g[0].as_ref().unwrap(), g[1].as_ref().unwrap());
     assert!(moto.contains(&255) && !moto.contains(&1), "closed to motorcycles");
-    assert!(wide.contains(&1) && !wide.contains(&255), "open to wide vehicles");
+    assert!(wide.contains(&1) && !wide.contains(&255), "open to wide vehicles: four driven wheels is enough");
+    // two driven wheels alone opens it too; both closed closes it; one class closed and the other without data is closed
+    let wide_of = |a, b| access_grids_ext(&[mvum_line([None, a, b])], &meta, None)[1].clone().unwrap();
+    assert!(wide_of(col("closed"), col("open")).contains(&1));
+    assert!(wide_of(col("closed"), col("closed")).contains(&255));
+    assert!(wide_of(col("closed"), Some((None, None))).contains(&255));
+    // each class keeps its own dates: 4wd open in June only, 2wd open in August only
+    let dated = |s: &str, d: &str| Some((Some(s.to_string()), Some(d.to_string())));
+    let f = mvum_line([None, dated("open", "06/01-06/30"), dated("open", "08/01-08/31")]);
+    let on = |m, d| access_grids_ext(std::slice::from_ref(&f), &meta, Some((m, d)))[1].clone().unwrap();
+    assert!(on(6, 15).contains(&1) && on(8, 15).contains(&1), "open to either on its own dates");
+    assert!(on(7, 15).contains(&255) && !on(7, 15).contains(&1), "open to neither in July");
 }
 
 #[test]
@@ -422,6 +433,11 @@ fn the_assistants_off_road_modes_get_no_road_legs_from_the_trail_cells() {
 
 /// A line across the whole world between the trip's ends, with what MVUM says of it: (ATV, high-clearance vehicle) open or closed.
 fn mvum_wall(atv_open: bool, veh_open: bool) -> MvumFeature {
+    mvum_wall_ext(atv_open, veh_open, [None, None, None])
+}
+
+/// The same wall with the rebuilt pack's columns: (motorcycle, four-wheel-drive over 50 in, two-wheel-drive over 50 in).
+fn mvum_wall_ext(atv_open: bool, veh_open: bool, ext_open: [Option<bool>; 3]) -> MvumFeature {
     let s = |x: &str| Some(x.to_string());
     let st = |open: bool| (s(if open { "open" } else { "closed" }), None);
     let lat = (FROM.0 + TO.0) / 2.0;
@@ -430,9 +446,53 @@ fn mvum_wall(atv_open: bool, veh_open: bool) -> MvumFeature {
         symbol: s("1"),
         seasonal: s("yearlong"),
         access: [st(true), st(atv_open), st(veh_open)],
-        ext: [None, None],
+        ext: ext_open.map(|o| o.map(st)),
         lines: vec![vec![(-114.60, lat), (-114.35, lat)]],
     }
+}
+
+fn wall_route(wall: MvumFeature, mode: TravelMode) -> cache_offroad::directions::Directions {
+    let mut world = flat_world();
+    world.mvum = vec![wall];
+    let v = Recorder(Mutex::new(vec![]));
+    let mut r = DirectionsRequest::new(FROM, TO, mode);
+    r.boundary = Boundary::Strict;
+    env(&world, &v).directions(&r)
+}
+
+/// On a rebuilt pack the side-by-side opens a trail open to four-wheel-drive OR two-wheel-drive vehicles over 50 in, and not one open
+/// only to ATVs or high-clearance vehicles; the dirt bike reads the motorcycle column, not the ATV's.
+#[test]
+fn a_rebuilt_pack_routes_the_side_by_side_and_dirt_bike_by_their_own_columns() {
+    let sxs = |w: MvumFeature| wall_route(w, TravelMode::OffroadSxs).ok;
+    let moto = |w: MvumFeature| wall_route(w, TravelMode::OffroadMoto).ok;
+    let (t, f) = (Some(true), Some(false));
+    assert!(sxs(mvum_wall_ext(false, false, [f, t, f])), "open to four-wheel-drive over 50 in only");
+    assert!(sxs(mvum_wall_ext(false, false, [f, f, t])), "open to two-wheel-drive over 50 in only");
+    assert!(!sxs(mvum_wall_ext(true, true, [t, f, f])), "open only to ATVs (and motorcycles, high-clearance): not for a side-by-side");
+    // a motorcycle-only trail
+    assert!(moto(mvum_wall_ext(false, false, [t, f, f])), "the dirt bike uses a motorcycle-only trail");
+    assert!(!moto(mvum_wall_ext(true, true, [f, t, t])), "the dirt bike does not use the ATV column once the pack has its own");
+}
+
+/// A world with a wall and no land rules or fallbacks asked for: the notes of a route by `mode`.
+fn wall_notes(ext_open: [Option<bool>; 3], mode: TravelMode) -> Vec<String> {
+    let mut world = flat_world();
+    world.mvum = vec![mvum_wall_ext(true, true, ext_open)];
+    notes(&world, mode, Boundary::Pragmatic)
+}
+
+#[test]
+fn the_fallback_notes_show_on_an_old_pack_and_not_on_a_rebuilt_one() {
+    let (t, f) = (Some(true), Some(false));
+    let old = [None, None, None];
+    assert!(wall_notes(old, TravelMode::OffroadMoto).contains(&NOTE_MOTO_FALLBACK.to_string()));
+    assert!(wall_notes(old, TravelMode::OffroadSxs).contains(&NOTE_SXS_FALLBACK.to_string()));
+    let new = [t, f, t];
+    assert!(!wall_notes(new, TravelMode::OffroadMoto).contains(&NOTE_MOTO_FALLBACK.to_string()));
+    assert!(!wall_notes(new, TravelMode::OffroadSxs).contains(&NOTE_SXS_FALLBACK.to_string()));
+    // only the two-wheel-drive class present is still a rebuilt pack
+    assert!(!wall_notes([t, None, t], TravelMode::OffroadSxs).contains(&NOTE_SXS_FALLBACK.to_string()));
 }
 
 /// On a pack without the over-50-in column the side-by-side reads the high-clearance-vehicle rules, not the ATV's (ATV trails are for
