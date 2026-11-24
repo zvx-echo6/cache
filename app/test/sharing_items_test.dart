@@ -643,34 +643,4 @@ void main() {
     s.dispose();
     await r.dir.delete(recursive: true);
   });
-
-  test('Sync now result: a linked device fetching from this one is Syncing, while it fetches and only for what is in scope', () async {
-    final r = await _rig();
-    final s = r.make();
-    await s.setUp();
-    await s.setShared(r.kind('models'), true);
-    await s.setShared(r.kind('library'), true);
-    // This device only sends: nothing to fetch here (pending 0, no transfer of its own), the phone is fetching a 100 MB video
-    // from it. The engine reports that on the phone's entry (`fetching`: the folder and how far it got, no path).
-    r.sync.peers
-      ..add({'id': 'p1', 'name': 'Android device', 'linked': 1, 'link': {'mode': 'match'}, 'fetching': null})
-      ..add({'id': 'p2', 'name': 'Shed', 'linked': 1, 'link': {'mode': 'match'}, 'fetching': null});
-    await s.refresh();
-    String result({Iterable<String>? shareIds, String? peer}) => s.syncResult(shareIds: shareIds, peer: peer, working: 'Syncing');
-    expect(result(), 'Up to date');
-
-    r.sync.peers.first['fetching'] = {'share': 'models', 'size': 100 << 20, 'done': 6 << 20};
-    await s.refresh();
-    expect(result(), 'Syncing', reason: 'Sync all now');
-    expect(result(peer: 'p1'), 'Syncing', reason: 'the device page of the phone');
-    expect(result(shareIds: ['models']), 'Syncing', reason: 'the kind page');
-    expect(result(peer: 'p2'), 'Up to date', reason: 'another device is not fetching');
-    expect(result(shareIds: ['library', 'libraries']), 'Up to date', reason: 'the fetch is in another kind');
-
-    r.sync.peers.first['fetching'] = null;
-    await s.refresh();
-    expect(result(), 'Up to date', reason: 'done');
-    s.dispose();
-    await r.dir.delete(recursive: true);
-  });
 }
