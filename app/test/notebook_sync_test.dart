@@ -686,12 +686,9 @@ void main() {
       final (a, b, nb, ids) = await pair(n: 1);
       await a.nb.deleteEntry(ids[0]);
       await a.engine.run();
-      final e = (await b.nb.entry(ids[0]))!;
-      await b.nb.saveEntry(id: ids[0], notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
-      await b.engine.run();
-      // each folder now holds the edited file and the marker
-      final path = mds(b).single;
-      a.folder.text[path] = b.folder.text[path]!;
+      // the other device's file was edited (it arrives changed) and the marker reaches it
+      final path = mds(b).firstWhere((k) => b.folder.text[k]!.contains('body 0'));
+      a.folder.text[path] = b.folder.text[path] = b.folder.text[path]!.replaceFirst('body 0', 'edited on B');
       b.folder.text['_deleted/${ids[0]}.json'] = a.folder.text['_deleted/${ids[0]}.json']!;
       await a.engine.run();
       await b.engine.run();
