@@ -562,6 +562,192 @@ void main() {
     });
   });
 
+  group('a file going missing never deletes an entry; only a delete made in Cache does, by a marker that travels', () {
+    bool hidden(String p) => p.split('/').any((c) => c.startsWith('.'));
+
+    /// What the share sync does: the other folder becomes this one's files (files taken away here are taken away there).
+    void mirror(_Rig from, _Rig to) {
+      to.folder.text.removeWhere((k, _) => !hidden(k) && !from.folder.text.containsKey(k));
+      to.folder.bytes.removeWhere((k, _) => !hidden(k) && !from.folder.bytes.containsKey(k));
+      for (final e in from.folder.text.entries) {
+        if (!hidden(e.key)) to.folder.text[e.key] = e.value;
+      }
+      for (final e in from.folder.bytes.entries) {
+        if (!hidden(e.key)) to.folder.bytes[e.key] = e.value;
+      }
+    }
+
+    List<String> mds(_Rig r) => [for (final k in r.folder.text.keys) if (k.endsWith('.md')) k]..sort();
+    List<String> marks(_Rig r) => [for (final k in r.folder.text.keys) if (k.startsWith('_deleted/')) k]..sort();
+
+    /// Both devices have the entries, synced both ways.
+    Future<(_Rig, _Rig, String, List<String>)> pair({int n = 2}) async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      final ja = await a.journal();
+      await b.journal();
+      final ids = <String>[];
+      for (var i = 0; i < n; i++) {
+        ids.add((await a.nb.saveEntry(notebookId: ja.id, occurredAt: '2026-10-27T1$i:12:00-06:00', title: 'Entry $i', body: 'body $i')).id);
+      }
+      await a.engine.run();
+      mirror(a, b);
+      await b.engine.run();
+      mirror(b, a);
+      await a.engine.run();
+      for (final id in ids) {
+        expect(await b.nb.entry(id), isNotNull, reason: 'the entry reached the other device');
+      }
+      return (a, b, ja.id, ids);
+    }
+
+    test('one file missing, no marker: it is written again from the store, nothing is deleted', () async {
+      final r = _Rig(SyncKind.share);
+      final j = await r.journal();
+      final a = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'First', body: 'one');
+      final b = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T17:12:00-06:00', title: 'Second', body: 'two');
+      await r.engine.run();
+      final gone = mds(r).first;
+      r.folder.text.remove(gone);
+      final rep = await r.engine.run();
+      expect(rep.deleted, 0);
+      expect(rep.written, 1);
+      expect(mds(r), hasLength(2), reason: 'the file is written again');
+      expect(r.folder.text.containsKey(gone), isTrue);
+      expect(await r.nb.entry(a.id), isNotNull);
+      expect(await r.nb.entry(b.id), isNotNull);
+      expect(marks(r), isEmpty);
+    });
+
+    test('an emptied folder: both files are written again and both entries stay', () async {
+      final r = _Rig(SyncKind.share);
+      final j = await r.journal();
+      await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'First', body: 'one');
+      await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T17:12:00-06:00', title: 'Second', body: 'two');
+      await r.engine.run();
+      r.folder.text.clear();
+      r.folder.bytes.clear();
+      final rep = await r.engine.run();
+      expect(rep.deleted, 0);
+      expect(mds(r), hasLength(2));
+      expect(await r.nb.entries(j.id), hasLength(2));
+    });
+
+    test('a delete made in Cache writes the marker and removes the file; the other device deletes the entry, and it stays deleted', () async {
+      final (a, b, nb, ids) = await pair();
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      expect(marks(a), ['_deleted/${ids[0]}.json']);
+      final m = jsonDecode(a.folder.text['_deleted/${ids[0]}.json']!) as Map;
+      expect(m['id'], ids[0]);
+      expect(m['at'], isA<int>());
+      expect(mds(a), hasLength(1), reason: 'the entry\'s file is removed');
+      mirror(a, b);
+      final rb = await b.engine.run();
+      expect(rb.deleted, 1);
+      expect(await b.nb.entry(ids[0]), isNull);
+      expect(await b.nb.entry(ids[1]), isNotNull);
+      for (var i = 0; i < 3; i++) {
+        mirror(b, a);
+        await a.engine.run();
+        mirror(a, b);
+        await b.engine.run();
+      }
+      for (final r in [a, b]) {
+        expect(await r.nb.entry(ids[0]), isNull, reason: 'stays deleted');
+        expect(await r.nb.entries(nb).then((l) => l.length), 1);
+        expect(mds(r), hasLength(1));
+        expect(marks(r), ['_deleted/${ids[0]}.json'], reason: 'markers are kept');
+      }
+    });
+
+    test('a wipe that also removes _deleted/: nothing is deleted on either device', () async {
+      final (a, b, nb, ids) = await pair(n: 3);
+      await a.nb.deleteEntry(ids[2]);
+      await a.engine.run();
+      mirror(a, b);
+      await b.engine.run();
+      expect(await b.nb.entry(ids[2]), isNull);
+      a.folder.text.clear();
+      a.folder.bytes.clear();
+      final ra = await a.engine.run();
+      expect(ra.deleted, 0);
+      mirror(a, b);
+      final rb = await b.engine.run();
+      expect(rb.deleted, 0);
+      mirror(b, a);
+      await a.engine.run();
+      for (final r in [a, b]) {
+        expect(await r.nb.entries(nb).then((l) => l.map((e) => e.id).toSet()), {ids[0], ids[1]});
+        expect(mds(r), hasLength(2));
+      }
+    });
+
+    test('one device edits while the other deletes: the file wins, the entry is on both, and the marker is removed', () async {
+      final (a, b, nb, ids) = await pair(n: 1);
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      final e = (await b.nb.entry(ids[0]))!;
+      await b.nb.saveEntry(id: ids[0], notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
+      await b.engine.run();
+      // each folder now holds the edited file and the marker
+      final path = mds(b).single;
+      a.folder.text[path] = b.folder.text[path]!;
+      b.folder.text['_deleted/${ids[0]}.json'] = a.folder.text['_deleted/${ids[0]}.json']!;
+      await a.engine.run();
+      await b.engine.run();
+      mirror(b, a);
+      await a.engine.run();
+      for (final r in [a, b]) {
+        expect((await r.nb.entry(ids[0]))?.body, 'edited on B');
+        expect(marks(r), isEmpty, reason: 'the marker is removed');
+      }
+    });
+
+    test('an old-build peer removes a file with no marker: the new device writes it back, and the old device gets the entry back', () async {
+      final (a, b, nb, ids) = await pair();
+      // the old device: the delete leaves no marker
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      a.folder.text.removeWhere((k, _) => k.startsWith('_deleted/'));
+      mirror(a, b);
+      final rb = await b.engine.run();
+      expect(rb.deleted, 0);
+      expect(rb.written, 1);
+      expect(await b.nb.entry(ids[0]), isNotNull, reason: 'the new device keeps the entry');
+      expect(mds(b), hasLength(2));
+      mirror(b, a);
+      await a.engine.run();
+      expect(await a.nb.entry(ids[0]), isNotNull, reason: 'the old-style delete comes back');
+    });
+
+    test('upgrade: a delete already applied stays deleted (no file written); one in flight (record, missing file, no marker) is written back once', () async {
+      final r = _Rig(SyncKind.share);
+      final j = await r.journal();
+      final x = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Applied', body: 'x');
+      final z = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T17:12:00-06:00', title: 'Flight', body: 'z');
+      await r.engine.run();
+      // the old build applied a delete of X: no store copy, no record, no file, no marker
+      await r.nb.deleteEntry(x.id);
+      final st = jsonDecode(r.state.readAsStringSync()) as Map;
+      (st['items'] as Map).remove(x.id);
+      r.state.writeAsStringSync(jsonEncode(st));
+      final keep = mds(r).firstWhere((k) => r.folder.text[k]!.contains(z.id));
+      r.folder.text.removeWhere((k, _) => k != keep && k.endsWith('.md'));
+      // Z: file gone, record kept, no marker
+      r.folder.text.remove(keep);
+      final rep = await r.engine.run();
+      expect(rep.deleted, 0);
+      expect(rep.written, 1, reason: 'only Z is written');
+      expect(mds(r), hasLength(1));
+      expect(r.folder.text[mds(r).single]!.contains(z.id), isTrue);
+      expect(await r.nb.entry(x.id), isNull);
+      expect(await r.nb.entry(z.id), isNotNull);
+      final again = await r.engine.run();
+      expect(again.written, 0, reason: 'once');
+      expect(marks(r), isEmpty);
+    });
+  });
+
   group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
     // Two devices of one share, each with its own folder (what cache_sync carries: every file but hidden ones).
     void carry(_Rig from, _Rig to) {
