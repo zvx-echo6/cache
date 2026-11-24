@@ -7,6 +7,7 @@ import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/guidance_panels.dart';
 import 'package:cache/nav/ui/place_card.dart';
 import 'package:cache/nav/ui/route_panel.dart';
+import 'package:cache/nav/ui/travel_rows.dart';
 import 'package:cache/nav/ui/search_panel.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/theme.dart';
@@ -354,7 +355,7 @@ void main() {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson({...fakeRouteJson(offroad: true, mode: mode), 'alternatives': [fakeRouteJson(id: 'r2', alt: 1)]});
         await nav.openDirections(hospital);
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
-        for (final m in ['Drive', 'Walk', 'Bike']) {
+        for (final m in ['Drive', 'Walk', 'Bike', 'ATV']) {
           expect(find.text(m), findsOneWidget);
         }
         expect(find.byKey(const ValueKey('route-card-0')), findsOneWidget);
@@ -382,34 +383,34 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('directions: off-road, on foot or by vehicle, with the land access', (tester) async {
+      testWidgets('directions: off-road, on foot, by dirt bike, quad or side-by-side, with the land access', (tester) async {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: true, mode: mode));
         await nav.openDirections(hospital);
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
-        expect(find.text('Off-road'), findsOneWidget);
-        expect(find.byKey(const ValueKey('land-strict')), findsNothing);
-        await tester.tap(find.byKey(const ValueKey('mode-offroad')));
+        // Drive: no land rules to choose
+        expect(find.byKey(const ValueKey('land-pragmatic')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('mode-atv')));
         await tester.pump();
-        expect(nav.mode, 'offroad_foot');
-        for (final t in ['On foot', 'Vehicle', 'Stay on open land', 'Usual', 'Emergency: any land']) {
+        expect(nav.mode, 'offroad_4w');
+        for (final t in ['Quad', 'Side-by-side', 'Standard', 'Emergency']) {
           expect(find.text(t), findsOneWidget);
         }
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsNothing);
-        await tester.tap(find.byKey(const ValueKey('offroad-mode-offroad_vehicle')));
+        await tester.tap(find.byKey(const ValueKey('opt-offroad_sxs')));
         await tester.pump();
-        expect(nav.mode, 'offroad_vehicle');
+        expect(nav.mode, 'offroad_sxs');
         await tester.tap(find.byKey(const ValueKey('land-emergency')));
         await tester.pump();
         expect(nav.landAccess, 'emergency');
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsOneWidget);
-        expect(find.textContaining('Ignores land rules'), findsOneWidget);
-        // back to drive: the off-road choices go away; Off-road comes back to the vehicle
+        expect(find.text(TravelChoicesView.emergencyWarning), findsOneWidget);
+        // back to drive: the land rules go away; ATV comes back to the side-by-side
         await tester.tap(find.byKey(const ValueKey('mode-drive')));
         await tester.pump();
-        expect(find.byKey(const ValueKey('land-strict')), findsNothing);
-        await tester.tap(find.byKey(const ValueKey('mode-offroad')));
+        expect(find.byKey(const ValueKey('land-pragmatic')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('mode-atv')));
         await tester.pump();
-        expect(nav.mode, 'offroad_vehicle');
+        expect(nav.mode, 'offroad_sxs');
         expect(tester.takeException(), isNull);
       });
 
@@ -437,7 +438,7 @@ void main() {
       testWidgets('directions: off-road at the largest text size still fits', (tester) async {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: true, mode: mode));
         await nav.openDirections(hospital);
-        await nav.setMode('offroad_vehicle');
+        await nav.setMode('offroad_sxs');
         await nav.setLandAccess('emergency');
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt)), scale: 1.6));
         expect(find.byKey(const ValueKey('land-emergency-warning')), findsOneWidget);

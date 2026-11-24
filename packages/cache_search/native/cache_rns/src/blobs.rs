@@ -1,8 +1,9 @@
-//! Verified file fetch over Reticulum, into Cache's own iroh-blobs store.
+//! Verified file fetch over Reticulum, into Cache's own file store ([`cache_store`]).
 //!
-//! The transfer carries exactly what iroh carries today: iroh-blobs' bao encoding of a range of the blob (the data plus the
-//! tree nodes that prove it), checked against the BLAKE3 hash and stored by `import_bao_bytes`. So verification, the store,
-//! and resume after a break are iroh-blobs' own: a fetch asks only for the windows the store does not hold yet.
+//! The transfer carries exactly what iroh carried: the bao encoding of a range of the blob (an 8-byte size, then the data plus
+//! the tree nodes that prove it, 16 KiB chunk groups), checked against the BLAKE3 hash and stored by
+//! [`Store::import_ranges`]. So verification, the store, and resume after a break are the store's own: a fetch asks only for
+//! the windows the store does not hold yet. The windows a device serves are whatever ranges the asker names.
 //!
 //! A window is 16 MiB (16,384 BLAKE3 chunks of 1 KiB). One window is one request and its answer on the link, so only one
 //! window is held in memory at a time, and a dropped link loses at most the window in flight.
@@ -10,11 +11,8 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use bao_tree::ChunkNum;
+use cache_store::{ChunkNum, ChunkRanges, Hash, Status, Store};
 use iroh::PublicKey;
-use iroh_blobs::api::Store;
-use iroh_blobs::protocol::ChunkRanges;
-use iroh_blobs::Hash;
 
 use crate::RnsNode;
 
@@ -51,18 +49,19 @@ pub(crate) async fn serve_window(store: &Store, body: &[u8]) -> Vec<u8> {
     if end <= start || end - start > WINDOW_CHUNKS {
         return vec![REFUSED];
     }
-    match store.has(hash).await {
-        Ok(true) => {}
-        _ => return vec![MISSING],
-    }
-    match store.export_bao(hash, ChunkRanges::from(ChunkNum(start)..ChunkNum(end))).bao_to_vec().await {
-        Ok(bao) => {
-            let mut v = Vec::with_capacity(bao.len() + 1);
-            v.push(OK);
-            v.extend_from_slice(&bao);
-            v
+    let store = store.clone();
+    let served = tokio::task::spawn_blocking(move || {
+        if !store.has(&hash).unwrap_or(false) {
+            return None;
         }
-        Err(_) => vec![MISSING],
+        let mut v = vec![OK];
+        store.encode_ranges(&hash, &ChunkRanges::from(ChunkNum(start)..ChunkNum(end)), &mut v).ok()?;
+        Some(v)
+    })
+    .await;
+    match served {
+        Ok(Some(v)) => v,
+        _ => vec![MISSING],
     }
 }
 
@@ -93,9 +92,9 @@ pub async fn fetch(
     window_timeout: Duration,
     mut progress: impl FnMut(&Fetched),
 ) -> Result<Fetched> {
-    let have = store.observe(hash).await.map_err(|e| anyhow!("cannot read the store: {e}"))?;
-    let mut f = Fetched { size: have.size(), ..Default::default() };
-    if have.is_complete() {
+    let mut held = held(store, hash).await?;
+    let mut f = Fetched { size: held.0, ..Default::default() };
+    if held.1 {
         f.have = f.size;
         return Ok(f);
     }
@@ -109,7 +108,7 @@ pub async fn fetch(
         if f.size > 0 {
             let last = f.size.div_ceil(CHUNK);
             let wanted = ChunkRanges::from(ChunkNum(start)..ChunkNum(((k + 1) * WINDOW_CHUNKS).min(last)));
-            if have.ranges.is_superset(&wanted) {
+            if held.2.is_superset(&wanted) {
                 f.skipped += 1;
                 // A resumed fetch says at once how much it already holds.
                 f.have = ((k + 1) * WINDOW_CHUNKS * CHUNK).min(f.size);
@@ -131,24 +130,46 @@ pub async fn fetch(
             bail!("the answer is too short");
         }
         let size = u64::from_le_bytes(bao[..8].try_into().expect("8 bytes"));
-        if f.size == 0 {
+        // A size that differs from the stored partial's is for the store to judge: it replaces a size nobody has proven yet (the
+        // last chunk group has not verified) and refuses one it has.
+        let changed = f.size != 0 && size != f.size;
+        if f.size == 0 || changed {
             f.size = size;
-        } else if size != f.size {
-            bail!("the other device reports a different size");
         }
-        store
-            .import_bao_bytes(hash, window(k), bytes::Bytes::copy_from_slice(bao))
+        let (st, bytes) = (store.clone(), reply);
+        tokio::task::spawn_blocking(move || st.import_ranges(&hash, &window(k), &bytes[1..]))
             .await
+            .map_err(|e| anyhow!("{e}"))?
             .map_err(|e| anyhow!("the data did not verify against the hash: {e}"))?;
+        if changed {
+            held = self::held(store, hash).await?;
+            if held.1 {
+                break;
+            }
+        }
         f.windows += 1;
         f.have = ((k + 1) * WINDOW_CHUNKS * CHUNK).min(f.size);
         progress(&f);
         k += 1;
     }
-    let done = store.observe(hash).await.map_err(|e| anyhow!("cannot read the store: {e}"))?;
-    if !done.is_complete() {
+    let done = self::held(store, hash).await?;
+    if !done.1 {
         bail!("the file is not complete after the last window");
     }
     f.have = f.size;
     Ok(f)
+}
+
+/// What the store holds of `hash`: its size (0 if unknown), whether it is complete, and the chunks held.
+async fn held(store: &Store, hash: Hash) -> Result<(u64, bool, ChunkRanges)> {
+    let st = store.clone();
+    let status = tokio::task::spawn_blocking(move || st.status(&hash))
+        .await
+        .map_err(|e| anyhow!("{e}"))?
+        .map_err(|e| anyhow!("cannot read the store: {e}"))?;
+    Ok(match status {
+        Status::Complete { size } => (size, true, ChunkRanges::all()),
+        Status::Partial { size, have } => (size, false, have),
+        Status::Absent => (0, false, ChunkRanges::empty()),
+    })
 }

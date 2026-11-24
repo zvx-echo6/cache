@@ -457,10 +457,10 @@ async fn gate() -> Gate {
     let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
     let port = free_port();
     let dir = tempfile::tempdir().unwrap();
-    let store = iroh_blobs::store::fs::FsStore::load(dir.path().join("blobs")).await.unwrap();
+    let store = cache_store::Store::open(&dir.path().join("store"), cache_store::Options::default()).unwrap();
     let rec = Arc::new(Rec::default());
     let mut c = cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), vec![&kb]);
-    c.blobs = Some((*store).clone());
+    c.blobs = Some(store.clone());
     let a = RnsNode::start(c, rec.clone()).await.unwrap();
     Gate { ka, kb, port, rec, a, _dir: dir }
 }
@@ -647,9 +647,9 @@ async fn a_request_on_an_open_link_after_the_unlink_fails_as_not_linked() {
     let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
     let port = free_port();
     let dir = tempfile::tempdir().unwrap();
-    let store = iroh_blobs::store::fs::FsStore::load(dir.path().join("blobs")).await.unwrap();
+    let store = cache_store::Store::open(&dir.path().join("store"), cache_store::Options::default()).unwrap();
     let mut c = cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), vec![&kb]);
-    c.blobs = Some((*store).clone());
+    c.blobs = Some(store.clone());
     let a = Arc::new(RnsNode::start(c, Arc::new(Rec::default())).await.unwrap());
     let b = Arc::new(RnsNode::start(cfg(&kb, Iface::TcpConnect(format!("127.0.0.1:{port}")), vec![&ka]), Arc::new(Rec::default())).await.unwrap());
     let (a2, b2) = (a.clone(), b.clone());

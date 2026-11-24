@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.0+54
+version: 1.2.0+56
 
 environment:
   sdk: ^3.12.2
@@ -140,6 +140,8 @@ flutter:
   uses-material-design: true
 
   assets:
+    # The road sources data file: 511 sites, WZDx feeds, key steps (schema, version, updated; a newer copy can override it later).
+    - assets/roads/road_sources.json
     # The base-map template (colours are palette roles) and the map fonts that ship with the app.
     - assets/map/omt_template.json
     - assets/map/protomaps_v4_template.json

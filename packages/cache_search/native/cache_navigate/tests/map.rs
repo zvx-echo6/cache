@@ -85,7 +85,7 @@ fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
 }
 
 fn req(via: Vec<MapEnd>, alternatives: usize) -> MapRouteReq {
-    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives, from_heading_deg: None }
+    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives, from_heading_deg: None, avoid_highways: false, avoid_tolls: false }
 }
 
 #[test]
@@ -168,6 +168,10 @@ fn options_are_checked() {
     let (m, l, _) = parse_opts(&json!({"mode": "offroad_vehicle", "land_access": "emergency"})).unwrap();
     assert_eq!((m, l), (TravelMode::OffroadVehicle, Boundary::Emergency));
     assert_eq!(parse_opts(&json!({"mode": "offroad_foot"})).unwrap().0, TravelMode::OffroadFoot);
+    // the ids only the screen sends
+    assert_eq!(parse_opts(&json!({"mode": "offroad_moto"})).unwrap().0, TravelMode::OffroadMoto);
+    assert_eq!(parse_opts(&json!({"mode": "offroad_4w"})).unwrap().0, TravelMode::OffroadFourW);
+    assert_eq!(parse_opts(&json!({"mode": "offroad_sxs"})).unwrap().0, TravelMode::OffroadSxs);
     assert_eq!(parse_opts(&json!({})).unwrap().2, 2);
 }
 

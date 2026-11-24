@@ -576,7 +576,7 @@ void main() {
     expect(find.text('No books yet'), findsOneWidget);
     await tapKey(tester, 'library-docs');
     expect(find.text('The Cache guide'), findsOneWidget);
-    expect(find.text("What's new in 1.1.0"), findsOneWidget);
+    expect(find.text("What's new in 1.2.0"), findsOneWidget);
     expect(find.text('Credits and licenses'), findsOneWidget);
     await tapKey(tester, 'docs-credits');
     expect(find.text('License'), findsOneWidget);

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/app_state.dart' show ModelEntry;
+import 'package:cache/screens/settings/api_keys_page.dart';
 import 'package:cache/screens/settings/assistant_page.dart';
 import 'package:cache/screens/settings/notifications_page.dart';
 import 'package:cache/screens/settings/storage_page.dart';
@@ -29,7 +30,7 @@ void main() {
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
       for (final title in [
-        'Cache model and web search', 'Maps', 'Weather and alerts', 'Notifications', 'Storage', 'Sharing and sync', 'Appearance',
+        'Cache model and web search', 'Maps', 'Weather and alerts', 'API keys', 'Notifications', 'Storage', 'Sharing and sync', 'Appearance',
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
@@ -39,7 +40,8 @@ void main() {
       }
       expect(find.text('Choose a model · web search off'), findsOneWidget);
       expect(find.text('No regions yet · miles'), findsOneWidget);
-      expect(find.text('All 4 working'), findsOneWidget, reason: 'Weather and alerts: the defaults are on from the start, not "Nothing on"');
+      expect(find.text('All ${r.weather.sourceCounts.working} working'), findsOneWidget, reason: 'Weather and alerts: the defaults are on from the start, not "Nothing on"; web search is not counted');
+      expect(find.text('No keys yet'), findsOneWidget);
       expect(find.text('Nothing on'), findsNothing);
       expect(find.text('Serious alerts · quiet 10 PM–6 AM'), findsOneWidget);
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
@@ -65,6 +67,7 @@ void main() {
       r.settings.setPopUpFor(PopUpFor.all);
       r.settings.setQuiet(const QuietHours(on: true, from: 23 * 60, to: 5 * 60 + 30));
       await r.webSearch.saveKey('abc');
+      r.settings.setWebSearchOn(true);
       await tester.runAsync(() => r.app.setTheme(CacheThemeId.tactical));
       await tester.pump();
       expect(find.text('All alerts · quiet 11 PM–5:30 AM'), findsOneWidget);
@@ -142,98 +145,100 @@ void main() {
   });
 
   group('Assistant: the search service and its key', () {
-    testWidgets('web search stays off and says why until a key is saved', (tester) async {
+    testWidgets('the web search switch is always usable; with no key the Kagi row says Not set and Ask stays quiet', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, AssistantPage(deps: r.deps));
-      expect(find.text('Not set up · Kagi, paid, your own key'), findsOneWidget);
-      expect(find.text('Set up a search service to turn this on'), findsOneWidget);
-      expect(switchIn(tester, 'Search the web when online').onChanged, isNull);
-      expect(switchIn(tester, 'Search the web when online').value, isFalse);
+      expect(find.text('Search service'), findsNothing);
+      expect(find.text('Kagi API key'), findsOneWidget);
+      expect(find.text('Not set'), findsOneWidget);
+      expect(switchIn(tester, 'Search the web when online').onChanged, isNotNull);
+      await tester.tap(find.descendant(of: rowWith('Search the web when online'), matching: find.byType(Switch)));
+      await tester.pumpAndSettle();
+      expect(r.settings.webSearchOn, isTrue);
+      expect(r.webCalls.last.$1, isNull, reason: 'no key: the core is told nothing, web search stays silent');
       await r.dispose(tester);
     });
 
-    testWidgets('Check and save: stores the key, turns web search on, tells the core, and never shows the key again', (tester) async {
+    testWidgets('the Kagi row opens the API keys list at Kagi, open; Back returns', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, AssistantPage(deps: r.deps));
-      await tester.tap(find.text('Set up'));
+      await tester.tap(find.byKey(const ValueKey('key-shortcut-kagi')));
       await tester.pumpAndSettle();
-      expect(find.text('Web search'), findsWidgets);
-      // The button opens the provider's key page in the browser.
+      expect(find.text('API keys'), findsWidgets);
+      expect(find.byKey(const ValueKey('api-key-open-kagi')), findsOneWidget);
+      expect(find.byKey(const ValueKey('key-field')), findsNothing, reason: 'the sheet is not opened by itself');
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('Cache model and web search'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('Check and save in the list: stores the key, turns nothing on, tells the core only once the switch is on, never shows the key again', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, ApiKeysScreen(deps: r.deps, openId: 'kagi'));
+      await tester.tap(find.byKey(const ValueKey('add-kagi')));
+      await tester.pumpAndSettle();
+      expect(find.text('Add your Kagi key'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('get-key')));
       await tester.pump();
       expect(r.opened, ['https://kagi.com/api/keys']);
+      expect(tester.widget<FilledButton>(find.byKey(const ValueKey('check-and-save'))).onPressed, isNull, reason: 'disabled while the field is empty');
       await tester.enterText(find.byKey(const ValueKey('key-field')), '  kagi-secret-123  ');
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
       expect(r.keysChecked, ['kagi-secret-123'], reason: 'checked once, trimmed');
       expect(r.secrets.values[WebSearchSetup.keyName], 'kagi-secret-123', reason: 'in secure storage');
       expect(r.webSearch.hasKey, isTrue);
-      expect(r.settings.webSearchOn, isTrue);
-      expect(r.webCalls.last, ('kagi', 'kagi-secret-123', true), reason: 'the core is told provider, key and online');
-      // The sheet is closed and the key is nowhere on screen.
+      expect(r.settings.webSearchOn, isFalse, reason: 'saving turns nothing on');
       expect(find.byKey(const ValueKey('key-field')), findsNothing);
       expect(find.textContaining('kagi-secret-123'), findsNothing);
-      expect(find.text('Set up · Kagi key saved on this device'), findsOneWidget);
-      expect(switchIn(tester, 'Search the web when online').onChanged, isNotNull);
-      expect(switchIn(tester, 'Search the web when online').value, isTrue);
-      // The key is not in the saved preferences either.
       expect(File('${r.dir.path}/preferences.json').readAsStringSync(), isNot(contains('kagi-secret-123')));
-      // Replacing starts with an empty field.
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('replace-key')));
-      await tester.pumpAndSettle();
-      expect(tester.widget<TextField>(find.byKey(const ValueKey('key-field'))).controller!.text, isEmpty);
-      expect(find.textContaining('kagi-secret-123'), findsNothing);
+      r.settings.setWebSearchOn(true);
+      await tester.runAsync(() => r.webSearch.setEnabled(true));
+      expect(r.webCalls.last, ('kagi', 'kagi-secret-123', true));
       await r.dispose(tester);
     });
 
-    testWidgets('a key that fails the check is not saved, and the error says why', (tester) async {
+    testWidgets('a key that fails the check is not saved, the typed key stays, and the error says why', (tester) async {
       final r = await SettingsRig.create(tester);
-      r.searchContent = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
-      await r.show(tester, AssistantPage(deps: r.deps));
-      await tester.tap(find.text('Set up'));
+      r.searchContent = '{"ok":false,"error":{"type":"key_missing","detail":"That source isn\'t available right now."}}';
+      await r.show(tester, ApiKeysScreen(deps: r.deps, openId: 'kagi'));
+      await tester.tap(find.byKey(const ValueKey('add-kagi')));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('key-field')), 'not-a-key');
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('key-error')), findsOneWidget);
       expect(find.text("Kagi didn't accept this key. Check you copied all of it."), findsOneWidget);
-      expect(find.byKey(const ValueKey('key-field')), findsOneWidget, reason: 'the sheet stays so the key can be fixed');
+      expect(tester.widget<TextField>(find.byKey(const ValueKey('key-field'))).controller!.text, 'not-a-key');
+      expect(find.byKey(const ValueKey('save-unchecked')), findsNothing);
       expect(r.secrets.values, isEmpty);
       expect(r.webSearch.hasKey, isFalse);
-      expect(r.settings.webSearchOn, isFalse);
       expect(r.webCalls.last, (null, null, false), reason: 'the core is put back as it was: no key');
-      // An empty field is refused before any call.
-      await tester.enterText(find.byKey(const ValueKey('key-field')), '   ');
-      await tester.tap(find.byKey(const ValueKey('check-and-save')));
-      await tester.pumpAndSettle();
-      expect(find.text('Paste your key first.'), findsOneWidget);
-      expect(r.keysChecked, ['not-a-key']);
       await r.dispose(tester);
     });
 
-    testWidgets('remove forgets the key and switches web search off', (tester) async {
+    testWidgets('remove forgets the key and turns nothing off: the switch stays as it is', (tester) async {
       final r = await SettingsRig.create(tester);
+      r.settings.setWebSearchOn(true);
       await tester.runAsync(() => r.webSearch.saveKey('kagi-secret-123'));
-      await r.show(tester, AssistantPage(deps: r.deps));
-      expect(switchIn(tester, 'Search the web when online').value, isTrue);
-      await tester.tap(find.text('Change'));
+      await r.show(tester, ApiKeysScreen(deps: r.deps, openId: 'kagi'));
+      await tester.tap(find.byKey(const ValueKey('remove-kagi')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('remove-key')));
-      await tester.pumpAndSettle();
+      expect(find.textContaining('Web search for Ask goes back to the data on this device'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('confirm-remove-key')));
       await tester.pumpAndSettle();
       expect(r.secrets.values, isEmpty);
       expect(r.webSearch.hasKey, isFalse);
-      expect(r.webCalls.last, (null, null, false), reason: 'the core is told web search is off');
-      expect(find.text('Not set up · Kagi, paid, your own key'), findsOneWidget);
-      expect(switchIn(tester, 'Search the web when online').onChanged, isNull);
+      expect(r.settings.webSearchOn, isTrue, reason: 'removing a key turns nothing off');
+      expect(r.webCalls.last, (null, null, false), reason: 'with no key the core is told nothing');
       await r.dispose(tester);
     });
 
     testWidgets('the switch turns web search on and off for the core', (tester) async {
       final r = await SettingsRig.create(tester);
+      r.settings.setWebSearchOn(true);
       await tester.runAsync(() => r.webSearch.saveKey('k'));
       await r.show(tester, AssistantPage(deps: r.deps));
       await tester.tap(find.descendant(of: rowWith('Search the web when online'), matching: find.byType(Switch)));
@@ -249,6 +254,7 @@ void main() {
 
     testWidgets('a key already saved is found at start and given to the core; offline is passed on', (tester) async {
       final r = await SettingsRig.create(tester);
+      r.settings.setWebSearchOn(true);
       await tester.runAsync(() => r.webSearch.saveKey('k1'));
       r.probe.kind = ConnectionKind.none;
       final again = WebSearchSetup(

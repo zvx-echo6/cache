@@ -103,6 +103,9 @@ pub struct MvumRow {
     pub maint: Option<String>,
     /// (status, dates) for mtb (e_bike_class1), atv and vehicle (highclearancevehicle), the pack's order.
     pub access: [(Option<String>, Option<String>); 3],
+    /// (status, dates) for `motorcycle` (the dirt bike), `fourwd_gt50inches` and `twowd_gt50inches` (the side-by-side opens a trail
+    /// open to either), the pack's `ext` order. Each wide class keeps its own dates so "open to either on a date" stays exact.
+    pub ext: [(Option<String>, Option<String>); 3],
     pub lines: Vec<Vec<(f64, f64)>>,
 }
 
@@ -138,6 +141,11 @@ pub fn parse_mvum_line(line: &str) -> Result<Option<MvumRow>, String> {
             (s("e_bike_class1"), s("e_bike_class1_dur")),
             (s("atv"), s("atv_datesopen")),
             (s("highclearancevehicle"), s("highclearancevehicle_datesopen")),
+        ],
+        ext: [
+            (s("motorcycle"), s("motorcycle_datesopen")),
+            (s("fourwd_gt50inches"), s("fourwd_gt50_datesopen")),
+            (s("twowd_gt50inches"), s("twowd_gt50_datesopen")),
         ],
         lines,
     }))
@@ -203,7 +211,7 @@ mod tests {
 
     #[test]
     fn mvum_feature_line() {
-        let l = r#"{"type":"Feature","properties":{"symbol":"1","seasonal":"yearlong","operationalmaintlevel":"2 - HIGH CLEARANCE VEHICLES","e_bike_class1":null,"atv":"open","atv_datesopen":"06/01-10/31","highclearancevehicle":"open","is_trail":0,"fid":"{X}"},"geometry":{"type":"MultiLineString","coordinates":[[[-115.5,44.0],[-115.4,44.1]],[[-115.0,44.0]]]}}"#;
+        let l = r#"{"type":"Feature","properties":{"symbol":"1","seasonal":"yearlong","operationalmaintlevel":"2 - HIGH CLEARANCE VEHICLES","e_bike_class1":null,"atv":"open","atv_datesopen":"06/01-10/31","highclearancevehicle":"open","motorcycle":"open","motorcycle_datesopen":"06/01-09/30","fourwd_gt50inches":"closed","twowd_gt50inches":"open","twowd_gt50_datesopen":"07/01-08/31","is_trail":0,"fid":"{X}"},"geometry":{"type":"MultiLineString","coordinates":[[[-115.5,44.0],[-115.4,44.1]],[[-115.0,44.0]]]}}"#;
         let r = parse_mvum_line(l).unwrap().unwrap();
         assert!(!r.is_trail);
         assert_eq!(r.symbol.as_deref(), Some("1"));
@@ -211,11 +219,15 @@ mod tests {
         assert_eq!(r.access[0], (None, None));
         assert_eq!(r.access[1], (Some("open".into()), Some("06/01-10/31".into())));
         assert_eq!(r.access[2], (Some("open".into()), None));
+        assert_eq!(r.ext[0], (Some("open".into()), Some("06/01-09/30".into())));
+        assert_eq!(r.ext[1], (Some("closed".into()), None));
+        assert_eq!(r.ext[2], (Some("open".into()), Some("07/01-08/31".into())));
         assert_eq!(r.lines, vec![vec![(-115.5, 44.0), (-115.4, 44.1)]]); // the one-point part is dropped
         assert_eq!(lines_bbox(&r.lines), (-115.5, -115.4, 44.0, 44.1));
         let t = r#"{"properties":{"is_trail":1,"symbol":12},"geometry":{"type":"LineString","coordinates":[[1,2],[3,4]]}}"#;
         let r = parse_mvum_line(t).unwrap().unwrap();
         assert!(r.is_trail && r.symbol.as_deref() == Some("12"));
+        assert_eq!(r.ext, [(None, None), (None, None), (None, None)], "a feature without the new fields has none");
         assert!(parse_mvum_line(r#"{"properties":{},"geometry":null}"#).unwrap().is_none());
         assert!(parse_mvum_line("not json").is_err());
     }

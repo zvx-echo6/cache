@@ -99,8 +99,15 @@ void main() {
     tmp.deleteSync(recursive: true);
   });
 
-  SharingHost host({Duration poll = const Duration(milliseconds: 20), Future<SyncCoreLike> Function(Map<String, Object?>)? opener}) {
+  SharingHost host({
+    Duration poll = const Duration(milliseconds: 20),
+    Future<SyncCoreLike> Function(Map<String, Object?>)? opener,
+    void Function(String)? log,
+    List<String> Function()? drainLog,
+  }) {
     final h = SharingHost(
+      log: log,
+      drainLog: drainLog,
       dataDir: data,
       supportDir: support,
       docsDir: docs,
@@ -145,6 +152,27 @@ void main() {
     expect(ex['maps'], contains('tiles.sqlite*'));
     expect(ex['regions'], contains('places/index'));
     expect(ex['models'], contains('*.part'));
+  });
+
+  test('the engine\'s buffered log lines are drained into the log after the open and on every status refresh', () async {
+    final lines = <String>[];
+    final buffer = <String>['sync open: start +0 ms'];
+    final h = host(
+      log: lines.add,
+      drainLog: () {
+        final taken = List<String>.of(buffer);
+        buffer.clear();
+        return taken;
+      },
+    );
+    await h.invoke('sharing.setup', {});
+    // the lines the open said reach the log, once each
+    expect(lines, contains('sync open: start +0 ms'));
+    expect(buffer, isEmpty);
+    // a line the engine says later is taken by the next poll
+    buffer.add('sync: later line');
+    await until(() => lines.contains('sync: later line'));
+    expect(lines.where((l) => l == 'sync open: start +0 ms'), hasLength(1));
   });
 
   test('nothing starts until sharing is set up, and the state says so', () async {

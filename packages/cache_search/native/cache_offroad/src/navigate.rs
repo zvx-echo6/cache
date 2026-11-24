@@ -86,6 +86,9 @@ pub struct NavigateRequest {
     pub min_leg_m: f64,
     /// The vehicle's heading at the start, degrees clockwise from north, when it is moving (a re-route).
     pub from_heading_deg: Option<f64>,
+    /// Drive only: avoid highways / tolls (see `DirectionsRequest`).
+    pub avoid_highways: bool,
+    pub avoid_tolls: bool,
 }
 
 impl NavigateRequest {
@@ -93,6 +96,7 @@ impl NavigateRequest {
         NavigateRequest {
             from, to, mode, land_access, offroad: OffroadChoice::Auto, offroad_snap_m: DEFAULT_OFFROAD_SNAP_M,
             merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M, from_heading_deg: None,
+            avoid_highways: false, avoid_tolls: false,
         }
     }
 }
@@ -151,6 +155,8 @@ impl<'a> Navigator<'a> {
         dr.from_category = req.from.category();
         dr.to_category = req.to.category();
         dr.from_heading_deg = req.from_heading_deg;
+        dr.avoid_highways = req.avoid_highways;
+        dr.avoid_tolls = req.avoid_tolls;
         let env = Env {
             pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, options: self.options.clone(), namer: None,
             version: self.version.clone(),
@@ -174,6 +180,8 @@ impl<'a> Navigator<'a> {
         dr.from_category = req.from.category();
         dr.to_category = req.to.category();
         dr.from_heading_deg = req.from_heading_deg;
+        dr.avoid_highways = req.avoid_highways;
+        dr.avoid_tolls = req.avoid_tolls;
         let env = Env {
             pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, options: self.options.clone(), namer: None,
             version: self.version.clone(),

@@ -23,8 +23,8 @@ iroh = "=1.3.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 anyhow = "1"
 blake3 = "1.8"
-# The same blob store as cache_sync: windows travel as its bao encoding and are verified and stored by it.
-iroh-blobs = "=0.103.1"
+# The same file store as cache_sync: windows travel as its bao encoding and are verified and stored by it.
+cache_store = { path = "../cache_store" }
 bao-tree = "0.16"
 bytes = "1"
 # Nearby linking core (pair_core): one-time X25519 exchange, versioned wire messages, secret wiping.
@@ -37,6 +37,8 @@ serde_json.workspace = true
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 [dev-dependencies]
+# Test-only (tests/interop.rs runs main's pre-6a window code beside the new one); dropped with iroh at step 6b.
+iroh-blobs = "=0.103.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }
 tempfile = "3"
 

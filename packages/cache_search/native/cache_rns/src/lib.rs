@@ -222,7 +222,7 @@ pub trait Handler: Send + Sync + 'static {
     fn reachable(&self, _peer: PublicKey) {}
     /// A linked device asked for a window of a blob: the blob's hash and the byte just past the last one the window covers. Called
     /// when the request arrives and again when the answer has been made; do not block.
-    fn served(&self, _peer: PublicKey, _hash: iroh_blobs::Hash, _end: u64) {}
+    fn served(&self, _peer: PublicKey, _hash: cache_store::Hash, _end: u64) {}
     /// Both people confirmed a Nearby link and the other device's signature over its destination checked out: keep it
     /// (device key, name, Reticulum destination, and the device key's signature over it).
     fn pair_linked(&self, _peer: PublicKey, _name: String, _destination: DestinationHash, _sig: Vec<u8>) {}
@@ -242,7 +242,7 @@ pub struct Config {
     /// The largest request or response, in bytes.
     pub max_bytes: u64,
     /// Cache's blob store: when set, linked devices may fetch verified windows of its blobs ([`blobs`]).
-    pub blobs: Option<iroh_blobs::api::Store>,
+    pub blobs: Option<cache_store::Store>,
     /// For tests only, off in production: pairing announces are only ever sent on, and listed from, local Wi-Fi/LAN
     /// interfaces; with this on, TCP interfaces count as local so a loopback test can run.
     pub pair_local_tcp: bool,
@@ -764,8 +764,9 @@ impl RnsNode {
                                 // iroh gate refuses the connection.
                                 continue;
                             }
-                            if name == blobs::BLOB_PATH {
-                                // Built in: only for linked devices (the path is never open).
+                            if name == blobs::BLOB_PATH && store.is_some() {
+                                // Built in: only for linked devices (the path is never open). With no store given the path
+                                // goes to the handler like any other (the interop test serves it with the pre-6a code).
                                 let (Some(store), Asker::Linked(_)) = (store.clone(), asker) else {
                                     continue;
                                 };

@@ -1103,6 +1103,7 @@ dependencies = [
  "bao-tree",
  "blake3",
  "bytes",
+ "cache_store",
  "iroh",
  "iroh-blobs",
  "personal-rns",
@@ -1230,12 +1231,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_store"
+version = "0.1.0"
+dependencies = [
+ "bao-tree",
+ "blake3",
+ "bytes",
+ "cache_store",
+ "data-encoding",
+ "iroh-blobs",
+ "postcard",
+ "redb",
+ "reflink-copy",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cache_sync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
  "cache_rns",
+ "cache_store",
  "cache_sync",
  "data-encoding",
  "fs4 1.1.0",

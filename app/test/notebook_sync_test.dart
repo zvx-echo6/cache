@@ -459,6 +459,77 @@ void main() {
     });
   });
 
+  group('a pass never takes a share file out just because its entry is not included on this device', () {
+    // Devices of one share folder: each has its own store and state, all see the same folder.
+    final folder = MemFolder();
+    Future<SyncReport> pass(_Rig r, {Set<String> privateBooks = const {}}) =>
+        NotebookSync(notebook: r.nb, kind: SyncKind.share, folder: folder, stateFile: r.state, includePrivate: false, privateBooks: privateBooks, clock: () => DateTime(2026, 10, 29, 17, 2), templates: () async => builtInTemplates())
+            .run();
+    int mdFiles() => folder.text.keys.where((k) => k.endsWith('.md')).length;
+
+    setUp(() {
+      folder.text.clear();
+      folder.bytes.clear();
+    });
+
+    test('a private notebook that a phone switched on stays in the share and on the phone: a server-like device that has it not included does not take its entry back out', () async {
+      final phone = _Rig(SyncKind.share, includePrivate: false);
+      await phone.journal();
+      final health = await phone.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Health', fields: [], sort: NotebookSort.recent), private: true);
+      final bp = await phone.nb.saveEntry(notebookId: health.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Blood pressure', body: '120 over 80', private: true);
+      await pass(phone, privateBooks: {health.id});
+      expect(mdFiles(), 1, reason: 'the phone sent it');
+      final server = _Rig(SyncKind.share, includePrivate: false);
+      await server.nb.start();
+      await pass(server);
+      expect(server.nb.notebooks.map((n) => n.name), contains('Health'));
+      expect(mdFiles(), 1, reason: 'the server\'s pass left the file in the share');
+      await pass(server);
+      await pass(server);
+      expect(mdFiles(), 1);
+      await pass(phone, privateBooks: {health.id});
+      expect((await phone.nb.entries(health.id)).map((e) => e.id), [bp.id], reason: 'the phone still has its entry');
+    });
+
+    test('phone to phone: a second phone that has not switched the private notebook on does not remove its file either', () async {
+      final a = _Rig(SyncKind.share, includePrivate: false);
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      await a.journal();
+      await b.journal();
+      final health = await a.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Health', fields: [], sort: NotebookSort.recent), private: true);
+      final e = await a.nb.saveEntry(notebookId: health.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Blood pressure', body: '120 over 80', private: true);
+      await pass(a, privateBooks: {health.id});
+      await pass(b);
+      await pass(b);
+      expect(mdFiles(), 1, reason: 'b did not take the file out');
+      await pass(a, privateBooks: {health.id});
+      expect((await a.nb.entries(health.id)).map((x) => x.id), [e.id]);
+    });
+
+    test('a real delete still propagates, for a public entry and for an included private notebook', () async {
+      final a = _Rig(SyncKind.share, includePrivate: false);
+      final b = _Rig(SyncKind.share, includePrivate: false);
+      final ja = await a.journal();
+      await b.journal();
+      final health = await a.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Health', fields: [], sort: NotebookSort.recent), private: true);
+      final pub = await a.nb.saveEntry(notebookId: ja.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Public', body: 'x');
+      final priv = await a.nb.saveEntry(notebookId: health.id, occurredAt: '2026-10-27T17:12:00-06:00', title: 'Private', body: 'y', private: true);
+      final both = {health.id};
+      await pass(a, privateBooks: both);
+      await pass(b, privateBooks: both);
+      expect(await b.nb.entry(pub.id), isNotNull);
+      expect(await b.nb.entry(priv.id), isNotNull);
+      await pass(a, privateBooks: both);
+      await a.nb.deleteEntry(pub.id);
+      await a.nb.deleteEntry(priv.id);
+      await pass(a, privateBooks: both);
+      expect(mdFiles(), 0, reason: 'the deletes took the files out');
+      await pass(b, privateBooks: both);
+      expect(await b.nb.entry(pub.id), isNull);
+      expect(await b.nb.entry(priv.id), isNull);
+    });
+  });
+
   group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
     // Two devices of one share, each with its own folder (what cache_sync carries: every file but hidden ones).
     void carry(_Rig from, _Rig to) {

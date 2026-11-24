@@ -1,10 +1,10 @@
 {
- "updated": "11 Nov 2026",
- "lede": "Cache 1.1 is in testing on phones. It becomes stable when every must-have below works on each kind of device and Ask is fast enough.",
+ "updated": "23 Nov 2026",
+ "lede": "Cache 1.1 is in testing on phones and has been sent to Google Play for everyone. Work on Cache 1.2 has started; the cards below show where each part stands.",
  "cards": [
   {
    "id": "st-test",
-   "title": "Testing now: Cache 1.1.0 (49)",
+   "title": "Testing now: Cache 1.1.0 (54)",
    "wide": false,
    "goals": null,
    "table": null,
@@ -12,11 +12,6 @@
     {
      "heading": null,
      "lines": [
-      {
-       "chip": "Checked",
-       "tone": "ok",
-       "text": "Launch check on a Pixel 8, updating from the build before: libraries and linked devices are kept; watched folders, map icons and pin styles, the question that sets how settings sync, and Stop while Ask is searching."
-      },
       {
        "chip": "Live",
        "tone": "ok",
@@ -28,9 +23,19 @@
        "text": "On TestFlight for public testers."
       },
       {
-       "chip": "Waiting",
+       "chip": "Sent",
        "tone": "warn",
-       "text": "Google Play for everyone, until 1.1 is finished."
+       "text": "Google Play for everyone: sent on 23 Nov, and live once Google's review clears."
+      },
+      {
+       "chip": "Approved",
+       "tone": "ok",
+       "text": "Android Auto, approved in Google's car review."
+      },
+      {
+       "chip": "Building",
+       "tone": "info",
+       "text": "Cache 1.2.0 (55), the next test build."
       }
      ]
     }
@@ -59,22 +64,32 @@
       {
        "chip": "Works",
        "tone": "ok",
-       "text": "New Library and Bookshelves, adding PDFs with OCR, search inside your books."
+       "text": "Library and Bookshelves, adding PDFs with OCR, search inside your books, watched folders, and map icons for notebooks and places."
       },
       {
-       "chip": "Testing",
+       "chip": "Merged",
        "tone": "info",
-       "text": "Watched folders (new PDFs you drop in a folder are added on their own), map icons and colors for notebooks and places, and one question that sets how settings sync between two devices."
+       "text": "Shops, parks, landmarks and fuel shown on the map as icons you can tap; tap a town, county or area to outline it and open its summary; place cards with tap to call or open, elevation and land ownership."
+      },
+      {
+       "chip": "Merged",
+       "tone": "info",
+       "text": "Notebook entries edited on two devices at once now keep both versions. Android backups keep only your settings, never your library or device links."
       },
       {
        "chip": "Building",
        "tone": "info",
-       "text": "Notebooks that sync cleanly between devices, full-size photos, and a clearer log for problem reports."
+       "text": "Travel modes for directions (drive, walk, bicycle, dirt bike and quad or side-by-side, with on-road legs) and correct arrival times for off-road routes."
       },
       {
        "chip": "Building",
        "tone": "info",
-       "text": "Android Auto, being readied for Google's car review. CarPlay follows."
+       "text": "One place for API keys, with how-to steps, and road events and road work drawn on the map."
+      },
+      {
+       "chip": "Building",
+       "tone": "info",
+       "text": "A new way for your devices to reach each other with nothing passing through our servers: on the same Wi-Fi with nothing to type, Nearby linking, a short link code and Cache's own QR scanner. Bluetooth, and the internet through Reticulum entry points you add, come next."
       }
      ]
     }
@@ -94,22 +109,27 @@
       {
        "chip": "Works",
        "tone": "ok",
-       "text": "Maps in the browser."
+       "text": "The full app in a browser: maps and directions, the Library with meaning search and OCR, the PDF reader, Ask with sources, weather, chat history, models and linked folders."
+      },
+      {
+       "chip": "Works",
+       "tone": "ok",
+       "text": "A Raspberry Pi build."
       },
       {
        "chip": "Merged",
        "tone": "info",
-       "text": "The new Library, routing, and meaning search, waiting for their browser checks."
+       "text": "A map laid out for a computer, with zoom buttons; drag to reorder stops; places highlight as you point at them."
       },
       {
-       "chip": "In review",
+       "chip": "Building",
        "tone": "info",
-       "text": "Downloads from other sites, directions, the PDF reader, regions, weather, chat history, models, videos, and the first part of sync."
+       "text": "Linking and sharing with a phone."
       },
       {
-       "chip": "Designing",
+       "chip": "Building",
        "tone": "info",
-       "text": "The storage page, sharing, the update notice and location wording."
+       "text": "Notebooks, and Obsidian and Logseq folders."
       }
      ]
     }
@@ -123,28 +143,28 @@
    "goals": "Goals: the first words within 15–20 s on a Pixel 8, then writing faster than you read · at least 85% of answers mostly correct",
    "table": {
     "head": [
-     "Pixel 8, build 47",
+     "Pixel 8, build 54",
      "Full answer"
     ],
     "rows": [
      [
-      "First question",
-      "61 s",
+      "First question after the app starts",
+      "about 3 min",
       "bad"
      ],
      [
       "Follow-up in the same chat",
-      "127 s",
+      "55 s",
       "bad"
      ],
      [
       "Question in a new chat",
-      "158 s",
+      "60 s",
       "bad"
      ],
      [
-      "Time to the first words (clean run)",
-      "about 30–35 s",
+      "Time to the first words of the answer",
+      "about 32 s",
       "bad"
      ]
     ]
@@ -156,12 +176,17 @@
       {
        "chip": "Slow",
        "tone": "bad",
-       "text": "The phone reads the question and its sources far slower than it should."
+       "text": "The phone reads the question and its sources far slower than it should; most of the wait comes before the first word."
       },
       {
-       "chip": "Slow",
-       "tone": "bad",
-       "text": "A changing line in the instructions throws away work Cache had saved between questions."
+       "chip": "Fixed",
+       "tone": "ok",
+       "text": "Cache keeps the work it saved between questions, so a follow-up no longer starts from scratch."
+      },
+      {
+       "chip": "Good",
+       "tone": "ok",
+       "text": "Once it starts, the answer is written faster than most people read."
       },
       {
        "chip": "Accuracy",
@@ -173,11 +198,6 @@
     {
      "heading": "What we're doing",
      "lines": [
-      {
-       "chip": "Measuring",
-       "tone": "info",
-       "text": "Timing older builds on the same phone to find where it slowed down."
-      },
       {
        "chip": "Testing",
        "tone": "info",

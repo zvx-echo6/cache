@@ -15,6 +15,7 @@ import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
 import '../platform/multicast_lock.dart';
 import 'install_marker.dart';
+import 'share_rules.dart' show kSettingsShareId;
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -96,7 +97,12 @@ class SharingState extends ChangeNotifier {
   bool newDevice = false;
 
   /// The page has shown the new-device message: it is not shown again.
-  Future<void> dismissNewDevice() => _driver.dismissNewDevice();
+  Future<void> dismissNewDevice() => _dismissing = _driver.dismissNewDevice();
+
+  /// The latest [dismissNewDevice] call's write; completes when sharing.json is saved. The page calls it fire-and-forget, so a
+  /// caller that must see the saved file (a test) awaits this.
+  Future<void> get dismissed => _dismissing;
+  Future<void> _dismissing = Future<void>.value();
 
   /// Cache Server's `/api/core` in a browser (a test gives a fake): when set, the engine is the server's and this asks its sharing
   /// host. Null: the app runs the engine itself.
@@ -406,6 +412,30 @@ class SharingState extends ChangeNotifier {
 
   /// Sync now with one linked device only.
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+
+  /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
+  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
+  /// transfer running (then [working], the line the page already showed); or nothing new ("Up to date"). Only what the person
+  /// would call shared counts: a folder of a kind switched on, and the settings log (which the engine keeps from a device whose
+  /// settings sync is Off); never the folders the app always shares (the search indexes, the Bookshelves log). A folder with no
+  /// `with` goes to every linked device; otherwise `with` lists link kinds (a device's `link.mode`, "match" when it has none), and
+  /// an empty list goes to none.
+  String syncResult({Iterable<String>? shareIds, String? peer, required String working}) {
+    final ids = shareIds?.toSet();
+    final counted = {for (final k in kinds) ...k.shared().keys, kSettingsShareId};
+    final devices = [for (final p in peers) if (peer == null || p['id'] == peer) p];
+    String mode(Map<String, dynamic> p) => ((p['link'] as Map?)?['mode'] as String?) ?? 'match';
+    final scoped = [
+      for (final sh in shares)
+        if (counted.contains(sh['id']) &&
+            (ids == null || ids.contains(sh['id'])) &&
+            devices.any((p) => sh['with'] is! List || (sh['with'] as List).contains(mode(p))))
+          sh,
+    ];
+    if (scoped.isEmpty) return 'Nothing is shared yet';
+    final pending = scoped.any((sh) => ((sh['pending_files'] as num?) ?? 0) > 0);
+    return pending || transfer != null ? working : 'Up to date';
+  }
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
   /// stops sharing it, and the files stay.
@@ -799,6 +829,9 @@ class _PhoneDriver implements SharingDriver {
   /// Every 2 s the status; every 10 s what each linked device holds, and the items' list given to the engine again if it
   /// changed (a notebook made private, a new library here).
   Future<void> _tick() async {
+    // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
+    // the app's log (cache.log) as well as the Activity.
+    s._drainNow();
     await refresh();
     if (++_ticks % 5 == 0) {
       await refreshItems();

@@ -157,18 +157,57 @@ fn draw_line(grid: &mut [u8], rows: i64, cols: i64, r1: i64, c1: i64, r2: i64, c
 
 /// Rasterize the features for the three motorized modes (mtb, atv, vehicle) onto the query grid.
 /// `check_date` = None reproduces the cached path the reference server's Auto uses (no seasonal check).
-#[allow(clippy::needless_range_loop)] // `mi` is the mode index into the feature's access and the three grids
 pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Vec<u8>; 3] {
+    let mut grids = vec![vec![0u8; meta.rows * meta.cols]; 3];
+    rasterize(feats, meta, &mut grids, &|f, mi| feature_access(f, mi, check_date));
+    let mut it = grids.into_iter();
+    [it.next().unwrap(), it.next().unwrap(), it.next().unwrap()]
+}
+
+/// The grids of the columns the off-road pack rebuild adds: the dirt bike (MVUM `motorcycle`, index 0) and the side-by-side
+/// (index 1: a trail is open when `fourwd_gt50inches` OR `twowd_gt50inches` is open). Each is `None` when no feature of the box
+/// carries its column(s) (a pack from before the rebuild): the caller then uses the ATV grid for the dirt bike and the
+/// high-clearance-vehicle grid for the side-by-side.
+pub fn access_grids_ext(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Option<Vec<u8>>; 2] {
+    let mut out: [Option<Vec<u8>>; 2] = [None, None];
+    for (k, slot) in out.iter_mut().enumerate() {
+        let cols: &[usize] = if k == 0 { &[0] } else { &[1, 2] };
+        if !feats.iter().any(|f| cols.iter().any(|&c| f.ext[c].is_some())) {
+            continue;
+        }
+        let mut grids = vec![vec![0u8; meta.rows * meta.cols]];
+        rasterize(feats, meta, &mut grids, &|f, _| {
+            // each class on its own dates; the dirt bike has one class, the side-by-side two
+            let reads: Vec<Option<bool>> = cols
+                .iter()
+                .filter_map(|&c| f.ext[c].as_ref())
+                .map(|(st, dt)| check_access(st.as_deref(), dt.as_deref(), f.seasonal.as_deref(), check_date))
+                .collect();
+            let a = if reads.contains(&Some(true)) {
+                Some(true)
+            } else if reads.contains(&Some(false)) {
+                Some(false)
+            } else {
+                None
+            };
+            // the MVUM symbol says the same for a motorcycle as for an ATV; for a wide vehicle the ATV's reading is the nearest
+            if a.is_none() { symbol_to_access(f.symbol.as_deref(), if k == 0 { "motorcycle" } else { "atv" }) } else { a }
+        });
+        *slot = grids.pop();
+    }
+    out
+}
+
+#[allow(clippy::needless_range_loop)] // `mi` is the index of the grid and of the mode in the feature's access
+fn rasterize(feats: &[MvumFeature], meta: &GridMeta, grids: &mut [Vec<u8>], access: &dyn Fn(&MvumFeature, usize) -> Option<bool>) {
     let (rows, cols) = (meta.rows as i64, meta.cols as i64);
-    let n = meta.rows * meta.cols;
-    let mut grids = [vec![0u8; n], vec![0u8; n], vec![0u8; n]];
     let top = meta.origin_lat + 0.5 * meta.pixel_size_lat.abs();
     let left = meta.origin_lon - 0.5 * meta.pixel_size_lon;
     let ps_lat = meta.pixel_size_lat.abs();
     let ps_lon = meta.pixel_size_lon;
     for f in feats {
-        for mi in 0..3 {
-            let Some(a) = feature_access(f, mi, check_date) else { continue };
+        for mi in 0..grids.len() {
+            let Some(a) = access(f, mi) else { continue };
             let value = if a { 1 } else { 255 };
             for line in &f.lines {
                 for w in line.windows(2) {
@@ -183,5 +222,4 @@ pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(
             }
         }
     }
-    grids
 }

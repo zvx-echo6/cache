@@ -31,15 +31,15 @@ ask-sources | Ask: an answer with [1] citation marks and the "1 source" line exp
 chat-list | Ask chat list: "Search chats", Pinned and Today groups, "New chat"
 chat-menu | Chat list with one chat held: Rename, Pin, Share as Markdown, Add to Home, Delete
 connections | Notebooks > Connections: an Obsidian vault connected, with the phones' line that Obsidian syncs only while it is open; Logseq with Connect; "Your other devices"
-directions-offroad | Directions panel with Off-road chosen: "On foot", the three land-access choices and "Start"
-directions-panel | Maps: the directions panel with Drive, Walk, Bike and Off-road, a route, distance and time, and "Start"
+directions-offroad | Directions panel with Walk and "Off-road" chosen: "Standard" and "Emergency" land choices, the route and "Start"
+directions-panel | Maps: the directions panel with Drive, Walk, Bike and ATV, "Avoid highways" and "Avoid tolls", a route, distance and time, and "Start"
 edit-home | Edit Home: switches for each block and the "Reset to default" button
 guidance | Maps guiding a route: the next-turn banner, voice button and "End"
 hf-search | Find a model (Search Hugging Face): a search for a model name with a few single-file results, each with size and fit
 home | Home: search box, Weather and alerts card (50 degrees, a red warning triangle and a fire with its distance), and Shortcuts; Set up card finished
 home-search | Home with "water" typed: first row "Ask Cache: water", then results from Library, Notebooks, Places and Maps
 home-shortcut-menu | Home with a shortcut held: "Move earlier", "Move later", "Remove from Home"
-key-sheet | The key sheet opened from "Get key" on "Satellite fire hotspots": the provider link, the Key field and "Check and save"
+key-sheet | The key sheet opened from "Add key" on the NASA FIRMS row in Settings > API keys: the provider link, the Key field and "Check and save"
 layers-sheet | Maps with the layers sheet open over the map: layer switches with their state lines and "Opacity" (with two overlays on, "Show my position", "Download a region" and "Get more layers" are further down the sheet, out of the picture)
 library-own | Library > Add to Library > Your own library: "From a file on this phone", "From a download link" and "Get a blank library template"
 log-editor | New Log notebook: name, "Due again", "Private" and "Create" (a notebook keeps the fields it is made with: no field editor)
@@ -67,8 +67,8 @@ settings-location-blocked | Settings > Cache model and web search, Location grou
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
 settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks switched on under "Shared with linked devices", Models off, each with its line
-settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, one with "Get key", and "More sources (9 more)"
-source-page | A data source's page: "Use this source", "Replace", "Remove the key" and the About this source facts
+settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, and "More sources (9 more)"
+source-page | A data source's page: "Use this source", the "NASA FIRMS API key" row (opens Settings > API keys) and the About this source facts
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
 video-download | A video page with "Download" and the size choices
 weather-choose-place | The Choose a place sheet: "Find a town or place" with a few matching towns

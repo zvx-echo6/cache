@@ -36,7 +36,7 @@ fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
 }
 
 fn req(via: Vec<MapEnd>) -> MapRouteReq {
-    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives: 0, from_heading_deg: None }
+    MapRouteReq { from: end("A", 42.5, -113.8), via, to: end("B", 42.5, -113.5), mode: TravelMode::Drive, land_access: Boundary::Pragmatic, alternatives: 0, from_heading_deg: None, avoid_highways: false, avoid_tolls: false }
 }
 
 /// The first error of the route the app is told about: (code, end).

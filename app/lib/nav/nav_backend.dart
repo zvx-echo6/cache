@@ -15,7 +15,7 @@ abstract class MapBackend {
 
   /// The complete route; [from] is where to start (the app sends its own GPS fix). A route that cannot be made comes back
   /// with `ok` false and its errors.
-  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via, String mode, String? landAccess, int alternatives});
+  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via, String mode, String? landAccess, int alternatives, bool avoidHighways, bool avoidTolls});
 
   Future<MapProgress> progress(MapRoute route, {required double lat, required double lon, double? accuracyM, DateTime? now, bool reset, bool sendRoute});
 
@@ -62,8 +62,8 @@ class CoreMapBackend implements MapBackend {
       _core().mapPoiLink(kind: kind, name: name, lat: lat, lon: lon);
 
   @override
-  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) =>
-      _core().mapRoute(from: from, to: to, via: via, mode: mode, landAccess: landAccess, alternatives: alternatives);
+  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2, bool avoidHighways = false, bool avoidTolls = false}) =>
+      _core().mapRoute(from: from, to: to, via: via, mode: mode, landAccess: landAccess, alternatives: alternatives, avoidHighways: avoidHighways, avoidTolls: avoidTolls);
 
   @override
   Future<MapProgress> progress(MapRoute route, {required double lat, required double lon, double? accuracyM, DateTime? now, bool reset = false, bool sendRoute = false}) =>

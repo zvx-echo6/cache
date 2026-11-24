@@ -18,7 +18,7 @@ LiveGroup groupOf(Connector c) {
 
 /// One stored item of a source for a place, as the core gives it to the app.
 class LiveItem {
-  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false, this.area, this.app = const {}, this.distancesKm = const {}});
+  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false, this.area, this.app = const {}, this.distancesKm = const {}, this.point});
 
   factory LiveItem.fromJson(Map<String, dynamic> j) => LiveItem(
     address: '${j['address'] ?? ''}',
@@ -31,6 +31,7 @@ class LiveItem {
     },
     noneActive: j['none_active'] == true,
     area: j['area'] is Map ? (j['area'] as Map).cast<String, dynamic>() : null,
+    point: j['point'] is Map && (j['point'] as Map)['lat'] is num && (j['point'] as Map)['lon'] is num ? (lat: ((j['point'] as Map)['lat'] as num).toDouble(), lon: ((j['point'] as Map)['lon'] as num).toDouble()) : null,
     app: j['app'] is Map ? (j['app'] as Map).cast<String, dynamic>() : const {},
     distancesKm: {
       if (j['distances'] is Map)
@@ -51,6 +52,9 @@ class LiveItem {
 
   /// The item's area (GeoJSON) when the source gives one: an alert's polygons and circles. The app's own; the model never sees it.
   final Map<String, dynamic>? area;
+
+  /// The item's point when the source gives one (a road event's place).
+  final ({double lat, double lon})? point;
 
   /// What the source's definition gives the app alone, as the service wrote it: an alert's `message_type`, `references` and
   /// `vtec` (alert_watch.dart reads them). The model never sees it. Empty when the definition names nothing.

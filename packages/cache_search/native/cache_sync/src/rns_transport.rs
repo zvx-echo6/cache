@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use cache_rns::{blobs, Asker, BoxFut as RnsFut, Config as RnsConfig, Handler, Iface, RnsNode, Via};
 use iroh::{PublicKey, SecretKey};
-use iroh_blobs::{store::fs::FsStore, Hash};
+use cache_store::{Hash, Store};
 use n0_future::Stream;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -57,7 +57,7 @@ enum Net {
 #[derive(Clone)]
 struct StartArgs {
     device: SecretKey,
-    blobs: iroh_blobs::api::Store,
+    blobs: Store,
     serve: Arc<dyn Serve>,
     interfaces: Vec<Iface>,
     pair_local_tcp: bool,
@@ -103,8 +103,8 @@ impl MultiTransport {
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
     /// requests answered by `serve`. `interfaces` are the test block's; none means Wi-Fi auto.
-    pub async fn start_rns(&self, device: SecretKey, store: &FsStore, serve: Arc<dyn Serve>, interfaces: Vec<Iface>, pair_local_tcp: bool) -> Result<()> {
-        *self.start_args.lock().unwrap() = Some(StartArgs { device, blobs: (**store).clone(), serve, interfaces, pair_local_tcp });
+    pub async fn start_rns(&self, device: SecretKey, store: &Store, serve: Arc<dyn Serve>, interfaces: Vec<Iface>, pair_local_tcp: bool) -> Result<()> {
+        *self.start_args.lock().unwrap() = Some(StartArgs { device, blobs: store.clone(), serve, interfaces, pair_local_tcp });
         self.launch().await
     }
 
@@ -411,7 +411,7 @@ impl Transport for MultiTransport {
     /// while it is in flight the stream repeats the verified byte count every few seconds so the engine's 20 s rule does not
     /// fire. A dead link ends the window with an error at the timeout at the latest; the next round resumes from what the
     /// store holds.
-    fn fetch<'a>(&'a self, store: &'a FsStore, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
+    fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
         Box::pin(async move {
             let via_rns = |p: &String| self.last_via.lock().unwrap().get(p) == Some(&Net::Reticulum);
             let (rns_providers, iroh_providers): (Vec<String>, Vec<String>) = providers.iter().cloned().partition(via_rns);
@@ -419,7 +419,7 @@ impl Transport for MultiTransport {
             match node {
                 Some(node) if iroh_providers.is_empty() && !rns_providers.is_empty() => {
                     let keys: Vec<PublicKey> = rns_providers.iter().filter_map(|p| p.parse().ok()).collect();
-                    Ok(Box::pin(RnsFetch::start(node, (**store).clone(), hash, keys)) as BoxStream<FetchEvent>)
+                    Ok(Box::pin(RnsFetch::start(node, store.clone(), hash, keys)) as BoxStream<FetchEvent>)
                 }
                 _ => self.iroh.fetch(store, hash, if iroh_providers.is_empty() { providers } else { iroh_providers }).await,
             }
@@ -519,7 +519,7 @@ struct RnsFetch {
 }
 
 impl RnsFetch {
-    fn start(node: Arc<RnsNode>, store: iroh_blobs::api::Store, hash: Hash, providers: Vec<PublicKey>) -> RnsFetch {
+    fn start(node: Arc<RnsNode>, store: Store, hash: Hash, providers: Vec<PublicKey>) -> RnsFetch {
         let (tx, rx) = mpsc::channel(32);
         let task = tokio::spawn(async move {
             let have = Arc::new(AtomicU64::new(0));
@@ -638,7 +638,7 @@ impl Handler for Serving {
         self.serve.reachable(&peer.to_string());
     }
 
-    fn served(&self, peer: PublicKey, hash: iroh_blobs::Hash, end: u64) {
+    fn served(&self, peer: PublicKey, hash: Hash, end: u64) {
         self.serve.served(&peer.to_string(), &hash.to_string(), end);
     }
 

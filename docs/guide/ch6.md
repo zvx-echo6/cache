@@ -258,7 +258,8 @@ In the directions panel:
 - "The off-road part of this trip is too long to work out": move the end nearer a road.
 - "Working out the route took too long. Try again"
 - "Could not get directions" or "Directions are not available in this build yet": try "Drive" or "Walk", or try later.
-- "Ignores land rules: the route may cross private or closed land.": shown with "Emergency: any land". Use only in an emergency.
+- "Emergency routing ignores land-access rules. The route may cross private or closed land.": shown with "Emergency". Use only in an emergency.
+- "Cache has no land rules for this area. Check local access before you go.": the off-road data for this area has no land rules, so "Standard" and "Emergency" route the same. Find out who allows access before you go.
 
 ## Guidance messages
 
@@ -335,7 +336,6 @@ The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) sa
 One line under the top card says what needs attention. Tap it to open the settings.
 
 - "[source] has not updated since [when]": that source didn't update. Its page in the settings shows why.
-- "[source] needs a key": tap "Get key" on the source's row in the settings.
 - "Alerts and fires are not switched on": no alert or fire source is on. Turn one on in the settings.
 
 ## Update messages
@@ -357,7 +357,6 @@ Weather and alerts update on any connection, even with "Mobile data downloads" o
 When a source fails the message reads "[provider] for [place] failed: [why]".
 
 - "reached its limit for now": wait and try later.
-- "needs a key": tap "Get key" on the source's row in "Settings" > "Weather and alerts".
 - "sent something Cache could not read": the provider had a problem. Try later.
 - "the service answered HTTP [code]": if it's 401 or 403, replace the key.
 - "couldn't be reached": check your connection.
@@ -382,7 +381,6 @@ On a source's page (tap its row in ["Settings" > "Weather and alerts"](cache://s
 - "Data" "Out of date": update when online.
 - "Last update" "Nothing downloaded yet": tap "Update now" on "Weather".
 - "This source is no longer offered.": the source list dropped it.
-- "Needs your own key": tap "Get key".
 
 In the source list:
 - "Loading…": wait.
@@ -399,33 +397,33 @@ Shown as a source's "Last problem" or in the status:
 
 ## Web search key messages
 
-In the "Web search" sheet (["Settings" > "Cache model and web search" > "Set up"](cache://settings/assistant)):
+In the Kagi key sheet ("Settings" > "API keys" > "Kagi API key" > "Add key" or "Replace"):
 - "Paste your key first." (the field is empty) or "Kagi didn't accept this key. Check you copied all of it.": copy the whole key again.
 - "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.": add credit.
-- "Couldn't reach Kagi. Check your connection."
+- "Can't reach Kagi. Check your connection.": tap "Save without checking" to keep the key and check it later with "Test key".
 - "Kagi had a problem (HTTP [code]). Try again in a moment."
 - "Kagi answered with an error (HTTP [code])." or "Kagi answered with something Cache couldn't read. Try again later."
 - "The key was accepted but couldn't be saved on this device.": try again. Restart Cache if it repeats.
 - "Couldn't open the page. Go to [address]": open that address in your browser.
 - "Web search is on": it worked.
-- "Key removed": web search is off.
+- "Key removed": web search has no key, so it stays silent. The switch is unchanged.
 
 ## Data source key messages
 
-In the key sheet from "Get key" on a source's row (["Settings" > "Weather and alerts"](cache://settings/weather)). [Provider] is the company that gives the key.
+In the key sheet in "Settings" > "API keys". [Provider] is the company that gives the key.
 
 - "Paste your key first.": the field is empty.
 - "[Provider] didn't accept this key. Check you copied all of it.": copy it again.
 - "[Provider] didn't accept this key, or answered with something Cache couldn't read. Check you copied all of it."
-- "[Provider] says this key has reached its limit. Try again later."
-- "Couldn't reach [provider]. Check your connection."
+- "[Provider] says this key has no credit or has reached its limit.": tap "Save anyway" to keep it.
+- "Can't reach [provider]. Check your connection.": tap "Save without checking".
 - "[Provider] had a problem. Try again in a moment."
 - "[Provider] answered with an error." or "[Provider] answered with something Cache couldn't read. Try again later."
 - "This source needs no key.": nothing to add.
 - "That key wasn't accepted." or "Couldn't check the key. Try again."
 - "The key was accepted but couldn't be saved on this device.": try again.
 - "[source] is on" or "Key replaced": it worked.
-- "Key removed": its sources are off.
+- "Key removed": the key is gone from this device. Its sources keep their switches.
 
 ## Your own source messages
 

@@ -17,6 +17,7 @@ import '../location/position_source.dart';
 import '../maps/geo.dart';
 import '../maps/maps_state.dart';
 import '../maps/area_tap.dart';
+import '../maps/map_hover.dart';
 import '../maps/map_tap.dart';
 import '../maps/layers/layer_def.dart' show LayerKind;
 import '../maps/palette/map_palette.dart';
@@ -28,6 +29,7 @@ import '../regions/area_lookup.dart' show AreaHit, AreaSource;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
+import '../maps/web/map_mouse.dart' show listenMapHover, setMapCursor;
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_mouse_ring.dart';
 import '../maps/ui/map_pointer_gate.dart';
@@ -39,7 +41,12 @@ import '../platform/phone_window.dart';
 import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
+import '../roads/road_chips.dart';
+import '../roads/road_event_card.dart';
+import '../roads/road_events_state.dart';
+import '../roads/road_map_layers.dart';
 import '../nav/elevation/route_elevation.dart';
+import '../nav/point_facts/point_facts.dart';
 import '../nav/guidance_camera.dart';
 import '../nav/overview/overview_camera.dart';
 import '../nav/overview/route_overview.dart';
@@ -339,7 +346,7 @@ const int kRouteRefits = 4;
 Duration areaFitSettle = const Duration(milliseconds: 300);
 
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump, this.areas});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump, this.areas, this.roadEvents});
 
   /// The screen's pixels per point, for the images drawn for the map (the pins: pinImageRatio); null: this screen's own. The
   /// guide's map pictures stand for another screen than the one their test draws on, and give that screen's.
@@ -375,6 +382,9 @@ class MapsScreen extends StatefulWidget {
   /// Set while a jump here from another screen is remembered ([Shell]): Back, with nothing of the map's own to close, calls it
   /// (it returns to that screen) instead of leaving. Null: Back is as before.
   final VoidCallback? onBackToJump;
+
+  /// The road events (closures, crashes, work zones) the sources stored, and the one a tap chose; null leaves them off the map.
+  final RoadEventsState? roadEvents;
 
   /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
   final NotebookState? notebooks;
@@ -456,6 +466,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   // ---- guidance: the elevation panel and the route mini map ----
 
+  late final PointFacts _pointFacts = PointFacts.fromEngine(maps.engine);
   late final RouteElevation _elevation = widget.elevation ?? RouteElevation(start: tileServerElevationJobs(maps.engine));
   RouteSnapshotter get _snapshotter => widget.snapshotter ?? platformRouteSnapshotter();
 
@@ -690,9 +701,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.notebooks?.addListener(_notebooksChanged);
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
+    widget.roadEvents?.addListener(_onRoadEvents);
+    unawaited(widget.roadEvents?.refresh());
     _elevation.addListener(_onElevation);
     widget.drive?.carConnected.addListener(_onCarLink);
     _lifecycle;
+    _stopHover = listenMapHover(_onMouseMove);
     // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
     // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
     final c = maps.savedCamera;
@@ -740,6 +754,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   void dispose() {
     final c = _controller;
     if (c != null) phoneMapRest.remove(c);
+    _stopHover?.call();
+    setMapCursor(false);
     _lifecycle.dispose();
     _driveBuilt = false;
     _reportDrive();
@@ -751,6 +767,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.notebooks?.removeListener(_notebooksChanged);
     widget.userLayers?.removeListener(_pushUser);
     widget.userLayers?.selectedRepeater.removeListener(_onRepeater);
+    widget.roadEvents?.removeListener(_onRoadEvents);
     _elevation.removeListener(_onElevation);
     if (widget.elevation == null) _elevation.dispose();
     _overviewPosition.dispose();
@@ -813,6 +830,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _appliedKey = key;
     _styleReady = false;
     _styleJson = json;
+    _hover.forget();
     await c.setStyle(json);
   }
 
@@ -860,9 +878,71 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _userSig = -1;
     await _pushUser();
     await _pushMeasure();
+    await _pushRoadEvents();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     _afterCameraSettles();
     await _addPoiChips(c, screenRatio);
+    await _addRoadChips(c, screenRatio);
+  }
+
+  /// The road event chips (a block, a car crash, a construction sign), at the screen's own scale like the pins; then the events the sources
+  /// stored are drawn (the images must be in the style before a feature names one).
+  Future<void> _addRoadChips(MapLibreMapController c, double screenRatio) async {
+    try {
+      await addRoadChips((name, png) => c.addImage(name, png), _palette, ratio: pinImageRatio(screenRatio), log: (m) => appLog.add(LogLevel.standard, 'WARN', m));
+    } catch (_) {}
+    _roadSig = null;
+    await _pushRoadEvents();
+  }
+
+  String? _roadSig;
+
+  /// The road events and the tapped one follow the state: drawn only from what is already stored (nothing is fetched here).
+  Future<void> _pushRoadEvents() async {
+    final c = _controller, r = widget.roadEvents;
+    if (c == null || r == null || !_styleReady) return;
+    final sig = '${r.selectedId}|${r.events.map((e) => '${e.id}${e.stale}').join(',')}';
+    if (sig == _roadSig) return;
+    _roadSig = sig;
+    try {
+      await c.setGeoJsonSource(kRoadEventSource, roadEventsGeoJson(r.events, selectedId: r.selectedId));
+    } catch (_) {}
+  }
+
+  /// A road event was read or chosen: drawn again; a chosen one's card shows over a place card and replaces it.
+  void _onRoadEvents() {
+    final r = widget.roadEvents;
+    if (r?.selectedId != null && nav.selected != null) nav.clearSelection();
+    unawaited(_pushRoadEvents());
+    if (mounted) setState(() {});
+  }
+
+  /// A tap on a road event's chip or line chooses it (its card opens); true when there was one. Asked before the base map's labels, so a
+  /// closure wins over the road's name under it. Where two events overlap the tap, a full closure wins, then the nearest.
+  Future<bool> _tapRoadEvent(math.Point<double> point) async {
+    final c = _controller, r = widget.roadEvents;
+    if (c == null || r == null || r.events.isEmpty) return false;
+    try {
+      final hits = await _query(c, point, roadEventTapLayers);
+      final ids = [for (final h in hits) if (h is Map && h['properties'] is Map && (h['properties'] as Map)['id'] is String) (h['properties'] as Map)['id'] as String];
+      final id = pickEvent(ids, r.events);
+      if (id != null) {
+        HapticFeedback.selectionClick();
+        if (nav.selected != null) nav.clearSelection();
+        widget.userLayers?.clearRepeater();
+        r.select(id);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// The card of the road event a tap chose (null when none).
+  Widget? _roadEventCard(double? maxHeight) {
+    final r = widget.roadEvents;
+    final e = r?.selected;
+    if (r == null || e == null) return null;
+    return RoadEventCard(event: e, onClose: () => r.select(null), maxHeight: maxHeight);
   }
 
   /// The public-place chips (the base map's POI layer draws them by name), at the screen's own scale like the pins; then the layer's
@@ -1905,6 +1985,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
+    // A road event (a closure over a road's name) wins over what is under it.
+    if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point)) return;
     // A search result's pin opens that result, as its row in the list does.
     if (nav.searchOpen && await _tapResultPin(point)) return;
     // Another route's line chooses that route, as its card in the panel does.
@@ -1943,6 +2025,84 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Offset _localOf(Offset global) {
     final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     return stack != null && stack.hasSize ? stack.globalToLocal(global) : global;
+  }
+
+  // ---- mouse hover (browser and Linux desktop) ----------------------------------------------------------
+
+  late final MapHover _hover = MapHover(apply: (id, paint) async => _controller?.setLayerProperties(id, RawPaint(paint)));
+  void Function()? _stopHover;
+  bool _hoverBusy = false;
+  math.Point<double>? _hoverAt;
+  bool _hoverOver = false;
+  int _hoverGen = 0;
+
+  /// The mouse moved over the map ([x], [y] in its own box), or is not over it (null). Only the latest spot is asked about, one
+  /// query at a time, so a fast mouse never queues work.
+  void _onMouseMove(double? x, double? y) {
+    if (!mounted) return;
+    if (!mouseHoverOn(web: plat.isWeb, linuxDesktop: isLinuxDesktop(context))) return;
+    if (x == null || y == null) {
+      _hoverAt = null;
+      _hoverGen++;
+      if (_hoverOver) _hoverEnd();
+      return;
+    }
+    _hoverAt = math.Point<double>(x, y);
+    if (!_hoverBusy) _hoverRun();
+  }
+
+  void _hoverEnd() {
+    _hoverOver = false;
+    setMapCursor(false);
+    _hover.show(null, styleLayersById(_styleJson), '');
+  }
+
+  Future<void> _hoverRun() async {
+    _hoverBusy = true;
+    try {
+      while (mounted) {
+        final at = _hoverAt;
+        _hoverAt = null;
+        if (at == null) break;
+        await _hoverAsk(at);
+      }
+    } finally {
+      _hoverBusy = false;
+    }
+  }
+
+  Future<void> _hoverAsk(math.Point<double> at) async {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    final gen = _hoverGen;
+    final layers = styleLayersById(_styleJson);
+    List<String> present(Iterable<String> ids) => [for (final id in ids) if (layers.containsKey(id)) id];
+    // What a click opens, in the order a tap ranks it: the app's own pins, the public places' chips, the base map's labels, then
+    // the lines and areas of imported files.
+    final groups = [
+      present(const [kNotebookPins, kUserRepeaters, kPinResults]),
+      present(poiLayerIds),
+      present([for (final l in _basemapLabels()) if (!poiLayerIds.contains(l)) l]),
+      present(const [kUserLines, kUserAreas]),
+    ];
+    HoverTarget? found;
+    for (final g in groups) {
+      if (g.isEmpty) continue;
+      final hits = await _query(c, at, g);
+      if (!mounted) return;
+      if (hits.isNotEmpty) {
+        final raw = hits.first;
+        found = HoverTarget(g, featureName(raw is Map ? raw['properties'] : null));
+        break;
+      }
+    }
+    // The mouse left the map while the query ran.
+    if (gen != _hoverGen) return;
+    if ((found != null) != _hoverOver) {
+      _hoverOver = found != null;
+      setMapCursor(_hoverOver);
+    }
+    await _hover.show(found, layers, _palette.css('pin'));
   }
 
   /// A browser's right-click or mouse hold on the map (its long click is a double click): the same ring as a press and hold.
@@ -2757,9 +2917,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final VoidCallback? onOpen = entry != null
           ? () => open!(entry)
           : (book != null && openBook != null ? () => openBook(book) : null);
-      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null, facts: _pointFacts);
     }
-    if (!searching && nav.phase == NavPhase.browsing) return _repeaterCard();
+    if (!searching && nav.phase == NavPhase.browsing) return _roadEventCard(maxHeight) ?? _repeaterCard();
     return null;
   }
 

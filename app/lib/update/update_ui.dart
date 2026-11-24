@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../app_fs.dart';
 import '../desktop/desktop.dart';
+import '../platform/app_log.dart' show logInfo;
 import '../theme.dart';
 import '../version.dart';
 import 'app_update.dart';
@@ -262,25 +264,70 @@ bool whatsNewAfterUpdate = true;
 
 /// Shows "What's new in [version]" once, after the first start of a new version, when the owner wrote lines for it. A first install
 /// ([firstInstall]) records the version without showing it. Any way it closes (Got it, a swipe down, a tap outside) counts as seen.
-Future<void> maybeShowWhatsNew(BuildContext context, {required WhatsNewSeen seen, required bool firstInstall, String version = kAppVersion, Future<String> Function()? read}) async {
-  if (!whatsNewAfterUpdate) return;
+///
+/// Every decision writes one line to the app log ("whats-new: BRANCH"), so a sheet that did not show says why.
+Future<void> maybeShowWhatsNew(BuildContext context, {required WhatsNewSeen seen, required bool firstInstall, String version = kAppVersion, Future<String> Function()? read, void Function(String)? log}) async {
+  final say = log ?? logInfo;
+  if (!whatsNewAfterUpdate) {
+    say('whats-new: off (whatsNewAfterUpdate is false) for $version');
+    return;
+  }
   final last = await seen.lastSeen();
-  if (last == version) return;
+  if (last == version) {
+    say('whats-new: seen equal ($version)');
+    return;
+  }
   if (last == null && firstInstall) {
     await seen.markSeen(version);
+    say('whats-new: first install with no record, recorded $version');
     return;
   }
   String text;
   try {
     text = await (read ?? () => rootBundle.loadString('assets/whats_new.md'))();
   } catch (_) {
+    say('whats-new: lines file unreadable for $version');
     return;
   }
   final lines = whatsNewLines(text, version);
-  if (lines.isEmpty || !context.mounted) return;
+  if (lines.isEmpty) {
+    say('whats-new: no section for $version (seen ${last ?? 'none'})');
+    return;
+  }
+  if (!context.mounted) {
+    say('whats-new: context gone before showing $version');
+    return;
+  }
   await seen.markSeen(version);
-  if (!context.mounted) return;
+  if (!context.mounted) {
+    say('whats-new: context gone before showing $version');
+    return;
+  }
+  say('whats-new: shown $version (seen ${last ?? 'none'}, ${lines.length} lines)');
   await showWhatsNew(context, version: version, lines: lines);
+}
+
+/// Why the sheet waits now (it opens on Home only, never over another screen), or null when Home is showing.
+String? whatsNewGuard({required bool moduleOpen, required bool onModules, required bool homeIsCurrent}) {
+  if (moduleOpen) return 'a module is open';
+  if (onModules) return 'on the modules page';
+  if (!homeIsCurrent) return 'Home is not the current route';
+  return null;
+}
+
+/// Completes once [started] is true, as [app] (a listenable) tells. The first-install question ("no model installed") is only
+/// true after the models folder was read; before that every phone looks like a first install.
+Future<void> whenStarted(Listenable app, bool Function() started) {
+  if (started()) return Future<void>.value();
+  final done = Completer<void>();
+  void check() {
+    if (!started() || done.isCompleted) return;
+    app.removeListener(check);
+    done.complete();
+  }
+
+  app.addListener(check);
+  return done.future;
 }
 
 /// This version's lines, or none (no row, no sheet).
