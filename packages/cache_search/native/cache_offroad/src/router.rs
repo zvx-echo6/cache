@@ -22,6 +22,11 @@ pub const CORRIDOR_PAD_KM: f64 = 10.0;
 pub const CORRIDOR_ENDPOINT_PAD_KM: f64 = 5.0;
 pub const DEFAULT_MAX_CELLS: usize = 20_000_000;
 
+/// Notes a route can carry (plain words, shown with the route).
+pub const NOTE_MOTO_FALLBACK: &str = "This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.";
+pub const NOTE_SXS_FALLBACK: &str = "No side-by-side trail rules yet, so roads open to full-size vehicles were used.";
+pub const NOTE_NO_LAND_RULES: &str = "Cache has no land rules for this area. Check local access before you go.";
+
 const PAVED: [&str; 9] = [
     "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "service_other",
 ];
@@ -80,10 +85,12 @@ pub struct RouteRequest {
     pub mvum_on_date: Option<(u32, u32)>,
     /// Record per-cell path detail (elevation, class, trail, step time) for directions.
     pub collect_detail: bool,
+    /// Which profile fills the 2w or 4w slot of a single-mode search (dirt bike, side-by-side); standard everywhere else.
+    pub variant: Variant,
 }
 impl RouteRequest {
     pub fn new(start: (f64, f64), end: (f64, f64), mode: RequestMode, boundary: Boundary) -> Self {
-        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None, collect_detail: false }
+        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None, collect_detail: false, variant: Variant::Standard }
     }
 }
 
@@ -181,6 +188,8 @@ pub struct RouteResult {
     /// per-cell detail of the travelled path (when requested): the reference server's `path_detail["unified"]`
     pub detail: Option<PathDetail>,
     pub stats: RouteStats,
+    /// Plain-words notes for the person about how the route was made (data that was missing and what was used instead).
+    pub notes: Vec<String>,
 }
 
 /// Per-cell detail of a travelled path (`OffrouteRouter._path_detail`).
@@ -423,6 +432,7 @@ impl<'a> Router<'a> {
                     meta: None,
                     detail: None,
                     stats: RouteStats::default(),
+                    notes: vec![],
                 });
             }
         }
@@ -459,9 +469,12 @@ impl<'a> Router<'a> {
         let trails = rd(Layer::Trails).map_err(terr)?;
         let wilderness = if self.pack.has_layer(Layer::Wilderness) { Some(rd(Layer::Wilderness).map_err(terr)?) } else { None };
         // MVUM per mode: 2w=mtb, 4w=atv, vehicle=vehicle (best effort, like the reference server)
-        let mvum_by_mode: Option<[Vec<u8>; 3]> = match self.pack.mvum_in_box(south, north, west, east) {
-            Ok(f) => Some(mvum::access_grids(&f, &meta, req.mvum_on_date)),
-            Err(_) => None,
+        let mvum_feats = self.pack.mvum_in_box(south, north, west, east).ok();
+        let mvum_by_mode: Option<[Vec<u8>; 3]> = mvum_feats.as_ref().map(|f| mvum::access_grids(f, &meta, req.mvum_on_date));
+        // the dirt bike and over-50-in columns of the rebuilt pack; None until the pack has them
+        let mvum_ext: [Option<Vec<u8>>; 2] = match (&mvum_feats, req.variant) {
+            (Some(f), Variant::Moto | Variant::Sxs) => mvum::access_grids_ext(f, &meta, req.mvum_on_date),
+            _ => [None, None],
         };
         let ms_rasters = t0.elapsed().as_millis();
 
@@ -477,13 +490,18 @@ impl<'a> Router<'a> {
         let aff = |m: Mode| req.network_affinity.as_ref().and_then(|a| a.get(&m).copied()).unwrap_or(1.0);
         let mut stack = vec![0f32; rows * cols * N_MODES];
         for (mi, mode) in Mode::ALL.iter().enumerate() {
-            let mut m = compute_cost_multiplier_grid(&elevation, rows, cols, meta.cell_size_m, Some(&friction_mult),
-                class.as_deref(), wilderness.as_deref(), *mode);
+            let mut m = compute_cost_multiplier_grid_with(&elevation, rows, cols, meta.cell_size_m, Some(&friction_mult),
+                class.as_deref(), wilderness.as_deref(), *mode, req.variant.profile_for(*mode));
             if let Some(mv) = &mvum_by_mode {
                 if *mode != Mode::Foot && req.boundary != Boundary::Emergency {
-                    let grid = match mode {
-                        Mode::TwoW => &mv[0],
-                        Mode::FourW => &mv[1],
+                    // the dirt bike reads the motorcycle column and the side-by-side the over-50-in one; without them (a pack from
+                    // before the rebuild) the dirt bike reads the ATV rules and the side-by-side the high-clearance-vehicle rules
+                    // (ATV trails are for vehicles 50 in wide or less, and most side-by-sides are wider)
+                    let grid = match (req.variant, mode) {
+                        (Variant::Moto, Mode::TwoW) => mvum_ext[0].as_ref().unwrap_or(&mv[1]),
+                        (Variant::Sxs, Mode::FourW) => mvum_ext[1].as_ref().unwrap_or(&mv[2]),
+                        (_, Mode::TwoW) => &mv[0],
+                        (_, Mode::FourW) => &mv[1],
                         _ => &mv[2],
                     };
                     for (v, &g) in m.iter_mut().zip(grid) {
@@ -530,7 +548,7 @@ impl<'a> Router<'a> {
         let mut sfid = [0i64; N_MODES];
         let mut base = [0f64; N_MODES];
         for (mi, mode) in Mode::ALL.iter().enumerate() {
-            let p = mode.profile();
+            let p = req.variant.profile_for(*mode);
             let a = aff(*mode);
             for &(tv, fr) in p.trail_friction {
                 trail_friction_stack[mi * 256 + tv as usize] = fr.map_or(f64::INFINITY, |f| f * a);
@@ -556,6 +574,23 @@ impl<'a> Router<'a> {
 
         let origin_modes: Vec<usize> = origin_set.iter().copied().collect();
         let goal_modes: Vec<usize> = goal_set.iter().copied().collect();
+        // A quad (or side-by-side) may not ride a foot trail, and cannot step from one onto open ground, so a start or an end on a path
+        // (the pack marks the paths of a town) had no way out. It starts and ends at the nearest cell it can leave by.
+        let (mut s_row, mut s_col, mut g_row, mut g_col) = (s_row, s_col, g_row, g_col);
+        if req.mode == RequestMode::Single(Mode::FourW) {
+            let mi = Mode::FourW.idx();
+            let mp = crate::astar::ModeParams {
+                cost_mult: &stack, stride: N_MODES, mode: mi, trail_friction: &trail_friction_stack[mi * 256..(mi + 1) * 256],
+                max_grade: max_grade[mi], speed_function_id: sfid[mi], base_speed_kmh: base[mi],
+            };
+            let open = |r: i64, c: i64| open_cell_near(r, c, rows, cols, &mp, &elevation, &trails, &barriers, req.boundary.id(), meta.cell_size_m);
+            if let Some(p) = open(s_row, s_col) {
+                (s_row, s_col) = p;
+            }
+            if let Some(p) = open(g_row, g_col) {
+                (g_row, g_col) = p;
+            }
+        }
         let t3 = Instant::now();
         let res = astar_multigoal_multimode(&MultiModeInput {
             rows, cols, n_modes: N_MODES,
@@ -579,6 +614,19 @@ impl<'a> Router<'a> {
             ms_rasters, ms_layers, ms_transitions, ms_search,
         };
         let mut out = render_unified_path(&res.path, res.cost, &meta, req.boundary, stats);
+        // what the person is told about the data this route was made from
+        if req.boundary != Boundary::Emergency && mvum_by_mode.is_some() {
+            if req.variant == Variant::Moto && mvum_ext[0].is_none() {
+                out.notes.push(NOTE_MOTO_FALLBACK.into());
+            }
+            if req.variant == Variant::Sxs && mvum_ext[1].is_none() {
+                out.notes.push(NOTE_SXS_FALLBACK.into());
+            }
+        }
+        // only when the pack says outright that it has none; a pack that says nothing gets no note
+        if self.pack.land_rules() == Some(false) {
+            out.notes.push(NOTE_NO_LAND_RULES.into());
+        }
         if req.collect_detail {
             let mp = |mi: usize| (max_grade[mi], sfid[mi], base[mi]);
             let trans_cost_map: HashMap<(i64, i64, usize, usize), f64> = tc.iter().map(|t| ((t.0, t.1, t.2, t.3), t.4)).collect();
@@ -589,6 +637,41 @@ impl<'a> Router<'a> {
         }
         Ok(out)
     }
+}
+
+/// How far (in cells, about 14 m each) a start or an end moves to reach a cell the mode can leave by.
+pub const OPEN_CELL_SEARCH_RADIUS: i64 = 12;
+
+/// The cell nearest to (row, col) that `mp`'s mode can step out of and back into (itself when it can), within
+/// [`OPEN_CELL_SEARCH_RADIUS`] cells; `None` when there is none.
+#[allow(clippy::too_many_arguments)]
+fn open_cell_near(
+    row: i64, col: i64, rows: usize, cols: usize, mp: &crate::astar::ModeParams, elevation: &[f32], trails: &[u8], barriers: &[u8],
+    boundary_id: i64, cell_m: f64,
+) -> Option<(i64, i64)> {
+    let inb = |r: i64, c: i64| r >= 0 && r < rows as i64 && c >= 0 && c < cols as i64;
+    let time = |r0: i64, c0: i64, r1: i64, c1: i64| {
+        crate::astar::movement_edge_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols, elevation, mp, trails, barriers, boundary_id, cell_m, cell_m)
+    };
+    let can_leave = |r: i64, c: i64| {
+        (-1i64..=1).any(|dr| {
+            (-1i64..=1).any(|dc| {
+                let (nr, nc) = (r + dr, c + dc);
+                (dr != 0 || dc != 0) && inb(nr, nc) && time(r, c, nr, nc).is_finite() && time(nr, nc, r, c).is_finite()
+            })
+        })
+    };
+    let mut near: Vec<(i64, i64, i64)> = Vec::new();
+    for dr in -OPEN_CELL_SEARCH_RADIUS..=OPEN_CELL_SEARCH_RADIUS {
+        for dc in -OPEN_CELL_SEARCH_RADIUS..=OPEN_CELL_SEARCH_RADIUS {
+            near.push((dr * dr + dc * dc, dr, dc));
+        }
+    }
+    near.sort();
+    near.into_iter()
+        .take_while(|(d2, _, _)| *d2 <= OPEN_CELL_SEARCH_RADIUS * OPEN_CELL_SEARCH_RADIUS)
+        .map(|(_, dr, dc)| (row + dr, col + dc))
+        .find(|&(r, c)| inb(r, c) && can_leave(r, c))
 }
 
 /// `_render_unified_path`.
@@ -647,11 +730,13 @@ pub fn render_unified_path(path: &[[i64; 3]], total_cost: f64, meta: &GridMeta, 
         meta: Some(meta.clone()),
         detail: None,
         stats,
+        notes: vec![],
     }
 }
 
 /// `OffrouteRouter._path_detail`: per-cell detail of a travelled path. step_s[k] is the time from cell k to
-/// k+1 from the kernel's own edge model, or the flat transition cost for a same-cell mode change; a hop the
+/// k+1 from the kernel's own edge model with the search's preferences left out (a trail's friction and a barrier's cost say where to go, not how
+/// fast; the reference server counted them as time, which made a walk along roads about ten times too quick), or the flat transition cost for a same-cell mode change; a hop the
 /// kernel would not take falls back to distance / mode base speed.
 #[allow(clippy::too_many_arguments)]
 pub fn path_detail(
@@ -688,7 +773,7 @@ pub fn path_detail(
                 cost_mult: stack, stride: N_MODES, mode: m0, trail_friction: &trail_friction_stack[m0 * 256..(m0 + 1) * 256],
                 max_grade: mg, speed_function_id: sf, base_speed_kmh: bs,
             };
-            t = crate::astar::movement_edge_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols,
+            t = crate::astar::movement_travel_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols,
                 elevation, &mp, trails, barriers, boundary_id, cell_m, cell_m);
         }
         if !t.is_finite() {

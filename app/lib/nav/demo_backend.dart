@@ -43,7 +43,7 @@ class DemoMapBackend implements MapBackend {
   }
 
   @override
-  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) async {
+  Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2, bool avoidHighways = false, bool avoidTolls = false}) async {
     final name = ((to['name'] ?? '') as String).toLowerCase();
     final routes = ((_json('demo.json')['routes']) as List).cast<Map>().map((e) => e.cast<String, dynamic>()).toList();
     final hit = routes.where((r) => name.contains(r['to'] as String) && r['mode'] == mode).firstOrNull ?? routes.where((r) => name.contains(r['to'] as String)).firstOrNull;

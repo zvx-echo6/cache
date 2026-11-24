@@ -483,6 +483,7 @@ class MapRoute {
     required this.segments,
     required this.maneuvers,
     required this.warnings,
+    required this.notes,
     required this.alternatives,
     required this.errors,
     required this.from,
@@ -509,6 +510,7 @@ class MapRoute {
         for (final w in _l(j['warnings']))
           RouteWarning(code: (_m(w)['code'] ?? '') as String, end: _s(_m(w)['end']), gapM: _i(_m(w)['gap_m'])),
       ],
+      notes: [for (final n in _l(j['notes'])) if (n is String && n.isNotEmpty) n],
       alternatives: [for (final a in _l(j['alternatives'])) MapRoute.fromJson(_m(a))],
       errors: [for (final e in _l(j['errors'])) RouteError((_m(e)['code'] ?? 'internal') as String, (_m(e)['message'] ?? '') as String)],
       from: _m(j['from']),
@@ -534,6 +536,9 @@ class MapRoute {
   final List<RouteSegment> segments;
   final List<Maneuver> maneuvers;
   final List<RouteWarning> warnings;
+
+  /// How the route was made, in plain words (data the area lacks and what was used instead); shown with the route.
+  final List<String> notes;
   final List<MapRoute> alternatives;
   final List<RouteError> errors;
   final Map<String, dynamic> from;

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and later. Cloud backup and phone-to-phone transfer keep Cache's settings only (owner decision, 2026-11-23): include-only
+     rules, so nothing else is taken in any domain. User data (library, notebooks, chats, maps, linked devices and the sync folder) is not
+     in phone backups, and API keys are not restorable (they are bound to the phone's hardware key). The list is kBackupAllowList in
+     lib/platform/backup_scope.dart; a test keeps the two equal. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="settings.json"/>
+        <include domain="file" path="layout.json"/>
+        <include domain="file" path="preferences.json"/>
+        <include domain="file" path="maps.json"/>
+        <include domain="file" path="live-catalogues/473764f0fe8c"/>
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="settings.json"/>
+        <include domain="file" path="layout.json"/>
+        <include domain="file" path="preferences.json"/>
+        <include domain="file" path="maps.json"/>
+        <include domain="file" path="live-catalogues/473764f0fe8c"/>
+    </device-transfer>
+</data-extraction-rules>

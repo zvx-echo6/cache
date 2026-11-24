@@ -6,6 +6,10 @@ release notes).
 
 ## Unreleased
 
+### Directions
+- Travel modes are Drive, Walk, Bike and ATV, each with two choices on one line: Drive can avoid highways or tolls; Walk is Pedestrian or Off-road; Bike is Bicycle or Dirt bike; ATV is Quad or Side-by-side. Off-road choices add Standard or Emergency routing; Emergency lasts for one trip. Your mode and choices are remembered
+- Off-road travel times are realistic: they were far too short before (a cross-country walk showed about 35 minutes instead of about 5 hours)
+
 ### Places
 - A place's opening hours are in plain words ("Mon–Fri 9 AM–7 PM · Sat 10 AM–5 PM", "Open 24 hours") in your phone's 12 or 24 hour setting, with Open now or Closed now when the hours are a plain weekly schedule; hours with holidays, sunrise or sunset, seasons or notes are shown as written, with no Open or Closed
 

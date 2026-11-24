@@ -1626,6 +1626,18 @@ instruction, length and time and its range of points, the totals (road and off-r
 (`alternates`, for a plain road route; an off-road route has none). Stops (`via`) are routed leg by leg and joined; each stop is a `via` maneuver. A route that cannot be made is
 `{"ok": false, "errors": [{code, message}]}`, not an error of the call.
 
+**Travel modes of the screen.** `cs_map_route` also takes the ids only the directions screen sends (the `navigate` tool never accepts them, and its
+`mode` enum, `land_access` values, description and step wording are unchanged): `offroad_moto` (dirt bike: the 2w slot of the single-mode search with the `moto`
+profile; roads by Valhalla `motorcycle` costing with `use_trails` 1), `offroad_4w` (quad: the 4w profile) and `offroad_sxs` (side-by-side: the 4w slot with the
+`sxs` profile). On the road parts of the quad and the side-by-side, Valhalla drives `auto` with `use_highways` 0 and `use_tracks` 1. `avoid_highways` and `avoid_tolls`
+(booleans, `drive` only) become `costing_options` `use_highways` 0 / `use_tolls` 0 on `auto` and are part of the route id. The profiles are in `cache_offroad::cost`
+(`PROFILE_MOTO`, `PROFILE_SXS`; they are not in `PROFILES`, so the pack's profile hash and the Auto search are unchanged). The dirt bike reads the MVUM motorcycle
+column and the side-by-side the over-50-in column (`moto_status`/`moto_dates`, `gt50_status`/`gt50_dates` of the pack's `mvum` table); a pack without them (before
+the off-road pack rebuild) is read as before, the dirt bike by the ATV rules and the side-by-side by the quad's, and the route object's `notes` says so. `notes`
+(plain words, only when there is something to say) also carries "Cache has no land rules for this area. Check local access before you go." when the pack's meta
+`land_access` is `none`, or, for a pack that does not say, when its window has neither MVUM features nor barrier cells. Step words for the screen's trips name the
+machine ("By dirt bike", "By quad", "By side-by-side"); every other trip words its legs as before. No tool result the model reads carries these steps.
+
 **Guidance (`cs_map_progress`).** Each route (and each alternative) is kept in the handle, newest eight, so a fix is matched by `route_id`; the app sends the route
 object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
 when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther

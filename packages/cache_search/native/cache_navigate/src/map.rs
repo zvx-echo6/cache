@@ -84,6 +84,9 @@ pub struct MapRouteReq {
     pub alternatives: usize,
     /// The vehicle's heading at `from` when it is moving (a re-route), degrees clockwise from north.
     pub from_heading_deg: Option<f64>,
+    /// Drive only: avoid highways / tolls.
+    pub avoid_highways: bool,
+    pub avoid_tolls: bool,
 }
 
 /// The mode, land access and alternatives of a route request (the ends are resolved by the caller).
@@ -91,7 +94,7 @@ pub fn parse_opts(v: &Value) -> Result<(TravelMode, Boundary, usize), ToolError>
     let bad = |m: String| ToolError::new(ToolError::BAD_ARGUMENTS, m);
     let mode = match v.get("mode") {
         None | Some(Value::Null) => TravelMode::Drive,
-        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle".into()))?,
+        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle, offroad_moto, offroad_4w, offroad_sxs".into()))?,
     };
     let land = match v.get("land_access") {
         None | Some(Value::Null) => Boundary::Pragmatic,
@@ -315,6 +318,16 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
         warnings.extend(build::warnings(d, have_offroad, DEFAULT_OFFROAD_SNAP_M));
     }
     o.insert("warnings".into(), Value::Array(warnings));
+    // how the route was made, in plain words (data missing and what was used): only when there is something to say
+    let mut notes: Vec<String> = Vec::new();
+    for n in legs.iter().flat_map(|d| d.notes.iter()) {
+        if !notes.contains(n) {
+            notes.push(n.clone());
+        }
+    }
+    if !notes.is_empty() {
+        o.insert("notes".into(), json!(notes));
+    }
     Value::Object(o)
 }
 
@@ -375,6 +388,8 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut have_offroad = false;
     for (i, pair) in stops.windows(2).enumerate() {
         let mut nr = NavigateRequest::new(pair[0].waypoint(), pair[1].waypoint(), req.mode, req.land_access);
+        nr.avoid_highways = req.avoid_highways;
+        nr.avoid_tolls = req.avoid_tolls;
         if i == 0 {
             nr.from_heading_deg = req.from_heading_deg;
         }
@@ -390,6 +405,8 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     // alternatives exist for a plain road route (one leg, nothing off-road)
     if req.alternatives > 0 && legs.len() == 1 && main["routing"] == "road" {
         let mut nr = NavigateRequest::new(req.from.waypoint(), req.to.waypoint(), req.mode, req.land_access);
+        nr.avoid_highways = req.avoid_highways;
+        nr.avoid_tolls = req.avoid_tolls;
         nr.from_heading_deg = req.from_heading_deg;
         for d in core.alternatives(&nr, req.alternatives)? {
             let o = route_object(std::slice::from_ref(&d), &stops, req.mode, req.land_access, have_offroad);

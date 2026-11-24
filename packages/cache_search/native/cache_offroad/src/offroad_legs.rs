@@ -185,6 +185,20 @@ impl Cells {
     }
 }
 
+impl Cells {
+    /// The cells a..=b of this run, as their own run.
+    pub fn sub(&self, a: usize, b: usize) -> Cells {
+        Cells {
+            lat: self.lat[a..=b].to_vec(),
+            lon: self.lon[a..=b].to_vec(),
+            elev: self.elev[a..=b].to_vec(),
+            terrain: self.terrain[a..=b].to_vec(),
+            step_s: self.step_s[a..b].to_vec(),
+            trail: self.trail.as_ref().map(|t| t[a..=b].to_vec()),
+        }
+    }
+}
+
 struct Run {
     lat: Vec<f64>,
     lon: Vec<f64>,
@@ -725,4 +739,66 @@ pub fn pieces_from_result(result: &RouteResult) -> Vec<Piece> {
         i = j + 1;
     }
     pieces
+}
+
+/// The shortest stretch of road (pack trail value 5) of a single-machine route that becomes a road leg from Valhalla; shorter ones (a
+/// driveway, a crossing) stay part of the off-road route.
+pub const ROAD_LEG_MIN_M: f64 = 400.0;
+
+/// [`pieces_from_result`] for the screen's dirt bike, quad and side-by-side, whose search runs one machine over the whole trip (roads are
+/// cells of the trail raster to it): each stretch of road of at least [`ROAD_LEG_MIN_M`] becomes a road piece, so Valhalla routes it
+/// (with the machine's costing), and the stretches between them stay off-road pieces. The pieces share their end cells, so the line has no gaps.
+pub fn pieces_with_road_legs(result: &RouteResult, min_road_m: f64) -> Vec<Piece> {
+    let mut out = Vec::new();
+    for p in pieces_from_result(result) {
+        let (PieceKind::Offroad { after_switch }, Some(c)) = (&p.kind, &p.cells) else {
+            out.push(p);
+            continue;
+        };
+        let Some(trail) = &c.trail else {
+            out.push(p);
+            continue;
+        };
+        let n = c.lat.len();
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        let mut k = 0;
+        while k < n {
+            if trail[k] != 5 {
+                k += 1;
+                continue;
+            }
+            let mut j = k;
+            while j + 1 < n && trail[j + 1] == 5 {
+                j += 1;
+            }
+            let len: f64 = (k..j).map(|i| haversine_m(c.lat[i], c.lon[i], c.lat[i + 1], c.lon[i + 1])).sum();
+            if len >= min_road_m {
+                runs.push((k, j));
+            }
+            k = j + 1;
+        }
+        if runs.is_empty() {
+            out.push(p);
+            continue;
+        }
+        let (mut cursor, mut first) = (0usize, true);
+        let mut piece = |kind: PieceKind, mode: &str, a: usize, b: usize| {
+            let extra_s = if first { p.extra_s } else { 0.0 };
+            first = false;
+            Piece { kind, mode: mode.to_string(), extra_s, cells: Some(c.sub(a, b)) }
+        };
+        let start_after = *after_switch;
+        for (a, b) in runs {
+            if a > cursor {
+                let after = start_after || cursor > 0;
+                out.push(piece(PieceKind::Offroad { after_switch: after }, &p.mode, cursor, a));
+            }
+            out.push(piece(PieceKind::Road { start: (c.lat[a], c.lon[a]), end: (c.lat[b], c.lon[b]) }, "vehicle", a, b));
+            cursor = b;
+        }
+        if cursor < n - 1 {
+            out.push(piece(PieceKind::Offroad { after_switch: true }, &p.mode, cursor, n - 1));
+        }
+    }
+    out
 }
