@@ -517,9 +517,29 @@ class NotebookSync {
     await folder.writeText(page, p.head + [for (final b in p.blocks) if (b.cacheId != id) b.text].join());
   }
 
+  static const _markerDir = '_deleted';
+
+  /// The ids of entries deleted in Cache on some device of the share (`_deleted/<id>.json`; a plain name, since hidden folders
+  /// do not travel with the share). Markers are kept; one is removed only when its entry comes back.
+  Future<Set<String>> _markers() async {
+    final out = <String>{};
+    for (final f in await folder.list(_markerDir)) {
+      final n = f.path.substring(_markerDir.length + 1);
+      if (n.endsWith('.json') && !n.contains('/')) out.add(n.substring(0, n.length - 5));
+    }
+    return out;
+  }
+
+  Future<void> _removeMarker(String id) async {
+    if (await folder.exists('$_markerDir/$id.json')) await folder.delete('$_markerDir/$id.json');
+  }
+
   Future<void> _deleteOutside(String id) async {
     final it = _items[id];
     if (it == null) return;
+    if (kind == SyncKind.share) {
+      await folder.writeText('$_markerDir/$id.json', jsonEncode({'id': id, 'at': _now().millisecondsSinceEpoch}));
+    }
     if (_logseq) {
       await _removeBlock(it.path, id);
     } else {
@@ -726,6 +746,7 @@ class NotebookSync {
     final candidates = <_Cand>[];
     final outside = await _scan(byName, newOutside, unreadable, cache: cache, candidates: kind == SyncKind.share ? null : candidates);
     _stopped.removeWhere((id) => !cache.containsKey(id));
+    final marks = kind == SyncKind.share ? await _markers() : <String>{};
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
@@ -779,6 +800,24 @@ class NotebookSync {
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
+      if (marks.contains(id)) {
+        // A delete marker is a delete made in Cache on some device. The marker and the file's removal are separate files and
+        // can arrive in either order, so a marker with the entry here and nothing changed is the pending delete, file there or not.
+        // Only an edit that raced the delete (here or in the file) keeps the entry; the marker is then removed (the file wins).
+        if (c != null && !cacheChanged && !fileChanged) {
+          await notebook.deleteEntry(id);
+          if (f != null) await folder.delete(f.path);
+          _items.remove(id);
+          r.deleted++;
+          r.removedHere++;
+          continue;
+        }
+        // Not in the store and the file is there: written again after the delete (no record, or changed against it): read back.
+        if (c != null || (f != null && (s == null || fileChanged) && await notebook.entry(id) == null)) {
+          await _removeMarker(id);
+          marks.remove(id);
+        }
+      }
       if (c != null) {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
@@ -799,17 +838,10 @@ class NotebookSync {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
           }
         } else if (missing) {
-          if (kind == SyncKind.share && !cacheChanged) {
-            await notebook.deleteEntry(id);
-            _items.remove(id);
-            r.deleted++;
-            r.removedHere++;
-          } else {
-            // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
-            // file or block is written back and the entry stays.
-            _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
-            r.written++;
-          }
+          // Cache is the source of truth, so its file or block is written back and the entry stays (a share: a file missing
+          // never deletes; only a marker does, above).
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+          r.written++;
         } else if (cacheChanged && !fileChanged) {
           _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
           r.written++;
