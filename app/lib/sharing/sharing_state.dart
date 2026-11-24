@@ -761,6 +761,9 @@ class _PhoneDriver implements SharingDriver {
   /// Every 2 s the status; every 10 s what each linked device holds, and the items' list given to the engine again if it
   /// changed (a notebook made private, a new library here).
   Future<void> _tick() async {
+    // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
+    // the app's log (cache.log) as well as the Activity.
+    s._drainNow();
     await refresh();
     if (++_ticks % 5 == 0) {
       await refreshItems();

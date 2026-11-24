@@ -18,13 +18,14 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointAddr, EndpointId,
 };
+use cache_store::{Hash, Store};
 use iroh_blobs::{
     api::downloader::{DownloadOptions, DownloadProgressItem, Shuffled, SplitStrategy},
-    store::fs::FsStore,
-    BlobsProtocol, Hash, HashAndFormat,
+    HashAndFormat,
 };
 use n0_future::{Stream, StreamExt};
 
+use crate::bridge::{theirs, Bridge, BlobsGate};
 use crate::{closed_403, closed_code, is_no_space, now_ms, GateState, MAX_INDEX, NO_SPACE, PAIR_ALPN, SYNC_ALPN};
 
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -72,8 +73,9 @@ pub trait Transport: Send + Sync + 'static {
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
     fn disallow(&self, peer: &str);
-    /// Fetches `hash` into `store` from any of `providers`. Dropping the stream ends the fetch; what arrived stays in the store.
-    fn fetch<'a>(&'a self, store: &'a FsStore, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>>;
+    /// Fetches `hash` into `store` from any of `providers`. Dropping the stream ends the fetch; what arrived stays where the
+    /// transport keeps partial data and resumes from there. When the stream ends without a failure the whole file is in `store`.
+    fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>>;
     /// The phone moved between networks: find new paths.
     fn network_change(&self) -> BoxFut<'_, ()>;
     /// For the status: the relay in use and the direct addresses.
@@ -117,6 +119,8 @@ pub struct IrohTransport {
     endpoint: Endpoint,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
     router: Mutex<Option<Router>>,
+    /// The iroh-blobs view that files are served from and downloaded into (see [`crate::bridge`]).
+    bridge: Arc<Bridge>,
 }
 
 impl IrohTransport {
@@ -125,18 +129,19 @@ impl IrohTransport {
         builder: iroh::endpoint::Builder,
         allowed: impl IntoIterator<Item = String>,
         gate: Arc<GateState>,
+        bridge: Arc<Bridge>,
     ) -> Result<Arc<IrohTransport>> {
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(allowed.into_iter().filter_map(|p| p.parse().ok()).collect()));
         let endpoint = builder.hooks(Gate { allowed: allowed.clone(), state: gate }).bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
-        Ok(Arc::new(IrohTransport { endpoint, allowed, router: Mutex::new(None) }))
+        Ok(Arc::new(IrohTransport { endpoint, allowed, router: Mutex::new(None), bridge }))
     }
 
     /// Starts accepting: the blob protocol from `store`, pairing and sync answered by `serve`.
-    pub fn serve(&self, store: &FsStore, serve: Arc<dyn Serve>) {
-        let blobs = BlobsProtocol::new(store, None);
+    pub fn serve(&self, store: &Store, serve: Arc<dyn Serve>) {
+        self.bridge.set_store(store.clone());
         let router = Router::builder(self.endpoint.clone())
-            .accept(iroh_blobs::ALPN, blobs)
+            .accept(iroh_blobs::ALPN, BlobsGate(self.bridge.clone()))
             .accept(PAIR_ALPN, PairProto(serve.clone()))
             .accept(SYNC_ALPN, SyncProto(serve))
             .spawn();
@@ -228,25 +233,45 @@ impl Transport for IrohTransport {
         }
     }
 
-    fn fetch<'a>(&'a self, store: &'a FsStore, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
+    fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
         Box::pin(async move {
             let providers: Vec<EndpointId> = providers.iter().filter_map(|p| p.parse().ok()).collect();
             let strategy = if providers.len() > 1 { SplitStrategy::Split } else { SplitStrategy::None };
-            let dl = store.downloader(&self.endpoint);
+            // Downloads land in the bridge's view; when one is whole it is moved into `store`.
+            self.bridge.set_store(store.clone());
+            let view = self.bridge.view().await?;
+            let dl = view.downloader(&self.endpoint);
             let stream = dl
-                .download_with_opts(DownloadOptions::new(HashAndFormat::raw(hash), Shuffled::new(providers), strategy))
+                .download_with_opts(DownloadOptions::new(HashAndFormat::raw(theirs(&hash)), Shuffled::new(providers), strategy))
                 .stream()
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            let events = stream.filter_map(|item| match item {
+            let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let failed2 = failed.clone();
+            let events = stream.filter_map(move |item| match item {
                 DownloadProgressItem::Progress(n) => Some(FetchEvent::Progress(n)),
                 DownloadProgressItem::Error(e) => {
+                    failed2.store(true, Ordering::Relaxed);
                     Some(FetchEvent::Failed(if is_no_space(&e) { NO_SPACE.to_string() } else { format!("{e}") }))
                 }
-                DownloadProgressItem::DownloadError => Some(FetchEvent::Failed("the transfer stopped".into())),
+                DownloadProgressItem::DownloadError => {
+                    failed2.store(true, Ordering::Relaxed);
+                    Some(FetchEvent::Failed("the transfer stopped".into()))
+                }
                 _ => None,
             });
-            Ok(Box::pin(events) as BoxStream<FetchEvent>)
+            let bridge = self.bridge.clone();
+            let land = n0_future::stream::once_future(async move {
+                if failed.load(Ordering::Relaxed) {
+                    return None;
+                }
+                match bridge.land(hash).await {
+                    Ok(()) => None,
+                    Err(e) => Some(FetchEvent::Failed(if is_no_space(e.as_ref()) { NO_SPACE.to_string() } else { format!("{e:#}") })),
+                }
+            })
+            .filter_map(|x| x);
+            Ok(Box::pin(events.chain(land)) as BoxStream<FetchEvent>)
         })
     }
 
@@ -271,6 +296,7 @@ impl Transport for IrohTransport {
             if let Some(r) = router {
                 let _ = tokio::time::timeout(Duration::from_secs(5), r.shutdown()).await;
             }
+            self.bridge.shutdown().await;
         })
     }
 }

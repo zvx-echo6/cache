@@ -1,0 +1,33 @@
+[package]
+name = "cache_store"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Cache's own file store (step 6a): BLAKE3-addressed files with verified pieces, indexed in SQLite, replacing iroh-blobs"
+
+[dependencies]
+# The same tree, chunk groups and verified-piece encoding as iroh-blobs (MIT OR Apache-2.0); 0.16 is what cache_rns uses today.
+bao-tree = "0.16"
+blake3 = "1.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+data-encoding = "2.11"
+# Reflink exports on file systems that have them (already in the lockfile through iroh-blobs).
+reflink-copy = "0.1"
+# The one-time move reads iroh-blobs 0.103.1's redb 4 database (iroh-blobs asks for 4.1, the lockfile has 4.4.0). Not iroh.
+redb = "4"
+postcard = { version = "1", features = ["use-std"] }
+
+[features]
+# Lets the tests cut a write off between its rename and its index commit, as if the app were killed there.
+test-hooks = []
+
+[dev-dependencies]
+cache_store = { path = ".", features = ["test-hooks"] }
+tempfile = "3"
+serde_json.workspace = true
+# Test-only, dropped with iroh at step 6b: the cross-checks run the real iroh-blobs 0.103.1 beside this store.
+iroh-blobs = "=0.103.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+bytes = "1"
