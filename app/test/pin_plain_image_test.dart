@@ -61,7 +61,8 @@ void main() {
     // Just under the head's centre line, off the middle, the fill is the tint.
     final y = first + ((last - first) * 0.3).round();
     final x = i.w ~/ 2 + ((last - first) * 0.12).round();
-    expect(i.px.getUint8((y * i.w + x) * 4), greaterThan(200), reason: 'red channel');
+    final r = i.px.getUint8((y * i.w + x) * 4), g = i.px.getUint8((y * i.w + x) * 4 + 1), b = i.px.getUint8((y * i.w + x) * 4 + 2);
+    expect((r, g, b), (0xFF, 0x6B, 0x5E), reason: 'the tint, not the white ring');
     expect(i.px.getUint8((y * i.w + x) * 4 + 3), 255);
   });
 }

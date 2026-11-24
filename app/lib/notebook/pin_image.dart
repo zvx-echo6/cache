@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/painting.dart';
 import 'package:flutter/widgets.dart' show IconData;
 
@@ -151,10 +151,6 @@ Future<Uint8List> renderPlainPinPng(Color tint, PinStyle style, {double size = 3
   final c = Canvas(rec)..scale(ratio);
   _paintTeardrop(c, at, size, tint, tactical: tactical);
   final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
-  // TEMP DEBUG: the colour of a body pixel as drawn on this device.
-  final raw = (await img.toByteData())!;
-  final px = ((img.height * 0.3).round() * img.width + (img.width / 2 + img.height * 0.06).round()) * 4;
-  debugPrint('PLAINPIN ${img.width}x${img.height} body=${raw.getUint8(px)},${raw.getUint8(px + 1)},${raw.getUint8(px + 2)},${raw.getUint8(px + 3)}');
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
 
