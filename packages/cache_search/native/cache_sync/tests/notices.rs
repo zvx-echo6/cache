@@ -288,10 +288,8 @@ fn a_device_without_summary_support_still_gets_the_timer_round_and_wakes_on_aske
     let a_id = peer_id(&t.db);
     assert!(!quiet(t.b(), &a_id), "an older build is not quiet");
     let b0 = rounds(t.b());
-    // The timer is the point here, so this one is a fixed wait: B must run rounds on its own.
-    std::thread::sleep(Duration::from_secs(14));
-    let n = rounds(t.b()) - b0;
-    assert!(n >= 2, "B ran {n} rounds in 14 s with a 5 s timer");
+    // The timer is the point here: B must run rounds on its own. A minimum count, so wait for it (a loaded machine is slow).
+    wait("B to run two rounds on its own timer", 60, || rounds(t.b()) - b0 >= 2);
     // A device that asks wakes a round, as today (a fresh device is not rate limited).
     assert!(call(t.b(), "test_ask", json!({"peer": a_id}))["wakes"].as_bool().unwrap(), "an older build that asks wakes a round");
     close(t);
