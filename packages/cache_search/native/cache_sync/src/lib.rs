@@ -430,6 +430,18 @@ struct RemoteIndex {
     /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
+    /// The sender is fetching a file right now (from this device or another): the shared folder's id and how far it has got. It is
+    /// how a device that only sends sees a transfer to the other one (older versions do not say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fetching: Option<Fetching>,
+}
+
+/// What a device says of the file it is fetching at the moment: no path, only the folder and the progress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Fetching {
+    share: String,
+    size: u64,
+    done: u64,
 }
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
@@ -473,6 +485,8 @@ struct PeerState {
 
 #[derive(Debug, Clone, Serialize)]
 struct Transfer {
+    /// The shared folder's id (`share` is its name).
+    share_id: String,
     share: String,
     path: String,
     size: u64,
@@ -1488,6 +1502,7 @@ impl Inner {
             link,
             links: true,
             secrets,
+            fetching: self.run.lock().unwrap().transfer.as_ref().map(|t| Fetching { share: t.share_id.clone(), size: t.size, done: t.done }),
         }
     }
 
@@ -1946,12 +1961,25 @@ impl Inner {
             }
             self.wanted.lock().unwrap().insert(hash);
             self.run.lock().unwrap().transfer = Some(Transfer {
+                share_id: sh.id.clone(),
                 share: sh.name.clone(),
                 path: path.to_string(),
                 size: entry.size,
                 done: 0,
                 from: providers.iter().map(|p| self.peer_name(p)).collect(),
             });
+            #[cfg(feature = "test-hooks")]
+            {
+                // A fetch caught while it runs: held while `<dir>/hold-fetch` exists (it says so with `<dir>/hold-fetch.held`).
+                let hold = self.dir.join("hold-fetch");
+                if hold.exists() {
+                    let _ = std::fs::write(self.dir.join("hold-fetch.held"), b"");
+                    while hold.exists() {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    let _ = std::fs::remove_file(self.dir.join("hold-fetch.held"));
+                }
+            }
             let mut stream = self.net.fetch(&self.store, hash, providers).await?;
             let mut failed = None;
             let mut last_progress = Instant::now();
@@ -2921,6 +2949,7 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "fetching": st.index.as_ref().and_then(|i| i.fetching.as_ref()).map(|f| json!({"share": f.share, "size": f.size, "done": f.done})),
                 })
             })
             .collect();
