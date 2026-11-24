@@ -1383,9 +1383,15 @@ void main() {
     await m.kit.loadChips(tester);
     // The screen draws the map's own images (the pins, the routes' time labels) with real work after the state changes: let it finish
     // before the scene is read, so the scene is the same in every run.
-    for (var i = 0; i < 4; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
+    // It is finished when what the map was given (its sources and its images) has stayed the same for three looks in a row.
+    String seen() => '${jsonEncode(m.kit.controller.sources)}|${(m.kit.controller.images.keys.toList()..sort()).join(',')}';
+    var last = '', still = 0;
+    for (var i = 0; i < 60 && still < 3; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 150)));
       await tester.pump();
+      final now = seen();
+      still = now == last ? still + 1 : 0;
+      last = now;
     }
     final map = mapOf(tester);
     final size = tester.getSize(find.byType(MapLibreMap));
