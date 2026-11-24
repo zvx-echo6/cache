@@ -1403,7 +1403,12 @@ void main() {
       size: size,
       ratio: tester.view.devicePixelRatio,
       sources: m.kit.controller.sources,
-      images: m.kit.controller.images,
+      // Only the images the map's data names: the screen adds an image once and keeps it, so a label of a state the map has left (the
+      // other route selected a moment ago) would otherwise be in the scene in one run and not in the next.
+      images: {
+        for (final e in m.kit.controller.images.entries)
+          if (jsonEncode(m.kit.controller.sources).contains(e.key) || m.kit.style.contains(e.key)) e.key: e.value,
+      },
     );
     m.kit.show(scene);
     map.onCameraMove!(CameraPosition(target: LatLng(cam.lat, cam.lon), zoom: cam.zoom, bearing: cam.bearing));

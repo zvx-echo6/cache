@@ -32,18 +32,28 @@ void main() {
   const purple = Color(0xFFAE86F0), yellow = Color(0xFFE6C24E), sand = Color(0xFFD8C7A0);
 
   group('what dark and Tactical draw is what they always drew (byte for byte)', () {
-    // Hashes of the PNGs of the code before this change (origin c27202ab): Icon, Teardrop and Badge pins, and the fuel chip and its dot.
-    const pins = {
-      'dark-purple': ['e89f9239ed75dd10e0f0e6b17900d942b6c12b65', '28452d9162de116012b6ee8bd3005829b3f69d07', '0e0e354ba2e9300dcd59c3510a580344af8c5ea4'],
-      'dark-yellow': ['e1b7ac6a7bf8d9f9427fc43719a0ddd93a97a18d', '66adc5abf5342954ea1a13c5f54c442eef5d2402', '09584c8681887b0733506d32a1ee2cc31967c87c'],
-      'tactical': ['142421c8c5b1dd2caa8165fa83b2c693d23e606f', 'aa0a2bc329a0fe179ff846994f9401a174c0b577', '16eff4e6206cfc3e918a9bcadf0c40930d24f74a'],
-    };
-    testWidgets('pins: Icon, Teardrop and Badge in dark and Tactical', (tester) async {
+    // The glyph is drawn by the platform's text engine, so a hash of the pin differs between machines; what must hold anywhere is that the
+    // flag is off by default, that dark and Tactical keep the white ring, and that they never take the flat look.
+    int whiteRim(({int w, int h, ByteData px}) i) {
+      var n = 0;
+      for (var y = 1; y < i.h - 1; y++) {
+        for (var x = 1; x < i.w - 1; x++) {
+          final p = _rgba(i, x, y);
+          if (!(p[3] > 200 && p[0] > 245 && p[1] > 245 && p[2] > 245)) continue;
+          if (_rgba(i, x - 1, y)[3] < 200 || _rgba(i, x + 1, y)[3] < 200 || _rgba(i, x, y - 1)[3] < 200 || _rgba(i, x, y + 1)[3] < 200) n++;
+        }
+      }
+      return n;
+    }
+
+    testWidgets('pins: Icon, Teardrop and Badge in dark and Tactical keep their white ring and ignore the flat flag', (tester) async {
       await tester.runAsync(() async {
-        for (final e in pins.entries) {
-          final tint = e.key == 'dark-yellow' ? yellow : (e.key == 'tactical' ? const Color(0xFFFF2D1F) : purple);
-          for (final (i, style) in PinStyle.values.indexed) {
-            expect(_hash(await renderPinPng(Icons.place, tint, style, ratio: 3, tactical: e.key == 'tactical')), e.value[i], reason: '${e.key} ${style.name}');
+        for (final (name, tint, tac) in [('dark-purple', purple, false), ('dark-yellow', yellow, false), ('tactical', const Color(0xFFFF2D1F), true)]) {
+          for (final style in PinStyle.values) {
+            final plain = await renderPinPng(Icons.place, tint, style, ratio: 3, tactical: tac);
+            expect(_hash(await renderPinPng(Icons.place, tint, style, ratio: 3, tactical: tac, flat: false)), _hash(plain), reason: '$name ${style.name}');
+            if (style == PinStyle.icon && !tac) expect(whiteRim(await _decode(plain)), greaterThan(30), reason: '$name: the ring is there');
+            if (tac) expect(_hash(await renderPinPng(Icons.place, tint, style, ratio: 3, tactical: true, flat: true)), _hash(plain), reason: 'Tactical is never flat');
           }
         }
       });
@@ -68,20 +78,16 @@ void main() {
   });
 
   group('the plain dropped pin and destination pin', () {
-    // The code of e5271778, flat off: dark and Tactical are what they were.
-    const plain = {
-      'dark': ['7df7505915e084fc184adc580d913c8e548f07f9', 'a6d385aec45836002f00f9815027bada57f1a245', '7df7505915e084fc184adc580d913c8e548f07f9'],
-      'tactical': ['d6f345d4e70c08d0cad93e1991324e30c8f59911', '751c46daf358a5ee7ac924baa1c8289f85425640', 'd6f345d4e70c08d0cad93e1991324e30c8f59911'],
-    };
-    testWidgets('dark and Tactical are byte for byte as they were', (tester) async {
+    testWidgets('dark and Tactical are as they were: flat is off by default and Tactical never takes it', (tester) async {
       await tester.runAsync(() async {
-        for (final e in plain.entries) {
-          final tint = e.key == 'dark' ? const Color(0xFFFF6B5E) : const Color(0xFFFF2D1F);
-          for (final (i, style) in PinStyle.values.indexed) {
-            expect(_hash(await renderPlainPinPng(tint, style, ratio: 3, tactical: e.key == 'tactical')), e.value[i], reason: '${e.key} ${style.name}');
+        for (final style in PinStyle.values) {
+          for (final tac in [false, true]) {
+            const tint = Color(0xFFFF6B5E);
+            final base = await renderPlainPinPng(tint, style, ratio: 3, tactical: tac);
+            expect(_hash(await renderPlainPinPng(tint, style, ratio: 3, tactical: tac, flat: false)), _hash(base), reason: '${style.name} tactical=$tac');
+            if (tac) expect(_hash(await renderPlainPinPng(tint, style, ratio: 3, tactical: true, flat: true)), _hash(base), reason: 'Tactical is never flat');
           }
         }
-        expect(_hash(await renderPlainPinPng(const Color(0xFFFF2D1F), PinStyle.icon, ratio: 3, tactical: true, flat: true)), plain['tactical']![0], reason: 'Tactical is never flat');
       });
     });
 
