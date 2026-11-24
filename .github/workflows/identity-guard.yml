@@ -22,6 +22,11 @@ jobs:
         env:
           PAT: ${{ secrets.IDENTITY_PATTERN }}
           OK_EMAIL: 242306573+zvx-echo6@users.noreply.github.com
+          # Known exception: these two commits were pushed to main on 2026-11-23 with the short noreply form of the
+          # project identity. They carry no personal data and cannot be rewritten. Only these exact SHAs are exempt
+          # from the identity check, and only for that exact short form.
+          KNOWN_SHORT_NOREPLY: 7cd799db87143237da1ecfc3d013515bdc2e8aab d11360b485e2dba27e9f522f619ab1f3984c2cbd
+          SHORT_EMAIL: zvx-echo6@users.noreply.github.com
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
           BASE: ${{ github.event.pull_request.base.sha }}
@@ -36,7 +41,14 @@ jobs:
           fail=0
           for c in $(git rev-list $range); do
             ids=$(git log -1 --format='%ae %ce' "$c")
-            if [ "$ids" != "$OK_EMAIL $OK_EMAIL" ]; then echo "::error::$c is not by the no-reply identity"; fail=1; fi
+            id_ok=0
+            if [ "$ids" = "$OK_EMAIL $OK_EMAIL" ]; then id_ok=1
+            else
+              case " $KNOWN_SHORT_NOREPLY " in
+                *" $c "*) [ "$ids" = "$SHORT_EMAIL $SHORT_EMAIL" ] && id_ok=1 ;;
+              esac
+            fi
+            if [ "$id_ok" != "1" ]; then echo "::error::$c is not by the no-reply identity"; fail=1; fi
             if [ -n "$PAT" ]; then
               n=$( { git log -1 --format=%B "$c"; git diff-tree -p --no-commit-id --unified=0 --root -r --text "$c" | grep '^+[^+]'; } \
                 | grep -c -i -E "$PAT" || true)

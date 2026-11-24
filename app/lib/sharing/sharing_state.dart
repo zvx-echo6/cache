@@ -13,6 +13,7 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
+import 'install_marker.dart';
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -42,6 +43,7 @@ class SharingState extends ChangeNotifier {
     List<String> Function()? drainLog,
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
+    InstallMarkerStore? installMarker,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _drainLog = drainLog ?? drainSyncLog,
@@ -49,6 +51,9 @@ class SharingState extends ChangeNotifier {
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
+       // The install marker (install_marker.dart) is for Android and iPhone only: on Linux the folder is a file in the person's own
+       // data folder, under their own backup choices.
+       _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
 
@@ -72,6 +77,16 @@ class SharingState extends ChangeNotifier {
   /// Ignored in a browser: Cache Server names itself.
   final String deviceName;
   final SyncOpener _opener;
+
+  /// The device-only install marker checked before the engine opens its folder; null where there is none (Linux, a browser).
+  final InstallMarkerStore? _marker;
+
+  /// This device was started as a new, unlinked one because its sync folder came from another phone (a restore). Said once on
+  /// the Sharing and sync page ([dismissNewDevice]); kept in sharing.json until then.
+  bool newDevice = false;
+
+  /// The page has shown the new-device message: it is not shown again.
+  Future<void> dismissNewDevice() => _driver.dismissNewDevice();
 
   /// Cache Server's `/api/core` in a browser (a test gives a fake): when set, the engine is the server's and this asks its sharing
   /// host. Null: the app runs the engine itself.
@@ -406,6 +421,9 @@ abstract class SharingDriver {
 
   Future<void> init();
   Future<void> setUp();
+
+  /// The new-device message was shown (see [SharingState.newDevice]).
+  Future<void> dismissNewDevice();
   Future<void> refresh();
   Future<void> refreshItems();
 
@@ -482,6 +500,7 @@ class _PhoneDriver implements SharingDriver {
         s._askSince = DateTime.now().millisecondsSinceEpoch;
         await _save();
       }
+      s.newDevice = j['new_device'] == true;
       if (enabled) {
         await _start();
       }
@@ -499,9 +518,22 @@ class _PhoneDriver implements SharingDriver {
       jsonEncode({
         'enabled': _enabled,
         'ask_since': ?s._askSince,
+        if (s.newDevice) 'new_device': true,
         if (_off.values.any((v) => v.isNotEmpty)) 'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: [...e.value]..sort()},
       }),
     );
+  }
+
+  @override
+  Future<void> dismissNewDevice() async {
+    if (!s.newDevice) return;
+    s.newDevice = false;
+    s._changed();
+    try {
+      await _save();
+    } catch (e) {
+      logError('Sharing: could not keep that the new-device message was shown', error: e);
+    }
   }
 
   /// The first time: creates this device's identity and starts sharing.
@@ -526,6 +558,17 @@ class _PhoneDriver implements SharingDriver {
     _drain = s._every(SharingState.kDrainEvery, s._drainNow);
     try {
       final dir = Directory('${(await s.supportDir()).path}/sync');
+      // Before anything opens the folder: a folder that came in a backup or from another phone is moved aside and this device
+      // starts new and unlinked (install_marker.dart). If it cannot be moved the start fails here and the old key is never opened.
+      final marker = s._marker;
+      if (marker != null) {
+        final found = await prepareSyncFolder(syncDir: dir, store: marker);
+        if (found.state == MarkerState.restored) {
+          s._log('Sharing: the sync folder came from another phone; moved aside, starting as a new device');
+          s.newDevice = true;
+          await _save();
+        }
+      }
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
       // given time to close its engine, before this one opens (two engines on one folder made "Sharing could not start").
       final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await s.supportDir()).path)));
@@ -1049,6 +1092,9 @@ class _WebDriver implements SharingDriver {
       s._changed();
     }
   }
+
+  @override
+  Future<void> dismissNewDevice() async {}
 
   @override
   Future<void> setUp() async {
