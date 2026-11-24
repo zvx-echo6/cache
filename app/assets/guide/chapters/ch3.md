@@ -97,9 +97,9 @@ This page turns weather sources on and off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
 
-The rest are under "More sources", with a count such as "9 more". Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Under them is "Your own", with the sources you added, and at the bottom "Add your own source".
+The rest are under "More sources". Its row names the other sources and counts them. The count depends on what the source list offers and on what you have turned on, so it changes. Open it for a search box and sources such as earthquakes, river levels, avalanche danger, road conditions, space weather and "Satellite fire detections near the place (NASA FIRMS)". Under them is "Your own", with the sources you added, and at the bottom "Add your own source".
 
-- A source that needs a key has a key row in "Settings" > "Maps" or on its own page. Turning it on without a key is fine: it downloads nothing until you add the key. See Keys for data sources.
+- A source that needs a key says "Needs a key" on its row until you add one. Its own page has a row for the key, for example "NASA FIRMS API key", that opens "Settings" > "API keys" at that key. Turning the source on without a key is fine: it downloads nothing until you add the key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.
 
 Which places the data covers is set under "What weather watches" at the top of this page. See What weather watches.
@@ -121,33 +121,34 @@ A saved place's own page has the same "Weather and alerts" switch.
 
 ## Keys for data sources
 
-Some sources need your own free key from the provider. The key goes on the source's row.
+Some sources need your own free key from the provider. Every key is added in one place, "Settings" > "API keys".
 
 ![The key sheet](shot:key-sheet)
 
 1. Go to "Settings" > "API keys". "Your keys" are saved; "Keys Cache can use" are not set yet.
-2. Tap the provider's row to open it, then tap "Add key". (A source's page and "Settings" > "Maps" have a plain row for its key that opens the same place.)
+2. Tap the provider's row to open it, then tap "Add key". (A source's page, "Settings" > "Maps" and "Settings" > "Cache model and web search" have a plain row for the key, for example "NASA FIRMS API key" or "Kagi API key". Tap it to open the same list at that key.)
 3. Tap "Get a key from [provider]" and follow the numbered steps.
 4. Copy the key, come back, and paste it (or tap "Paste").
 5. Tap "Check and save". Saving turns nothing on.
 
-An open row also has "Replace", "Test key" (one request from your account), Used by, Shared with, About and "Remove the key". Removing a key turns nothing off; the features go back to the data on this device.
+An open row also has "Replace", "Test key" (one request from your account), Used by, Shared with, About and "Remove the key". Removing a key turns nothing off: the sources keep their switches, and the features go back to the data on this device.
 
-Cache checks the key with one real download. If it works, the key is saved and the source turns on.
+Cache checks the key with one real download. If it works, the key is saved. Saving turns nothing on.
 
 - If it fails, the sheet says why and nothing is saved.
 
-Keys stay on this device, in secure storage. They are never shown again and are not shared to your other devices. For where to get each key, see chapter 4.
+Keys stay on this device, in secure storage. They are never shown again. They go to a linked device only if you switch them on for it (see Sharing and sync: settings between devices). For where to get each key, see chapter 4.
 
 ## Replace or remove a key
 
-1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
-2. Tap the source's row to open its page.
-3. Tap "Replace" for a new key, or "Remove the key".
+1. Go to "Settings" > "API keys". You can also tap the key's row on a source's page, in "Settings" > "Maps" or in "Cache model and web search".
+2. Tap the key's row to open it.
+3. Tap "Replace" for a new key, or "Remove the key". To remove it, tap "Remove" to confirm, or "Keep" to cancel.
 
-![A source's page](shot:source-page)
+![A source's page, with its key row](shot:source-page)
 
-- Removing a key turns off every source that uses it.
+- Removing a key turns nothing off. The sources that use it keep their switches, and they go back to the data on this device until you add a key again.
+- It removes the key on this device only.
 
 ## Add your own source
 
@@ -418,7 +419,7 @@ One choice sets both devices: when you send yours, the other device is set to ta
 
 "Never synced" lists what always stays on each device: its name, mobile data downloads, indexing speed, the space kept free, the log level, Obsidian and Logseq connections, and the permissions each device asks for itself.
 
-"API keys" lists each key saved on this device, each with its own switch. All start off. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match both ways", from you only when you send yours.
+"API keys" lists each key saved on this device, each with its own switch. A key you switch on goes to that device alone, encrypted for it, and is kept in its secure storage. Keys are never written to a synced folder. Keys go the way settings go: both ways with "Match both ways", from you only when you send yours.
 
 A setting changes on the other device at once. Nothing restarts.
 

@@ -263,7 +263,7 @@ Feeds that are by request or not supported yet are listed but cannot be added. T
 Every source comes from Cache's source list, which the app downloads when online. Nothing is on until you choose it.
 
 - Featured sources are first in ["Settings" > "Weather and alerts"](cache://settings/weather). The rest are under "More sources".
-- A source that needs a key has a "Get key" button.
+- A source that needs a key says "Needs a key" on its row. Its page has a key row, for example "NASA FIRMS API key", that opens "Settings" > "API keys" at that key. Add the key there.
 - To add a web service of your own, tap "Add your own source" at the bottom of "More sources". See chapter 3, Add your own source.
 - To add a source file or a list someone gives you, tap "Or import a source file" on that page. Cache checks every source and adds nothing until you say so.
 

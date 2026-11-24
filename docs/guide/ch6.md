@@ -423,7 +423,7 @@ In the key sheet in "Settings" > "API keys". [Provider] is the company that give
 - "That key wasn't accepted." or "Couldn't check the key. Try again."
 - "The key was accepted but couldn't be saved on this device.": try again.
 - "[source] is on" or "Key replaced": it worked.
-- "Key removed": its sources are off.
+- "Key removed": the key is gone from this device. Its sources keep their switches.
 
 ## Your own source messages
 
