@@ -209,6 +209,7 @@ class ServerSettingsSync {
             // the first key ticked turns the switch on: the keys not ticked yet are left out, so exactly the ticked keys go
             ticked.add(name);
             _kept.keysAll[peer] = held.difference(ticked);
+            _kept.keysHeld.remove(peer);
             _kept.keysFor.remove(peer);
           } else {
             _kept.keysFor[peer] = ticked..add(name);
@@ -233,9 +234,11 @@ class ServerSettingsSync {
     if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
     await _locked(() async {
       if (on) {
-        _kept.keysAll[peer] = <String>{};
+        // the keys left out before the switch went off stay left out
+        _kept.keysAll[peer] = _kept.keysHeld.remove(peer) ?? <String>{};
       } else {
-        _kept.keysAll.remove(peer);
+        final out = _kept.keysAll.remove(peer);
+        if (out != null && out.isNotEmpty) _kept.keysHeld[peer] = out;
       }
       _kept.keysFor.remove(peer);
       await _save();
@@ -248,8 +251,9 @@ class ServerSettingsSync {
   Future<void> forgetPeer(String peer) => _locked(() async {
         final had = _kept.keysAll.remove(peer) != null;
         final hadTicks = _kept.keysFor.remove(peer) != null;
+        final hadHeld = _kept.keysHeld.remove(peer) != null;
         _pushed.remove(peer);
-        if (had || hadTicks) await _save();
+        if (had || hadTicks || hadHeld) await _save();
       });
 
   /// What a browser may see of the keys: the names of the keys this server holds that can sync (in the phone's form, decoded from the
@@ -371,10 +375,11 @@ class ServerSettingsSync {
           // the one sweep per start: choices kept for a device that is no longer linked go (an unlink made while this was not running,
           // or by an older version). Only here, once the host reports its linked devices: before that the list is empty and not true.
           final linked = {for (final p in peers()) if (p['id'] is String) p['id'] as String};
-          final gone = {..._kept.keysAll.keys, ..._kept.keysFor.keys}.where((id) => !linked.contains(id)).toList();
+          final gone = {..._kept.keysAll.keys, ..._kept.keysFor.keys, ..._kept.keysHeld.keys}.where((id) => !linked.contains(id)).toList();
           for (final id in gone) {
             _kept.keysAll.remove(id);
             _kept.keysFor.remove(id);
+            _kept.keysHeld.remove(id);
           }
           if (gone.isNotEmpty) await _save();
           await _pushKeys();

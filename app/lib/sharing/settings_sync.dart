@@ -170,6 +170,7 @@ class SettingsSync extends ChangeNotifier {
   Map<String, String> get _last => _kept.last;
   Map<String, Set<String>> get _keysFor => _kept.keysFor;
   Map<String, Set<String>> get _keysAll => _kept.keysAll;
+  Map<String, Set<String>> get _keysHeld => _kept.keysHeld;
   Map<String, SettingsEvent> get _waiting => _kept.waiting;
   Map<String, Object?> get _notes => _kept.notes;
 
@@ -529,11 +530,12 @@ class SettingsSync extends ChangeNotifier {
   Future<void> _forgetUnlinked() async {
     if (sharing.onServer || !sharing.running) return;
     final linked = {for (final p in sharing.peers) if (p['id'] is String) p['id'] as String};
-    final gone = {..._keysAll.keys, ..._keysFor.keys}.where((id) => !linked.contains(id)).toList();
+    final gone = {..._keysAll.keys, ..._keysFor.keys, ..._keysHeld.keys}.where((id) => !linked.contains(id)).toList();
     if (gone.isEmpty) return;
     for (final id in gone) {
       _keysAll.remove(id);
       _keysFor.remove(id);
+      _keysHeld.remove(id);
       _pushed.remove(id);
     }
     await _saveState();
@@ -673,9 +675,11 @@ class SettingsSync extends ChangeNotifier {
       return;
     }
     if (on) {
-      _keysAll[peer] = <String>{};
+      // the keys left out before the switch went off stay left out
+      _keysAll[peer] = _keysHeld.remove(peer) ?? <String>{};
     } else {
-      _keysAll.remove(peer);
+      final out = _keysAll.remove(peer);
+      if (out != null && out.isNotEmpty) _keysHeld[peer] = out;
     }
     _keysFor.remove(peer);
     await _saveState();
@@ -709,6 +713,7 @@ class SettingsSync extends ChangeNotifier {
       // The switch is off: a single key can only be left out of an included set.
       if (!on) return;
       _keysAll[peer] = {for (final k in keys()) if (k.name != name) k.name};
+      _keysHeld.remove(peer);
     } else {
       on ? all.remove(name) : all.add(name);
     }
