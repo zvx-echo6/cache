@@ -64,6 +64,7 @@ class ConnectionsScreen extends StatelessWidget {
       k = pick;
     }
     // Cache's own picker when the connections have one (a browser has no system picker); else the phone's.
+    if (!context.mounted) return;
     final own = connections.ownPicker;
     final picked = own != null ? await own(context) : await pickFolder();
     if (picked == null) return;

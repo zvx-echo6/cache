@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:cache_search/cache_search.dart' show CoreTransport;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'connections.dart';
