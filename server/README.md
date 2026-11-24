@@ -302,6 +302,14 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   private notebook stays out of the share until its "Include in sync and sharing" is on (`sharing.set_private`; kept in
   `<support>/notebook-sync/targets.json`). A photo that arrives is stored in `<support>/notebook/photos/<id>.jpg` (and `thumbs/`,
   the same bytes: the helper has no image library). The built-in templates come from the web build (`CACHE_NOTEBOOK_TEMPLATES`).
+- **Notes folders** (Obsidian and Logseq on this computer; `server/helper/bin/folder_pick_ops.dart` and `folder_connections.dart`): the
+  person picks a folder of the computer Cache runs on in the browser's own folder picker, which lists folders with `devfs.list {path?}`
+  (from the home folder of the user Cache runs as, up to `/`; subfolders only, hidden ones left out, each marked `obsidian` when it has
+  `.obsidian` and `logseq` when it has `logseq/config.edn`, with whether it can be opened; `io_error` for one that cannot be read). The
+  `nbfolders.*` ops (`state`, `connect`, `disconnect`, `pause`, `sync`, `set_tag`, `resolve`) connect a folder, and the helper then
+  keeps it the same as the notebooks with the phone's engine over `core_notebook_store.dart` (the phone's triggers: at start, 2 s after
+  a write to the notebooks, every 2 minutes; the phone's merge rules and status lines), with no tab open. The connections are kept in
+  `<support>/notebook-sync/folders.json` and each one's record in `<support>/notebook-sync/<obsidian|logseq>.json`.
 
 - **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
   (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the
