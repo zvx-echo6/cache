@@ -1320,7 +1320,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         unawaited(_lookUpPinCounty(sel));
         _focusPin(sel);
       } else {
-        _focusOn(sel.lat, sel.lon);
+        // Any other place with a card (a coordinate search, a searched or saved place): the same slide, so its pin shows above the card.
+        _focusPin(sel);
       }
     }
     if (sel == null) _focusFor = null;

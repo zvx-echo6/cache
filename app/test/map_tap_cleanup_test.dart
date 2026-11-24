@@ -301,6 +301,25 @@ void main() {
   });
 
   group('b) markers', () {
+    for (final (label, place) in [
+      ('a coordinate search result', const MapPlace(id: 'coords:42.5,-113.5', type: 'coordinates', name: '42.5, -113.5', kind: 'Coordinates', address: '', lat: 42.5, lon: -113.5, matched: 'name')),
+      ('a searched place', const MapPlace(id: 'place:test:boise', type: 'place', name: 'Boise', kind: 'City', address: 'Ada County, ID', lat: 42.5, lon: -113.5, matched: 'name')),
+    ]) {
+      testWidgets('$label: the map slides so its pin shows above the card, as for a tap on open ground', (tester) async {
+        final m = _Maps();
+        await m.pump(tester);
+        m.camera.cameras.clear();
+        await tester.runAsync(() async => m.nav.select(place));
+        await m.settle(tester);
+        expect(m.camera.cameras, isNotEmpty, reason: 'the map moved');
+        final last = m.camera.cameras.last as List;
+        expect(last.first, 'newCameraPosition', reason: 'moved to an offset centre, not onto the pin itself: $last');
+        final target = (last[1] as Map)['target'] as List;
+        expect(target[0] as num, lessThan(42.5), reason: 'the centre is south of the pin, so the pin is drawn above the card');
+        await m.finish(tester);
+      });
+    }
+
     testWidgets('an area\'s card draws no dot (only its outline); a dropped pin is drawn as a map pin image', (tester) async {
       final m = _Maps();
       await m.pump(tester);
