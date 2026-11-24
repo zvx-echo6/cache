@@ -3243,6 +3243,14 @@ impl Serve for Inner {
         }
     }
 
+    fn blobs_ready(&self) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("hold-store-ready").exists() {
+            return false;
+        }
+        self.store_ready.load(Ordering::SeqCst)
+    }
+
     fn served(&self, peer: &str, hash: &str, end: u64) {
         #[cfg(feature = "test-hooks")]
         if self.dir.join("no-serve-signal").exists() {

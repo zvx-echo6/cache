@@ -220,6 +220,11 @@ pub trait Handler: Send + Sync + 'static {
     /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
     /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
     fn reachable(&self, _peer: PublicKey) {}
+    /// Whether the file store may be served yet (false while it is being moved to a new format). While false, a window request
+    /// is answered "not ready" (a temporary failure for the asker), never "missing". Called per request; do not block.
+    fn blobs_ready(&self) -> bool {
+        true
+    }
     /// A linked device asked for a window of a blob: the blob's hash and the byte just past the last one the window covers. Called
     /// when the request arrives and again when the answer has been made; do not block.
     fn served(&self, _peer: PublicKey, _hash: cache_store::Hash, _end: u64) {}
@@ -776,6 +781,10 @@ impl RnsNode {
                                     Asker::Unlinked => continue,
                                 });
                                 tokio::spawn(async move {
+                                    if !handler.blobs_ready() {
+                                        let _ = handle.respond_owned_bytes(token, blobs::not_ready());
+                                        return;
+                                    }
                                     let want = blobs::decode_want(&data);
                                     if let Some((hash, _, end)) = want {
                                         handler.served(from, hash, end.saturating_mul(blobs::CHUNK));

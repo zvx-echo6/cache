@@ -639,6 +639,10 @@ impl Handler for Serving {
         self.serve.reachable(&peer.to_string());
     }
 
+    fn blobs_ready(&self) -> bool {
+        self.serve.blobs_ready()
+    }
+
     fn served(&self, peer: PublicKey, hash: Hash, end: u64) {
         self.serve.served(&peer.to_string(), &hash.to_string(), end);
     }

@@ -25,6 +25,12 @@ pub(crate) const CHUNK: u64 = 1024;
 const OK: u8 = 0;
 const MISSING: u8 = 1;
 const REFUSED: u8 = 2;
+/// The file store is not ready to serve yet (being moved to a new format): the asker tries again later.
+const NOT_READY: u8 = 3;
+
+pub(crate) fn not_ready() -> Vec<u8> {
+    vec![NOT_READY]
+}
 
 pub(crate) fn encode_want(hash: &Hash, start: u64, end: u64) -> Vec<u8> {
     let mut v = hash.as_bytes().to_vec();
@@ -123,6 +129,7 @@ pub async fn fetch(
         match reply.first() {
             Some(&OK) => {}
             Some(&MISSING) => bail!("the other device does not have this file"),
+            Some(&NOT_READY) => bail!("the other device is not ready to send files yet (its file store is being updated)"),
             _ => bail!("the other device refused the request"),
         }
         let bao = &reply[1..];

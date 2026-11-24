@@ -190,6 +190,10 @@ pub trait Serve: Send + Sync + 'static {
     fn reachable(&self, _peer: &str) {}
     /// A linked device asked for a window of the blob `hash`: the byte just past the window.
     fn served(&self, _peer: &str, _hash: &str, _end: u64) {}
+    /// Whether the file store may be served over Reticulum yet.
+    fn blobs_ready(&self) -> bool {
+        true
+    }
     /// A Nearby link both people confirmed, with the other device's destination and signature (hex): keep it.
     fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str);
 }

@@ -7,7 +7,7 @@
 //!
 //! Hooks (files in a device's folder, read by the test-hooks build): `no-notice` (this device sends no notices: a lost one),
 //! `no-summary` (acts as an older build), `reach-gap-ms` (how long without an announce makes a device reachable again),
-//! `hold-fetch-mid` (a fetch is held after its first window, and says so with `hold-fetch.held`), `no-summary-fetching` (the
+//! `hold-store-ready` (this device's file windows are not served: its file store counts as not ready), `hold-fetch-mid` (a fetch is held after its first window, and says so with `hold-fetch.held`), `no-summary-fetching` (the
 //! summary says nothing of a fetch in progress), `no-serve-signal` (the windows served are not noted).
 #![cfg(any(target_os = "linux", target_os = "android"))]
 
@@ -393,5 +393,41 @@ fn the_sender_sees_the_other_device_fetching_through_the_summary_it_sends() {
         round(t.a());
         fetching(t.a()) == Value::Null
     });
+    close(t);
+}
+
+// --- Files are served over Reticulum only once the file store is ready ---
+
+#[test]
+fn a_device_whose_file_store_is_not_ready_is_not_taken_as_not_having_the_file() {
+    // B holds the file and its store counts as not ready (as during a move of an old store): A asks for the file and gets no data,
+    // but is told "not ready", not "I do not have it". A keeps it wanted (nothing failed or dropped), and when B is ready it comes.
+    let t = pair(&[], &[], &["hold-store-ready"], (600, 600), (600, 600));
+    put(&t.fb.join("clip.bin"), &random(300 * 1024, 7));
+    let want = std::fs::read(t.fb.join("clip.bin")).unwrap();
+    call(t.b(), "sync_now", json!({}));
+    call(t.a(), "sync_now", json!({}));
+    wait_dbg(
+        "A to be told B is not ready",
+        60,
+        || {
+            call(t.a(), "sync_now", json!({}));
+            brief(t.a()).contains("not ready")
+        },
+        || format!("A: {}\nB: {}", brief(t.a()), brief(t.b())),
+    );
+    assert!(!t.fa.join("clip.bin").exists(), "no data came from a device that is not ready");
+    let b_says = brief(t.a());
+    assert!(!b_says.contains("does not have"), "A was told B lacks the file: {b_says}");
+    std::fs::remove_file(t.db.join("hold-store-ready")).unwrap();
+    wait_dbg(
+        "the file on A",
+        60,
+        || {
+            call(t.a(), "sync_now", json!({}));
+            std::fs::read(t.fa.join("clip.bin")).ok().as_deref() == Some(&want[..])
+        },
+        || format!("A: {}\nB: {}", brief(t.a()), brief(t.b())),
+    );
     close(t);
 }
