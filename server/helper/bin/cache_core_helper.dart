@@ -18,6 +18,8 @@ import 'starter_layers.dart';
 import 'line_protocol.dart';
 import 'live_timer.dart';
 import 'core_notebook_store.dart';
+import 'folder_connections.dart';
+import 'folder_pick_ops.dart';
 import 'notebook_sync_host.dart';
 import 'regions_ops.dart';
 import 'server_settings_sync.dart';
@@ -145,6 +147,18 @@ Future<void> main() async {
     attachNotebookSync(host, nb);
     notebookSync = nb;
   }
+  // Obsidian and Logseq folders of this computer, chosen in the browser's folder picker (`devfs.list`): the notebooks in the core and
+  // the folder are kept the same by the phone's engine (`nbfolders.*`), with no tab open. It needs no sharing.
+  final folders = FolderConnections(
+    support: dirs.support,
+    store: CoreNotebookStore(
+      call: (op, args) async => (dispatcher.handle('notebook', {'op': op, 'args': args}) as Map).cast<String, dynamic>(),
+      mediaDir: Directory('${dirs.support.path}/notebook'),
+    ),
+    templates: serverTemplates(Platform.environment['CACHE_NOTEBOOK_TEMPLATES'], log: log),
+    changedNotebooks: () => notebookSync?.changed(),
+    log: log,
+  );
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.
   if (sharing != null) {
     indexesSync = IndexesSync(host: sharing, dispatcher: dispatcher, savedVideos: () => videoOps.savedVideos(), log: log);
@@ -180,6 +194,7 @@ Future<void> main() async {
       OpenOp(dirs, dispatcher, log: log, indexer: indexer, guide: guide, own: own, given: givenSources, onOpened: () {
         updateIndexes();
         unawaited(notebookSync?.start() ?? Future<void>.value());
+        unawaited(folders.start());
         regionsOps.afterOpen();
         keys.replay(dispatcher);
       }),
@@ -193,12 +208,19 @@ Future<void> main() async {
       videoOps,
       HistoryOps(Directory('${dirs.support.path}/history'), log: log),
       keys,
+      FolderPickOps(),
+      folders,
       if (sharing != null) SharingOps(sharing),
     ],
-    hook: nbSync == null ? keys : NotebookWriteHook(nbSync.changed, then: keys),
+    // A browser's write to the notebooks exports to the linked devices' folder and to the connected Obsidian and Logseq folders.
+    hook: NotebookWriteHook(() {
+      nbSync?.changed();
+      folders.changed();
+    }, then: keys),
     onEnd: () {
       settingsSync?.stop();
       notebookSync?.stop();
+      folders.stop();
       return sharing?.stop();
     },
   );
