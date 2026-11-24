@@ -838,6 +838,9 @@ struct Inner {
     /// soon, but at most once per interval per device (two idle devices asking each other must not keep each other awake).
     every: Duration,
     asked_at: Mutex<HashMap<String, Instant>>,
+    /// Per device: the files (share id, path) a round wanted from it and could not get whole. While any is left the device is not
+    /// quiet ([`Inner::quiet_peer`]): the timer round retries them.
+    held_from: Mutex<HashMap<String, HashSet<(String, String)>>>,
     network: AtomicBool,
     reserve: AtomicU64,
     round: tokio::sync::Mutex<()>,
@@ -1955,6 +1958,10 @@ impl Inner {
         if !self.peer_has_summary(peer) || !self.net.reached_over_rns(peer) || !self.heard_from.lock().unwrap().contains(peer) {
             return false;
         }
+        if self.held_from.lock().unwrap().get(peer).is_some_and(|s| !s.is_empty()) {
+            // Still has files to get from it: the timer round retries them until a round leaves nothing held.
+            return false;
+        }
         self.run.lock().unwrap().peers.get(peer).is_some_and(|s| s.error.is_none() && s.last_seen.is_some())
     }
 
@@ -2715,6 +2722,7 @@ impl Inner {
         // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
         let mut held = false;
         let mut no_room: Option<anyhow::Error> = None;
+        let fetch_paths: HashSet<String> = actions.iter().filter_map(|a| if let Action::Fetch { path, .. } = a { Some(path.clone()) } else { None }).collect();
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -2775,11 +2783,23 @@ impl Inner {
                     if held && excluded(last, &path) {
                         continue;
                     }
+                    let size = entry.size;
+                    let key = (sh.id.clone(), path.clone());
                     match self.fetch(sh, &path, entry, conflict, from).await {
-                        Ok(true) => {}
-                        Ok(false) => held = true,
+                        Ok(true) => {
+                            if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
+                                say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
+                            }
+                        }
+                        Ok(false) => {
+                            held = true;
+                            if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
+                                s.remove(&key);
+                            }
+                        }
                         Err(e) => {
                             held = true;
+                            self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
                             let msg = format!("{e:#}");
                             // With no network it may use nothing else can come either: the round says sync is paused.
                             if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
@@ -2796,6 +2816,12 @@ impl Inner {
                         }
                     }
                 }
+            }
+        }
+        if !self.stop.load(Ordering::Relaxed) {
+            // What this device no longer wants from `from` (gone or replaced there) is not held.
+            if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
+                s.retain(|(id, p)| *id != sh.id || fetch_paths.contains(p));
             }
         }
         match no_room {
@@ -2843,7 +2869,7 @@ impl Inner {
                 done: 0,
                 from: providers.iter().map(|p| self.peer_name(p)).collect(),
             });
-            let mut stream = self.net.fetch(self.store.raw(), hash, providers).await?;
+            let mut stream = self.net.fetch(self.store.raw(), hash, providers.clone()).await?;
             let mut failed = None;
             let mut last_progress = Instant::now();
             loop {
@@ -2855,6 +2881,12 @@ impl Inner {
                             last_progress = Instant::now();
                             if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
                                 t.done = n;
+                            }
+                            #[cfg(feature = "test-hooks")]
+                            if n > 0 && self.dir.join("drop-fetch-mid").exists() {
+                                // A link that drops part way: while `<dir>/drop-fetch-mid` exists a fetch fails after its first window.
+                                failed = Some("test: link dropped".to_string());
+                                break;
                             }
                             #[cfg(feature = "test-hooks")]
                             {
@@ -2885,8 +2917,11 @@ impl Inner {
                     break;
                 }
             }
+            let done = self.run.lock().unwrap().transfer.as_ref().map(|t| t.done).unwrap_or(0);
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
+                let names: Vec<String> = providers.iter().map(|p| self.peer_name(p)).collect();
+                say(&format!("fetch from {} stopped at {}/{} MB: {f} (will retry)", names.join(", "), done / 1_048_576, need / 1_048_576));
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
                 if f == NO_SPACE {
                     bail!("Paused: no room to keep {path} ({} needed). Free up space and it carries on.", human(need));
@@ -3601,6 +3636,7 @@ impl SyncEngine {
             wake: Notify::new(),
             every: Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5)),
             asked_at: Mutex::new(HashMap::new()),
+            held_from: Mutex::new(HashMap::new()),
             network: AtomicBool::new(true),
             reserve: AtomicU64::new(cfg.reserve_bytes.unwrap_or(1024 * 1024 * 1024)),
             round: tokio::sync::Mutex::new(()),
