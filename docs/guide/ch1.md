@@ -349,14 +349,14 @@ To keep a place for good, add it to the Places notebook. Each place has its own 
 
 ## Add more weather sources
 
-More sources are in ["Settings" > "Weather and alerts"](cache://settings/weather). Featured ones come first. The rest are under "More sources", with a count such as "9 more".
+More sources are in ["Settings" > "Weather and alerts"](cache://settings/weather). Featured ones come first. The rest are under "More sources", which names them and counts them.
 
 ![The Weather and alerts settings](shot:settings-weather)
 
 1. Find the source.
 2. Turn on its switch.
 
-- If it needs a key, its key row in "Settings" > "API keys" says "Not set". Turning the source on without a key is fine.
+- If it needs a key, its row says "Needs a key", and its key row in "Settings" > "API keys" says "Not set". Turning the source on without a key is fine.
 
 You choose which alerts pop up in ["Settings" > "Notifications"](cache://settings/notifications).
 

@@ -48,6 +48,7 @@ import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/notebooks_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
 import 'package:cache/screens/videos/instance_screen.dart';
+import 'package:cache/screens/settings/api_keys_page.dart';
 import 'package:cache/screens/videos/instance_sheet.dart';
 import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/screens/videos/videos_screen.dart';
@@ -402,12 +403,10 @@ void main() {
     await shot(tester, 'settings-weather');
     await frame(tester, 932);
 
-    // The watch list (1.0.29) sits above the sources: the row of the key-only source is further down the page.
-    await tester.scrollUntilVisible(find.byKey(const ValueKey('source-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+    // The key sheet now opens from Settings > API keys: the NASA FIRMS row, open, then "Add key".
+    await show(tester, ApiKeysScreen(deps: r.deps, openId: 'firms'));
     await tester.pumpAndSettle();
-    // The source is off, so its row has a switch (the Add key button shows once it is on and has no key): the switch asks for the key.
-    await tester.tap(find.descendant(of: find.byKey(const ValueKey('source-firms-viirs-near')), matching: find.byType(Switch)));
+    await tester.tap(find.byKey(const ValueKey('add-firms')));
     await tester.pumpAndSettle();
     await shot(tester, 'key-sheet', crop: _sheet);
     await tester.tapAt(const Offset(10, 60));
