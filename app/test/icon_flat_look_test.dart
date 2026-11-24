@@ -105,20 +105,21 @@ void main() {
             final flat = await _decode(await renderPinPng(Icons.place, tint, style, ratio: 3, flat: true));
             final halo = await _decode(await renderPinPng(Icons.place, tint, style, ratio: 3));
             // The halo look has a white ring around the shape; the flat look has no white pixel outside the tint.
-            int whites(({int w, int h, ByteData px}) i) {
+            // White pixels on the outer boundary of the shape (a glyph's white inside it does not count): the ring is exactly that.
+            int rim(({int w, int h, ByteData px}) i) {
               var n = 0;
-              for (var y = 0; y < i.h; y++) {
-                for (var x = 0; x < i.w; x++) {
+              for (var y = 1; y < i.h - 1; y++) {
+                for (var x = 1; x < i.w - 1; x++) {
                   final p = _rgba(i, x, y);
-                  if (p[3] > 200 && p[0] > 245 && p[1] > 245 && p[2] > 245) n++;
+                  if (!(p[3] > 200 && p[0] > 245 && p[1] > 245 && p[2] > 245)) continue;
+                  if (_rgba(i, x - 1, y)[3] < 200 || _rgba(i, x + 1, y)[3] < 200 || _rgba(i, x, y - 1)[3] < 200 || _rgba(i, x, y + 1)[3] < 200) n++;
                 }
               }
               return n;
             }
 
-            expect(whites(halo), greaterThan(50), reason: '${style.name}: the ring is white today');
-            // A glyph may be white inside (glyphOn purple), but the pin has far fewer white pixels than the ring alone.
-            expect(whites(flat), lessThan(whites(halo) ~/ 4 + 1), reason: '${style.name} ${tint.toARGB32().toRadixString(16)}: no white ring');
+            expect(rim(halo), greaterThan(50), reason: '${style.name}: the ring is white today');
+            expect(rim(flat), 0, reason: '${style.name} ${tint.toARGB32().toRadixString(16)}: no white ring');
             // The shape itself is the same size: its filled body is there in the tint, with an edge of at most 1 pixel and a faint alpha.
             var tinted = 0, faint = 0;
             for (var y = 0; y < flat.h; y++) {
