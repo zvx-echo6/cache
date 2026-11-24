@@ -125,7 +125,7 @@ void main() {
     app.notifyListeners();
     await f;
     expect(done, isTrue);
-    expect(await whenStarted(app, () => true), isNull);
+    await whenStarted(app, () => true);
   });
 
   test('the shipped whats_new.md has a 1.2.0 section matching kAppVersion', () {

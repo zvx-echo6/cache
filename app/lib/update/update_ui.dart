@@ -265,7 +265,7 @@ bool whatsNewAfterUpdate = true;
 /// Shows "What's new in [version]" once, after the first start of a new version, when the owner wrote lines for it. A first install
 /// ([firstInstall]) records the version without showing it. Any way it closes (Got it, a swipe down, a tap outside) counts as seen.
 ///
-/// Every decision writes one line to the app log ("whats-new: <branch>"), so a sheet that did not show says why.
+/// Every decision writes one line to the app log ("whats-new: BRANCH"), so a sheet that did not show says why.
 Future<void> maybeShowWhatsNew(BuildContext context, {required WhatsNewSeen seen, required bool firstInstall, String version = kAppVersion, Future<String> Function()? read, void Function(String)? log}) async {
   final say = log ?? logInfo;
   if (!whatsNewAfterUpdate) {
