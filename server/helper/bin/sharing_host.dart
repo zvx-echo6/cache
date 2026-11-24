@@ -37,6 +37,8 @@ class SharingHost {
     this.engineConfig = const {},
     this.pollEvery = const Duration(seconds: 2),
     this.log,
+    this.drainLog,
+    this.engineLog,
   }) : table = ShareTable.forServer(dataDir: dataDir, supportDir: supportDir, docsDir: docsDir);
 
   final Directory dataDir;
@@ -52,6 +54,13 @@ class SharingHost {
   final Map<String, Object?> engineConfig;
   final Duration pollEvery;
   final void Function(String message)? log;
+
+  /// Takes the engine's buffered lines ([SyncCore.takeLog]; the real one when null). The engine never calls into Dart, so the lines
+  /// are asked for: after the open and on every status refresh (the phone does the same, app/lib/sharing/sharing_state.dart).
+  final List<String> Function()? drainLog;
+
+  /// Where the engine's lines go (the server's app log, through the helper's stderr); [log] when null.
+  final void Function(String line)? engineLog;
   final ShareTable table;
 
   SyncCoreLike? _core;
@@ -173,6 +182,7 @@ class SharingHost {
     try {
       syncDir.createSync(recursive: true);
       final open = opener ?? _openReal;
+      // The engine's lines about this open reach the log whether the open works or not.
       // What each device builds for itself inside a shared folder never syncs (a library's search index).
       final core = await open({
         'dir': syncDir.path,
@@ -191,7 +201,7 @@ class SharingHost {
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
         ...engineConfig,
-      });
+      }).whenComplete(_drain);
       _core = core;
       // The server is always online: sync uses the network (the phone's rule for Wi-Fi).
       await core.call('set_policy', {'network': true});
@@ -293,7 +303,19 @@ class SharingHost {
       status = await c.call('status');
       _noteShareChanges();
     } catch (_) {}
+    _drain();
   }
+
+  /// Takes the engine's buffered lines and writes each to the log (the same lines, one each, as the phone's app log).
+  void _drain() {
+    try {
+      for (final l in (drainLog ?? _drainReal)()) {
+        (engineLog ?? log)?.call(l);
+      }
+    } catch (_) {}
+  }
+
+  List<String> _drainReal() => SyncCore.takeLog(libraryPath: libraryPath);
 
   /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
   final Map<String, (int, int)> _settled = {};
@@ -598,10 +620,19 @@ class SharingHost {
   /// `key_names` and `set_key_on` are not the engine's: the host answers them itself, from [keyNames] and [setKeyOn] (the settings
   /// sync's key list and tick). They give a browser the names of the keys that can go to a linked device and which are ticked, and
   /// take a tick; a key's value is in neither.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on', 'set_include_keys'};
 
   /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
   List<Map<String, Object?>> Function()? keyNames;
+
+  /// The devices with "Include API keys" on, set by the helper. When set, the key calls answer `include` with them.
+  List<String> Function()? includeKeys;
+
+  /// Switches "Include API keys" on or off for the device [peer]. Set by the helper.
+  Future<void> Function(String peer, bool on)? setIncludeKeys;
+
+  /// Told after an `unlink` went through (the device): the settings sync forgets that device's key choices. Set by the helper.
+  Future<void> Function(String peer)? onUnlinked;
 
   /// Told after a browser's `set_link` went through: the device and its record as it was just before (a copy; null when it was not
   /// there). The settings sync seeds what the link now sends from it. Set by the helper; not called for the host's own calls.
@@ -612,6 +643,11 @@ class SharingHost {
 
   /// The engine's key methods, which a browser may never reach (the host does them itself).
   static const Set<String> secretMethods = {'set_secrets', 'take_secrets'};
+
+  Map<String, dynamic> _keyAnswer(List<Map<String, Object?>> keys) {
+    final inc = includeKeys;
+    return {'keys': keys, if (inc != null) 'include': inc()};
+  }
 
   /// One engine method, as `sharing.call` runs it. [trusted] is true for the host's own code and false for a browser's request.
   Future<Map<String, dynamic>> call(String method, Map<String, dynamic> args, {bool trusted = false}) async {
@@ -626,14 +662,34 @@ class SharingHost {
     if (method == 'key_names') {
       final f = keyNames;
       if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
-      return {'keys': f()};
+      return _keyAnswer(f());
+    }
+    if (method == 'set_include_keys') {
+      final f = setIncludeKeys, names = keyNames;
+      if (f == null || names == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
+      final on = args['on'];
+      if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
+      await f(_str(args, 'peer'), on);
+      return _keyAnswer(names());
     }
     if (method == 'set_key_on') {
       final f = setKeyOn;
       if (f == null) throw const CacheSearchException('sync', 'Keys are not kept on this server');
       final on = args['on'];
       if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
-      return {'keys': await f(_str(args, 'peer'), _str(args, 'name'), on)};
+      return _keyAnswer(await f(_str(args, 'peer'), _str(args, 'name'), on));
+    }
+    if (method == 'unlink') {
+      final r = await _locked(() => _engine(method, args.cast<String, Object?>()));
+      final peer = args['peer'], forget = onUnlinked;
+      if (peer is String && forget != null) {
+        try {
+          await forget(peer);
+        } catch (e) {
+          log?.call('sharing: an unlinked device\'s key choices could not be forgotten: $e');
+        }
+      }
+      return r;
     }
     final hear = !trusted && method == 'set_link' ? onLinkSet : null;
     if (hear == null) return _locked(() => _engine(method, args.cast<String, Object?>()));

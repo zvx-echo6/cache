@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -165,8 +166,12 @@ void main() {
       await tester.pump();
       expect(find.text('This is a new device: link it to your other devices again'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
-      for (var i = 0; i < 5; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+      // The page's dispose started the save inside the test's fake zone, so its continuations need pumping: yield to real I/O and
+      // pump until the save is done (no fixed wait; a save that never ends is stopped by the test timeout).
+      var saved = false;
+      unawaited(s.dismissed.whenComplete(() => saved = true));
+      while (!saved) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
         await tester.pump();
       }
       expect(s.newDevice, isFalse);

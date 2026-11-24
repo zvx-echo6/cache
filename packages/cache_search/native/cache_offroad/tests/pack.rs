@@ -56,6 +56,65 @@ fn sqlite_pack_round_trip() {
     assert_eq!(m.len(), 1);
     assert_eq!(m[0].lines[0].len(), 2);
     assert_eq!(m[0].access[1].0.as_deref(), Some("open"));
+    // a pack from before the rebuild has no dirt bike or over-50-in columns: the features say so
+    assert_eq!(m[0].ext, [None, None, None]);
+    assert_eq!(p.land_rules(), None);
+    // the older Alberta/BC packs say it as `cov_land_access`
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("INSERT INTO meta VALUES ('cov_land_access', 'none');").unwrap();
+    }
+    assert_eq!(SqlitePack::open(&path).unwrap().land_rules(), Some(false));
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("INSERT INTO meta VALUES ('land_access', 'us');").unwrap();
+    }
+    assert_eq!(SqlitePack::open(&path).unwrap().land_rules(), Some(true), "land_access wins");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_rebuilt_packs_new_mvum_columns_are_read_when_present() {
+    let dir = std::env::temp_dir().join(format!("offroad_pack_test_ext_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.sqlite");
+    write_pack(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(
+            "ALTER TABLE mvum ADD COLUMN moto_status TEXT; ALTER TABLE mvum ADD COLUMN moto_dates TEXT; \
+             ALTER TABLE mvum ADD COLUMN gt50_4wd_status TEXT; ALTER TABLE mvum ADD COLUMN gt50_4wd_dates TEXT; \
+             ALTER TABLE mvum ADD COLUMN gt50_2wd_status TEXT; ALTER TABLE mvum ADD COLUMN gt50_2wd_dates TEXT; \
+             UPDATE mvum SET moto_status='open', moto_dates='06/01-09/30', gt50_4wd_status='closed', gt50_2wd_status='open', gt50_2wd_dates='07/01-07/31'; \
+             INSERT INTO meta VALUES ('land_access', 'us');",
+        )
+        .unwrap();
+    }
+    let p = SqlitePack::open(&path).unwrap();
+    let m = p.mvum_in_box(42.0, 43.0, -116.0, -115.0).unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].access[1].0.as_deref(), Some("open"), "the old columns are read as before");
+    assert_eq!(m[0].ext[0], Some((Some("open".to_string()), Some("06/01-09/30".to_string()))));
+    assert_eq!(m[0].ext[1], Some((Some("closed".to_string()), None)));
+    assert_eq!(m[0].ext[2], Some((Some("open".to_string()), Some("07/01-07/31".to_string()))));
+    assert_eq!(p.land_rules(), Some(true));
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("UPDATE meta SET value='none' WHERE key='land_access';").unwrap();
+    }
+    assert_eq!(SqlitePack::open(&path).unwrap().land_rules(), Some(false), "land_access none is read from the new meta");
+    // only the motorcycle pair present
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(
+            "ALTER TABLE mvum DROP COLUMN gt50_4wd_status; ALTER TABLE mvum DROP COLUMN gt50_4wd_dates; \
+             ALTER TABLE mvum DROP COLUMN gt50_2wd_status; ALTER TABLE mvum DROP COLUMN gt50_2wd_dates;",
+        )
+        .unwrap();
+    }
+    let p = SqlitePack::open(&path).unwrap();
+    let m = p.mvum_in_box(42.0, 43.0, -116.0, -115.0).unwrap();
+    assert!(m[0].ext[0].is_some() && m[0].ext[1].is_none() && m[0].ext[2].is_none());
     std::fs::remove_dir_all(&dir).ok();
 }
 

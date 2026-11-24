@@ -66,19 +66,17 @@ When you search a place in an area you haven't downloaded, Cache's data server s
 
 Keys and logins are stored in the device's secure storage (Android Keystore or iOS Keychain). They are never shown again after saving.
 
-- Kagi key: entered in ["Settings" > "Cache model and web search"](cache://settings/assistant).
-- Data source keys: entered on the source's row in ["Settings" > "Weather and alerts"](cache://settings/weather).
+- All keys: added, replaced and removed in "Settings" > "API keys". The "Kagi API key" row in ["Settings" > "Cache model and web search"](cache://settings/assistant), and the key rows on a source's page and in ["Settings" > "Maps"](cache://settings/maps), open it.
 - Video site sign-ins: Cache doesn't keep your password. It keeps only the sign-in the site returns. A sign-in through the site's own page happens in a private browser view that keeps nothing.
 
 When you save a key, Cache checks it once with a real search or download. The provider sees that one request. Each key goes only to its own provider.
 
-Keys aren't shared between devices. Add them on each device.
+Keys aren't shared between devices unless you switch a key on for a linked device (see Sharing and sync: settings between devices in chapter 3). Otherwise add them on each device.
 
 ## Remove a key
 
-1. Kagi: go to "Settings" > "Cache model and web search", tap "Change" next to "Search service", then "Remove the key".
-2. Data sources: tap the source's row in "Settings" > "Weather and alerts", then "Remove the key". Its sources turn off.
-3. Video sites: open the site in "Videos", tap the account button, then "Sign out". To drop the site too, tap "Remove this video site".
+1. Any API key: go to "Settings" > "API keys", tap the key's row, then "Remove the key". It turns nothing off; the features go back to the data on this device. This removes the key on this device only.
+2. Video sites: open the site in "Videos", tap the account button, then "Sign out". To drop the site too, tap "Remove this video site".
 
 ## The assistant and web search
 
@@ -100,6 +98,7 @@ When "Use my location" is on, your position goes to the assistant on the device,
 "Private" leaves a notebook or entry out of sharing and sync by default. It doesn't hide it from the assistant.
 
 - A private notebook isn't sent to your other devices unless you include it. Open "Edit notebook" and turn on "Include in sync and sharing". It's off by default.
+- Marking something private after it was shared stops further updates; the copies already on your other devices stay.
 - Once Cache is open, the assistant can read everything in your notebooks, private ones too. It does this on your device.
 - Private is not encryption or a lock. Keep a screen lock on.
 
@@ -119,7 +118,7 @@ When it's on:
 - If a direct link isn't possible, they use a relay ("Connected through a relay"). What they send is encrypted end to end, so the relay can't read it.
 - Devices look for each other on the local network and on the internet.
 - Only what you switch on under "Shared with linked devices" is shared: the kinds "Library", "Maps", "Models", "Notebooks" and "Videos", and inside each kind the items you leave on.
-- Chats, settings and keys aren't shared. Where you stopped in a video isn't shared either.
+- Chats and settings aren't shared by this. Keys aren't either, unless you switch them on for a device under its "Settings" section. Where you stopped in a video isn't shared either.
 - Search indexes are shared whatever kinds you switch on, once sharing is set up. They hold words from your libraries, PDFs, EPUBs and video captions, and only your own linked devices get them. A device fetches only the indexes of what it has.
 - Files and folders whose names start with a dot are never shared.
 - Private notebooks are left out by default.

@@ -2,7 +2,7 @@
 // source form says "For example:". Made-up source names, light theme, phone 390 wide.
 // flutter test test_shots/wording_turn_off_renders_test.dart --update-goldens  (pictures in test_shots/wording/)
 
-import 'package:cache/screens/settings/source_page.dart';
+import 'package:cache/screens/settings/api_keys_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,9 +29,9 @@ void main() {
       await r.weather.refreshCatalogues();
       await r.weather.saveKey(r.weather.sourceById('road-events-near')!, 'made-up-key');
     });
-    await tester.pumpWidget(shotApp(SourcePage(deps: r.deps, sourceId: 'road-events-near')));
+    await tester.pumpWidget(shotApp(ApiKeysScreen(deps: r.deps, openId: 'exroads')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('remove-key')));
+    await tester.tap(find.byKey(const ValueKey('remove-exroads')));
     await tester.pumpAndSettle();
     await snap(tester, _out, '01-remove-key-two-sources');
     await tester.tap(find.text('Keep'));

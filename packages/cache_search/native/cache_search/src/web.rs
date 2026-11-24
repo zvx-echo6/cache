@@ -146,7 +146,7 @@ impl WebSearchProvider for KagiProvider {
 }
 
 fn key_rejected() -> ToolError {
-    ToolError::new(ToolError::KEY_MISSING, "web search key rejected")
+    ToolError::new(ToolError::KEY_MISSING, "That source isn't available right now.")
 }
 
 fn quota_reached() -> ToolError {
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn auth_and_quota_statuses() {
-        assert_eq!(code(parse(401, "")), ("key_missing".into(), "web search key rejected".into()));
+        assert_eq!(code(parse(401, "")), ("key_missing".into(), "That source isn't available right now.".into()));
         assert_eq!(code(parse(403, "not json")).0, "key_missing");
         assert_eq!(code(parse(429, "")).0, "quota");
         assert_eq!(code(parse(402, "")).0, "quota");
@@ -830,7 +830,7 @@ mod tests {
     fn kagi_invalid_key_as_seen_live() {
         // verbatim shape of Kagi's answer to an invalid token (2026-10-26): HTTP 400, `errors`, a string code
         let body = r#"{"meta":{"trace":"t","ms":23,"node":"us-central1"},"data":null,"errors":[{"code":"general.invalid_token","url":"https://kagi.com/api#todo","message":"Token signature failed to verify. Ensure your token has been correctly copied from your dashboard, containing no extra spaces or newlines."}]}"#;
-        assert_eq!(code(parse(400, body)), ("key_missing".into(), "web search key rejected".into()));
+        assert_eq!(code(parse(400, body)), ("key_missing".into(), "That source isn't available right now.".into()));
         assert_eq!(code(parse(200, body)).0, "key_missing");
         // another 400 keeps its code in the detail and is not a key problem
         let other = r#"{"data":null,"errors":[{"code":"search.bad_query","message":"x"}]}"#;

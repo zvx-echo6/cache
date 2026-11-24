@@ -3,6 +3,15 @@
 The lines the "What's new in 1.0.N" sheet shows once after an update: one "## <version>" heading, then one "- " line each,
 written by the owner (lead words in **bold**). A version with no lines shows no sheet; the app never writes them itself.
 
+## 1.2.0
+- **Travel modes:** Drive, Walk, Bike or ATV, each with its own options: avoid highways or tolls, pedestrian or off-road, bicycle or dirt bike, quad or side-by-side. Choose Standard or Emergency routing.
+- **Places on the map:** shops, parks, fuel and landmarks show as icons you can tap, and tapping a town or area opens its card.
+- **Better place cards:** tap to call, open the website, copy details, and see elevation and who owns the land.
+- **Road events:** road work, closures and winter road conditions from 511 and work-zone feeds, on the map with their own cards.
+- **API keys in one place:** Settings > API keys, with steps for getting each key.
+- **Multi-stop trips:** drag stops to reorder them.
+- **Fixes:** off-road travel times are now realistic; notebook edits made on two devices at once are both kept; your phone's backup keeps Cache's settings only.
+
 ## 1.1.0
 - **A new Library:** four places in one: ZIM Collections, Bookshelves (your books on the numbered shelves of the Cache Decimal System, each with its own call number), Catalog (every search index, with Pause and Resume) and Cache Documentation (this guide, What's new and the credits).
 - **Add your own source:** plug in any web service that gives data, pick what to show, and it works like the other weather and alerts sources.

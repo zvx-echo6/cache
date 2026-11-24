@@ -100,6 +100,67 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 4)), skip: skip);
 
+  test('a file written again after the other device deleted it beats the delete and reaches the wiped side', () async {
+    expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
+    final tmp = Directory.systemTemp.createTempSync('sharing_loopback_rewrite');
+    final hosts = <SharingHost>[];
+    SyncCore? b;
+    try {
+      final data = Directory('${tmp.path}/data')..createSync();
+      final support = Directory('${data.path}/app/support')..createSync(recursive: true);
+      final docs = Directory('${data.path}/app/docs')..createSync(recursive: true);
+      final note = File('${data.path}/models/note.md')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('first version\n');
+      final host = SharingHost(dataDir: data, supportDir: support, docsDir: docs, deviceName: 'Server', libraryPath: lib, engineConfig: _noNetwork);
+      hosts.add(host);
+      await host.setUp();
+      expect(host.snapshot()['running'], true, reason: '${host.snapshot()['error']}');
+      await host.setKind('models', true);
+      final bDir = Directory('${tmp.path}/b/sync');
+      final bModels = Directory('${tmp.path}/b/models')..createSync(recursive: true);
+      b = await SyncCore.open({'dir': bDir.path, 'name': 'Phone', ..._noNetwork}, libraryPath: lib);
+      await b.call('share_add', {'id': 'models', 'name': 'Models', 'path': bModels.path});
+      final code = (await b.call('link_code'))['code'] as String;
+      await host.invoke('sharing.link_start', {'code': code});
+      await until(() => (host.snapshot()['link'] as Map)['state'] != 'linking', 'the link');
+      final onB = File('${bModels.path}/note.md');
+      Future<void> round() async {
+        await host.invoke('sharing.call', {'method': 'sync_now', 'args': <String, Object?>{}});
+        await b!.call('sync_now');
+      }
+
+      Future<void> roundsUntil(bool Function() ok, String what) async {
+        final end = DateTime.now().add(const Duration(seconds: 90));
+        while (!ok()) {
+          if (DateTime.now().isAfter(end)) fail('timed out waiting for $what');
+          await round();
+          await Future<void>.delayed(const Duration(seconds: 1));
+        }
+      }
+
+      await roundsUntil(() => onB.existsSync(), 'the note on the second device');
+      // The note goes missing on the host (a wiped folder), and the delete reaches the second device.
+      note.deleteSync();
+      await roundsUntil(() => !onB.existsSync(), 'the delete on the second device');
+      // The host writes it again (what Cache does when a file is missing and no delete marker exists): it reaches the wiped side.
+      note.writeAsStringSync('written again\n');
+      await roundsUntil(() => onB.existsSync() && onB.readAsStringSync() == 'written again\n', 'the note written again on the second device');
+      await round();
+      await Future<void>.delayed(const Duration(seconds: 6));
+      expect(note.existsSync(), isTrue, reason: 'and the delete does not come back to the host');
+      expect(onB.readAsStringSync(), 'written again\n');
+    } finally {
+      for (final h in hosts) {
+        await h.stop();
+      }
+      await b?.close();
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+  }, timeout: const Timeout(Duration(minutes: 4)), skip: skip);
+
   test('the Bookshelves log: the server\'s own log stays whole and its own while a Match device syncs, the other device\'s log arrives beside it, and a restored older copy on the other side never replaces it', () async {
     expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
     final tmp = Directory.systemTemp.createTempSync('sharing_loopback_log');

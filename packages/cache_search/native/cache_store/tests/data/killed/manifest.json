@@ -1,0 +1,58 @@
+[
+  {
+    "name": "tiny.txt",
+    "seed": 1,
+    "size": 3000,
+    "kind": "inline",
+    "hash": "57e5ef10663aaca8f1aeaa4ae6b9579b566bd469bdd2725139cf8a72b778471b",
+    "tag": "share1/tiny.txt"
+  },
+  {
+    "name": "small.txt",
+    "seed": 2,
+    "size": 12000,
+    "kind": "inline",
+    "hash": "3796143e001fd5bd843c218e2560ed246ab2c21cd6d40e308997e74f6275b550",
+    "tag": null
+  },
+  {
+    "name": "a.bin",
+    "seed": 3,
+    "size": 20000,
+    "kind": "owned",
+    "hash": "cd8cd02c15d502370ab8ca99cf2f26a9cfff7fafe02d1603aa21cfc405381aa8",
+    "tag": null
+  },
+  {
+    "name": "b.bin",
+    "seed": 4,
+    "size": 50000,
+    "kind": "owned",
+    "hash": "9ccee7e916610d5e24857ee2de049bc1fa42825d71638b02025090e97b49b08b",
+    "tag": "share1/b.bin"
+  },
+  {
+    "name": "c.bin",
+    "seed": 5,
+    "size": 70000,
+    "kind": "owned",
+    "hash": "485716376c42fd7af372d86dcaa690250e0d40e8c6e65f8edbbebb61afd818a4",
+    "tag": "share1/c.bin"
+  },
+  {
+    "name": "edge.bin",
+    "seed": 9,
+    "size": 16385,
+    "kind": "owned",
+    "hash": "152a3ea263b5e29119515373b01ffdc37cd5d4f0a2a93dd5be149eef9d6034ed",
+    "tag": null
+  },
+  {
+    "name": "partial.bin",
+    "seed": 8,
+    "size": 120000,
+    "kind": "partial",
+    "hash": "47c87dcf78fc789f65d49b6c4f24208a12c95f256c744d59fc058b4be76612a8",
+    "tag": "share3/partial.bin"
+  }
+]

@@ -61,6 +61,7 @@ import '../update/app_update.dart' show ReleaseFileSource;
 import '../update/update_ui.dart';
 import '../video/video_state.dart';
 import '../video/zim_video.dart' show openZimMediaInPlayer;
+import '../roads/road_events_state.dart';
 import '../weather/alert_notifier.dart';
 import '../weather/background.dart' show kBackgroundEvery;
 import '../weather/alert_watch.dart';
@@ -94,6 +95,7 @@ import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
 import '../platform.dart' as plat;
+import '../platform/app_log.dart' show logInfo;
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -199,6 +201,9 @@ class _HeldAsk {
 }
 
 class _ShellState extends State<Shell> {
+  /// The road events the map draws, read from what the road sources stored; null where there are no road sources.
+  late final RoadEventsState? _roadEvents = widget.hub.weather.roads == null ? null : RoadEventsState.fromWeather(widget.hub.weather, widget.hub.weather.roads!);
+
   /// The module on screen; null with [_onModules] false is Home.
   ModuleId? _module;
   bool _onModules = false;
@@ -518,8 +523,16 @@ class _ShellState extends State<Shell> {
 
   /// "What's new" once after an update, on Home only, never over another screen or pop-up (it waits until Home is back).
   Future<void> _whatsNew() async {
-    if (_whatsNewAsked || !mounted || _module != null || _onModules || !(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    if (_whatsNewAsked || !mounted) return;
+    final guard = whatsNewGuard(moduleOpen: _module != null, onModules: _onModules, homeIsCurrent: ModalRoute.of(context)?.isCurrent ?? true);
+    if (guard != null) {
+      logInfo('whats-new: guard: $guard');
+      return;
+    }
     _whatsNewAsked = true;
+    // The shell is built before the models folder is read: wait for the start, or every phone looks like a first install.
+    await whenStarted(widget.app, () => widget.app.started);
+    if (!mounted) return;
     await maybeShowWhatsNew(context, seen: WhatsNewSeen(), firstInstall: widget.app.models.isEmpty);
   }
 
@@ -545,6 +558,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    _roadEvents?.dispose();
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
     openMapsInbox.removeListener(_openMapsFromNotification);
@@ -1312,7 +1326,7 @@ class _ShellState extends State<Shell> {
             ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, onOpenTarget: _openTarget, layout: widget.layout, readOnly: readOnly, onBack: onBack, held: _heldText, returned: _returnedText, onHold: _holdTyped),
           ),
         ModuleId.library => BrowseScreen.inHub(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout, hub: widget.hub),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, elevation: widget.elevation, drive: widget.phoneDrive, active: !_onModules && _module == ModuleId.maps, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, onOpenNotebook: _openNotebookOverMap, onOpenList: _openListOverMap, about: _about, onBackToJump: _jumpBack == null ? null : _backFromMaps, roadEvents: _roadEvents),
         ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),

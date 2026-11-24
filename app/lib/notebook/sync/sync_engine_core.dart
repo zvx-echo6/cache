@@ -135,11 +135,14 @@ const String kImportFallbackNotebook = 'Notes';
 
 /// One entry as the folder has it now.
 class _Unit {
-  _Unit(this.path, this.text, this.doc);
+  _Unit(this.path, this.text, this.doc, {this.origId});
 
   final String path;
   final String text;
   final EntryDoc doc;
+
+  /// Set on a second file that carries entry [origId] (the share file sync's "(conflict, ...)" copy): another version of it.
+  final String? origId;
 }
 
 /// The two-way sync of the notebooks with one folder, with the rules of the notebook spec (5.4, 6.3): what changed on one side
@@ -403,7 +406,9 @@ class NotebookSyncCore {
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
         final other = identical(keep, prev) ? u : prev;
         out[u.doc.id] = keep;
-        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props)));
+        final id = u.doc.id;
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props, template: other.doc.template),
+            origId: kind == SyncKind.share ? id : null));
       }
     }
 
@@ -524,9 +529,29 @@ class NotebookSyncCore {
     await folder.writeText(page, p.head + [for (final b in p.blocks) if (b.cacheId != id) b.text].join());
   }
 
+  static const _markerDir = '_deleted';
+
+  /// The ids of entries deleted in Cache on some device of the share (`_deleted/<id>.json`; a plain name, since hidden folders
+  /// do not travel with the share). Markers are kept; one is removed only when its entry comes back.
+  Future<Set<String>> _markers() async {
+    final out = <String>{};
+    for (final f in await folder.list(_markerDir)) {
+      final n = f.path.substring(_markerDir.length + 1);
+      if (n.endsWith('.json') && !n.contains('/')) out.add(n.substring(0, n.length - 5));
+    }
+    return out;
+  }
+
+  Future<void> _removeMarker(String id) async {
+    if (await folder.exists('$_markerDir/$id.json')) await folder.delete('$_markerDir/$id.json');
+  }
+
   Future<void> _deleteOutside(String id) async {
     final it = _items[id];
     if (it == null) return;
+    if (kind == SyncKind.share) {
+      await folder.writeText('$_markerDir/$id.json', jsonEncode({'id': id, 'at': _now().millisecondsSinceEpoch}));
+    }
     if (_logseq) {
       await _removeBlock(it.path, id);
     } else {
@@ -733,6 +758,7 @@ class NotebookSyncCore {
     final candidates = <_Cand>[];
     final outside = await _scan(byName, newOutside, unreadable, cache: cache, candidates: kind == SyncKind.share ? null : candidates);
     _stopped.removeWhere((id) => !cache.containsKey(id));
+    final marks = kind == SyncKind.share ? await _markers() : <String>{};
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
@@ -786,6 +812,24 @@ class NotebookSyncCore {
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
+      if (marks.contains(id)) {
+        // A delete marker is a delete made in Cache on some device. The marker and the file's removal are separate files and
+        // can arrive in either order, so a marker with the entry here and nothing changed is the pending delete, file there or not.
+        // Only an edit that raced the delete (here or in the file) keeps the entry; the marker is then removed (the file wins).
+        if (c != null && !cacheChanged && !fileChanged) {
+          await notebook.deleteEntry(id);
+          if (f != null) await folder.delete(f.path);
+          _items.remove(id);
+          r.deleted++;
+          r.removedHere++;
+          continue;
+        }
+        // Not in the store and the file is there: written again after the delete (no record, or changed against it): read back.
+        if (c != null || (f != null && (s == null || fileChanged) && await notebook.entry(id) == null)) {
+          await _removeMarker(id);
+          marks.remove(id);
+        }
+      }
       if (c != null) {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
@@ -806,17 +850,10 @@ class NotebookSyncCore {
             _items[id] = _Item(f.path, f.text, c.$2.rev);
           }
         } else if (missing) {
-          if (kind == SyncKind.share && !cacheChanged) {
-            await notebook.deleteEntry(id);
-            _items.remove(id);
-            r.deleted++;
-            r.removedHere++;
-          } else {
-            // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
-            // file or block is written back and the entry stays.
-            _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
-            r.written++;
-          }
+          // Cache is the source of truth, so its file or block is written back and the entry stays (a share: a file missing
+          // never deletes; only a marker does, above).
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+          r.written++;
         } else if (cacheChanged && !fileChanged) {
           _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
           r.written++;
@@ -845,11 +882,12 @@ class NotebookSyncCore {
           }
         }
       } else if (s != null) {
-        // Not read is not deleted: an entry that is still in the store (and still part of this sync) was left out of the read, so
-        // nothing is removed or written for it this round.
+        // Not read is not deleted, and not included here is not deleted: an entry that is still in the store was left out of the
+        // read, or is one this device does not send (a draft, or private and not switched on here: another device may have it
+        // switched on), so nothing is removed or written for it this round. Only an entry gone from the store is deleted.
         final stored = await notebook.entry(id);
         final home = stored == null ? null : notebook.notebook(stored.notebookId);
-        if (stored != null && home != null && _included(home, stored)) continue;
+        if (stored != null && home != null) continue;
         if (f == null || kind == SyncKind.logseqExport) {
           // Gone from Cache: gone from the folder too (unless only the folder had it, already gone).
           if (f == null && kind != SyncKind.logseqExport) {
@@ -886,6 +924,10 @@ class NotebookSyncCore {
     // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
     // Obsidian and Logseq notes the person made are left alone).
     for (final u in _ownFilesOnly ? const <_Unit>[] : newOutside) {
+      if (u.origId != null) {
+        await _conflictCopy(u, byName, r);
+        continue;
+      }
       final id = _newId();
       final saved = await _apply(id, u.doc, byName, text: u.text);
       final book = notebook.notebook(saved.notebookId) ?? byName[u.doc.notebook]!;
@@ -946,8 +988,47 @@ class NotebookSyncCore {
     r.keptAsTwo.add(doc.title ?? doc.when);
   }
 
+  /// A second file with entry [u].origId's id (the share file sync's "(conflict, ...)" copy), after the entry itself was
+  /// settled this pass. The same rule as [_keepBoth], so every device ends the same: of the two texts the one that hashes
+  /// lower stays on the entry, the other is the new entry "<title> (other version)", whose id comes from the entry's id and its
+  /// text alone (so it is made once, whichever way a device reaches it). The conflict file becomes the copy's file; when it
+  /// only repeats a text the entry holds, or the copy exists already, it is removed.
+  Future<void> _conflictCopy(_Unit u, Map<String, Notebook> byName, SyncReport r) async {
+    final id = u.origId!;
+    final held = _items[id];
+    final e = await notebook.entry(id);
+    final book = e == null ? null : notebook.notebook(e.notebookId);
+    if (held == null || e == null || book == null) return; // left alone until the entry is known here
+    if (u.text == held.base) {
+      await folder.delete(u.path);
+      return;
+    }
+    Future<bool> made(String cid) async => _items.containsKey(cid) || await notebook.entry(cid) != null;
+    if (_sha(held.base).compareTo(_sha(u.text)) < 0) {
+      final cid = _derivedId(id, u.text);
+      if (await made(cid)) {
+        await folder.delete(u.path);
+        return;
+      }
+      await _makeCopy(cid, u.doc, byName, r, at: u.path);
+    } else {
+      // The conflict file's text hashes lower: it takes the entry, and the text the entry held is kept as the copy.
+      final cid = _derivedId(id, held.base);
+      if (!await made(cid)) {
+        await _makeCopy(cid, _docOf(book, e), byName, r, at: u.path);
+      } else {
+        await folder.delete(u.path);
+      }
+      final saved = await _apply(id, u.doc, byName, text: u.text);
+      await folder.writeText(held.path, u.text);
+      _rec(id, held.path, u.text, saved.rev, extra: held.extra);
+    }
+    r.keptAsTwo.add(u.doc.title ?? u.doc.when);
+    r.read++;
+  }
+
   /// [d] as a new entry [copyId] in its notebook: titled "<title> (other version)", with its own copies of its photos.
-  Future<void> _makeCopy(String copyId, EntryDoc d, Map<String, Notebook> byName, SyncReport r) async {
+  Future<void> _makeCopy(String copyId, EntryDoc d, Map<String, Notebook> byName, SyncReport r, {String? at}) async {
     if (_items.containsKey(copyId) || await notebook.entry(copyId) != null) return;
     // A photo belongs to one entry (deleting an entry deletes its photos' files), so the copy gets its own under a new id.
     Future<String?> own(String pid) async {
@@ -989,6 +1070,8 @@ class NotebookSyncCore {
     final extra = _items[copyId]?.extra ?? const <String>[];
     // _apply recorded it with no place yet: it is written as a new file or block.
     _items.remove(copyId);
+    // A conflict copy's own file is taken over (it carries the new id now), as notes written outside are.
+    if (at != null) _items[copyId] = _Item(at, '', saved.rev);
     final path = await _write(copyId, out, book, text);
     _items[copyId] = _Item(path, text, saved.rev, extra: extra);
   }

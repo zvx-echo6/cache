@@ -9,7 +9,7 @@ import '../actions/setup_status.dart' show setupAge;
 import '../chat/system_prompt.dart' show isoWithOffset;
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
-import '../settings/web_search_setup.dart' show KeyCheck;
+import '../settings/web_search_setup.dart' show KeyCheck, KeyFailure;
 import '../video/token_store.dart';
 import 'catalogue.dart';
 import 'catalogue_store.dart';
@@ -23,6 +23,7 @@ import 'live_view.dart';
 import 'own_source.dart';
 import 'place_alerts.dart';
 import 'place_summary.dart' show conditionsOf, kNamedPeriodLasts, kReadingLasts, periodsNotPassed, readingOf;
+import '../roads/road_state.dart';
 import 'places.dart';
 import 'source_health.dart';
 import '../notebook/places.dart' show distanceM;
@@ -198,6 +199,7 @@ class WeatherState extends ChangeNotifier {
     required this.builtIns,
     this.position,
     this.regions,
+    this.roads,
     this.notifier,
     this.told,
     this.onPlacesChanged,
@@ -257,6 +259,10 @@ class WeatherState extends ChangeNotifier {
   final Future<List<String>> Function() builtIns;
   final Position? Function()? position;
   final List<WatchRegion> Function()? regions;
+
+  /// The road sources (511 road events, WZDx road work): their connectors are listed with the others and their downloads count against
+  /// their site's rate limit. Null where there are none (tests that do not use them).
+  final RoadSources? roads;
   final FetchBytes _fetch;
   final OwnFetch _ownFetch;
 
@@ -332,7 +338,8 @@ class WeatherState extends ChangeNotifier {
   /// failure into the row's state.
   SourceRowState lastStatusOf(Connector c) {
     if (!isOn(c.id)) return SourceRowState.off;
-    if (!keyReady(c)) return SourceRowState.needsKey;
+    // A keyed source that is on with no key is silent (decided 2026-11-22): it reads as working and downloads nothing.
+    if (!keyReady(c)) return SourceRowState.working;
     final h = _health[c.id];
     if (h == null || h.failure == SourceFailure.none) return SourceRowState.working;
     // a rejected or missing key needs the person, so it shows at once; the rest wait for the saved copy to go out of date
@@ -341,8 +348,7 @@ class WeatherState extends ChangeNotifier {
       SourceFailure.keyRejected => SourceRowState.keyRejected,
       SourceFailure.limit => SourceRowState.limitReached,
       SourceFailure.unreachable || SourceFailure.providerError || SourceFailure.unreadable => SourceRowState.notAnswering,
-      SourceFailure.keyMissing => SourceRowState.needsKey,
-      SourceFailure.none => SourceRowState.working,
+      SourceFailure.keyMissing || SourceFailure.none => SourceRowState.working,
     };
   }
 
@@ -358,7 +364,7 @@ class WeatherState extends ChangeNotifier {
   SourceRowState lastRowStateOf(Connector c) => _offlineAware(lastStatusOf(c));
 
   /// A state that needs the person to do something (counted in "N need attention"). Limit reached does not.
-  static bool needsAttention(SourceRowState s) => s == SourceRowState.needsKey || s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
+  static bool needsAttention(SourceRowState s) => s == SourceRowState.keyRejected || s == SourceRowState.notAnswering;
 
   /// The sources Settings > Weather and alerts lists above More sources: the featured ones and any other that is on, your own
   /// included (a source that is off and not featured is under More sources).
@@ -457,8 +463,13 @@ class WeatherState extends ChangeNotifier {
   List<Connector> get sources {
     final out = <Connector>[];
     final seen = <String>{};
+    // Road sources first: they keep the ids of the catalogue's Idaho sources, which are left out (the model's tool lists the ids).
+    for (final k in roads?.connectors ?? const <Connector>[]) {
+      if (seen.add(k.id)) out.add(k);
+    }
     for (final c in [...catalogues, ?_own]) {
       for (final k in c.connectors) {
+        if (roads != null && kRetiredRoadIds.contains(k.id)) continue;
         if (seen.add(k.id)) out.add(k);
       }
     }
@@ -593,6 +604,9 @@ class WeatherState extends ChangeNotifier {
     return r;
   }
 
+  /// One real download with [key] (stores nothing): the key sheet's check and a key row's Test.
+  Future<KeyCheck> checkKey(Connector c, String key) => _checkKey(c, key);
+
   Future<KeyCheck> _checkKey(Connector c, String key) async {
     final at = _probePlace();
     try {
@@ -606,14 +620,27 @@ class WeatherState extends ChangeNotifier {
       });
       // A provider that answers a bad key with a page of its own comes back as a response the mapping cannot read.
       if (r['mapping_error'] != null) {
-        return KeyCheck.failed("${_providerOf(c)} didn't accept this key, or answered with something Cache couldn't read. Check you copied all of it.");
+        return KeyCheck.failed("${_providerOf(c)} didn't accept this key, or answered with something Cache couldn't read. Check you copied all of it.", kind: KeyFailure.refused);
       }
       return const KeyCheck.ok();
     } on CacheSearchException catch (e) {
-      return KeyCheck.failed(_keyFailureWords(c, e));
+      return KeyCheck.failed(_keyFailureWords(c, e), kind: _keyFailureKind(e));
     } catch (_) {
       return const KeyCheck.failed("Couldn't check the key. Try again.");
     }
+  }
+
+  static KeyFailure _keyFailureKind(CacheSearchException e) {
+    if (e.code == 'key_missing') return KeyFailure.refused;
+    if (e.code == 'quota') return KeyFailure.limit;
+    final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
+    if (e.code == 'fetch_failed') {
+      if (m == null) return KeyFailure.offline;
+      final code = int.parse(m.group(1)!);
+      if (code == 401 || code == 403) return KeyFailure.refused;
+      if (code == 429) return KeyFailure.limit;
+    }
+    return KeyFailure.other;
   }
 
   String _providerOf(Connector c) => c.provider.isEmpty ? 'The service' : c.provider;
@@ -621,10 +648,10 @@ class WeatherState extends ChangeNotifier {
   String _keyFailureWords(Connector c, CacheSearchException e) {
     final who = _providerOf(c);
     if (e.code == 'key_missing') return "$who didn't accept this key. Check you copied all of it.";
-    if (e.code == 'quota') return '$who says this key has reached its limit. Try again later.';
+    if (e.code == 'quota') return '$who says this key has no credit or has reached its limit.';
     final m = RegExp(r'HTTP (\d{3})').firstMatch(e.message);
     if (e.code == 'fetch_failed') {
-      if (m == null) return "Couldn't reach $who. Check your connection.";
+      if (m == null) return "Can't reach $who. Check your connection.";
       final code = int.parse(m.group(1)!);
       if (code == 401 || code == 403) return "$who didn't accept this key. Check you copied all of it.";
       if (code >= 500) return '$who had a problem. Try again in a moment.';
@@ -642,14 +669,13 @@ class WeatherState extends ChangeNotifier {
     return (lat: 44.07, lon: -114.74);
   }
 
-  /// Forgets the key, forgets it in the core and switches off the sources that need it.
+  /// Forgets the key on this device and in the core. No source is switched off: they keep their switches and quietly use what is on the
+  /// device.
   Future<void> removeKey(String alias) async {
     try {
       await secrets.delete(secretName(alias));
     } catch (_) {}
     _keys.remove(alias);
-    final users = sourcesUsingKey(alias);
-    settings.setLiveSourcesOn({for (final c in users) ..._same(c.id)}, false);
     notifyListeners();
     await _applyAll();
   }
@@ -668,6 +694,12 @@ class WeatherState extends ChangeNotifier {
     }
     _catalogues = _store!.loadAll();
     _moveLinkedLists();
+    try {
+      await roads?.load();
+      await roads?.migrateIdaho(secrets);
+    } catch (e) {
+      logError('Road sources move', error: e);
+    }
     _readStatus();
     _readShown();
     _readHereData();
@@ -707,7 +739,7 @@ class WeatherState extends ChangeNotifier {
 
   Future<void> _readKeys() async {
     _keys.clear();
-    final aliases = <String>{for (final c in [..._builtIn, for (final k in _catalogues) ...k.connectors]) ?c.keyAlias};
+    final aliases = <String>{for (final c in [..._builtIn, for (final k in _catalogues) ...k.connectors, ...?roads?.connectors]) ?c.keyAlias, ...?roads?.allKeyAliases};
     for (final a in aliases) {
       try {
         if ((await secrets.read(secretName(a)))?.isNotEmpty == true) _keys.add(a);
@@ -1463,7 +1495,7 @@ class WeatherState extends ChangeNotifier {
       for (final c in srcs)
         () async {
           try {
-            await core.fetch({'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
+            await _fetchCore(c, {'source': c.id, 'place': placeRequest(here.first), 'now': isoWithOffset(_now())});
             _noteHere(c, here.first);
             _coreOffline = false;
             await _noteOutcome(c, SourceFailure.none);
@@ -1641,16 +1673,34 @@ class WeatherState extends ChangeNotifier {
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
+  /// A download through the core. A road source's download first asks its site's limiter (one budget per site, ten calls every 60
+  /// seconds on a 511 site): when the budget is used it waits for room. A download the core answered from its stored copy gives the call back.
+  Future<Map<String, dynamic>> _fetchCore(Connector c, Map<String, dynamic> request) async {
+    final host = c.rateHost, limiter = roads?.limiter;
+    if (host == null || limiter == null) return core.fetch(request);
+    for (var i = 0; i < 6; i++) {
+      final wait = limiter.tryAcquire(host);
+      if (wait == null) break;
+      logInfo('Road sources: ${c.id} waits ${wait.inSeconds + 1} s for room under the site\'s limit');
+      await Future<void>.delayed(wait + const Duration(milliseconds: 50));
+    }
+    final r = await core.fetch(request);
+    if (r['fetched'] != true) limiter.release(host);
+    return r;
+  }
+
   /// One download of [c] for [p]; the kind of a failure goes into [kinds], its words into [sourceErrors].
   Future<(bool, String?)> _fetchOne(Connector c, WatchPlace p, bool force, Map<String, SourceFailure> kinds) async {
     final took = Stopwatch()..start();
     try {
-      final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
+      final r = await _fetchCore(c, {'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
       final got = r['fetched'] == true;
       _noteHere(c, p);
       logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, ${got ? 'downloaded' : 'still fresh'}');
       return (got, null);
     } on CacheSearchException catch (e) {
+      // A keyed source with no key is silent: nothing was downloaded and nothing is said about it.
+      if (_failureOf(c, e) == SourceFailure.keyMissing && !keyReady(c)) return (false, null);
       logInfo('Live update ${c.id}: ${took.elapsedMilliseconds} ms, failed (${e.code})');
       logError('Live update failed (${e.code})', error: e.message, detail: c.id);
       final who = c.provider.isEmpty ? c.title : c.provider;
@@ -1732,16 +1782,13 @@ class WeatherState extends ChangeNotifier {
     return updateNow();
   }
 
-  /// What a source without its key is said to be (after "… failed:" for an update, after "Not downloaded:" on the Weather screen).
-  static const String _needsKeyWords = 'needs a key';
-
   /// A failed download as the person reads it (after "… failed:" for an update, after "Not downloaded:" on the Weather screen): from
   /// the failure kind, never the HTTP status or the core's own words (those are in the log).
   String _fetchFailureWords(Connector c, CacheSearchException e) => _failureWords(_failureOf(c, e));
 
   static String _failureWords(SourceFailure k) => switch (k) {
     SourceFailure.limit => 'reached its limit for now',
-    SourceFailure.keyMissing => _needsKeyWords,
+    SourceFailure.keyMissing => "couldn't update",
     SourceFailure.keyRejected => 'no longer accepts the saved key',
     SourceFailure.unreadable => 'sent something Cache could not read',
     SourceFailure.providerError => 'the service had a problem',
@@ -1852,9 +1899,9 @@ class WeatherState extends ChangeNotifier {
         // never come true. It says why instead, in the words a failed update has for it.
         // Nothing downloaded because the last update failed for it: it says why, in that update's words, not that an update
         // will get it.
-        return (SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? _sourceErrors[c.id] : _needsKeyWords) : (_sourceErrors[c.id] ?? e.message)), null);
+        return (SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? (keyReady(c) ? _sourceErrors[c.id] : null) : (_sourceErrors[c.id] ?? e.message)), null);
       } catch (_) {
-        return (SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id] ?? (keyReady(c) ? null : _needsKeyWords)), null);
+        return (SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]), null);
       }
     }
 

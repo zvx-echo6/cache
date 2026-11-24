@@ -69,6 +69,7 @@ import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
+import 'nav/travel_prefs.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'net/fetch.dart' show fetchText;
@@ -125,6 +126,8 @@ import 'weather/weather_files.dart';
 import 'weather/live_core.dart';
 import 'weather/place_alerts.dart';
 import 'weather/places.dart';
+import 'roads/road_sources.dart' show kRoadSourcesAsset;
+import 'roads/road_state.dart';
 import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
@@ -330,6 +333,7 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => watchRegionsOf(regions.local),
+    roads: RoadSources(settings: settings, loadShipped: () => rootBundle.loadString(kRoadSourcesAsset)),
     // The town "Where I am" is named after: the offline places data's nearest town, as the map search gives it for a point (the `town` field of its coordinates result).
     townOf: (lat, lon) async {
       final core = sources.core;
@@ -1007,6 +1011,8 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
     // One guidance line a minute in the app log while a route is followed (fixes, the core's answer, failures).
     guidanceLogEvery: const Duration(minutes: 1),
+    // The way of travel and its options are kept across restarts.
+    prefs: TravelPrefs(),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.

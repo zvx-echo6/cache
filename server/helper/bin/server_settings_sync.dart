@@ -184,16 +184,72 @@ class ServerSettingsSync {
 
   static String _shown(String name) => name.length > 120 ? '${name.substring(0, 120)}...' : name;
 
-  /// The key [name] is ticked for [peer]. Every key starts off.
-  bool keyOn(String peer, String name) => _kept.keysFor[peer]?.contains(name) ?? false;
+  /// The key [name] is ticked for [peer]. Every key starts off. As on a phone, a device with the "Include API keys" switch on
+  /// ([_kept] `keysAll`: the keys left out) gets every key, one saved later too, except the ones left out.
+  bool keyOn(String peer, String name) {
+    final out = _kept.keysAll[peer];
+    if (out != null) return !out.contains(name);
+    return _kept.keysFor[peer]?.contains(name) ?? false;
+  }
 
-  /// Ticks or unticks the key [name] for [peer], keeps it, and gives the keys to the engine.
+  /// The names of the keys this server holds that can sync (see [keyNames]).
+  Set<String> _heldNames() => {for (final k in keyNames()) k['name'] as String};
+
+  /// Ticks or unticks the key [name] for [peer], keeps it, and gives the keys to the engine. The ticks are kept the way a phone keeps
+  /// them: every key ticked for a device is the switch on (the keys saved later follow it); the keys left out are listed by name.
   Future<void> setKeyOn(String peer, String name, bool on) => _locked(() async {
-        final set = _kept.keysFor.putIfAbsent(peer, () => <String>{});
-        on ? set.add(name) : set.remove(name);
-        if (set.isEmpty) _kept.keysFor.remove(peer);
+        final held = _heldNames();
+        final out = _kept.keysAll[peer];
+        if (out == null) {
+          final ticked = {...?_kept.keysFor[peer]};
+          if (!on) {
+            ticked.remove(name);
+            ticked.isEmpty ? _kept.keysFor.remove(peer) : _kept.keysFor[peer] = ticked;
+          } else if (held.contains(name)) {
+            // the first key ticked turns the switch on: the keys not ticked yet are left out, so exactly the ticked keys go
+            ticked.add(name);
+            _kept.keysAll[peer] = held.difference(ticked);
+            _kept.keysFor.remove(peer);
+          } else {
+            _kept.keysFor[peer] = ticked..add(name);
+          }
+        } else {
+          // as on a phone, leaving every key out does not turn the switch off: only the switch does
+          on ? out.remove(name) : out.add(name);
+        }
         await _save();
         await _pushKeys();
+      });
+
+  /// "Include API keys" is on for [peer] (the phone's `includeKeys`): the device has a `keysAll` entry, whatever keys are saved or left out.
+  bool includeKeys(String peer) => _kept.keysAll.containsKey(peer);
+
+  /// The devices with the switch on, sorted (what a browser reads to show the switch).
+  List<String> includeKeyDevices() => _kept.keysAll.keys.toList()..sort();
+
+  /// The "Include API keys" switch for [peer] (the phone's `setIncludeKeys`): on records the choice with nothing left out, so every key
+  /// saved now or later goes, even when none is saved yet; off sends none. Refused for a device that is not linked.
+  Future<void> setIncludeKeys(String peer, bool on) async {
+    if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
+    await _locked(() async {
+      if (on) {
+        _kept.keysAll[peer] = <String>{};
+      } else {
+        _kept.keysAll.remove(peer);
+      }
+      _kept.keysFor.remove(peer);
+      await _save();
+      await _pushKeys();
+    });
+  }
+
+  /// A device was unlinked: what is kept about its keys goes, so nothing is left of it in state.json and a device that links again
+  /// starts with the switch off.
+  Future<void> forgetPeer(String peer) => _locked(() async {
+        final had = _kept.keysAll.remove(peer) != null;
+        final hadTicks = _kept.keysFor.remove(peer) != null;
+        _pushed.remove(peer);
+        if (had || hadTicks) await _save();
       });
 
   /// What a browser may see of the keys: the names of the keys this server holds that can sync (in the phone's form, decoded from the
@@ -208,7 +264,7 @@ class ServerSettingsSync {
       if (name == null || !isSyncedKeyName(name)) continue;
       final v = store.get(stored);
       if (v == null || v.isEmpty || v.startsWith(KeyStore.refPrefix)) continue;
-      final on = [for (final e in _kept.keysFor.entries) if (e.value.contains(name)) e.key]..sort();
+      final on = [for (final id in {..._kept.keysFor.keys, ..._kept.keysAll.keys}) if (keyOn(id, name)) id]..sort();
       out.add({'name': name, 'on': on});
     }
     out.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
@@ -216,11 +272,11 @@ class ServerSettingsSync {
   }
 
   /// A browser's tick: [setKeyOn] for a linked device and a key this server holds that can sync, answered with [keyNames] (names and
-  /// ticks only). A tick that is already on for a key no longer held can still be cleared; any other name is refused.
+  /// ticks only). A single tick kept for a key no longer held can still be cleared (a device with every key ticked has no such ticks); any other name is refused.
   Future<List<Map<String, Object?>>> setKeyOnFromBrowser(String peer, String name, bool on) async {
     if (!peers().any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
     final held = keyNames().any((k) => k['name'] == name);
-    if (!held && !(!on && keyOn(peer, name))) throw CacheSearchException('bad_args', 'No such key to send: ${_shown(name)}');
+    if (!held && !(!on && (_kept.keysFor[peer]?.contains(name) ?? false))) throw CacheSearchException('bad_args', 'No such key to send: ${_shown(name)}');
     await setKeyOn(peer, name, on);
     return keyNames();
   }
@@ -235,8 +291,9 @@ class ServerSettingsSync {
       if (id is! String) continue;
       final out = <String, String>{};
       if (linkSends(_linkWith(id, p))) {
-        for (final name in (_kept.keysFor[id] ?? const <String>{}).toList()..sort()) {
-          if (!isSyncedKeyName(name)) continue;
+        final names = {..._heldNames(), ...?_kept.keysFor[id]}.toList()..sort();
+        for (final name in names) {
+          if (!isSyncedKeyName(name) || !keyOn(id, name)) continue;
           final v = store.get(keystoreNameOf(name));
           if (v != null && v.isNotEmpty && !v.startsWith(KeyStore.refPrefix)) out[name] = v;
         }
@@ -311,12 +368,23 @@ class ServerSettingsSync {
           _wasRunning = true;
           _pushed.clear();
           _links = sig;
+          // the one sweep per start: choices kept for a device that is no longer linked go (an unlink made while this was not running,
+          // or by an older version). Only here, once the host reports its linked devices: before that the list is empty and not true.
+          final linked = {for (final p in peers()) if (p['id'] is String) p['id'] as String};
+          final gone = {..._kept.keysAll.keys, ..._kept.keysFor.keys}.where((id) => !linked.contains(id)).toList();
+          for (final id in gone) {
+            _kept.keysAll.remove(id);
+            _kept.keysFor.remove(id);
+          }
+          if (gone.isNotEmpty) await _save();
           await _pushKeys();
         } else if (sig != _links) {
           // a link changed (here, or the other device's choice arrived)
           _links = sig;
           await _pushKeys();
         }
+        // a key saved here since the last look goes to the devices that get every key (nothing is sent when nothing changed)
+        await _pushKeys();
         await _takeKeys();
         await _pull();
       });

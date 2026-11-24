@@ -35,13 +35,16 @@ class FakeSharingHost implements CoreTransport {
   Object? stateError;
 
   /// The methods a browser may call (SharingHost.browserMethods).
-  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on'};
+  static const allowed = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on', 'set_include_keys'};
 
   /// The keys the server's keystore holds that can sync, by name, with their values: the values stay in here and no answer carries one.
   final Map<String, String> keyValues = {};
 
   /// The devices each key name is ticked for (the server's `.local/state.json`).
   final Map<String, Set<String>> keyTicks = {};
+
+  /// The devices with "Include API keys" on (the server's `keysAll`): the switch is its own record, whatever keys are saved.
+  final Set<String> keyInclude = {};
 
   /// When set, `set_key_on` fails with it.
   Object? keyError;
@@ -79,6 +82,7 @@ class FakeSharingHost implements CoreTransport {
   /// What the host answers about keys: names and the devices each is ticked for, never a value.
   Map<String, dynamic> _keys() => {
     'keys': [for (final n in keyValues.keys.toList()..sort()) {'name': n, 'on': [...?keyTicks[n]]..sort()}],
+    'include': keyInclude.toList()..sort(),
   };
 
   bool _shared(String id) => sync.shares.any((s) => s['id'] == id);
@@ -144,6 +148,22 @@ class FakeSharingHost implements CoreTransport {
           if (!sync.peers.any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
           if (name is! String || !keyValues.containsKey(name)) throw CacheSearchException('bad_args', 'No such key to send: $name');
           (a['on'] == true) ? keyTicks.putIfAbsent(name, () => {}).add(peer as String) : keyTicks[name]?.remove(peer);
+          return _keys();
+        }
+        if (method == 'set_include_keys') {
+          final peer = a['peer'];
+          if (!sync.peers.any((p) => p['id'] == peer)) throw const CacheSearchException('bad_args', 'No such linked device');
+          if (a['on'] == true) {
+            keyInclude.add(peer as String);
+            for (final n in keyValues.keys) {
+              keyTicks.putIfAbsent(n, () => {}).add(peer);
+            }
+          } else {
+            keyInclude.remove(peer);
+            for (final t in keyTicks.values) {
+              t.remove(peer);
+            }
+          }
           return _keys();
         }
         if (!allowed.contains(method)) throw CacheSearchException('forbidden', 'Not available from a browser: $method');

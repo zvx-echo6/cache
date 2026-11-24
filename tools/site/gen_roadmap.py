@@ -5,10 +5,14 @@ never reach the public page. It lives in a repository secret so this public file
 Any match in an item's title or body, the readme text used, or the finished page stops the build with an error.
 "Where things stand" is driven by status.json next to this script (cards of state-chip lines, an optional timing table, links);
 its text goes through the same blocked-word checks as the board text.
-A body line "Summary: ..." sets the item's one-line description; "Release: X" overrides the Release field (e.g. 1.3)."""
+A body line "Summary: ..." sets the item's one-line description; "Release: X" overrides the Release field (e.g. 1.3).
+Switching to the next release is one line: RELEASE. Open items of the release before it are listed under Later.
+ROADMAP_FIXTURE=file.json reads the readme and items from a file instead of the project, for local previews."""
 import datetime, html, json, os, pathlib, re, subprocess, sys
 
-OWNER, NUMBER, RELEASE = "zvx-echo6", 4, "1.1"
+OWNER, NUMBER, RELEASE = "zvx-echo6", 4, "1.2"
+RELEASES = ("1.1", "1.2", "1.3", "1.4", "1.5")  # in order; the page shows RELEASE, then the ones after it under Later
+PREV = RELEASES[RELEASES.index(RELEASE) - 1] if RELEASES.index(RELEASE) else None
 PROJECT_URL = f"https://github.com/users/{OWNER}/projects/{NUMBER}"
 PLATFORMS = ["Android", "iPhone & iPad", "Linux & Pi"]
 STATES = ["Done", "Building", "Planned", "Later", "n/a"]
@@ -22,6 +26,9 @@ items(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{
  fieldValues(first:30){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{name}}}}}}}}}}"""
 
 def fetch():
+    if os.environ.get("ROADMAP_FIXTURE"):
+        d = json.loads(pathlib.Path(os.environ["ROADMAP_FIXTURE"]).read_text(encoding="utf-8"))
+        return d["items"], d["readme"]
     items, cur, readme = [], None, ""
     while True:
         args = ["gh", "api", "graphql", "-f", "query=" + Q, "-f", f"o={OWNER}", "-F", f"n={NUMBER}"]
@@ -53,8 +60,13 @@ def describe(body):
     s = s.split(";", 1)[0].strip().rstrip(".")
     return s + "." if s else ""
 
+def section(readme, release=RELEASE):
+    """The readme's text for one release: from its "## <release>:" line to the next "## " line."""
+    m = re.search(r"^##\s*" + re.escape(release) + r":.*?$(.*?)(?=^##\s|\Z)", readme, re.M | re.S)
+    return m.group(1) if m else ""
+
 def stable_means(readme):
-    m = re.search(r"\*\*Stable means:\*\*\s*(.+?)(?:\n\s*\n|\Z)", readme, re.S)
+    m = re.search(r"\*\*Stable means:\*\*\s*(.+?)(?:\n\s*\n|\Z)", section(readme), re.S)
     if not m: return []
     text = re.sub(r"\s+", " ", m.group(1)).strip().rstrip(".")
     return [p.strip()[:1].upper() + p.strip()[1:] for p in text.split(";") if p.strip()]
@@ -73,7 +85,7 @@ ICON = {  # 16px inline icons; the state is always written out too, so colour is
 }
 CLS = {"Done": "done", "Building": "building", "Planned": "planned", "Later": "later", "n/a": "na"}
 MEANING = {"Done": "Shipped and tested on real devices", "Building": "Work has started",
-           "Planned": "In 1.1, not started yet", "Later": "Coming to this platform in a later release",
+           "Planned": f"In {RELEASE}, not started yet", "Later": "Coming to this platform in a later release",
            "n/a": "Does not apply to this platform"}
 
 def icon(state):
@@ -98,16 +110,19 @@ def release_of(it):
     """A body line "Release: X" overrides the field (for versions the Release field has no option for, e.g. 1.3)."""
     m = re.search(r"(?im)^\s*release:\s*(\d+\.\d+)\s*$", it["body"])
     return m.group(1) if m else it.get("Release")
-LATER = ("1.2", "1.3", "1.4", "1.5")
+LATER = RELEASES[RELEASES.index(RELEASE) + 1:]
 cur = [i for i in items if i.get("Release") == RELEASE and release_of(i) == RELEASE]
 later = {r: [i["title"] for i in items if release_of(i) == r] for r in LATER}
+# Open items of the release before this one: not dropped, listed under Later until they are scheduled.
+carried = [i["title"] for i in items if PREV and release_of(i) == PREV and i.get("Status") != "Done"]
 the_theme = theme(readme)
 stable = stable_means(readme)
 
-# Public hygiene: everything that is published, plus the full bodies of the 1.1 items.
+# Public hygiene: everything that is published, plus the full bodies of this release's items.
 for i in cur: check(i["title"] + "\n" + i["body"], f'item "{i["title"]}"')
 for r, ts in later.items():
     for t in ts: check(t, f"{r} title")
+for t in carried: check(t, f"{PREV} title")
 later_titles = {r: theme(readme, r) for r in LATER}
 for r, t in later_titles.items(): check(t, f"{r} release title")
 check(the_theme + " " + " ".join(stable), "project readme")
@@ -124,7 +139,9 @@ stable_html = "".join(f"<li>{html.escape(s)}.</li>" for s in stable)
 later_html = "".join(
     f'<div><h3>{r}' + (f': {html.escape(later_titles[r])}' if later_titles.get(r) else "") + '</h3><ul>'
     + "".join(f"<li>{html.escape(t)}</li>" for t in ts) + "</ul></div>"
-    for r, ts in later.items() if ts)
+    for r, ts in later.items() if ts) + (
+    f'<div><h3>From {PREV}, not yet scheduled</h3><ul>' + "".join(f"<li>{html.escape(t)}</li>" for t in carried) + "</ul></div>"
+    if carried else "")
 today = datetime.date.today().isoformat()
 done = sum(1 for i in cur for p in PLATFORMS if i.get(p) == "Done")
 total = sum(1 for i in cur for p in PLATFORMS if i.get(p) not in ("n/a", "Later", None))
@@ -326,7 +343,7 @@ footer .wrap{{display:flex;gap:1rem 1.5rem;flex-wrap:wrap}}
 <p class="kicker">Next release: Cache {RELEASE}</p>
 <h1>{html.escape(the_theme)}</h1>
 <p class="lede">What Cache {RELEASE} brings, and where each feature stands on each kind of device. Must-haves are the promise: {RELEASE} ships when they all work. Stretch features ride along if they are ready, and never hold the release.</p>
-<p class="platforms"><strong>Devices in {RELEASE}:</strong> Android, iPhone and iPad, and Linux and Raspberry Pi (the full app in a browser). Windows comes in 1.2.</p>
+<p class="platforms"><strong>Devices in {RELEASE}:</strong> Android, iPhone and iPad, and Linux and Raspberry Pi (the full app in a browser).</p>
 </div></header>
 <main class="wrap">
 {standing}
@@ -344,4 +361,4 @@ footer .wrap{{display:flex;gap:1rem 1.5rem;flex-wrap:wrap}}
 # Final pass over the whole page; the project link is the one allowed mention of the account name.
 check(page.replace(PROJECT_URL, ""), "generated page")
 open(out, "w", encoding="utf-8").write(page)
-print(len(cur), "items,", sum(len(t) for t in later.values()), "later,", f"{done}/{total} platform cells done")
+print(len(cur), "items,", sum(len(t) for t in later.values()) + len(carried), "later,", f"{done}/{total} platform cells done")

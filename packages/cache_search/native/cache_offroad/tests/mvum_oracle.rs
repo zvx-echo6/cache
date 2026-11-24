@@ -24,7 +24,7 @@ fn mvum_grids_match_reference() {
     let feats: Vec<MvumFeature> = j["features"].as_array().unwrap().iter().map(|f| {
         let r = &f["row"];
         MvumFeature {
-            is_trail: false, symbol: s(&r["symbol"]).filter(|x| !x.is_empty()).or(None), seasonal: s(&r["seasonal"]),
+            is_trail: false, ext: [None, None, None], symbol: s(&r["symbol"]).filter(|x| !x.is_empty()).or(None), seasonal: s(&r["seasonal"]),
             access: [(s(&r["e_bike_class1"]), s(&r["e_bike_class1_dur"])), (s(&r["atv"]), s(&r["atv_datesopen"])),
                      (s(&r["highclearancevehicle"]), s(&r["highclearancevehicle_datesopen"]))],
             lines: f["lines"].as_array().unwrap().iter().map(|l| l.as_array().unwrap().iter()

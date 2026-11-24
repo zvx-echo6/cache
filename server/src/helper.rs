@@ -134,8 +134,17 @@ struct State {
     reason: String,
 }
 
+/// A helper stderr line that starts with this is one of the sync engine's log lines (the helper took it from the engine's buffer),
+/// and goes to the server's app log (`cache.log`); every other stderr line goes to the system journal as before.
+pub const ENGINE_LOG_PREFIX: &str = "cache-log: ";
+
+/// Where the engine's log lines go (see [`Helper::set_engine_log`]).
+type EngineLog = Box<dyn Fn(&str) + Send + Sync>;
+
 pub struct Helper {
     cfg: HelperConfig,
+    /// Set once, by whoever owns the app log.
+    engine_log: Arc<std::sync::OnceLock<EngineLog>>,
     state: Mutex<State>,
     next_id: AtomicU64,
     stopping: AtomicBool,
@@ -152,6 +161,7 @@ impl Helper {
     pub async fn start(cfg: HelperConfig) -> Arc<Helper> {
         let h = Arc::new(Helper {
             cfg,
+            engine_log: Arc::new(std::sync::OnceLock::new()),
             state: Mutex::new(State { run: None, failures: 0, restarting: false, reason: String::new() }),
             next_id: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
@@ -169,6 +179,12 @@ impl Helper {
         }
         drop(st);
         h
+    }
+
+    /// Sends the sync engine's log lines (the helper's stderr lines that start with [`ENGINE_LOG_PREFIX`], prefix removed) to `f`.
+    /// The first call wins.
+    pub fn set_engine_log(&self, f: impl Fn(&str) + Send + Sync + 'static) {
+        let _ = self.engine_log.set(Box::new(f));
     }
 
     /// The port the core's tile server listens on (127.0.0.1). Kept after the first answer; [fresh] asks the core again (the helper
@@ -294,10 +310,14 @@ impl Helper {
         let stdin = child.stdin.take().ok_or("no standard input")?;
         let stdout = child.stdout.take().ok_or("no standard output")?;
         if let Some(stderr) = child.stderr.take() {
+            let engine_log = self.engine_log.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(l)) = lines.next_line().await {
-                    eprintln!("[helper] {l}");
+                    match (l.strip_prefix(ENGINE_LOG_PREFIX), engine_log.get()) {
+                        (Some(line), Some(f)) => f(line),
+                        _ => eprintln!("[helper] {l}"),
+                    }
                 }
             });
         }

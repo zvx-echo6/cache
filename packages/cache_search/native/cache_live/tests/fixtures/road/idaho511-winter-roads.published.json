@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "idaho511-winter-roads",
+  "title": "Idaho 511 winter road conditions",
+  "provider": "Idaho Transportation Department (511)",
+  "description": "statewide Idaho winter road conditions from 511 (dry, wet, snow, ice, closed) by road section; the same list for every place; needs a free 511 developer key",
+  "attribution": "Road condition data from Idaho 511 (511.idaho.gov), Idaho Transportation Department; use is subject to the 511 developer terms",
+  "request": { "url": "https://511.idaho.gov/api/v2/get/winterroads?key={api_key}&format=json" },
+  "api_key": { "alias": "idaho511", "required": true },
+  "refresh_minutes": 15,
+  "quota": { "per_minute": 4, "per_day": 400, "per_month": 8000 },
+  "validity": { "fixed_hours": 3 },
+  "require": ["[0]"],
+  "items": [
+    {
+      "each": "^",
+      "key": { "first_of": [ { "path": "Id" }, { "path": "ID" } ] },
+      "label": { "template": "{road}: {loc}", "vars": { "road": { "path": "RoadwayName" }, "loc": { "path": "LocationDescription" } } },
+      "time": { "path": "LastUpdated", "time": { "in": "unix", "out": "datetime" } },
+      "fields": [
+        { "label": "Overall status", "first_of": [ { "path": "OverallStatus" }, { "path": "Overall Status" } ] },
+        { "label": "Weather", "first_of": [ { "path": "WeatherConditions" }, { "path": "Weather Conditions" } ] },
+        { "label": "Special conditions", "first_of": [ { "path": "SpecialConditions" }, { "path": "Special Conditions" } ] },
+        { "label": "Area", "path": "AreaName" },
+        { "label": "Updated", "path": "LastUpdated", "time": { "in": "unix", "zone": "place", "out": "%Y-%m-%d %H:%M" } }
+      ]
+    }
+  ]
+}

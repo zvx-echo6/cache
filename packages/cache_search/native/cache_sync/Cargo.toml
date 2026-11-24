@@ -11,6 +11,7 @@ name = "cache-sync"
 path = "src/bin/cache_sync.rs"
 
 [dependencies]
+cache_store = { path = "../cache_store" }
 # Pinned to releases at least two weeks old; iroh-blobs 0.103 is the release built on iroh 1.x.
 iroh = "=1.3.0"
 iroh-blobs = "=0.103.1"
