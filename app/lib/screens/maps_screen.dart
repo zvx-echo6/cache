@@ -1226,7 +1226,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       // An area's card draws its outline only: no dot.
       final areaOn = _area != null && nav.selected?.id == _area!.place.id;
       await c.setGeoJsonSource(kPinSource, pinGeoJson(areaOn ? null : nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
-    } catch (_) {}
+    } catch (e) {
+      appLog.add(LogLevel.standard, 'ERROR', 'map pins and routes not drawn: $e');
+    }
     await _pushArea(c);
   }
 
@@ -1241,7 +1243,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (sel != null && !sel.isCategory && (sel.matched == 'pin' || sel.isCoordinates || nav.phase == NavPhase.previewing)) {
       try {
         out[sel.id] = await images.ensure('place', Icons.place, _palette['pin']);
-      } catch (_) {}
+        appLog.add(LogLevel.standard, 'INFO', 'map pin image ${out[sel.id]} for ${sel.id}');
+      } catch (e) {
+        appLog.add(LogLevel.standard, 'ERROR', 'map pin image failed: $e');
+      }
     }
     if (nb == null || _pins.isEmpty) return out;
     final places = [?sel, if (nav.searchOpen) ...nav.results];
