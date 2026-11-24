@@ -414,8 +414,9 @@ class SharingState extends ChangeNotifier {
   Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
-  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
-  /// transfer running (then [working], the line the page already showed); or nothing new ("Up to date"). Only what the person
+  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch, a
+  /// transfer running here, or a linked device fetching from this one (then [working], the line the page already showed); or
+  /// nothing new ("Up to date"). Only what the person
   /// would call shared counts: a folder of a kind switched on, and the settings log (which the engine keeps from a device whose
   /// settings sync is Off); never the folders the app always shares (the search indexes, the Bookshelves log). A folder with no
   /// `with` goes to every linked device; otherwise `with` lists link kinds (a device's `link.mode`, "match" when it has none), and
@@ -434,7 +435,11 @@ class SharingState extends ChangeNotifier {
     ];
     if (scoped.isEmpty) return 'Nothing is shared yet';
     final pending = scoped.any((sh) => ((sh['pending_files'] as num?) ?? 0) > 0);
-    return pending || transfer != null ? working : 'Up to date';
+    // A transfer to a device that only this one sends to shows nowhere here, so each device says when it is fetching (the engine's
+    // `fetching` on a linked device, as of the last time this one asked it).
+    final scopedIds = {for (final sh in scoped) sh['id']};
+    final sending = devices.any((p) => scopedIds.contains((p['fetching'] as Map?)?['share']));
+    return pending || sending || transfer != null ? working : 'Up to date';
   }
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
