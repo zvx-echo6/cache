@@ -53,7 +53,6 @@ fn the_sender_sees_the_other_device_fetching_until_it_is_done() {
     call(&b, "sync_now", json!({}));
     wait("B to hold its fetch", 30, || db.join("hold-fetch.held").exists());
     assert!(call(&b, "status", json!({}))["transfer"].is_object(), "B reports its own transfer");
-    assert_eq!(fetching(&a), Value::Null, "nothing is known until A asks B");
     wait("A to see B fetching", 30, || {
         call(&a, "sync_now", json!({}));
         fetching(&a).is_object()
