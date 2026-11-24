@@ -530,6 +530,38 @@ void main() {
     });
   });
 
+  group('an emptied share folder never deletes entries from the store', () {
+    // The share folder is emptied (or removed and made again) while the engine's state file is kept: the entries are still
+    // here, so the next pass writes them back; it must never read the missing files as "deleted on the other device".
+    Future<(_Rig, String, String)> sent() async {
+      final r = _Rig(SyncKind.share);
+      final j = await r.journal();
+      final a = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'First', body: 'one');
+      final b = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T17:12:00-06:00', title: 'Second', body: 'two');
+      await r.engine.run();
+      expect(r.folder.text.keys.where((k) => k.endsWith('.md')).length, 2, reason: 'the first pass wrote both files');
+      expect(r.state.existsSync(), isTrue, reason: 'the state file is kept');
+      return (r, a.id, b.id);
+    }
+
+    test('every file taken out of the share folder, state file kept: both entries stay in the store', () async {
+      final (r, a, b) = await sent();
+      r.folder.text.clear();
+      r.folder.bytes.clear();
+      await r.engine.run();
+      expect(await r.nb.entry(a), isNotNull, reason: 'First is still in the store');
+      expect(await r.nb.entry(b), isNotNull, reason: 'Second is still in the store');
+    });
+
+    test('the share folder deleted and made again empty, state file kept: both entries stay in the store', () async {
+      final (r, a, b) = await sent();
+      final fresh = MemFolder();
+      await NotebookSync(notebook: r.nb, kind: SyncKind.share, folder: fresh, stateFile: r.state, includePrivate: true, clock: () => DateTime(2026, 10, 29, 17, 2), templates: () async => builtInTemplates()).run();
+      expect(await r.nb.entry(a), isNotNull, reason: 'First is still in the store');
+      expect(await r.nb.entry(b), isNotNull, reason: 'Second is still in the store');
+    });
+  });
+
   group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
     // Two devices of one share, each with its own folder (what cache_sync carries: every file but hidden ones).
     void carry(_Rig from, _Rig to) {
