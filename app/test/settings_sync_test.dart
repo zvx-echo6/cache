@@ -385,6 +385,46 @@ void main() {
     b.dispose();
   });
 
+  test('Include API keys: an unlinked device takes its switch and left-out keys with it; linking again starts off', () async {
+    final (a, b) = await pair();
+    a.keys['live.key.owm'] = 'OWM-SECRET-1234';
+    await a.sync.setIncludeKeys('B', true);
+    await a.sync.setKeyOn('B', 'live.key.owm', false);
+    expect(a.sync.includeKeys('B'), isTrue);
+    final state = File('${a.dir.path}/.local/state.json');
+    expect(jsonDecode(state.readAsStringSync())['keysAll'], containsPair('B', ['live.key.owm']));
+    // unlinked: the engine no longer lists it
+    a.core.peers.removeWhere((p) => p['id'] == 'B');
+    await a.sharing.refresh();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(a.sync.includeKeys('B'), isFalse);
+    expect(jsonDecode(state.readAsStringSync()).containsKey('keysAll'), isFalse, reason: 'nothing of the device is left in the state file');
+    // linked again: the switch is off
+    a.core.peers.add({'id': 'B', 'name': 'Desk', 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null, 'link_known': true});
+    await a.sharing.refresh();
+    expect(a.sync.includeKeys('B'), isFalse);
+    a.dispose();
+    b.dispose();
+  });
+
+  test('Include API keys: at start, choices kept for a device that is no longer linked are swept; a linked one is kept', () async {
+    final a = Dev('A', 'B', otherName: 'Phone');
+    final state = File('${a.dir.path}/.local/state.json')..parent.createSync(recursive: true);
+    state.writeAsStringSync(jsonEncode({
+      'keys': {'GONE2': ['live.key.owm']},
+      'keysAll': {'GONE': <String>[], 'B': ['live.key.owm']},
+    }));
+    await a.start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(a.sync.includeKeys('GONE'), isFalse);
+    expect(a.sync.keyOn('GONE2', 'live.key.owm'), isFalse);
+    expect(a.sync.includeKeys('B'), isTrue);
+    final j = jsonDecode(state.readAsStringSync()) as Map;
+    expect(j['keysAll'], {'B': ['live.key.owm']});
+    expect((j['keys'] as Map).containsKey('GONE2'), isFalse);
+    a.dispose();
+  });
+
   test('existing per-key ticks become the switch with exactly the same keys, with no re-entry; running it twice changes nothing', () async {
     final (a, b) = await pair();
     a.keys['live.key.owm'] = 'OWM-SECRET-1234';

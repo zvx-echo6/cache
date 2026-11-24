@@ -246,6 +246,70 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('API keys: the Include API keys switch stays on, as on a phone, while one key is left out; pressing it turns it off', (tester) async {
+    _tall(tester);
+    final host = _host();
+    host.keyInclude.add('p1');
+    host.keyTicks['live.key.owm'] = {'p1'};
+    host.keyTicks['live.key.zzz'] = {'p1'}; // search.kagi.key is left out
+    final r = _Rig(host, dir);
+    await r.start(tester);
+    await tester.pumpWidget(r.page());
+    await _settle(tester);
+    await _tap(tester, 'link-keys');
+    expect(tester.widget<SwitchRow>(find.byKey(const ValueKey('include-keys'))).value, isTrue, reason: 'one key left out is not the switch off');
+    expect(find.text('3 keys, 2 shared'), findsOneWidget, reason: 'one of three left out');
+    expect(find.text('All keys go to Desk'), findsNothing);
+    expect(tester.widget<SwitchRow>(find.byKey(const ValueKey('key-search.kagi.key'))).value, isFalse);
+    await _tap(tester, 'include-keys');
+    expect(host.opArgs.lastWhere((a) => a['method'] == 'set_include_keys'), {'method': 'set_include_keys', 'args': {'peer': 'p1', 'on': false}});
+    expect(tester.widget<SwitchRow>(find.byKey(const ValueKey('include-keys'))).value, isFalse);
+    expect(find.text('No keys go to Desk'), findsOneWidget);
+    r.dispose();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('API keys: the line under Include API keys in its three states: all shared, some left out, off', (tester) async {
+    _tall(tester);
+    final host = _host();
+    host.keyInclude.add('p1');
+    for (final n in host.keyValues.keys) {
+      host.keyTicks[n] = {'p1'};
+    }
+    final r = _Rig(host, dir);
+    await r.start(tester);
+    await tester.pumpWidget(r.page());
+    await _settle(tester);
+    await _tap(tester, 'link-keys');
+    expect(find.text('All keys shared'), findsOneWidget);
+    await _tap(tester, 'key-live.key.owm');
+    expect(find.text('3 keys, 2 shared'), findsOneWidget);
+    await _tap(tester, 'key-live.key.zzz');
+    expect(find.text('3 keys, 1 shared'), findsOneWidget);
+    await _tap(tester, 'include-keys');
+    expect(find.text('No keys go to Desk'), findsOneWidget, reason: 'the switch off is unchanged');
+    r.dispose();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('API keys: with no key saved, switching Include API keys on is recorded, and stays on', (tester) async {
+    _tall(tester);
+    final host = _host()..keyValues.clear();
+    final r = _Rig(host, dir);
+    await r.start(tester);
+    await tester.pumpWidget(r.page());
+    await _settle(tester);
+    await _tap(tester, 'link-keys');
+    expect(tester.widget<SwitchRow>(find.byKey(const ValueKey('include-keys'))).value, isFalse);
+    await _tap(tester, 'include-keys');
+    expect(host.opArgs.lastWhere((a) => a['method'] == 'set_include_keys'), {'method': 'set_include_keys', 'args': {'peer': 'p1', 'on': true}});
+    expect(host.keyInclude, {'p1'});
+    expect(tester.widget<SwitchRow>(find.byKey(const ValueKey('include-keys'))).value, isTrue);
+    expect(find.text('All keys shared'), findsOneWidget, reason: 'switched on with none saved: nothing is left out');
+    r.dispose();
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a server holding no key that can sync says so, as the phone does', (tester) async {
     _tall(tester);
     final host = _host()..keyValues.clear();
