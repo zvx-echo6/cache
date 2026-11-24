@@ -1,0 +1,820 @@
+{
+ "schema": 1,
+ "version": 1,
+ "updated": "2026-11-22",
+ "_comment": "The ONE data file for road sources. It feeds the site and feed pickers, the key sheets (steps and page), the Map settings key rows and the guide table (gen_guide_table.py). Source: SURVEY.md (surveyed 2026-11-22). Feed web addresses are deliberately NOT stored: the registry carries some publishers' own tokens inline; the app reads the registry at run time and strips credential parameters (see DESIGN.md). Precedence and versioning: see DESIGN.md section 2.1.",
+ "platform": {
+  "name": "511 road events",
+  "endpoint": "https://{site}/api/v2/get/event?key={api_key}&format=json",
+  "rate": "Ten calls every 60 seconds",
+  "keySteps": [
+   "Create an account on the site, or sign in.",
+   "Open the site's developer page.",
+   "Request a Developer API key.",
+   "Copy the key shown on that page."
+  ],
+  "conditionsEndpoint": "https://{site}/api/v3/get/{conditions}?key={api_key}&format=json"
+ },
+ "sites": [
+  {
+   "id": "511.idaho.gov",
+   "name": "Idaho",
+   "country": "US",
+   "host": "511.idaho.gov",
+   "keyPage": "https://511.idaho.gov/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": "https://511.idaho.gov/api/wzdx",
+   "lacks": [],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "511wi.gov",
+   "name": "Wisconsin",
+   "country": "US",
+   "host": "511wi.gov",
+   "keyPage": "https://511wi.gov/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": "https://511wi.gov/api/wzdx",
+   "lacks": [],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "az511.com",
+   "name": "Arizona",
+   "country": "US",
+   "host": "az511.com",
+   "keyPage": "https://az511.com/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": "https://az511.com/api/wzdx",
+   "lacks": [
+    "Comment"
+   ],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "511ga.org",
+   "name": "Georgia",
+   "country": "US",
+   "host": "511ga.org",
+   "keyPage": "https://511ga.org/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "EventSubType"
+   ],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "511.alaska.gov",
+   "name": "Alaska",
+   "country": "US",
+   "host": "511.alaska.gov",
+   "keyPage": "https://511.alaska.gov/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "Comment"
+   ],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "ctroads.org",
+   "name": "Connecticut",
+   "country": "US",
+   "host": "ctroads.org",
+   "keyPage": "https://ctroads.org/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "DetourPolyline",
+    "DetourInstructions"
+   ],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "511la.org",
+   "name": "Louisiana",
+   "country": "US",
+   "host": "511la.org",
+   "keyPage": "https://511la.org/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "Comment"
+   ],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "nvroads.com",
+   "name": "Nevada",
+   "country": "US",
+   "host": "nvroads.com",
+   "keyPage": "https://www.nvroads.com/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [],
+   "conditions": "roadconditions",
+   "conditionsNote": null
+  },
+  {
+   "id": "udottraffic.utah.gov",
+   "name": "Utah",
+   "country": "US",
+   "host": "udottraffic.utah.gov",
+   "keyPage": "https://www.udottraffic.utah.gov/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "drivenc.gov",
+   "name": "North Carolina",
+   "country": "US",
+   "host": "drivenc.gov",
+   "keyPage": "https://www.drivenc.gov/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": "https://www.drivenc.gov/api/wzdx",
+   "lacks": [],
+   "conditions": "roadconditions",
+   "conditionsNote": "List only: no road name or geometry"
+  },
+  {
+   "id": "511.alberta.ca",
+   "name": "Alberta",
+   "country": "CA",
+   "host": "511.alberta.ca",
+   "keyPage": "https://511.alberta.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "Comment"
+   ],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "511on.ca",
+   "name": "Ontario",
+   "country": "CA",
+   "host": "511on.ca",
+   "keyPage": "https://511on.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "DetourPolyline",
+    "DetourInstructions"
+   ],
+   "conditions": "roadconditions",
+   "conditionsNote": "No Id or AreaName"
+  },
+  {
+   "id": "manitoba511.ca",
+   "name": "Manitoba",
+   "country": "CA",
+   "host": "manitoba511.ca",
+   "keyPage": "https://www.manitoba511.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [],
+   "conditions": null,
+   "conditionsNote": null
+  },
+  {
+   "id": "511.gnb.ca",
+   "name": "New Brunswick",
+   "country": "CA",
+   "host": "511.gnb.ca",
+   "keyPage": "https://511.gnb.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "511nl.ca",
+   "name": "Newfoundland and Labrador",
+   "country": "CA",
+   "host": "511nl.ca",
+   "keyPage": "https://511nl.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  },
+  {
+   "id": "511yukon.ca",
+   "name": "Yukon",
+   "country": "CA",
+   "host": "511yukon.ca",
+   "keyPage": "https://511yukon.ca/developers/doc",
+   "keyNeeded": true,
+   "rateLimit": "10 calls per 60 seconds",
+   "ownWzdx": null,
+   "lacks": [
+    "Comment"
+   ],
+   "conditions": "winterroads",
+   "conditionsNote": null
+  }
+ ],
+ "unconfirmed": [
+  {
+   "host": "511ny.org",
+   "why": "Its docs need JavaScript; not verified. New York work zones come through WZDx."
+  },
+  {
+   "host": "hotline.gov.sk.ca",
+   "why": "No documented API found. Not supported."
+  }
+ ],
+ "wzdx": {
+  "registry": "data.transportation.gov dataset 69qe-yiui (Work Zone Data Feed Registry)",
+  "supportedVersions": [
+   "4",
+   "4.1",
+   "4.2"
+  ],
+  "feeds": [
+   {
+    "id": "mcdot",
+    "area": "Arizona",
+    "publisher": "Maricopa County DOT",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "mtc",
+    "area": "California",
+    "publisher": "Metropolitan Transportation Commission San Francisco",
+    "version": "4.1",
+    "keyNeeded": true,
+    "keyPage": "https://511.org/open-data/token",
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "key",
+    "auth": {
+     "in": "query",
+     "name": "api_key"
+    },
+    "rateLimit": "60 requests per hour"
+   },
+   {
+    "id": "cdot",
+    "area": "Colorado",
+    "publisher": "Colorado DOT",
+    "version": "4.2",
+    "keyNeeded": true,
+    "keyPage": "https://maps.cotrip.org/help/section/for-developers.html",
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "key",
+    "auth": {
+     "in": "query",
+     "name": "apiKey"
+    }
+   },
+   {
+    "id": "cdot_cwz",
+    "area": "Colorado",
+    "publisher": "Colorado DOT (Connected Work Zones)",
+    "version": "CWZ 1.0",
+    "keyNeeded": true,
+    "keyPage": "https://manage-api.cotrip.org/subscriber/subscription",
+    "update": "5m",
+    "supported": false,
+    "unsupportedReason": "Connected Work Zones 1.0 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "dedot",
+    "area": "Delaware",
+    "publisher": "Delaware DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "10m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "fdot",
+    "area": "Florida",
+    "publisher": "Florida DOT",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "fldot",
+    "area": "Florida",
+    "publisher": "Florida DOT (second feed)",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "4m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "hidot",
+    "area": "Hawaii",
+    "publisher": "Hawaii DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "168h",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "iddot",
+    "area": "Idaho",
+    "publisher": "Idaho DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "idot_cwz",
+    "area": "Illinois",
+    "publisher": "IDOT (Connected Work Zones)",
+    "version": "CWZ 1.0",
+    "keyNeeded": true,
+    "keyPage": "https://wzad-idot.illinois.gov/cwz/api-key/",
+    "update": "1m",
+    "supported": false,
+    "unsupportedReason": "Connected Work Zones 1.0 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "iltollway",
+    "area": "Illinois",
+    "publisher": "Illinois Tollway",
+    "version": "4.2",
+    "keyNeeded": true,
+    "keyPage": "https://tims2go.tollway.state.il.us/",
+    "update": "60m",
+    "supported": false,
+    "unsupportedReason": "Key instructions not verified yet",
+    "access": "unverified"
+   },
+   {
+    "id": "indot",
+    "area": "Indiana",
+    "publisher": "Indiana DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "idot",
+    "area": "Iowa",
+    "publisher": "Iowa DOT",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "kansas",
+    "area": "Kansas",
+    "publisher": "Kansas DOT",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "60s",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "kytc",
+    "area": "Kentucky",
+    "publisher": "Kentucky Transportation Cabinet",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "30m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "ladotd",
+    "area": "Louisiana",
+    "publisher": "Louisiana DOTD",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "10m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "mdot",
+    "area": "Maryland",
+    "publisher": "Maryland DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "massdot__cwz",
+    "area": "Massachusetts",
+    "publisher": "Massachusetts DOT (Connected Work Zones)",
+    "version": "CWZ 1.0",
+    "keyNeeded": true,
+    "keyPage": "https://api-app.massdot-swzm.com/",
+    "update": "1m",
+    "supported": false,
+    "unsupportedReason": "Connected Work Zones 1.0 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "mdot_4",
+    "area": "Michigan",
+    "publisher": "Michigan DOT",
+    "version": "4",
+    "keyNeeded": true,
+    "keyPage": "https://www.michigan.gov/mdot/travel/safety/efforts/its/its-data",
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "request",
+    "auth": {
+     "in": "basic",
+     "name": "Authorization"
+    },
+    "accessNote": "Email the contractor and fill in a form; HTTP Basic authorization"
+   },
+   {
+    "id": "mndot",
+    "area": "Minnesota",
+    "publisher": "Minnesota DOT",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "msdot",
+    "area": "Mississippi",
+    "publisher": "Mississippi DOT",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "2m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "modot",
+    "area": "Missouri",
+    "publisher": "Missouri DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "3m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "stcharlesco_v4",
+    "area": "Missouri",
+    "publisher": "St. Charles County",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "60m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "CivicLink_CrewCast",
+    "area": "United States (other)",
+    "publisher": "CivicLink",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "pbs",
+    "area": "United States (other)",
+    "publisher": "PurposeBuilt Systems, LLC (Connected Work Zones)",
+    "version": "CWZ 1.0",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": false,
+    "unsupportedReason": "Connected Work Zones 1.0 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "quebec",
+    "area": "United States (other)",
+    "publisher": "Quebec City",
+    "version": "3.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "-",
+    "supported": false,
+    "unsupportedReason": "WZDx version 3.1 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "necdot",
+    "area": "New Hampshire, Vermont, Maine",
+    "publisher": "NHDOT, VTrans and MaineDOT",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "njdot",
+    "area": "New Jersey",
+    "publisher": "New Jersey Institute of Technology",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "2m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "nysdot",
+    "area": "New York",
+    "publisher": "New York DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "15m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "ncdot",
+    "area": "North Carolina",
+    "publisher": "North Carolina DOT",
+    "version": "4.2",
+    "keyNeeded": true,
+    "keyPage": "https://www.drivenc.gov/developers/doc",
+    "update": "4m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "key",
+    "auth": {
+     "in": "query",
+     "name": "key",
+     "inferred": true
+    },
+    "authNote": "Key placement inferred from the 511 platform note; not read in the feed documentation."
+   },
+   {
+    "id": "nddot",
+    "area": "North Dakota",
+    "publisher": "North Dakota DOT",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "nps",
+    "area": "National Park Service",
+    "publisher": "National Park Service",
+    "version": "4",
+    "keyNeeded": true,
+    "keyPage": "https://www.nps.gov/subjects/developer/get-started.htm",
+    "update": "60m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "key",
+    "auth": {
+     "in": "header",
+     "name": "X-Api-Key",
+     "alt": {
+      "in": "query",
+      "name": "api_key"
+     }
+    }
+   },
+   {
+    "id": "ohio",
+    "area": "Ohio",
+    "publisher": "Ohio DOT",
+    "version": "4.2",
+    "keyNeeded": true,
+    "keyPage": "https://publicapi.ohgo.com/accounts/registration",
+    "update": "60m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "key",
+    "auth": {
+     "in": "header",
+     "name": "Authorization",
+     "prefix": "APIKEY ",
+     "alt": {
+      "in": "query",
+      "name": "api-key"
+     }
+    }
+   },
+   {
+    "id": "odot",
+    "area": "Oklahoma",
+    "publisher": "Oklahoma DOT",
+    "version": "4",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "ordot",
+    "area": "Oregon",
+    "publisher": "Oregon DOT",
+    "version": "4",
+    "keyNeeded": true,
+    "keyPage": "https://apiportal.odot.state.or.us/",
+    "update": "1m",
+    "supported": false,
+    "unsupportedReason": "Key instructions not verified yet",
+    "access": "unverified"
+   },
+   {
+    "id": "ptc",
+    "area": "Pennsylvania",
+    "publisher": "Pennsylvania Turnpike Commission",
+    "version": "4.1",
+    "keyNeeded": true,
+    "keyPage": "https://datahub.transportation.gov/api/views/69qe-yiui/files/de6330ba-7e11-4335-9a3f-caf24015dc1a",
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "request",
+    "auth": {
+     "in": "query",
+     "name": "api_key"
+    },
+    "accessNote": "Email request and a data sharing agreement"
+   },
+   {
+    "id": "sddot",
+    "area": "South Dakota",
+    "publisher": "South Dakota DOT (Connected Work Zones)",
+    "version": "CWZ 1.0",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "5m",
+    "supported": false,
+    "unsupportedReason": "Connected Work Zones 1.0 is not supported yet",
+    "access": "unsupported"
+   },
+   {
+    "id": "austin",
+    "area": "Texas",
+    "publisher": "City of Austin",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "60m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "txdot_v4_2",
+    "area": "Texas",
+    "publisher": "Texas DOT",
+    "version": "4.2",
+    "keyNeeded": true,
+    "keyPage": "https://api.drivetexas.org/",
+    "update": "5m",
+    "supported": false,
+    "unsupportedReason": "Key instructions not verified yet",
+    "access": "unverified"
+   },
+   {
+    "id": "vdot",
+    "area": "Virginia",
+    "publisher": "Virginia DOT",
+    "version": "4",
+    "keyNeeded": true,
+    "keyPage": "https://smarterroads.vdot.virginia.gov/register",
+    "update": "1m",
+    "supported": false,
+    "unsupportedReason": "Key instructions not verified yet",
+    "access": "unverified"
+   },
+   {
+    "id": "wsdot",
+    "area": "Washington",
+    "publisher": "Washington State DOT",
+    "version": "4.2",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "1m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   },
+   {
+    "id": "wisdot",
+    "area": "Wisconsin",
+    "publisher": "Wisconsin DOT",
+    "version": "4.1",
+    "keyNeeded": false,
+    "keyPage": null,
+    "update": "5m",
+    "supported": true,
+    "unsupportedReason": null,
+    "access": "open"
+   }
+  ],
+  "accessValues": {
+   "open": "No key",
+   "key": "Self-serve key, entered in Settings > API keys",
+   "request": "Access by request from the publisher (no key sheet; contact only)",
+   "unverified": "Needs a key; instructions not verified, not supported yet",
+   "unsupported": "Version not supported yet"
+  },
+  "_authNote": "auth = where the person's own key goes: in is query, header or basic; name is the parameter or header; prefix is put before the key. alt is the documented alternative. Filled only from feeds whose publisher documentation was read (SURVEY.md section 6)."
+ }
+}

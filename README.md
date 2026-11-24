@@ -71,7 +71,7 @@ Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later. Lin
 **Maps and directions**
 - Download regions for offline maps, road routing, and place and address search.
 - Turn-by-turn directions by car, on foot or by bike, offline, with spoken guidance and up to 10 stops.
-- Off-road directions on foot or by vehicle where the region includes off-road data, with a land-access choice.
+- Directions by Drive (avoid highways or tolls), Walk (on paths or off-road), Bike (bicycle or dirt bike) and ATV (quad or side-by-side); off-road routes where the region includes off-road data, with Standard or Emergency routing.
 - Press and hold the map for To here, From here, Add stop, Save and Measure.
 - Import places from KML, KMZ, GPX or GeoJSON, and repeater lists from RepeaterBook KML or CHIRP CSV; export as KML or GPX.
 

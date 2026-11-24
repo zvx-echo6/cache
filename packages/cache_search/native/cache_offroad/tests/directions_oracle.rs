@@ -53,6 +53,12 @@ fn close(a: &Value, b: &Value, path: &str) {
             let ky: BTreeSet<_> = y.keys().collect();
             assert_eq!(kx, ky, "{path}: keys");
             for k in x.keys() {
+                // Off-road times (2026-11-23, owner-approved): a leg's time is the machine's speed over it. The reference server's
+                // `_path_detail` took the search's cost, which includes the preference for trails and the cost of crossing a barrier, so its
+                // recorded durations are not the ones this port gives. Everything else about a step is still compared exactly.
+                if k == "duration_s" && x[k].is_number() {
+                    continue;
+                }
                 close(&x[k], &y[k], &format!("{path}.{k}"));
             }
         }
@@ -121,7 +127,17 @@ fn directions_assembly_matches_reference() {
         }
         for i in 0..n - 1 {
             let e = ed["step_s"][i].as_f64().unwrap();
-            assert!((d.step_s[i] - e).abs() <= 1e-6 * e.abs().max(1.0), "{tag}: step_s {i}: {} vs {e}", d.step_s[i]);
+            // A same-cell mode change is the flat transition cost: still exactly the reference server's. A step on open ground (no trail
+            // at either end) takes what the reference server's cost says, less only a barrier's 5x. A step on a trail takes longer than its
+            // cost (a trail's friction is below 1: a preference, not a speed).
+            let same_cell = (d.lat[i], d.lon[i]) == (d.lat[i + 1], d.lon[i + 1]);
+            if same_cell {
+                assert!((d.step_s[i] - e).abs() <= 1e-6 * e.abs().max(1.0), "{tag}: transition {i}: {} vs {e}", d.step_s[i]);
+            } else if d.trail[i] == 0 && d.trail[i + 1] == 0 {
+                assert!(d.step_s[i] <= e * (1.0 + 1e-6), "{tag}: step_s {i}: {} vs {e}", d.step_s[i]);
+            } else {
+                assert!(d.step_s[i] >= e * (1.0 - 1e-6), "{tag}: trail step_s {i}: {} vs {e}", d.step_s[i]);
+            }
         }
 
         // pieces + assembly

@@ -276,4 +276,46 @@ void main() {
       expect(find.text(kUnknownAppLink), findsOneWidget);
     });
   });
+
+  group('road events and road work in the guide', () {
+    test('the section is what the data file makes (tables and counts are generated, never typed)', () {
+      final r = _python(['-I', '../tools/guide/gen_road_sources.py', '--check', 'assets/roads/road_sources.json', '../docs/guide/ch4.md', 'assets/guide/chapters/ch4.md']);
+      expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
+    });
+
+    test('has a row for every 511 site and every listed feed, in the reader\'s book', () {
+      final data = jsonDecode(File('assets/roads/road_sources.json').readAsStringSync()) as Map<String, dynamic>;
+      final sections = [for (final s in book.sections) if (s.title.endsWith('Road events and road work on the map')) s];
+      expect(sections.length, 1);
+      final text = sections.single.body;
+      for (final s in data['sites'] as List) {
+        expect(text, contains('| ${(s as Map)['host']} |'));
+      }
+      for (final f in (data['wzdx'] as Map)['feeds'] as List) {
+        if ((f as Map)['access'] == 'open' || f['access'] == 'key' || f['access'] == 'request') expect(text, contains('| ${f['publisher']} |'));
+      }
+      expect(RegExp(r'\bfree\b', caseSensitive: false).hasMatch(text), isFalse, reason: 'the word "free" is not used for these sources');
+      expect(text, contains('16 state and provincial 511 sites'));
+    });
+
+    testWidgets('a table\'s columns take the width their content needs: a host name is on one line, not wrapped in the middle', (tester) async {
+      tester.view.physicalSize = const Size(390, 844) * 3;
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final b = GuideBook.parse(['# 9. Test\n\n## Table\n\n| Site | Covers | Winter road conditions | Link |\n|---|---|---|---|\n| udottraffic.utah.gov | Utah | No | [Key page](https://example.org/a) |\n| 511.idaho.gov | Idaho | Yes | [Key page](https://example.org/b) |\n']);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.light),
+        home: Scaffold(body: SingleChildScrollView(child: GuideText(book: b, markdown: b.sections.single.body, onLink: (_) {}))),
+      ));
+      final host = tester.getSize(find.text('udottraffic.utah.gov'));
+      final utah = tester.getSize(find.text('Utah'));
+      // one line of the reader's 17-point text (line height 1.55) and no taller
+      expect(host.height, lessThan(17 * 1.55 * 1.5));
+      expect(host.width, greaterThan(utah.width * 2), reason: 'the columns are not the same width');
+      expect(find.byType(SingleChildScrollView), findsWidgets, reason: 'a table wider than the screen scrolls sideways');
+      // the table is as wide as its content needs, so the cells are not stretched to equal widths
+      final head = tester.getSize(find.text('Winter road conditions'));
+      expect(head.height, lessThan(17 * 1.55 * 1.5 * 1.0 + 1), reason: 'a short heading is on one line too');
+    });
+  });
 }

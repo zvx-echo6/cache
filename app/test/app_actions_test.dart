@@ -137,7 +137,9 @@ void main() {
     await reg.run('home.source_switch', {'source': 'wildfires', 'on': false});
     expect(f.rowsOn, isEmpty);
     f.missingKey = true;
-    expect((await reg.run('home.source_switch', {'source': 'satellite_fire_hotspots', 'on': true}))['error']['type'], 'needs_key');
+    final noKey = (await reg.run('home.source_switch', {'source': 'satellite_fire_hotspots', 'on': true}))['error'];
+    expect(noKey['type'], 'needs_key');
+    expect(noKey['detail'], "That source isn't available right now.");
     f.available = false;
     expect((await reg.run('home.source_switch', {'source': 'weather_alerts', 'on': true}))['error']['type'], 'not_set_up');
   });

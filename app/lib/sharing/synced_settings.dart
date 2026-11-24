@@ -7,6 +7,7 @@ import '../settings/web_search_setup.dart';
 import '../theme.dart';
 import '../video/token_store.dart';
 import '../platform/app_log.dart';
+import '../roads/road_state.dart' show RoadSources;
 import '../weather/weather_state.dart';
 import 'settings_sync.dart';
 
@@ -306,7 +307,8 @@ Future<bool> keepSyncedKey(String name, String value, {required WeatherState wea
   }
   const prefix = 'live.key.';
   if (name.startsWith(prefix) && name.length > prefix.length && name == WeatherState.secretName(name.substring(prefix.length))) {
-    await weather.keepKey(name.substring(prefix.length), value);
+    // Idaho's old key name is the one key of the Idaho 511 source now: a device that has not updated still sends it under the old name.
+    await weather.keepKey(RoadSources.currentAlias(name.substring(prefix.length)), value);
     return true;
   }
   return false;
