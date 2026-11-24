@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+## 1.2.0 (build 55, test) - 2026-11-23
+
 ### Directions
 - Travel modes are Drive, Walk, Bike and ATV, each with two choices on one line: Drive can avoid highways or tolls; Walk is Pedestrian or Off-road; Bike is Bicycle or Dirt bike; ATV is Quad or Side-by-side. Off-road choices add Standard or Emergency routing; Emergency lasts for one trip. Your mode and choices are remembered
 - Off-road travel times are realistic: they were far too short before (a cross-country walk showed about 35 minutes instead of about 5 hours)
