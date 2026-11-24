@@ -123,7 +123,6 @@ class Device {
       ).run();
 }
 
-const _openFinding = 'STOPPED, needs a decision: the shared engine (sync_engine_core.dart _included / the not-read branch near line 852) removes the file of a private entry whose notebook this device has not switched on, on the phone as well; see the report';
 
 void main() {
   late Directory tmp, data, support, docs;
@@ -496,7 +495,7 @@ void main() {
       expect(r.nb.includedIds, isEmpty);
     });
 
-    test('a private notebook that a phone switched on stays on the server and on the phone: the server\'s own pass does not take its entry back out', skip: _openFinding, () async {
+    test('a private notebook that a phone switched on stays on the server and on the phone: the server\'s own pass does not take its entry back out', () async {
       final r = rig(shareOnAlways: true);
       final phone = Device(tmp, name: 'phone');
       final health = await phone.book('Health', private: true);
@@ -512,7 +511,7 @@ void main() {
       expect((await phone.store.entries(health.id)).map((e) => e.id), [bp.id], reason: 'the phone still has its entry');
     });
 
-    test('phone to phone: a second phone that has not switched the private notebook on does not remove its file either (the phone\'s own behaviour)', skip: _openFinding, () async {
+    test('phone to phone: a second phone that has not switched the private notebook on does not remove its file either (the phone\'s own behaviour)', () async {
       final a = Device(tmp, name: 'a');
       final b = Device(tmp, name: 'b');
       final health = await a.book('Health', private: true);
