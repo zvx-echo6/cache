@@ -10,6 +10,7 @@ import 'package:cache/layout/adaptive.dart';
 import 'package:cache/layout/modules.dart';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/places.dart';
+import 'package:cache/screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'package:cache/screens/notebooks/notebooks_screen.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/device_folder_picker.dart';
