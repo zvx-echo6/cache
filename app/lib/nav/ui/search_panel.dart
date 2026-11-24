@@ -82,7 +82,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          decoration: mapPanel(context, radius: 28),
+          decoration: mapPanel(context, radius: kControlRadius),
           child: Row(
             children: [
               if (open || nav.query.isNotEmpty)

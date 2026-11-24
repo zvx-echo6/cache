@@ -1,5 +1,5 @@
-// The directions panel is short: the three rows (as ever), then one line with the ETA and distance, a ^, the next-step arrow and
-// Start. The route choices, the elevation chart and the route notes are in the "Route details" sheet that line opens. Every name and
+// The directions panel is short: the three rows (as ever), one line with the ETA and distance and an outlined "N routes ^" chip, then
+// "Turns" and Start. The route cards, the elevation chart and the route notes are in the "Routes" sheet that chip opens. Every name and
 // place here is made up.
 
 import 'package:cache/maps/palette/map_palette.dart';
@@ -37,6 +37,7 @@ class _Panel {
   late DriveRig rig;
   VoidCallback? swiped;
   int swipes = 0;
+  int turns = 0;
 
   Future<void> pump(WidgetTester tester, {bool off = false, int alts = 2, Size size = const Size(390, 844), double text = 1.0, String travel = 'drive'}) async {
     tester.view.physicalSize = size * 3;
@@ -70,7 +71,7 @@ class _Panel {
               nav: rig.nav,
               fmt: const Fmt(UnitSystem.imperial),
               elevation: RouteElevationSummary(elevation: rig.elevation, fmt: const Fmt(UnitSystem.imperial), palette: mapPaletteFor(CacheThemeId.parchment)),
-              onNextTurn: () {},
+              onNextTurn: () => turns++,
               onSwipeDown: () => swipes++,
             ),
           ),
@@ -94,25 +95,36 @@ void main() {
     expect(find.text('2 h 3 min · 130 mi'), findsOneWidget);
     expect(find.text('via I 84'), findsOneWidget);
     expect(find.byKey(const ValueKey('route-start')), findsOneWidget);
-    expect(find.byKey(const ValueKey('step-next')), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-turns')), findsOneWidget);
+    expect(find.text('Turns'), findsOneWidget);
+    // The chip: "3 routes" and the ^, outlined, on the right of the ETA line.
+    expect(find.byKey(const ValueKey('routes-chip')), findsOneWidget);
+    expect(find.text('3 routes'), findsOneWidget);
     expect(find.byIcon(Icons.expand_less), findsOneWidget, reason: 'the ^');
+    // No arrow and no route-cycling control: the old next and disabled back arrows, and "Route 1 of 3", are gone.
+    expect(find.byKey(const ValueKey('step-next')), findsNothing);
+    expect(find.byKey(const ValueKey('step-back')), findsNothing);
+    expect(find.byIcon(Icons.arrow_forward), findsNothing);
+    expect(find.byIcon(Icons.arrow_back), findsNothing);
+    expect(find.textContaining('Route 1 of'), findsNothing);
+    expect(find.textContaining(' of 3'), findsNothing);
     for (final k in ['route-card-0', 'route-card-1', 'route-card-2', 'preview-elevation']) {
-      expect(find.byKey(ValueKey(k)), findsNothing, reason: '$k belongs in the Route details sheet');
+      expect(find.byKey(ValueKey(k)), findsNothing, reason: '$k belongs in the Routes sheet');
     }
     expect(find.textContaining('Gate at mile 3'), findsNothing);
-    expect(find.text('Route details'), findsNothing);
+    expect(find.text('Routes'), findsNothing);
     // The panel is short: the rows and one line, not the half-screen it was with the routes and the chart.
     final h = tester.getSize(find.byType(RoutePanel)).height;
     expect(h, lessThan(844 * 0.3), reason: '$h dp');
     await p.done(tester);
   });
 
-  testWidgets('tapping the ETA line opens Route details: the routes (tappable to choose), the elevation chart and the notes', (tester) async {
+  testWidgets('tapping the ETA line opens the Routes sheet: the routes (tappable to choose), the elevation chart and the notes', (tester) async {
     final p = _Panel();
     await p.pump(tester);
     await tester.tap(find.byKey(const ValueKey('route-summary')));
     await tester.pumpAndSettle();
-    expect(find.text('Route details'), findsOneWidget);
+    expect(find.text('Routes'), findsOneWidget);
     expect(find.byKey(const ValueKey('route-card-0')), findsOneWidget);
     expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
     expect(find.byKey(const ValueKey('route-card-2')), findsOneWidget);
@@ -126,12 +138,51 @@ void main() {
     await p.done(tester);
   });
 
-  testWidgets('the ^ opens the same sheet', (tester) async {
+  testWidgets('the "3 routes" chip opens the same sheet', (tester) async {
     final p = _Panel();
     await p.pump(tester);
-    await tester.tap(find.byIcon(Icons.expand_less));
+    await tester.tap(find.byKey(const ValueKey('routes-chip')));
     await tester.pumpAndSettle();
-    expect(find.text('Route details'), findsOneWidget);
+    expect(find.text('Routes'), findsOneWidget);
+    await p.done(tester);
+  });
+
+  testWidgets('with one route the chip shows just the ^ (no count) and still opens the sheet with that route', (tester) async {
+    final p = _Panel();
+    await p.pump(tester, alts: 0);
+    expect(find.byKey(const ValueKey('routes-chip')), findsOneWidget);
+    expect(find.textContaining('routes'), findsNothing);
+    expect(find.byIcon(Icons.expand_less), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('routes-chip')));
+    await tester.pumpAndSettle();
+    expect(find.text('Routes'), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-card-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('route-card-1')), findsNothing);
+    await p.done(tester);
+  });
+
+  testWidgets('Turns opens the turn list (what the old arrow did) and is off with no route', (tester) async {
+    final p = _Panel();
+    await p.pump(tester);
+    await tester.tap(find.byKey(const ValueKey('route-turns')));
+    await tester.pump();
+    expect(p.turns, 1);
+    await p.done(tester);
+  });
+
+  testWidgets('selecting a card in the Routes sheet selects that route: the panel line follows', (tester) async {
+    final p = _Panel();
+    await p.pump(tester);
+    expect(find.text('2 h 3 min · 130 mi'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('routes-chip')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('route-card-2')));
+    await tester.pumpAndSettle();
+    expect(p.rig.nav.routeIndex, 2);
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    expect(find.text('2 h 3 min · 130 mi'), findsNothing, reason: 'the line is the third route now');
+    expect(find.text('${p.rig.nav.fmt.duration(p.rig.nav.route!.durationS)} · ${p.rig.nav.fmt.distance(p.rig.nav.route!.distanceM)}'), findsOneWidget);
     await p.done(tester);
   });
 

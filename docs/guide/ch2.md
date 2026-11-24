@@ -368,9 +368,11 @@ Directions plan a route from where you are to a place.
    - "Bike": "Bicycle" or "Dirt bike".
    - "ATV": "Quad" or "Side-by-side".
 5. Under "Off-road", "Dirt bike" or "ATV" a third row appears: "Standard" or "Emergency". See Leaving the road.
-6. Check the line above "Start": the time and distance. For an off-road route it also shows the off-road distance and the main road, for example `3.8 mi off-road · via Forest Road 142`.
-7. To see more, tap that line or the ^ beside it. "Route details" opens with the other routes (tap one to choose it), the elevation chart and notes about the route.
-8. Tap "Start". The arrow beside "Start" shows the first turn.
+6. Check the line above "Start": the time and distance, for example `14 min · 9.9 mi`, and under it the main road, for example `via East 3700 North`. For an off-road route it also shows the off-road distance, for example `3.8 mi off-road · via Forest Road 142`.
+7. The map draws every route. The one you chose is bold, with its time in a filled label. The others are faded, each with its time in a pale label. Tap a faded line to choose that route. The map fits all of them above the panel.
+8. To see the routes as a list, tap that line or the chip at its right: `3 routes` with a ^, or just the ^ when there is one route. "Routes" opens with a card for each route (tap one to choose it), the elevation chart and notes about the route.
+9. Tap "Turns" to read the route's turns one at a time. Back from the first turn returns to the whole route.
+10. Tap "Start".
 
 To go back to the place card, tap empty map, swipe down on the panel, use the Back gesture or button, or tap the back arrow at the top. Back again closes the place card. A tap on a repeater or a notebook pin still opens it.
 
@@ -402,7 +404,7 @@ Road directions work offline if the region is downloaded.
 
 Land rules come from US public-land data. Where Cache has none for the area, "Standard" and "Emergency" route the same and the route says "Cache has no land rules for this area. Check local access before you go."
 
-Until the off-road data is updated, "Dirt bike" follows the ATV trail rules and "Side-by-side" follows the "Quad" ones, and a note in "Route details" says so.
+Until the off-road data is updated, "Dirt bike" follows the ATV trail rules and "Side-by-side" follows the "Quad" ones, and a note in "Routes" says so.
 
 Changing a choice plans the route again. Cache remembers the way of travel and its options, also after a restart. At first it is "Drive", then "Standard".
 

@@ -11,6 +11,7 @@ import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/style/style_generator.dart';
 import 'package:cache/maps/user_layers.dart';
 import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/route_panel.dart';
 import 'package:cache/regions/area_lookup.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/screens/maps_screen.dart';
@@ -22,6 +23,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'location_service_test.dart' show FakeSource;
+import 'nav_fakes.dart';
 import 'navigation_camera_test.dart' show CameraController, NoSurface;
 import 'support/drive_rig.dart';
 import 'support/test_layer_engine.dart';
@@ -342,6 +344,108 @@ void main() {
       });
       await m.settle(tester);
       expect(_pinFeatures(m, 'selected').single['pin'], isNull);
+      await m.finish(tester);
+    });
+  });
+
+  group('e) the routes on the map', () {
+    Future<void> threeRoutes(WidgetTester tester, _Maps m) async {
+      m.rig.backend.onRoute = (to, mode, from) async {
+        final j = fakeRouteJson(id: 'r1', name: 'Walmart');
+        j['duration_s'] = 14 * 60.0;
+        final b = fakeRouteJson(id: 'r2', alt: 3);
+        b['duration_s'] = 15 * 60.0;
+        final c = fakeRouteJson(id: 'r3', alt: 6);
+        c['duration_s'] = 17 * 60.0;
+        j['alternatives'] = [b, c];
+        return MapRoute.fromJson(j);
+      };
+      await tester.runAsync(() => m.nav.openDirections(const MapPlace(id: 'place:t:w', type: 'place', name: 'Walmart', kind: '', address: '', lat: 42.5, lon: -113.5, matched: 'name')));
+      await m.settle(tester);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
+      await tester.pump();
+      expect(m.nav.routes, hasLength(3));
+    }
+
+    List<Map> labels(_Maps m) => [
+          for (final f in (m.camera.sources[kRouteSource]?['features'] as List? ?? const []))
+            if ((f as Map)['geometry']['type'] == 'Point') f['properties'] as Map,
+        ];
+
+    testWidgets('every route has a time label in the panel\'s words; the chosen one is the filled one; the styles follow the selection', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      await threeRoutes(tester, m);
+      var l = labels(m);
+      expect(l, hasLength(3));
+      expect({for (final p in l) p['label']}, {'14 min', '15 min', '17 min'});
+      expect({for (final p in l) p['route']: p['sel']}, {0: true, 1: false, 2: false});
+      expect(find.text('14 min · ${m.nav.fmt.distance(m.nav.routes[0].distanceM)}'), findsOneWidget, reason: 'the panel says what the label says');
+      await tester.runAsync(() async => m.nav.selectRoute(2));
+      await m.settle(tester);
+      for (var i = 0; i < 40 && labels(m).firstWhere((p) => p['sel'] == true)['route'] != 2; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+        await tester.pump();
+      }
+      l = labels(m);
+      expect({for (final p in l) p['route']: p['sel']}, {0: false, 1: false, 2: true});
+      expect(l.firstWhere((p) => p['sel'] == true)['img'], 'route-time-sel-17 min');
+      expect(find.text('17 min · ${m.nav.fmt.distance(m.nav.routes[2].distanceM)}'), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('a tap on a faded alternate\'s line selects it', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      await threeRoutes(tester, m);
+      expect(m.nav.routeIndex, 0);
+      final alt = m.nav.routes[1].points[20];
+      await m.tap(tester, alt.lat, alt.lon);
+      expect(m.nav.routeIndex, 1);
+      expect(m.nav.phase, NavPhase.previewing);
+      // The label image is drawn (real work) before the labels are pushed.
+      for (var i = 0; i < 40 && labels(m).firstWhere((p) => p['sel'] == true)['route'] != 1; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+        await tester.pump();
+      }
+      expect(labels(m).firstWhere((p) => p['sel'] == true)['route'], 1);
+      await m.finish(tester);
+    });
+
+    testWidgets('the camera frames all the routes inside the map above the panel: the fit holds every route and its bottom padding clears the panel', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.cameras.clear();
+      await threeRoutes(tester, m);
+      await m.settle(tester);
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      final probe = CameraUpdate.newLatLngBounds(LatLngBounds(southwest: const LatLng(0, 0), northeast: const LatLng(1, 1)), left: 11, top: 12, right: 13, bottom: 14).toJson() as List<dynamic>;
+      double pad(List<dynamic> u, double v) => (u[probe.indexOf(v)] as num).toDouble();
+      final fits = m.camera.cameras.cast<List<dynamic>>().where((u) => u.first == 'newLatLngBounds').toList();
+      expect(fits, isNotEmpty);
+      final u = fits.last;
+      final a = [for (final n in (u[1] as List)[0] as List) (n as num).toDouble()], b = [for (final n in (u[1] as List)[1] as List) (n as num).toDouble()];
+      final south = a[0] < b[0] ? a[0] : b[0], north = a[0] < b[0] ? b[0] : a[0];
+      final west = a[1] < b[1] ? a[1] : b[1], east = a[1] < b[1] ? b[1] : a[1];
+      for (final r in m.nav.routes) {
+        final bb = r.bounds;
+        expect(south, lessThanOrEqualTo(bb[0] + 1e-9));
+        expect(west, lessThanOrEqualTo(bb[1] + 1e-9));
+        expect(north, greaterThanOrEqualTo(bb[2] - 1e-9));
+        expect(east, greaterThanOrEqualTo(bb[3] - 1e-9));
+      }
+      final panel = tester.getRect(find.byType(RoutePanel));
+      final map = tester.getSize(find.byType(MapLibreMap));
+      expect(pad(u, 14), greaterThanOrEqualTo(map.height - panel.top - 1), reason: 'the routes are framed above the panel (its ${map.height - panel.top} points)');
+      expect(pad(u, 12), greaterThan(0), reason: 'and below the header');
+      // Choosing another route does not move the camera again.
+      final before = fits.length;
+      await tester.runAsync(() async => m.nav.selectRoute(1));
+      await m.settle(tester);
+      expect(m.camera.cameras.cast<List<dynamic>>().where((x) => x.first == 'newLatLngBounds').length, before);
       await m.finish(tester);
     });
   });

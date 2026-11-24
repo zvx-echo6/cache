@@ -683,7 +683,7 @@ class RouteElevationSummary extends StatelessWidget {
   /// 0 to 1). Null: not tappable.
   final ValueChanged<double>? onSpot;
 
-  /// Listens to [elevation] itself: the summary sits in a sheet (Route details) that was built before the profile was read.
+  /// Listens to [elevation] itself: the summary sits in a sheet (Routes) that was built before the profile was read.
   @override
   Widget build(BuildContext context) => ListenableBuilder(listenable: elevation, builder: _build);
 

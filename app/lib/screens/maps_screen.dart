@@ -56,6 +56,7 @@ import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
 import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
+import '../maps/ui/route_time_image.dart';
 import '../notebook/map_icons.dart';
 import '../notebook/notebook_map.dart';
 import '../notebook/pin_image.dart';
@@ -295,26 +296,6 @@ const double kRouteTapReach = 16;
 
 /// The metres one point of the map covers at [lat] and [zoom] (the map's world is 512 points wide at zoom 0).
 double metresPerPoint(double lat, double zoom) => 40075016.686 * math.cos(lat * math.pi / 180) / (512 * math.pow(2, zoom));
-
-/// The metres from ([lat], [lon]) to the nearest point of the line [pts] (flat-earth, which is close enough at a tap's reach).
-double metresToLine(List<GeoPoint> pts, double lat, double lon) {
-  if (pts.isEmpty) return double.infinity;
-  final kx = 111320 * math.cos(lat * math.pi / 180), ky = 110574.0;
-  (double, double) at(GeoPoint p) => ((p.lon - lon) * kx, (p.lat - lat) * ky);
-  var best = double.infinity;
-  var (ax, ay) = at(pts.first);
-  if (pts.length == 1) return math.sqrt(ax * ax + ay * ay);
-  for (final p in pts.skip(1)) {
-    final (bx, by) = at(p);
-    final dx = bx - ax, dy = by - ay;
-    final len = dx * dx + dy * dy;
-    final t = len <= 0 ? 0.0 : ((-ax * dx - ay * dy) / len).clamp(0.0, 1.0);
-    final x = ax + t * dx, y = ay + t * dy;
-    best = math.min(best, math.sqrt(x * x + y * y));
-    (ax, ay) = (bx, by);
-  }
-  return best;
-}
 
 /// The route whose grey line a tap at ([lat], [lon]) is on in the route preview: the nearest of the routes other than the
 /// [selected] one, within [kRouteTapReach] points, and nearer than the selected route's own line (where the lines run together a
@@ -1222,7 +1203,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (sig == _navSig) return;
     _navSig = sig;
     try {
-      await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
+      await _ensureRouteTimeImages();
+      await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex, fmt: nav.phase == NavPhase.previewing ? nav.fmt : null));
       // An area's card draws its outline only: no dot.
       final areaOn = _area != null && nav.selected?.id == _area!.place.id;
       await c.setGeoJsonSource(kPinSource, pinGeoJson(areaOn ? null : nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
@@ -1230,6 +1212,21 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       appLog.add(LogLevel.standard, 'ERROR', 'map pins and routes not drawn: $e');
     }
     await _pushArea(c);
+  }
+
+  /// The images of the routes' time labels the map is about to name (one per text and state), added once each.
+  Future<void> _ensureRouteTimeImages() async {
+    final images = _pinImages;
+    if (images == null || nav.phase != NavPhase.previewing || nav.routes.isEmpty) return;
+    final ratio = pinImageRatio(widget.imagePixelRatio ?? (mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
+    final route = _palette['route'];
+    try {
+      for (final l in routeLabels(nav.routes, nav.routeIndex, nav.fmt)) {
+        await images.ensureNamed(l.image, () => renderRouteTimePng(l.text, selected: l.selected, route: route, ratio: ratio));
+      }
+    } catch (e) {
+      appLog.add(LogLevel.standard, 'ERROR', 'map route time labels not drawn: $e');
+    }
   }
 
   /// The map images of the chosen place and the search results that are notebook entries: the entry's icon in the pin style, as its
@@ -1301,8 +1298,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     final r = nav.route;
     // A new set of routes: show all of the chosen one.
-    if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
-      _fitFor = r.routeId;
+    if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != _routesKey) {
+      _fitFor = _routesKey;
       _refits = 0;
       _fitRoute(r);
     }
@@ -1375,10 +1372,29 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (covers == null) {
       return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: _coveredLeft(), coveredRight: _coveredRight());
     }
-    final b = r.bounds;
+    final b = _fitBounds(r);
     final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]));
     return EdgeInsets.fromLTRB(rect.left, rect.top, map.width - rect.right, map.height - rect.bottom);
   }
+
+  /// What the route preview frames: every route (the chosen one and its alternatives, so all of them show above the panel); [r]'s own
+  /// box when it is alone or the preview is not the one on screen. South, west, north, east.
+  List<double> _fitBounds(MapRoute r) {
+    if (nav.phase != NavPhase.previewing || nav.routes.length < 2) return r.bounds;
+    var s = 90.0, w = 180.0, n = -90.0, e = -180.0;
+    for (final x in nav.routes) {
+      if (x.points.isEmpty) continue;
+      final b = x.bounds;
+      s = math.min(s, b[0]);
+      w = math.min(w, b[1]);
+      n = math.max(n, b[2]);
+      e = math.max(e, b[3]);
+    }
+    return n < s ? r.bounds : [s, w, n, e];
+  }
+
+  /// The set of routes shown (their ids): a change of it, not the choice of another route, frames the routes again.
+  String get _routesKey => nav.routes.map((x) => x.routeId).join('+');
 
   /// The size of the map a route is fitted on: the stack's, as laid out (the screen's before that).
   Size _fitMapSize() {
@@ -1428,7 +1444,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The room what covers the map leaves ([_fitPad]: a change of it fits the route again). On a phone the pin and the
     // position dot at the route's ends are fitted into that free rectangle too, whole.
     final room = _fitPad = _fitPaddingFor(r);
-    final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: r.bounds, marks: _phoneCovers() == null ? const [] : _routeEndMarks());
+    final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: _fitBounds(r), marks: _phoneCovers() == null ? const [] : _routeEndMarks());
     final b = fit.bounds, pad = fit.padding;
     // On Android the map keeps the fit's padding for the moves after it (MapLibre's camera for bounds carries it): whatever moves
     // the camera next sets the padding it means ([_padTo]).
@@ -1447,7 +1463,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (!mounted) return;
     final r = nav.route;
     final was = _fitPad;
-    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId || _step != null) return;
+    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != _routesKey || _step != null) return;
     if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
     if (_refits >= kRouteRefits) return;
     final now = _fitPaddingFor(r);

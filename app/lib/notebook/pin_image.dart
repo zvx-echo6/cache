@@ -224,5 +224,10 @@ class PinImages {
     return name;
   }
 
+  /// Adds a ready-drawn image under [name] once (the route time labels), and says whether it was added now.
+  Future<void> ensureNamed(String name, Future<Uint8List> Function() draw) async {
+    if (_have.add(name)) await add(name, await draw());
+  }
+
   void reset() => _have.clear();
 }

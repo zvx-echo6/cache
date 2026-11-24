@@ -351,7 +351,7 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('directions: the way of travel, one ETA line and Start; the routes and the off-road note are in Route details', (tester) async {
+      testWidgets('directions: the way of travel, one ETA line and Start; the routes and the off-road note are in the Routes sheet', (tester) async {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson({...fakeRouteJson(offroad: true, mode: mode), 'alternatives': [fakeRouteJson(id: 'r2', alt: 1)]});
         await nav.openDirections(hospital);
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
@@ -365,7 +365,7 @@ void main() {
         expect(find.text('3.8 mi off-road · via Road 0', findRichText: true), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('route-summary')));
         await tester.pumpAndSettle();
-        expect(find.text('Route details'), findsOneWidget);
+        expect(find.text('Routes'), findsOneWidget);
         expect(find.byKey(const ValueKey('route-card-0')), findsOneWidget);
         expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
         expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
@@ -387,7 +387,7 @@ void main() {
         // Close the sheet: a tap outside it.
         await tester.tapAt(const Offset(20, 20));
         await tester.pumpAndSettle();
-        expect(find.text('Route details'), findsNothing);
+        expect(find.text('Routes'), findsNothing);
         await tester.tap(find.byKey(const ValueKey('mode-walk')));
         await tester.pump();
         expect(nav.mode, 'walk');

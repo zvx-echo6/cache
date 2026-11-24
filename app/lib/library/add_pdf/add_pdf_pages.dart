@@ -248,7 +248,7 @@ class _Ghost extends StatelessWidget {
       side: BorderSide(color: k.accent, width: 1.5),
       minimumSize: const Size(0, 36),
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      shape: const StadiumBorder(),
+      shape: kControlShape,
     );
     // the size and weight on the text itself: the button keeps the theme's font
     final text = Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500));
@@ -1226,7 +1226,7 @@ Widget? addPdfResultNote(
       if (guess != null)
         FilledButton(
           key: ValueKey('add-pdf-place-${job.id}'),
-          style: FilledButton.styleFrom(backgroundColor: k.primary, foregroundColor: k.onPrimary, minimumSize: const Size(0, 40), shape: const StadiumBorder()),
+          style: FilledButton.styleFrom(backgroundColor: k.primary, foregroundColor: k.onPrimary, minimumSize: const Size(0, 40), shape: kControlShape),
           onPressed: placer == null || book == null
               ? null
               : () async {

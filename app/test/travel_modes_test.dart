@@ -289,7 +289,7 @@ void main() {
     });
   });
 
-  testWidgets('a note on the route (the data it lacks) shows in the Route details sheet, not in the short panel', (tester) async {
+  testWidgets('a note on the route (the data it lacks) shows in the Routes sheet, not in the short panel', (tester) async {
     backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
           ...fakeRouteJson(mode: mode, offroad: true),
           'notes': ['This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.'],

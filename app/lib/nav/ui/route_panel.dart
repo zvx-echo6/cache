@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/gestures.dart' show VelocityTracker;
 import 'package:flutter/material.dart';
@@ -20,7 +22,7 @@ class DirectionsHeader extends StatelessWidget {
     final k = context.t;
     final to = nav.selected;
     return Container(
-      decoration: mapPanel(context, radius: 28),
+      decoration: mapPanel(context, radius: kControlRadius),
       child: Row(
         children: [
           IconButton(tooltip: 'Back', icon: Icon(Icons.arrow_back, color: k.text), onPressed: nav.cancelDirections),
@@ -146,7 +148,7 @@ class RoutePanel extends StatelessWidget {
   /// The next arrow beside Start: shows the route's first turn (the step card). Null leaves the arrow out.
   final VoidCallback? onNextTurn;
 
-  /// The chosen route's elevation (RouteElevationSummary), in the route details; null leaves it out.
+  /// The chosen route's elevation (RouteElevationSummary), in the Routes sheet; null leaves it out.
   final Widget? elevation;
 
   /// The most the panel may take (the map's side column); null: the choices take up to half the window, as a bottom panel.
@@ -170,7 +172,7 @@ class RoutePanel extends StatelessWidget {
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: Text('Route details', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                    child: Text('Routes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
                   ),
                   for (var i = 0; i < nav.routes.length; i++)
                     Padding(
@@ -197,7 +199,7 @@ class RoutePanel extends StatelessWidget {
     // At large text the route line does not fit beside the buttons (it would shrink): it goes in the scrolling part, under the rows,
     // so the panel never grows past its cap, and the buttons stay at the foot.
     final big = MediaQuery.textScalerOf(context).scale(10) > 11.5;
-    final summary = r == null || nav.routing || nav.routeError != null ? null : _RouteSummary(route: r, fmt: fmt, onTap: () => _showDetails(context), wrap: big);
+    final summary = r == null || nav.routing || nav.routeError != null ? null : _RouteSummary(route: r, fmt: fmt, onTap: () => _showDetails(context), wrap: big, routeCount: nav.routes.length);
     final panel = Container(
       decoration: mapPanel(context, radius: 20),
       padding: const EdgeInsets.fromLTRB(16, 12, 0, 12),
@@ -265,29 +267,36 @@ class RoutePanel extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: Builder(builder: (context) {
-                final next = onNextTurn == null
+                final turns = onNextTurn == null
                     ? null
-                    : IconButton.outlined(
-                        key: const ValueKey('step-next'),
-                        tooltip: 'Next',
-                        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                        icon: const Icon(Icons.arrow_forward),
+                    : OutlinedButton(
+                        key: const ValueKey('route-turns'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 10)),
                         onPressed: !ready || r.maneuvers.isEmpty ? null : onNextTurn,
+                        child: const FittedBox(fit: BoxFit.scaleDown, child: Text('Turns', maxLines: 1, softWrap: false)),
                       );
-                final start = FilledButton.icon(
+                final start = FilledButton(
                   key: const ValueKey('route-start'),
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48), padding: const EdgeInsets.symmetric(horizontal: 14)),
                   onPressed: ready ? nav.start : null,
-                  icon: const Icon(Icons.navigation),
-                  label: const Text('Start'),
+                  // One line, shrinking at large text, so the buttons never grow the panel.
+                  child: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.navigation, size: 20), SizedBox(width: 8), Text('Start', maxLines: 1, softWrap: false)]),
+                  ),
                 );
-                if (big) return Row(children: [if (next != null) ...[next, const SizedBox(width: 8)], Expanded(child: start)]);
-                return Row(
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // The chosen route in one line; a tap opens the details (the other routes, elevation, notes).
-                    Expanded(child: summary ?? const SizedBox(height: 48)),
-                    if (next != null) ...[const SizedBox(width: 8), next],
-                    const SizedBox(width: 8),
-                    start,
+                    // The chosen route in one line with the "N routes" chip (in the scrolling part at large text).
+                    if (!big) summary ?? const SizedBox(height: 48),
+                    if (!big) const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        if (turns != null) ...[Expanded(child: turns), const SizedBox(width: 8)],
+                        Expanded(child: start),
+                      ],
+                    ),
                   ],
                 );
               }),
@@ -353,7 +362,7 @@ class _SwipeDownState extends State<_SwipeDown> {
 
 /// The chosen route in one line: its time and distance, and under them its road (and the off-road part when it has one).
 class _RouteSummary extends StatelessWidget {
-  const _RouteSummary({required this.route, required this.fmt, required this.onTap, this.wrap = false});
+  const _RouteSummary({required this.route, required this.fmt, required this.onTap, this.wrap = false, this.routeCount = 1});
 
   final MapRoute route;
   final Fmt fmt;
@@ -361,6 +370,9 @@ class _RouteSummary extends StatelessWidget {
 
   /// Large text: the lines are not squeezed to one line each, they wrap.
   final bool wrap;
+
+  /// The number of routes: the chip says "N routes" when there are several, and shows only the ^ for one.
+  final int routeCount;
 
   @override
   Widget build(BuildContext context) {
@@ -370,10 +382,10 @@ class _RouteSummary extends StatelessWidget {
     final via = major != null ? 'via $major' : '';
     return Semantics(
       button: true,
-      label: 'Route, ${fmt.duration(route.durationS)}, ${fmt.distance(route.distanceM)}. Route details',
+      label: 'Route, ${fmt.duration(route.durationS)}, ${fmt.distance(route.distanceM)}. ${routeCount > 1 ? '$routeCount routes' : 'Routes'}',
       child: InkWell(
         key: const ValueKey('route-summary'),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(kControlRadius),
         onTap: onTap,
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 48),
@@ -402,7 +414,33 @@ class _RouteSummary extends StatelessWidget {
                   ),
                 ),
               ),
-              Icon(Icons.expand_less, size: 22, color: k.secondary),
+              const SizedBox(width: 8),
+              // The chip keeps its look and gives way (shrinks) only when the line has too little room, as at large text.
+              Flexible(
+                flex: 0,
+                child: LayoutBuilder(
+                  builder: (context, box) => ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: math.max(56, MediaQuery.sizeOf(context).width * 0.4)),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Container(
+                        key: const ValueKey('routes-chip'),
+                        constraints: const BoxConstraints(minHeight: 36),
+                        padding: EdgeInsets.symmetric(horizontal: routeCount > 1 ? 12 : 8),
+                        decoration: BoxDecoration(borderRadius: BorderRadius.circular(kControlRadius), border: Border.all(color: k.secondary.withValues(alpha: 0.5))),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (routeCount > 1) Text('$routeCount routes', maxLines: 1, softWrap: false, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+                            if (routeCount > 1) const SizedBox(width: 4),
+                            Icon(Icons.expand_less, size: 22, color: k.text),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
