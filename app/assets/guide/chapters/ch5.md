@@ -283,6 +283,8 @@ Cache can keep your entries as Markdown files in a folder, for Obsidian or Logse
 
 On Android, Cache uses the system folder picker and keeps the permission you give. On iPhone, it keeps the folder you pick as a bookmark.
 
+On a computer, in the browser, "Connect" opens Cache's own "Choose a folder" page, which lists "Folders on this computer". A folder marked "Obsidian vault" or "Logseq graph" has a "Use" button. "Use this folder" picks the folder you are in.
+
 What you get:
 - Obsidian: Markdown files in the folder. Open it as a vault. Changes in either place update the other.
 - Logseq with Markdown files (0.10 and earlier): blocks on the journal pages. Open it as a graph. Changes go both ways.
