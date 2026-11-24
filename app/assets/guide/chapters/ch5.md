@@ -364,6 +364,8 @@ The row's menu has "Sync now", "Pause" or "Resume", and "Disconnect".
 
 Your other devices are on the same "Connections" screen. See Sharing and sync: choose what to share in chapter 3.
 
+Deleting an entry in Cache deletes it on your other linked devices too. A notebook file removed outside Cache never deletes anything; Cache puts it back.
+
 ## Ask Cache to add to a notebook
 
 You can tell Cache to log something in "Ask", for example: add a generator test, 20 minutes, under load. It can add to your Journal and log notebooks.
