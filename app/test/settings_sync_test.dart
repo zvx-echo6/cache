@@ -385,6 +385,47 @@ void main() {
     b.dispose();
   });
 
+  test('Include API keys: off then on keeps the left-out key out; off sends nothing; unlink clears the remembered list', () async {
+    final (a, b) = await pair();
+    a.keys['live.key.owm'] = 'OWM-SECRET-1234';
+    a.keys['search.kagi.key'] = 'KAGI-SECRET-5678';
+    await a.sync.setIncludeKeys('B', true);
+    await a.sync.setKeyOn('B', 'search.kagi.key', false);
+    await a.sync.setIncludeKeys('B', false);
+    expect(a.core.secrets['B'], anyOf(isNull, isEmpty));
+    expect(a.sync.keyOn('B', 'live.key.owm'), isFalse);
+    final state = File('${a.dir.path}/.local/state.json');
+    expect(jsonDecode(state.readAsStringSync())['keysHeld'], {'B': ['search.kagi.key']});
+    await a.sync.setIncludeKeys('B', true);
+    expect(a.sync.keyOn('B', 'search.kagi.key'), isFalse);
+    expect(a.sync.keyOn('B', 'live.key.owm'), isTrue);
+    expect(a.core.secrets['B'], {'live.key.owm': 'OWM-SECRET-1234'});
+    // off again, then unlinked: the remembered list goes with the device
+    await a.sync.setIncludeKeys('B', false);
+    a.core.peers.removeWhere((p) => p['id'] == 'B');
+    await a.sharing.refresh();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(jsonDecode(state.readAsStringSync()).containsKey('keysHeld'), isFalse);
+    a.core.peers.add({'id': 'B', 'name': 'Desk', 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null, 'link_known': true});
+    await a.sharing.refresh();
+    await a.sync.setIncludeKeys('B', true);
+    expect(a.sync.keyOn('B', 'search.kagi.key'), isTrue);
+    a.dispose();
+    b.dispose();
+  });
+
+  test('Include API keys: the start sweep clears the remembered list of a device that is no longer linked', () async {
+    final a = Dev('A', 'B', otherName: 'Phone');
+    final state = File('${a.dir.path}/.local/state.json')..parent.createSync(recursive: true);
+    state.writeAsStringSync(jsonEncode({
+      'keysHeld': {'GONE': ['live.key.owm'], 'B': ['live.key.owm']},
+    }));
+    await a.start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect((jsonDecode(state.readAsStringSync()) as Map)['keysHeld'], {'B': ['live.key.owm']});
+    a.dispose();
+  });
+
   test('Include API keys: an unlinked device takes its switch and left-out keys with it; linking again starts off', () async {
     final (a, b) = await pair();
     a.keys['live.key.owm'] = 'OWM-SECRET-1234';

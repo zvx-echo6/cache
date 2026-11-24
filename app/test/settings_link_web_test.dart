@@ -66,8 +66,11 @@ class _Rig {
       storeKey: (n, v) async => false,
       dir: () async => null,
       every: const Duration(hours: 1),
+      onServerKeysChanged: () => keysChanged++,
     );
   }
+
+  int keysChanged = 0;
 
   final FakeSharingHost host;
   final Directory dir;
@@ -204,6 +207,23 @@ void main() {
       expect(find.textContaining(v), findsNothing);
     }
     expect(jsonEncode(host.opArgs), isNot(contains('SECRET')), reason: 'no key value was sent to the host or asked of it');
+    r.dispose();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('API keys: when the keys the server holds change, the tab is told so its own key list is read again', (tester) async {
+    _tall(tester);
+    final host = _host();
+    final r = _Rig(host, dir);
+    await r.start(tester);
+    final before = r.keysChanged;
+    await r.sync.refreshServerKeys();
+    await _settle(tester);
+    expect(r.keysChanged, before, reason: 'nothing changed: nothing is read again');
+    host.keyValues['live.key.nws'] = 'NWS-SECRET-4';
+    await r.sync.refreshServerKeys();
+    await _settle(tester);
+    expect(r.keysChanged, before + 1);
     r.dispose();
     await tester.pumpWidget(const SizedBox());
   });

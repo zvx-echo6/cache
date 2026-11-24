@@ -263,6 +263,11 @@ class SettingsLogState {
   /// has turned them into this.
   final Map<String, Set<String>> keysAll = {};
 
+  /// The keys left out of a device while its "Include API keys" switch is off, by device, so switching on again leaves the same keys
+  /// out. Never read as "include": only [keysAll] says a key goes. An older build ignores it and, on its next save, drops it (the
+  /// switch then comes back with every key, as before).
+  final Map<String, Set<String>> keysHeld = {};
+
   /// The note of the change each setting last took from another device, by key.
   final Map<String, Object?> notes = {};
 
@@ -289,6 +294,7 @@ class SettingsLogState {
     'seen': seen,
     'keys': {for (final e in keysFor.entries) e.key: e.value.toList()..sort()},
     if (keysAll.isNotEmpty) 'keysAll': {for (final e in keysAll.entries) e.key: e.value.toList()..sort()},
+    if (keysHeld.isNotEmpty) 'keysHeld': {for (final e in keysHeld.entries) e.key: e.value.toList()..sort()},
     'notes': notes,
     'waiting': {for (final e in waiting.entries) e.key: e.value.toLine()},
     if (removed.isNotEmpty) 'removed': removed,
@@ -312,6 +318,9 @@ class SettingsLogState {
     }
     for (final e in ((j['keysAll'] as Map?) ?? const {}).entries) {
       if (e.value is List) keysAll['${e.key}'] = {for (final x in e.value as List) '$x'};
+    }
+    for (final e in ((j['keysHeld'] as Map?) ?? const {}).entries) {
+      if (e.value is List) keysHeld['${e.key}'] = {for (final x in e.value as List) '$x'};
     }
     for (final e in ((j['notes'] as Map?) ?? const {}).entries) {
       notes['${e.key}'] = e.value;
