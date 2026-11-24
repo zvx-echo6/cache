@@ -178,12 +178,19 @@ Future<void> _guidance(WidgetTester tester, CacheThemeId theme) async {
       expect(tester.getSize(find.byKey(const ValueKey('route-overview-crop'))).height, inset.height - 4, reason: 'the visible corner is a square');
       expect(tester.getSize(find.byKey(const ValueKey('route-overview-inset'))).height, inset.height - 4 + kSnapshotCreditStripPt);
       // The credit: under the row, on one line, in full.
+      // The credit shows as one line only when the map first opens in a launch, then folds for good to the (i) button (the fold is
+      // tested in map_credits_fold_test.dart): by guidance it is the button, under the row, which is what the picture shows.
       final chip = tester.getRect(find.byType(AttributionChip));
       expect(chip.top, greaterThanOrEqualTo(inset.bottom - 0.5), reason: 'under the corner picture, not beside it');
       expect(chip.width, lessThanOrEqualTo(screen.width));
       final credit = find.descendant(of: find.byType(AttributionChip), matching: find.byType(Text));
-      expect(tester.widget<Text>(credit).data, isNotEmpty);
-      expect(tester.renderObject<RenderParagraph>(credit).size.height, lessThan(10.5 * 1.2 * 1.5), reason: 'the credit is on one line at 390 pt');
+      if (credit.evaluate().isNotEmpty) {
+        expect(tester.widget<Text>(credit).data, isNotEmpty);
+        expect(tester.renderObject<RenderParagraph>(credit).size.height, lessThan(10.5 * 1.2 * 1.5), reason: 'the credit is on one line at 390 pt');
+      } else {
+        expect(find.byKey(const ValueKey('credits-button')), findsOneWidget, reason: 'folded: the (i) button');
+        expect(chip.height, greaterThanOrEqualTo(44), reason: 'a 44 point touch target');
+      }
     }
     await snap(tester, _out, _old ? 'guidance-${theme.name}-BEFORE' : 'guidance-${theme.name}');
   } finally {
