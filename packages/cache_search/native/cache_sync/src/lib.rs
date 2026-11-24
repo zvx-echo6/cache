@@ -1952,11 +1952,9 @@ impl Inner {
             }
             #[cfg(feature = "test-hooks")]
             {
-                // The process is stopped after the page was taken and before it was saved: half the file reaches the temporary
-                // name, and the saved mirror stays as it was.
-                let marker = self.dir.join("kill-before-mirror-save");
-                if marker.exists() {
-                    let _ = std::fs::remove_file(&marker);
+                // The process is stopped after the page was taken and before it was saved (for as long as `<dir>/kill-before-mirror-save`
+                // exists): half the file reaches the temporary name, and the saved mirror stays as it was.
+                if self.dir.join("kill-before-mirror-save").exists() {
                     let path = self.mirror_path(peer, &rs.id);
                     let bytes = serde_json::to_vec(&m)?;
                     std::fs::create_dir_all(path.parent().unwrap())?;
@@ -3333,7 +3331,8 @@ impl SyncEngine {
             "test_round" => {
                 // One whole round now, and back when it is over.
                 let inner2 = inner.clone();
-                self.rt.block_on(async move { inner2.round().await });
+                let scope = Scope { peer: s("peer"), ..Scope::default() };
+                self.rt.block_on(async move { inner2.round_with(&scope).await });
                 Ok(json!({}))
             }
             #[cfg(feature = "test-hooks")]
