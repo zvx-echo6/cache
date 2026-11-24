@@ -494,6 +494,35 @@ void main() {
       expect(r.nb.includedIds, isEmpty);
     });
 
+    test('a private notebook that a phone switched on stays on the server and on the phone: the server\'s own pass does not take its entry back out', () async {
+      final r = rig(shareOnAlways: true);
+      final phone = Device(tmp, name: 'phone');
+      final health = await phone.book('Health', private: true);
+      final bp = await phone.entry(health, 'Blood pressure', private: true);
+      await phone.run(shareDir(), include: {health.id});
+      expect(files(shareDir()).where((p) => p.endsWith('.md')), hasLength(1), reason: 'the phone sent it');
+      await r.nb.run();
+      expect(r.server.store.notebooks.map((n) => n.name), ['Health']);
+      expect(files(shareDir()).where((p) => p.endsWith('.md')), hasLength(1), reason: 'the server\'s pass left the file in the share');
+      await r.nb.run();
+      expect(files(shareDir()).where((p) => p.endsWith('.md')), hasLength(1));
+      await phone.run(shareDir(), include: {health.id});
+      expect((await phone.store.entries(health.id)).map((e) => e.id), [bp.id], reason: 'the phone still has its entry');
+    });
+
+    test('phone to phone: a second phone that has not switched the private notebook on does not remove its file either (the phone\'s own behaviour)', () async {
+      final a = Device(tmp, name: 'a');
+      final b = Device(tmp, name: 'b');
+      final health = await a.book('Health', private: true);
+      final e = await a.entry(health, 'Blood pressure', private: true);
+      await a.run(shareDir(), include: {health.id});
+      await b.run(shareDir());
+      await b.run(shareDir());
+      expect(files(shareDir()).where((p) => p.endsWith('.md')), hasLength(1), reason: 'b did not take the file out');
+      await a.run(shareDir(), include: {health.id});
+      expect((await a.store.entries(health.id)).map((x) => x.id), [e.id]);
+    });
+
     test('a browser reaches the switch through sharing.set_private, and the state says which are on', () async {
       final r = rig(shareOnAlways: true);
       final health = await r.server.book('Health', private: true);
