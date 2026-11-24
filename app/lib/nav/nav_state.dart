@@ -18,6 +18,7 @@ import 'nav_backend.dart';
 import 'nav_position.dart';
 import 'saved_first.dart';
 import 'speaker.dart';
+import 'travel_prefs.dart';
 import 'units.dart';
 
 /// What the Maps tab is doing about getting somewhere.
@@ -107,9 +108,17 @@ class NavState extends ChangeNotifier {
     this.guidanceLogEvery,
     this.rerouteTimeout = const Duration(seconds: 25),
     this.arrivalEndAfter = const Duration(minutes: 5),
+    this.prefs,
   }) : _clock = clock ?? DateTime.now {
     location.addListener(_onLocation);
+    restored = _restore();
   }
+
+  /// Where the way of travel and its options are remembered across restarts; null remembers nothing (tests).
+  final TravelPrefs? prefs;
+
+  /// Completes when what was remembered has been read and applied (immediately when nothing is remembered).
+  late final Future<void> restored;
 
   final MapBackend backend;
   final LocationService location;
@@ -174,18 +183,60 @@ class NavState extends ChangeNotifier {
 
   // ---- directions ---------------------------------------------------------------------------------------------
 
+  /// The engine's id of the way of travel being routed: drive, walk, bike, offroad_foot (Walk > Off-road), offroad_moto (Bike >
+  /// Dirt bike), offroad_4w (ATV > Quad), offroad_sxs (ATV > Side-by-side), or offroad_vehicle (a route the assistant planned,
+  /// which no choice on the screen is). Only the first five of the assistant's ids reach it from outside ([previewSnapshot]); the
+  /// others pass between this screen and the engine.
   String mode = 'drive';
 
-  /// How an off-road route treats land the data marks private or closed: strict, pragmatic (the default) or emergency.
-  /// Sent only with an off-road mode; drive, walk and bike keep the core's default.
+  /// How an off-road route treats land the data marks private or closed: strict (only the assistant plans that; no choice on the
+  /// screen is highlighted), pragmatic (the default; Standard on the screen) or emergency. Sent only with an off-road mode; drive,
+  /// walk and bike keep the core's default.
   String landAccess = 'pragmatic';
 
-  /// The off-road mode the Off-road choice comes back to (on foot until the person picks Vehicle).
-  String offroadMode = 'offroad_foot';
+  /// Drive's two toggles: avoid highways, avoid tolls (avoided where there is a reasonable way round). Sent only with Drive.
+  bool avoidHighways = false;
+  bool avoidTolls = false;
 
-  /// The way of travel is one of the off-road modes (offroad_foot, offroad_vehicle).
+  // The option each way of travel comes back to when it is chosen again (Walk's Off-road, Bike's Dirt bike, ATV's Side-by-side).
+  bool _walkOffroad = false;
+  bool _bikeDirt = false;
+  bool _atvSideBySide = false;
+
+  // What is remembered: the person's last choices (never an assistant route's mode or strict land access).
+  String _keptMode = 'drive';
+  bool _touched = false;
+
+  /// The way of travel is one of the off-road modes (they leave the roads: Walk > Off-road, Bike > Dirt bike, ATV, and the
+  /// assistant's offroad_vehicle).
   bool get offroad => isOffroadMode(mode);
-  static bool isOffroadMode(String m) => m == 'offroad_foot' || m == 'offroad_vehicle';
+  static const offroadModes = ['offroad_foot', 'offroad_vehicle', 'offroad_moto', 'offroad_4w', 'offroad_sxs'];
+  static bool isOffroadMode(String m) => offroadModes.contains(m);
+
+  /// The first row's choice of the screen for an engine id: `drive`, `walk`, `bike` or `atv`; null for offroad_vehicle (no choice
+  /// is highlighted).
+  static String? travelOf(String m) => switch (m) {
+        'drive' => 'drive',
+        'walk' || 'offroad_foot' => 'walk',
+        'bike' || 'offroad_moto' => 'bike',
+        'offroad_4w' || 'offroad_sxs' => 'atv',
+        _ => null,
+      };
+
+  /// The way of travel highlighted in the first row ([travelOf] of [mode]).
+  String? get travel => travelOf(mode);
+
+  /// The engine id of a first-row choice, with the option that choice was last set to.
+  String modeFor(String travel) => switch (travel) {
+        'walk' => _walkOffroad ? 'offroad_foot' : 'walk',
+        'bike' => _bikeDirt ? 'offroad_moto' : 'bike',
+        'atv' => _atvSideBySide ? 'offroad_sxs' : 'offroad_4w',
+        _ => 'drive',
+      };
+
+  /// Whether the Standard / Emergency row is shown: where land rules mean something (the off-road modes).
+  bool get showsLandRow => offroad;
+
   bool routing = false;
   String? routeError;
 
@@ -322,7 +373,8 @@ class NavState extends ChangeNotifier {
     var added = false;
     try {
       final r = await backend.route(
-          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
+          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0,
+          avoidHighways: _sendAvoidHighways, avoidTolls: _sendAvoidTolls);
       if (!guiding) return false;
       if (r.ok) {
         routes = [r];
@@ -698,8 +750,9 @@ class NavState extends ChangeNotifier {
     routes = [snapshot];
     routeIndex = 0;
     mode = snapshot.mode;
-    if (offroad) offroadMode = mode;
     landAccess = snapshot.landAccess;
+    avoidHighways = false;
+    avoidTolls = false;
     _routeFrom = GeoPoint((snapshot.from['lat'] as num).toDouble(), (snapshot.from['lon'] as num).toDouble());
     routeError = null;
     routing = false;
@@ -715,7 +768,12 @@ class NavState extends ChangeNotifier {
   /// the route first); if this is reached while guiding all the same, guidance is ended first, so its position service is
   /// never left running behind a preview.
   Future<void> openDirections(MapPlace to) async {
+    // Emergency routing lasts for one trip: a destination that is not the one being previewed starts a trip on Standard.
+    final sameTrip = phase == NavPhase.previewing && selected?.id == to.id;
     if (guiding) await end();
+    if (!sameTrip && landAccess != 'pragmatic') {
+      landAccess = 'pragmatic';
+    }
     selected = to;
     phase = NavPhase.previewing;
     searchOpen = false;
@@ -723,20 +781,83 @@ class NavState extends ChangeNotifier {
     await _fetchRoutes();
   }
 
+  /// Choose the way of travel by its engine id (see [mode]): the options of Walk, Bike and ATV, or a way of travel as it was last
+  /// set. Routes again while previewing. Remembered across restarts.
   Future<void> setMode(String m) async {
     if (m == mode) return;
     mode = m;
-    if (offroad) offroadMode = m;
+    switch (m) {
+      case 'walk' || 'offroad_foot':
+        _walkOffroad = m == 'offroad_foot';
+      case 'bike' || 'offroad_moto':
+        _bikeDirt = m == 'offroad_moto';
+      case 'offroad_4w' || 'offroad_sxs':
+        _atvSideBySide = m == 'offroad_sxs';
+    }
+    if (TravelChoices.modes.contains(m)) _keptMode = m;
+    _remember();
     notifyListeners();
     if (phase == NavPhase.previewing) await _fetchRoutes();
   }
 
-  /// The land access of off-road routes; routes again when an off-road route is shown.
+  /// Choose Drive, Walk, Bike or ATV (`drive`, `walk`, `bike`, `atv`), with the option that choice was last set to.
+  Future<void> setTravel(String t) => setMode(modeFor(t));
+
+  /// The land access of off-road routes (Standard is `pragmatic`, Emergency `emergency`); routes again when an off-road route is
+  /// shown. Lasts for the current trip: a new destination and a restart both go back to Standard (the way of travel and its options are
+  /// what is remembered).
   Future<void> setLandAccess(String l) async {
     if (l == landAccess) return;
     landAccess = l;
+    _remember();
     notifyListeners();
     if (phase == NavPhase.previewing && offroad) await _fetchRoutes();
+  }
+
+  /// Drive's toggles: avoid highways, avoid tolls. Routes again while previewing a drive. Remembered across restarts.
+  Future<void> setAvoid({bool? highways, bool? tolls}) async {
+    final h = highways ?? avoidHighways, t = tolls ?? avoidTolls;
+    if (h == avoidHighways && t == avoidTolls) return;
+    avoidHighways = h;
+    avoidTolls = t;
+    _remember();
+    notifyListeners();
+    if (phase == NavPhase.previewing && mode == 'drive') await _fetchRoutes();
+  }
+
+  bool get _sendAvoidHighways => mode == 'drive' && avoidHighways;
+  bool get _sendAvoidTolls => mode == 'drive' && avoidTolls;
+
+  void _remember() {
+    _touched = true;
+    final p = prefs;
+    if (p == null) return;
+    unawaited(p.save(TravelChoices(
+      mode: _keptMode,
+      avoidHighways: avoidHighways,
+      avoidTolls: avoidTolls,
+      landAccess: 'pragmatic', // Emergency is for one trip: never kept for the next start
+      walkOffroad: _walkOffroad,
+      bikeDirt: _bikeDirt,
+      atvSideBySide: _atvSideBySide,
+    )));
+  }
+
+  /// Reads what was remembered and shows it, unless the person (or the assistant's route) chose something in the meantime.
+  Future<void> _restore() async {
+    final p = prefs;
+    if (p == null) return;
+    final c = await p.load();
+    if (_disposed || _touched || phase != NavPhase.browsing) return;
+    _walkOffroad = c.walkOffroad;
+    _bikeDirt = c.bikeDirt;
+    _atvSideBySide = c.atvSideBySide;
+    avoidHighways = c.avoidHighways;
+    avoidTolls = c.avoidTolls;
+    landAccess = 'pragmatic'; // a file from before Emergency became per-trip may still say emergency: not carried over
+    mode = c.mode;
+    _keptMode = c.mode;
+    notifyListeners();
   }
 
   void selectRoute(int i) {
@@ -785,7 +906,9 @@ class NavState extends ChangeNotifier {
           via: _via(),
           mode: mode,
           landAccess: offroad ? landAccess : null,
-          alternatives: stops.isEmpty ? 2 : 0);
+          alternatives: stops.isEmpty ? 2 : 0,
+          avoidHighways: _sendAvoidHighways,
+          avoidTolls: _sendAvoidTolls);
       if (seq != _routeSeq) return;
       if (!r.ok) {
         routeError = routeErrorText(r);
@@ -1106,7 +1229,7 @@ class NavState extends ChangeNotifier {
               // new route forward. Without it a start on a road mid-block was snapped either way, and a driver who turned early
               // got a route that began with a U-turn, which he was off again after a few more seconds (a re-route every cooldown).
               from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location', if (f.heading != null) 'heading_deg': f.heading},
-              to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0)
+              to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0, avoidHighways: _sendAvoidHighways, avoidTolls: _sendAvoidTolls)
           .timeout(rerouteTimeout);
       if (gen != _rerouteGen || !guiding || !identical(selected, to)) {
         logInfo('Guidance: a new route came after guidance had moved on, it is not used');

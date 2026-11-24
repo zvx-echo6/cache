@@ -187,8 +187,8 @@ class SearchCore {
   }
 
   /// The complete route. [to] and [from] are ends (`{"id"?, "lat", "lon", "name"?}`, from a [MapPlace.toEnd]); no [from]
-  /// is the core's last GPS fix. A route that cannot be made is a [MapRoute] with `ok` false and its errors.
-  Future<MapRoute> mapRoute({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) async =>
+  /// is the core's last GPS fix. [avoidHighways] and [avoidTolls] are for `drive` only (avoided where there is a reasonable way round). A route that cannot be made is a [MapRoute] with `ok` false and its errors.
+  Future<MapRoute> mapRoute({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2, bool avoidHighways = false, bool avoidTolls = false}) async =>
       MapRoute.fromJson(((await _call('mapRoute', {
         'request': {
           'from': ?from,
@@ -197,6 +197,8 @@ class SearchCore {
           'mode': mode,
           'land_access': ?landAccess,
           'alternatives': alternatives,
+          if (avoidHighways) 'avoid_highways': true,
+          if (avoidTolls) 'avoid_tolls': true,
         },
       })) as Map)
           .cast<String, dynamic>());

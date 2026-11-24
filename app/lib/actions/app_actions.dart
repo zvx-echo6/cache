@@ -202,7 +202,7 @@ class AppActions {
               orElse: () => throw const ActionFailure('not_found', 'There is no such data source.'));
           final on = f['on'] == true;
           if (!sources.available(row)) throw ActionFailure('not_set_up', '${row.title} is not downloaded yet. It needs a connection once.');
-          if (on && sources.needsKey(row)) throw ActionFailure('needs_key', '${row.title} needs your own key. Add it in Settings > Weather and alerts.');
+          if (on && sources.needsKey(row)) throw const ActionFailure('needs_key', "That source isn't available right now.");
           await sources.setOn(row, on);
           return {'source': row.title, 'on': on};
         },

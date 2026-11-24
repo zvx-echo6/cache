@@ -356,7 +356,7 @@ More sources are in ["Settings" > "Weather and alerts"](cache://settings/weather
 1. Find the source.
 2. Turn on its switch.
 
-- If it needs a free key, the row has a "Get key" button.
+- If it needs a key, its key row in "Settings" > "API keys" says "Not set". Turning the source on without a key is fine.
 
 You choose which alerts pop up in ["Settings" > "Notifications"](cache://settings/notifications).
 

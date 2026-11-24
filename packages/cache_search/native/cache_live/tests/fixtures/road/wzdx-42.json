@@ -1,0 +1,104 @@
+{
+ "road_event_feed_info": {
+  "feed_info_id": "sample",
+  "version": "4.2"
+ },
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "wz-1",
+   "properties": {
+    "core_details": {
+     "data_source_id": "sample",
+     "event_type": "work-zone",
+     "road_names": [
+      "I-84"
+     ],
+     "direction": "eastbound",
+     "description": "Sample work zone.",
+     "update_date": "2026-11-22T20:00:00Z"
+    },
+    "start_date": "2026-11-20T12:00:00Z",
+    "end_date": "2026-11-30T12:00:00Z",
+    "vehicle_impact": "all-lanes-closed",
+    "beginning_cross_street": "Sample St",
+    "reduced_speed_limit_kph": 80
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -116.2809,
+      43.6049
+     ],
+     [
+      -116.284,
+      43.605
+     ],
+     [
+      -116.29,
+      43.6052
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "wz-2",
+   "properties": {
+    "core_details": {
+     "data_source_id": "sample",
+     "event_type": "work-zone",
+     "road_names": [
+      "US-20"
+     ],
+     "direction": "eastbound",
+     "description": "Sample work zone.",
+     "update_date": "2026-11-22T20:00:00Z"
+    },
+    "start_date": "2026-11-20T12:00:00Z",
+    "end_date": "2026-12-05T12:00:00Z",
+    "vehicle_impact": "some-lanes-closed",
+    "beginning_cross_street": "Sample St",
+    "reduced_speed_limit_kph": 80
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -116.25,
+      43.62
+     ],
+     [
+      -116.24,
+      43.63
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "wz-3",
+   "properties": {
+    "core_details": {
+     "event_type": "work-zone",
+     "road_names": [
+      "SH-55"
+     ],
+     "direction": "unknown",
+     "update_date": "2026-11-22T20:00:00Z"
+    },
+    "start_date": "2026-11-20T12:00:00Z",
+    "vehicle_impact": "all-lanes-open"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -116.28,
+     43.65
+    ]
+   }
+  }
+ ]
+}

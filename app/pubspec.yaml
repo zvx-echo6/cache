@@ -134,6 +134,8 @@ flutter:
   uses-material-design: true
 
   assets:
+    # The road sources data file: 511 sites, WZDx feeds, key steps (schema, version, updated; a newer copy can override it later).
+    - assets/roads/road_sources.json
     # The base-map template (colours are palette roles) and the map fonts that ship with the app.
     - assets/map/omt_template.json
     - assets/map/protomaps_v4_template.json

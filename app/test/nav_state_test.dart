@@ -295,7 +295,8 @@ void main() {
       await nav.setLandAccess('strict');
       await nav.setMode('offroad_vehicle');
       await nav.setLandAccess('emergency');
-      expect(nav.offroadMode, 'offroad_vehicle');
+      expect(nav.mode, 'offroad_vehicle');
+      expect(nav.travel, isNull, reason: 'no choice on the screen is the assistant\'s vehicle route');
       await nav.setMode('drive');
       // the land access stays for the next off-road route, but is not sent with drive
       await nav.setLandAccess('pragmatic');

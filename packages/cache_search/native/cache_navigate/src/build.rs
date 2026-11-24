@@ -44,7 +44,15 @@ fn terrain(s: &Step) -> Option<String> {
     s.terrain.as_deref().filter(|t| !t.is_empty() && *t != "unknown").map(|t| t.replace('_', " "))
 }
 
-fn travel_phrase(t: &str) -> String {
+/// How a leg travelled in router mode `t` is worded on a trip of `trip_mode`. The trip modes only the screen starts (`offroad_moto`,
+/// `offroad_4w`, `offroad_sxs`) name the machine; every other trip, the assistant's five included, words it as it always did.
+fn travel_phrase(t: &str, trip_mode: &str) -> String {
+    match (trip_mode, t) {
+        ("offroad_moto", "2w") => return "By dirt bike".into(),
+        ("offroad_4w", "4w") => return "By quad".into(),
+        ("offroad_sxs", "4w") => return "By side-by-side".into(),
+        _ => {}
+    }
     match t {
         "foot" => "On foot".into(),
         "2w" => "By dirt bike or mountain bike".into(),
@@ -92,7 +100,7 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
         text.push_str(&format!(" ({})", climb.join(" ")));
     }
     match s.mode.as_deref() {
-        Some(t) if !(t == "foot" && (trip_mode == "walk" || trip_mode == "offroad_foot")) => format!("{}: {text}", travel_phrase(t)),
+        Some(t) if !(t == "foot" && (trip_mode == "walk" || trip_mode == "offroad_foot")) => format!("{}: {text}", travel_phrase(t, trip_mode)),
         _ => text,
     }
 }
@@ -376,6 +384,26 @@ mod step_tests {
         }
     }
 
+    /// The machine is named only on the trips the screen starts; the assistant's five trip modes word every leg as they always did.
+    #[test]
+    fn the_new_phrases_belong_to_the_screens_trips_only() {
+        let mut s = step(0, "offroad");
+        s.cardinal = Some("N".into());
+        s.distance_mi = 0.1;
+        s.grade_class = Some("flat".into());
+        for (travel, trip, phrase) in [("2w", "offroad_moto", "By dirt bike"), ("4w", "offroad_4w", "By quad"), ("4w", "offroad_sxs", "By side-by-side")] {
+            s.mode = Some(travel.into());
+            assert_eq!(step_text(&s, trip), format!("{phrase}: Off-road N 0.1 mi, flat"));
+        }
+        // the same legs on any of the five modes the model can ask for: the old words
+        for trip in ["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"] {
+            s.mode = Some("4w".into());
+            assert_eq!(step_text(&s, trip), "By ATV: Off-road N 0.1 mi, flat", "{trip}");
+            s.mode = Some("2w".into());
+            assert_eq!(step_text(&s, trip), "By dirt bike or mountain bike: Off-road N 0.1 mi, flat", "{trip}");
+        }
+    }
+
     #[test]
     fn offroad_text_is_the_recorded_one() {
         let mut s = step(0, "offroad");
@@ -459,6 +487,7 @@ mod direction_tests {
             leg_params: (0.0, 0.0, 0.0),
             warnings: vec![],
             errors: vec![],
+            notes: vec![],
         }
     }
 
@@ -532,6 +561,7 @@ mod direction_tests {
             leg_params: (0.0, 0.0, 0.0),
             warnings: vec![],
             errors: vec![],
+            notes: vec![],
         };
         let w = warnings(&d, false, 150.0);
         assert_eq!(w.len(), 1, "{w:?}");
@@ -558,6 +588,7 @@ mod direction_tests {
             leg_params: (0.0, 0.0, 0.0),
             warnings: vec![],
             errors: vec![],
+            notes: vec![],
         };
         let from = Resolved::point("Boise".into(), 43.6150, -116.2023);
         let to = Resolved::point("Nampa".into(), 43.5407, -116.5635);

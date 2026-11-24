@@ -253,17 +253,15 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('a source that is on without its key: one plain line names it and leads to Settings', (tester) async {
+  testWidgets('a source that is on without its key is silent: no plain line, no "needs a key" anywhere on the Weather screen', (tester) async {
     final r = await _rig(tester);
     await sceneQuietDay(tester, r);
     await tester.runAsync(() => r.weather.setSourceOn(r.weather.sourceById('firms-viirs-near')!, true));
-    final opened = <String>[];
-    await _open(tester, r, opened: opened);
-    expect(_in('weather-plain-line', find.text('Satellite fire detections near the place (NASA FIRMS) needs a key')), findsOneWidget);
-    expect(find.text('No alerts or fires nearby'), findsOneWidget, reason: 'the sources that were checked still speak');
-    await tester.tap(find.byKey(const ValueKey('weather-plain-line')));
-    await tester.pump();
-    expect(opened, ['settings']);
+    await _open(tester, r);
+    expect(find.byKey(const ValueKey('weather-plain-line')), findsNothing);
+    expect(find.textContaining('needs a key'), findsNothing);
+    expect(find.textContaining('Not downloaded'), findsNothing);
+    expect(find.text('No alerts or fires nearby'), findsOneWidget);
     await r.dispose(tester);
   });
 

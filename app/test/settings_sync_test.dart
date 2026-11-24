@@ -359,6 +359,51 @@ void main() {
     b.dispose();
   });
 
+  test('Include API keys: off for a newly linked device; on sends every key, keys saved later too, minus the ones left out', () async {
+    final (a, b) = await pair();
+    a.keys['live.key.owm'] = 'OWM-SECRET-1234';
+    a.keys['search.kagi.key'] = 'KAGI-SECRET-5678';
+    await a.sync.pushKeys();
+    expect(a.sync.includeKeys('B'), isFalse);
+    expect(a.core.secrets, isEmpty, reason: 'a newly linked device gets no keys');
+
+    await a.sync.setIncludeKeys('B', true);
+    expect(a.core.secrets['B'], {'live.key.owm': 'OWM-SECRET-1234', 'search.kagi.key': 'KAGI-SECRET-5678'});
+    // a key saved later follows the switch
+    a.keys['live.key.nws'] = 'NWS-SECRET-9';
+    await a.sync.pushKeys();
+    expect(a.core.secrets['B']!.keys, contains('live.key.nws'));
+    // one left out
+    await a.sync.setKeyOn('B', 'search.kagi.key', false);
+    expect(a.core.secrets['B']!.keys, isNot(contains('search.kagi.key')));
+    expect(a.sync.keyOn('B', 'live.key.owm'), isTrue);
+    // off sends none
+    await a.sync.setIncludeKeys('B', false);
+    expect(a.core.secrets['B'], anyOf(isNull, isEmpty));
+    expect(a.sync.includeKeys('B'), isFalse);
+    a.dispose();
+    b.dispose();
+  });
+
+  test('existing per-key ticks become the switch with exactly the same keys, with no re-entry; running it twice changes nothing', () async {
+    final (a, b) = await pair();
+    a.keys['live.key.owm'] = 'OWM-SECRET-1234';
+    a.keys['search.kagi.key'] = 'KAGI-SECRET-5678';
+    a.keys['live.key.nws'] = 'NWS-SECRET-9';
+    a.sync.seedLegacyTicks('B', {'live.key.owm', 'live.key.nws'});
+    expect(a.sync.keyOn('B', 'live.key.owm'), isTrue, reason: 'the old tick still reads');
+    await a.sync.migrateKeys();
+    expect(a.sync.includeKeys('B'), isTrue);
+    expect([for (final k in a.sync.keys()) if (a.sync.keyOn('B', k.name)) k.name]..sort(), ['live.key.nws', 'live.key.owm']);
+    expect(a.sync.keyOn('B', 'search.kagi.key'), isFalse, reason: 'it was not ticked, so it is left out');
+    await a.sync.migrateKeys();
+    expect([for (final k in a.sync.keys()) if (a.sync.keyOn('B', k.name)) k.name]..sort(), ['live.key.nws', 'live.key.owm']);
+    await a.sync.pushKeys();
+    expect(a.core.secrets['B'], {'live.key.owm': 'OWM-SECRET-1234', 'live.key.nws': 'NWS-SECRET-9'});
+    a.dispose();
+    b.dispose();
+  });
+
   testWidgets('a model the other device uses that is not here: "not downloaded here" and Download, never on its own', (tester) async {
     tall(tester);
     late Dev a, b;
@@ -547,7 +592,8 @@ void main() {
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: SharingDevicePage(sharing: b.sharing, peer: 'A', settingsSync: b.sync)));
     await tester.pump();
     expect(find.text("Take Desk's settings"), findsOneWidget);
-    expect(find.text('API keys'), findsNothing, reason: 'keys come from the device whose settings it follows');
+    expect(find.text('API keys'), findsOneWidget, reason: 'read only: keys come from the device whose settings it follows');
+    expect(find.textContaining('Keys come from Desk'), findsOneWidget);
 
     // What's included: six groups and what never syncs; a group's page ticks single settings.
     await tapReal(tester, 'link-included');

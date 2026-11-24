@@ -31,8 +31,8 @@ ask-sources | Ask: an answer with [1] citation marks and the "1 source" line exp
 chat-list | Ask chat list: "Search chats", Pinned and Today groups, "New chat"
 chat-menu | Chat list with one chat held: Rename, Pin, Share as Markdown, Add to Home, Delete
 connections | Notebooks > Connections: an Obsidian vault connected, with the phones' line that Obsidian syncs only while it is open; Logseq with Connect; "Your other devices"
-directions-offroad | Directions panel with Off-road chosen: "On foot", the three land-access choices and "Start"
-directions-panel | Maps: the directions panel with Drive, Walk, Bike and Off-road, a route, distance and time, and "Start"
+directions-offroad | Directions panel with Walk and "Off-road" chosen: "Standard" and "Emergency" land choices, the route and "Start"
+directions-panel | Maps: the directions panel with Drive, Walk, Bike and ATV, "Avoid highways" and "Avoid tolls", a route, distance and time, and "Start"
 edit-home | Edit Home: switches for each block and the "Reset to default" button
 guidance | Maps guiding a route: the next-turn banner, voice button and "End"
 hf-search | Find a model (Search Hugging Face): a search for a model name with a few single-file results, each with size and fit
