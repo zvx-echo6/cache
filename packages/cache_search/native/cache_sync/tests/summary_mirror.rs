@@ -531,7 +531,6 @@ fn id_named(dir: &Path, name: &str) -> String {
 // Not run with the others: through the transport node the first exchanges take minutes (a routed path is slow to come, as in
 // the routed test), and this did not finish in 700 seconds; run it by hand with `-- --ignored`.
 #[test]
-#[ignore = "did not finish in 700 s through the transport node; see the report"]
 fn three_devices_one_away_through_several_changes_and_back_comes_back_by_differences() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db, dc) = (tmp.path().join("a"), tmp.path().join("b"), tmp.path().join("c"));
