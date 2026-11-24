@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use bao_tree::ChunkNum;
 use cache_rns::blobs as new_blobs;
-use cache_rns::{Asker, BoxFut, Config, Handler, Iface, RnsNode};
+use cache_rns::{destination_for, Asker, BoxFut, Config, Handler, Iface, RnsNode};
 use cache_store::{ChunkRanges, Hash, Options, Store};
 use iroh::{PublicKey, SecretKey};
 use iroh_blobs::store::fs::FsStore;
@@ -81,25 +81,29 @@ async fn rig() -> Rig {
     let old_cfg = Config {
         device: ko.clone(),
         interfaces: vec![Iface::TcpListen(format!("127.0.0.1:{port}"))],
-        peers: vec![kn.public()],
+        peers: vec![(kn.public(), Some(destination_for(&kn).unwrap()))],
+        wifi_group: None,
         paths: vec![old_blobs::BLOB_PATH.to_string()],
         open_paths: vec![],
         max_bytes: 64 * 1024 * 1024,
         blobs: None,
+        pair_local_tcp: false,
     };
     let new_cfg = Config {
         device: kn.clone(),
         interfaces: vec![Iface::TcpConnect(format!("127.0.0.1:{port}"))],
-        peers: vec![ko.public()],
+        peers: vec![(ko.public(), Some(destination_for(&ko).unwrap()))],
+        wifi_group: None,
         paths: vec![],
         open_paths: vec![],
         max_bytes: 64 * 1024 * 1024,
         blobs: Some(new_store.clone()),
+        pair_local_tcp: false,
     };
     let old_node = RnsNode::start(old_cfg, Arc::new(OldServes(old_store.clone()))).await.unwrap();
     let new_node = RnsNode::start(new_cfg, Arc::new(Nothing)).await.unwrap();
     let end = Instant::now() + Duration::from_secs(20);
-    while !(new_node.knows(&ko.public()) && old_node.knows(&kn.public())) {
+    while !(new_node.reachable(&ko.public()) && old_node.reachable(&kn.public())) {
         assert!(Instant::now() < end, "the two devices hear each other within 20 s");
         let _ = old_node.announce().await;
         let _ = new_node.announce().await;

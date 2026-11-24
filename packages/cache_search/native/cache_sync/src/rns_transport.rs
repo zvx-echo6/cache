@@ -150,6 +150,7 @@ impl MultiTransport {
     }
 
     /// Tests only: how long without an announce makes a device reachable again.
+    #[cfg(feature = "test-hooks")]
     pub fn set_reach_gap(&self, d: Duration) {
         self.reach_gap_ms.store(d.as_millis() as u64, Ordering::Relaxed);
     }
