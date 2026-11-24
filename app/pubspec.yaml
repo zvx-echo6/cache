@@ -170,13 +170,17 @@ flutter:
     # Discover's activities and collections built into the app (a copy of docs/discover-catalogue.json; a test keeps them equal).
     - assets/discover/catalogue.json
 
-  # The Library's own faces (SIL Open Font License 1.1; the licences are beside them and in CREDITS.md): call numbers in Roboto
+  # Cache Okina: three glyphs of Noto Sans (U+02BB to U+02BD, the okina in Hawaiʻi), named as the theme's fallback so the web build never
+  # asks for a CJK fallback font it does not carry. The Library's own faces (SIL Open Font License 1.1; the licences are beside them and in CREDITS.md): call numbers in Roboto
   # Mono, the book page's catalogue card in Libre Baskerville (a variable font: its weight is set with the wght axis).
   fonts:
     - family: Roboto Mono
       fonts:
         - asset: assets/fonts/RobotoMono-Bold.ttf
           weight: 700
+    - family: Cache Okina
+      fonts:
+        - asset: assets/fonts/NotoSans-Okina.ttf
     - family: Libre Baskerville
       fonts:
         - asset: assets/fonts/LibreBaskerville-Variable.ttf
