@@ -117,6 +117,7 @@ class SettingsSync extends ChangeNotifier {
     required this.dir,
     this.downloadModel,
     this.placesHere,
+    this.onServerKeysChanged,
     DateTime Function()? now,
     this.every = const Duration(seconds: 10),
   }) : _now = now ?? DateTime.now,
@@ -158,6 +159,10 @@ class SettingsSync extends ChangeNotifier {
 
   /// Starts the download of a model a linked device uses ([waitingModelDownload]); only when the person taps Download.
   final Future<void> Function(Map<String, Object?> download)? downloadModel;
+
+  /// In a browser: told when the keys the server holds change (one saved in another tab, or sent by a linked device), so the tab reads
+  /// its own key list again (the Settings row "API keys").
+  final void Function()? onServerKeysChanged;
 
   /// The saved places on this device, by key.
   final Future<Set<String>> Function()? placesHere;
@@ -761,10 +766,12 @@ class SettingsSync extends ChangeNotifier {
     _serverKeysRead = true;
     final names = [for (final k in got.keys) k.name];
     final on = {for (final k in got.keys) k.name: k.on};
-    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
+    final namesSame = listEquals(names, _serverNames);
+    final same = namesSame && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
     _serverNames = names;
     _serverOn = on;
     _serverInclude = got.include;
+    if (!namesSame) onServerKeysChanged?.call();
     if (!same) _tell();
   }
 
