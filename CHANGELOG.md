@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+## 1.2.0 (build 56, test) - 2026-11-23
+
 ## 1.2.0 (build 55, test) - 2026-11-23
 
 ### Directions
