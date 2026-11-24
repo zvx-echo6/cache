@@ -868,7 +868,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _keepOnline(c);
     final tactical = widget.themeId == CacheThemeId.tactical;
     final screenRatio = widget.imagePixelRatio ?? (mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
-    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical, ratio: pinImageRatio(screenRatio));
+    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical, flat: isFlatIconTheme(widget.themeId), ratio: pinImageRatio(screenRatio));
     try {
       await images.ensure(kRepeaterIcon, mapIcon(kRepeaterIcon).icon, repeaterTint(tactical: tactical));
     } catch (_) {}

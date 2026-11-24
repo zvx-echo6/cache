@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
-import '../../notebook/pin_image.dart' show PinStyle, pinIconSize;
+import '../../notebook/pin_image.dart' show PinStyle, iconSizeByZoom, pinIconSize;
 import '../../roads/road_map_layers.dart';
-import '../../theme.dart' show CacheThemeId;
+import '../../theme.dart' show CacheThemeId, isFlatIconTheme;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
 import 'protomaps_layout.dart';
@@ -555,8 +555,8 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'source': kUserSource,
           'filter': ['==', ['geometry-type'], 'Point'],
           'layout': {
-            'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical),
-            'icon-size': pinIconSize(),
+            'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical, flat: isFlatIconTheme(p.id)),
+            'icon-size': iconSizeByZoom(pinIconSize()),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -586,7 +586,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['has', 'pin'],
           'layout': {
             'icon-image': ['get', 'pin'],
-            'icon-size': pinIconSize(),
+            'icon-size': iconSizeByZoom(pinIconSize()),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -640,7 +640,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
             'filter': ['all', ['==', ['get', 'role'], role], ['has', 'pin']],
             'layout': {
               'icon-image': ['get', 'pin'],
-              'icon-size': pinIconSize(),
+              'icon-size': iconSizeByZoom(pinIconSize()),
               'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
               'icon-allow-overlap': true,
               'icon-ignore-placement': true,

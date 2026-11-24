@@ -196,6 +196,7 @@ class CarPins {
     final images = <String, Uint8List>{};
     final features = <Map<String, Object?>>[];
     for (final p in pins) {
+      // The car's map keeps the halo icons (no flat look): its theme is not the phone's.
       final name = pinImageId(style, p.iconId, p.tint, tactical: tactical);
       if (!_sent.contains(name) && !images.containsKey(name)) {
         images[name] = await _render(p.glyph, p.tint, style, ratio: kCarPinImageRatio, tactical: tactical);

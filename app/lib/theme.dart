@@ -124,6 +124,10 @@ extension CacheTokensContext on BuildContext {
 const double kControlRadius = 14;
 const RoundedRectangleBorder kControlShape = RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(kControlRadius)));
 
+/// The themes whose map icons are flat (a solid disc with a faint edge, no white halo): light and Parchment. Dark and Tactical keep the
+/// halo they have always had.
+bool isFlatIconTheme(CacheThemeId id) => id == CacheThemeId.light || id == CacheThemeId.parchment;
+
 enum CacheThemeId { dark, light, parchment, tactical }
 
 extension CacheThemeIdInfo on CacheThemeId {
