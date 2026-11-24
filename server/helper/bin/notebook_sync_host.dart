@@ -11,6 +11,7 @@ import '../../../app/lib/notebook/templates_model.dart';
 import '../../../app/lib/sharing/share_rules.dart' show kNotebookShareDir;
 import 'core_notebook_store.dart';
 import 'line_protocol.dart';
+import 'pass_lock.dart';
 import 'sharing_host.dart';
 
 /// Cache for Linux's notebook sync, headless: the phone's `NotebookConnections` for the notebook share (kind `notebooks`), with no
@@ -40,6 +41,7 @@ class NotebookSyncHost {
     this.clock,
     this.debounce = const Duration(seconds: 2),
     this.every = const Duration(minutes: 2),
+    this.lock,
     this.log,
   }) {
     // The switches are read at once (a file of a few ids): the sharing host asks for them as soon as it starts, before any pass.
@@ -65,6 +67,9 @@ class NotebookSyncHost {
 
   /// A pass this often too while the kind is on (the phone's 2 minutes), for what no trigger told of.
   final Duration every;
+
+  /// Shared with the notes folders' sync ([FolderConnections]): one pass at a time across both, as on the phone.
+  final PassLock? lock;
   final void Function(String message)? log;
 
   Directory get _dir => Directory('${support.path}/notebook-sync');
@@ -196,7 +201,7 @@ class NotebookSyncHost {
       try {
         do {
           _again = false;
-          await _pass();
+          await (lock?.run(_pass) ?? _pass());
         } while (_again && !_stopped);
       } finally {
         _loop = null;

@@ -21,6 +21,7 @@ import 'core_notebook_store.dart';
 import 'folder_connections.dart';
 import 'folder_pick_ops.dart';
 import 'notebook_sync_host.dart';
+import 'pass_lock.dart';
 import 'regions_ops.dart';
 import 'server_settings_sync.dart';
 import 'sharing_host.dart';
@@ -127,6 +128,8 @@ Future<void> main() async {
     host.setKeyOn = settingsSync.setKeyOnFromBrowser;
     unawaited(settingsSync.start());
   }
+  // One pass at a time across the notebook sync with linked devices and the notes folders (the phone's one guard).
+  final passLock = PassLock();
   // Notebook sync with the linked devices, run here with no tab open: the notebooks in the core and `<support>/notebook-share` are
   // kept the same by the phone's engine; a browser's change to the notebooks (the write hook below) exports.
   NotebookSyncHost? notebookSync;
@@ -142,6 +145,7 @@ Future<void> main() async {
       prepareShare: host.refreshGate,
       offChanged: host.refreshOff,
       templates: serverTemplates(Platform.environment['CACHE_NOTEBOOK_TEMPLATES'], log: log),
+      lock: passLock,
       log: log,
     );
     attachNotebookSync(host, nb);
@@ -157,6 +161,7 @@ Future<void> main() async {
     ),
     templates: serverTemplates(Platform.environment['CACHE_NOTEBOOK_TEMPLATES'], log: log),
     changedNotebooks: () => notebookSync?.changed(),
+    lock: passLock,
     log: log,
   );
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.

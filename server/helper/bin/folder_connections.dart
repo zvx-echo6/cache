@@ -11,6 +11,7 @@ import '../../../app/lib/notebook/templates_model.dart';
 import '../../../packages/cache_search/lib/src/errors.dart';
 import 'core_notebook_store.dart';
 import 'line_protocol.dart';
+import 'pass_lock.dart';
 
 /// One folder of this computer the notebooks are kept in step with: an Obsidian vault or a Logseq graph (two-way, or export-only
 /// for Logseq 2.x). The phone's `SyncTargetConfig`, as far as the server needs it.
@@ -72,6 +73,7 @@ class FolderConnections implements OpHandler {
     DateTime Function()? clock,
     this.debounce = const Duration(seconds: 2),
     this.every = const Duration(minutes: 2),
+    this.lock,
     this.log,
   }) : _now = clock ?? DateTime.now {
     _read();
@@ -87,6 +89,9 @@ class FolderConnections implements OpHandler {
   final DateTime Function() _now;
   final Duration debounce;
   final Duration every;
+
+  /// Shared with the notebook sync with linked devices ([NotebookSyncHost]): one pass at a time across both, as on the phone.
+  final PassLock? lock;
   final void Function(String message)? log;
 
   Directory get _dir => Directory('${support.path}/notebook-sync');
@@ -170,7 +175,7 @@ class FolderConnections implements OpHandler {
       try {
         do {
           _again = false;
-          await _pass();
+          await (lock?.run(_pass) ?? _pass());
         } while (_again && !_stopped);
       } finally {
         _loop = null;
