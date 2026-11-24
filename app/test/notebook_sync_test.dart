@@ -703,6 +703,61 @@ void main() {
       }
     });
 
+    test('i: the marker reaches the other device before the file removal: the entry is deleted there, the marker stays, and X is gone on both after more passes', () async {
+      final (a, b, nb, ids) = await pair();
+      final mk = '_deleted/${ids[0]}.json';
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      // only the marker has arrived on B; X's file is still there
+      b.folder.text[mk] = a.folder.text[mk]!;
+      expect(mds(b), hasLength(2));
+      final rb = await b.engine.run();
+      expect(rb.deleted, 1);
+      expect(await b.nb.entry(ids[0]), isNull, reason: 'the marker is the pending delete');
+      expect(marks(b), [mk], reason: 'the marker stays');
+      mirror(b, a);
+      await a.engine.run();
+      mirror(a, b); // the file removal arrives as well
+      for (var k = 0; k < 3; k++) {
+        await b.engine.run();
+        mirror(b, a);
+        await a.engine.run();
+        mirror(a, b);
+      }
+      for (final r in [a, b]) {
+        expect(await r.nb.entry(ids[0]), isNull, reason: 'X is gone');
+        expect(await r.nb.entry(ids[1]), isNotNull);
+        expect(mds(r), hasLength(1));
+        expect(marks(r), [mk], reason: 'the marker is still in _deleted/');
+      }
+    });
+
+    test('j: same order, but the other device edited X before the marker arrived: X is kept on both, the marker is removed, and the file holds the edit', () async {
+      final (a, b, nb, ids) = await pair();
+      final mk = '_deleted/${ids[0]}.json';
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      final e = (await b.nb.entry(ids[0]))!;
+      await b.nb.saveEntry(id: ids[0], notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
+      b.folder.text[mk] = a.folder.text[mk]!;
+      await b.engine.run();
+      expect((await b.nb.entry(ids[0]))?.body, 'edited on B');
+      expect(marks(b), isEmpty, reason: 'the marker is removed');
+      mirror(b, a);
+      for (var k = 0; k < 3; k++) {
+        await a.engine.run();
+        mirror(a, b);
+        await b.engine.run();
+        mirror(b, a);
+      }
+      for (final r in [a, b]) {
+        expect((await r.nb.entry(ids[0]))?.body, 'edited on B');
+        expect(marks(r), isEmpty);
+        expect(mds(r), hasLength(2));
+        expect(r.folder.text.values.any((t) => t.contains('edited on B')), isTrue, reason: 'the file holds the edit');
+      }
+    });
+
     test('an old-build peer removes a file with no marker: the new device writes it back, and the old device gets the entry back', () async {
       final (a, b, nb, ids) = await pair();
       // the old device: the delete leaves no marker
