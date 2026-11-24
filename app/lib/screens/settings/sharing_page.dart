@@ -396,7 +396,13 @@ class _SharingPageState extends State<SharingPage> {
                   key: const ValueKey('sync-all'),
                   icon: const Icon(Icons.sync),
                   label: const Text('Sync all now'),
-                  onPressed: _busy ? null : () => _run(s.syncNow),
+                  onPressed: _busy
+                      ? null
+                      : () => _run(() async {
+                          final result = s.syncResult(working: 'Syncing with your devices');
+                          await s.syncNow();
+                          if (context.mounted) say(context, result);
+                        }),
                 ),
               ],
             ),
@@ -598,7 +604,7 @@ class _SharingKindPageState extends State<SharingKindPage> {
                       key: const ValueKey('kind-sync'),
                       icon: const Icon(Icons.sync, size: 20),
                       label: const Text('Sync all'),
-                      onPressed: _busy || !on ? null : () => _sync(() => s.syncKind(k), 'Syncing ${k.sharingLabel}'),
+                      onPressed: _busy || !on ? null : () => _sync(() => s.syncKind(k), s.syncResult(shareIds: k.shared().keys, working: 'Syncing ${k.sharingLabel}')),
                     ),
                   ],
                 ),
@@ -614,7 +620,7 @@ class _SharingKindPageState extends State<SharingKindPage> {
                           on: s.itemOn(k, i.item),
                           busy: _busy,
                           onChanged: (v) => _run(() => s.setItem(k, i.item, v)),
-                          onSync: () => _sync(() => s.syncItem(i.item), 'Syncing ${i.item.name}'),
+                          onSync: () => _sync(() => s.syncItem(i.item), s.syncResult(shareIds: [i.item.share], working: 'Syncing ${i.item.name}')),
                           onOpen: widget.onOpenItem?.call(context, k, i.item),
                         ),
                     ],
@@ -783,8 +789,9 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                   onPressed: _busy
                       ? null
                       : () => _run(() async {
+                          final result = s.syncResult(peer: widget.peer, working: 'Syncing with $name');
                           await s.syncPeer(widget.peer);
-                          if (context.mounted) say(context, 'Syncing with $name');
+                          if (context.mounted) say(context, result);
                         }),
                 ),
               ],

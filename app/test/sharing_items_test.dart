@@ -514,4 +514,133 @@ void main() {
     await settleCalls(tester, () => r.calls('set_off').length > before);
     expect((r.calls('set_off').last['off'] as List), contains('Journal'));
   });
+
+  testWidgets('Sync now says what happened: nothing shared, up to date, or syncing', (tester) async {
+    final r = await tester.runAsync(_rig);
+    final s = r!.make();
+    await tester.runAsync(s.setUp);
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch, 'via': 'direct', 'error': null});
+    await tester.runAsync(s.refresh);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: SharingPage(sharing: s)));
+    await tester.pump();
+
+    Future<void> tapAndRead(Finder f) async {
+      await tester.tap(f);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+
+    // Nothing is shared with anyone: Sync now says so on the device's page.
+    await tester.tap(find.byKey(const ValueKey('peer-p1')));
+    await tester.pumpAndSettle();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    expect(find.text('Nothing is shared yet'), findsOneWidget);
+    expect(r.calls('sync_now').last, {'peer': 'p1'}, reason: 'the sync still goes ahead');
+
+    // Shared, and nothing new on the other device.
+    await tester.runAsync(() => s.setShared(r.kind('models'), true));
+    await tester.runAsync(s.refresh);
+    await tester.pump();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    expect(find.text('Up to date'), findsOneWidget);
+    expect(find.text('Nothing is shared yet'), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('sync-all')), 200);
+    await tapAndRead(find.byKey(const ValueKey('sync-all')));
+    expect(find.text('Up to date'), findsOneWidget, reason: 'Sync all now on the main page says it too');
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 2000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('peer-p1')));
+    await tester.pumpAndSettle();
+
+    // Something to fetch from the other device: the existing line.
+    r.sync.shares.first['pending_files'] = 2;
+    await tester.runAsync(s.refresh);
+    await tester.pump();
+    await tapAndRead(find.byKey(const ValueKey('device-sync')));
+    await tester.pump(const Duration(seconds: 1)); // the earlier message finishes leaving, this one comes in
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Syncing with Desk'), findsOneWidget);
+    expect(find.text('Up to date'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    s.dispose();
+    await tester.runAsync(() => r.dir.delete(recursive: true));
+  });
+
+  test('Sync now result: no linked device or a folder kept with none is Nothing is shared yet; one kept with a device is Up to date', () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    await s.setShared(r.kind('models'), true);
+    await s.refresh();
+    String result({String? peer}) => s.syncResult(peer: peer, working: 'Syncing');
+
+    expect(s.shares, isNotEmpty);
+    expect(result(), 'Nothing is shared yet', reason: 'a kind is on but no device is linked');
+
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'link': {'mode': 'match'}});
+    r.sync.peers.add({'id': 'p2', 'name': 'Shed', 'linked': 1});
+    r.sync.shares.first['with'] = <String>[];
+    await s.refresh();
+    expect(result(), 'Nothing is shared yet', reason: 'an empty list keeps the folder from every device');
+    expect(result(peer: 'p1'), 'Nothing is shared yet');
+
+    r.sync.shares.first['with'] = ['send'];
+    await s.refresh();
+    expect(result(), 'Nothing is shared yet', reason: 'no linked device has that kind of link');
+
+    r.sync.shares.first['with'] = ['match'];
+    await s.refresh();
+    expect(result(), 'Up to date');
+    expect(result(peer: 'p1'), 'Up to date');
+    expect(result(peer: 'p2'), 'Up to date', reason: 'a link with no mode counts as match');
+
+    r.sync.shares.first.remove('with');
+    r.sync.shares.first['pending_files'] = 1;
+    await s.refresh();
+    expect(result(peer: 'p1'), 'Syncing', reason: 'no list: every linked device');
+    s.dispose();
+    await r.dir.delete(recursive: true);
+  });
+
+  test('Sync now result: the always-shared folders and the Bookshelves log are not what the person shared', () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    await s.refresh();
+    // As the engine reports them with every kind off and the device's settings sync Off ("Each keeps its own"): the indexes (no
+    // `with`), the settings log (Match and Send mine) and the Bookshelves log (Match), and the device's link Off.
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'link': {'mode': 'off', 'from': 'me', 'at': 5}});
+    r.sync.shares
+      ..add({'id': 'indexes', 'name': 'Search indexes', 'path': '/support/shared-indexes', 'with': null})
+      ..add({'id': 'settings', 'name': 'Settings', 'path': '/support/settings-sync', 'with': ['match', 'send']})
+      ..add({'id': 'bookshelves', 'name': 'Bookshelves', 'path': '/support/bookshelves', 'with': ['match']});
+    await s.refresh();
+    String result({Iterable<String>? shareIds, String? peer}) => s.syncResult(shareIds: shareIds, peer: peer, working: 'Syncing');
+    expect(result(), 'Nothing is shared yet', reason: 'the indexes go to the device but are not something the person switched on');
+    expect(result(peer: 'p1'), 'Nothing is shared yet');
+
+    // The device's settings sync is on (Match): the settings log counts, the other two still do not.
+    r.sync.peers.first['link'] = {'mode': 'match'};
+    await s.refresh();
+    expect(result(), 'Up to date', reason: 'settings are shared with this device');
+    expect(result(shareIds: ['indexes', 'bookshelves']), 'Nothing is shared yet');
+
+    // Send mine counts too; Off again does not.
+    r.sync.peers.first['link'] = {'mode': 'send', 'from': 'me'};
+    await s.refresh();
+    expect(result(), 'Up to date');
+    r.sync.peers.first['link'] = {'mode': 'off'};
+    await s.refresh();
+    expect(result(), 'Nothing is shared yet');
+
+    // A kind switched on counts again, whatever the settings say.
+    await s.setShared(r.kind('models'), true);
+    await s.refresh();
+    expect(result(), 'Up to date');
+    s.dispose();
+    await r.dir.delete(recursive: true);
+  });
 }
