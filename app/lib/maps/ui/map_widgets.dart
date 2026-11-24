@@ -154,7 +154,7 @@ class AttributionChip extends StatelessWidget {
                     child: Container(
                       width: 28,
                       height: 28,
-                      decoration: mapPanel(context, radius: 14, alpha: 0.85),
+                      decoration: mapPanel(context, radius: 14),
                       child: Icon(Icons.info_outline, size: 18, color: k.secondary),
                     ),
                   ),
