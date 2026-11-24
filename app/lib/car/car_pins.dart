@@ -80,6 +80,9 @@ class CarPins {
   /// Whether the car's map is Tactical (its palette, from the style the car last asked for).
   bool _tactical = false;
 
+  /// Whether the car's map is Light or Parchment (the flat icons: no white ring, see paintMapPin).
+  bool _flat = false;
+
   /// The pin style the car was last sent pictures for.
   PinStyle? _style;
 
@@ -123,6 +126,14 @@ class CarPins {
   void setTactical(bool on) {
     if (on == _tactical) return;
     _tactical = on;
+    _forget();
+    if (_on) _schedule(now: true);
+  }
+
+  /// The car's map is (or is not) Light or Parchment: its Icon, Teardrop and Badge pictures are drawn again in that look.
+  void setFlat(bool on) {
+    if (on == _flat) return;
+    _flat = on;
     _forget();
     if (_on) _schedule(now: true);
   }
@@ -181,7 +192,7 @@ class CarPins {
       _style = style;
       _forget();
     }
-    final tactical = _tactical;
+    final tactical = _tactical, flat = _flat && !_tactical;
     final List<CarPin> pins;
     try {
       pins = await read(tactical: tactical);
@@ -189,17 +200,16 @@ class CarPins {
       // Not readable now (the core still opening): the next change tries again. Nothing of the places is logged.
       return;
     }
-    if (style != pinStyle() || tactical != _tactical) {
+    if (style != pinStyle() || tactical != _tactical || flat != (_flat && !_tactical)) {
       _again = true;
       return;
     }
     final images = <String, Uint8List>{};
     final features = <Map<String, Object?>>[];
     for (final p in pins) {
-      // The car's map keeps the halo icons (no flat look): its theme is not the phone's.
-      final name = pinImageId(style, p.iconId, p.tint, tactical: tactical);
+      final name = pinImageId(style, p.iconId, p.tint, tactical: tactical, flat: flat);
       if (!_sent.contains(name) && !images.containsKey(name)) {
-        images[name] = await _render(p.glyph, p.tint, style, ratio: kCarPinImageRatio, tactical: tactical);
+        images[name] = await _render(p.glyph, p.tint, style, ratio: kCarPinImageRatio, tactical: tactical, flat: flat);
       }
       features.add({
         'type': 'Feature',
@@ -220,8 +230,8 @@ class CarPins {
     _lastGeo = geo;
   }
 
-  static Future<Uint8List> _renderPng(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical}) =>
-      renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical);
+  static Future<Uint8List> _renderPng(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical, required bool flat}) =>
+      renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical, flat: flat);
 }
 
 /// Pixels per point of the pin pictures sent to the car: the car's map shows them at that scale, so a pin is as many points as on
@@ -255,7 +265,7 @@ class CarPin {
 }
 
 typedef CarPinRead = Future<List<CarPin>> Function({required bool tactical});
-typedef CarPinRender = Future<Uint8List> Function(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical});
+typedef CarPinRender = Future<Uint8List> Function(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical, required bool flat});
 
 /// What the phone's Maps screen draws as pins ([CarPins]): the shown repeater lists' repeaters, then the places of the notebooks on
 /// the map, each with the look the phone gives it (PinLook, repeaterTint) in a Tactical map or not.

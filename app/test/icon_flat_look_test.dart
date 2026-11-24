@@ -67,6 +67,60 @@ void main() {
     });
   });
 
+  group('the plain dropped pin and destination pin', () {
+    // The code of e5271778, flat off: dark and Tactical are what they were.
+    const plain = {
+      'dark': ['7df7505915e084fc184adc580d913c8e548f07f9', 'a6d385aec45836002f00f9815027bada57f1a245', '7df7505915e084fc184adc580d913c8e548f07f9'],
+      'tactical': ['d6f345d4e70c08d0cad93e1991324e30c8f59911', '751c46daf358a5ee7ac924baa1c8289f85425640', 'd6f345d4e70c08d0cad93e1991324e30c8f59911'],
+    };
+    testWidgets('dark and Tactical are byte for byte as they were', (tester) async {
+      await tester.runAsync(() async {
+        for (final e in plain.entries) {
+          final tint = e.key == 'dark' ? const Color(0xFFFF6B5E) : const Color(0xFFFF2D1F);
+          for (final (i, style) in PinStyle.values.indexed) {
+            expect(_hash(await renderPlainPinPng(tint, style, ratio: 3, tactical: e.key == 'tactical')), e.value[i], reason: '${e.key} ${style.name}');
+          }
+        }
+        expect(_hash(await renderPlainPinPng(const Color(0xFFFF2D1F), PinStyle.icon, ratio: 3, tactical: true, flat: true)), plain['tactical']![0], reason: 'Tactical is never flat');
+      });
+    });
+
+    testWidgets('light and Parchment: no white ring, a faint edge, the same shape', (tester) async {
+      await tester.runAsync(() async {
+        for (final style in [PinStyle.icon, PinStyle.teardrop]) {
+          final halo = await _decode(await renderPlainPinPng(const Color(0xFFFF6B5E), style, ratio: 3));
+          final flat = await _decode(await renderPlainPinPng(const Color(0xFFFF6B5E), style, ratio: 3, flat: true));
+          int rim(({int w, int h, ByteData px}) i) {
+            var n = 0;
+            for (var y = 1; y < i.h - 1; y++) {
+              for (var x = 1; x < i.w - 1; x++) {
+                final p = _rgba(i, x, y);
+                if (!(p[3] > 200 && p[0] > 245 && p[1] > 245 && p[2] > 245)) continue;
+                if (_rgba(i, x - 1, y)[3] < 200 || _rgba(i, x + 1, y)[3] < 200 || _rgba(i, x, y - 1)[3] < 200 || _rgba(i, x, y + 1)[3] < 200) n++;
+              }
+            }
+            return n;
+          }
+
+          expect(rim(halo), greaterThan(30), reason: '${style.name}: the white ring is there today');
+          expect(rim(flat), 0, reason: '${style.name}: no white ring');
+          expect((flat.w, flat.h), (halo.w, halo.h));
+        }
+      });
+    });
+
+    test('the plain pin image of the flat look has its own name', () async {
+      final names = <String>[];
+      for (final flat in [false, true]) {
+        final images = PinImages((n, png) async => names.add(n), PinStyle.icon, flat: flat, ratio: 3);
+        await images.ensurePlain(const Color(0xFFFF6B5E));
+      }
+      expect(names, hasLength(2));
+      expect(names.first, isNot(names.last));
+      expect(names.last, contains('-f-'));
+    });
+  });
+
   group('the flat Icon pin (light and Parchment)', () {
     testWidgets('is a solid disc in the tint with no white halo, and a faint edge', (tester) async {
       await tester.runAsync(() async {
@@ -160,6 +214,11 @@ void main() {
         expect(_rgba(dark, dark.w ~/ 2 + 29, dark.w ~/ 2)[3], 255, reason: 'dark keeps its ring');
       });
     });
+  });
+
+  test('the Settings > Maps hint of the Icon pin style says what the light themes draw', () {
+    expect(PinStyle.icon.hint, 'The icon on a colored disc');
+    expect(PinStyle.icon.hint, isNot(contains('halo')));
   });
 
   group('the image names carry the look', () {

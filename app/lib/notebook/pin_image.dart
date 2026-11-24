@@ -8,8 +8,8 @@ import 'package:flutter/widgets.dart' show IconData;
 
 /// The three pin styles (Maps settings > Pin style), per device.
 enum PinStyle {
-  /// Icon: the icon itself in the colour, with a halo so it reads on any map. The default.
-  icon('Icon', 'The icon itself, with a halo'),
+  /// Icon: the icon on a disc in the colour (a halo around the icon itself on the dark and Tactical themes). The default.
+  icon('Icon', 'The icon on a colored disc'),
 
   /// Teardrop: a map-pin shape in the colour, carrying the icon; its point is the place.
   teardrop('Teardrop', 'A map pin carrying the icon'),
@@ -165,14 +165,14 @@ void _paintTeardrop(Canvas canvas, Offset at, double size, Color tint, {required
 /// A plain map pin (a teardrop with a round hole, no icon font: a font that is not ready when the image is drawn would leave it empty)
 /// as PNG bytes, for a dropped pin and a route's destination. Its point is at the bottom middle of the image for the teardrop style's
 /// symbol layer (anchor at the bottom), and at the middle of an image twice as tall for the other styles' (anchor in the centre).
-Future<Uint8List> renderPlainPinPng(Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false}) async {
+Future<Uint8List> renderPlainPinPng(Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false, bool flat = false}) async {
   final one = pinImageSize(PinStyle.teardrop, size);
   final tall = style != PinStyle.teardrop;
   final box = tall ? Size(one.width, one.height * 2 - size * 0.34) : one;
   final at = tall ? Offset(box.width / 2, box.height / 2) : pinImageAt(PinStyle.teardrop, size, tactical: tactical);
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  _paintTeardrop(c, at, size, tint, tactical: tactical);
+  _paintTeardrop(c, at, size, tint, tactical: tactical, flat: flat, ratio: ratio);
   final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
@@ -258,8 +258,8 @@ class PinImages {
 
   /// The image name of the plain pin in [tint] (see [renderPlainPinPng]), added on first use.
   Future<String> ensurePlain(Color tint) async {
-    final name = 'pin-plain-${style.name}${tactical ? '-t' : ''}-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
-    if (_have.add(name)) await add(name, await renderPlainPinPng(tint, style, ratio: ratio, tactical: tactical));
+    final name = 'pin-plain-${style.name}${tactical ? '-t' : ''}${flat && !tactical ? '-f' : ''}-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+    if (_have.add(name)) await add(name, await renderPlainPinPng(tint, style, ratio: ratio, tactical: tactical, flat: flat));
     return name;
   }
 
