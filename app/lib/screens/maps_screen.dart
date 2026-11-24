@@ -1242,7 +1242,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final sel = nav.selected;
     if (sel != null && !sel.isCategory && (sel.matched == 'pin' || sel.isCoordinates || nav.phase == NavPhase.previewing)) {
       try {
-        out[sel.id] = await images.ensure('place', Icons.place, _palette['pin']);
+        out[sel.id] = await images.ensurePlain(_palette['pin']);
         appLog.add(LogLevel.standard, 'INFO', 'map pin image ${out[sel.id]} for ${sel.id}');
       } catch (e) {
         appLog.add(LogLevel.standard, 'ERROR', 'map pin image failed: $e');

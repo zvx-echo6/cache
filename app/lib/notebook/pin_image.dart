@@ -92,28 +92,7 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       }
       _paintGlyph(canvas, at, _glyph(icon, fs, color: tint));
     case PinStyle.teardrop:
-      final head = teardropHead(at, size, tactical: tactical);
-      final r = head.radius;
-      final c = head.centre;
-      final apex = Offset(at.dx, at.dy - pinOutline(size, tactical: tactical));
-      final th = math.acos(r / (apex.dy - c.dy));
-      final tl = c + Offset(-r * math.sin(th), r * math.cos(th));
-      final tr = c + Offset(r * math.sin(th), r * math.cos(th));
-      final needle = Path()
-        ..moveTo(apex.dx, apex.dy)
-        ..lineTo(tl.dx, tl.dy)
-        ..arcToPoint(tr, radius: Radius.circular(r), largeArc: true, clockwise: true)
-        ..close();
-      Paint line(Color col, double grow) => Paint()
-        ..color = col
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = grow * 2
-        ..strokeJoin = StrokeJoin.round;
-      canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
-      canvas.drawPath(needle, line(ring, ringGrow));
-      canvas.drawPath(needle, Paint()..color = fill);
-      final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
-      tp.paint(canvas, teardropIconBox(at, size, tp.size, tactical: tactical).topLeft);
+      _paintTeardrop(canvas, at, size, tint, tactical: tactical, icon: icon);
     case PinStyle.badge:
       final rect = Rect.fromCenter(center: at, width: size, height: size);
       RRect rr(double grow) => RRect.fromRectAndRadius(rect.inflate(grow), Radius.circular(size * 0.26 + grow));
@@ -122,6 +101,57 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       canvas.drawRRect(rr(0), Paint()..color = fill);
       _paintGlyph(canvas, at, _glyph(icon, size * 0.64, color: glyphColor));
   }
+}
+
+/// The teardrop (needle pin) of [size] whose point is [at], filled with [tint]: with an [icon] drawn in its head, or with none a round
+/// hole (a plain pin, which needs no icon font).
+void _paintTeardrop(Canvas canvas, Offset at, double size, Color tint, {required bool tactical, IconData? icon}) {
+  final edge = tactical ? const Color(0xFF000000) : const Color(0xB3000000);
+  final fill = tactical ? const Color(0xFF160505) : tint;
+  final ring = tactical ? tint : const Color(0xFFFFFFFF);
+  final glyphColor = tactical ? tint : glyphOn(tint);
+  final ringGrow = _ringGrow(size, tactical);
+  final head = teardropHead(at, size, tactical: tactical);
+  final r = head.radius;
+  final c = head.centre;
+  final apex = Offset(at.dx, at.dy - pinOutline(size, tactical: tactical));
+  final th = math.acos(r / (apex.dy - c.dy));
+  final tl = c + Offset(-r * math.sin(th), r * math.cos(th));
+  final tr = c + Offset(r * math.sin(th), r * math.cos(th));
+  final needle = Path()
+    ..moveTo(apex.dx, apex.dy)
+    ..lineTo(tl.dx, tl.dy)
+    ..arcToPoint(tr, radius: Radius.circular(r), largeArc: true, clockwise: true)
+    ..close();
+  Paint line(Color col, double grow) => Paint()
+    ..color = col
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = grow * 2
+    ..strokeJoin = StrokeJoin.round;
+  canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
+  canvas.drawPath(needle, line(ring, ringGrow));
+  canvas.drawPath(needle, Paint()..color = fill);
+  if (icon != null) {
+    final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
+    tp.paint(canvas, teardropIconBox(at, size, tp.size, tactical: tactical).topLeft);
+  } else {
+    canvas.drawCircle(c, r * 0.4, Paint()..color = glyphColor);
+  }
+}
+
+/// A plain map pin (a teardrop with a round hole, no icon font: a font that is not ready when the image is drawn would leave it empty)
+/// as PNG bytes, for a dropped pin and a route's destination. Its point is at the bottom middle of the image for the teardrop style's
+/// symbol layer (anchor at the bottom), and at the middle of an image twice as tall for the other styles' (anchor in the centre).
+Future<Uint8List> renderPlainPinPng(Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false}) async {
+  final one = pinImageSize(PinStyle.teardrop, size);
+  final tall = style != PinStyle.teardrop;
+  final box = tall ? Size(one.width, one.height * 2 - size * 0.34) : one;
+  final at = tall ? Offset(box.width / 2, box.height / 2) : pinImageAt(PinStyle.teardrop, size, tactical: tactical);
+  final rec = ui.PictureRecorder();
+  final c = Canvas(rec)..scale(ratio);
+  _paintTeardrop(c, at, size, tint, tactical: tactical);
+  final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
+  return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
 
 /// The image's name in the map style: one per style, icon and colour.
@@ -184,6 +214,13 @@ class PinImages {
   Future<String> ensure(String iconId, IconData icon, Color tint) async {
     final name = pinImageId(style, iconId, tint, tactical: tactical);
     if (_have.add(name)) await add(name, await renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical));
+    return name;
+  }
+
+  /// The image name of the plain pin in [tint] (see [renderPlainPinPng]), added on first use.
+  Future<String> ensurePlain(Color tint) async {
+    final name = 'pin-plain-${style.name}${tactical ? '-t' : ''}-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+    if (_have.add(name)) await add(name, await renderPlainPinPng(tint, style, ratio: ratio, tactical: tactical));
     return name;
   }
 
