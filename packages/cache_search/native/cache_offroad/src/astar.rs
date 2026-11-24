@@ -54,6 +54,27 @@ pub fn movement_edge_time(
     elevation: &[f32], mp: &ModeParams, trail_grid: &[u8], barrier_grid: &[u8], boundary_mode_id: i64,
     cell_size_lat_m: f64, cell_size_lon_m: f64,
 ) -> f64 {
+    edge_time(cr, cc, nr, nc, dr, dc, cols, elevation, mp, trail_grid, barrier_grid, boundary_mode_id, cell_size_lat_m, cell_size_lon_m, false)
+}
+
+/// The time (s) the same step takes: the search's edge cost with the preference for trails and the extra cost of crossing a barrier left out
+/// (a trail's friction says "prefer it", not "it is faster"), still INF where the step is not allowed.
+#[allow(clippy::too_many_arguments)]
+pub fn movement_travel_time(
+    cr: usize, cc: usize, nr: usize, nc: usize, dr: i64, dc: i64, cols: usize,
+    elevation: &[f32], mp: &ModeParams, trail_grid: &[u8], barrier_grid: &[u8], boundary_mode_id: i64,
+    cell_size_lat_m: f64, cell_size_lon_m: f64,
+) -> f64 {
+    edge_time(cr, cc, nr, nc, dr, dc, cols, elevation, mp, trail_grid, barrier_grid, boundary_mode_id, cell_size_lat_m, cell_size_lon_m, true)
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn edge_time(
+    cr: usize, cc: usize, nr: usize, nc: usize, dr: i64, dc: i64, cols: usize,
+    elevation: &[f32], mp: &ModeParams, trail_grid: &[u8], barrier_grid: &[u8], boundary_mode_id: i64,
+    cell_size_lat_m: f64, cell_size_lon_m: f64, travel: bool,
+) -> f64 {
     let ci = cr * cols + cc;
     let ni = nr * cols + nc;
     let elev_cur = elevation[ci] as f64;
@@ -90,7 +111,7 @@ pub fn movement_edge_time(
         if !(tf < INF) {
             return INF;
         }
-        edge = base_time * tf;
+        edge = if travel { base_time } else { base_time * tf };
     } else {
         let mc = mp.cost_mult[ci * mp.stride + mp.mode] as f64;
         let mn = mp.cost_mult[ni * mp.stride + mp.mode] as f64;
@@ -103,7 +124,7 @@ pub fn movement_edge_time(
         if barrier_grid[ci] == 255 || barrier_grid[ni] == 255 {
             return INF;
         }
-    } else if boundary_mode_id == 1 && (barrier_grid[ci] == 255 || barrier_grid[ni] == 255) {
+    } else if !travel && boundary_mode_id == 1 && (barrier_grid[ci] == 255 || barrier_grid[ni] == 255) {
         edge *= 5.0;
     }
     edge

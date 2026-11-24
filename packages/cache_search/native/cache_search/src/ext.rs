@@ -626,7 +626,7 @@ impl crate::handle::Handle {
             return Ok(snapshot.to_string());
         }
         for k in o.keys() {
-            if !["from", "to", "via", "mode", "land_access", "alternatives"].contains(&k.as_str()) {
+            if !["from", "to", "via", "mode", "land_access", "alternatives", "avoid_highways", "avoid_tolls"].contains(&k.as_str()) {
                 return Err(Error::bad_json(format!("{k}: not allowed")));
             }
         }
@@ -640,7 +640,15 @@ impl crate::handle::Handle {
             Some(_) => return Err(Error::bad_json("via: must be an array of at most 8 places")),
         };
         let from_heading_deg = o.get("from").and_then(|f| f.get("heading_deg")).and_then(serde_json::Value::as_f64).filter(|h| h.is_finite() && (0.0..=360.0).contains(h));
-        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives, from_heading_deg };
+        let flag = |k: &str| -> Result<bool> {
+            match o.get(k) {
+                None | Some(serde_json::Value::Null) => Ok(false),
+                Some(serde_json::Value::Bool(b)) => Ok(*b),
+                Some(_) => Err(Error::bad_json(format!("{k}: must be true or false"))),
+            }
+        };
+        let (avoid_highways, avoid_tolls) = (flag("avoid_highways")?, flag("avoid_tolls")?);
+        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives, from_heading_deg, avoid_highways, avoid_tolls };
         let (out, active) = cache_navigate::map::route(nav, &req).map_err(tool_err)?;
         self.ext.routes.add(&active);
         Ok(out.to_string())

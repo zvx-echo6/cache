@@ -6,14 +6,14 @@
 //! Differences from the reference server are listed in DESIGN-OFFROAD.md: no reverse-geocode of the ends (`near` is null),
 //! no PostGIS names for follow legs (null), and walk/bike use the same unified search with only that mode
 //! seeded (the reference server sends them through its A/B/C scenario handlers).
-use crate::cost::Mode;
+use crate::cost::{Mode, Variant};
 use crate::elevation::ElevationSource;
 use crate::grid::haversine_m;
 use crate::offroad_legs::*;
 use crate::pack::PackSource;
 use crate::router::{Boundary, RequestMode, RouteError, RouteOptions, RouteRequest, Router};
-use crate::snap::{plan_end, route_planned, EndPlan};
-use crate::valhalla::{decode_polyline6, encode_polyline6, Maneuver, Valhalla, ValhallaError};
+use crate::snap::{plan_end, route_planned_with, EndPlan};
+use crate::valhalla::{decode_polyline6, encode_polyline6, CostingOpts, Maneuver, RouteEnd, Valhalla, ValhallaError};
 use serde_json::{json, Value};
 
 /// A road piece of a route: its steps, its points, its maneuvers and its length.
@@ -40,6 +40,13 @@ pub enum TravelMode {
     /// Off-road the whole way by vehicle: the reference server's unified Auto search over 4x4, ATV, two-wheeler and foot, switching at
     /// parking lots, trailheads and road ends (on foot for the last part where no vehicle can go).
     OffroadVehicle,
+    /// Off-road the whole way by dirt bike (Bike > Dirt bike on the screen): the 2w slot with the `moto` profile; roads by Valhalla
+    /// `motorcycle` costing with `use_trails`. Only passes between the screen and the engine: the assistant's tool never names it.
+    OffroadMoto,
+    /// Off-road the whole way by quad (ATV > Quad): the 4w profile alone.
+    OffroadFourW,
+    /// Off-road the whole way by side-by-side (ATV > Side-by-side): the 4w slot with the `sxs` profile.
+    OffroadSxs,
 }
 impl TravelMode {
     pub fn name(self) -> &'static str {
@@ -49,6 +56,9 @@ impl TravelMode {
             TravelMode::Bike => "bike",
             TravelMode::OffroadFoot => "offroad_foot",
             TravelMode::OffroadVehicle => "offroad_vehicle",
+            TravelMode::OffroadMoto => "offroad_moto",
+            TravelMode::OffroadFourW => "offroad_4w",
+            TravelMode::OffroadSxs => "offroad_sxs",
         }
     }
     pub fn from_name(s: &str) -> Option<TravelMode> {
@@ -58,6 +68,9 @@ impl TravelMode {
             "bike" => Some(TravelMode::Bike),
             "offroad_foot" => Some(TravelMode::OffroadFoot),
             "offroad_vehicle" => Some(TravelMode::OffroadVehicle),
+            "offroad_moto" => Some(TravelMode::OffroadMoto),
+            "offroad_4w" => Some(TravelMode::OffroadFourW),
+            "offroad_sxs" => Some(TravelMode::OffroadSxs),
             _ => None,
         }
     }
@@ -68,6 +81,8 @@ impl TravelMode {
             TravelMode::Bike => "bicycle",
             TravelMode::OffroadFoot => "pedestrian",
             TravelMode::OffroadVehicle => "auto",
+            TravelMode::OffroadMoto => "motorcycle",
+            TravelMode::OffroadFourW | TravelMode::OffroadSxs => "auto",
         }
     }
     /// Off-road router request mode: drive and offroad_vehicle mix vehicle/4w/2w/foot; walk and offroad_foot = foot; bike = 2w.
@@ -75,13 +90,46 @@ impl TravelMode {
         match self {
             TravelMode::Drive | TravelMode::OffroadVehicle => RequestMode::Auto,
             TravelMode::Walk | TravelMode::OffroadFoot => RequestMode::Single(Mode::Foot),
-            TravelMode::Bike => RequestMode::Single(Mode::TwoW),
+            TravelMode::Bike | TravelMode::OffroadMoto => RequestMode::Single(Mode::TwoW),
+            TravelMode::OffroadFourW | TravelMode::OffroadSxs => RequestMode::Single(Mode::FourW),
+        }
+    }
+    /// Which profile fills the slot of the router mode: the dirt bike's or the side-by-side's, else the standard one.
+    pub fn variant(self) -> Variant {
+        match self {
+            TravelMode::OffroadMoto => Variant::Moto,
+            TravelMode::OffroadSxs => Variant::Sxs,
+            _ => Variant::Standard,
         }
     }
     /// The off-road modes route the whole trip with the off-road router (no road route first), and only where the
     /// off-road data covers both ends.
     pub fn offroad_only(self) -> bool {
-        matches!(self, TravelMode::OffroadFoot | TravelMode::OffroadVehicle)
+        matches!(
+            self,
+            TravelMode::OffroadFoot | TravelMode::OffroadVehicle | TravelMode::OffroadMoto | TravelMode::OffroadFourW | TravelMode::OffroadSxs
+        )
+    }
+    /// The pieces of a router result: for the dirt bike, quad and side-by-side (one machine over the whole trip), the road stretches are
+    /// Valhalla legs ([`pieces_with_road_legs`]); every other mode as the reference server does it.
+    pub fn pieces(self, result: &crate::router::RouteResult) -> Vec<Piece> {
+        match self {
+            TravelMode::OffroadMoto | TravelMode::OffroadFourW | TravelMode::OffroadSxs => pieces_with_road_legs(result, ROAD_LEG_MIN_M),
+            _ => pieces_from_result(result),
+        }
+    }
+    /// The Valhalla costing and options for a road piece of an off-road route travelled in the router mode `piece_mode`
+    /// ("foot", "2w", "4w", "vehicle"): the dirt bike rides roads with `motorcycle` costing preferring trails; the quad and the
+    /// side-by-side drive with highways avoided and tracks preferred; the other off-road modes are as they always were.
+    pub fn road_costing(self, piece_mode: &str) -> (&'static str, CostingOpts) {
+        match (self, piece_mode) {
+            (TravelMode::OffroadMoto, "vehicle" | "2w") => ("motorcycle", CostingOpts { use_trails: Some(1.0), ..Default::default() }),
+            (TravelMode::OffroadFourW | TravelMode::OffroadSxs, "vehicle" | "4w") => ("auto", CostingOpts { use_highways: Some(0.0), use_tracks: Some(1.0), ..Default::default() }),
+            (_, "vehicle" | "4w") => ("auto", CostingOpts::default()),
+            (_, "foot") => ("pedestrian", CostingOpts::default()),
+            (_, "2w") => ("bicycle", CostingOpts::default()),
+            _ => ("auto", CostingOpts::default()),
+        }
     }
 }
 
@@ -123,6 +171,9 @@ pub struct DirectionsRequest {
     /// The way the vehicle is heading at `from`, degrees clockwise from north (a re-route from a moving vehicle): the route
     /// then starts forward, not with a U-turn.
     pub from_heading_deg: Option<f64>,
+    /// Drive only: avoid highways / tolls where there is a reasonable alternative (Valhalla `use_highways` / `use_tolls` 0 on `auto`).
+    pub avoid_highways: bool,
+    pub avoid_tolls: bool,
 }
 
 impl DirectionsRequest {
@@ -131,6 +182,7 @@ impl DirectionsRequest {
             from, to, mode, offroad: OffroadChoice::Auto, offroad_snap_m: DEFAULT_OFFROAD_SNAP_M,
             merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M, boundary: Boundary::Pragmatic,
             from_category: None, to_category: None, from_arrival: false, to_arrival: false, from_heading_deg: None,
+            avoid_highways: false, avoid_tolls: false,
         }
     }
 }
@@ -190,6 +242,26 @@ pub struct Directions {
     pub leg_params: (f64, f64, f64), // offroad_snap_m, merge_bearing_deg, min_leg_m
     pub warnings: Vec<Warning>,
     pub errors: Vec<DirectionsError>,
+    /// Plain-words notes about how an off-road route was made (see `router::RouteResult::notes`). Not in [`Directions::to_json`]
+    /// (the reference server's shape, and the assistant's); the map's route object carries them.
+    pub notes: Vec<String>,
+}
+
+impl DirectionsRequest {
+    /// "" or what is avoided ("highways", "tolls", "highways+tolls"): part of the route id.
+    fn avoid_key(&self) -> String {
+        if self.mode != TravelMode::Drive {
+            return String::new();
+        }
+        [(self.avoid_highways, "highways"), (self.avoid_tolls, "tolls")].iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect::<Vec<_>>().join("+")
+    }
+    /// The Valhalla costing options of the road route of this request: Drive's avoid toggles.
+    pub fn road_opts(&self) -> CostingOpts {
+        if self.mode != TravelMode::Drive {
+            return CostingOpts::default();
+        }
+        CostingOpts { use_highways: self.avoid_highways.then_some(0.0), use_tolls: self.avoid_tolls.then_some(0.0), ..Default::default() }
+    }
 }
 
 impl Directions {
@@ -231,9 +303,11 @@ fn in_coverage(lat: f64, lon: f64) -> bool {
 
 /// The reference server's route id; a land access other than pragmatic (the reference server's only one) is part of the key, so the same trip under another
 /// land access is another route.
-fn route_id(frm: (f64, f64), to: (f64, f64), mode: &str, boundary: Boundary, version: &str) -> String {
+fn route_id(frm: (f64, f64), to: (f64, f64), mode: &str, boundary: Boundary, version: &str, avoid: &str) -> String {
     use sha2::{Digest, Sha256};
     let mode = if boundary == Boundary::Pragmatic { mode.to_string() } else { format!("{mode}|{}", boundary.name()) };
+    // the same trip with highways or tolls avoided is another route
+    let mode = if avoid.is_empty() { mode } else { format!("{mode}|{avoid}") };
     let key = format!("{:.6},{:.6}|{:.6},{:.6}|{}|{}", frm.0, frm.1, to.0, to.1, mode, version);
     Sha256::digest(key.as_bytes()).iter().take(8).map(|b| format!("{:02x}", b)).collect()
 }
@@ -355,13 +429,14 @@ pub struct Assembled {
 pub type ADirResult<T> = Result<T, DirectionsError>;
 
 impl Env<'_> {
-    fn valhalla_route(&self, frm: (f64, f64), to: (f64, f64), costing: &str) -> ADirResult<crate::valhalla::Trip> {
-        self.valhalla.route(frm, to, costing).map_err(|e| valhalla_failure(&e, frm, to))
+    fn valhalla_route(&self, frm: (f64, f64), to: (f64, f64), costing: &str, opts: &CostingOpts) -> ADirResult<crate::valhalla::Trip> {
+        self.valhalla.route_with(&RouteEnd::at(frm), &RouteEnd::at(to), costing, opts).map_err(|e| valhalla_failure(&e, frm, to))
     }
 
     fn run_offroad_router(&self, frm: (f64, f64), to: (f64, f64), req: &DirectionsRequest, from_cat: Option<&String>, to_cat: Option<&String>) -> Result<crate::router::RouteResult, RouteError> {
         let mut rr = RouteRequest::new(frm, to, req.mode.router_mode(), req.boundary);
         rr.collect_detail = true;
+        rr.variant = req.mode.variant();
         rr.start_category = from_cat.cloned();
         rr.end_category = to_cat.cloned();
         Router { pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, opts: self.options.clone() }.route(&rr)
@@ -376,8 +451,8 @@ impl Env<'_> {
             let is_last = n == pieces.len() - 1;
             let mut got: Option<RoadPiece> = None;
             if let PieceKind::Road { start, end } = &piece.kind {
-                let costing = if piece.mode == "vehicle" || piece.mode == "4w" { "auto" } else if piece.mode == "foot" { "pedestrian" } else if piece.mode == "2w" { "bicycle" } else { "auto" };
-                match self.valhalla_route(*start, *end, costing) {
+                let (costing, opts) = req.mode.road_costing(&piece.mode);
+                match self.valhalla_route(*start, *end, costing, &opts) {
                     Ok(trip) => {
                         let pts = trip.shape.clone();
                         let mut new = build_steps(&trip.maneuvers, &pts);
@@ -431,7 +506,7 @@ impl Env<'_> {
 
     fn last_mile(&self, a: (f64, f64), b: (f64, f64), req: &DirectionsRequest, after_road: bool, from_cat: Option<&String>, to_cat: Option<&String>) -> ADirResult<OffroadPiece> {
         let result = self.run_offroad_router(a, b, req, from_cat, to_cat).map_err(|e| Self::offroad_error(&e))?;
-        let mut pieces = pieces_from_result(&result);
+        let mut pieces = req.mode.pieces(&result);
         if after_road {
             if let Some(p) = pieces.first_mut() {
                 if let PieceKind::Offroad { after_switch } = &mut p.kind {
@@ -450,7 +525,7 @@ impl Env<'_> {
         Directions {
             ok: false, route_id: rid.into(), mode: req.mode, from: None, to: None, distance_km: 0.0, distance_mi: 0.0,
             duration_s: 0, major_roads: vec![], steps: vec![], shape: String::new(), routing: String::new(),
-            leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m), warnings: vec![], errors: vec![e],
+            leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m), warnings: vec![], errors: vec![e], notes: vec![],
         }
     }
 
@@ -459,7 +534,7 @@ impl Env<'_> {
             Ok(r) => r,
             Err(e) => return self.fail(req, rid, Self::offroad_error(&e)),
         };
-        let pieces = pieces_from_result(&result);
+        let pieces = req.mode.pieces(&result);
         let asm = match self.assemble_offroad(&pieces, req) {
             Ok(a) => a,
             Err(e) => return self.fail(req, rid, e),
@@ -486,12 +561,13 @@ impl Env<'_> {
             leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m),
             warnings: vec![],
             errors: vec![],
+            notes: result.notes.clone(),
         }
     }
 
     /// `POST /api/directions`.
     pub fn directions(&self, req: &DirectionsRequest) -> Directions {
-        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version);
+        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version, &req.avoid_key());
         if req.mode.offroad_only() {
             if !(self.pack.covers(req.from.0, req.from.1) && self.pack.covers(req.to.0, req.to.1)) {
                 return self.fail(req, &rid, DirectionsError::new("not_set_up", OFFROAD_DATA_MISSING));
@@ -502,7 +578,7 @@ impl Env<'_> {
             return self.offroad_response(req, &rid);
         }
         let (from, to) = self.plan_ends(req);
-        let (trip, from, to) = match route_planned(self.valhalla, &from, &to, req.mode.costing()) {
+        let (trip, from, to) = match route_planned_with(self.valhalla, &from, &to, req.mode.costing(), &req.road_opts()) {
             Ok(t) => t,
             Err(e) => {
                 let e = valhalla_failure(&e, req.from, req.to);
@@ -532,13 +608,13 @@ impl Env<'_> {
         if req.offroad == OffroadChoice::Always || req.mode.offroad_only() || count == 0 {
             return vec![];
         }
-        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version);
+        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version, &req.avoid_key());
         let mut road_only = req.clone();
         road_only.offroad = OffroadChoice::Never;
         let (from, to) = self.plan_ends(req);
         let public = (from.public_road, to.public_road);
         self.valhalla
-            .alternatives_ends(&from.end, &to.end, req.mode.costing(), count)
+            .alternatives_with(&from.end, &to.end, req.mode.costing(), count, &req.road_opts())
             .into_iter()
             .enumerate()
             .map(|(i, t)| self.directions_for_trip(&road_only, &format!("{rid}-{}", i + 1), t, public))
@@ -644,6 +720,7 @@ impl Env<'_> {
             leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m),
             warnings,
             errors: vec![],
+            notes: vec![],
         }
     }
 }

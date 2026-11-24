@@ -69,6 +69,7 @@ import 'nav/nav_backend.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
+import 'nav/travel_prefs.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'net/fetch.dart' show fetchText;
@@ -1002,6 +1003,8 @@ class _CacheAppState extends State<CacheApp> {
     onFollow: (m) => maps.setFollow(m),
     // One guidance line a minute in the app log while a route is followed (fixes, the core's answer, failures).
     guidanceLogEvery: const Duration(minutes: 1),
+    // The way of travel and its options are kept across restarts.
+    prefs: TravelPrefs(),
   );
   // Guidance's position: the phone's GPS, or the car's test drive along the route (Android Auto's onAutoDriveEnabled).
   // The elevation of the route shown: one for the phone's Maps screen and the car's climb card.
