@@ -9,6 +9,8 @@ import 'package:cache/desktop/desktop_shell.dart';
 import 'package:cache/layout/adaptive.dart';
 import 'package:cache/layout/modules.dart';
 import 'package:cache/notebook/notebook_model.dart';
+import 'package:cache/notebook/places.dart';
+import 'package:cache/screens/notebooks/notebooks_screen.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/notebook/sync/device_folder_picker.dart';
 import 'package:cache/notebook/sync/folder.dart';
@@ -181,6 +183,40 @@ void main() {
       await shot(tester, '2d-picker-empty');
       await draw(tester, DeviceFolderPicker(list: _list, home: _home, start: '$_home/Private'));
       await shot(tester, '2e-picker-unreadable');
+    });
+
+    // The Notebooks placement (decided by cache-pm): the real Notebooks screen, Notebooks > menu > Connections, as the phone does it.
+    Future<NotebookConnections> notebooksPage(WidgetTester tester) async {
+      final (c, _) = await rig(tester);
+      final nb = (c as dynamic).notebook as dynamic;
+      await tester.runAsync(() async {
+        await nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Trail log', fields: [], sort: NotebookSort.recent));
+        await nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Garden', fields: [], sort: NotebookSort.recent));
+      });
+      tester.view.physicalSize = size * ratio;
+      tester.view.devicePixelRatio = ratio;
+      addTearDown(tester.view.reset);
+      final deps = NotebookDeps(notebook: nb, places: PlaceChoices.none, connections: c, now: () => DateTime(2026, 11, 23, 17, 2));
+      final page = NotebooksScreen(deps: deps);
+      final shown = !wide ? page : DesktopShell(atHome: false, module: ModuleId.notebooks, onHome: () {}, onModule: (_) {}, onModuleOptions: (c, m) {}, child: page);
+      await tester.pumpWidget(shotApp(shown, theme: CacheThemeId.dark, insets: wide ? EdgeInsets.zero : const EdgeInsets.only(top: 47, bottom: 34), desktop: wide));
+      await settle(tester, 10);
+      await tester.tap(find.byKey(const ValueKey('notebooks-menu')));
+      await settle(tester);
+      await tester.tap(find.text('Connections'));
+      await settle(tester, 10);
+      return c;
+    }
+
+    testWidgets('4 Notebooks placement ($tag)', (tester) async {
+      await notebooksPage(tester);
+      await shot(tester, '1a-entry-connections-notebooks');
+      final nav = Navigator.of(tester.element(find.byType(ConnectionsScreen)));
+      nav.push(MaterialPageRoute<void>(builder: (_) => DeviceFolderPicker(list: _list, home: _home)));
+      await settle(tester);
+      await tester.tap(find.byKey(const ValueKey('folder-Documents')));
+      await settle(tester);
+      await shot(tester, '2b-picker-documents-marked-notebooks');
     });
 
     testWidgets('3 connected row ($tag)', (tester) async {
