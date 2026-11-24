@@ -86,7 +86,12 @@ class SharingState extends ChangeNotifier {
   bool newDevice = false;
 
   /// The page has shown the new-device message: it is not shown again.
-  Future<void> dismissNewDevice() => _driver.dismissNewDevice();
+  Future<void> dismissNewDevice() => _dismissing = _driver.dismissNewDevice();
+
+  /// The latest [dismissNewDevice] call's write; completes when sharing.json is saved. The page calls it fire-and-forget, so a
+  /// caller that must see the saved file (a test) awaits this.
+  Future<void> get dismissed => _dismissing;
+  Future<void> _dismissing = Future<void>.value();
 
   /// Cache Server's `/api/core` in a browser (a test gives a fake): when set, the engine is the server's and this asks its sharing
   /// host. Null: the app runs the engine itself.
