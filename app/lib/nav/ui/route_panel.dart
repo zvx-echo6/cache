@@ -1,4 +1,5 @@
 import 'package:cache_search/cache_search.dart';
+import 'package:flutter/gestures.dart' show VelocityTracker;
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/map_widgets.dart';
@@ -6,7 +7,6 @@ import '../../theme.dart';
 import '../nav_state.dart';
 import '../street_names.dart';
 import '../units.dart';
-import 'route_steps.dart';
 import 'travel_rows.dart';
 
 /// The top pill while choosing how to go: where to, and the way back to the map.
@@ -124,12 +124,16 @@ class DirectionsHeader extends StatelessWidget {
   }
 }
 
-/// How to go: the way of travel, the routes (the best and its alternatives, with the road and off-road parts told apart), and Start.
+/// How to go: the way of travel, one line for the chosen route (its time, distance and road) and Start. The other routes, the
+/// elevation and the notes are one tap away on the route line ([_showDetails]).
 class RoutePanel extends StatelessWidget {
-  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onNextTurn, this.onDownloadArea, this.onAddOffroad});
+  const RoutePanel({super.key, required this.nav, required this.fmt, this.maxHeight, this.elevation, this.onNextTurn, this.onDownloadArea, this.onAddOffroad, this.onSwipeDown});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// A swipe down on the panel: back to the place (the same as the arrow on the top pill). Null: the panel does not take it.
+  final VoidCallback? onSwipeDown;
 
   /// "Download this area" under a route outside the downloaded maps ([NavState.outsideMaps]): the download for the route's area.
   /// Null leaves it out.
@@ -139,43 +143,82 @@ class RoutePanel extends StatelessWidget {
   /// route's area. Null leaves it out.
   final VoidCallback? onAddOffroad;
 
-  /// The next arrow beside Start: shows the route's first turn (the step card). Null leaves the arrows out. On the whole route
-  /// the back arrow is off.
+  /// The next arrow beside Start: shows the route's first turn (the step card). Null leaves the arrow out.
   final VoidCallback? onNextTurn;
 
-  /// The chosen route's elevation (RouteElevationSummary), under the routes; null leaves it out.
+  /// The chosen route's elevation (RouteElevationSummary), in the route details; null leaves it out.
   final Widget? elevation;
 
   /// The most the panel may take (the map's side column); null: the choices take up to half the window, as a bottom panel.
   final double? maxHeight;
 
+  void _showDetails(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: ListenableBuilder(
+          listenable: nav,
+          builder: (ctx, _) {
+            final k = ctx.t;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text('Route details', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                  ),
+                  for (var i = 0; i < nav.routes.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
+                    ),
+                  if (nav.routes.isNotEmpty && elevation != null) elevation!,
+                  if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
+                  if (nav.route case final r? when r.notes.isNotEmpty) _RouteNotes(notes: r.notes),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Container(
+    final r = nav.route;
+    final ready = r != null && !nav.routing;
+    // At large text the route line does not fit beside the buttons (it would shrink): it goes in the scrolling part, under the rows,
+    // so the panel never grows past its cap, and the buttons stay at the foot.
+    final big = MediaQuery.textScalerOf(context).scale(10) > 11.5;
+    final summary = r == null || nav.routing || nav.routeError != null ? null : _RouteSummary(route: r, fmt: fmt, onTap: () => _showDetails(context), wrap: big);
+    final panel = Container(
       decoration: mapPanel(context, radius: 20),
-      // The room on the right (16, as on the left) is inside the choices and beside Start, so the choices' scroll bar is in it.
-      padding: const EdgeInsets.fromLTRB(16, 12, 0, 14),
+      padding: const EdgeInsets.fromLTRB(16, 12, 0, 12),
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices),
-            // and a bar at its right edge shows while there is more than fits.
+            // The three rows (and a route error) scroll only when taller than about half the screen (large text).
             ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxHeight == null ? MediaQuery.sizeOf(context).height * 0.5 : (maxHeight! - 82).clamp(120.0, double.infinity)),
+              constraints: BoxConstraints(maxHeight: maxHeight == null ? MediaQuery.sizeOf(context).height * 0.5 : (maxHeight! - 70).clamp(120.0, double.infinity)),
               child: _ChoicesScroll(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     TravelChoicesView(nav: nav),
-                    const SizedBox(height: 10),
                     if (nav.routing)
                       Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        padding: const EdgeInsets.only(top: 12),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -187,99 +230,188 @@ class RoutePanel extends StatelessWidget {
                       )
                     else if (nav.routeError != null)
                       Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        padding: const EdgeInsets.only(top: 10),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
-                            // A place outside the downloaded maps: the download for it.
                             if (nav.outsideMaps && onDownloadArea != null) ...[
                               const SizedBox(height: 8),
-                              FilledButton.icon(
-                                key: const ValueKey('route-download-area'),
-                                onPressed: onDownloadArea,
-                                icon: const Icon(Icons.download),
-                                label: const Text('Download this area'),
-                              ),
+                              FilledButton.icon(key: const ValueKey('route-download-area'), onPressed: onDownloadArea, icon: const Icon(Icons.download), label: const Text('Download this area')),
                             ],
-                            // No off-road data here: the off-road data for it, or the road modes, which still work.
                             if (nav.offroadDataMissing && onAddOffroad != null) ...[
                               const SizedBox(height: 8),
-                              FilledButton.icon(
-                                key: const ValueKey('route-add-offroad'),
-                                onPressed: onAddOffroad,
-                                icon: const Icon(Icons.terrain_outlined),
-                                label: const Text('Add off-road data'),
-                              ),
+                              FilledButton.icon(key: const ValueKey('route-add-offroad'), onPressed: onAddOffroad, icon: const Icon(Icons.terrain_outlined), label: const Text('Add off-road data')),
                             ],
-                            // No off-road data here: the road modes still work.
                             if (nav.offroadDataMissing) ...[
                               const SizedBox(height: 8),
                               Row(
                                 children: [
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      key: const ValueKey('offroad-instead-walk'),
-                                      onPressed: () => nav.setMode('walk'),
-                                      icon: const Icon(Icons.directions_walk),
-                                      label: const Text('Walk'),
-                                    ),
-                                  ),
+                                  Expanded(child: OutlinedButton.icon(key: const ValueKey('offroad-instead-walk'), onPressed: () => nav.setMode('walk'), icon: const Icon(Icons.directions_walk), label: const Text('Walk'))),
                                   const SizedBox(width: 8),
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      key: const ValueKey('offroad-instead-drive'),
-                                      onPressed: () => nav.setMode('drive'),
-                                      icon: const Icon(Icons.directions_car),
-                                      label: const Text('Drive'),
-                                    ),
-                                  ),
+                                  Expanded(child: OutlinedButton.icon(key: const ValueKey('offroad-instead-drive'), onPressed: () => nav.setMode('drive'), icon: const Icon(Icons.directions_car), label: const Text('Drive'))),
                                 ],
                               ),
                             ],
                           ],
                         ),
-                      )
-                    else ...[
-                      for (var i = 0; i < nav.routes.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
-                        ),
-                      if (nav.routes.isNotEmpty && elevation != null) elevation!,
-                      if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
-                      if (nav.route case final r? when r.notes.isNotEmpty) _RouteNotes(notes: r.notes),
-                    ],
+                      ),
+                    if (big && summary != null) Padding(padding: const EdgeInsets.only(top: 8), child: summary),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.only(right: 16),
-              child: Row(
-                children: [
-                  if (onNextTurn != null) ...[
-                    StepArrows(onBack: null, onNext: nav.route == null || nav.routing || nav.route!.maneuvers.isEmpty ? null : onNextTurn),
-                    const SizedBox(width: 12),
+              child: Builder(builder: (context) {
+                final next = onNextTurn == null
+                    ? null
+                    : IconButton.outlined(
+                        key: const ValueKey('step-next'),
+                        tooltip: 'Next',
+                        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                        icon: const Icon(Icons.arrow_forward),
+                        onPressed: !ready || r.maneuvers.isEmpty ? null : onNextTurn,
+                      );
+                final start = FilledButton.icon(
+                  key: const ValueKey('route-start'),
+                  onPressed: ready ? nav.start : null,
+                  icon: const Icon(Icons.navigation),
+                  label: const Text('Start'),
+                );
+                if (big) return Row(children: [if (next != null) ...[next, const SizedBox(width: 8)], Expanded(child: start)]);
+                return Row(
+                  children: [
+                    // The chosen route in one line; a tap opens the details (the other routes, elevation, notes).
+                    Expanded(child: summary ?? const SizedBox(height: 48)),
+                    if (next != null) ...[const SizedBox(width: 8), next],
+                    const SizedBox(width: 8),
+                    start,
                   ],
-                  Expanded(
-                    child: FilledButton.icon(
-                      key: const ValueKey('route-start'),
-                      onPressed: nav.route == null || nav.routing ? null : nav.start,
-                      icon: const Icon(Icons.navigation),
-                      label: const Text('Start'),
-                    ),
-                  ),
-                ],
-              ),
+                );
+              }),
             ),
           ],
         ),
       ),
     );
+    if (onSwipeDown == null) return panel;
+    return _SwipeDown(key: const ValueKey('route-panel-swipe'), onSwipeDown: onSwipeDown!, child: panel);
   }
 }
+
+/// A quick swipe down anywhere on the panel (the choices included, which scroll): [onSwipeDown]. Read from the raw pointer events, so
+/// the choices' own scroll does not swallow it; a drag that scrolled the choices is theirs and does not count.
+class _SwipeDown extends StatefulWidget {
+  const _SwipeDown({super.key, required this.onSwipeDown, required this.child});
+
+  final VoidCallback onSwipeDown;
+  final Widget child;
+
+  @override
+  State<_SwipeDown> createState() => _SwipeDownState();
+}
+
+class _SwipeDownState extends State<_SwipeDown> {
+  final Map<int, VelocityTracker> _trackers = {};
+  final Map<int, Offset> _starts = {};
+  bool _scrolled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return NotificationListener<ScrollUpdateNotification>(
+      onNotification: (n) {
+        if ((n.scrollDelta ?? 0) != 0) _scrolled = true;
+        return false;
+      },
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (e) {
+          if (_trackers.isEmpty) _scrolled = false;
+          _trackers[e.pointer] = VelocityTracker.withKind(e.kind)..addPosition(e.timeStamp, e.position);
+          _starts[e.pointer] = e.position;
+        },
+        onPointerMove: (e) => _trackers[e.pointer]?.addPosition(e.timeStamp, e.position),
+        onPointerCancel: (e) {
+          _trackers.remove(e.pointer);
+          _starts.remove(e.pointer);
+        },
+        onPointerUp: (e) {
+          final t = _trackers.remove(e.pointer), start = _starts.remove(e.pointer);
+          if (t == null || start == null || _scrolled || _trackers.isNotEmpty) return;
+          final v = t.getVelocity().pixelsPerSecond;
+          final d = e.position - start;
+          // Down, mostly vertical, far enough and fast enough: not a tap, not a slow drag.
+          if (d.dy >= 40 && d.dy.abs() > d.dx.abs() * 1.5 && v.dy >= 300) widget.onSwipeDown();
+        },
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// The chosen route in one line: its time and distance, and under them its road (and the off-road part when it has one).
+class _RouteSummary extends StatelessWidget {
+  const _RouteSummary({required this.route, required this.fmt, required this.onTap, this.wrap = false});
+
+  final MapRoute route;
+  final Fmt fmt;
+  final VoidCallback onTap;
+
+  /// Large text: the lines are not squeezed to one line each, they wrap.
+  final bool wrap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final roads = route.raw['major_roads'];
+    final major = roads is List && roads.isNotEmpty ? majorRoadShown(roads.first) : null;
+    final via = major != null ? 'via $major' : '';
+    return Semantics(
+      button: true,
+      label: 'Route, ${fmt.duration(route.durationS)}, ${fmt.distance(route.distanceM)}. Route details',
+      child: InkWell(
+        key: const ValueKey('route-summary'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Row(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: wrap ? const EdgeInsets.symmetric(vertical: 4) : EdgeInsets.zero,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _fit(wrap, Text('${fmt.duration(route.durationS)} \u00b7 ${fmt.distance(route.distanceM)}', maxLines: 1, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, height: 1.15, color: k.accent))),
+                      if (route.hasOffroad || via.isNotEmpty)
+                        Text.rich(
+                          TextSpan(children: [
+                            if (route.hasOffroad) TextSpan(text: '${fmt.distance(route.totals.offroadM)} off-road', style: TextStyle(color: k.warning)),
+                            if (via.isNotEmpty && route.hasOffroad) TextSpan(text: ' \u00b7 ', style: TextStyle(color: k.secondary)),
+                            if (via.isNotEmpty) TextSpan(text: via, style: TextStyle(color: k.secondary)),
+                          ]),
+                          maxLines: wrap ? 3 : 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, height: 1.15),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              Icon(Icons.expand_less, size: 22, color: k.secondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Widget _fit(bool wrap, Widget c) => wrap ? c : Align(alignment: Alignment.centerLeft, child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: c));
 
 /// The colour of the bar beside the choices while there is more of them than fits (see [_ChoicesScroll]).
 Color routeChoicesBarColor(CacheTokens k) => k.secondary.withValues(alpha: 0.6);

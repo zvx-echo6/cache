@@ -50,23 +50,54 @@ double niceStep(double raw, {bool quarter = true}) {
 /// The heights the chart's full height covers, in the chart's unit, for a profile from [lo] to [hi]: its own range, or the [floor]
 /// when that is less (then the profile sits in the middle), with room below and above for the labels. A route at or above 0 never gets
 /// a window below 0.
+///
+/// With [plotHeight] (the plot's height in points) a flat profile's window also reaches the lines that bracket it ([flatLines]).
 @visibleForTesting
-(double, double) chartWindow(double lo, double hi, {required double floor}) {
+(double, double) chartWindow(double lo, double hi, {required double floor, double? plotHeight}) {
   final span = math.max(hi - lo, floor);
   final mid = (hi + lo) / 2;
   // A profile that spans less than the floor sits in the middle of it; room for the labels is added only to a taller one.
   if (hi - lo < floor) {
     var yMin = mid - span * 0.73, yMax = mid + span * 0.73;
     if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
+    if (plotHeight != null && plotHeight > 0) {
+      final f = _flatAxis(lo, hi, yMin, yMax, plotHeight);
+      return (f.yMin, f.yMax);
+    }
     return (yMin, yMax);
   }
   var yMin = mid - span / 2 - span * 0.28, yMax = mid + span / 2 + span * 0.18;
+  // The labelled lines run from one at or below the lowest point to one at or above the highest (a 5,700 ft peak under a top line of
+  // 5,500 read as a line drawn off the axis): the window reaches them both.
+  final step = niceStep(span / 2.2);
+  yMin = math.min(yMin, (lo / step).floor() * step);
+  yMax = math.max(yMax, (hi / step).ceil() * step);
   if (lo >= 0 && yMin < 0) (yMax, yMin) = (yMax - yMin, 0);
   return (yMin, yMax);
 }
 
 /// The least room between two height labels, in points: the label's text is 11 points tall.
 const double kChartLabelGap = 18.0;
+
+/// A flat profile's window and line step: the least nice step that keeps [kChartLabelGap] points between labels in the window of
+/// [yMin] to [yMax], and the window grown to reach the lines at or below [lo] and at or above [hi] (a larger window can need a larger
+/// step, so it is worked out again until it holds still).
+({double yMin, double yMax, double step}) _flatAxis(double lo, double hi, double yMin, double yMax, double plotHeight) {
+  var step = 1.0;
+  for (var i = 0; i < 6; i++) {
+    final want = kChartLabelGap * (yMax - yMin) / plotHeight;
+    final decade = math.pow(10, (math.log(want) / math.ln10).floor()).toDouble();
+    step = [for (final m in const [1.0, 2.0, 5.0, 10.0]) m * decade].firstWhere((v) => v >= want - 1e-9);
+    final bottom = (lo / step).floor() * step;
+    var top = (hi / step).ceil() * step;
+    if (top - bottom < step - 1e-9) top = bottom + step;
+    final nMin = math.min(yMin, bottom), nMax = math.max(yMax, top);
+    if (nMin == yMin && nMax == yMax) break;
+    yMin = nMin;
+    yMax = nMax;
+  }
+  return (yMin: yMin, yMax: yMax, step: step);
+}
 
 /// The heights of the chart's grid lines, each labelled with its own height, in the chart's unit, for a profile from [lo] to [hi]
 /// drawn in a plot [plotHeight] points tall ([full]: the guidance panel's chart, else the preview's, which draws every other line of
@@ -78,25 +109,26 @@ const double kChartLabelGap = 18.0;
 /// and only when that gives fewer than two, one more at the profile's own middle.
 @visibleForTesting
 List<double> chartGridLines(double lo, double hi, {required double floor, required double plotHeight, required bool full}) {
-  final (yMin, yMax) = chartWindow(lo, hi, floor: floor);
+  final (yMin, yMax) = chartWindow(lo, hi, floor: floor, plotHeight: plotHeight);
   final span = math.max(hi - lo, floor);
   if (hi - lo >= floor) {
     // The lines of a profile as ever: a nice step of its span apart, every other one in the preview.
     final gStep = niceStep(span / 2.2);
     final usual = <double>[];
-    var line = 0;
-    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax; g += gStep, line++) {
-      if (!full && line.isOdd) continue;
+    for (var g = (yMin / gStep).ceil() * gStep; g <= yMax + 1e-9; g += gStep) {
       usual.add(g);
     }
-    return usual;
+    if (full || usual.length < 3) return usual;
+    // The preview draws every other line, but always the lowest and the highest (they bracket the profile), and not one beside the
+    // highest (the labels would touch).
+    final last = usual.length - 1;
+    return [for (var i = 0; i <= last; i++) if (i == 0 || i == last || (i.isEven && i < last - 1)) usual[i]];
   }
   if (plotHeight <= 0) return const [];
   final pointsPer = (yMax - yMin) / plotHeight;
-  // A flat route: even lines, the least nice step that keeps the labels apart ([kChartLabelGap]).
-  final want = kChartLabelGap * pointsPer;
-  final decade = math.pow(10, (math.log(want) / math.ln10).floor()).toDouble();
-  final step = [for (final m in const [1.0, 2.0, 5.0, 10.0]) m * decade].firstWhere((v) => v >= want - 1e-9);
+  // A flat route: even lines, the least nice step that keeps the labels apart ([kChartLabelGap]); the window reaches the lines
+  // that bracket the profile.
+  final step = _flatAxis(lo, hi, yMin, yMax, plotHeight).step;
   final even = <double>[for (var g = (yMin / step).ceil() * step; g <= yMax + 1e-9; g += step) g];
   if (even.length >= 2) return even;
   final unit = step / 10;
@@ -205,7 +237,7 @@ class ElevationChartPainter extends CustomPainter {
       lo = math.min(lo, _h(e));
       hi = math.max(hi, _h(e));
     }
-    final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM));
+    final (yMin, yMax) = chartWindow(lo, hi, floor: _h(kChartMinSpanM), plotHeight: ph);
     final total = _d(profile.totalM);
     double x(double m) => l + (total <= 0 ? 0 : _d(m) / total * pw);
     double y(double hm) => t + (yMax - _h(hm)) / (yMax - yMin) * ph;
@@ -651,8 +683,11 @@ class RouteElevationSummary extends StatelessWidget {
   /// 0 to 1). Null: not tappable.
   final ValueChanged<double>? onSpot;
 
+  /// Listens to [elevation] itself: the summary sits in a sheet (Route details) that was built before the profile was read.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: elevation, builder: _build);
+
+  Widget _build(BuildContext context, Widget? _) {
     final k = context.t;
     final p = elevation.profile;
     final head = <Widget>[Expanded(child: Text('Elevation', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: k.secondary)))];

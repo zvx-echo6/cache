@@ -36,6 +36,8 @@ class _NavSearchBarState extends State<NavSearchBar> {
   @override
   void initState() {
     super.initState();
+    // The bar comes back while a place is chosen (after Back from the directions): it starts with the state's text.
+    _text.text = nav.query;
     nav.addListener(_sync);
     _focus.addListener(() {
       if (_focus.hasFocus) nav.openSearch();

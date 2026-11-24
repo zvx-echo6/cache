@@ -351,16 +351,23 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('directions: the way of travel, the routes, the off-road note, Start', (tester) async {
+      testWidgets('directions: the way of travel, one ETA line and Start; the routes and the off-road note are in Route details', (tester) async {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson({...fakeRouteJson(offroad: true, mode: mode), 'alternatives': [fakeRouteJson(id: 'r2', alt: 1)]});
         await nav.openDirections(hospital);
         await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
         for (final m in ['Drive', 'Walk', 'Bike', 'ATV']) {
           expect(find.text(m), findsOneWidget);
         }
+        // The short panel: one line for the chosen route (its off-road part and its road), not a card for each route.
+        expect(find.byKey(const ValueKey('route-card-0')), findsNothing);
+        expect(find.byKey(const ValueKey('route-card-1')), findsNothing);
+        expect(find.byKey(const ValueKey('offroad-note')), findsNothing);
+        expect(find.text('3.8 mi off-road · via Road 0', findRichText: true), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('route-summary')));
+        await tester.pumpAndSettle();
+        expect(find.text('Route details'), findsOneWidget);
         expect(find.byKey(const ValueKey('route-card-0')), findsOneWidget);
         expect(find.byKey(const ValueKey('route-card-1')), findsOneWidget);
-        expect(find.textContaining('off-road'), findsWidgets);
         expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
         // The note says "off-road" (a part that follows a trail is off-road too, not "open ground"), then the climb and descent.
         final totals = nav.route!.totals;
@@ -377,6 +384,10 @@ void main() {
         expect(nav.routeIndex, 1);
         // the second (road only) route has no off-road note
         expect(find.byKey(const ValueKey('offroad-note')), findsNothing);
+        // Close the sheet: a tap outside it.
+        await tester.tapAt(const Offset(20, 20));
+        await tester.pumpAndSettle();
+        expect(find.text('Route details'), findsNothing);
         await tester.tap(find.byKey(const ValueKey('mode-walk')));
         await tester.pump();
         expect(nav.mode, 'walk');
@@ -446,7 +457,7 @@ void main() {
       });
 
       testWidgets('directions: a bar beside the choices shows while there is more of them than fits, and only then', (tester) async {
-        // A phone's width, so the off-road choices take the rows they take on a phone.
+        // A phone's width; the panel may take only 190 points, so the off-road choices (three rows) are more than its room holds.
         tester.view.physicalSize = const Size(360, 700);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.reset);
@@ -454,7 +465,7 @@ void main() {
         bool bar(Symbol method, List<dynamic> args) => method == #drawRRect && args.length == 2 && args[1] is Paint && (args[1] as Paint).color.toARGB32() == color;
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: mode.startsWith('offroad'), mode: mode));
         await nav.openDirections(hospital);
-        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
+        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt, maxHeight: 190))));
         Future<void> settle() async {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
@@ -467,10 +478,9 @@ void main() {
         await settle();
         expect(position().maxScrollExtent, 0);
         expect(choices, isNot(paints..something(bar)));
-        // Off-road: its choices and the off-road note are more than half the window holds.
+        // Off-road: its choices are more than half the window holds.
         await nav.setMode('offroad_foot');
         await settle();
-        expect(find.byKey(const ValueKey('offroad-note')), findsOneWidget);
         expect(position().maxScrollExtent, greaterThan(0));
         expect(choices, paints..something(bar));
         // Back to what fits: the bar goes.

@@ -608,6 +608,8 @@ class NavState extends ChangeNotifier {
     final base = MapPlace.pin(lat, lon, name: pinName(lat, lon), formats: {'decimal': formatDecimal(lat, lon), 'dms': formatDms(lat, lon)});
     selected = base;
     searchOpen = false;
+    // The search bar shows the pin's name, as it does for any chosen place.
+    query = base.name;
     notifyListeners();
     try {
       final r = await backend.search('${lat.toStringAsFixed(6)},${lon.toStringAsFixed(6)}', near: here, limit: 1, meaning: false);

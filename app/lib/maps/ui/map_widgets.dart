@@ -123,12 +123,15 @@ class ScaleBarWidget extends StatelessWidget {
   }
 }
 
-/// The credit line, always on the map. Tapping it opens the full credits.
+/// The map credits. [folded] false: the credit line ("© OpenStreetMap contributors · Protomaps"), shown when the map first opens in a
+/// launch (OpenStreetMap asks for the credit to be shown before it is collapsed). [folded] true: a small (i) button, 28 points
+/// across in a 44 point touch area. Either way a tap opens the full credits (their sheet).
 class AttributionChip extends StatelessWidget {
-  const AttributionChip({super.key, required this.lines, required this.onTap});
+  const AttributionChip({super.key, required this.lines, required this.onTap, this.folded = false});
 
   final List<String> lines;
   final VoidCallback onTap;
+  final bool folded;
 
   @override
   Widget build(BuildContext context) {
@@ -137,26 +140,46 @@ class AttributionChip extends StatelessWidget {
       button: true,
       label: 'Map credits',
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 28),
-          padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
-          decoration: mapPanel(context, radius: 6, alpha: 0.78),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  lines.join(' · '),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 10.5, color: k.secondary, height: 1.2),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: folded
+              // A 44-point target around a 28-point button.
+              ? SizedBox(
+                  key: const ValueKey('credits-button'),
+                  width: 44,
+                  height: 44,
+                  child: Center(
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: mapPanel(context, radius: 14, alpha: 0.85),
+                      child: Icon(Icons.info_outline, size: 18, color: k.secondary),
+                    ),
+                  ),
+                )
+              : Container(
+                  key: const ValueKey('credits-line'),
+                  constraints: const BoxConstraints(minHeight: 28),
+                  padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
+                  decoration: mapPanel(context, radius: 6, alpha: 0.78),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          lines.join(' · '),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 10.5, color: k.secondary, height: 1.2),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.info_outline, size: 15, color: k.secondary),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Icon(Icons.info_outline, size: 15, color: k.secondary),
-            ],
-          ),
         ),
       ),
     );

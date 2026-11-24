@@ -327,9 +327,11 @@ Search finds a place, town, address or coordinates.
 
 The locate button ("Find me") moves the map to you. Tap it again to turn the map with your heading. The chip at the top left shows your coordinates. Tap it to copy them.
 
+When Maps first opens after Cache starts, a credit line at the foot of the map reads `© OpenStreetMap contributors · Protomaps`. It folds to a small info button (the letter i in a circle) under the scale bar on your first pan, zoom or tap, or after 5 seconds. It shows only once each time Cache starts. Tap the credit line or the info button to open "Map credits": the credits and licenses of the map layers.
+
 ## The place card and saving a place
 
-Tap a search result or a place to open its card at the bottom of "Maps".
+Tap a search result or a place to open its card at the bottom of "Maps". Tap open ground to drop a pin and open its card. A town or city opens when you tap its name on the map.
 
 ![A place card](shot:place-card)
 
@@ -338,6 +340,10 @@ The card has:
 - "Save place": keeps it in your Places notebook;
 - "Add to Home": adds a shortcut;
 - "Close".
+
+A pin's card shows its coordinates, elevation, who manages the land, and the nearest town. The map slides so the pin shows above the card. Tap open ground again to move the pin and its card there. Tap "Close", or press Back, to close the card.
+
+The card of a pin, and the card of a town or city, has a county line, for example `Ada County, ID`. Tap it to open that county's card. A county has no "Directions".
 
 When the place has a Wikipedia summary, the card shows it with "Read about it".
 - Tap "Read about it". The button says "Opening…", then the article opens in your Wikipedia.
@@ -362,8 +368,13 @@ Directions plan a route from where you are to a place.
    - "Bike": "Bicycle" or "Dirt bike".
    - "ATV": "Quad" or "Side-by-side".
 5. Under "Off-road", "Dirt bike" or "ATV" a third row appears: "Standard" or "Emergency". See Leaving the road.
-6. Check the route, its distance and time.
-7. Tap "Start".
+6. Check the line above "Start": the time and distance. For an off-road route it also shows the off-road distance and the main road, for example `3.8 mi off-road · via Forest Road 142`.
+7. To see more, tap that line or the ^ beside it. "Route details" opens with the other routes (tap one to choose it), the elevation chart and notes about the route.
+8. Tap "Start". The arrow beside "Start" shows the first turn.
+
+To go back to the place card, tap empty map, swipe down on the panel, use the Back gesture or button, or tap the back arrow at the top. Back again closes the place card. A tap on a repeater or a notebook pin still opens it.
+
+In the elevation chart, the height lines run from below the lowest point to above the highest, so "Highest" and "Lowest" are always inside the chart.
 
 Cache remembers the way of travel and its options, also after a restart. Changing a choice plans the route again.
 
@@ -391,7 +402,7 @@ Road directions work offline if the region is downloaded.
 
 Land rules come from US public-land data. Where Cache has none for the area, "Standard" and "Emergency" route the same and the route says "Cache has no land rules for this area. Check local access before you go."
 
-Until the off-road data is updated, "Dirt bike" follows the ATV trail rules and "Side-by-side" follows the "Quad" ones, and a note under the route says so.
+Until the off-road data is updated, "Dirt bike" follows the ATV trail rules and "Side-by-side" follows the "Quad" ones, and a note in "Route details" says so.
 
 Changing a choice plans the route again. Cache remembers the way of travel and its options, also after a restart. At first it is "Drive", then "Standard".
 
