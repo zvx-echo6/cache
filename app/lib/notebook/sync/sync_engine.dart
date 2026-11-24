@@ -131,11 +131,15 @@ const String kImportFallbackNotebook = 'Notes';
 
 /// One entry as the folder has it now.
 class _Unit {
-  _Unit(this.path, this.text, this.doc);
+  _Unit(this.path, this.text, this.doc, {this.copyId});
 
   final String path;
   final String text;
   final EntryDoc doc;
+
+  /// Set on a second file that carries an entry's id (the share file sync's "(conflict, ...)" copy): it is that entry's other
+  /// version, made as the entry [copyId] (the same on every device).
+  final String? copyId;
 }
 
 /// The two-way sync of the notebooks with one folder, with the rules of the notebook spec (5.4, 6.3): what changed on one side
@@ -396,7 +400,9 @@ class NotebookSync {
         final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
         final other = identical(keep, prev) ? u : prev;
         out[u.doc.id] = keep;
-        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props)));
+        final id = u.doc.id;
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra, props: other.doc.props, template: other.doc.template),
+            copyId: kind == SyncKind.share ? _derivedId(id, _sha(other.text)) : null));
       }
     }
 
@@ -880,6 +886,13 @@ class NotebookSync {
     // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
     // Obsidian and Logseq notes the person made are left alone).
     for (final u in _ownFilesOnly ? const <_Unit>[] : newOutside) {
+      if (u.copyId != null) {
+        // A second file with an entry's id (a sync conflict copy): the other version, as in a both-changed pass.
+        await _makeCopy(u.copyId!, u.doc, byName, r, at: u.path);
+        r.keptAsTwo.add(u.doc.title ?? u.doc.when);
+        r.read++;
+        continue;
+      }
       final id = _newId();
       final saved = await _apply(id, u.doc, byName, text: u.text);
       final book = notebook.notebook(saved.notebookId) ?? byName[u.doc.notebook]!;
@@ -941,7 +954,7 @@ class NotebookSync {
   }
 
   /// [d] as a new entry [copyId] in its notebook: titled "<title> (other version)", with its own copies of its photos.
-  Future<void> _makeCopy(String copyId, EntryDoc d, Map<String, Notebook> byName, SyncReport r) async {
+  Future<void> _makeCopy(String copyId, EntryDoc d, Map<String, Notebook> byName, SyncReport r, {String? at}) async {
     if (_items.containsKey(copyId) || await notebook.entry(copyId) != null) return;
     // A photo belongs to one entry (deleting an entry deletes its photos' files), so the copy gets its own under a new id.
     Future<String?> own(String pid) async {
@@ -983,6 +996,8 @@ class NotebookSync {
     final extra = _items[copyId]?.extra ?? const <String>[];
     // _apply recorded it with no place yet: it is written as a new file or block.
     _items.remove(copyId);
+    // A conflict copy's own file is taken over (it carries the new id now), as notes written outside are.
+    if (at != null) _items[copyId] = _Item(at, '', saved.rev);
     final path = await _write(copyId, out, book, text);
     _items[copyId] = _Item(path, text, saved.rev, extra: extra);
   }
