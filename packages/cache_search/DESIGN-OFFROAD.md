@@ -293,6 +293,12 @@ Run with `offroad_pack directions` (Idaho pack + elevation + shim). Step compari
 | D3 walk out, then drive | offroad, 57 steps, 42.52 km, 23589 s | 63 steps, 42.47 km, 23529 s | -0.1% / -0.3% |
 | D5 north Idaho road to trail | offroad, 10 steps, 26.46 km, 3189 s | 11 steps, 26.84 km, 3239 s | +1.4% / +1.6% |
 
+Durations of off-road legs (2026-11-23, owner-approved): the table above was measured before this change. A leg's time is now the machine's speed over it; the
+reference server's `_path_detail` counted the search's cost (trail friction as a speed-up, barrier crossing as a slowdown), which made a walk along roads about ten
+times too quick. Off-road durations therefore no longer match the reference server's; the paths, distances and steps do. The directions oracle test still
+compares every step field except the duration, and checks the steps' times against the reference's cost (a trail step takes at least its cost, an open-ground step
+at most).
+
 D4 and D6 are pure Valhalla routes and confirm the shim, the maneuver typing, rounding and shape encoding exactly. In the four
 off-road routes the road part is identical and the off-road lead/tail legs differ in the same two ways: (1) the cells of the path
 differ by the layer-alignment effect, so decision points, terrain labels (e.g. the first leg of D1 reads water in the reference server and tree cover

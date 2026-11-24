@@ -426,7 +426,7 @@ void main() {
   testWidgets('on a phone with Off-road chosen the route is fitted above the panel, the scale and the credits', (tester) async {
     // An off-road route on foot, with a stretch of open ground: the panel has the off-road choices and the off-road note.
     await _withFittedRoute(tester, size: const Size(390, 844), route: fakeRouteJson(id: 'fit-offroad', offroad: true, mode: 'offroad_foot'), check: (fit, map) {
-      expect(find.byKey(const ValueKey('land-strict')), findsOneWidget, reason: 'Off-road is not chosen');
+      expect(find.byKey(const ValueKey('land-pragmatic')), findsOneWidget, reason: 'Off-road is not chosen');
       final bottom = _fitPad(fit, 14);
       // The scale is the top of what covers the map's foot: under it the credits and the panel.
       final covered = map.height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
@@ -450,7 +450,7 @@ void main() {
       // A position whose text is short: in a test every letter is a square as wide as the text is tall, and a longer position
       // would make the chip reach the buttons, with no column between them.
       await _withFittedRoute(tester, size: const Size(430, 932), route: json, position: fixAt(1, 2), check: (fit, map) {
-        expect(find.byKey(const ValueKey('land-strict')), findsOneWidget, reason: 'Off-road is not chosen');
+        expect(find.byKey(const ValueKey('land-pragmatic')), findsOneWidget, reason: 'Off-road is not chosen');
         final chip = tester.getRect(find.ancestor(of: find.text('1.00000, 2.00000'), matching: find.byType(Container)).first);
         final layers = tester.getRect(find.byType(MapButton).first), findMe = tester.getRect(find.byType(MapButton).last);
         final over = {

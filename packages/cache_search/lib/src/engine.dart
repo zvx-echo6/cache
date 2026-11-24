@@ -209,7 +209,7 @@ class SearchEngine {
   /// cs_map_search: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?}` as the raw JSON object.
   Map<String, dynamic> mapSearchRaw(Map<String, dynamic> request) => _object(_ok(_map.mapSearch(_h, jsonEncode(request))));
 
-  /// cs_map_route: `{"from"?, "to", "via"?, "mode"?, "land_access"?, "alternatives"?}` as the raw JSON object.
+  /// cs_map_route: `{"from"?, "to", "via"?, "mode"?, "land_access"?, "alternatives"?, "avoid_highways"?, "avoid_tolls"?}` as the raw JSON object.
   Map<String, dynamic> mapRouteRaw(Map<String, dynamic> request) => _object(_ok(_map.mapRoute(_h, jsonEncode(request))));
 
   /// cs_map_progress: `{"route_id"|"route", "lat", "lon", ...}` as the raw JSON object.
