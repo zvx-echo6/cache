@@ -117,6 +117,7 @@ class SettingsSync extends ChangeNotifier {
     required this.dir,
     this.downloadModel,
     this.placesHere,
+    this.onServerKeysChanged,
     DateTime Function()? now,
     this.every = const Duration(seconds: 10),
   }) : _now = now ?? DateTime.now,
@@ -159,6 +160,10 @@ class SettingsSync extends ChangeNotifier {
   /// Starts the download of a model a linked device uses ([waitingModelDownload]); only when the person taps Download.
   final Future<void> Function(Map<String, Object?> download)? downloadModel;
 
+  /// In a browser: told when the keys the server holds change (one saved in another tab, or sent by a linked device), so the tab reads
+  /// its own key list again (the Settings row "API keys").
+  final void Function()? onServerKeysChanged;
+
   /// The saved places on this device, by key.
   final Future<Set<String>> Function()? placesHere;
 
@@ -170,6 +175,7 @@ class SettingsSync extends ChangeNotifier {
   Map<String, String> get _last => _kept.last;
   Map<String, Set<String>> get _keysFor => _kept.keysFor;
   Map<String, Set<String>> get _keysAll => _kept.keysAll;
+  Map<String, Set<String>> get _keysHeld => _kept.keysHeld;
   Map<String, SettingsEvent> get _waiting => _kept.waiting;
   Map<String, Object?> get _notes => _kept.notes;
 
@@ -529,11 +535,12 @@ class SettingsSync extends ChangeNotifier {
   Future<void> _forgetUnlinked() async {
     if (sharing.onServer || !sharing.running) return;
     final linked = {for (final p in sharing.peers) if (p['id'] is String) p['id'] as String};
-    final gone = {..._keysAll.keys, ..._keysFor.keys}.where((id) => !linked.contains(id)).toList();
+    final gone = {..._keysAll.keys, ..._keysFor.keys, ..._keysHeld.keys}.where((id) => !linked.contains(id)).toList();
     if (gone.isEmpty) return;
     for (final id in gone) {
       _keysAll.remove(id);
       _keysFor.remove(id);
+      _keysHeld.remove(id);
       _pushed.remove(id);
     }
     await _saveState();
@@ -673,9 +680,11 @@ class SettingsSync extends ChangeNotifier {
       return;
     }
     if (on) {
-      _keysAll[peer] = <String>{};
+      // the keys left out before the switch went off stay left out
+      _keysAll[peer] = _keysHeld.remove(peer) ?? <String>{};
     } else {
-      _keysAll.remove(peer);
+      final out = _keysAll.remove(peer);
+      if (out != null && out.isNotEmpty) _keysHeld[peer] = out;
     }
     _keysFor.remove(peer);
     await _saveState();
@@ -709,6 +718,7 @@ class SettingsSync extends ChangeNotifier {
       // The switch is off: a single key can only be left out of an included set.
       if (!on) return;
       _keysAll[peer] = {for (final k in keys()) if (k.name != name) k.name};
+      _keysHeld.remove(peer);
     } else {
       on ? all.remove(name) : all.add(name);
     }
@@ -756,10 +766,12 @@ class SettingsSync extends ChangeNotifier {
     _serverKeysRead = true;
     final names = [for (final k in got.keys) k.name];
     final on = {for (final k in got.keys) k.name: k.on};
-    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
+    final namesSame = listEquals(names, _serverNames);
+    final same = namesSame && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
     _serverNames = names;
     _serverOn = on;
     _serverInclude = got.include;
+    if (!namesSame) onServerKeysChanged?.call();
     if (!same) _tell();
   }
 

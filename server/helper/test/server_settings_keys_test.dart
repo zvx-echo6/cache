@@ -429,4 +429,48 @@ void main() {
     expect(sync.includeKeys('gone'), isFalse);
     expect(sync.includeKeys('peerA'), isTrue);
   });
+
+  test('remembered left-out keys: master off then on keeps the left-out key out; off sends nothing', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    store.set('live.key.owm', 'OWM-SECRET-2');
+    await sync.start();
+    await sync.setIncludeKeys('peerA', true);
+    await sync.setKeyOn('peerA', 'live.key.owm', false);
+    await sync.setIncludeKeys('peerA', false);
+    expect(sync.includeKeys('peerA'), isFalse);
+    expect(sync.keyOn('peerA', 'search.kagi.key'), isFalse, reason: 'the remembered list is never read as include');
+    expect(sync.keyOn('peerA', 'live.key.owm'), isFalse);
+    expect(lastGivenTo('peerA'), isEmpty);
+    await sync.setIncludeKeys('peerA', true);
+    expect(sync.keyOn('peerA', 'live.key.owm'), isFalse);
+    expect(sync.keyOn('peerA', 'search.kagi.key'), isTrue);
+    expect(lastGivenTo('peerA'), {'search.kagi.key': 'KAGI-SECRET-1'});
+  });
+
+  test('remembered left-out keys: unlink and the sweep clear the remembered list too', () async {
+    store.set('search.kagi.key', 'KAGI-SECRET-1');
+    peers = [peer('peerA', {'mode': 'match'}), peer('peerB', {'mode': 'match'})];
+    await sync.start();
+    await sync.setIncludeKeys('peerA', true);
+    await sync.setKeyOn('peerA', 'search.kagi.key', false);
+    await sync.setIncludeKeys('peerA', false);
+    expect(jsonDecode(stateFile().readAsStringSync())['keysHeld'], {'peerA': ['search.kagi.key']});
+    peers = [peer('peerB', {'mode': 'match'})];
+    await sync.forgetPeer('peerA');
+    expect((jsonDecode(stateFile().readAsStringSync()) as Map).containsKey('keysHeld'), isFalse);
+    peers = [peer('peerA', {'mode': 'match'}), peer('peerB', {'mode': 'match'})];
+    await sync.setIncludeKeys('peerA', true);
+    expect(sync.keyOn('peerA', 'search.kagi.key'), isTrue, reason: 'linked again: nothing is remembered');
+  });
+
+  test('remembered left-out keys: the sweep at start clears the list of a device that is no longer linked', () async {
+    final f = stateFile()..parent.createSync(recursive: true);
+    f.writeAsStringSync(jsonEncode({
+      'keysHeld': {'gone': ['live.key.owm'], 'peerA': ['live.key.owm']},
+    }));
+    await sync.start();
+    await sync.tick();
+    final j = jsonDecode(stateFile().readAsStringSync()) as Map;
+    expect(j['keysHeld'], {'peerA': ['live.key.owm']});
+  });
 }

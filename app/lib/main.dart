@@ -489,6 +489,7 @@ class _CacheAppState extends State<CacheApp> {
       recommended: () => RecommendedModels.shared.models,
     ),
     keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
+    onServerKeysChanged: () => unawaited(hub.apiKeys.rescan()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.
