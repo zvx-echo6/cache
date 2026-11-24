@@ -161,6 +161,14 @@ class SharingState extends ChangeNotifier {
     return _askSince != null && at is int && at >= _askSince!;
   }
 
+  /// Cache Server only: the private notebooks switched on ("Include in sync and sharing"), by notebook id, as the server last said.
+  /// The server keeps them (its notebook sync is the one that leaves a private notebook out); a browser only shows and sets them.
+  final Set<String> _privateIncluded = {};
+  Set<String> get privateIncluded => Set.unmodifiable(_privateIncluded);
+
+  /// Cache Server only: switches a private notebook's "Include in sync and sharing" on the server.
+  Future<void> setPrivateIncluded(String notebookId, bool on) => _driver.setPrivateIncluded(notebookId, on);
+
   /// Starts sharing if it was set up before.
   Future<void> init() => _driver.init();
 
@@ -417,6 +425,9 @@ abstract class SharingDriver {
   Future<({String peer, String name})> link(String code);
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
+
+  /// A private notebook's "Include in sync and sharing" (Cache Server's: the phone keeps it with its notebook sync).
+  Future<void> setPrivateIncluded(String notebookId, bool on);
   Future<void> setOnly(String id, List<String> patterns);
 
   /// Brings what the engine may send from the gated folders (the notebooks' photos) up to date now.
@@ -847,6 +858,10 @@ class _PhoneDriver implements SharingDriver {
     if (changed) s._changed();
   }
 
+  // The phone keeps this with its notebook sync (NotebookConnections), not here.
+  @override
+  Future<void> setPrivateIncluded(String notebookId, bool on) async {}
+
   @override
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     if (on && !s.kindOn(k)) {
@@ -1019,7 +1034,7 @@ class _WebDriver implements SharingDriver {
   final CoreTransport t;
 
   /// The kinds listed in a browser for now.
-  static const Set<String> kindIds = {'library', 'models'};
+  static const Set<String> kindIds = {'library', 'models', 'notebooks'};
 
   /// How long a link may take (the engine waits for the other device) before the browser gives up waiting.
   static const Duration kLinkWait = Duration(minutes: 3);
@@ -1057,6 +1072,10 @@ class _WebDriver implements SharingDriver {
     s._off
       ..clear()
       ..addAll({if (off is Map) for (final o in off.entries) if (o.value is List) '${o.key}': {for (final k in o.value as List) '$k'}});
+    final inc = snap['private_included'];
+    s._privateIncluded
+      ..clear()
+      ..addAll({if (inc is List) for (final x in inc) '$x'});
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
     s._noteShareChanges();
@@ -1164,9 +1183,18 @@ class _WebDriver implements SharingDriver {
   }
 
   @override
+  Future<void> setPrivateIncluded(String notebookId, bool on) async => _apply(await _op('sharing.set_private', {'notebook': notebookId, 'on': on}));
+
+  @override
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     // Switching one on in a kind that is off shares the kind with that item alone, which needs every item of the kind.
     final all = on && !s.kindOn(k) ? [for (final x in s.itemsOf(k)) if (!x.item.private) x.item.key] : null;
+    // A private item has its own switch (the server's notebook sync keeps it); the host's off list follows from it. Only a kind
+    // that is off needs the kind switched on as well, with every other item as it is.
+    if (it.private) {
+      await k.setPrivate?.call(it, on);
+      if (all == null) return;
+    }
     _apply(await _op('sharing.set_item', {'kind': k.id, 'key': it.key, 'on': on, 'all': ?all}));
     if (all != null) await refreshItems();
   }
