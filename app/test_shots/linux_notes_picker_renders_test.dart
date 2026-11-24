@@ -202,9 +202,14 @@ void main() {
       final shown = !wide ? page : DesktopShell(atHome: false, module: ModuleId.notebooks, onHome: () {}, onModule: (_) {}, onModuleOptions: (c, m) {}, child: page);
       await tester.pumpWidget(shotApp(shown, theme: CacheThemeId.dark, insets: wide ? EdgeInsets.zero : const EdgeInsets.only(top: 47, bottom: 34), desktop: wide));
       await settle(tester, 10);
-      await tester.tap(find.byKey(const ValueKey('notebooks-menu')));
-      await settle(tester);
-      await tester.tap(find.text('Connections'));
+      if (wide) {
+        // On the desktop the page opens in the detail pane beside the shelf (openDetail), so the rail and the shelf stay.
+        openDetail(tester.element(find.byKey(const ValueKey('notebooks-menu'))), key: 'connections', builder: (_) => ConnectionsScreen(connections: c, pickFolder: () async => null, phone: false));
+      } else {
+        await tester.tap(find.byKey(const ValueKey('notebooks-menu')));
+        await settle(tester);
+        await tester.tap(find.text('Connections'));
+      }
       await settle(tester, 10);
       return c;
     }
