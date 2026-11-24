@@ -45,6 +45,7 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _drainLog = drainLog ?? drainSyncLog,
@@ -57,6 +58,18 @@ class SharingState extends ChangeNotifier {
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
+
+  /// Run, and waited for, before a Sync now round starts: the notebook pass that writes pending notebook changes into the share
+  /// folder (it otherwise runs 2 s after a change and every 2 minutes), so the round carries the latest change.
+  final Future<void> Function()? beforeSync;
+
+  Future<void> _prepare() async {
+    try {
+      await beforeSync?.call();
+    } catch (e) {
+      _log('Sync now: the notebook pass failed ($e)');
+    }
+  }
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -371,10 +384,14 @@ class SharingState extends ChangeNotifier {
   Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
 
   /// Sync now: everything ("Sync all now").
-  Future<void> syncNow() => _call('sync_now');
+  Future<void> syncNow() async {
+    await _prepare();
+    await _call('sync_now');
+  }
 
   /// Sync now for one kind ("Sync all" on its page): its shared folders only.
   Future<void> syncKind(DataKind k) async {
+    await _prepare();
     final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
     if (ids.isEmpty) return;
     await _call('sync_now', {'shares': ids});
@@ -387,7 +404,10 @@ class SharingState extends ChangeNotifier {
   });
 
   /// Sync now with one linked device only.
-  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+  Future<void> syncPeer(String peer) async {
+    await _prepare();
+    await _call('sync_now', {'peer': peer});
+  }
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
   /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
