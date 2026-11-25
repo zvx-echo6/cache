@@ -188,6 +188,20 @@ void main() {
       expect(c.areaRecordsOf(RegionRecord.drawn(const GeoBounds(south: 42, west: -115, north: 43, east: -114))), isEmpty);
     });
 
+    test('fetchGeometry fetches an outline that is not on the phone, keeps its file, and reads null offline or when it is not published', () async {
+      final c = RegionCatalogue(dir: () async => dir, fetch: fetch);
+      final shard = await c.shard('us');
+      final kimberly = shard['us-id-kimberly']!;
+      expect(await c.storedGeometry(kimberly), isNull, reason: 'not on the phone yet');
+      expect(await c.fetchGeometry(kimberly), isNotNull);
+      expect(File('${dir.path}/polygons/us-id-kimberly.geojson').existsSync(), isTrue, reason: 'kept for next time');
+      expect(await c.storedGeometry(kimberly), isNotNull);
+      offline = true;
+      expect(await c.fetchGeometry(shard['us-id-buhl']!), isNull, reason: 'a half file or no connection: no outline, no error');
+      final c2 = RegionCatalogue(dir: () async => dir, fetch: fetch);
+      expect(await c2.fetchGeometry((await c2.shard('us'))['us-id-twin-falls']!), isNull, reason: 'offline: no outline, no error');
+    });
+
     test('downloading Idaho keeps the outlines that can be fetched; one that fails is left out; then a tap is answered offline', () async {
       final c = RegionCatalogue(dir: () async => dir, fetch: fetch);
       final idaho = (await c.shard('us'))['us-id']!;

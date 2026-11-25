@@ -252,6 +252,10 @@ void _pureTests() {
 class _TapCamera extends CameraController {
   final List<Map<String, dynamic>> labels = [];
 
+  /// What a query at the tapped POINT itself (not the box around it) finds in the town-label layer: the labels whose text is under the
+  /// finger. Null: the same as [labels].
+  List<Map<String, dynamic>>? labelsAtPoint;
+
   /// What the public places' chip layer answers.
   final List<Map<String, dynamic>> pois = [];
   final List<Map<String, dynamic>> trails = [];
@@ -272,7 +276,7 @@ class _TapCamera extends CameraController {
       } else if (layers.any((l) => l.startsWith('test-trails-'))) {
         out = trails;
       } else if (layers.contains('places_locality')) {
-        out = labels;
+        out = i.memberName == #queryRenderedFeatures ? (labelsAtPoint ?? labels) : labels;
       } else if (layers.contains('pois')) {
         out = pois;
       } else {
@@ -528,15 +532,29 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('a chip beside a town\'s label wins over the town', (tester) async {
+    testWidgets('a chip beside a town\'s label (the tap on the chip, not on the text) wins over the town', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labelsAtPoint = [];
       m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.name, 'Cascade Park');
       expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip on top of a town\'s label text (the tap on the text) loses to the town', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      // The label's text is under the finger (a query at the point finds it) and a chip overlaps it.
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor', reason: 'the town opened, not the chip');
+      expect(_outlineFeatures(m), 1);
       await m.finish(tester);
     });
 
@@ -667,6 +685,7 @@ void _screenTests() {
     testWidgets('a chip beside a town\'s label opens the chip\'s place, by its link', (tester) async {
       final m = _Maps();
       await m.pump(tester);
+      m.camera.labelsAtPoint = [];
       final shop = _place('place:test:s1', 'Sorrel Bakery', 42.5001, -113.5001, kind: 'Bakery');
       m.rig.backend.links[('bakery', 'Sorrel Bakery')] = shop;
       m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));

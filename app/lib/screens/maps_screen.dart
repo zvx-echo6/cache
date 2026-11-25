@@ -25,7 +25,7 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
-import '../regions/area_lookup.dart' show AreaHit, AreaSource;
+import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
@@ -933,7 +933,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// A tap on a road event's chip or line chooses it (its card opens); true when there was one. Asked before the base map's labels, so a
   /// closure wins over the road's name under it. Where two events overlap the tap, a full closure wins, then the nearest.
-  Future<bool> _tapRoadEvent(math.Point<double> point) async {
+  Future<bool> _tapRoadEvent(math.Point<double> point, LatLng at) async {
     final c = _controller, r = widget.roadEvents;
     if (c == null || r == null || r.events.isEmpty) return false;
     try {
@@ -941,11 +941,37 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final ids = [for (final h in hits) if (h is Map && h['properties'] is Map && (h['properties'] as Map)['id'] is String) (h['properties'] as Map)['id'] as String];
       final id = pickEvent(ids, r.events);
       if (id != null) {
+        // A town's name label under the icon is what was meant: the town opens. Own pins, repeaters and the route lines were asked before.
+        if (await _tapTownLabel(point, at)) return true;
         HapticFeedback.selectionClick();
         if (nav.selected != null) nav.clearSelection();
         widget.userLayers?.clearRepeater();
         r.select(id);
         return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// A tap on a city or town's own name label opens that town (card and outline); true when it did. Asked when a road event's icon is
+  /// also under the tap, so the icon on the name does not take the tap.
+  Future<bool> _tapTownLabel(math.Point<double> point, LatLng at, {bool exact = false}) async {
+    final c = _controller;
+    if (c == null || _areaSource == null) return false;
+    final placeIds = [for (final l in _basemapLabels()) if (l.startsWith('places_locality')) l];
+    if (placeIds.isEmpty) return false;
+    final seq = ++_tapSeq;
+    try {
+      // [exact]: only a name whose text is under the point itself (not one in the box around it).
+      final found = exact ? await c.queryRenderedFeatures(point, placeIds, null) : await _query(c, point, placeIds);
+      for (final raw in found) {
+        final f = tapFeatureFrom(raw, source: TapSource.basemap, kind: '', tapLat: at.latitude, tapLon: at.longitude);
+        if (f == null || f.name == null) continue;
+        HapticFeedback.selectionClick();
+        if (await _openArea(f.lat, f.lon, seq, townOnly: true, name: f.name)) {
+          widget.roadEvents?.select(null);
+          return true;
+        }
       }
     } catch (_) {}
     return false;
@@ -1898,6 +1924,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Future<bool> _tapMapFeature(math.Point<double> point, LatLng at, {bool probe = false}) async {
     final c = _controller;
     if (c == null) return false;
+    // A tap on a town's name TEXT wins over a public-place chip overlapping it; a chip merely beside the name (the tap on the chip) is
+    // still the chip's (it is asked below, in the box around the tap).
+    if (!probe && _areaSource != null && await _tapTownLabel(point, at, exact: true)) return true;
     final seq = ++_tapSeq;
     final hits = <TapFeature>[];
     // One line in the app log per tap: what was asked and what came back (Settings > Log, Standard).
@@ -2045,7 +2074,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (countyOnly) hit = AreaHit(county: hit.county, state: hit.state);
     final towns = hit.town == null && rec.kind == 'county' ? src.townsIn(rec) : const <RegionRecord>[];
     final choice = areaChoice(hit, geometry: geometry, fmt: nav.fmt, towns: towns);
-    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline=${geometry == null ? 'not stored, none drawn' : 'from stored file, no network'}');
+    // One line per area opened: where its outline came from. A missing one is fetched below and its line is written when that ends.
+    if (geometry != null) appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=stored reason=from stored file, no network');
     HapticFeedback.selectionClick();
     _tappedBook = null;
     widget.userLayers?.clearRepeater();
@@ -2054,7 +2084,41 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The card and the outline are up at once; the town's summary (from the places data, which may be slow or not there) joins the card
     // when it is found.
     if (hit.town != null && rec.id == hit.town!.id) unawaited(_addTownSummary(hit, geometry, towns, lat, lon, seq, choice));
+    if (geometry == null) unawaited(_fetchOutline(src, rec, choice));
     return true;
+  }
+
+  /// The fetch of an outline that is not on the phone is the normal path (it starts as the card opens and is drawn as soon as it arrives);
+  /// this only bounds a hung request.
+  static const Duration _outlineFetchWait = Duration(seconds: 10);
+
+  /// The outline of an area opened without one: fetched (and kept for next time) and drawn when it arrives, if that card is still the one
+  /// shown. Offline, failed or late: the card stays as it is, with no outline. Writes the area's one log line.
+  Future<void> _fetchOutline(AreaSource src, RegionRecord rec, AreaChoice shown) async {
+    Map<String, dynamic>? g;
+    var reason = 'no fetch available';
+    if (src is AreaFetcher) {
+      try {
+        g = await (src as AreaFetcher).fetchGeometry(rec).timeout(_outlineFetchWait);
+        if (g == null) reason = 'not available (offline or not published)';
+      } on TimeoutException {
+        reason = 'timeout after ${_outlineFetchWait.inSeconds} s';
+      } catch (e) {
+        reason = 'fetch failed (${e.runtimeType})';
+      }
+    }
+    final c = _controller;
+    final same = mounted && _area != null && _area!.place.id == shown.place.id && nav.selected?.id == shown.place.id;
+    if (g == null || c == null || !same) {
+      appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=none reason=${g != null ? 'arrived after the selection changed' : reason}');
+      return;
+    }
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=fetched reason=kept for next time');
+    final cur = _area!;
+    final next = AreaChoice(place: cur.place, info: cur.info, region: cur.region, geometry: g);
+    _area = next;
+    await _pushArea(c);
+    unawaited(_fitAreaOutline(next));
   }
 
   Future<void> _addTownSummary(AreaHit hit, Map<String, dynamic>? geometry, List<RegionRecord> towns, double lat, double lon, int seq, AreaChoice shown) async {
@@ -2068,7 +2132,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} places record: ${pack == null ? 'none' : pack.id}');
     // Only if that card is still the one on screen (a later tap, or the X, was not waited for).
     if (pack == null || !mounted || seq != _tapSeq || _area != shown || nav.selected?.id != shown.place.id) return;
-    final next = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: towns);
+    // The outline may have arrived (fetched) while the summary was being looked for: keep it.
+    final geo = (_area != null && _area!.place.id == shown.place.id ? _area!.geometry : null) ?? geometry;
+    final next = areaChoice(hit, pack: pack, geometry: geo, fmt: nav.fmt, towns: towns);
     _area = next;
     nav.select(next.place);
     // The card grew with its summary: fit again into what is left above it.
@@ -2150,8 +2216,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
-    // A road event (a closure over a road's name) wins over what is under it.
-    if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point)) return;
+    // A road event (a closure over a road's name) wins over what is under it, except a town's name (see _tapRoadEvent).
+    if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point, at)) return;
     // A search result's pin opens that result, as its row in the list does.
     if (nav.searchOpen && await _tapResultPin(point)) return;
     // Another route's line chooses that route, as its card in the panel does.
