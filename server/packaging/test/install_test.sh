@@ -420,6 +420,32 @@ check "with no record it is refused" rc_fail
 check "and nothing is switched" [ "$(readlink "$CACHE_INSTALL_OPT/current")" = "$CACHE_INSTALL_OPT/releases/0.1.0+old" ]
 end_case "$f0"
 
+f0=$FAIL
+start_case 9 "the identity guard: the device key changes while Cache starts"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+STUB_FLIP_IDENTITY=1
+export STUB_FLIP_IDENTITY
+with_sudo alice run "$R/new.tgz"
+check "the update fails" rc_fail
+check "it names the check that failed" has 'check failed: sync/identity.key'
+check "it says how to go back" has 'install.sh --rollback'
+check "Cache is stopped after the start" before '^systemctl start cache' '^systemctl stop cache \[dropin User=alice\]'
+check "the key itself is never printed" eval '! has "a new key" && ! has "the device key"'
+# the same guard on a rollback
+printf 'the device key' >"$CACHE_INSTALL_DATA/sync/identity.key"
+: >"$R/calls.log"
+run --rollback
+check "a rollback fails the same way" rc_fail
+check "and names the check" has 'check failed: sync/identity.key'
+check "and stops Cache" before '^systemctl start cache' '^systemctl stop cache \[dropin absent\]'
+# with the key left alone the guard is quiet
+unset STUB_FLIP_IDENTITY
+printf 'the device key' >"$CACHE_INSTALL_DATA/sync/identity.key"
+run --rollback
+check "with the key unchanged a rollback succeeds (exit $RC)" rc_ok
+end_case "$f0"
+
 echo
 echo "install_test.sh: $PASS passed, $FAIL failed (install.sh run with $SH)"
 if [ "$FAIL" -ne 0 ]; then
