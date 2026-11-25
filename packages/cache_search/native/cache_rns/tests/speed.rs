@@ -31,6 +31,14 @@ fn the_thresholds_are_the_designs() {
     assert_eq!(Speed::Medium.as_str(), "medium");
     assert_eq!(Speed::Fast.as_str(), "fast");
     assert!(Speed::Slow < Speed::Medium && Speed::Medium < Speed::Fast);
+    // What a class carries: any file on Fast, up to 10 MiB on Medium, none on Slow (the 8 KB inline cap is a later step).
+    assert!(Speed::Fast.carries_file(1 << 40));
+    assert!(Speed::Medium.carries_file(10 * 1024 * 1024));
+    assert!(!Speed::Medium.carries_file(10 * 1024 * 1024 + 1));
+    assert!(!Speed::Slow.carries_file(0) && !Speed::Slow.carries_file(8 * 1024));
+    assert_eq!(Speed::Fast.window_chunks(), Some(16 * 1024));
+    assert_eq!(Speed::Medium.window_chunks(), Some(1024));
+    assert_eq!(Speed::Slow.window_chunks(), None);
 }
 
 #[test]

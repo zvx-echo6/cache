@@ -94,6 +94,9 @@ pub struct DiffAsk {
     pub c: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p: Option<String>,
+    /// The most bytes of differences the asker wants in one page (a slow link asks for less); none: the answering end's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<usize>,
 }
 
 /// The changes of `idx` after the cursor (`c`, `p`) in epoch `epoch`, as the asking device's view (`admits`) has them, ordered

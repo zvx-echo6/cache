@@ -86,9 +86,9 @@ impl Speed {
         }
     }
 
-    /// A file of `size` bytes may go over a link of this class.
+    /// A file of `size` bytes may go over a link of this class (never over a Slow one, whatever its size).
     pub fn carries_file(self, size: u64) -> bool {
-        self.max_file().is_none_or(|m| size <= m)
+        self != Speed::Slow && self.max_file().is_none_or(|m| size <= m)
     }
 }
 

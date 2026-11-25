@@ -58,6 +58,62 @@ pub enum Delta {
     Diff,
 }
 
+/// The class of a link (design 2b): how fast the path to a linked device is, which decides what is sent over it. A path nothing
+/// is known against, and every iroh path, is Fast. Kept apart from cache_rns's own type because cache_rns is not built on every
+/// platform; the two agree on the numbers (a test in `rns_transport` says so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Speed {
+    Slow,
+    Medium,
+    Fast,
+}
+
+/// The largest file a Medium link carries.
+pub const MEDIUM_MAX_FILE: u64 = 10 * 1024 * 1024;
+/// The page of differences on a Slow link (the review of the step 3 plan, and design 2b: pages of 4 KB or less).
+pub const SLOW_PAGE_BYTES: usize = 4 * 1024;
+/// The page of differences on a Medium link by default (tunable with [`crate::Config::medium_page_bytes`]): about 3 s at the 20 KB/s floor.
+pub const MEDIUM_PAGE_BYTES: usize = 64 * 1024;
+
+impl Speed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Speed::Slow => "slow",
+            Speed::Medium => "medium",
+            Speed::Fast => "fast",
+        }
+    }
+
+    /// A file of `size` bytes may go over a link of this class: any on Fast, up to 10 MiB on Medium, none on Slow (files go there
+    /// only by the 8 KB inline cap, a later step).
+    pub fn carries_file(self, size: u64) -> bool {
+        match self {
+            Speed::Fast => true,
+            Speed::Medium => size <= MEDIUM_MAX_FILE,
+            Speed::Slow => false,
+        }
+    }
+}
+
+/// What a link too slow for what was asked fails with: not a failure of the device, the item waits for a faster link.
+pub const TOO_SLOW_TEXT: &str = "the connection is too slow for this";
+
+#[derive(Debug)]
+pub struct TooSlow;
+
+impl std::fmt::Display for TooSlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(TOO_SLOW_TEXT)
+    }
+}
+
+impl std::error::Error for TooSlow {}
+
+/// Whether `e` is a [`TooSlow`].
+pub fn is_too_slow(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<TooSlow>().is_some())
+}
+
 /// One step of a file fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchEvent {
@@ -65,6 +121,8 @@ pub enum FetchEvent {
     Progress(u64),
     /// The fetch failed; [`NO_SPACE`] for a full disk.
     Failed(String),
+    /// The link is too slow for this file (either end's judgment): not a failure, the file waits for a faster link.
+    Waiting(String),
 }
 
 /// Where a pairing hello goes: the iroh address from the link code, and the Reticulum destination (32 hex characters) when
@@ -109,6 +167,10 @@ pub trait Transport: Send + Sync + 'static {
     /// Whether the device was last reached over Reticulum and a path to it is known now.
     fn reached_over_rns(&self, _peer: &str) -> bool {
         false
+    }
+    /// The class of the link to a linked device, for what this device asks of it. iroh paths count as Fast.
+    fn speed(&self, _peer: &str) -> Speed {
+        Speed::Fast
     }
     /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
     /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
@@ -180,6 +242,19 @@ pub trait Serve: Send + Sync + 'static {
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> BoxFut<'static, Vec<u8>>;
     /// A linked device asks for a summary or differences: the answer to send back.
     fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
+    /// The most one page of differences may carry over a link of class `speed` (the asker may ask for less).
+    fn page_cap(&self, speed: Speed) -> usize {
+        match speed {
+            Speed::Fast => crate::delta::PAGE_BYTES,
+            Speed::Medium => MEDIUM_PAGE_BYTES,
+            Speed::Slow => SLOW_PAGE_BYTES,
+        }
+    }
+    /// A window of the file `hash` is about to be served to `peer` over a link of class `speed`: false when this file's kind may
+    /// not go over it (the big kinds on a Medium link).
+    fn blob_allowed(&self, _peer: &str, _hash: &str, _speed: Speed) -> bool {
+        true
+    }
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
     /// A Reticulum link to or from a linked device closed (cache_rns says why): the app's log says it.

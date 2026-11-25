@@ -45,7 +45,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
-use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
+use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Speed, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -297,6 +297,22 @@ pub struct Config {
     /// else counts as not set).
     #[serde(default)]
     pub device_kind: Option<String>,
+    /// The shared folders of the big kinds, by share id (maps, libraries, ZIMs, models, videos): their files wait on a Medium link
+    /// whatever their size (design 2b). Default: the ids the app gives those kinds (`library`, `libraries`, `models`, `maps`,
+    /// `regions`, `videos`).
+    #[serde(default = "default_bulk")]
+    pub bulk: Vec<String>,
+    /// The page of differences asked for on a Medium link, in bytes (default 64 KB, about 3 s at the 20 KB/s floor).
+    #[serde(default)]
+    pub medium_page_bytes: Option<usize>,
+    /// Tests only: how long a Reticulum link may go without a measurement before the next request is preceded by a small one that
+    /// measures it, in ms (default 10 s).
+    #[serde(default)]
+    pub speed_probe_ms: Option<u64>,
+}
+
+fn default_bulk() -> Vec<String> {
+    ["library", "libraries", "models", "maps", "regions", "videos"].into_iter().map(String::from).collect()
 }
 
 /// The Reticulum interfaces a test asks for ([`Config::rns_interfaces`]).
@@ -644,6 +660,29 @@ struct Serving {
     at: Instant,
 }
 
+/// What the status says an item that a link's class holds back is waiting for.
+const WAITING_FOR_FASTER: &str = "Waiting for a faster connection";
+
+/// An item the link's class does not allow now: a file too big for it (or of a big kind), or a folder's whole list. Not a
+/// failure: it stays wanted and goes when the link allows it.
+#[derive(Debug)]
+struct Waiting;
+
+impl std::fmt::Display for Waiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(WAITING_FOR_FASTER)
+    }
+}
+
+impl std::error::Error for Waiting {}
+
+fn is_waiting(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<Waiting>().is_some())
+}
+
+/// A held back item as the status lists it: (device, folder id, path; empty for a folder's whole list).
+type WaitKey = (String, String, String);
+
 /// A device that is served windows is "fetching from this one" until this long after the last window.
 const SERVING_FOR: Duration = Duration::from_secs(10);
 /// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
@@ -925,6 +964,12 @@ struct Inner {
     heard_from: Mutex<HashSet<String>>,
     /// Linked devices heard reachable again, and when a round with each becomes due ([`REACHABLE_DELAY`]).
     reach_pending: Mutex<HashMap<String, Instant>>,
+    /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
+    waiting: Mutex<BTreeMap<WaitKey, u64>>,
+    /// [`Config::bulk`].
+    bulk: HashSet<String>,
+    /// [`Config::medium_page_bytes`].
+    medium_page: usize,
     /// The one-time move of an older store into the new one has finished (or there was none); rounds wait for it.
     store_ready: AtomicBool,
     /// While that move runs: bytes done and bytes in all.
@@ -1931,6 +1976,10 @@ impl Inner {
         if let Some(n) = std::fs::read_to_string(self.dir.join("diff-page-bytes")).ok().and_then(|t| t.trim().parse::<usize>().ok()) {
             cap = n;
         }
+        // The asker may ask for less than the class carries (the answering end's cap is put in `max` before it gets here).
+        if let Some(m) = ask.max {
+            cap = cap.min(m.max(1));
+        }
         let page = delta::diff_page(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap);
         serde_json::to_vec(&page).unwrap_or_default()
     }
@@ -2147,6 +2196,31 @@ impl Inner {
 
     /// What `peer` is doing with this device's files, for the status: what this device serves it (the windows it asks for, until
     /// [`SERVING_FOR`] after the last one), else what its last summary said it fetches (while that summary is fresh).
+    /// The class of the link to `peer` for what this device asks of it ([`Transport::speed`]; iroh paths are Fast). Tests only: a
+    /// device with `<dir>/ignore-class` acts as a build that does not check its own class (the answering end still does).
+    fn class_of(&self, peer: &str) -> Speed {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("ignore-class").exists() {
+            return Speed::Fast;
+        }
+        self.net.speed(peer)
+    }
+
+    /// A file of `size` in folder `share` may be asked for over a link of class `class`: a Medium link carries files up to 10 MiB
+    /// and not the big kinds ([`Config::bulk`]); a Slow link carries none (the 8 KB inline cap is a later step).
+    fn class_allows(&self, class: Speed, share: &str, size: u64) -> bool {
+        class.carries_file(size) && !(class == Speed::Medium && self.bulk.contains(share))
+    }
+
+    /// The page of differences to ask for over a link of class `class` (none: the answering end's own, 1 MB).
+    fn page_ask(&self, class: Speed) -> Option<usize> {
+        match class {
+            Speed::Fast => None,
+            Speed::Medium => Some(self.medium_page),
+            Speed::Slow => Some(transport::SLOW_PAGE_BYTES),
+        }
+    }
+
     fn fetching_by(&self, peer: &str, summary: Option<&RemoteIndex>, last_seen: Option<u64>) -> Option<Value> {
         let served = {
             let mut sv = self.serving.lock().unwrap();
@@ -2168,8 +2242,14 @@ impl Inner {
                 Ok(v) => return Ok(v),
                 #[cfg(feature = "test-hooks")]
                 Err(e) if format!("{e:#}").starts_with("test: killed") => return Err(e),
+                // Not the whole list over a slow link, which is what a failed summary would fall back to.
+                Err(e) if self.class_of(peer) == Speed::Slow => return Err(e),
                 Err(_) => {}
             }
+        }
+        if self.class_of(peer) == Speed::Slow {
+            // A device that cannot give a summary, over a slow link: its whole list waits for a faster one.
+            return Err(anyhow::Error::new(Waiting));
         }
         let (idx, via) = self.fetch_index(peer, closed).await?;
         self.take_full(peer, &idx);
@@ -2208,10 +2288,28 @@ impl Inner {
             bail!("the device did not send a summary");
         }
         let mut full = None;
+        let mut held_back = Vec::new();
         for rs in sum.shares.iter_mut() {
-            rs.index = self.catch_up(peer, rs, closed, &mut full).await?;
+            match self.catch_up(peer, rs, closed, &mut full).await? {
+                Some(idx) => {
+                    rs.index = idx;
+                    self.waiting.lock().unwrap().remove(&(peer.to_string(), rs.id.clone(), String::new()));
+                }
+                None => held_back.push(rs.id.clone()),
+            }
         }
         let ids: Vec<String> = sum.shares.iter().map(|x| x.id.clone()).collect();
+        // A folder this device keeps, whose whole list a slow link does not carry: it waits for a faster one, and nothing of it is
+        // compared meanwhile (what is known of it stays as it was).
+        if !held_back.is_empty() {
+            let joined: HashSet<String> = self.saved.lock().unwrap().shares.iter().map(|s| s.id.clone()).collect();
+            for id in &held_back {
+                if joined.contains(id) {
+                    self.waiting.lock().unwrap().insert((peer.to_string(), id.clone(), String::new()), 0);
+                }
+            }
+            sum.shares.retain(|x| !held_back.contains(&x.id));
+        }
         for f in self.mirror_files(peer, &ids) {
             let _ = std::fs::remove_file(f);
         }
@@ -2221,15 +2319,21 @@ impl Inner {
     /// The view `peer` has of the folder `rs` summarises: the mirror when it already is at the summary's counter, the mirror
     /// followed to it page by page (each page applied and saved in one write before the next is asked for), or the folder's
     /// whole list (asked once for all the folders that need it, in `full`), which replaces the mirror.
-    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Index> {
+    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Option<Index>> {
         let fp = rs.fp.clone().ok_or_else(|| anyhow!("the summary has no fingerprint for {}", rs.name))?;
         let (epoch, counter) = (rs.index.epoch.clone(), rs.index.counter);
-        if let Some(mut m) = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter)) {
+        let class = self.class_of(peer);
+        let mut start = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter));
+        if start.is_none() && class == Speed::Medium && !epoch.is_empty() {
+            // The whole comparison on a medium link goes in pages: the differences since nothing, from an empty mirror.
+            start = Some(delta::Mirror { epoch: epoch.clone(), fp: fp.clone(), ..Default::default() });
+        }
+        if let Some(mut m) = start {
           loop {
             if m.is_at(counter) {
-                return Ok(m.index());
+                return Ok(Some(m.index()));
             }
-            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone() };
+            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone(), max: self.page_ask(class) };
             let (bytes, _) = self.net.ask_delta(peer, Delta::Diff, serde_json::to_vec(&ask)?, closed).await?;
             self.asked_diff.fetch_add(1, Ordering::Relaxed);
             let page: delta::Page = serde_json::from_slice(&bytes).context("the differences from the device are not valid")?;
@@ -2256,6 +2360,10 @@ impl Inner {
             write_json(&self.mirror_path(peer, &rs.id), &m)?;
           }
         }
+        // The requests above have measured the link again: a slow one does not carry the whole list.
+        if self.class_of(peer) == Speed::Slow {
+            return Ok(None);
+        }
         if full.is_none() {
             *full = Some(self.fetch_index(peer, closed).await?.0);
         }
@@ -2263,7 +2371,7 @@ impl Inner {
         if let Some(fp) = f.fp.as_deref().filter(|_| !f.index.epoch.is_empty()) {
             write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&f.index, fp))?;
         }
-        Ok(f.index.clone())
+        Ok(Some(f.index.clone()))
     }
 
     /// The unlinks this device offers in its file list: the kept ones, newer than [`REMOVAL_KEEP_MS`].
@@ -2342,6 +2450,7 @@ impl Inner {
         self.push_former();
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
+        self.waiting.lock().unwrap().retain(|(p, _, _), _| p != id);
         self.summary_peers.lock().unwrap().remove(id);
         for f in self.mirror_files(id, &[]) {
             let _ = std::fs::remove_file(f);
@@ -2793,17 +2902,27 @@ impl Inner {
                     }
                     let size = entry.size;
                     let key = (sh.id.clone(), path.clone());
+                    let wkey = (from.to_string(), sh.id.clone(), path.clone());
                     match self.fetch(sh, &path, entry, conflict, from).await {
                         Ok(true) => {
+                            self.waiting.lock().unwrap().remove(&wkey);
                             if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
                                 say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
                             }
                         }
                         Ok(false) => {
                             held = true;
+                            self.waiting.lock().unwrap().remove(&wkey);
                             if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
                                 s.remove(&key);
                             }
+                        }
+                        // The link's class holds it back: listed as waiting, still wanted (held like a file not yet fetched, so
+                        // the next round asks again), and not an error.
+                        Err(e) if is_waiting(&e) => {
+                            held = true;
+                            self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
+                            self.waiting.lock().unwrap().insert(wkey, size);
                         }
                         Err(e) => {
                             held = true;
@@ -2831,6 +2950,7 @@ impl Inner {
             if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
                 s.retain(|(id, p)| *id != sh.id || fetch_paths.contains(p));
             }
+            self.waiting.lock().unwrap().retain(|(f, id, p), _| p.is_empty() || f != from || *id != sh.id || fetch_paths.contains(p));
         }
         match no_room {
             Some(e) => Err(e),
@@ -2869,6 +2989,11 @@ impl Inner {
                 bail!("no linked device has {path} right now");
             }
             self.wanted.lock().unwrap().insert(hash);
+            // Only from the devices whose link carries it: the others hold it back, and it waits for a faster link.
+            let providers: Vec<String> = providers.into_iter().filter(|p| self.class_allows(self.class_of(p), &sh.id, entry.size)).collect();
+            if providers.is_empty() {
+                return Err(anyhow::Error::new(Waiting));
+            }
             self.run.lock().unwrap().transfer = Some(Transfer {
                 share_id: sh.id.clone(),
                 share: sh.name.clone(),
@@ -2879,6 +3004,7 @@ impl Inner {
             });
             let mut stream = self.net.fetch(self.store.raw(), hash, providers.clone()).await?;
             let mut failed = None;
+            let mut too_slow = false;
             let mut last_progress = Instant::now();
             loop {
                 // Woken every second even when nothing arrives, so a pause or a stalled path is noticed.
@@ -2912,6 +3038,10 @@ impl Inner {
                             }
                         }
                         FetchEvent::Failed(m) => failed = Some(m),
+                        FetchEvent::Waiting(m) => {
+                            failed = Some(m);
+                            too_slow = true;
+                        }
                     },
                     Err(_) => {}
                 }
@@ -2928,6 +3058,10 @@ impl Inner {
             let done = self.run.lock().unwrap().transfer.as_ref().map(|t| t.done).unwrap_or(0);
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
+                if too_slow {
+                    // Either end says the link is too slow for it: held back, not failed. What arrived stays in the store.
+                    return Err(anyhow::Error::new(Waiting));
+                }
                 let names: Vec<String> = providers.iter().map(|p| self.peer_name(p)).collect();
                 say(&format!("fetch from {} stopped at {}/{} MB: {f} (will retry)", names.join(", "), done / 1_048_576, need / 1_048_576));
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
@@ -3306,6 +3440,29 @@ impl Serve for Inner {
 
     fn asked(&self, peer: &str) {
         self.asked_wakes(peer);
+    }
+
+    fn page_cap(&self, speed: Speed) -> usize {
+        match speed {
+            Speed::Fast => delta::PAGE_BYTES,
+            Speed::Medium => self.medium_page,
+            Speed::Slow => transport::SLOW_PAGE_BYTES,
+        }
+    }
+
+    /// The big kinds do not go over a Medium link: a window is refused when every folder kept with `peer` that lists the file is
+    /// one of them. A file no folder lists (or any folder that is not a big kind lists) goes, subject to its size.
+    fn blob_allowed(&self, peer: &str, hash: &str, speed: Speed) -> bool {
+        if speed != Speed::Medium {
+            return true;
+        }
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let listing: Vec<&Share> = shares
+            .iter()
+            .filter(|sh| self.shares_with(&sh.id, peer))
+            .filter(|sh| self.load_index(&sh.id).files.values().any(|e| !e.deleted && e.hash == hash))
+            .collect();
+        listing.is_empty() || listing.iter().any(|sh| !self.bulk.contains(&sh.id))
     }
 
     fn link_closed(&self, peer: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) {
@@ -3688,6 +3845,9 @@ impl SyncEngine {
             serving: Mutex::new(HashMap::new()),
             heard_from: Mutex::new(HashSet::new()),
             reach_pending: Mutex::new(HashMap::new()),
+            waiting: Mutex::new(BTreeMap::new()),
+            bulk: cfg.bulk.iter().cloned().collect(),
+            medium_page: cfg.medium_page_bytes.unwrap_or(transport::MEDIUM_PAGE_BYTES).max(512),
             store_ready: AtomicBool::new(false),
             store_move: Mutex::new(None),
         });
@@ -3715,6 +3875,9 @@ impl SyncEngine {
             #[cfg(feature = "test-hooks")]
             if let Some(ms) = std::fs::read_to_string(cfg.dir.join("reach-gap-ms")).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
                 m.set_reach_gap(Duration::from_millis(ms));
+            }
+            if let Some(ms) = cfg.speed_probe_ms {
+                m.set_probe_every(Duration::from_millis(ms));
             }
             if let Err(e) = m.start_rns(secret.clone(), inner.store.raw(), inner.clone(), ifaces, pair_local_tcp).await {
                 inner.note(format!("Reticulum did not start: {e:#}"));
@@ -4357,6 +4520,8 @@ impl SyncEngine {
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
                     "fetching": inner.fetching_by(&p.id, st.index.as_ref(), st.last_seen),
+                    // How the link to it is judged now (fast, medium or slow); iroh paths are fast.
+                    "speed": inner.net.speed(&p.id).as_str(),
                 })
             })
             .collect();
@@ -4393,6 +4558,21 @@ impl SyncEngine {
                 })
             })
             .collect();
+        // What a link's class holds back (engine field only; the wording on the device row is part 4): files and whole lists.
+        let waiting: Vec<Value> = inner
+            .waiting
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|((peer, share, path), size)| {
+                let peer_name = saved.peers.iter().find(|p| p.id == *peer).map(|p| p.name.clone());
+                let share_name = saved.shares.iter().find(|s| s.id == *share).map(|s| s.name.clone());
+                json!({
+                    "peer": peer, "peer_name": peer_name, "share_id": share, "share": share_name, "path": path,
+                    "what": if path.is_empty() { "list" } else { "file" }, "size": size, "reason": WAITING_FOR_FASTER,
+                })
+            })
+            .collect();
         let (relay, direct) = inner.net.addresses();
         json!({
             "id": inner.me,
@@ -4410,6 +4590,7 @@ impl SyncEngine {
             "shares": shares,
             "offers": offers,
             "transfer": run.transfer,
+            "waiting": waiting,
             "paused": run.paused,
             "store_move": inner.store_move.lock().unwrap().map(|(done, total)| json!({"done": done, "total": total})),
             "rounds": run.rounds,
