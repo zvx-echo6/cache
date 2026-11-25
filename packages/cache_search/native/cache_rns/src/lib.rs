@@ -37,8 +37,10 @@ pub mod rnode;
 #[cfg(feature = "rnode")]
 pub mod standin;
 pub mod pair_core;
+pub mod speed;
 pub mod nearby;
 pub use nearby::{NearbyDevice, PairSelf, PairStatus};
+pub use speed::{Speed, Speeds};
 
 /// Cache's Reticulum destination name: `cache.sync.v1`.
 pub const APP_NAME: &str = "cache";
@@ -217,6 +219,16 @@ pub type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// The caller's side: answers requests and takes notifications.
 pub trait Handler: Send + Sync + 'static {
     fn request(&self, asker: Asker, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>>;
+    /// [`Handler::request`] with the class this end judges the asker's link to be ([`speed`]): what a request on a path may be
+    /// answered with depends on it. The node calls this one; the default ignores the class.
+    fn request_at(&self, asker: Asker, _speed: Speed, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>> {
+        self.request(asker, path, body)
+    }
+    /// A window of the blob `hash` is about to be served to `peer` over a link of class `speed` (Medium here: the file's kind may
+    /// not go over it). False answers the window "too slow". Called per request; do not block.
+    fn blob_allowed(&self, _peer: PublicKey, _hash: cache_store::Hash, _speed: Speed) -> bool {
+        true
+    }
     fn notify(&self, from: PublicKey, body: Vec<u8>);
     /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
     /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
@@ -335,6 +347,7 @@ pub struct RnsNode {
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
     state: Arc<Mutex<State>>,
+    speeds: Arc<Speeds>,
     /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
     reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -665,12 +678,14 @@ impl RnsNode {
         }));
 
         let reach_gap_ms = Arc::new(std::sync::atomic::AtomicU64::new(REACHABLE_GAP.as_millis() as u64));
+        let speeds = Speeds::new();
         // Events: heard announces, identities on links, hellos, requests, notifications.
         {
             let reach_gap_ms = reach_gap_ms.clone();
             let state = state.clone();
             let handle = handle.clone();
             let nearby = nearby.clone();
+            let speeds = speeds.clone();
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
@@ -713,13 +728,18 @@ impl RnsNode {
                         Ev::PairAnnounce { destination, local, hops } => nearby.on_announce(destination, local, hops),
                         Ev::Pair { link, data } => nearby.on_message(link, &data),
                         Ev::Established { link, rtt_ms } => {
-                            state
-                                .lock()
-                                .unwrap()
-                                .link_info
+                            let mut s = state.lock().unwrap();
+                            s.link_info
                                 .entry(link)
                                 .and_modify(|i| i.1 = Some(rtt_ms))
                                 .or_insert((std::time::Instant::now(), Some(rtt_ms)));
+                            // The opener's RTT packet can arrive after its hello checked out: the round trip time is this
+                            // end's measure of the other device's link either way.
+                            let who = s.verified.get(&link).map(|(d, _)| *d);
+                            drop(s);
+                            if let Some(k) = who.and_then(|d| PublicKey::from_bytes(&d).ok()) {
+                                speeds.set_accepted_rtt(&k, rtt_ms);
+                            }
                         }
                         Ev::Closed { link, reason } => {
                             nearby.on_link_closed(link);
@@ -779,6 +799,10 @@ impl RnsNode {
                                     }
                                     if s.peers.contains(device.as_bytes()) {
                                         s.verified.insert(token.link_id, (*device.as_bytes(), id));
+                                        // The round trip time this link came up with is this end's measure of the device's link.
+                                        if let Some(ms) = s.link_info.get(&token.link_id).and_then(|i| i.1) {
+                                            speeds.set_accepted_rtt(&device, ms);
+                                        }
                                         Some(&b"ok"[..])
                                     } else if s.former.contains(device.as_bytes()) {
                                         Some(NOT_LINKED)
@@ -822,16 +846,24 @@ impl RnsNode {
                                     Asker::Linked(p) => p,
                                     Asker::Unlinked => continue,
                                 });
+                                let speed = speeds.serve_speed(&from);
                                 tokio::spawn(async move {
                                     if !handler.blobs_ready() {
                                         let _ = handle.respond_owned_bytes(token, blobs::not_ready());
                                         return;
                                     }
                                     let want = blobs::decode_want(&data);
-                                    if let Some((hash, _, end)) = want {
+                                    if let Some((hash, start, end)) = want {
+                                        // The class this end judges the link to be decides first, whatever the asker thinks of it.
+                                        if speed != Speed::Fast
+                                            && (speed.window_chunks().is_none_or(|w| end.saturating_sub(start) > w) || !handler.blob_allowed(from, hash, speed))
+                                        {
+                                            let _ = handle.respond_owned_bytes(token, vec![blobs::TOO_SLOW]);
+                                            return;
+                                        }
                                         handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
                                     }
-                                    let reply = blobs::serve_window(&store, &data).await;
+                                    let reply = blobs::serve_window(&store, &data, speed).await;
                                     if let Some((hash, _, end)) = want {
                                         handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
                                     }
@@ -841,8 +873,12 @@ impl RnsNode {
                             }
                             let handler = handler.clone();
                             let handle = handle.clone();
+                            let speed = match asker {
+                                Asker::Linked(p) => speeds.serve_speed(&p),
+                                Asker::Unlinked => Speed::Fast,
+                            };
                             tokio::spawn(async move {
-                                let reply = match handler.request(asker, &name, data).await {
+                                let reply = match handler.request_at(asker, speed, &name, data).await {
                                     Ok(r) => r,
                                     Err(e) => format!("error: {e}").into_bytes(),
                                 };
@@ -917,6 +953,7 @@ impl RnsNode {
             nearby,
             peers_dest,
             state,
+            speeds,
             reach_gap_ms,
             tasks,
             stop: Mutex::new(Some(stop_tx)),
@@ -927,6 +964,11 @@ impl RnsNode {
     #[cfg(feature = "rnode")]
     pub fn rnode_count(&self) -> usize {
         self.rnode_ifaces.lock().unwrap().len()
+    }
+
+    /// What this node knows of each linked device's link speed ([`speed`]).
+    pub fn speeds(&self) -> Arc<Speeds> {
+        self.speeds.clone()
     }
 
     pub fn destination(&self) -> DestinationHash {
@@ -1056,10 +1098,18 @@ impl RnsNode {
             .identify(link, self.my_identity)
             .await
             .map_err(|e| anyhow!("could not identify on the link: {e:?}"))?;
-        if let Err(e) = self.hello(link, timeout).await {
-            let _ = self.handle.close_link(link);
-            return Err(e);
+        let rtt = match self.hello(link, timeout).await {
+            Ok(rtt) => rtt,
+            Err(e) => {
+                let _ = self.handle.close_link(link);
+                return Err(e);
+            }
+        };
+        // The new link's round trip time and the route's first hop set its class before anything has been measured.
+        if let Some(hop) = self.first_hop(destination).await {
+            self.speeds.set_first_hop(peer, Some(hop));
         }
+        self.speeds.set_opened_rtt(peer, rtt);
         {
             let mut s = self.state.lock().unwrap();
             s.link_to.insert(*peer.as_bytes(), link);
@@ -1069,8 +1119,15 @@ impl RnsNode {
         Ok(link)
     }
 
-    /// The first message on a link: who we are (device key), signed over the identity the link proved.
-    async fn hello(&self, link: LinkId, timeout: Duration) -> Result<()> {
+    /// The nominal bitrate (bits a second) of the interface the route to `destination` leaves by, when Prns knows it.
+    async fn first_hop(&self, destination: DestinationHash) -> Option<u64> {
+        let route = self.handle.route(destination).await?;
+        self.handle.interface_timing_inventory().into_iter().find(|i| i.id == route.interface).map(|i| i.bitrate.get())
+    }
+
+    /// The first message on a link: who we are (device key), signed over the identity the link proved. Its answer carries the
+    /// link's round trip time (ms) as Reticulum measured it.
+    async fn hello(&self, link: LinkId, timeout: Duration) -> Result<u64> {
         let body = hello_body(&self.device, &self.my_identity);
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
@@ -1083,12 +1140,33 @@ impl RnsNode {
         )
         .await;
         match r {
-            Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == b"ok") => Ok(()),
+            Ok(Ok((reply, rtt))) if unpack_bin(reply.clone()).is_ok_and(|b| b == b"ok") => Ok(rtt.millis()),
             Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == NOT_LINKED) => bail!(NOT_LINKED_ERROR),
             Ok(Ok(_)) => bail!("the other device did not accept the hello"),
             Ok(Err(e)) => bail!("no answer to the hello: {e:?}"),
             Err(_) => bail!("the hello timed out"),
         }
+    }
+
+    /// A link that has gone without a measurement is measured before it is used: the time of a small request (the hello again,
+    /// which every build answers) is its round trip time now. If that puts it in another class than the link was set up with, the
+    /// path changed under the link (a link stays on the interface it started on): it is closed and made again, so both ends
+    /// learn the new round trip time, and only what the new class allows goes on. Returns the link to use.
+    async fn probe(&self, peer: &PublicKey, link: LinkId, timeout: Duration) -> Result<LinkId> {
+        let before = self.speeds.ask_speed(peer);
+        let sent = std::time::Instant::now();
+        if let Err(e) = self.hello(link, timeout.min(Duration::from_secs(30))).await {
+            self.forget_link(peer);
+            let _ = self.handle.close_link(link);
+            return Err(e);
+        }
+        self.speeds.note_probe(peer, sent.elapsed().as_millis() as u64);
+        if self.speeds.ask_speed(peer) == before {
+            return Ok(link);
+        }
+        let _ = self.handle.close_link(link);
+        self.state.lock().unwrap().link_to.remove(peer.as_bytes());
+        self.link_to(peer, timeout).await
     }
 
     fn forget_link(&self, peer: &PublicKey) {
@@ -1105,7 +1183,10 @@ impl RnsNode {
         body: &[u8],
         timeout: Duration,
     ) -> Result<Vec<u8>> {
-        let link = self.link_to(peer, timeout).await?;
+        let mut link = self.link_to(peer, timeout).await?;
+        if self.speeds.probe_due(peer) {
+            link = self.probe(peer, link, timeout).await?;
+        }
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
             self.handle.request_with_response_timeout(
