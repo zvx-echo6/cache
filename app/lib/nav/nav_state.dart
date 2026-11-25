@@ -918,9 +918,8 @@ class NavState extends ChangeNotifier {
         outsideMaps = r.errors.isNotEmpty && r.errors.first.code == 'out_of_coverage';
       } else {
         routes = [r, ...r.alternatives];
-        if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
-          _events.add(const NavNotice('Part of this trip is off the roads, and the off-road map data is not on this device'));
-        }
+        final off = r.warnings.where((w) => w.code == 'offroad_unavailable').firstOrNull;
+        if (off != null) _events.add(NavNotice(offroadNoticeText(off.reason)));
       }
     } catch (e) {
       if (seq != _routeSeq) return;
@@ -930,6 +929,14 @@ class NavState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// The notice for a route with a leg off the roads that got no off-road way, by the warning's reason (the first warning's, when several).
+  static String offroadNoticeText(String? reason) => switch (reason) {
+        'not_downloaded' => 'Part of this trip is off the roads, and the off-road data for this area isn\'t on the phone.',
+        'no_data' => 'Part of this trip is off the roads, and there is no off-road data for this area.',
+        'no_way_found' => 'Part of this trip is off the roads, and Cache couldn\'t find an off-road way there.',
+        _ => 'Part of this trip is off the roads, and the off-road map data is not on this device',
+      };
 
   /// A route the core could not make, in words for people.
   static String routeErrorText(MapRoute r) {

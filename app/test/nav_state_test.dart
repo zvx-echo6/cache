@@ -367,6 +367,29 @@ void main() {
       expect((events.last as NavNotice).text, contains('off the roads'));
     });
 
+    for (final (reasons, text) in [
+      (['not_downloaded'], 'Part of this trip is off the roads, and the off-road data for this area isn\'t on the phone.'),
+      (['no_data'], 'Part of this trip is off the roads, and there is no off-road data for this area.'),
+      (['no_way_found'], 'Part of this trip is off the roads, and Cache couldn\'t find an off-road way there.'),
+      (['something_new'], 'Part of this trip is off the roads, and the off-road map data is not on this device'),
+      (<String>[], 'Part of this trip is off the roads, and the off-road map data is not on this device'),
+      (['no_data', 'not_downloaded'], 'Part of this trip is off the roads, and there is no off-road data for this area.'),
+    ]) {
+      test('the off-road notice follows the warning\'s reason: $reasons', () async {
+        location.publish(fixAt(42.5, -113.8));
+        backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
+              ...routeJson,
+              'warnings': [
+                if (reasons.isEmpty) {'code': 'offroad_unavailable', 'end': 'to', 'gap_m': 900},
+                for (final r in reasons) {'code': 'offroad_unavailable', 'end': 'to', 'gap_m': 900, 'reason': r},
+              ],
+            });
+        await nav.openDirections(place('place:4', 'Far'));
+        await settle(5);
+        expect((events.last as NavNotice).text, text);
+      });
+    }
+
     test('backing out returns to the map with the place still chosen', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
