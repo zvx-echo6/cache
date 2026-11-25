@@ -806,13 +806,16 @@ mod elevation_tests {
     }
 
     #[test]
-    fn the_router_gets_an_error_not_nan_cells_for_a_tile_it_cannot_have() {
+    fn a_tile_it_cannot_have_reads_as_nan_and_is_reported_as_a_gap() {
         use cache_navigate::ElevationSource;
         let (port, _hits) = host(200);
         let (inner, dir) = engine(port, false);
         let source = cache_navigate::TileElevation::new(tiles(inner));
-        let r = source.read_elevation(5 * 512, 7 * 512, 4, 4);
-        assert!(matches!(r, Err(cache_navigate::ElevError::Unavailable)), "{r:?}");
+        let (row0, col0) = (5 * 512, 7 * 512);
+        let v = source.read_elevation(row0, col0, 4, 4).unwrap();
+        assert!(v.iter().all(|x| x.is_nan()));
+        assert_eq!(source.unavailable_rects(row0, col0, 4, 4), vec![(5 * 512, 7 * 512, 6 * 512, 8 * 512)]);
+        assert!(source.unavailable_rects(row0 + 100 * 512, col0, 4, 4).is_empty(), "a window elsewhere sees no gap");
         let _ = std::fs::remove_dir_all(dir);
     }
 

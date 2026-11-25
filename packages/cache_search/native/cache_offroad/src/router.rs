@@ -123,9 +123,6 @@ pub enum RouteError {
     TooLong { estimated: usize, max: usize },
     #[error("Failed to load terrain: {0}")]
     Terrain(String),
-    /// An elevation tile the route needs is not on the phone and could not be fetched.
-    #[error("Elevation data for this area is not available")]
-    ElevationUnavailable,
     #[error("Endpoint outside grid bounds")]
     OutsideGrid,
     #[error("No unified route found")]
@@ -193,6 +190,11 @@ pub struct RouteResult {
     pub stats: RouteStats,
     /// Plain-words notes for the person about how the route was made (data that was missing and what was used instead).
     pub notes: Vec<String>,
+    /// Data the route needed was missing, so it was made without it: an elevation tile the search corridor needed (not stored,
+    /// not streamed; its cells were left out of the search as if impassable, so the route goes around ground it could not see;
+    /// not real terrain, and not "no tile here", sea), or an access-rules (MVUM) query that failed. Pack raster tiles that are
+    /// absent are NOT counted: the pack builder omits all-zero tiles, so an absent tile is real zeros.
+    pub data_gap: bool,
 }
 
 /// Per-cell detail of a travelled path (`OffrouteRouter._path_detail`).
@@ -436,6 +438,7 @@ impl<'a> Router<'a> {
                     detail: None,
                     stats: RouteStats::default(),
                     notes: vec![],
+                    data_gap: false,
                 });
             }
         }
@@ -461,10 +464,7 @@ impl<'a> Router<'a> {
         let (south, north, west, east) = meta.bounds;
         let (rows, cols) = (meta.rows, meta.cols);
         let terr = |e: crate::pack::PackError| RouteError::Terrain(e.to_string());
-        let elev_err = |e: crate::elevation::ElevError| match e {
-            crate::elevation::ElevError::Unavailable => RouteError::ElevationUnavailable,
-            e => RouteError::Terrain(e.to_string()),
-        };
+        let elev_err = |e: crate::elevation::ElevError| RouteError::Terrain(e.to_string());
         let elevation = self.elevation.read_elevation(meta.global_row0, meta.global_col0, rows, cols).map_err(elev_err)?;
         let rd = |l: Layer| self.pack.read_u8(l, meta.global_row0, meta.global_col0, rows, cols);
         let friction_raw = rd(Layer::Friction).map_err(terr)?;
@@ -475,7 +475,10 @@ impl<'a> Router<'a> {
         let trails = rd(Layer::Trails).map_err(terr)?;
         let wilderness = if self.pack.has_layer(Layer::Wilderness) { Some(rd(Layer::Wilderness).map_err(terr)?) } else { None };
         // MVUM per mode: 2w=mtb, 4w=atv, vehicle=vehicle (best effort, like the reference server)
-        let mvum_feats = self.pack.mvum_in_box(south, north, west, east).ok();
+        // a failed query is not "no restrictions": the route is made without them and says so (`data_gap`)
+        let mvum_result = self.pack.mvum_in_box(south, north, west, east);
+        let mvum_failed = mvum_result.is_err();
+        let mvum_feats = mvum_result.ok();
         let mvum_by_mode: Option<[Vec<u8>; 3]> = mvum_feats.as_ref().map(|f| mvum::access_grids(f, &meta, req.mvum_on_date));
         // the dirt bike and over-50-in columns of the rebuilt pack; None until the pack has them
         let mvum_ext: [Option<Vec<u8>>; 2] = match (&mvum_feats, req.variant) {
@@ -544,6 +547,13 @@ impl<'a> Router<'a> {
                 }
             }
         }
+        // missing elevation data inside the corridor (the cells the search may use): the route is made without it
+        let gap_rects = self.elevation.unavailable_rects(meta.global_row0, meta.global_col0, rows, cols);
+        let data_gap = gap_rects.iter().any(|&(r0, c0, r1, c1)| {
+            let (rs, re) = ((r0 - meta.global_row0).max(0), (r1 - meta.global_row0).min(rows as i64));
+            let (cs, ce) = ((c0 - meta.global_col0).max(0), (c1 - meta.global_col0).min(cols as i64));
+            (rs..re).any(|r| (cs..ce).any(|c| !cm[r as usize * cols + c as usize]))
+        });
         drop(cm);
         drop(friction_mult);
         let ms_layers = t1.elapsed().as_millis();
@@ -620,6 +630,7 @@ impl<'a> Router<'a> {
             ms_rasters, ms_layers, ms_transitions, ms_search,
         };
         let mut out = render_unified_path(&res.path, res.cost, &meta, req.boundary, stats);
+        out.data_gap = data_gap || mvum_failed;
         // what the person is told about the data this route was made from
         if req.boundary != Boundary::Emergency && mvum_by_mode.is_some() {
             if req.variant == Variant::Moto && mvum_ext[0].is_none() {
@@ -737,6 +748,7 @@ pub fn render_unified_path(path: &[[i64; 3]], total_cost: f64, meta: &GridMeta, 
         detail: None,
         stats,
         notes: vec![],
+        data_gap: false,
     }
 }
 
