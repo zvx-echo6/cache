@@ -279,6 +279,8 @@ struct State {
     down: HashSet<[u8; 32]>,
     /// Link -> when it was seen first and the round trip time it opened with (for the line that says why it closed).
     link_info: HashMap<LinkId, (std::time::Instant, Option<u64>)>,
+    /// Hellos answered "ok" (the first one on each link, then the keepalives of [`RnsNode::keep_link_alive`]).
+    hellos: u64,
 }
 
 enum Ev {
@@ -318,6 +320,15 @@ enum Ev {
         link: LinkId,
         data: Vec<u8>,
     },
+}
+
+/// The keepalive of [`RnsNode::keep_link_alive`]: it stops when this is dropped.
+pub struct KeepAlive(tokio::task::JoinHandle<()>);
+
+impl Drop for KeepAlive {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 pub struct RnsNode {
@@ -779,6 +790,7 @@ impl RnsNode {
                                     }
                                     if s.peers.contains(device.as_bytes()) {
                                         s.verified.insert(token.link_id, (*device.as_bytes(), id));
+                                        s.hellos += 1;
                                         Some(&b"ok"[..])
                                     } else if s.former.contains(device.as_bytes()) {
                                         Some(NOT_LINKED)
@@ -1089,6 +1101,38 @@ impl RnsNode {
             Ok(Err(e)) => bail!("no answer to the hello: {e:?}"),
             Err(_) => bail!("the hello timed out"),
         }
+    }
+
+    /// How many hellos this node has answered "ok" (one per link, plus one per keepalive from [`RnsNode::keep_link_alive`]).
+    pub fn hellos_answered(&self) -> u64 {
+        self.state.lock().unwrap().hellos
+    }
+
+    /// Keeps the link to `peer` busy while the returned guard lives: every `every`, a hello (a tiny request the other device answers
+    /// "ok" from memory, on the path every link already uses first) goes over the open link, so the link has traffic both ways even
+    /// while one long answer is being sent in one direction. Prns closes a link nothing has been heard on for about two keepalive
+    /// periods (a few tens of seconds on a quick link), and its own keepalive does not count a long transfer as traffic here; this
+    /// is the app's own. It only uses a link that is open (it never opens one), says nothing per hello, and ends when dropped.
+    pub fn keep_link_alive(&self, peer: &PublicKey, every: Duration) -> KeepAlive {
+        let (handle, state, device, identity, peer) =
+            (self.handle.clone(), self.state.clone(), self.device.clone(), self.my_identity, *peer.as_bytes());
+        KeepAlive(tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let link = state.lock().unwrap().link_to.get(&peer).copied();
+                if let Some(link) = link {
+                    let body = hello_body(&device, &identity);
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(8),
+                        handle.request_with_response_timeout(link, RequestPathHash::of(HELLO_PATH), &body, exact(Duration::from_secs(7))),
+                    )
+                    .await;
+                }
+            }
+        }))
     }
 
     fn forget_link(&self, peer: &PublicKey) {

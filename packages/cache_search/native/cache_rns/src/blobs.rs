@@ -19,6 +19,8 @@ use crate::RnsNode;
 /// The request path for a window of a blob.
 pub const BLOB_PATH: &str = "/cache/blob/window";
 /// 16 MiB of 1 KiB chunks.
+/// How often a fetch sends a keepalive hello on its link.
+pub const KEEPALIVE_EVERY: Duration = Duration::from_secs(10);
 pub const WINDOW_CHUNKS: u64 = 16 * 1024;
 pub(crate) const CHUNK: u64 = 1024;
 
@@ -104,6 +106,8 @@ pub async fn fetch(
         f.have = f.size;
         return Ok(f);
     }
+    // A long answer flows one way: keep the link busy both ways until the fetch ends (the guard stops it).
+    let _alive = node.keep_link_alive(peer, KEEPALIVE_EVERY);
     let mut k = 0u64;
     loop {
         let start = k * WINDOW_CHUNKS;
