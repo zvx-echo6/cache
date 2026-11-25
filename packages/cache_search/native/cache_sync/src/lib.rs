@@ -46,7 +46,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
-use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Transport};
+use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Speed, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -307,6 +307,31 @@ pub struct Config {
     /// else counts as not set).
     #[serde(default)]
     pub device_kind: Option<String>,
+    /// The shared folders of the big kinds, by share id (maps, libraries, ZIMs, models, videos): their files wait on a Medium link
+    /// whatever their size (design 2b). Default: the ids the app gives those kinds (`library`, `libraries`, `models`, `maps`,
+    /// `regions`, `videos`).
+    #[serde(default = "default_bulk")]
+    pub bulk: Vec<String>,
+    /// The page of differences asked for on a Medium link, in bytes (default 64 KB, about 3 s at the 20 KB/s floor).
+    #[serde(default)]
+    pub medium_page_bytes: Option<usize>,
+    /// Tests only: how long a Reticulum link may go without a measurement before the next request is preceded by a small one that
+    /// measures it, in ms (default 10 s).
+    #[serde(default)]
+    pub speed_probe_ms: Option<u64>,
+    /// How often the link of a device this device holds files back from is measured, in ms (default 5 s).
+    #[serde(default)]
+    pub resume_check_ms: Option<u64>,
+    /// How long a link must allow what was held back before a round for that device is started, in ms (default 30 s, design 2b).
+    #[serde(default)]
+    pub resume_hold_ms: Option<u64>,
+    /// The most that hold grows to after repeated slow cancels, in ms (default 10 min).
+    #[serde(default)]
+    pub resume_backoff_max_ms: Option<u64>,
+}
+
+fn default_bulk() -> Vec<String> {
+    ["library", "libraries", "models", "maps", "regions", "videos"].into_iter().map(String::from).collect()
 }
 
 /// How much of Reticulum to run ([`Config::reticulum`]).
@@ -683,6 +708,35 @@ struct Serving {
     at: Instant,
 }
 
+/// What the status says an item that a link's class holds back is waiting for.
+const WAITING_FOR_FASTER: &str = "Waiting for a faster connection";
+
+/// An item the link's class does not allow now: a file too big for it (or of a big kind), or a folder's whole list. Not a
+/// failure: it stays wanted and goes when the link allows it.
+#[derive(Debug)]
+struct Waiting;
+
+impl std::fmt::Display for Waiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(WAITING_FOR_FASTER)
+    }
+}
+
+impl std::error::Error for Waiting {}
+
+fn is_waiting(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<Waiting>().is_some())
+}
+
+/// A held back item as the status lists it: (device, folder id, path; empty for a folder's whole list).
+type WaitKey = (String, String, String);
+
+/// How long a link must allow what is held back before a retry, after `cancels` slow cancels in a row: the base, doubled for each
+/// one, up to `cap`.
+fn backoff_hold(base: Duration, cancels: u32, cap: Duration) -> Duration {
+    base.saturating_mul(1u32.checked_shl(cancels).unwrap_or(u32::MAX)).min(cap)
+}
+
 /// A device that is served windows is "fetching from this one" until this long after the last window.
 const SERVING_FOR: Duration = Duration::from_secs(10);
 /// The key in the notice queues for "this device's entry points changed" (not a folder's id: those are never empty or start with NUL).
@@ -967,6 +1021,9 @@ struct Inner {
     notice_out: Mutex<HashMap<String, (HashSet<String>, bool)>>,
     notice_sent: AtomicU64,
     notice_got: AtomicU64,
+    /// Small files taken from a device's page of differences, and ones whose bytes did not match the entry's hash.
+    inline_ok: AtomicU64,
+    inline_bad: AtomicU64,
     /// What each linked device is being served from this device's files (the windows it asks for), by device.
     serving: Mutex<HashMap<String, Serving>>,
     /// Linked devices that have asked this device something since it started: they can reach it, so they can send it notices.
@@ -974,6 +1031,29 @@ struct Inner {
     heard_from: Mutex<HashSet<String>>,
     /// Linked devices heard reachable again, and when a round with each becomes due ([`REACHABLE_DELAY`]).
     reach_pending: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_check_ms`] and [`Config::resume_hold_ms`].
+    resume_check: Duration,
+    resume_hold: Duration,
+    /// Per device: since when its link has allowed what was held back from it.
+    resume_since: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_backoff_max_ms`].
+    resume_cap: Duration,
+    /// Per device: how many retries the watcher started ended as a slow cancel, one after the other (the hold doubles for each).
+    resume_cancels: Mutex<HashMap<String, u32>>,
+    /// Devices the watcher started a round for whose result is not known yet: the next item of one that goes back to waiting is a
+    /// slow cancel.
+    resume_trial: Mutex<HashSet<String>>,
+    /// Per device: the node's interface count of changes when the watcher last looked.
+    resume_gen: Mutex<HashMap<String, u64>>,
+    /// Tests only: when (ms since 1970) a round was started by the resume watcher.
+    #[cfg(feature = "test-hooks")]
+    resume_fires: Mutex<Vec<(u64, &'static str, u32)>>,
+    /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
+    waiting: Mutex<BTreeMap<WaitKey, u64>>,
+    /// [`Config::bulk`].
+    bulk: HashSet<String>,
+    /// [`Config::medium_page_bytes`].
+    medium_page: usize,
     /// The one-time move of an older store into the new one has finished (or there was none); rounds wait for it.
     store_ready: AtomicBool,
     /// While that move runs: bytes done and bytes in all.
@@ -1986,7 +2066,31 @@ impl Inner {
         if let Some(n) = std::fs::read_to_string(self.dir.join("diff-page-bytes")).ok().and_then(|t| t.trim().parse::<usize>().ok()) {
             cap = n;
         }
-        let page = delta::diff_page(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap);
+        // The asker may ask for less than the class carries (the answering end's cap is put in `max` before it gets here).
+        if let Some(m) = ask.max {
+            cap = cap.min(m.max(1));
+        }
+        // A Slow asker gets the bytes of its small files (8 KB or less) with their entries; they come from this device's own store.
+        let store = self.store.raw().clone();
+        #[cfg(feature = "test-hooks")]
+        let corrupt = self.dir.join("corrupt-inline").exists();
+        let inline = |_: &str, e: &Entry| -> Option<Vec<u8>> {
+            if !ask.inl {
+                return None;
+            }
+            let hash: Hash = e.hash.parse().ok()?;
+            #[allow(unused_mut)]
+            let mut bytes = store.get_bytes(&hash).ok().filter(|b| b.len() as u64 == e.size)?;
+            #[cfg(feature = "test-hooks")]
+            if corrupt {
+                // Acts as a build that sends wrong bytes: one byte flipped.
+                if let Some(b) = bytes.first_mut() {
+                    *b ^= 0xff;
+                }
+            }
+            Some(bytes)
+        };
+        let page = delta::diff_page_with(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap, &inline);
         serde_json::to_vec(&page).unwrap_or_default()
     }
 
@@ -2135,6 +2239,78 @@ impl Inner {
         [pending, safety].into_iter().flatten().min().map(|d| d.max(Duration::from_millis(500)))
     }
 
+    /// Watches the devices this device holds files or lists back from because their link was too slow (design 2b, "It speeds up"):
+    /// each is measured every few seconds, and when its class allows what waits, a round for it is started at once if a new link
+    /// came up, or once the class has allowed it for 30 seconds. The rate cannot be measured while nothing flows, so the round
+    /// that follows is the measurement: a link that is not fast after all gives the item back to waiting.
+    async fn resume_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(self.resume_check).await;
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if !self.network.load(Ordering::Relaxed) {
+                continue;
+            }
+            let mut held: BTreeMap<String, Vec<(String, String, u64)>> = BTreeMap::new();
+            for ((peer, share, path), size) in self.waiting.lock().unwrap().iter() {
+                held.entry(peer.clone()).or_default().push((share.clone(), path.clone(), *size));
+            }
+            self.resume_since.lock().unwrap().retain(|p, _| held.contains_key(p));
+            // Nothing held from a device any more (it all came, or went): its backoff is over.
+            let gone: Vec<String> = self.resume_cancels.lock().unwrap().keys().chain(self.resume_trial.lock().unwrap().iter()).filter(|p| !held.contains_key(*p)).cloned().collect();
+            for p in gone {
+                self.end_backoff(&p);
+            }
+            let iface_gen = self.net.interface_gen();
+            for (peer, items) in held {
+                let new_link = self.net.measure(&peer).await;
+                // An interface of this device came up or went down since the watcher last looked: the path may be faster.
+                let iface_changed = self.resume_gen.lock().unwrap().insert(peer.clone(), iface_gen).is_some_and(|g| g != iface_gen);
+                let fresh = new_link || iface_changed;
+                if fresh {
+                    // A new link or a change of interface ends the backoff at once, so a real speed-up is caught right away.
+                    self.end_backoff(&peer);
+                }
+                let class = self.class_of(&peer);
+                let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) });
+                if !allowed {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    continue;
+                }
+                let since = *self.resume_since.lock().unwrap().entry(peer.clone()).or_insert_with(Instant::now);
+                if fresh || since.elapsed() >= self.resume_hold_for(&peer) {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    self.resume_trial.lock().unwrap().insert(peer.clone());
+                    #[cfg(feature = "test-hooks")]
+                    self.resume_fires.lock().unwrap().push((std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64), if new_link { "new link" } else if iface_changed { "interface" } else { "hold" }, self.resume_cancels.lock().unwrap().get(&peer).copied().unwrap_or(0)));
+                    self.due.lock().unwrap().insert(peer.clone());
+                    self.due_why.lock().unwrap().insert(peer.clone(), format!("faster connection to {}", self.peer_name(&peer)));
+                    self.wake_due.notify_one();
+                }
+            }
+        }
+    }
+
+    /// How long the link of `peer` must allow what is held back before a round for it is started.
+    fn resume_hold_for(&self, peer: &str) -> Duration {
+        let cancels = self.resume_cancels.lock().unwrap().get(peer).copied().unwrap_or(0);
+        backoff_hold(self.resume_hold, cancels, self.resume_cap)
+    }
+
+    /// A round the watcher started for `peer` gave an item back to waiting: a slow cancel, the next retry waits twice as long.
+    fn note_slow_cancel(&self, peer: &str) {
+        if self.resume_trial.lock().unwrap().remove(peer) {
+            *self.resume_cancels.lock().unwrap().entry(peer.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// What the watcher held against `peer` is over: the backoff starts again.
+    fn end_backoff(&self, peer: &str) {
+        self.resume_trial.lock().unwrap().remove(peer);
+        self.resume_cancels.lock().unwrap().remove(peer);
+    }
+
     /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
     /// and folder for a burst of writes, carrying the latest counter. Runs for as long as the engine does.
     async fn notice_loop(self: Arc<Self>) {
@@ -2217,6 +2393,32 @@ impl Inner {
 
     /// What `peer` is doing with this device's files, for the status: what this device serves it (the windows it asks for, until
     /// [`SERVING_FOR`] after the last one), else what its last summary said it fetches (while that summary is fresh).
+    /// The class of the link to `peer` for what this device asks of it ([`Transport::speed`]; iroh paths are Fast). Tests only: a
+    /// device with `<dir>/ignore-class` acts as a build that does not check its own class (the answering end still does).
+    fn class_of(&self, peer: &str) -> Speed {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("ignore-class").exists() {
+            return Speed::Fast;
+        }
+        self.net.speed(peer)
+    }
+
+    /// A file of `size` in folder `share` may be asked for over a link of class `class`: a Medium link carries files up to 10 MiB
+    /// and not the big kinds ([`Config::bulk`]); a Slow link carries none as a window (a file of 8 KB or less
+    /// comes inline with its entry and is then in the store already).
+    fn class_allows(&self, class: Speed, share: &str, size: u64) -> bool {
+        class.carries_file(size) && !(class == Speed::Medium && self.bulk.contains(share))
+    }
+
+    /// The page of differences to ask for over a link of class `class` (none: the answering end's own, 1 MB).
+    fn page_ask(&self, class: Speed) -> Option<usize> {
+        match class {
+            Speed::Fast => None,
+            Speed::Medium => Some(self.medium_page),
+            Speed::Slow => Some(transport::SLOW_PAGE_BYTES),
+        }
+    }
+
     fn fetching_by(&self, peer: &str, summary: Option<&RemoteIndex>, last_seen: Option<u64>) -> Option<Value> {
         let served = {
             let mut sv = self.serving.lock().unwrap();
@@ -2238,8 +2440,14 @@ impl Inner {
                 Ok(v) => return Ok(v),
                 #[cfg(feature = "test-hooks")]
                 Err(e) if format!("{e:#}").starts_with("test: killed") => return Err(e),
+                // Not the whole list over a slow link, which is what a failed summary would fall back to.
+                Err(e) if self.class_of(peer) == Speed::Slow => return Err(e),
                 Err(_) => {}
             }
+        }
+        if self.class_of(peer) == Speed::Slow {
+            // A device that cannot give a summary, over a slow link: its whole list waits for a faster one.
+            return Err(anyhow::Error::new(Waiting));
         }
         let (idx, via) = self.fetch_index(peer, closed).await?;
         self.take_full(peer, &idx);
@@ -2278,33 +2486,84 @@ impl Inner {
             bail!("the device did not send a summary");
         }
         let mut full = None;
+        let mut held_back = Vec::new();
         for rs in sum.shares.iter_mut() {
-            rs.index = self.catch_up(peer, rs, closed, &mut full).await?;
+            match self.catch_up(peer, rs, closed, &mut full).await? {
+                Some(idx) => {
+                    rs.index = idx;
+                    self.waiting.lock().unwrap().remove(&(peer.to_string(), rs.id.clone(), String::new()));
+                }
+                None => held_back.push(rs.id.clone()),
+            }
         }
         let ids: Vec<String> = sum.shares.iter().map(|x| x.id.clone()).collect();
+        // A folder this device keeps, whose whole list a slow link does not carry: it waits for a faster one, and nothing of it is
+        // compared meanwhile (what is known of it stays as it was).
+        if !held_back.is_empty() {
+            let joined: HashSet<String> = self.saved.lock().unwrap().shares.iter().map(|s| s.id.clone()).collect();
+            for id in &held_back {
+                if joined.contains(id) {
+                    self.waiting.lock().unwrap().insert((peer.to_string(), id.clone(), String::new()), 0);
+                }
+            }
+            sum.shares.retain(|x| !held_back.contains(&x.id));
+        }
         for f in self.mirror_files(peer, &ids) {
             let _ = std::fs::remove_file(f);
         }
         Ok((sum, via))
     }
 
+    /// The bytes of small files that came inline with their entries (Slow link): each is checked against its entry's BLAKE3 hash and
+    /// size, and only then put in the store, where the ordinary fetch finds it complete. Bytes that do not match are dropped: the file
+    /// stays wanted and waits like any file a slow link does not carry. They are held against clean-up until the file is written.
+    async fn take_inline(&self, page: &delta::Page) {
+        for ch in &page.changes {
+            let (Some(e), Some(bytes)) = (ch.e.as_ref().filter(|e| !e.deleted), delta::inline_bytes(ch)) else { continue };
+            let Ok(hash) = e.hash.parse::<Hash>() else { continue };
+            if bytes.len() as u64 != e.size || e.size > delta::INLINE_MAX || Hash::new(&bytes) != hash {
+                self.inline_bad.fetch_add(1, Ordering::Relaxed);
+                say(&format!("a small file's bytes from a device did not match its hash, so {} was not taken that way", ch.p));
+                continue;
+            }
+            if self.store.is_complete(hash).await {
+                continue;
+            }
+            let st = self.store.raw().clone();
+            let added = tokio::task::spawn_blocking(move || st.add_bytes(&bytes).map(|a| a.hash())).await;
+            if matches!(added, Ok(Ok(h)) if h == hash) {
+                self.wanted.lock().unwrap().insert(hash);
+                self.inline_ok.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// The view `peer` has of the folder `rs` summarises: the mirror when it already is at the summary's counter, the mirror
     /// followed to it page by page (each page applied and saved in one write before the next is asked for), or the folder's
     /// whole list (asked once for all the folders that need it, in `full`), which replaces the mirror.
-    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Index> {
+    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Option<Index>> {
         let fp = rs.fp.clone().ok_or_else(|| anyhow!("the summary has no fingerprint for {}", rs.name))?;
         let (epoch, counter) = (rs.index.epoch.clone(), rs.index.counter);
-        if let Some(mut m) = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter)) {
+        let class = self.class_of(peer);
+        let mut start = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter));
+        if start.is_none() && class == Speed::Medium && !epoch.is_empty() {
+            // The whole comparison on a medium link goes in pages: the differences since nothing, from an empty mirror.
+            start = Some(delta::Mirror { epoch: epoch.clone(), fp: fp.clone(), ..Default::default() });
+        }
+        if let Some(mut m) = start {
           loop {
             if m.is_at(counter) {
-                return Ok(m.index());
+                return Ok(Some(m.index()));
             }
-            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone() };
+            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone(), max: self.page_ask(class), inl: class == Speed::Slow };
             let (bytes, _) = self.net.ask_delta(peer, Delta::Diff, serde_json::to_vec(&ask)?, closed).await?;
             self.asked_diff.fetch_add(1, Ordering::Relaxed);
             let page: delta::Page = serde_json::from_slice(&bytes).context("the differences from the device are not valid")?;
             if page.full {
                 break;
+            }
+            if class == Speed::Slow {
+                self.take_inline(&page).await;
             }
             let before = (m.ctr, m.after.clone());
             m.take(&page);
@@ -2326,6 +2585,10 @@ impl Inner {
             write_json(&self.mirror_path(peer, &rs.id), &m)?;
           }
         }
+        // The requests above have measured the link again: a slow one does not carry the whole list.
+        if self.class_of(peer) == Speed::Slow {
+            return Ok(None);
+        }
         if full.is_none() {
             *full = Some(self.fetch_index(peer, closed).await?.0);
         }
@@ -2333,7 +2596,7 @@ impl Inner {
         if let Some(fp) = f.fp.as_deref().filter(|_| !f.index.epoch.is_empty()) {
             write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&f.index, fp))?;
         }
-        Ok(f.index.clone())
+        Ok(Some(f.index.clone()))
     }
 
     /// The unlinks this device offers in its file list: the kept ones, newer than [`REMOVAL_KEEP_MS`].
@@ -2412,6 +2675,7 @@ impl Inner {
         self.push_former();
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
+        self.waiting.lock().unwrap().retain(|(p, _, _), _| p != id);
         self.summary_peers.lock().unwrap().remove(id);
         for f in self.mirror_files(id, &[]) {
             let _ = std::fs::remove_file(f);
@@ -2946,17 +3210,29 @@ impl Inner {
                     }
                     let size = entry.size;
                     let key = (sh.id.clone(), path.clone());
+                    let wkey = (from.to_string(), sh.id.clone(), path.clone());
                     match self.fetch(sh, &path, entry, conflict, from).await {
                         Ok(true) => {
+                            self.waiting.lock().unwrap().remove(&wkey);
+                            self.end_backoff(from);
                             if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
                                 say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
                             }
                         }
                         Ok(false) => {
                             held = true;
+                            self.waiting.lock().unwrap().remove(&wkey);
                             if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
                                 s.remove(&key);
                             }
+                        }
+                        // The link's class holds it back: listed as waiting, still wanted (held like a file not yet fetched, so
+                        // the next round asks again), and not an error.
+                        Err(e) if is_waiting(&e) => {
+                            held = true;
+                            self.note_slow_cancel(from);
+                            self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
+                            self.waiting.lock().unwrap().insert(wkey, size);
                         }
                         Err(e) => {
                             held = true;
@@ -2984,6 +3260,7 @@ impl Inner {
             if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
                 s.retain(|(id, p)| *id != sh.id || fetch_paths.contains(p));
             }
+            self.waiting.lock().unwrap().retain(|(f, id, p), _| p.is_empty() || f != from || *id != sh.id || fetch_paths.contains(p));
         }
         match no_room {
             Some(e) => Err(e),
@@ -3022,6 +3299,11 @@ impl Inner {
                 bail!("no linked device has {path} right now");
             }
             self.wanted.lock().unwrap().insert(hash);
+            // Only from the devices whose link carries it: the others hold it back, and it waits for a faster link.
+            let providers: Vec<String> = providers.into_iter().filter(|p| self.class_allows(self.class_of(p), &sh.id, entry.size)).collect();
+            if providers.is_empty() {
+                return Err(anyhow::Error::new(Waiting));
+            }
             self.run.lock().unwrap().transfer = Some(Transfer {
                 share_id: sh.id.clone(),
                 share: sh.name.clone(),
@@ -3032,6 +3314,7 @@ impl Inner {
             });
             let mut stream = self.net.fetch(self.store.raw(), hash, providers.clone()).await?;
             let mut failed = None;
+            let mut too_slow = false;
             let mut last_progress = Instant::now();
             loop {
                 // Woken every second even when nothing arrives, so a pause or a stalled path is noticed.
@@ -3065,6 +3348,10 @@ impl Inner {
                             }
                         }
                         FetchEvent::Failed(m) => failed = Some(m),
+                        FetchEvent::Waiting(m) => {
+                            failed = Some(m);
+                            too_slow = true;
+                        }
                     },
                     Err(_) => {}
                 }
@@ -3081,6 +3368,10 @@ impl Inner {
             let done = self.run.lock().unwrap().transfer.as_ref().map(|t| t.done).unwrap_or(0);
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
+                if too_slow {
+                    // Either end says the link is too slow for it: held back, not failed. What arrived stays in the store.
+                    return Err(anyhow::Error::new(Waiting));
+                }
                 let names: Vec<String> = providers.iter().map(|p| self.peer_name(p)).collect();
                 say(&format!("fetch from {} stopped at {}/{} MB: {f} (will retry)", names.join(", "), done / 1_048_576, need / 1_048_576));
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
@@ -3488,6 +3779,35 @@ impl Serve for Inner {
         self.asked_wakes(peer);
     }
 
+    fn page_cap(&self, speed: Speed) -> usize {
+        match speed {
+            Speed::Fast => delta::PAGE_BYTES,
+            Speed::Medium => self.medium_page,
+            Speed::Slow => transport::SLOW_PAGE_BYTES,
+        }
+    }
+
+    /// The big kinds do not go over a Medium link: a window is refused when every folder kept with `peer` that lists the file is
+    /// one of them. A file no folder lists (or any folder that is not a big kind lists) goes, subject to its size.
+    #[cfg(feature = "test-hooks")]
+    fn test_refuse_blobs(&self) -> bool {
+        // A device with `<dir>/refuse-blobs` refuses every window as too slow (a link that turned out slow at the answering end).
+        self.dir.join("refuse-blobs").exists()
+    }
+
+    fn blob_allowed(&self, peer: &str, hash: &str, speed: Speed) -> bool {
+        if speed != Speed::Medium {
+            return true;
+        }
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let listing: Vec<&Share> = shares
+            .iter()
+            .filter(|sh| self.shares_with(&sh.id, peer))
+            .filter(|sh| self.load_index(&sh.id).files.values().any(|e| !e.deleted && e.hash == hash))
+            .collect();
+        listing.is_empty() || listing.iter().any(|sh| !self.bulk.contains(&sh.id))
+    }
+
     fn link_closed(&self, peer: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) {
         say(&link_closed_line(&self.peer_name(peer), reason, open_secs, rtt_ms));
     }
@@ -3724,6 +4044,8 @@ impl SyncEngine {
         });
         let inner5 = inner.clone();
         rt.spawn(async move { inner5.notice_loop().await });
+        let inner6 = inner.clone();
+        rt.spawn(async move { inner6.resume_loop().await });
         if let Some(secs) = cfg.lifetime_secs {
             let inner4 = inner.clone();
             let net4 = inner.net.clone();
@@ -3887,9 +4209,23 @@ impl SyncEngine {
             notice_out: Mutex::new(HashMap::new()),
             notice_sent: AtomicU64::new(0),
             notice_got: AtomicU64::new(0),
+            inline_ok: AtomicU64::new(0),
+            inline_bad: AtomicU64::new(0),
             serving: Mutex::new(HashMap::new()),
             heard_from: Mutex::new(HashSet::new()),
             reach_pending: Mutex::new(HashMap::new()),
+            waiting: Mutex::new(BTreeMap::new()),
+            resume_check: Duration::from_millis(cfg.resume_check_ms.unwrap_or(5_000).max(50)),
+            resume_hold: Duration::from_millis(cfg.resume_hold_ms.unwrap_or(30_000)),
+            resume_since: Mutex::new(HashMap::new()),
+            resume_cap: Duration::from_millis(cfg.resume_backoff_max_ms.unwrap_or(600_000)),
+            resume_cancels: Mutex::new(HashMap::new()),
+            resume_trial: Mutex::new(HashSet::new()),
+            resume_gen: Mutex::new(HashMap::new()),
+            #[cfg(feature = "test-hooks")]
+            resume_fires: Mutex::new(Vec::new()),
+            bulk: cfg.bulk.iter().cloned().collect(),
+            medium_page: cfg.medium_page_bytes.unwrap_or(transport::MEDIUM_PAGE_BYTES).max(512),
             store_ready: AtomicBool::new(false),
             store_move: Mutex::new(None),
         });
@@ -3906,6 +4242,9 @@ impl SyncEngine {
             #[cfg(feature = "test-hooks")]
             if let Some(ms) = std::fs::read_to_string(cfg.dir.join("reach-gap-ms")).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
                 m.set_reach_gap(Duration::from_millis(ms));
+            }
+            if let Some(ms) = cfg.speed_probe_ms {
+                m.set_probe_every(Duration::from_millis(ms));
             }
             if let Err(e) = m.start_rns(secret.clone(), inner.store.raw(), inner.clone(), ifaces, pair_local_tcp).await {
                 inner.note(format!("Reticulum did not start: {e:#}"));
@@ -4055,7 +4394,27 @@ impl SyncEngine {
                 "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
                 "notice_got": inner.notice_got.load(Ordering::Relaxed),
                 "entries": inner.asked_entries.load(Ordering::Relaxed),
+                "inline_ok": inner.inline_ok.load(Ordering::Relaxed),
+                "inline_bad": inner.inline_bad.load(Ordering::Relaxed),
             })),
+            #[cfg(feature = "test-hooks")]
+            "test_resume" => {
+                // The resume watcher: when it started rounds (ms since 1970), and the hold it now waits for `peer`.
+                let peer = s("peer").unwrap_or_default();
+                let fires = inner.resume_fires.lock().unwrap().clone();
+                Ok(json!({"fires": fires.iter().map(|f| f.0).collect::<Vec<_>>(), "why": fires.iter().map(|f| f.1).collect::<Vec<_>>(), "cancels": fires.iter().map(|f| f.2).collect::<Vec<_>>(), "hold_ms": inner.resume_hold_for(&peer).as_millis() as u64}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_relink" => {
+                // The link to `peer` drops; the next request makes a new one.
+                inner.net.test_relink(&s("peer").ok_or_else(|| anyhow!("peer is required"))?);
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_attach_iface" => {
+                inner.net.test_attach_iface();
+                Ok(json!({}))
+            }
             #[cfg(feature = "test-hooks")]
             "test_quiet" => {
                 let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
@@ -4667,6 +5026,8 @@ impl SyncEngine {
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
                     "fetching": inner.fetching_by(&p.id, st.index.as_ref(), st.last_seen),
+                    // How the link to it is judged now (fast, medium or slow); iroh paths are fast.
+                    "speed": inner.net.speed(&p.id).as_str(),
                 })
             })
             .collect();
@@ -4703,6 +5064,21 @@ impl SyncEngine {
                 })
             })
             .collect();
+        // What a link's class holds back (engine field only; the wording on the device row is part 4): files and whole lists.
+        let waiting: Vec<Value> = inner
+            .waiting
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|((peer, share, path), size)| {
+                let peer_name = saved.peers.iter().find(|p| p.id == *peer).map(|p| p.name.clone());
+                let share_name = saved.shares.iter().find(|s| s.id == *share).map(|s| s.name.clone());
+                json!({
+                    "peer": peer, "peer_name": peer_name, "share_id": share, "share": share_name, "path": path,
+                    "what": if path.is_empty() { "list" } else { "file" }, "size": size, "reason": WAITING_FOR_FASTER,
+                })
+            })
+            .collect();
         let (relay, direct) = inner.net.addresses();
         json!({
             "id": inner.me,
@@ -4720,6 +5096,7 @@ impl SyncEngine {
             "shares": shares,
             "offers": offers,
             "transfer": run.transfer,
+            "waiting": waiting,
             "paused": run.paused,
             "store_move": inner.store_move.lock().unwrap().map(|(done, total)| json!({"done": done, "total": total})),
             "rounds": run.rounds,
@@ -4748,6 +5125,25 @@ impl SyncEngine {
     }
 }
 
+
+#[cfg(test)]
+mod resume_backoff_tests {
+    use super::*;
+
+    const S: fn(u64) -> Duration = Duration::from_secs;
+
+    /// The test clock is the schedule itself: each retry's gap is the hold after the slow cancels so far (the real constants: a 30 s
+    /// hold and a 5 s look, so the gaps are about 35 s, 65 s, 125 s ... up to 10 min and a look).
+    #[test]
+    fn the_hold_doubles_with_each_slow_cancel_and_stops_at_the_cap() {
+        let holds: Vec<Duration> = (0..8).map(|n| backoff_hold(S(30), n, S(600))).collect();
+        assert_eq!(holds, [S(30), S(60), S(120), S(240), S(480), S(600), S(600), S(600)]);
+        // No overflow however many in a row, and a base over the cap is held to it.
+        assert_eq!(backoff_hold(S(30), 1000, S(600)), S(600));
+        assert_eq!(backoff_hold(S(30), u32::MAX, S(600)), S(600));
+        assert_eq!(backoff_hold(S(900), 0, S(600)), S(600));
+    }
+}
 
 #[cfg(test)]
 mod space_tests {

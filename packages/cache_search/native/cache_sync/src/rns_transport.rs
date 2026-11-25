@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::entries::EntryPoint;
-use crate::transport::{Ask, BoxFut, BoxStream, Delta, EntryStatus, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
+use crate::transport::{is_too_slow, Ask, BoxFut, BoxStream, Delta, EntryStatus, FetchEvent, IrohTransport, PairTarget, Serve, Speed, TooSlow, Transport, NO_REACH};
 use crate::MAX_INDEX;
 
 /// How long iroh waits before it starts when Reticulum has a path to the device: Reticulum answers first when it can, and
@@ -87,6 +87,8 @@ pub struct MultiTransport {
     reach_gap_ms: AtomicU64,
     /// The entry points (on and off) the node is to have, kept to start it again.
     entries: Mutex<Vec<cache_rns::EntryPoint>>,
+    /// How long a link may go without a measurement before the next request is preceded by a small one, in ms (u64::MAX: the node's own).
+    probe_ms: AtomicU64,
 }
 
 /// An entry point as the node takes it (the passphrase in a string that is wiped when dropped).
@@ -110,6 +112,24 @@ fn via_name(node: &RnsNode, key: &PublicKey) -> String {
     }
 }
 
+/// The engine's class for cache_rns's.
+fn speed_of(s: cache_rns::Speed) -> Speed {
+    match s {
+        cache_rns::Speed::Slow => Speed::Slow,
+        cache_rns::Speed::Medium => Speed::Medium,
+        cache_rns::Speed::Fast => Speed::Fast,
+    }
+}
+
+#[cfg(test)]
+fn rns_speed_of(s: Speed) -> cache_rns::Speed {
+    match s {
+        Speed::Slow => cache_rns::Speed::Slow,
+        Speed::Medium => cache_rns::Speed::Medium,
+        Speed::Fast => cache_rns::Speed::Fast,
+    }
+}
+
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -124,7 +144,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default() })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default(), probe_ms: AtomicU64::new(u64::MAX) })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
@@ -156,6 +176,9 @@ impl MultiTransport {
         if let Some(ms) = Some(self.reach_gap_ms.load(Ordering::Relaxed)).filter(|ms| *ms > 0) {
             node.set_reach_gap(Duration::from_millis(ms));
         }
+        if let Some(ms) = Some(self.probe_ms.load(Ordering::Relaxed)).filter(|ms| *ms != u64::MAX) {
+            node.speeds().set_probe_every(Duration::from_millis(ms));
+        }
         let sig = cache_rns::vouch_destination(&a.device, &dest);
         *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
         Ok(())
@@ -182,6 +205,12 @@ impl MultiTransport {
     #[cfg(feature = "test-hooks")]
     pub fn set_reach_gap(&self, d: Duration) {
         self.reach_gap_ms.store(d.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// How long a link may go without a measurement before a small request measures it (the node's own default, 10 s, unless set;
+    /// tests make it short). Set before [`MultiTransport::start_rns`].
+    pub fn set_probe_every(&self, d: Duration) {
+        self.probe_ms.store(d.as_millis() as u64, Ordering::Relaxed);
     }
 
     fn node(&self) -> Option<Arc<RnsNode>> {
@@ -250,6 +279,11 @@ impl Transport for MultiTransport {
             };
             let over_rns = async {
                 let body = node.request(&key, path, b"ask", wait).await?;
+                // The other end's class for this link does not allow what was asked: the slower judgment wins from now on.
+                if cache_rns::speed::is_refusal(&body) {
+                    node.speeds().note_refused(&key);
+                    return Err(anyhow::Error::new(TooSlow));
+                }
                 // "wifi" is what the app's Same Wi-Fi row keys on: the route comes in on a Wi-Fi interface.
                 Ok::<_, anyhow::Error>((body, via_name(&node, &key)))
             };
@@ -263,6 +297,8 @@ impl Transport for MultiTransport {
             // The other device said "not linked" over Reticulum. That answer is given only to a device it unlinked itself, so
             // iroh's own refusal (a Gate that says 409 "links reset" for 7 days after a fresh start, or 503) must not replace it.
             let mut rns_not_linked = false;
+            // The other device refused over Reticulum as too slow: iroh's own failure must not hide that.
+            let mut rns_slow = false;
             // The first good answer wins and the other is dropped. `closed` (the 403 that can unlink) is set by iroh's Gate and,
             // over Reticulum, by the other device answering the hello "not linked" (the engine still waits for two, 10 minutes apart).
             loop {
@@ -279,6 +315,7 @@ impl Transport for MultiTransport {
                                     rns_not_linked = true;
                                     closed.store(403, Ordering::Relaxed);
                                 }
+                                rns_slow |= is_too_slow(&e);
                                 failure = failure.or(Some(e));
                             }
                         }
@@ -299,6 +336,9 @@ impl Transport for MultiTransport {
                     if rns_not_linked {
                         closed.store(403, Ordering::Relaxed);
                     }
+                    if rns_slow {
+                        return Err(anyhow::Error::new(TooSlow));
+                    }
                     return Err(failure.unwrap_or_else(|| anyhow!("not reachable")));
                 }
             }
@@ -316,6 +356,10 @@ impl Transport for MultiTransport {
                 Delta::Diff => (PATH_DIFF, Duration::from_secs(60)),
             };
             match node.request(&key, path, &body, wait).await {
+                Ok(reply) if cache_rns::speed::is_refusal(&reply) => {
+                    node.speeds().note_refused(&key);
+                    Err(anyhow::Error::new(TooSlow))
+                }
                 Ok(reply) => {
                     self.note(peer, Net::Reticulum);
                     Ok((reply, via_name(&node, &key)))
@@ -343,6 +387,42 @@ impl Transport for MultiTransport {
             }
             Ok(())
         })
+    }
+
+    fn speed(&self, peer: &str) -> Speed {
+        if !self.reached_over_rns(peer) {
+            return Speed::Fast;
+        }
+        peer.parse::<PublicKey>().ok().zip(self.node()).map_or(Speed::Fast, |(k, n)| speed_of(n.speeds().ask_speed(&k)))
+    }
+
+    fn measure(&self, peer: &str) -> BoxFut<'_, bool> {
+        let key = peer.parse::<PublicKey>().ok().zip(self.node()).filter(|_| self.reached_over_rns(peer));
+        Box::pin(async move {
+            match key {
+                Some((k, n)) => n.measure(&k, Duration::from_secs(30)).await.unwrap_or(false),
+                None => false,
+            }
+        })
+    }
+
+    fn interface_gen(&self) -> u64 {
+        self.node().map_or(0, |n| n.interface_gen())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn test_relink(&self, peer: &str) {
+        if let Some((k, n)) = peer.parse::<PublicKey>().ok().zip(self.node()) {
+            n.relink(&k);
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn test_attach_iface(&self) {
+        if let Some(n) = self.node() {
+            // Nothing listens there: the interface exists (and is trying to connect), which is all a test needs.
+            n.attach_tcp_client("127.0.0.1:9");
+        }
     }
 
     fn reached_over_rns(&self, peer: &str) -> bool {
@@ -579,6 +659,7 @@ impl RnsFetch {
         let task = tokio::spawn(async move {
             let have = Arc::new(AtomicU64::new(0));
             let mut last = String::from("no linked device could be reached over Reticulum");
+            let mut slow = false;
             for peer in providers {
                 let (h, t2) = (have.clone(), tx.clone());
                 let fetch = blobs::fetch(&node, &peer, &store, hash, WINDOW_TIMEOUT, move |f| {
@@ -600,10 +681,14 @@ impl RnsFetch {
                         let _ = tx.send(FetchEvent::Progress(f.size)).await;
                         return;
                     }
-                    Err(e) => last = format!("{e:#}"),
+                    Err(e) => {
+                        slow |= blobs::is_too_slow(&e);
+                        last = format!("{e:#}");
+                    }
                 }
             }
-            let _ = tx.send(FetchEvent::Failed(last)).await;
+            // Every device that could not carry it said the link is too slow (or this end did): the file waits, it did not fail.
+            let _ = tx.send(if slow { FetchEvent::Waiting(last) } else { FetchEvent::Failed(last) }).await;
         });
         RnsFetch { rx, task }
     }
@@ -620,6 +705,16 @@ impl Drop for RnsFetch {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// A differences request ([`crate::delta::DiffAsk`]) whose page is held to `cap` bytes: its `max` is the smaller of what the asker
+/// asked for and the cap. A body that is not that JSON is left as it is (the engine answers it "full").
+fn cap_page(body: &[u8], cap: usize) -> Vec<u8> {
+    let Ok(mut v) = serde_json::from_slice::<Value>(body) else { return body.to_vec() };
+    let Some(o) = v.as_object_mut() else { return body.to_vec() };
+    let max = o.get("max").and_then(|m| m.as_u64()).map_or(cap, |m| (m as usize).min(cap));
+    o.insert("max".into(), json!(max));
+    serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
 }
 
 /// What the Reticulum node asks of the engine.
@@ -690,6 +785,27 @@ impl Handler for Serving {
         })
     }
 
+    /// What this end's class for the asker's link allows ([`cache_rns::Speed`]), on top of what [`Handler::request`] answers: the
+    /// whole file list is not given over a Slow link (it waits for a faster one), and a page of differences is no bigger than the
+    /// class carries. The asker is told so even if it is a build that does not check its own class.
+    fn request_at(&self, asker: Asker, speed: cache_rns::Speed, path: &str, body: Vec<u8>) -> RnsFut<Result<Vec<u8>>> {
+        let linked = matches!(asker, Asker::Linked(_));
+        if linked && path == PATH_INDEX && speed == cache_rns::Speed::Slow {
+            return Box::pin(async { Err(anyhow::Error::new(TooSlow)) });
+        }
+        let body = if linked && path == PATH_DIFF { cap_page(&body, self.serve.page_cap(speed_of(speed))) } else { body };
+        self.request(asker, path, body)
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn refuse_blobs(&self) -> bool {
+        self.serve.test_refuse_blobs()
+    }
+
+    fn blob_allowed(&self, peer: PublicKey, hash: Hash, speed: cache_rns::Speed) -> bool {
+        self.serve.blob_allowed(&peer.to_string(), &hash.to_string(), speed_of(speed))
+    }
+
     fn notify(&self, from: PublicKey, _body: Vec<u8>) {
         self.serve.asked(&from.to_string());
     }
@@ -722,6 +838,34 @@ impl Handler for Serving {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine's class and cache_rns's are two types (cache_rns is not built everywhere); they must say the same.
+    #[test]
+    fn the_two_classes_agree() {
+        for (mine, theirs) in [(Speed::Slow, cache_rns::Speed::Slow), (Speed::Medium, cache_rns::Speed::Medium), (Speed::Fast, cache_rns::Speed::Fast)] {
+            assert_eq!(speed_of(theirs), mine);
+            assert_eq!(rns_speed_of(mine), theirs);
+            assert_eq!(mine.as_str(), theirs.as_str());
+            for size in [0, 1, 4096, 8 * 1024 + 1, 10 * 1024 * 1024, 10 * 1024 * 1024 + 1, 1 << 40] {
+                assert_eq!(mine.carries_file(size), theirs.carries_file(size), "{mine:?} {size}");
+            }
+        }
+        assert_eq!(crate::transport::TOO_SLOW_TEXT, cache_rns::speed::TOO_SLOW_TEXT);
+    }
+
+    #[test]
+    fn a_page_is_held_to_the_cap_and_never_raised() {
+        let body = serde_json::to_vec(&json!({"share": "s", "c": 1})).unwrap();
+        let v: Value = serde_json::from_slice(&cap_page(&body, 4096)).unwrap();
+        assert_eq!(v["max"], 4096);
+        let body = serde_json::to_vec(&json!({"share": "s", "c": 1, "max": 1000})).unwrap();
+        let v: Value = serde_json::from_slice(&cap_page(&body, 4096)).unwrap();
+        assert_eq!(v["max"], 1000, "an asker may ask for less");
+        let body = serde_json::to_vec(&json!({"share": "s", "c": 1, "max": 9_999_999})).unwrap();
+        let v: Value = serde_json::from_slice(&cap_page(&body, 4096)).unwrap();
+        assert_eq!(v["max"], 4096);
+        assert_eq!(cap_page(b"not json", 4096), b"not json");
+    }
 
     /// A Serve that must never be reached: an unknown path has to be refused before the engine is asked anything.
     struct Unreached;
