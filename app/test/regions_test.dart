@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/geo.dart';
@@ -21,6 +22,7 @@ import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/screens/settings/deps.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/search/core_config.dart';
+import 'package:cache/weather/catalogue_store.dart' show NetworkProblem;
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/hub.dart';
 import 'package:cache/settings/space.dart';
@@ -57,6 +59,7 @@ class _Rig {
     bool placesBuildOnlyWithRegion = false,
     Future<void> Function()? onPlacesChanged,
     bool Function()? synced,
+    Future<List<int>> Function(Uri u, Future<List<int>> Function(Uri u) inner)? wrapFetch,
   }) async {
     final r = _Rig();
     r.s = await SettingsRig.create(tester, connection: connection);
@@ -65,7 +68,7 @@ class _Rig {
       ..placesBuildOnlyWithRegion = placesBuildOnlyWithRegion;
     Directory(r.core.tileDir).createSync(recursive: true);
     final web = regionWeb();
-    r.catalogue = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: web.fetch);
+    r.catalogue = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: wrapFetch == null ? web.fetch : (u) => wrapFetch(u, web.fetch));
     r.regions = RegionsState(
       policy: r.s.policy,
       supportDir: () async => r.s.dir,
@@ -249,6 +252,146 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       expect(tester.takeException(), isNull);
+      await r.dispose(tester);
+    });
+
+    // ---- the outline back-fill (A2): outlines only, a marker per region, never in the quiet hours, the mobile data rule ----------------
+    Future<List<int>> squares(Uri u, Future<List<int>> Function(Uri) inner, List<String> asked) async {
+      if (u.path.endsWith('.geojson')) {
+        asked.add(u.pathSegments.last);
+        return Uint8List.fromList(utf8.encode(jsonEncode({'type': 'Polygon', 'coordinates': [[[-115.0, 42.0], [-114.0, 42.0], [-114.0, 43.0], [-115.0, 43.0], [-115.0, 42.0]]]})));
+      }
+      return inner(u);
+    }
+
+    Future<_Rig> keptWithOutlines(WidgetTester tester, List<String> asked, {ConnectionKind connection = ConnectionKind.wifi}) async {
+      final r = await _Rig.boot(tester, connection: connection, wrapFetch: (u, inner) => squares(u, inner, asked));
+      r.s.settings.setMobileForDownloads(true); // so the download itself may run on mobile data; the tests set it as they need after
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      await tester.runAsync(() async {
+        for (var i = 0; i < 200 && !await r.catalogue.outlinesDone(r.county.id); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      return r;
+    }
+
+    Directory polygons(_Rig r) => Directory('${r.s.dir.path}/region-catalogue/polygons');
+    void forget(_Rig r) {
+      for (final f in polygons(r).listSync().whereType<File>()) {
+        f.deleteSync();
+      }
+    }
+
+    RegionsState again(_Rig r, DateTime Function() clock) => RegionsState(
+          policy: r.s.policy,
+          supportDir: () async => r.s.dir,
+          catalogue: r.catalogue,
+          maps: r.s.maps,
+          opener: (_) async => r.core,
+          clock: clock,
+        );
+
+    testWidgets('outline back-fill: a region that has its tiles and no outlines gets them all and a marker; a second run fetches nothing', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isTrue, reason: 'the download left its marker');
+      forget(r);
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isNotEmpty, reason: 'an empty folder: every outline is fetched');
+      expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isTrue);
+      final first = asked.length;
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked.length, first, reason: 'the marker is there: nothing is fetched again');
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: a partly filled folder fetches only the missing outlines', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      final want = {for (final x in r.catalogue.areaRecordsOf(r.county)) '${x.id}.geojson'};
+      final files = polygons(r).listSync().whereType<File>().where((f) => want.contains(f.uri.pathSegments.last)).toList();
+      expect(files.length, greaterThan(1));
+      final gone = files.first.uri.pathSegments.last;
+      files.first.deleteSync();
+      File('${polygons(r).path}/.done-${r.county.id}').deleteSync();
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, [gone], reason: 'only the one that was missing');
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: a failure leaves no marker and the next run tries again', (tester) async {
+      final asked = <String>[];
+      var fail = false;
+      final r = await _Rig.boot(tester, wrapFetch: (u, inner) async {
+        if (u.path.endsWith('.geojson') && fail) throw const NetworkProblem('no connection');
+        return squares(u, inner, asked);
+      });
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      await tester.runAsync(() async {
+        for (var i = 0; i < 200 && !await r.catalogue.outlinesDone(r.county.id); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      forget(r);
+      fail = true;
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isFalse, reason: 'a failed store leaves no marker');
+      fail = false;
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isNotEmpty, reason: 'it tries again');
+      expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isTrue);
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: updateRegion back-fills the outlines and asks neither the core nor the map to update when nothing else is out of date', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      forget(r);
+      asked.clear();
+      final before = List<String>.of(r.core.calls);
+      await tester.runAsync(() => r.regions.updateRegion(r.county.id));
+      expect(asked, isNotEmpty, reason: 'the outlines were fetched');
+      expect(r.core.calls.where((c) => c.startsWith('update')).length, before.where((c) => c.startsWith('update')).length, reason: 'no routing or places update was asked of the core');
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: it does nothing from 1 to 8 AM local, and runs at other hours', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      forget(r);
+      asked.clear();
+      final night = again(r, () => DateTime(2026, 11, 25, 3, 30));
+      await tester.runAsync(() async {
+        await night.init();
+        await night.backfillOutlines();
+      });
+      expect(asked, isEmpty, reason: 'quiet hours');
+      final morning = again(r, () => DateTime(2026, 11, 25, 8, 0));
+      await tester.runAsync(() async {
+        await morning.init();
+        await morning.backfillOutlines();
+      });
+      expect(asked, isNotEmpty, reason: '8 AM is out of the quiet hours');
+      night.dispose();
+      morning.dispose();
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: on mobile data it follows the setting for downloads (off: waits; on: runs)', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked, connection: ConnectionKind.mobile);
+      forget(r);
+      asked.clear();
+      r.s.settings.setMobileForDownloads(false);
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isEmpty, reason: 'mobile data is not allowed for downloads');
+      r.s.settings.setMobileForDownloads(true);
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isNotEmpty, reason: 'mobile data is allowed for downloads');
       await r.dispose(tester);
     });
 

@@ -524,6 +524,7 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     final want = areaRecordsOf(r);
     if (want.length > maxFiles) return AreaStoreResult(wanted: want.length, stored: 0, failed: 0, tooMany: true);
     var stored = 0, failed = 0, next = 0;
+    final present = await _presentOutlines(want);
     Future<void> worker() async {
       while (next < want.length) {
         final x = want[next++];
@@ -537,7 +538,43 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     }
 
     await Future.wait([for (var i = 0; i < parallel; i++) worker()]);
-    return AreaStoreResult(wanted: want.length, stored: stored, failed: failed);
+    // Every outline of the region is on the phone: the back-fill need not look at this region again.
+    if (failed == 0 && want.isNotEmpty) await _markOutlinesDone(r.id);
+    return AreaStoreResult(wanted: want.length, stored: stored, failed: failed, present: present);
+  }
+
+  /// The marker that says every outline of region [regionId] was kept: written only when a store ended with none failed and not too
+  /// many. Next to the outline files, so removing the files' folder removes it.
+  File _doneMarker(Directory d, String regionId) => File('${d.path}/polygons/.done-$regionId');
+
+  /// Whether the outlines of region [regionId] were all kept once (its marker). False in a browser, which keeps no files.
+  Future<bool> outlinesDone(String regionId) async {
+    if (plat.isWeb) return false;
+    try {
+      return await _doneMarker(await dir(), regionId).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _markOutlinesDone(String regionId) async {
+    if (plat.isWeb) return;
+    try {
+      await _doneMarker(await dir(), regionId).create(recursive: true);
+    } catch (_) {}
+  }
+
+  /// How many of [records]' outline files are on the phone now.
+  Future<int> _presentOutlines(List<RegionRecord> records) async {
+    if (plat.isWeb) return 0;
+    var n = 0;
+    try {
+      final d = await dir();
+      for (final x in records) {
+        if (await File('${d.path}/polygons/${x.id}.geojson').exists()) n++;
+      }
+    } catch (_) {}
+    return n;
   }
 
   /// The town, county and state of a point from the outlines kept on the phone (never fetched). The shards of the countries around
@@ -638,11 +675,17 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
 
 /// What [RegionCatalogue.storeAreaPolygons] did: outlines asked for, kept, and not fetched; [tooMany] when it did none for lack of room.
 class AreaStoreResult {
-  const AreaStoreResult({required this.wanted, required this.stored, required this.failed, this.tooMany = false});
+  const AreaStoreResult({required this.wanted, required this.stored, required this.failed, this.tooMany = false, this.present = 0});
 
   final int wanted;
   final int stored;
   final int failed;
+
+  /// How many of the outlines were already on the phone when it started (they are not fetched again).
+  final int present;
+
+  /// How many were fetched by this run.
+  int get fetched => (stored - present).clamp(0, stored);
   final bool tooMany;
 }
 
