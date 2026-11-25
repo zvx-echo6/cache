@@ -702,6 +702,10 @@ impl Handler for Serving {
         self.serve.link_closed(&peer.to_string(), reason, open_secs, rtt_ms);
     }
 
+    fn route_moved(&self, peer: PublicKey, now: &str, was: &str, from: cache_rns::RouteFrom) {
+        self.serve.route_moved(&peer.to_string(), now, was, from.text());
+    }
+
     fn blobs_ready(&self) -> bool {
         self.serve.blobs_ready()
     }

@@ -280,6 +280,24 @@ pub enum Asker {
     Unlinked,
 }
 
+/// What taught the node a route that moved ([`Handler::route_moved`]). Prns's announce event does not say whether an announce
+/// answered a path request (`is_path_response` is not on it), so a route heard in an announce is always `Announce`; `PathResponse`
+/// is a route read from the routing table after Cache's own path request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteFrom {
+    Announce,
+    PathResponse,
+}
+
+impl RouteFrom {
+    pub fn text(self) -> &'static str {
+        match self {
+            RouteFrom::Announce => "an announce",
+            RouteFrom::PathResponse => "a path response",
+        }
+    }
+}
+
 pub type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// The caller's side: answers requests and takes notifications.
@@ -292,6 +310,10 @@ pub trait Handler: Send + Sync + 'static {
     /// A link to or from a linked device closed: why (`reason`), how long it had been open, and the round trip time measured
     /// when it opened (when known). Called from the node's event task: do not block. Prns's event carries nothing more.
     fn link_closed(&self, _peer: PublicKey, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
+    /// The route to a linked device now goes through a different interface or entry point than before (`now` and `was` read like
+    /// "host:port", "Wi-Fi" or "other"), learned from `from`. Called once per change, never for the first route learned, from the
+    /// node's event task or a path request: do not block.
+    fn route_moved(&self, _peer: PublicKey, _now: &str, _was: &str, _from: RouteFrom) {}
     /// Whether the file store may be served yet (false while it is being moved to a new format). While false, a window request
     /// is answered "not ready" (a temporary failure for the asker), never "missing". Called per request; do not block.
     fn blobs_ready(&self) -> bool {
@@ -351,6 +373,11 @@ struct State {
     entries: HashMap<String, Slot>,
     /// The interface of each attached entry point, back to its id.
     iface_entry: HashMap<InterfaceId, String>,
+    /// Where each linked device's route last went through, as the words a log line uses ([`route_label`]); kept when an entry
+    /// is lost or removed, so the move to another one can say what it was.
+    last_route: HashMap<[u8; 32], String>,
+    /// Told when a route moves ([`Handler::route_moved`]).
+    handler: Option<Arc<dyn Handler>>,
 }
 
 enum Ev {
@@ -734,6 +761,7 @@ impl RnsNode {
         tasks.push(nearby.start_tick());
 
         let state = Arc::new(Mutex::new(State {
+            handler: Some(handler.clone()),
             peers: cfg.peers.iter().map(|(p, _)| *p.as_bytes()).collect(),
             destination_of: cfg
                 .peers
@@ -781,7 +809,9 @@ impl RnsNode {
                                 .find(|(_, d)| **d == destination)
                                 .map(|(k, _)| *k);
                             let mut again = None;
+                            let mut moved = None;
                             if let Some(k) = hit {
+                                moved = note_route(&mut s, k, &via);
                                 // A device heard for the first time is not "again": the round every device makes at its start, and the
                                 // notices, cover it (and a round at that instant can ask before the link can be made).
                                 s.heard.insert(k, via);
@@ -793,6 +823,10 @@ impl RnsNode {
                                 }
                             }
                             drop(s);
+                            if let Some(((now, was), k)) = moved.zip(hit).and_then(|(m, k)| Some((m, PublicKey::from_bytes(&k).ok()?))) {
+                                // Prns's event does not say whether this announce answered a path request.
+                                handler.route_moved(k, &now, &was, RouteFrom::Announce);
+                            }
                             if let Some(k) = again.and_then(|k| PublicKey::from_bytes(&k).ok()) {
                                 handler.reachable(k);
                             }
@@ -1056,12 +1090,14 @@ impl RnsNode {
             if let Some(d) = d {
                 if s.destination_of.insert(*p.as_bytes(), *d) != Some(*d) {
                     s.heard.remove(p.as_bytes());
+                    s.last_route.remove(p.as_bytes());
                 }
             }
         }
         s.destination_of.retain(|k, _| keep.contains(k));
         *self.peers_dest.lock().unwrap() = s.destination_of.values().copied().collect();
         s.heard.retain(|k, _| keep.contains(k));
+        s.last_route.retain(|k, _| keep.contains(k));
         // `verified` is kept: `verified_device` checks the peer list, and an unlinked device's open link must still be
         // recognised (to answer it "not linked") until `set_former` says whether it is remembered.
         s.link_to.retain(|k, _| keep.contains(k));
@@ -1398,6 +1434,25 @@ async fn route_via(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, destinati
     })
 }
 
+/// How a route is named in the log: an entry point by its address, Wi-Fi, or anything else.
+fn route_label(s: &State, via: &Via) -> String {
+    match via {
+        Via::Wifi => "Wi-Fi".to_string(),
+        Via::Other => "other".to_string(),
+        Via::Entry(id) => s.entries.get(id).map_or("an entry point that was removed".to_string(), |e| e.wire.addr.clone()),
+    }
+}
+
+/// Records where `peer`'s route goes through and returns `(now, was)` when that is a different place than the last one recorded
+/// (never for the first route learned, and never for an unchanged one).
+fn note_route(s: &mut State, peer: [u8; 32], via: &Via) -> Option<(String, String)> {
+    let now = route_label(s, via);
+    match s.last_route.insert(peer, now.clone()) {
+        Some(was) if was != now => Some((now, was)),
+        _ => None,
+    }
+}
+
 /// A standard Reticulum path request for a stored destination; a returned path makes it reachable (over whatever
 /// transport nodes carry it: nothing here needs a direct neighbour). The interface it came in on is learned from the
 /// announce that answers, or else from the routing table ([`route_via`]).
@@ -1414,11 +1469,18 @@ async fn find_path(
             // "not known" and "anything else" give way to it.
             let via = route_via(handle, state, destination).await.unwrap_or(Via::Other);
             let mut s = state.lock().unwrap();
+            let mut moved = None;
             match s.heard.get(&peer) {
                 None | Some(Via::Other) => {
+                    moved = note_route(&mut s, peer, &via);
                     s.heard.insert(peer, via);
                 }
                 Some(_) => {}
+            }
+            let handler = s.handler.clone();
+            drop(s);
+            if let (Some((now, was)), Some(h), Ok(k)) = (moved, handler, PublicKey::from_bytes(&peer)) {
+                h.route_moved(k, &now, &was, RouteFrom::PathResponse);
             }
             true
         }

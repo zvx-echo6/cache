@@ -100,6 +100,13 @@ fn link_closed_line(name: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Op
     format!("reticulum link to {name} closed: {reason}{after}{rtt}")
 }
 
+/// The cache.log line for a linked device's route that moved to another entry point or interface. `from` is what taught it
+/// (cache_rns says "an announce" or "a path response"; Prns's announce event does not tell the two apart, so a heard announce
+/// is always "an announce").
+fn route_moved_line(name: &str, now: &str, was: &str, from: &str) -> String {
+    format!("reticulum route to {name} now through {now} (was {was}), from {from}")
+}
+
 /// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
@@ -3485,6 +3492,10 @@ impl Serve for Inner {
         say(&link_closed_line(&self.peer_name(peer), reason, open_secs, rtt_ms));
     }
 
+    fn route_moved(&self, peer: &str, now: &str, was: &str, from: &str) {
+        say(&route_moved_line(&self.peer_name(peer), now, was, from));
+    }
+
     fn notice(&self, peer: &str, body: &[u8]) -> Vec<u8> {
         // The network lets only a linked device's notice through; the engine checks again, since a notice starts a round.
         if !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
@@ -5061,6 +5072,18 @@ mod former_tests {
             "reticulum link to Pixel closed: timeout (nothing heard on it for too long) after 44 s (rtt 90 ms)"
         );
         assert_eq!(link_closed_line("Pixel", "closed by the other device", None, None), "reticulum link to Pixel closed: closed by the other device");
+    }
+
+    #[test]
+    fn a_route_move_line_names_the_device_both_routes_and_what_taught_it() {
+        assert_eq!(
+            route_moved_line("Pixel", "rns2.example.org:4242", "rns1.example.org:4242", "an announce"),
+            "reticulum route to Pixel now through rns2.example.org:4242 (was rns1.example.org:4242), from an announce"
+        );
+        assert_eq!(
+            route_moved_line("Pixel", "Wi-Fi", "other", "a path response"),
+            "reticulum route to Pixel now through Wi-Fi (was other), from a path response"
+        );
     }
 
     #[test]

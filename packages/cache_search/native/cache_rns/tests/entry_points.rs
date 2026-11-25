@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cache_rns::{
-    destination_for, Asker, DROP_REANNOUNCE_GAP, BoxFut, Config, EntryPoint, EntryState, Handler, Iface, RnsNode, Via,
+    destination_for, Asker, BoxFut, Config, EntryPoint, EntryState, Handler, Iface, RnsNode, RouteFrom, Via, DROP_REANNOUNCE_GAP,
 };
 use iroh::{PublicKey, SecretKey};
 use personal_rns::interfaces::{IfacContext, IfacSize};
@@ -20,6 +20,7 @@ fn free_port() -> u16 {
 #[derive(Default)]
 struct Rec {
     closed: Mutex<Vec<PublicKey>>,
+    moved: Mutex<Vec<(String, String, RouteFrom)>>,
 }
 impl Handler for Rec {
     fn request(&self, _: Asker, _: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>> {
@@ -28,6 +29,9 @@ impl Handler for Rec {
     fn notify(&self, _: PublicKey, _: Vec<u8>) {}
     fn link_closed(&self, peer: PublicKey, _: &str, _: Option<u64>, _: Option<u64>) {
         self.closed.lock().unwrap().push(peer);
+    }
+    fn route_moved(&self, _: PublicKey, now: &str, was: &str, from: RouteFrom) {
+        self.moved.lock().unwrap().push((now.to_string(), was.to_string(), from));
     }
 }
 
@@ -483,13 +487,16 @@ async fn when_the_entry_in_use_dies_the_peer_is_reached_through_the_other_entry(
             Iface::Entry(entry(&format!("{p}2"), p2, Some(NAME2), Some(PASS2), true)),
         ]
     };
-    let (a, _) = start(&ka, two("e"), vec![&kb]).await;
+    let (a, rec_a) = start(&ka, two("e"), vec![&kb]).await;
     let (_b, _) = start(&kb, two("f"), vec![&ka]).await;
     until("a reaches b", 60, || matches!(a.via(&kb.public()), Some(Via::Entry(_)))).await;
     let first = match a.via(&kb.public()) {
         Some(Via::Entry(id)) => id,
         v => panic!("not through an entry: {v:?}"),
     };
+    // The first route learned is not a move, and a stable route says nothing.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(rec_a.moved.lock().unwrap().is_empty(), "no route-move line while the route is stable: {:?}", rec_a.moved.lock().unwrap());
     let r = a.request(&kb.public(), "/x", b"one", Duration::from_secs(20)).await;
     assert_eq!(r.expect("a request over the first entry"), b"one".to_vec());
     // Stop the stand-in the route runs through.
@@ -501,6 +508,16 @@ async fn when_the_entry_in_use_dies_the_peer_is_reached_through_the_other_entry(
     })
     .await;
     println!("failover took {:?}", stopped.elapsed());
+    // Exactly one line for the move, naming the new entry's address and the old one's; none more while the route holds.
+    let (new_port, old_port) = if other == "e2" { (p2, p1) } else { (p1, p2) };
+    until("one route-move line", 10, || !rec_a.moved.lock().unwrap().is_empty()).await;
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    {
+        let m = rec_a.moved.lock().unwrap();
+        assert_eq!(m.len(), 1, "exactly one route-move line: {m:?}");
+        assert_eq!(m[0].0, format!("127.0.0.1:{new_port}"));
+        assert_eq!(m[0].1, format!("127.0.0.1:{old_port}"));
+    }
     assert_eq!(a.route_via(destination_for(&kb).unwrap()).await, Some(Via::Entry(other.to_string())), "the routing table agrees");
     let mut got = None;
     for _ in 0..4 {

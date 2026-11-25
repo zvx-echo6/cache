@@ -204,6 +204,8 @@ pub trait Serve: Send + Sync + 'static {
     fn asked(&self, peer: &str);
     /// A Reticulum link to or from a linked device closed (cache_rns says why): the app's log says it.
     fn link_closed(&self, _peer: &str, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
+    /// A linked device's route over Reticulum now goes through another entry point or interface (`from`: what taught it).
+    fn route_moved(&self, _peer: &str, _now: &str, _was: &str, _from: &str) {}
     /// A linked device says a folder changed (`body`: [`crate::delta::Notice`]); the answer to send back.
     fn notice(&self, _peer: &str, _body: &[u8]) -> Vec<u8> {
         b"ok".to_vec()

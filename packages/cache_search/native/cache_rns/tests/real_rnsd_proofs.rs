@@ -263,8 +263,12 @@ async fn proof_h_reference_interop_through_the_chain() {
     let (a, rec) = start(&k, vec![Iface::Entry(entry("e1", "HUB1"))]).await;
     let cache_dest = dest_hex(&a.destination());
     say(&format!("Cache destination {cache_dest} (on hub1 only)"));
-    until("Cache entry connected", 60, || {
-        a.entry_status().iter().any(|(i, s, _)| i == "e1" && *s == cache_rns::EntryState::Connected)
+    // On a quiet hub (nobody announcing) the entry stays NothingHeard: connected, nothing valid heard yet. Both mean the TCP
+    // connection is up, which is all this proof needs.
+    until("Cache entry connected (or connected and nothing heard yet)", 60, || {
+        a.entry_status().iter().any(|(i, s, _)| {
+            i == "e1" && matches!(s, cache_rns::EntryState::Connected | cache_rns::EntryState::NothingHeard)
+        })
     })
     .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
