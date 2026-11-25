@@ -238,6 +238,20 @@ void main() {
     });
 
 
+    testWidgets('a refresh that finishes after the state was disposed (a screen left mid-refresh) ends quietly: no notify after dispose', (tester) async {
+      final r = await _Rig.boot(tester);
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        final pending = again.refresh();
+        again.dispose();
+        await pending;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      expect(tester.takeException(), isNull);
+      await r.dispose(tester);
+    });
+
     testWidgets('a region an earlier version adopted from the other device\'s store file is listed once, with the other device\'s; one whose areas are gone is dropped', (tester) async {
       final r = await _Rig.boot(tester);
       File('${r.s.dir.path}/regions/.share-id')

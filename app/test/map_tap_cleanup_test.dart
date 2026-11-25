@@ -102,7 +102,7 @@ class _Maps {
 
   DriveNav get nav => rig.nav;
 
-  Future<void> pump(WidgetTester tester, {Size size = const Size(390, 844)}) async {
+  Future<void> pump(WidgetTester tester, {Size size = const Size(390, 844), Future<void> Function()? beforeMount, Future<void> Function()? beforeReady}) async {
     areaFitSettle = Duration.zero;
     addTearDown(() => areaFitSettle = const Duration(milliseconds: 300));
     tester.view.physicalSize = size * 3;
@@ -139,6 +139,7 @@ class _Maps {
       await userLayers.reload();
     });
     maps.setOn('basemap', true);
+    await beforeMount?.call();
     rig.backend.onRoute = (to, mode, from) async => MapRoute.fromJson(driveRouteJson(withStop: false));
     await tester.pumpWidget(MaterialApp(
       theme: buildTheme(CacheThemeId.dark),
@@ -158,6 +159,9 @@ class _Maps {
       await tester.pump();
     }
     map = tester.widget<MapLibreMap>(find.byType(MapLibreMap));
+    // A cold start: what was chosen before the map exists (beforeReady) is chosen while the map is still being made.
+    await beforeReady?.call();
+    await settle(tester);
     map.onMapCreated!(camera);
     map.onStyleLoadedCallback!();
     await tester.pump();
@@ -333,6 +337,53 @@ void main() {
       expect(last.first, 'newCameraPosition', reason: 'moved to an offset centre, not onto the repeater itself: $last');
       final target = (last[1] as Map)['target'] as List;
       expect(target[0] as num, lessThan(42.56), reason: 'the centre is south of the repeater, so it is drawn above the card');
+      await m.finish(tester);
+    });
+
+    // A cold launch: the screen is built (or its map is still being made) when the card is chosen. The slide is queued, not dropped.
+    const coldRepeater = Repeater(listId: 'l2', listName: 'Magic Valley', item: 1, address: 'repeater:l2/1', name: 'K7ABC', town: 'Twin Falls', lat: 42.56, lon: -113.46);
+    void expectSlidAbove(_Maps m, double lat) {
+      final moves = m.camera.cameras.where((c) => (c as List).first == 'newCameraPosition').toList();
+      expect(moves, isNotEmpty, reason: 'the map moved to the card\'s spot once it was ready');
+      final target = ((moves.last as List)[1] as Map)['target'] as List;
+      expect(target[0] as num, lessThan(lat), reason: 'the centre is south of the spot, so it is drawn above the card');
+    }
+
+    testWidgets('cold start: a repeater shown before the Maps screen exists is slid above its card once the map is ready', (tester) async {
+      final m = _Maps();
+      await m.pump(tester, beforeMount: () async => m.userLayers.showRepeater(coldRepeater));
+      await m.settle(tester);
+      expect(m.userLayers.selectedRepeater.value?.name, 'K7ABC');
+      expectSlidAbove(m, 42.56);
+      await m.finish(tester);
+    });
+
+    testWidgets('cold start: a repeater shown while the map is still being made is slid once the map is ready', (tester) async {
+      final m = _Maps();
+      await m.pump(tester, beforeReady: () async => m.userLayers.showRepeater(coldRepeater));
+      await m.settle(tester);
+      expectSlidAbove(m, 42.56);
+      await m.finish(tester);
+    });
+
+    testWidgets('cold start: a coordinate search result chosen while the map is still being made is slid once the map is ready', (tester) async {
+      final m = _Maps();
+      const coords = MapPlace(id: 'coords:42.5,-113.5', type: 'coordinates', name: '42.5, -113.5', kind: 'Coordinates', address: '', lat: 42.5, lon: -113.5, matched: 'name');
+      await m.pump(tester, beforeReady: () async => tester.runAsync(() async => m.nav.select(coords)));
+      await m.settle(tester);
+      await m.settle(tester); // the pin's picture is drawn before the style's last step
+      await m.settle(tester);
+      expectSlidAbove(m, 42.5);
+      await m.finish(tester);
+    });
+
+    testWidgets('warm path: a repeater shown with the map ready moves the map once', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.cameras.clear();
+      m.userLayers.showRepeater(coldRepeater);
+      await m.settle(tester);
+      expect(m.camera.cameras.where((c) => (c as List).first == 'newCameraPosition'), hasLength(1), reason: 'one move, no doubling');
       await m.finish(tester);
     });
 
