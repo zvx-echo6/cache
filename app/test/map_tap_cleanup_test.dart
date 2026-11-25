@@ -70,19 +70,28 @@ class _Areas implements AreaSource, AreaFetcher {
   Future<Map<String, dynamic>?> Function(RegionRecord r)? fetch;
   int fetches = 0;
 
+  /// The outlines a fetch kept, by region id (read back by [storedGeometry] like the real files).
+  final Map<String, Map<String, dynamic>> kept = {};
+
+  /// The records the real lookup searches.
+  List<RegionRecord> records = [_town, _county, _state];
+
   @override
   Future<Map<String, dynamic>?> fetchGeometry(RegionRecord r) async {
     fetches++;
     final g = await fetch?.call(r);
-    if (g != null) stored = true;
+    if (g != null) kept[r.id] = g;
     return g;
   }
 
-  @override
-  Future<AreaHit?> areaAtPoint(double lat, double lon) async => hit;
+  /// The catalogue's own lookup of the point from the outlines that are stored (areaAt), not the fixed [hit].
+  bool realLookup = false;
 
   @override
-  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => !stored ? null : _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+  Future<AreaHit?> areaAtPoint(double lat, double lon) async => realLookup ? areaAt(lat, lon, records, storedGeometry) : hit;
+
+  @override
+  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => kept[r.id] ?? (!stored ? null : _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]));
 
   @override
   List<RegionRecord> townsIn(RegionRecord county, {int limit = 3}) => [_town];
@@ -92,13 +101,17 @@ class _Areas implements AreaSource, AreaFetcher {
 class _Cam extends CameraController {
   final Map<String, List<Map<String, dynamic>>> hits = {};
 
+  /// What a query at the tapped POINT itself finds in the town-label layer (the label text under the finger), as against the box
+  /// around it. Null: the same as [hits].
+  List<Map<String, dynamic>>? labelsAtPoint;
+
   @override
   dynamic noSuchMethod(Invocation i) {
     if (i.memberName == #queryRenderedFeaturesInRect || i.memberName == #queryRenderedFeatures) {
       final layers = (i.positionalArguments[1] as List).cast<String>();
       final out = <Map<String, dynamic>>[];
       for (final l in layers) {
-        final h = hits[l] ?? (l.startsWith('places_locality') ? hits['places_locality'] : null);
+        final h = l.startsWith('places_locality') && i.memberName == #queryRenderedFeatures && labelsAtPoint != null ? labelsAtPoint : (hits[l] ?? (l.startsWith('places_locality') ? hits['places_locality'] : null));
         if (h != null && !out.any((o) => h.contains(o))) out.addAll(h);
       }
       return Future<List<dynamic>>.value(List<dynamic>.of(out));
@@ -264,6 +277,23 @@ void main() {
       await m.finish(tester);
     });
 
+    testWidgets('a road-event icon near a town label but not on its text opens the road card, not the town', (tester) async {
+      final m = _Maps();
+      const closure = RoadEvent(id: 'e1', source: RoadEventSource.event511, sourceId: 'idaho511-events', kind: RoadEventKind.work, road: 'US-20', line: [], point: LL(42.5, -113.5));
+      final roads = RoadEventsState(changes: ChangeNotifier(), debounce: Duration.zero, read: () async => [closure]);
+      await m.pump(tester, roads: roads);
+      await tester.runAsync(() async => roads.refresh());
+      await m.settle(tester);
+      // The label is only in the box around the tap (its text is not under the finger); the icon is.
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      m.camera.labelsAtPoint = [];
+      m.camera.hits[kRoadEventChips] = [_raw('Point', [-113.5, 42.5], {'id': 'e1'})];
+      await m.tap(tester, 42.5, -113.5);
+      expect(roads.selectedId, 'e1', reason: 'the road card opened');
+      expect(m.nav.selected, isNull, reason: 'not the town');
+      await m.finish(tester);
+    });
+
     testWidgets('a town\'s label wins over a road-event icon on it: a tap where both are hit opens the town', (tester) async {
       final m = _Maps();
       const closure = RoadEvent(
@@ -313,7 +343,7 @@ void main() {
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(m.areas.fetches, 1);
       expect(_outlineFeatures(m), 1, reason: 'the fetched outline is drawn');
-      expect(m.areas.stored, isTrue, reason: 'and kept for next time');
+      expect(m.areas.kept, isNotEmpty, reason: 'and kept for next time');
       expect(log.where((l) => l.contains('map area us-id-quillmoor') && l.contains('source=fetched')), hasLength(1));
       restoreLog();
       await m.finish(tester);
@@ -385,6 +415,85 @@ void main() {
       expect(find.text('County in Idaho'), findsOneWidget);
       expect(find.byKey(const ValueKey('place-directions')), findsNothing, reason: 'a county has no Directions');
       expect(_outlineFeatures(m), 1, reason: 'the county outline');
+      await m.finish(tester);
+    });
+
+    testWidgets('a pin in a county whose outline file is missing still has its county line, and a tap on it fetches and draws the outline', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(find.byKey(const ValueKey('place-county')), findsOneWidget, reason: 'the county line is there without the outline file');
+      expect(find.text('Quill County, ID'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('place-county')));
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(m.nav.selected?.id, 'area:us-id-quill-county');
+      expect(m.areas.fetches, 1, reason: 'the outline was fetched');
+      expect(_outlineFeatures(m), 1, reason: 'and drawn');
+      await m.finish(tester);
+    });
+
+    // The county from the boxes alone is a guess: it is checked against the real outline, and never shown when it could be wrong.
+    final countyB = _region('us-id-mill-county', 'Mill County', 'county', pop: 51000, area: 6000, bbox: [-113.9, 42.1, -113.1, 42.9]);
+    final northOnly = _square(-113.9, 42.6, -113.1, 42.9); // Quill County's real outline: the point is not in it
+    final aroundPoint = _square(-113.8, 42.2, -113.2, 42.8); // Mill County's: it is
+
+    testWidgets('two counties whose boxes hold the point: the line shows the one whose real outline holds it, after the fetch', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.records = [_town, _county, countyB, _state];
+      m.areas.fetch = (r) async => r.id == _county.id ? northOnly : aroundPoint;
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(m.areas.fetches, 2, reason: 'the smaller county was tried first, then the next');
+      expect(find.text('Mill County, ID'), findsOneWidget, reason: 'the second county\'s line');
+      expect(find.text('Quill County, ID'), findsNothing);
+      await m.finish(tester);
+    });
+
+    testWidgets('offline, two counties\' boxes hold the point: no county line rather than a guess', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.records = [_town, _county, countyB, _state];
+      m.areas.fetch = (r) async => throw Exception('offline');
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('place-county')), findsNothing);
+      await m.finish(tester);
+    });
+
+    testWidgets('offline, only one county\'s box holds the point: its line shows', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => throw Exception('offline');
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(find.text('Quill County, ID'), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('a lone box county whose real outline does not hold the point: the line goes', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => northOnly;
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(find.byKey(const ValueKey('place-county')), findsNothing, reason: 'the guess was wrong, so no line');
       await m.finish(tester);
     });
 

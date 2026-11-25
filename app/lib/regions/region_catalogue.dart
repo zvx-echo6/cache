@@ -539,7 +539,11 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
 
     await Future.wait([for (var i = 0; i < parallel; i++) worker()]);
     // Every outline of the region is on the phone: the back-fill need not look at this region again.
-    if (failed == 0 && want.isNotEmpty) await _markOutlinesDone(r.id);
+    if (failed == 0 && want.isNotEmpty) {
+      await _markOutlinesDone(r.id);
+    } else {
+      await _unmarkOutlines(r.id); // a marker is only true while every file is there
+    }
     return AreaStoreResult(wanted: want.length, stored: stored, failed: failed, present: present);
   }
 
@@ -563,6 +567,27 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     if (plat.isWeb) return false;
     try {
       return await _doneMarker(await dir(), regionId).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _unmarkOutlines(String regionId) async {
+    if (plat.isWeb) return;
+    try {
+      final f = _doneMarker(await dir(), regionId);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  /// Whether every outline of [r] is on the phone: its marker is there and each expected file is (a stat of each, no reads). The marker
+  /// alone is not trusted: files that were lost since make this false, so the back-fill fetches them again.
+  Future<bool> outlinesComplete(RegionRecord r) async {
+    if (!await outlinesDone(r.id)) return false;
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return want.isNotEmpty && await _presentOutlines(want) == want.length;
     } catch (_) {
       return false;
     }
