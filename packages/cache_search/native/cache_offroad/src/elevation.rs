@@ -17,6 +17,10 @@ pub const ZOOM: u8 = 12;
 pub enum ElevError {
     #[error("elevation: {0}")]
     Msg(String),
+    /// A tile the route needs could not be had (not on the phone and not fetchable now). Not "no elevation here": the
+    /// route is not worked out from a grid with holes in it, the caller reports the off-road data as not downloaded.
+    #[error("elevation: a tile is not available")]
+    Unavailable,
 }
 
 /// Terrarium decode, same f32 operations as the reference server's `terrarium_decode`: (R*256 + G + B/256) - 32768.
@@ -31,6 +35,14 @@ pub fn terrarium_f32(q: u32) -> f32 {
 pub trait ElevationSource: Send + Sync {
     /// Elevation (m) window in global z12 pixel coordinates; NaN where there is no tile.
     fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Result<Vec<f32>, ElevError>;
+
+    /// The tiles overlapping this window whose elevation is NaN because the data could not be had (not stored, and not
+    /// streamed: offline or a failed fetch), as global z12 pixel rectangles `(row0, col0, row1, col1)`, ends excluded. Not
+    /// the tiles the source says have no ground (sea), which are NaN for real. As of the last `read_elevation` of those
+    /// tiles. A source that has no such state says none.
+    fn unavailable_rects(&self, _row0: i64, _col0: i64, _rows: usize, _cols: usize) -> Vec<(i64, i64, i64, i64)> {
+        Vec::new()
+    }
 }
 
 /// Decode one Terrarium WebP tile (lossless required) to 24-bit packed values (R<<16|G<<8|B).
@@ -51,14 +63,14 @@ pub fn decode_terrarium_webp(bytes: &[u8]) -> Result<Vec<u32>, ElevError> {
 }
 
 /// Where z12 elevation tiles come from: the Mapterhorn tile at (x, y) as its bytes (lossless Terrarium WebP, uncompressed),
-/// `None` where there is none.
+/// `None` where there is none (the source says so), `Err(ElevError::Unavailable)` where it could not be had.
 pub trait ElevationTiles: Send + Sync {
-    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String>;
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, ElevError>;
 }
 
 impl ElevationTiles for PmTiles {
-    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String> {
-        self.get_decompressed(ZOOM, x, y)
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, ElevError> {
+        self.get_decompressed(ZOOM, x, y).map_err(ElevError::Msg)
     }
 }
 
@@ -70,11 +82,30 @@ type TileKey = (i64, i64);
 pub struct TileElevation<T> {
     tiles: T,
     cache: Mutex<VecDeque<(TileKey, Arc<Vec<f32>>)>>,
+    /// Tiles whose last read found the data unavailable.
+    gaps: Mutex<std::collections::HashSet<TileKey>>,
 }
 
 impl<T: ElevationTiles> TileElevation<T> {
     pub fn new(tiles: T) -> TileElevation<T> {
-        TileElevation { tiles, cache: Mutex::new(VecDeque::new()) }
+        TileElevation { tiles, cache: Mutex::new(VecDeque::new()), gaps: Mutex::new(Default::default()) }
+    }
+
+    /// The tile's bytes. A tile that cannot be had reads as no tile (NaN cells) and is remembered as a gap, so the route can say
+    /// the data was missing; the source's own "no tile here" is not a gap.
+    fn bytes(&self, tx: i64, ty: i64) -> Result<Option<Vec<u8>>, ElevError> {
+        let r = self.tiles.z12(tx as u64, ty as u64);
+        let mut g = self.gaps.lock().unwrap_or_else(|e| e.into_inner());
+        match r {
+            Err(ElevError::Unavailable) => {
+                g.insert((tx, ty));
+                Ok(None)
+            }
+            r => {
+                g.remove(&(tx, ty));
+                r
+            }
+        }
     }
 
     fn tile(&self, tx: i64, ty: i64) -> Result<Option<Arc<Vec<f32>>>, ElevError> {
@@ -84,7 +115,7 @@ impl<T: ElevationTiles> TileElevation<T> {
         if let Some((_, t)) = self.cache.lock().unwrap().iter().find(|(k, _)| *k == (tx, ty)) {
             return Ok(Some(t.clone()));
         }
-        let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else { return Ok(None) };
+        let Some(bytes) = self.bytes(tx, ty)? else { return Ok(None) };
         let q = decode_terrarium_webp(&bytes)?;
         let t = Arc::new(q.iter().map(|&v| terrarium_f32(v)).collect::<Vec<f32>>());
         let mut c = self.cache.lock().unwrap();
@@ -120,6 +151,15 @@ impl ElevationSource for PmtilesElevation {
 }
 
 impl<T: ElevationTiles> ElevationSource for TileElevation<T> {
+    fn unavailable_rects(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Vec<(i64, i64, i64, i64)> {
+        let (r1, c1) = (row0 + rows as i64, col0 + cols as i64);
+        let g = self.gaps.lock().unwrap_or_else(|e| e.into_inner());
+        g.iter()
+            .map(|&(tx, ty)| (ty * TILE, tx * TILE, (ty + 1) * TILE, (tx + 1) * TILE))
+            .filter(|&(a, b, c, d)| a < r1 && c > row0 && b < c1 && d > col0)
+            .collect()
+    }
+
     fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Result<Vec<f32>, ElevError> {
         let mut out = vec![f32::NAN; rows * cols];
         if rows == 0 || cols == 0 {
@@ -144,7 +184,7 @@ impl<T: ElevationTiles> ElevationSource for TileElevation<T> {
         let tiles: Vec<(i64, i64, Option<Vec<f32>>)> = keys
             .into_par_iter()
             .map(|(tx, ty)| -> Result<_, ElevError> {
-                let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else {
+                let Some(bytes) = self.bytes(tx, ty)? else {
                     return Ok((tx, ty, None));
                 };
                 let q = decode_terrarium_webp(&bytes)?;

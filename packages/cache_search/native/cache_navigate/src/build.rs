@@ -284,6 +284,13 @@ impl OffroadGap {
     }
 }
 
+/// The warning for a route that had to go around ground whose elevation data was missing (not on the phone and not streamed).
+/// Wording pending the owner's OK.
+pub fn offroad_data_gap() -> Value {
+    json!({"code": "offroad_data_gap", "reason": "missing_data",
+           "detail": "Off-road data is missing for part of this area, so the route goes around it. A shorter way through may exist there."})
+}
+
 /// One `offroad_unavailable` warning: code, end, road_point, gap_m, reason, detail.
 pub fn offroad_unavailable(end: &str, road_point: (f64, f64), gap_m: i64, gap: OffroadGap) -> Value {
     json!({"code": "offroad_unavailable", "end": end, "road_point": {"lat": round_py(road_point.0, 6), "lon": round_py(road_point.1, 6)},
@@ -309,6 +316,9 @@ pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
             let gap = if w.covered { OffroadGap::NoWayFound } else { OffroadGap::NotDownloaded };
             warnings.push(offroad_unavailable(&w.end, w.road_point, w.gap_m, gap));
         }
+    }
+    if d.data_gap {
+        warnings.push(offroad_data_gap());
     }
     warnings
 }
@@ -488,7 +498,21 @@ mod direction_tests {
             warnings: vec![],
             errors: vec![],
             notes: vec![],
+            data_gap: false,
         }
+    }
+
+    #[test]
+    fn missing_elevation_data_is_one_more_warning_and_only_then() {
+        let mut d = directions(1.0, 0.62, vec![], vec![]);
+        assert!(warnings(&d, true, 0.0).is_empty());
+        d.data_gap = true;
+        let w = warnings(&d, true, 0.0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(
+            w[0].to_string(),
+            r#"{"code":"offroad_data_gap","reason":"missing_data","detail":"Off-road data is missing for part of this area, so the route goes around it. A shorter way through may exist there."}"#
+        );
     }
 
     #[test]
@@ -562,6 +586,7 @@ mod direction_tests {
             warnings: vec![],
             errors: vec![],
             notes: vec![],
+            data_gap: false,
         };
         let w = warnings(&d, false, 150.0);
         assert_eq!(w.len(), 1, "{w:?}");
@@ -589,6 +614,7 @@ mod direction_tests {
             warnings: vec![],
             errors: vec![],
             notes: vec![],
+            data_gap: false,
         };
         let from = Resolved::point("Boise".into(), 43.6150, -116.2023);
         let to = Resolved::point("Nampa".into(), 43.5407, -116.5635);
