@@ -389,6 +389,20 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     return list;
   }
 
+  /// Every region the search looks through: the global list (countries, states, the larger places) and the full list of each country
+  /// whose shard is loaded and of each of [countries] (country ids, "us"): the towns and counties are only in those. A list that
+  /// cannot be read is left out.
+  Future<List<RegionHit>> searchRows({Iterable<String> countries = const []}) async {
+    final rows = <RegionHit>[...await globalSearch()];
+    final ids = <String>{for (final s in loadedShards) s.id, ...countries};
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
   /// One country's full search list (every region it holds).
   Future<List<RegionHit>> shardSearch(String id) async {
     final known = _search[id];

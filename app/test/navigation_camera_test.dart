@@ -75,6 +75,16 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
     return true;
   }
 
+  /// Where the map shows a position, in the map's own pixels (a test sets it); null: the middle of a 100 x 100 map. [screenAsked] counts the asks.
+  math.Point<num> Function(LatLng at)? screenOf;
+  int screenAsked = 0;
+
+  @override
+  Future<math.Point<num>> toScreenLocation(LatLng latLng) async {
+    screenAsked++;
+    return screenOf?.call(latLng) ?? const math.Point<num>(50, 50);
+  }
+
   /// The camera moves made at once (no animation), as [cameras] records them; they are in [cameras] too, in order.
   final List<dynamic> moves = [];
 

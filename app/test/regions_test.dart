@@ -292,6 +292,21 @@ void main() {
           clock: clock,
         );
 
+    testWidgets('the region search offers towns of the country the person has regions in, with no shard opened and no position (a browser)', (tester) async {
+      final r = await _Rig.boot(tester);
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      // A new session: the catalogue has read nothing but the global list, and there is no position.
+      final fresh = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+      final state = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: fresh, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() => state.init());
+      expect(fresh.loadedShards, isEmpty);
+      final rows = await tester.runAsync(() => state.searchRows());
+      final names = {for (final h in rows!) if (h.kind == 'locality') h.name};
+      expect(names, contains('Twin Falls'), reason: 'a town the global list does not hold, found from the country list of a kept region');
+      state.dispose();
+      await r.dispose(tester);
+    });
+
     testWidgets('outline back-fill: a region that has its tiles and no outlines gets them all and a marker; a second run fetches nothing', (tester) async {
       final asked = <String>[];
       final r = await keptWithOutlines(tester, asked);

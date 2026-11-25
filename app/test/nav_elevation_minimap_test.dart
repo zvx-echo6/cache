@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/maps/style/style_generator.dart' show kPositionSource, kRouteSource;
 import 'package:cache/nav/elevation/elevation_profile.dart';
 import 'package:cache/nav/elevation/route_elevation.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -44,7 +46,8 @@ class FakeSnapshotter implements RouteSnapshotter {
 }
 
 class _Rig {
-  _Rig(this.nav, this.maps, this.location, this.elevation, this.snapshots);
+  _Rig(this.nav, this.maps, this.location, this.elevation, this.snapshots, this.camera);
+  final CameraController camera;
   final NavState nav;
   final MapsState maps;
   final LocationService location;
@@ -109,7 +112,7 @@ Future<void> _withGuidance(WidgetTester tester, {required Size size, required Fu
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 50));
     }
-    await body(_Rig(nav, maps, location, elevation, snapshots));
+    await body(_Rig(nav, maps, location, elevation, snapshots, camera));
   } finally {
     await tester.pumpWidget(const SizedBox.shrink());
     MapLibrePlatform.createInstance = originalPlatform;
@@ -161,6 +164,37 @@ void main() {
       expect(find.byKey(const ValueKey('route-overview-full')), findsNothing);
       expect(identical(tester.state(find.byType(MapLibreMap)), live), isTrue);
       expect(tester.getSize(find.byType(MapLibreMap)), const Size(390, 844));
+    });
+  });
+
+  testWidgets('after a swap the live map in the corner carries the position and the route: both are pushed again, and a position that is outside the small map is brought into it (a browser)', (tester) async {
+    await _withGuidance(tester, size: const Size(1280, 800), body: (rig) async {
+      final cam = rig.camera;
+      // The position shows well outside the small map (the big map's camera was left where it was when the map shrank).
+      cam.screenOf = (_) => const math.Point<num>(-400, 900);
+      final positionBefore = cam.sources[kPositionSource];
+      final routeBefore = cam.sources[kRouteSource];
+      expect(positionBefore, isNotNull);
+      cam.cameras.clear();
+      await tester.tap(find.byKey(const ValueKey('route-inset')));
+      await _settle(tester);
+      await tester.pump(const Duration(milliseconds: 800));
+      await _settle(tester);
+      expect(cam.screenAsked, greaterThan(0), reason: 'where the position shows on the small map was asked');
+      expect(identical(cam.sources[kPositionSource], positionBefore), isFalse, reason: 'the position was pushed to the live map again');
+      expect(identical(cam.sources[kRouteSource], routeBefore), isFalse, reason: 'and the route');
+      final last = cam.cameras.last as List;
+      expect(last.first, 'newCameraPosition');
+      final target = (last[1] as Map)['target'] as List;
+      expect((target[0] as num).toDouble(), closeTo(42.5, 0.01), reason: 'the camera is on the position again');
+      // Swapped back: the big map carries them again too.
+      final p2 = cam.sources[kPositionSource];
+      cam.screenOf = (_) => const math.Point<num>(640, 400);
+      await tester.tap(find.byKey(const ValueKey('route-inset')));
+      await _settle(tester);
+      await tester.pump(const Duration(milliseconds: 800));
+      await _settle(tester);
+      expect(identical(cam.sources[kPositionSource], p2), isFalse, reason: 'pushed again after swapping back');
     });
   });
 
