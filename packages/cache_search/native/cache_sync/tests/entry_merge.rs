@@ -123,7 +123,7 @@ fn a_removal_is_remembered_for_60_days_and_at_most_500() {
     let old = Record::tombstone("aa", NOW - 61 * DAY, "d");
     let fresh = Record::tombstone("bb", NOW - 59 * DAY, "d");
     let live = e("cc", "kept.example", NOW - 200 * DAY, "d");
-    let m = merge(&[old.clone(), fresh.clone()], &[live.clone()], NOW);
+    let m = merge(&[old.clone(), fresh.clone()], std::slice::from_ref(&live), NOW);
     assert!(m.iter().all(|r| r.id != "aa"), "past 60 days it is forgotten");
     assert!(m.iter().any(|r| r.id == "bb"));
     assert!(m.iter().any(|r| r.id == "cc"), "an entry is never forgotten for being old");
