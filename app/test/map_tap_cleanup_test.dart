@@ -78,8 +78,11 @@ class _Areas implements AreaSource, AreaFetcher {
     return g;
   }
 
+  /// The catalogue's own lookup of the point from the outlines that are stored (areaAt), not the fixed [hit].
+  bool realLookup = false;
+
   @override
-  Future<AreaHit?> areaAtPoint(double lat, double lon) async => hit;
+  Future<AreaHit?> areaAtPoint(double lat, double lon) async => realLookup ? areaAt(lat, lon, [_town, _county, _state], storedGeometry) : hit;
 
   @override
   Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => !stored ? null : _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
@@ -385,6 +388,24 @@ void main() {
       expect(find.text('County in Idaho'), findsOneWidget);
       expect(find.byKey(const ValueKey('place-directions')), findsNothing, reason: 'a county has no Directions');
       expect(_outlineFeatures(m), 1, reason: 'the county outline');
+      await m.finish(tester);
+    });
+
+    testWidgets('a pin in a county whose outline file is missing still has its county line, and a tap on it fetches and draws the outline', (tester) async {
+      final m = _Maps();
+      m.areas.realLookup = true;
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+      await m.pump(tester);
+      await m.tap(tester, 42.5, -113.5);
+      expect(find.byKey(const ValueKey('place-county')), findsOneWidget, reason: 'the county line is there without the outline file');
+      expect(find.text('Quill County, ID'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('place-county')));
+      await m.settle(tester);
+      await m.settle(tester);
+      expect(m.nav.selected?.id, 'area:us-id-quill-county');
+      expect(m.areas.fetches, 1, reason: 'the outline was fetched');
+      expect(_outlineFeatures(m), 1, reason: 'and drawn');
       await m.finish(tester);
     });
 
