@@ -101,13 +101,17 @@ class _Areas implements AreaSource, AreaFetcher {
 class _Cam extends CameraController {
   final Map<String, List<Map<String, dynamic>>> hits = {};
 
+  /// What a query at the tapped POINT itself finds in the town-label layer (the label text under the finger), as against the box
+  /// around it. Null: the same as [hits].
+  List<Map<String, dynamic>>? labelsAtPoint;
+
   @override
   dynamic noSuchMethod(Invocation i) {
     if (i.memberName == #queryRenderedFeaturesInRect || i.memberName == #queryRenderedFeatures) {
       final layers = (i.positionalArguments[1] as List).cast<String>();
       final out = <Map<String, dynamic>>[];
       for (final l in layers) {
-        final h = hits[l] ?? (l.startsWith('places_locality') ? hits['places_locality'] : null);
+        final h = l.startsWith('places_locality') && i.memberName == #queryRenderedFeatures && labelsAtPoint != null ? labelsAtPoint : (hits[l] ?? (l.startsWith('places_locality') ? hits['places_locality'] : null));
         if (h != null && !out.any((o) => h.contains(o))) out.addAll(h);
       }
       return Future<List<dynamic>>.value(List<dynamic>.of(out));
@@ -270,6 +274,23 @@ void main() {
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(_outlineFeatures(m), 1);
       expect(find.text('About 49,800 people'), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('a road-event icon near a town label but not on its text opens the road card, not the town', (tester) async {
+      final m = _Maps();
+      const closure = RoadEvent(id: 'e1', source: RoadEventSource.event511, sourceId: 'idaho511-events', kind: RoadEventKind.work, road: 'US-20', line: [], point: LL(42.5, -113.5));
+      final roads = RoadEventsState(changes: ChangeNotifier(), debounce: Duration.zero, read: () async => [closure]);
+      await m.pump(tester, roads: roads);
+      await tester.runAsync(() async => roads.refresh());
+      await m.settle(tester);
+      // The label is only in the box around the tap (its text is not under the finger); the icon is.
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      m.camera.labelsAtPoint = [];
+      m.camera.hits[kRoadEventChips] = [_raw('Point', [-113.5, 42.5], {'id': 'e1'})];
+      await m.tap(tester, 42.5, -113.5);
+      expect(roads.selectedId, 'e1', reason: 'the road card opened');
+      expect(m.nav.selected, isNull, reason: 'not the town');
       await m.finish(tester);
     });
 

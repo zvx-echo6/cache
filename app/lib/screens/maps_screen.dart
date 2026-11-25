@@ -942,7 +942,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final id = pickEvent(ids, r.events);
       if (id != null) {
         // A town's name label under the icon is what was meant: the town opens. Own pins, repeaters and the route lines were asked before.
-        if (await _tapTownLabel(point, at)) return true;
+        // Only a name whose TEXT is under the finger (a query at the point itself): the label layer is text only, so its hit is the text.
+        if (await _tapTownLabel(point, at, exact: true)) return true;
         HapticFeedback.selectionClick();
         if (nav.selected != null) nav.clearSelection();
         widget.userLayers?.clearRepeater();
