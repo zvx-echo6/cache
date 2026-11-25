@@ -29,6 +29,11 @@ impl Handler for Small {
     }
 }
 
+/// The tests that move a file in 16 MiB windows take this one at a time. The class of a link follows the rate its windows were
+/// measured at (Fast needs over 1 MB/s), so a test run beside another that is hashing 16 MiB on a busy machine saw a link it
+/// had made fast come out Medium and its own file "too big for the connection". The other tests only send small things.
+static BIG_FILES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn random(n: usize, seed: u64) -> Vec<u8> {
     let mut x = seed | 1;
     let mut v = Vec::with_capacity(n);
@@ -201,6 +206,7 @@ async fn a_medium_link_carries_small_files_in_one_mib_windows_and_nothing_big() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fast_link_is_as_it_was() {
+    let _one_at_a_time = BIG_FILES.lock().await;
     let l = link(1).await;
     touch(&l).await;
     assert_eq!(l.b.speeds().ask_speed(&l.ka), Speed::Fast);
@@ -265,22 +271,34 @@ async fn the_answering_end_follows_through_its_own_probes_when_it_asks_too() {
 /// window would take over the budget (a minute; ten seconds here), so it is given up.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_that_slows_mid_way_is_cancelled_to_waiting_and_resumes_from_its_verified_windows() {
+    let _one_at_a_time = BIG_FILES.lock().await;
     let l = link(1).await;
     touch(&l).await;
-    l.b.speeds().set_window_budget(Duration::from_secs(10));
+    // The budget is generous while the first window comes (a busy machine can take longer than ten seconds for 16 MiB) and is cut to
+    // ten seconds only once that window is verified, by the progress callback: an event, not a wait.
+    let speeds = l.b.speeds();
+    speeds.set_window_budget(Duration::from_secs(120));
     let data = random(40 * 1024 * 1024 + 5, 41);
     let hash = l.a_store.add_bytes(&data).unwrap().hash;
     let rate = l.rate.clone();
-    let started = Instant::now();
+    let cut = speeds.clone();
+    let slowed: Arc<std::sync::Mutex<Option<Instant>>> = Arc::default();
+    let at_slowed = slowed.clone();
     let r = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(120), move |f| {
         if f.have >= 16 * 1024 * 1024 {
-            rate.store(200_000, Ordering::Relaxed);
+            let mut t = at_slowed.lock().unwrap();
+            if t.is_none() {
+                *t = Some(Instant::now());
+                rate.store(200_000, Ordering::Relaxed);
+                cut.set_window_budget(Duration::from_secs(10));
+            }
         }
     })
     .await;
     let e = r.expect_err("the slowed transfer is cancelled");
     assert!(is_too_slow(&e), "waiting, not failed: {e:#}");
-    assert!(started.elapsed() < Duration::from_secs(60), "given up at the budget, not left to run: {:?}", started.elapsed());
+    let after = slowed.lock().unwrap().expect("the first window was verified before the link slowed").elapsed();
+    assert!(after < Duration::from_secs(60), "given up at the budget, not left to run: {after:?}");
     // What was verified stays: one whole window, not the file.
     match l.b_store.status(&hash).unwrap() {
         cache_store::Status::Partial { have, .. } => assert!(have.is_superset(&cache_store::ChunkRanges::from(cache_store::ChunkNum(0)..cache_store::ChunkNum(16 * 1024)))),
@@ -288,6 +306,7 @@ async fn a_file_that_slows_mid_way_is_cancelled_to_waiting_and_resumes_from_its_
     }
     // The link is as fast as before: the same file comes on from where it stopped, the first window not asked for again.
     l.rate.store(0, Ordering::Relaxed);
+    speeds.set_window_budget(Duration::from_secs(120));
     let f = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(120), |_| {}).await.unwrap();
     assert_eq!((f.skipped, f.windows), (1, 2), "the verified window was skipped, the other two fetched");
     assert!(l.b_store.get_bytes(&hash).unwrap() == data);
