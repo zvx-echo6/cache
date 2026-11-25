@@ -80,7 +80,17 @@ void main() {
       final dialog = find.byKey(const ValueKey('how-to-run-installer'));
       expect(dialog, findsOneWidget);
       expect(find.descendant(of: dialog, matching: find.text('Run the installer again')), findsOneWidget);
-      expect(find.descendant(of: dialog, matching: find.text('tar -xzf cache-*.tar.gz ./install.sh\nsudo sh install.sh cache-*.tar.gz')), findsOneWidget);
+      expect(find.descendant(of: dialog, matching: find.text('On this computer, open a terminal and run:')), findsOneWidget);
+      // the command: selectable, monospace
+      final command = find.descendant(of: dialog, matching: find.byType(SelectableText));
+      expect(command, findsOneWidget);
+      final sel = tester.widget<SelectableText>(command);
+      expect(sel.data, 'sudo sh /opt/cache-app/current/install.sh --repair');
+      expect(sel.style?.fontFamily, 'monospace');
+      expect(find.descendant(of: dialog, matching: find.text('When sudo asks for a password, type your own. Cache starts again by itself; reload this page.')), findsOneWidget);
+      // nothing else in it: the four parts and Close
+      expect(find.descendant(of: dialog, matching: find.byType(Text)).evaluate().length, 4, reason: 'title, the line before the command, the line after it, Close');
+      expect(find.descendant(of: dialog, matching: find.widgetWithText(TextButton, 'Close')), findsOneWidget);
       expect(find.descendant(of: dialog, matching: find.textContaining('server')), findsNothing, reason: "it's their computer");
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
