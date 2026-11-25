@@ -1,7 +1,9 @@
 #!/bin/sh
-# Install or update Cache from a release tarball, or go back to the previous release. Run as root:
-#   install.sh <path-to-release-tarball>
-#   install.sh --rollback
+# Install or update Cache from a release tarball, or go back to the previous release. Run as root, through sudo from your own
+# account:
+#   sudo sh install.sh <path-to-release-tarball>
+#   sudo sh install.sh --user <name> <path-to-release-tarball>    (Cache for another person, or to hand it over)
+#   sudo sh install.sh --rollback
 #
 # The tarball holds `cache` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
 # `lib/libcache_search.so` (the core library the helper loads), `lib/libzim.so.9` (libzim with Xapian and ICU, which
@@ -17,15 +19,29 @@
 # Where things are (the same names in the service file): the program and its releases in /opt/cache-app, your library and
 # settings in /var/lib/cache-app (the libraries you build in app/docs/libraries, ZIM files in app/docs/zims, the password in
 # auth.json). The folder names say cache-app on purpose, and nothing is kept in any system cache folder, so clearing caches never
-# touches your library. Nothing has been released yet, so there is no migration from older paths: a test machine gets a fresh install.
+# touches your library.
+#
+# Cache runs as the person who installed it (their own account, so it can open the folders they can open), as a system service
+# that starts at boot. The person is --user, else the account that ran sudo (SUDO_USER, DOAS_USER, PKEXEC_UID), else, on an
+# update, the one recorded in /etc/cache-app/person. It is named in the drop-in cache.service.d/person.conf; the release's own
+# cache.service keeps User=cache only as a fallback. An update from a release that ran as the cache user stops the service, hands
+# the data folder to the person (same place, only the owner changes) and starts it again. One Cache per computer: an update run
+# by another account is refused unless --user hands it over.
+#
+# The paths can be moved with CACHE_INSTALL_OPT, _DATA, _UNIT, _ETC and _LOGIN_DEFS, for the tests (server/packaging/test) only:
+# the service file names the real ones.
 #
 # TODO: downloading the tarball from GitHub Releases comes later; for now it is a local file.
 
 set -eu
 
-OPT=/opt/cache-app
-DATA=/var/lib/cache-app
-UNIT=/etc/systemd/system/cache.service
+OPT=${CACHE_INSTALL_OPT:-/opt/cache-app}
+DATA=${CACHE_INSTALL_DATA:-/var/lib/cache-app}
+UNIT=${CACHE_INSTALL_UNIT:-/etc/systemd/system/cache.service}
+ETC=${CACHE_INSTALL_ETC:-/etc/cache-app}
+LOGIN_DEFS=${CACHE_INSTALL_LOGIN_DEFS:-/etc/login.defs}
+DROPIN=$UNIT.d/person.conf
+RECORD=$ETC/person
 PORT=8443
 
 die() {
@@ -55,16 +71,100 @@ install_unit() {
     fi
 }
 
-USAGE="usage: install.sh <path-to-release-tarball> | install.sh --rollback"
-[ "$#" -eq 1 ] || die "$USAGE"
+# write file $1 with the text $2 so that it is either the old file or the new one, never half of it
+write_atomic() {
+    printf '%s\n' "$2" >"$1.new"
+    chmod 644 "$1.new"
+    mv -f "$1.new" "$1"
+}
+
+# the drop-in that makes the service run as $PERSON
+dropin_text() {
+    printf '%s\n%s\n%s\n%s' "# Written by install.sh: Cache runs as the person who installed it. install.sh writes this file again on every install." \
+        "[Service]" "User=$PERSON" "Group=$PGROUP"
+}
+
+# the person recorded by an earlier install (empty when there is none)
+recorded_person() {
+    [ -f "$RECORD" ] || return 0
+    r=$(head -n 1 "$RECORD" | tr -d ' \t\r\n')
+    case "$r" in
+        "" | *[!A-Za-z0-9._-]*) die "$RECORD does not hold an account name; pass --user <name>" ;;
+    esac
+    echo "$r"
+}
+
+# check that $PERSON is an account Cache may run as, and set PUID, PGROUP and PHOME
+check_person() {
+    ENT=$(getent passwd "$PERSON") || die "there is no account called $PERSON"
+    PERSON=$(echo "$ENT" | cut -d: -f1)
+    PUID=$(echo "$ENT" | cut -d: -f3)
+    PGID=$(echo "$ENT" | cut -d: -f4)
+    PHOME=$(echo "$ENT" | cut -d: -f6)
+    if [ "$PERSON" = root ] || [ "$PUID" -eq 0 ]; then
+        die "Cache does not run as root. Run this with sudo from your own account, or pass --user <name>."
+    fi
+    [ "$PERSON" != cache ] || die "Cache runs as a person's own account, not as the cache account. Pass --user <name>."
+    UID_MIN=$(awk '$1 == "UID_MIN" { print $2 }' "$LOGIN_DEFS" 2>/dev/null | tail -n 1)
+    case "$UID_MIN" in "" | *[!0-9]*) UID_MIN=1000 ;; esac
+    UID_MAX=$(awk '$1 == "UID_MAX" { print $2 }' "$LOGIN_DEFS" 2>/dev/null | tail -n 1)
+    case "$UID_MAX" in "" | *[!0-9]*) UID_MAX=60000 ;; esac
+    [ "$PUID" -ge "$UID_MIN" ] && [ "$PUID" -le "$UID_MAX" ] || die "$PERSON is a system account, not a person's. Pass --user <name> with your own account."
+    [ -n "$PHOME" ] && [ -d "$PHOME" ] || die "$PERSON has no home folder ($PHOME). Cache starts the folder picker there."
+    PGROUP=$(getent group "$PGID" | cut -d: -f1) || true
+    [ -n "$PGROUP" ] || PGROUP=$PGID
+}
+
+# whether the data folder holds anything not owned by uid $1
+data_not_owned_by() {
+    [ -d "$DATA" ] || return 1
+    [ -n "$(find "$DATA" ! -user "$1" -print 2>/dev/null | head -n 1)" ]
+}
+
+# wait up to 30 s for the service to be active
+wait_active() {
+    i=0
+    while ! systemctl is-active --quiet cache; do
+        i=$((i + 1))
+        [ "$i" -lt 30 ] || die "Cache did not start. See: journalctl -u cache"
+        sleep 1
+    done
+}
+
+# a check after the start failed: stop Cache and say which check
+check_failed() {
+    systemctl stop cache || true
+    die "check failed: $*. Cache is stopped. To go back to the previous release, run: install.sh --rollback"
+}
+
+USAGE="usage: install.sh [--user <name>] <path-to-release-tarball> | install.sh --rollback"
 ROLLBACK=0
-if [ "$1" = "--rollback" ]; then
-    ROLLBACK=1
+WANT_USER=
+TARBALL=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --rollback) ROLLBACK=1 ;;
+        --user)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || die "$USAGE"
+            WANT_USER=$2
+            shift
+            ;;
+        --user=*) WANT_USER=${1#--user=} ;;
+        -*) die "$USAGE" ;;
+        *)
+            [ -z "$TARBALL" ] || die "$USAGE"
+            TARBALL=$1
+            ;;
+    esac
+    shift
+done
+if [ "$ROLLBACK" -eq 1 ]; then
+    [ -z "$TARBALL" ] && [ -z "$WANT_USER" ] || die "$USAGE"
 else
-    TARBALL=$1
+    [ -n "$TARBALL" ] || die "$USAGE"
     [ -f "$TARBALL" ] || die "$TARBALL is not a file"
 fi
-[ "$(id -u)" -eq 0 ] || die "run this as root"
+[ "$(id -u)" -eq 0 ] || die "run this as root (with sudo from your own account)"
 
 case "$(uname -m)" in
     x86_64 | aarch64) ;;
@@ -92,13 +192,26 @@ fi
 # the unit file sits next to this script (or inside the tarball, see below)
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
-# the system user and group
-if ! getent group cache >/dev/null 2>&1; then
-    groupadd --system cache
+# who Cache runs as: --user, else the account that ran sudo (doas, pkexec), else the one an earlier install recorded
+RECORDED=$(recorded_person)
+if [ -n "$WANT_USER" ]; then
+    PERSON=$WANT_USER
+elif [ -n "${SUDO_USER:-}" ]; then
+    PERSON=$SUDO_USER
+elif [ -n "${DOAS_USER:-}" ]; then
+    PERSON=$DOAS_USER
+elif [ -n "${PKEXEC_UID:-}" ]; then
+    PERSON=$(getent passwd "$PKEXEC_UID" | cut -d: -f1) || true
+    [ -n "$PERSON" ] || die "there is no account with the id $PKEXEC_UID"
+elif [ -n "$RECORDED" ]; then
+    PERSON=$RECORDED
+else
+    die "Run this with sudo from your own account, or pass --user <name>."
 fi
-if ! getent passwd cache >/dev/null 2>&1; then
-    NOLOGIN=$(command -v nologin || echo /usr/sbin/nologin)
-    useradd --system --gid cache --no-create-home --home-dir /nonexistent --shell "$NOLOGIN" cache
+check_person
+# one Cache per computer: another account does not take it over without saying so
+if [ -n "$RECORDED" ] && [ "$RECORDED" != "$PERSON" ] && [ -z "$WANT_USER" ]; then
+    die "This Cache belongs to $RECORDED. To hand it over to $PERSON, run this again with --user $PERSON."
 fi
 
 # unpack beside the final place, read the version, then move it in
@@ -120,7 +233,8 @@ esac
 # the road router (Valhalla and its C shim); the server hands the core its full path
 [ -f "$STAGE/lib/libvalhalla_shim.so" ] || die "the tarball has no lib/libvalhalla_shim.so"
 chown -R root:root "$STAGE"
-# the service runs as the cache user: it must execute the program and the helper and read the library and the web files
+# the service runs as the person (or, for an older release, the cache user): it must execute the program and the helper and read
+# the library and the web files
 chmod 755 "$STAGE/cache" "$STAGE/helper/cache-core-helper"
 chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so" "$STAGE/lib/libzim.so.9" "$STAGE/lib/libvalhalla_shim.so"
 chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
@@ -164,11 +278,28 @@ for d in "$OPT"/releases/* "$OPT"/releases/.[!.]*; do
     rm -rf "$d"
 done
 
-# the unit
+# Run as the person. When the drop-in changes (an update from a release that ran as the cache user, a hand-over) or any file in
+# the data folder belongs to someone else (an interrupted run), the service is stopped first and started again after the whole
+# folder is the person's: started as the person on files the cache user still owns, Cache could not read its own device key.
+MIGRATE=0
+if [ "$(cat "$DROPIN" 2>/dev/null || true)" != "$(dropin_text)" ] || data_not_owned_by "$PUID"; then
+    MIGRATE=1
+fi
+if [ "$MIGRATE" -eq 1 ] && [ -f "$UNIT" ]; then
+    systemctl stop cache || true
+fi
+mkdir -p "$ETC" "$UNIT.d"
+write_atomic "$RECORD" "$PERSON"
+write_atomic "$DROPIN" "$(dropin_text)"
 install_unit
 
-# the data folder, and the password on a first install
-install -d -o cache -g cache -m 0750 "$DATA"
+# the data folder (the same place as before, now the person's), and the password on a first install
+if [ -d "$DATA" ]; then
+    # systemd re-owns it too, but only when the top folder's owner differs; this also covers a run cut short half way
+    [ "$MIGRATE" -eq 0 ] || chown -R "$PERSON:$PGROUP" "$DATA"
+else
+    install -d -o "$PERSON" -g "$PGROUP" -m 0750 "$DATA"
+fi
 if [ ! -f "$DATA/auth.json" ]; then
     [ -t 0 ] || die "no password is set yet and there is no terminal to ask on; run this from a terminal"
     restore() { stty echo 2>/dev/null || true; }
@@ -193,19 +324,28 @@ if [ ! -f "$DATA/auth.json" ]; then
         fi
     done
     if command -v runuser >/dev/null 2>&1; then
-        printf '%s\n' "$PW1" | runuser -u cache -- "$OPT/current/cache" set-password --data "$DATA"
+        printf '%s\n' "$PW1" | runuser -u "$PERSON" -- "$OPT/current/cache" set-password --data "$DATA"
     else
-        printf '%s\n' "$PW1" | su -s /bin/sh cache -c "$OPT/current/cache set-password --data $DATA"
+        printf '%s\n' "$PW1" | su -s /bin/sh "$PERSON" -c "$OPT/current/cache set-password --data $DATA"
     fi
     PW1= PW2=
 fi
 
 systemctl daemon-reload
 systemctl enable cache
-systemctl restart cache
+if [ "$MIGRATE" -eq 1 ]; then
+    systemctl start cache
+else
+    systemctl restart cache
+fi
+wait_active
+if data_not_owned_by "$PUID"; then
+    check_failed "some files in $DATA do not belong to $PERSON"
+fi
 
 HOST=$(hostname -f 2>/dev/null || hostname)
 echo "Cache $VERSION is running. Open https://$HOST:$PORT/"
+echo "Cache runs as $PERSON. It can open the folders you can open."
 if [ -L "$OPT/previous" ]; then
     echo "The previous release is $(basename "$(link_of "$OPT/previous")"); to go back, run: install.sh --rollback"
 fi
@@ -214,4 +354,4 @@ echo "The program is in $OPT. Clearing caches never touches your library."
 echo "(the certificate is self-signed, so the browser asks you to accept it once)"
 echo "Sign-in is the password you chose. Security keys and key files are set up after you sign in, at https://$HOST:$PORT/settings/keys"
 echo "(security keys also need a host name and a trusted certificate: see the README, --public-origin)"
-echo "If you ever lose a key, reset with: $OPT/current/cache set-password --data $DATA   (as the cache user)"
+echo "If you ever lose a key, reset the password by running this as yourself: $OPT/current/cache set-password --data $DATA"
