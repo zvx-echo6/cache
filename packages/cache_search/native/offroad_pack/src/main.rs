@@ -120,7 +120,14 @@ enum Friction {
 /// Result of processing one DEM tile: pack-tile blobs.
 struct TileOut {
     rows: Vec<(&'static str, i64, i64, Vec<u8>)>,
+    /// Every (layer, pack tile x, pack tile y) this DEM tile processed, including the all-zero tiles left out of `rows`.
+    covered: Vec<(&'static str, i64, i64)>,
 }
+
+/// The "present" marker: one row per pack tile the builder processed for each raster layer (z is the pack tile's web-mercator
+/// zoom, 13: 256-cell tiles over the z12 512 px grid). Old readers ignore the table.
+const COVERED_SCHEMA: &str = "CREATE TABLE covered(layer TEXT NOT NULL, z INTEGER NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, PRIMARY KEY(layer,z,x,y)) WITHOUT ROWID;";
+const COVERED_Z: i64 = 13;
 
 fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level: i32) -> Result<Option<TileOut>, String> {
     let Some(bytes) = pm.get(12, tx as u64, ty as u64) else { return Ok(None) };
@@ -187,7 +194,24 @@ fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level:
             emit("wilderness", &v);
         }
     }
-    Ok(Some(TileOut { rows }))
+    let mut names: Vec<&'static str> = vec!["friction"];
+    if layers.class.is_some() {
+        names.push("class");
+    }
+    names.push("trails");
+    names.push("barriers");
+    if layers.wilderness.is_some() {
+        names.push("wilderness");
+    }
+    let mut covered = Vec::new();
+    for n in names {
+        for sy in 0..2i64 {
+            for sx in 0..2i64 {
+                covered.push((n, tx * 2 + sx, ty * 2 + sy));
+            }
+        }
+    }
+    Ok(Some(TileOut { rows, covered }))
 }
 
 fn in_bbox(lat: f64, lon: f64, b: (f64, f64, f64, f64)) -> bool {
@@ -258,6 +282,7 @@ fn build(a: &Args) -> Result<(), String> {
         ("mode_profile_hash", cache_offroad::cost::mode_profile_hash()),
         ("build_unix_time", secs.to_string()),
         ("source_tiles", written.to_string()),
+        ("covered_v", "1".into()),
         ("src_coverage_pmtiles", file_version(&dem)),
         ("src_friction", dir_version(&fr_dir)),
         ("src_class", class_dir.as_ref().map_or("none".into(), |d| dir_version(d))),
@@ -338,6 +363,7 @@ fn build_sources(a: &Args) -> Result<(), String> {
         ("build_unix_time", secs.to_string()),
         ("built_from", "original sources (cache-packs recipe offroad-region)".into()),
         ("source_tiles", written.to_string()),
+        ("covered_v", "1".into()),
         ("friction_rule", "friction = class_friction[class]".into()),
         ("class_friction_sha256", table.sha256.clone()),
         ("src_coverage_pmtiles", file_version(&dem)),
@@ -452,6 +478,7 @@ fn write_tiles(pm: &pmtiles::PmTiles, layers: &Layers, bbox: (f64, f64, f64, f64
     let conn = Connection::open(&out).map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;").map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    conn.execute_batch(COVERED_SCHEMA).map_err(|e| e.to_string())?;
 
     // tiles: workers -> channel -> this thread
     let (tx_ch, rx_ch) = mpsc::sync_channel::<Result<TileOut, String>>(64);
@@ -475,12 +502,16 @@ fn write_tiles(pm: &pmtiles::PmTiles, layers: &Layers, bbox: (f64, f64, f64, f64
         });
         conn.execute_batch("BEGIN").unwrap();
         let mut st = conn.prepare("INSERT OR REPLACE INTO tiles(layer, tx, ty, data) VALUES (?1,?2,?3,?4)").unwrap();
+        let mut st_cov = conn.prepare("INSERT OR REPLACE INTO covered(layer, z, x, y) VALUES (?1,?2,?3,?4)").unwrap();
         let mut last = Instant::now();
         for r in rx_ch {
             match r {
                 Ok(o) => {
                     for (layer, tx, ty, blob) in o.rows {
                         st.execute(params![layer, tx, ty, blob]).unwrap();
+                    }
+                    for (layer, x, y) in o.covered {
+                        st_cov.execute(params![layer, COVERED_Z, x, y]).unwrap();
                     }
                     written += 1;
                     if last.elapsed().as_secs() >= 20 {
@@ -495,6 +526,7 @@ fn write_tiles(pm: &pmtiles::PmTiles, layers: &Layers, bbox: (f64, f64, f64, f64
             }
         }
         drop(st);
+        drop(st_cov);
         conn.execute_batch("COMMIT").unwrap();
     });
     if let Some(e) = err {
