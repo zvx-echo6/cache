@@ -187,6 +187,33 @@ fn many_writes_in_a_burst_make_few_notices_per_peer_and_folder() {
     close(t);
 }
 
+// --- An entry-point change is a notice too (step 4) ---
+
+fn entry_ids(e: &SyncEngine) -> Vec<String> {
+    call(e, "entry_points", json!({}))["entries"].as_array().unwrap().iter().map(|v| v["id"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn an_entry_added_on_a_reaches_a_quiet_b_within_seconds() {
+    // Timer and safety rounds are 600 s on both and both hold the other as quiet: only a notice that carries the new `entries_v`
+    // can make B ask `cache.entries`.
+    let t = pair(&[("first.txt", "one")], &[], &[], (600, 600), (600, 600));
+    let fb = t.fb.clone();
+    t.until("the first file on B", || fb.join("first.txt").exists());
+    t.settle();
+    let before = notices(t.b());
+    let started = Instant::now();
+    // Nothing listens on this port: the entry only has to be in the list.
+    let id = call(t.a(), "entry_point_set", json!({"host": "127.0.0.1", "port": free_port()}))["id"].as_str().unwrap().to_string();
+    wait("the entry on B", 12, || entry_ids(t.b()).contains(&id));
+    eprintln!("the entry reached B after {:?}", started.elapsed());
+    assert!(notices(t.b()).1 > before.1, "B took a notice: {before:?} {:?}", notices(t.b()));
+    // And a removal travels the same way.
+    call(t.a(), "entry_point_remove", json!({"id": id}));
+    wait("the removal on B", 12, || !entry_ids(t.b()).contains(&id));
+    close(t);
+}
+
 // --- Nothing runs on a timer between two devices that answer summaries ---
 
 #[test]
