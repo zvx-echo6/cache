@@ -169,6 +169,9 @@ class UserLayersState extends ChangeNotifier {
   /// The repeater [listId]/[item] the map drew, or null.
   Repeater? repeaterAt(String listId, int item) => _drawn[(listId, item)];
 
+  /// The repeaters the map draws now (the shown lists' located ones), as [mapGeoJson] last made them.
+  Iterable<Repeater> get drawnRepeaters => _drawn.values;
+
   /// A tap on a repeater on the map: selects it so its card can open. Unknown ones are ignored.
   Repeater? selectRepeater(String listId, int item) {
     final r = repeaterAt(listId, item);
@@ -282,7 +285,7 @@ class UserLayersState extends ChangeNotifier {
             features.add({
               'type': 'Feature',
               'geometry': {'type': 'Point', 'coordinates': [m['lon'], m['lat']]},
-              'properties': {'list': l.id, 'item': rep.item, 'name': m['name'], 'frequency': m['frequency']},
+              'properties': {'list': l.id, 'item': rep.item, 'key': '${l.id}/${rep.item}', 'name': m['name'], 'frequency': m['frequency']},
             });
           }
         } else {

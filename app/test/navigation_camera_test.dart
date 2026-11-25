@@ -60,10 +60,20 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
     styleEvents.add('visible:$layerId:$visible');
   }
 
+  /// The filter each layer was last given.
+  final Map<String, dynamic> filters = {};
+
   @override
   Future<void> setFilter(String layerId, dynamic filter) async {
     styleEvents.add('filter:$layerId');
+    filters[layerId] = filter;
   }
+
+  /// Where the map shows a position, in the map's own points (a test sets it); null: the middle of a 100 x 100 map.
+  math.Point<num> Function(LatLng at)? screenOf;
+
+  @override
+  Future<math.Point<num>> toScreenLocation(LatLng latLng) async => screenOf?.call(latLng) ?? const math.Point<num>(50, 50);
   @override
   Future<void> setGeoJsonSource(String id, Map<String, dynamic> geojson) async {
     sources[id] = geojson;
