@@ -288,8 +288,8 @@ async fn a_peer_found_by_path_request_alone_shows_the_entry_it_came_through() {
     assert_eq!(a.via(&kb.public()), Some(Via::Entry("e1".to_string())), "a path request through an entry shows the entry");
 }
 
-/// Direct tests of three things the larger test above only passes through (a mutation check asked for them): the path requests
-/// sent when an entry connects, the routes dropped with an entry, and the `Via::Entry` a route is reported with.
+// Direct tests of three things the larger test above only passes through (a mutation check asked for them): the path requests
+// sent when an entry connects, the routes dropped with an entry, and the `Via::Entry` a route is reported with.
 
 /// Every stored linked device is asked for a path when an entry becomes Connected. The periodic loop is made too slow to cover for it
 /// (set to an hour, and the one wait it may still be in is let pass first), and neither device announces after A connects.

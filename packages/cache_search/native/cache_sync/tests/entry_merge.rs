@@ -165,7 +165,7 @@ fn the_same_host_and_port_under_two_ids_ends_as_one_entry_the_newer() {
     }
     // The same address on another port is another entry.
     let c = Record::entry("c1", "rt.example.net", 4966, NOW, "dev-a");
-    assert_eq!(live(&merge(&[b.clone()], &[c], NOW)).len(), 2);
+    assert_eq!(live(&merge(std::slice::from_ref(&b), &[c], NOW)).len(), 2);
 }
 
 #[test]
