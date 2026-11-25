@@ -100,6 +100,56 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 4)), skip: skip);
 
+  test('the identity sticks: a key gone from <data>/sync comes back from <data>/identity-keep (mode 600), so the id and the link stay', () async {
+    expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
+    final tmp = Directory.systemTemp.createTempSync('sharing_loopback_identity');
+    final hosts = <SharingHost>[];
+    try {
+      final data = Directory('${tmp.path}/data')..createSync();
+      final support = Directory('${data.path}/app/support')..createSync(recursive: true);
+      final docs = Directory('${data.path}/app/docs')..createSync(recursive: true);
+      SharingHost make() {
+        final h = SharingHost(dataDir: data, supportDir: support, docsDir: docs, deviceName: 'Server', libraryPath: lib, engineConfig: _noNetwork);
+        hosts.add(h);
+        return h;
+      }
+
+      final host = make();
+      await host.setUp();
+      expect(host.snapshot()['running'], true, reason: '${host.snapshot()['error']}');
+      final id = host.myId;
+      expect(id, isNotNull);
+      final kept = File('${data.path}/identity-keep/identity.key');
+      expect(kept.readAsBytesSync(), File('${data.path}/sync/identity.key').readAsBytesSync());
+      final mode = (await Process.run('stat', ['-c', '%a', kept.path])).stdout.toString().trim();
+      expect(mode, '600');
+      await host.stop();
+
+      File('${data.path}/sync/identity.key').deleteSync();
+      final again = make();
+      await again.init();
+      expect(again.snapshot()['running'], true, reason: '${again.snapshot()['error']}');
+      expect(again.myId, id, reason: 'the same device after its key went missing');
+      await again.stop();
+
+      // Both gone: only then a new device.
+      File('${data.path}/sync/identity.key').deleteSync();
+      kept.deleteSync();
+      final fresh = make();
+      await fresh.init();
+      expect(fresh.snapshot()['running'], true, reason: '${fresh.snapshot()['error']}');
+      expect(fresh.myId, isNot(id));
+      expect(kept.readAsBytesSync(), File('${data.path}/sync/identity.key').readAsBytesSync());
+    } finally {
+      for (final h in hosts) {
+        await h.stop();
+      }
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+  }, timeout: const Timeout(Duration(minutes: 2)), skip: skip);
+
   test('a file written again after the other device deleted it beats the delete and reaches the wiped side', () async {
     expect(lib, isNotNull, reason: 'CACHE_CORE_LIB (and CACHE_REQUIRE_CORE=1) must name libcache_search.so');
     final tmp = Directory.systemTemp.createTempSync('sharing_loopback_rewrite');

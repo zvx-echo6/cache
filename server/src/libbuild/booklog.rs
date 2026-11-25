@@ -38,6 +38,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// anything else sync keeps for this device. It is the one place; the Bookshelves log and any later sync use the same identity.
 pub const SYNC_DIR: &str = "sync";
 
+/// Red stub.
+pub const KEEP_DIR: &str = "identity-keep";
+
 /// The person's Bookshelves folder, `<data>/bookshelves` (`log/`, `.local/`).
 pub const BOOKSHELVES_DIR: &str = "bookshelves";
 

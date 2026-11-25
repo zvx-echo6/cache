@@ -13,6 +13,7 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
+import 'identity_keep.dart';
 import 'install_marker.dart';
 import 'share_rules.dart' show kSettingsShareId;
 
@@ -45,6 +46,7 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    IdentityKeepStore? identityKeep,
     this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
@@ -56,6 +58,8 @@ class SharingState extends ChangeNotifier {
        // The install marker (install_marker.dart) is for Android and iPhone only: on Linux the folder is a file in the person's own
        // data folder, under their own backup choices.
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
+       // ignore: prefer_initializing_formals, unused_field
+       _keep = identityKeep,
        // ignore: prefer_initializing_formals
        _remote = remote;
 
@@ -94,6 +98,10 @@ class SharingState extends ChangeNotifier {
 
   /// The device-only install marker checked before the engine opens its folder; null where there is none (Linux, a browser).
   final InstallMarkerStore? _marker;
+
+  // red stub
+  // ignore: unused_field
+  final IdentityKeepStore? _keep;
 
   /// This device was started as a new, unlinked one because its sync folder came from another phone (a restore). Said once on
   /// the Sharing and sync page ([dismissNewDevice]); kept in sharing.json until then.
