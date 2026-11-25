@@ -695,8 +695,7 @@ type WaitKey = (String, String, String);
 /// How long a link must allow what is held back before a retry, after `cancels` slow cancels in a row: the base, doubled for each
 /// one, up to `cap`.
 fn backoff_hold(base: Duration, cancels: u32, cap: Duration) -> Duration {
-    let _ = (cancels, cap);
-    base
+    base.saturating_mul(1u32.checked_shl(cancels).unwrap_or(u32::MAX)).min(cap)
 }
 
 /// A device that is served windows is "fetching from this one" until this long after the last window.
