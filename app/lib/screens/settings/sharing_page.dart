@@ -13,6 +13,7 @@ import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
 import 'link_code_page.dart';
+import 'ways_to_connect_page.dart';
 import 'link_scan_screen.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
@@ -343,9 +344,11 @@ class _SharingPageState extends State<SharingPage> {
                   icon: s.onServer ? Icons.dns : Icons.smartphone,
                   title: s.name,
                   status: [
-                    online ? Part(relay != null ? 'Online' : 'Local network only', relay != null ? Tone.ok : Tone.warn) : const Part('Paused: no network it may use', Tone.warn),
-                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free, keeps ${formatBytes(st['reserve_bytes'] as int)} free'),
+                    // "Wi-Fi, Bluetooth and 2 entry points · 10.0 GB free" (a browser's server has no entry points to list).
+                    online ? Part(s.onServer ? (relay != null ? 'Online' : 'Local network only') : thisDeviceWays(s.entriesOn), s.onServer ? (relay != null ? Tone.ok : Tone.warn) : Tone.normal) : const Part('Paused: no network it may use', Tone.warn),
+                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free'),
                   ],
+                  statusLines: 2,
                   onTap: _rename,
                 ),
               ],
@@ -358,7 +361,7 @@ class _SharingPageState extends State<SharingPage> {
                     key: ValueKey('peer-${p['id']}'),
                     icon: Icons.devices_other,
                     title: p['name'] as String? ?? '',
-                    status: peerStatus(p),
+                    status: peerStatus(p, entryHost: s.entryHostOf),
                     statusLines: 2,
                     onTap: () => _peer(p),
                   ),
@@ -366,6 +369,19 @@ class _SharingPageState extends State<SharingPage> {
                 SettingsRow(key: const ValueKey('enter-code'), icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
               ],
             ),
+            if (!s.onServer)
+              SettingsGroup(
+                label: 'Ways to connect',
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('ways-to-connect'),
+                    title: 'Ways to connect',
+                    status: [Part(waysSummary(s.entriesOn))],
+                    statusLines: 2,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WaysToConnectPage(sharing: s))),
+                  ),
+                ],
+              ),
             SettingsGroup(
               label: 'Shared with linked devices',
               rows: [
@@ -436,19 +452,59 @@ class _SharingPageState extends State<SharingPage> {
   }
 }
 
-/// "Same Wi-Fi · Last seen just now", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
-/// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
-/// via a relay"), not as a connection.
-List<Part> peerStatus(Map<String, dynamic> p) {
+/// How a linked device is reached now, from the engine's `via` and `speed` (step 3's class of the link).
+enum RouteKind { wifi, entry, radio, bluetooth, relay, direct }
+
+/// The way [p] is reached, and, through an entry point, the host it comes in through ([entryHost] gives it for an id; null or an
+/// unknown id says "the internet"). A link judged slow that is not Wi-Fi and not through an entry point is the radio; one judged
+/// medium is Bluetooth (the speed classes of design part 2b). Through an entry point or on Wi-Fi the route is named as it is, however
+/// fast it measures.
+({RouteKind kind, String? host}) peerRoute(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
+  final via = p['via'];
+  final entryId = SharingState.entryIdOfVia(via);
+  if (entryId != null) return (kind: RouteKind.entry, host: entryHost?.call(entryId));
+  if (via == 'wifi') return (kind: RouteKind.wifi, host: null);
+  switch (p['speed']) {
+    case 'slow':
+      return (kind: RouteKind.radio, host: null);
+    case 'medium':
+      return (kind: RouteKind.bluetooth, host: null);
+  }
+  return (kind: via == 'relay' ? RouteKind.relay : RouteKind.direct, host: null);
+}
+
+/// "Same Wi-Fi · Last seen just now", "Bluetooth · Last seen 2 min ago", "Radio, small items only · Last seen 5 min ago", "Through
+/// rt.example.net · Last seen just now", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable ·
+/// Never connected since linking". The time is kept across restarts, so before the first check of a session it is told as a fact of the
+/// past ("Last seen 3 h ago via a relay"), not as a connection.
+List<Part> peerStatus(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
-  final relay = p['via'] == 'relay';
-  final wifi = p['via'] == 'wifi';
+  final r = peerRoute(p, entryHost: entryHost);
+  final through = r.host ?? 'the internet';
   final lastSeen = seen == null ? 'Never connected since linking' : 'Last seen ${_ago(seen)}';
   if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · $lastSeen')];
   if (seen == null) return const [Part('Checking…')];
-  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : (wifi ? 'Wi-Fi' : 'direct')}')];
-  return [Part(relay ? 'Connected through a relay' : (wifi ? 'Same Wi-Fi' : 'Connected directly'), Tone.ok), Part(' · $lastSeen')];
+  if (p['live'] == false) {
+    final how = switch (r.kind) {
+      RouteKind.relay => 'a relay',
+      RouteKind.wifi => 'Wi-Fi',
+      RouteKind.entry => through,
+      RouteKind.radio => 'radio',
+      RouteKind.bluetooth => 'Bluetooth',
+      RouteKind.direct => 'direct',
+    };
+    return [Part('$lastSeen via $how')];
+  }
+  final now = switch (r.kind) {
+    RouteKind.relay => 'Connected through a relay',
+    RouteKind.wifi => 'Same Wi-Fi',
+    RouteKind.entry => 'Through $through',
+    RouteKind.radio => 'Radio, small items only',
+    RouteKind.bluetooth => 'Bluetooth',
+    RouteKind.direct => 'Connected directly',
+  };
+  return [Part(now, Tone.ok), Part(' · $lastSeen')];
 }
 
 /// Asks before a linked device is unlinked. True when the person said Unlink.
@@ -723,6 +779,22 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
 
   /// Both Unlink controls (the row and the button for a device never reached) ask once first, then for the
   /// phone's own screen lock (with none set, the confirm alone is enough).
+  /// The device page's status lines: how it is connected ("Connected over radio" with what a slow link carries), or the row's line.
+  List<Widget> _deviceStatusLines(BuildContext context, Map<String, dynamic> p) {
+    final k = context.t;
+    final live = p['live'] != false && p['error'] == null && p['last_seen'] != null;
+    final r = peerRoute(p, entryHost: s.entryHostOf);
+    if (live && (r.kind == RouteKind.radio || r.kind == RouteKind.bluetooth)) {
+      final radio = r.kind == RouteKind.radio;
+      return [
+        Text(radio ? 'Connected over radio' : 'Connected over Bluetooth', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+        if (radio) statusText(context, const [Part('Slow: notes, places, positions and check-ins only')], size: 14, maxLines: null),
+        statusText(context, [Part('Last seen ${_ago(p['last_seen'] as int?)}')], size: 14, maxLines: null),
+      ];
+    }
+    return [statusText(context, peerStatus(p, entryHost: s.entryHostOf), size: 14, maxLines: null)];
+  }
+
   Future<void> _unlink(String name) async {
     if (!await confirmUnlink(context, name)) return;
     final lock = await DeviceLock.confirm(title: 'Unlink $name?', description: "Confirm it's you to unlink this device.");
@@ -759,7 +831,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    statusText(context, peerStatus(p), size: 14, maxLines: null),
+                    ..._deviceStatusLines(context, p),
                     if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
                     if (neverReached(p)) ...[
                       const SizedBox(height: 10),
@@ -776,6 +848,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 ),
               ),
             ),
+            if (s.waitingFor(widget.peer).isNotEmpty) _Waiting(items: s.waitingFor(widget.peer)),
             if (widget.settingsSync != null)
               DeviceSettingsSection(
                 key: const ValueKey('device-settings'),
@@ -821,6 +894,44 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
           ],
         );
       },
+    );
+  }
+}
+
+/// "Waiting for a faster connection": what the engine holds back from a device until a faster link, one row each with its size.
+class _Waiting extends StatelessWidget {
+  const _Waiting({required this.items});
+
+  final List<Map<String, dynamic>> items;
+
+  /// A file is named by its file name; a folder's whole list by the folder's name.
+  static String _name(Map<String, dynamic> w) {
+    final path = w['path'] as String? ?? '';
+    if (w['what'] == 'file' && path.isNotEmpty) return path.split('/').last;
+    return (w['share'] as String?) ?? (w['share_id'] as String? ?? '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      key: const ValueKey('device-waiting'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('Waiting for a faster connection'),
+        SettingsGroup(
+          rows: [
+            for (final w in items)
+              SettingsRow(
+                title: _name(w),
+                chevron: false,
+                trailing: (w['size'] as num? ?? 0) > 0 ? Text(formatBytes((w['size'] as num).toInt()), style: TextStyle(fontSize: 15, color: k.secondary)) : null,
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const NoteText('These go the next time the devices are on the same Wi-Fi or in Bluetooth range, or both use an entry point that allows files this big.'),
+      ],
     );
   }
 }

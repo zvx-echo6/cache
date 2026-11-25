@@ -255,6 +255,9 @@ void main() {
   });
 
   testWidgets('Sync now: everything, a kind, an item', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
@@ -520,6 +523,9 @@ void main() {
   });
 
   testWidgets('Sync now says what happened: nothing shared, up to date, or syncing', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
