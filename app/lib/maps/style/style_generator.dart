@@ -500,6 +500,14 @@ List<Object> userRepeatersFilter([Iterable<String> grouped = const []]) => [
       if (grouped.isNotEmpty) ['!', ['in', ['get', 'key'], ['literal', grouped.toList()]]],
     ];
 
+/// The filter of the notebook pins' symbol layer: the pins that have an image, without the entries in [grouped] (their `entry` values):
+/// a group marker stands for those (only a repeater notebook's pins are ever grouped).
+List<Object> notebookPinsFilter([Iterable<String> grouped = const []]) => [
+      'all',
+      ['has', 'pin'],
+      if (grouped.isNotEmpty) ['!', ['in', ['get', 'entry'], ['literal', grouped.toList()]]],
+    ];
+
 /// The markers of grouped icons: the picture the group names, never smaller than 0.75 of full size so the badge can be read.
 Map<String, dynamic> _stackLayer() => {
       'id': kStackMarkers,
@@ -640,7 +648,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'id': kNotebookPins,
           'type': 'symbol',
           'source': kNotebookSource,
-          'filter': ['has', 'pin'],
+          'filter': notebookPinsFilter(),
           'layout': {
             'icon-image': ['get', 'pin'],
             'icon-size': iconSizeByZoom(pinIconSize()),

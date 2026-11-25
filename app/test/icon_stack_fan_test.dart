@@ -9,6 +9,8 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/style/style_generator.dart';
 import 'package:cache/maps/user_layers.dart';
+import 'package:cache/notebook/notebook_model.dart';
+import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/roads/road_event.dart';
 import 'package:cache/roads/road_events_state.dart';
 import 'package:cache/roads/road_geo.dart';
@@ -23,6 +25,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import 'location_service_test.dart' show FakeSource;
 import 'navigation_camera_test.dart' show CameraController, NoSurface;
 import 'support/drive_rig.dart';
+import 'support/notebook_fake.dart';
 import 'support/test_layer_engine.dart';
 
 const double _lat = 42.56, _lon = -113.46;
@@ -55,7 +58,7 @@ class _Maps {
   late MapLibrePlatform Function() _platform;
 
   /// The repeaters of the one list, as [offsets] (in degrees of longitude) from the base spot.
-  Future<void> pump(WidgetTester tester, List<double> offsets, {RoadEventsState? roads}) async {
+  Future<void> pump(WidgetTester tester, List<double> offsets, {RoadEventsState? roads, NotebookState? notebooks}) async {
     tester.view.physicalSize = const Size(390, 844) * 3;
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
@@ -102,6 +105,7 @@ class _Maps {
         elevation: rig.elevation,
         userLayers: userLayers,
         roadEvents: roads,
+        notebooks: notebooks,
       ),
     ));
     for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
@@ -293,6 +297,38 @@ void main() {
     m.map.onMapClick!(const math.Point<double>(195 + 4.7 + 60, 400), const LatLng(_lat, _lon));
     await m.settle(tester);
     expect(fan, findsNothing);
+    await m.finish(tester);
+  });
+
+  testWidgets('a repeater notebook\'s pins group as repeaters (filtered out of the pins layer; a disc opens the entry\'s card); a Places notebook\'s pins never group', (tester) async {
+    final m = _Maps();
+    final nb = fakeNotebook(FakeNotebookBackend(journal: false));
+    await tester.runAsync(() async {
+      await nb.start();
+      final reps = await nb.saveNotebook(template: 'repeaters', def: const NotebookDef(name: 'Repeaters', fields: [], icon: 'radio_tower', color: 'purple'), map: true);
+      final places = await nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Trailheads', fields: [], icon: 'star', color: 'teal'), map: true);
+      for (final (i, o) in [0.0, 0.0002, 0.0004].indexed) {
+        await nb.saveEntry(notebookId: reps.id, occurredAt: '2026-11-12T12:00:00Z', title: 'W7R$i', place: NbPlace(lat: _lat, lon: _lon + o));
+      }
+      // Two Places pins on the very same spot and far from the others: never grouped, however they overlap.
+      for (final t in ['Camp', 'Spring']) {
+        await nb.saveEntry(notebookId: places.id, occurredAt: '2026-11-12T12:00:00Z', title: t, place: const NbPlace(lat: _lat + 0.01, lon: _lon + 0.01));
+      }
+    });
+    await m.pump(tester, const [], notebooks: nb);
+    await m.settle(tester, turns: 14);
+    expect(m.markers, hasLength(1), reason: 'the three repeater pins are one marker, the two Places pins are none');
+    expect((m.markers.single['properties'] as Map)['img'], contains('stack-repeater-3'));
+    final pinsFilter = m.camera.filters[kNotebookPins].toString();
+    expect(pinsFilter, contains('!'), reason: 'the pins layer leaves the grouped entries out');
+    expect(pinsFilter, contains('literal'));
+    final grouped = (m.markers.single['properties'] as Map)['gkey'] as String;
+    expect(grouped.split('|'), everyElement(startsWith('nbpin:')));
+    for (final e in [for (final b in nb.notebooks) if (b.def.name == 'Trailheads') b]) {
+      expect(grouped, isNot(contains(e.id)));
+    }
+    await m.tapMarker(tester);
+    expect(fan, findsOneWidget);
     await m.finish(tester);
   });
 

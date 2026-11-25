@@ -895,6 +895,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The new style has none of the group markers or the pictures: made again for the groups now.
     _stackSig = '';
     _stackGroups = const [];
+    _nbPinsFiltered = false;
     _discPngs.clear();
     await _updateStacks();
     _onNav(); // A route may have been loaded before this screen/listener existed.
@@ -1088,6 +1089,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         out.add(StackIcon(id: 'repeater:${r.listId}/${r.item}', kind: StackKind.repeater, name: r.name, lat: lat, lon: lon, x: p.x, y: p.y));
       }
     }
+    // The pins of a repeater notebook (template `repeaters`) are repeaters too. The person's other notebooks' pins are never grouped.
+    final nb = widget.notebooks;
+    if (nb != null) {
+      for (final e in _pins) {
+        final place = e.place;
+        if (place == null || !_pinNames.containsKey(e.id) || nb.notebook(e.notebookId)?.isRepeaters != true) continue;
+        final p = plane(place.lat, place.lon);
+        out.add(StackIcon(id: 'nbpin:${e.id}', kind: StackKind.repeater, name: entryTitle(e), lat: place.lat, lon: place.lon, x: p.x, y: p.y));
+      }
+    }
     final roads = widget.roadEvents;
     if (roads != null) {
       for (final e in roads.events) {
@@ -1135,10 +1146,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         });
       }
       await c.setGeoJsonSource(kStackSource, {'type': 'FeatureCollection', 'features': features});
-      final keys = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.repeater) m.id.substring('repeater:'.length)];
+      final keys = [for (final g in groups) for (final m in g.members) if (m.id.startsWith('repeater:')) m.id.substring('repeater:'.length)];
       final ids = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.roadEvent) m.id.substring('road:'.length)];
       await c.setFilter(kUserRepeaters, userRepeatersFilter(keys));
       await c.setFilter(kRoadEventChips, roadChipsFilter(ids));
+      final pinIds = [for (final g in groups) for (final m in g.members) if (m.id.startsWith('nbpin:')) m.id.substring('nbpin:'.length)];
+      if (pinIds.isNotEmpty || _nbPinsFiltered) {
+        _nbPinsFiltered = pinIds.isNotEmpty;
+        await c.setFilter(kNotebookPins, notebookPinsFilter(pinIds));
+      }
     } catch (_) {}
   }
 
@@ -1267,6 +1283,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       if (u != null && ref.length == 2 && u.selectRepeater(ref[0], int.tryParse(ref[1]) ?? -1) != null) {
         if (nav.selected != null) nav.clearSelection();
       }
+    } else if (m.id.startsWith('nbpin:')) {
+      final e = _pins.where((p) => p.id == m.id.substring('nbpin:'.length)).firstOrNull;
+      if (e != null && mounted) _notebookCard(e);
     } else if (m.id.startsWith('road:')) {
       final r = widget.roadEvents;
       if (r != null) {
@@ -1925,6 +1944,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   int _notebookSig = -1;
   List<NbEntry> _pins = const [];
 
+  /// Each notebook pin's image name by entry id, and whether the pins layer carries a grouped-entries filter now.
+  Map<String, String> _pinNames = const {};
+  bool _nbPinsFiltered = false;
+
   /// The pin images the loaded style has (a new style has none).
   PinImages? _pinImages;
 
@@ -1946,7 +1969,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           names[e.id] = await images.ensure(look.icon.id, look.glyph, look.tint);
         }
       }
+      _pinNames = names;
       await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
+      unawaited(_updateStacks());
       // The chosen place's pin may be one of these entries: drawn again now that they are known.
       _navSig = null;
       await _pushNav();
