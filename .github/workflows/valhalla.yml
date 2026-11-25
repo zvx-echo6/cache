@@ -63,11 +63,30 @@ jobs:
       # failed the cold rel-1.1 build three times on 504s. One less outside download for every cold build.
       VCPKG_FORCE_SYSTEM_BINARIES: 1
     steps:
-      - name: Build tools
+      # Only what a reuse run needs, all from the Ubuntu archive: git (checkout), tar + zstd (actions/cache: without zstd the cache
+      # key version changes and the restore misses), ca-certificates, file (glibc check), binutils (objdump, nm). ldd, grep, sed,
+      # sort and tr come with the base image. The outside PPA is never touched here, so a PPA outage cannot fail a reuse run.
+      - name: Reuse tools
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update -q
+          apt-get install -y -q ca-certificates git tar zstd file binutils
+      - uses: actions/checkout@v4
+      # The tested output of an earlier run with the same shim sources (saved only after its shim test passed, below).
+      - name: Built shim
+        id: built
+        uses: actions/cache/restore@v4
+        with:
+          path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
+          key: valhalla-shim-linux-v1-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/**', '.github/actions/valhalla-source/**') }}
+      # Cold build only (cache miss): the compiler and build tooling, including the ubuntu-toolchain-r/test PPA for GCC 13. On a hit
+      # this step is skipped, so a PPA outage (503) cannot fail a run that only reuses the tested shim.
+      - name: Build tools
+        if: steps.built.outputs.cache-hit != 'true'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
           apt-get install -y -q build-essential pkg-config curl git ca-certificates unzip zip xz-utils zstd tar gzip python3 python3-pip software-properties-common gawk ccache file
           add-apt-repository -y ppa:ubuntu-toolchain-r/test
           apt-get update -q
@@ -77,14 +96,6 @@ jobs:
           g++-13 --version | sed -n 1p
           cmake --version | sed -n 1p
           ldd --version | sed -n 1p
-      - uses: actions/checkout@v4
-      # The tested output of an earlier run with the same shim sources (saved only after its shim test passed, below).
-      - name: Built shim
-        id: built
-        uses: actions/cache/restore@v4
-        with:
-          path: out/valhalla-shim-3.7.0-linux-${{ matrix.arch }}
-          key: valhalla-shim-linux-v1-${{ matrix.arch }}-${{ hashFiles('packages/valhalla/**', '.github/actions/valhalla-source/**') }}
       - name: Pinned Valhalla source
         if: steps.built.outputs.cache-hit != 'true'
         uses: ./.github/actions/valhalla-source
