@@ -171,7 +171,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   Widget _shelf(BuildContext context) {
     final k = context.t;
-    final hasMenu = widget.deps.connections != null || widget.deps.pin != null;
+    final hasMenu = widget.deps.connections != null || widget.deps.deviceConnections != null || widget.deps.pin != null;
     // The Linux desktop: from 1280 the 300-wide shelf is permanent, so it has no hide button. At 1024 to 1279 the button stays and
     // Search moves into the overflow menu when there is one; with no menu it stays in the header beside add, and the
     // smaller title still fits.
@@ -200,13 +200,20 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               onSelected: (c) {
                 if (c == 'search') return openSearch();
                 final d = widget.deps;
-                Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
-                ));
+                if (c == 'pin') {
+                  Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AppPinScreen(pin: d.pin!)));
+                  return;
+                }
+                // Beside the shelf on the desktop (the rail and the shelf stay); a page of its own on a phone.
+                openDetail(
+                  _pane ?? context,
+                  key: 'connections',
+                  builder: (_) => ConnectionsScreen(connections: d.deviceConnections ?? d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
+                );
               },
               itemBuilder: (_) => [
                 if (searchInMenu) const PopupMenuItem(value: 'search', child: Text('Search')),
-                if (widget.deps.connections != null) const PopupMenuItem(value: 'connections', child: Text('Connections')),
+                if (widget.deps.connections != null || widget.deps.deviceConnections != null) const PopupMenuItem(value: 'connections', child: Text('Connections')),
                 if (widget.deps.pin != null) const PopupMenuItem(value: 'pin', child: Text('App PIN')),
               ],
             ),

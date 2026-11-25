@@ -286,6 +286,17 @@ void main() {
       expect(lock.generation, 0);
     });
 
+    test('a background round never makes a new identity: a missing or bad key is left for the app\'s own start to restore', () async {
+      appLeaves();
+      Map<String, Object?>? opened;
+      final core = RoundCore(roundsAfter: 2, arriving: 2);
+      await run(core, opener: (c) async {
+        opened = c;
+        return core;
+      });
+      expect(opened!['make_identity'], false);
+    });
+
     test('an engine that never opens ends the round at the open limit with a log line, lets go of the lock, and closes it if it opens late', () async {
       appLeaves();
       final hung = Completer<SyncCoreLike>();

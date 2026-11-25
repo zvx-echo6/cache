@@ -1,6 +1,6 @@
 // Sharing and sync in the browser: SharingState with the web driver, which asks Cache Server's sharing host (`sharing.*` ops through
 // /api/core) instead of running the engine. The same cases as sharing_test.dart where they make sense for the server, and the Sharing
-// page on that driver: its code, a pasted link, the linked device's row, and only the Library and Models switches.
+// page on that driver: its code, a pasted link, the linked device's row, and the Library, Models and Notebooks switches.
 
 import 'dart:io';
 
@@ -268,7 +268,7 @@ void main() {
     s.dispose();
   });
 
-  testWidgets('the page: set up, the code, a pasted link, the linked device row, and only the Library and Models switches', (tester) async {
+  testWidgets('the page: set up, the code, a pasted link, the linked device row, and the Library, Models and Notebooks switches', (tester) async {
     _tall(tester);
     final host = _host();
     final s = _web(host, dir);
@@ -287,13 +287,14 @@ void main() {
     expect(find.text('Show my link code'), findsOneWidget);
     expect(find.text('Enter a link code'), findsOneWidget);
 
-    // Only the kinds that need nothing else yet.
+    // Only the kinds the server can share so far.
     expect(find.byKey(const ValueKey('share-library')), findsOneWidget);
     expect(find.byKey(const ValueKey('share-models')), findsOneWidget);
-    for (final k in ['regions', 'notebooks', 'videos']) {
+    expect(find.byKey(const ValueKey('share-notebooks')), findsOneWidget);
+    for (final k in ['regions', 'videos']) {
       expect(find.byKey(ValueKey('share-$k')), findsNothing, reason: '$k comes in a later slice');
     }
-    expect(s.shareKinds.map((k) => k.id), ['library', 'models']);
+    expect(s.shareKinds.map((k) => k.id), ['library', 'models', 'notebooks']);
 
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
@@ -319,7 +320,7 @@ void main() {
     expect(find.text('Desk'), findsOneWidget);
 
     // A kind's switch shares the server's folder.
-    expect(find.text('Not shared'), findsNWidgets(2));
+    expect(find.text('Not shared'), findsNWidgets(3));
     await tester.tap(find.descendant(of: find.byKey(const ValueKey('share-models')), matching: find.byType(Switch)));
     await _settle(tester);
     expect(s.shareOf('models')?['path'], '/srv/models');

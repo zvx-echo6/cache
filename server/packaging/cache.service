@@ -4,16 +4,21 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Cache runs as the person who installed it: install.sh names them in the drop-in cache.service.d/person.conf (User=, Group=).
+# The cache user below is only the fallback when the drop-in is missing, so Cache never runs as root.
 User=cache
 Group=cache
+# Read by install.sh --rollback (systemd ignores keys that start with X-): this release runs as the person.
+X-Cache-RunsAs=person
 ExecStart=/opt/cache-app/current/cache serve --data /var/lib/cache-app --web /opt/cache-app/current/web --helper /opt/cache-app/current/helper/cache-core-helper --core-lib /opt/cache-app/current/lib/libcache_search.so
 Restart=always
 RestartSec=5
 StateDirectory=cache-app
 StateDirectoryMode=0750
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
+# The person's own permissions are the boundary: any folder they can open, Cache can open; /usr, /boot, /efi and /etc stay read-only.
+ProtectSystem=full
+ProtectHome=no
 PrivateTmp=yes
 
 [Install]

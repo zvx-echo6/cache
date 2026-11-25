@@ -31,6 +31,7 @@ class NotebookDeps {
     this.placesDeps,
     this.userLayers,
     this.connections,
+    this.deviceConnections,
     this.pin,
     this.shareAvailable,
     this.now = DateTime.now,
@@ -49,6 +50,7 @@ class NotebookDeps {
     placesDeps: placesDeps,
     userLayers: userLayers,
     connections: connections,
+    deviceConnections: deviceConnections,
     pin: pin,
     shareAvailable: shareAvailable,
     now: now,
@@ -89,6 +91,10 @@ class NotebookDeps {
 
   /// Obsidian, Logseq and notebook sync (the Notebooks menu's Connections); null leaves them out.
   final NotebookConnections? connections;
+
+  /// In a browser: the Obsidian and Logseq folders of the computer Cache runs on (Notebooks > Connections). Null on a phone, where
+  /// [connections] are the folders of the phone.
+  final SyncConnections? deviceConnections;
 
   /// The optional app PIN (the Notebooks menu's App PIN); null leaves it out.
   final AppPin? pin;

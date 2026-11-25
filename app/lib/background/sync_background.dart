@@ -313,6 +313,10 @@ Future<String> syncBackgroundJob({
         // one automatic round (the engine's first); the engine stops itself shortly after the budget if this run is cut off
         'interval_secs': 3600,
         'lifetime_secs': (budget + kSyncEngineGrace).inSeconds,
+        // Never a new identity here: a key missing from the folder is brought back (or, when every copy is gone, made) by the app's
+        // own start, which can reach the second copy beside the install marker (sharing/identity_keep.dart). The open fails and the
+        // round is skipped until then.
+        'make_identity': false,
       });
       try {
         core = await opening.timeout(openLimit);

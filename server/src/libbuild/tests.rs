@@ -1624,6 +1624,34 @@ fn every_placement_is_written_to_this_devices_log_and_the_view_follows() {
 }
 
 #[test]
+fn the_device_id_sticks_when_its_key_goes_missing_and_a_key_that_cannot_be_read_is_never_replaced() {
+    let d = TempDir::new("idkeep");
+    let id = booklog::load_device_id(&d.0);
+    assert!(cache_shelves::events::valid_device_id(&id));
+    // the second copy, outside the sync folder
+    let keep = d.0.join(booklog::KEEP_DIR).join("identity.key");
+    assert_eq!(std::fs::read(&keep).unwrap(), std::fs::read(d.0.join("sync/identity.key")).unwrap());
+    std::fs::remove_file(d.0.join("sync/identity.key")).unwrap();
+    assert_eq!(booklog::load_device_id(&d.0), id, "restored from the copy: the same log name");
+    // unreadable (not as root): the fixed fallback name, and the key is left as it was
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let p = d.0.join("sync/identity.key");
+        let before = std::fs::read(&p).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&p).is_err() {
+            assert_eq!(booklog::load_device_id(&d.0), "unsynced");
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(std::fs::read(&p).unwrap(), before);
+        } else {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    assert_eq!(booklog::load_device_id(&d.0), id);
+}
+
+#[test]
 fn the_device_id_is_kept_and_other_devices_logs_decide_which_number_is_free() {
     let d = TempDir::new("m4");
     small_classes(&d);

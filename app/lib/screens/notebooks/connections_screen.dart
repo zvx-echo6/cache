@@ -1,11 +1,10 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 
 import '../../notebook/sync/connections.dart';
 import '../../notebook/sync/folder_access.dart';
 import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag;
 import '../../notebook/sync/sync_engine.dart';
+import '../../platform.dart' as plat;
 import '../../theme.dart';
 import '../../layout/adaptive.dart' show showFittedSheet;
 
@@ -20,9 +19,9 @@ class ConnectionsScreen extends StatelessWidget {
   /// On a phone (Android, iOS): the Obsidian section says that Obsidian syncs only while it is open. Null: this device.
   final bool? phone;
 
-  bool get _phone => phone ?? (Platform.isAndroid || Platform.isIOS);
+  bool get _phone => phone ?? (plat.isAndroid || plat.isIOS);
 
-  final NotebookConnections connections;
+  final SyncConnections connections;
   final PickFolder pickFolder;
 
   /// Sharing and sync is set up on this phone (notebook sync is ticked there, as Notebooks).
@@ -64,7 +63,10 @@ class ConnectionsScreen extends StatelessWidget {
       if (pick == null) return;
       k = pick;
     }
-    final picked = await pickFolder();
+    // Cache's own picker when the connections have one (a browser has no system picker); else the phone's.
+    if (!context.mounted) return;
+    final own = connections.ownPicker;
+    final picked = own != null ? await own(context) : await pickFolder();
     if (picked == null) return;
     final err = await connections.connect(k, picked.path, display: picked.display);
     if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
