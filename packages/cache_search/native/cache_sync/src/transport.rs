@@ -85,7 +85,7 @@ impl Speed {
     }
 
     /// A file of `size` bytes may go over a link of this class: any on Fast, up to 10 MiB on Medium, none on Slow (files go there
-    /// only by the 8 KB inline cap, a later step).
+    /// only inline with their entry when they are 8 KB or less, [`crate::delta::INLINE_MAX`]).
     pub fn carries_file(self, size: u64) -> bool {
         match self {
             Speed::Fast => true,

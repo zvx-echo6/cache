@@ -76,8 +76,8 @@ impl Speed {
         }
     }
 
-    /// The largest file this class carries: any on Fast, 10 MiB on Medium, none on Slow (files only by the 8 KB inline cap,
-    /// which a later step adds).
+    /// The largest file this class carries: any on Fast, 10 MiB on Medium, none on Slow (a file of 8 KB or less goes there
+    /// inline with its entry in a page of differences, not as a window; cache_sync does that).
     pub fn max_file(self) -> Option<u64> {
         match self {
             Speed::Fast => None,

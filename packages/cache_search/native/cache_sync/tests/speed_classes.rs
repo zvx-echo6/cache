@@ -224,16 +224,18 @@ fn a_slow_link_carries_summaries_and_differences_and_holds_files_and_lists_back_
     let st = status(&t.b);
     assert!(st["peers"][0]["error"].is_null(), "{}", st["peers"][0]);
     assert!(!t.fb("fam").join("big.bin").exists() && !t.fb("later").join("l.txt").exists());
+    // The note is 8 KB or less: it came inline with its entry (the inline path has its own tests); only the big file waits.
     let w = waiting(&t.b);
-    assert!(w.iter().any(|x| x.0 == "file" && x.2 == "note.txt"), "files wait on a slow link (the 8 KB inline path is a later step): {w:?}");
+    assert!(!w.iter().any(|x| x.2 == "note.txt"), "{w:?}");
+    assert_eq!(read(&t.fb("fam").join("note.txt")).as_deref(), Some(&b"a note"[..]));
     let fam = st["shares"].as_array().unwrap().iter().find(|s| s["id"] == "fam").unwrap().clone();
-    assert!(fam["pending_files"].as_u64().unwrap() >= 2, "still wanted: {fam}");
+    assert!(fam["pending_files"].as_u64().unwrap() >= 1, "still wanted: {fam}");
     assert!(st["transfer"].is_null(), "nothing was started over the slow link");
 
     // The link gets fast: what waited comes, from where it stopped, and the waiting list empties.
     t.link_is(1, "fast");
     t.until("the held back files to arrive", 240, || {
-        t.fb("fam").join("big.bin").exists() && t.fb("fam").join("note.txt").exists() && t.fb("later").join("l.txt").exists()
+        t.fb("fam").join("big.bin").exists() && t.fb("later").join("l.txt").exists()
     });
     assert!(read(&t.fb("fam").join("big.bin")).unwrap() == big, "the big file is byte for byte the original");
     assert_eq!(read(&t.fb("later").join("l.txt")).as_deref(), Some(&b"late"[..]));
@@ -304,6 +306,70 @@ fn a_modified_asker_that_ignores_its_class_is_refused_by_a_slow_answering_end() 
     });
     assert_eq!(asked(&t.b).2, full, "the whole list was asked for and refused: none came");
     assert!(!t.fb("x").join("x.txt").exists(), "nothing of the folder came");
+    t.a.close();
+    t.b.close();
+}
+
+/// (inline files taken, inline files rejected as not matching their hash) so far.
+fn inlined(e: &SyncEngine) -> (u64, u64) {
+    let v = call(e, "test_asked", json!({}));
+    (v["inline_ok"].as_u64().unwrap(), v["inline_bad"].as_u64().unwrap())
+}
+
+#[test]
+fn a_slow_link_carries_files_of_8_kb_or_less_inline_with_their_entries_and_holds_bigger_ones() {
+    let t = pair(&["fam"], &[("fam", "first.txt", "one")]);
+    t.until("the first file on B", 60, || read(&t.fb("fam").join("first.txt")).as_deref() == Some(b"one"));
+    t.link_is(900, "slow");
+    let before = asked(&t.b);
+    // Exactly 8 KB (8192 bytes), a small note, and 8 KB + 1: the first two travel in the page of differences, the last waits.
+    let eight = random(8192, 21);
+    let nine = random(8193, 22);
+    std::fs::write(t.fa("fam").join("eight.bin"), &eight).unwrap();
+    std::fs::write(t.fa("fam").join("note.txt"), "a short note").unwrap();
+    std::fs::write(t.fa("fam").join("nine.bin"), &nine).unwrap();
+    t.until("the 8 KB file and the note on B, over the slow link", 180, || {
+        read(&t.fb("fam").join("eight.bin")).is_some() && read(&t.fb("fam").join("note.txt")).is_some()
+    });
+    assert!(read(&t.fb("fam").join("eight.bin")).unwrap() == eight, "the 8 KB file is byte for byte the original");
+    assert_eq!(read(&t.fb("fam").join("note.txt")).as_deref(), Some(&b"a short note"[..]));
+    assert_eq!(speed(&t.b), "slow");
+    assert!(inlined(&t.b).0 >= 2, "both came inline: {:?}", inlined(&t.b));
+    assert_eq!(inlined(&t.b).1, 0);
+    // Over 8 KB waits, still wanted; nothing was fetched as a window and no whole list was asked for.
+    let w = waiting(&t.b);
+    assert!(w.iter().any(|x| x.0 == "file" && x.2 == "nine.bin"), "{w:?}");
+    assert!(!w.iter().any(|x| x.2 == "eight.bin" || x.2 == "note.txt"), "{w:?}");
+    assert!(!t.fb("fam").join("nine.bin").exists());
+    assert!(status(&t.b)["transfer"].is_null());
+    assert_eq!(asked(&t.b).2, before.2, "no whole list");
+    // Fast again: the 9 KB file comes the ordinary way.
+    t.link_is(1, "fast");
+    t.until("the 9 KB file", 120, || t.fb("fam").join("nine.bin").exists());
+    assert!(read(&t.fb("fam").join("nine.bin")).unwrap() == nine);
+    t.a.close();
+    t.b.close();
+}
+
+#[test]
+fn a_wrong_inline_byte_is_rejected_and_the_file_stays_wanted() {
+    let t = pair(&["fam"], &[("fam", "first.txt", "one")]);
+    t.until("the first file on B", 60, || read(&t.fb("fam").join("first.txt")).as_deref() == Some(b"one"));
+    t.link_is(900, "slow");
+    // From here A acts as a build that flips a byte of every inline file it sends.
+    std::fs::write(t.da.join("corrupt-inline"), b"").unwrap();
+    let data = random(3000, 31);
+    std::fs::write(t.fa("fam").join("small.bin"), &data).unwrap();
+    t.until("the wrong bytes to be seen and refused", 180, || inlined(&t.b).1 >= 1);
+    assert_eq!(inlined(&t.b).0, 0, "nothing was taken");
+    assert!(!t.fb("fam").join("small.bin").exists(), "the wrong bytes were not imported");
+    assert!(waiting(&t.b).iter().any(|x| x.0 == "file" && x.2 == "small.bin"), "still wanted: {:?}", waiting(&t.b));
+    assert!(status(&t.b)["peers"][0]["error"].is_null());
+    // The link is fast: it comes the ordinary way, intact.
+    std::fs::remove_file(t.da.join("corrupt-inline")).unwrap();
+    t.link_is(1, "fast");
+    t.until("the file", 120, || t.fb("fam").join("small.bin").exists());
+    assert!(read(&t.fb("fam").join("small.bin")).unwrap() == data);
     t.a.close();
     t.b.close();
 }

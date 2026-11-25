@@ -66,6 +66,18 @@ pub struct Change {
     pub c: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<Entry>,
+    /// The file's bytes, base64, when it is 8 KB or less and the asker is on a Slow link ([`INLINE_MAX`]): they travel with the
+    /// entry, and the receiver checks them against the entry's hash. Never part of a mirror. An older receiver ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i: Option<String>,
+}
+
+/// The most a file may be to travel inline with its entry on a Slow link (design 2b: 8 KB or less).
+pub const INLINE_MAX: u64 = 8 * 1024;
+
+/// The bytes a change carries inline, when it carries any.
+pub fn inline_bytes(ch: &Change) -> Option<Vec<u8>> {
+    data_encoding::BASE64.decode(ch.i.as_deref()?.as_bytes()).ok()
 }
 
 /// The answer to a request for differences.
@@ -97,11 +109,29 @@ pub struct DiffAsk {
     /// The most bytes of differences the asker wants in one page (a slow link asks for less); none: the answering end's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<usize>,
+    /// The asker is on a Slow link: files of [`INLINE_MAX`] or less come with their entries ([`Change::i`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inl: bool,
 }
 
 /// The changes of `idx` after the cursor (`c`, `p`) in epoch `epoch`, as the asking device's view (`admits`) has them, ordered
 /// by (counter, path), at most about `cap` bytes of them. `full` when `idx` has another epoch or is behind the cursor.
 pub fn diff_page(idx: &Index, epoch: &str, c: u64, p: Option<&str>, admits: &dyn Fn(&str, &Entry) -> bool, cap: usize) -> Page {
+    diff_page_with(idx, epoch, c, p, admits, cap, &|_, _| None)
+}
+
+/// [`diff_page`] with the bytes of small files: `inline` gives the bytes of an admitted, live file of [`INLINE_MAX`] or less. They
+/// count toward the page's size, so an entry with its bytes that is bigger than the page goes alone (as any entry bigger than the
+/// page does).
+pub fn diff_page_with(
+    idx: &Index,
+    epoch: &str,
+    c: u64,
+    p: Option<&str>,
+    admits: &dyn Fn(&str, &Entry) -> bool,
+    cap: usize,
+    inline: &dyn Fn(&str, &Entry) -> Option<Vec<u8>>,
+) -> Page {
     if idx.epoch.is_empty() || idx.epoch != epoch || c > idx.counter {
         return Page { full: true, ..Page::default() };
     }
@@ -115,7 +145,9 @@ pub fn diff_page(idx: &Index, epoch: &str, c: u64, p: Option<&str>, admits: &dyn
     let mut page = Page { counter: idx.counter, ..Page::default() };
     let mut bytes = 0;
     for (n, (path, e)) in items.iter().enumerate() {
-        let ch = Change { p: (*path).clone(), c: e.ctr, e: admits(path, e).then(|| (*e).clone()) };
+        let admitted = admits(path, e);
+        let i = if admitted && !e.deleted && e.size <= INLINE_MAX { inline(path, e).map(|b| data_encoding::BASE64.encode(&b)) } else { None };
+        let ch = Change { p: (*path).clone(), c: e.ctr, e: admitted.then(|| (*e).clone()), i };
         let len = serde_json::to_vec(&ch).map(|v| v.len()).unwrap_or(0);
         if n > 0 && bytes + len > cap {
             page.more = true;

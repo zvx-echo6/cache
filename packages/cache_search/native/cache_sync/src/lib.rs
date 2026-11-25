@@ -957,6 +957,9 @@ struct Inner {
     notice_out: Mutex<HashMap<String, (HashSet<String>, bool)>>,
     notice_sent: AtomicU64,
     notice_got: AtomicU64,
+    /// Small files taken from a device's page of differences, and ones whose bytes did not match the entry's hash.
+    inline_ok: AtomicU64,
+    inline_bad: AtomicU64,
     /// What each linked device is being served from this device's files (the windows it asks for), by device.
     serving: Mutex<HashMap<String, Serving>>,
     /// Linked devices that have asked this device something since it started: they can reach it, so they can send it notices.
@@ -1980,7 +1983,27 @@ impl Inner {
         if let Some(m) = ask.max {
             cap = cap.min(m.max(1));
         }
-        let page = delta::diff_page(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap);
+        // A Slow asker gets the bytes of its small files (8 KB or less) with their entries; they come from this device's own store.
+        let store = self.store.raw().clone();
+        #[cfg(feature = "test-hooks")]
+        let corrupt = self.dir.join("corrupt-inline").exists();
+        let inline = |_: &str, e: &Entry| -> Option<Vec<u8>> {
+            if !ask.inl {
+                return None;
+            }
+            let hash: Hash = e.hash.parse().ok()?;
+            #[allow(unused_mut)]
+            let mut bytes = store.get_bytes(&hash).ok().filter(|b| b.len() as u64 == e.size)?;
+            #[cfg(feature = "test-hooks")]
+            if corrupt {
+                // Acts as a build that sends wrong bytes: one byte flipped.
+                if let Some(b) = bytes.first_mut() {
+                    *b ^= 0xff;
+                }
+            }
+            Some(bytes)
+        };
+        let page = delta::diff_page_with(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap, &inline);
         serde_json::to_vec(&page).unwrap_or_default()
     }
 
@@ -2207,7 +2230,8 @@ impl Inner {
     }
 
     /// A file of `size` in folder `share` may be asked for over a link of class `class`: a Medium link carries files up to 10 MiB
-    /// and not the big kinds ([`Config::bulk`]); a Slow link carries none (the 8 KB inline cap is a later step).
+    /// and not the big kinds ([`Config::bulk`]); a Slow link carries none as a window (a file of 8 KB or less
+    /// comes inline with its entry and is then in the store already).
     fn class_allows(&self, class: Speed, share: &str, size: u64) -> bool {
         class.carries_file(size) && !(class == Speed::Medium && self.bulk.contains(share))
     }
@@ -2316,6 +2340,30 @@ impl Inner {
         Ok((sum, via))
     }
 
+    /// The bytes of small files that came inline with their entries (Slow link): each is checked against its entry's BLAKE3 hash and
+    /// size, and only then put in the store, where the ordinary fetch finds it complete. Bytes that do not match are dropped: the file
+    /// stays wanted and waits like any file a slow link does not carry. They are held against clean-up until the file is written.
+    async fn take_inline(&self, page: &delta::Page) {
+        for ch in &page.changes {
+            let (Some(e), Some(bytes)) = (ch.e.as_ref().filter(|e| !e.deleted), delta::inline_bytes(ch)) else { continue };
+            let Ok(hash) = e.hash.parse::<Hash>() else { continue };
+            if bytes.len() as u64 != e.size || e.size > delta::INLINE_MAX || Hash::new(&bytes) != hash {
+                self.inline_bad.fetch_add(1, Ordering::Relaxed);
+                say(&format!("a small file's bytes from a device did not match its hash, so {} was not taken that way", ch.p));
+                continue;
+            }
+            if self.store.is_complete(hash).await {
+                continue;
+            }
+            let st = self.store.raw().clone();
+            let added = tokio::task::spawn_blocking(move || st.add_bytes(&bytes).map(|a| a.hash())).await;
+            if matches!(added, Ok(Ok(h)) if h == hash) {
+                self.wanted.lock().unwrap().insert(hash);
+                self.inline_ok.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// The view `peer` has of the folder `rs` summarises: the mirror when it already is at the summary's counter, the mirror
     /// followed to it page by page (each page applied and saved in one write before the next is asked for), or the folder's
     /// whole list (asked once for all the folders that need it, in `full`), which replaces the mirror.
@@ -2333,12 +2381,15 @@ impl Inner {
             if m.is_at(counter) {
                 return Ok(Some(m.index()));
             }
-            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone(), max: self.page_ask(class) };
+            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone(), max: self.page_ask(class), inl: class == Speed::Slow };
             let (bytes, _) = self.net.ask_delta(peer, Delta::Diff, serde_json::to_vec(&ask)?, closed).await?;
             self.asked_diff.fetch_add(1, Ordering::Relaxed);
             let page: delta::Page = serde_json::from_slice(&bytes).context("the differences from the device are not valid")?;
             if page.full {
                 break;
+            }
+            if class == Speed::Slow {
+                self.take_inline(&page).await;
             }
             let before = (m.ctr, m.after.clone());
             m.take(&page);
@@ -3842,6 +3893,8 @@ impl SyncEngine {
             notice_out: Mutex::new(HashMap::new()),
             notice_sent: AtomicU64::new(0),
             notice_got: AtomicU64::new(0),
+            inline_ok: AtomicU64::new(0),
+            inline_bad: AtomicU64::new(0),
             serving: Mutex::new(HashMap::new()),
             heard_from: Mutex::new(HashSet::new()),
             reach_pending: Mutex::new(HashMap::new()),
@@ -4026,6 +4079,8 @@ impl SyncEngine {
                 "full": inner.asked_full.load(Ordering::Relaxed),
                 "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
                 "notice_got": inner.notice_got.load(Ordering::Relaxed),
+                "inline_ok": inner.inline_ok.load(Ordering::Relaxed),
+                "inline_bad": inner.inline_bad.load(Ordering::Relaxed),
             })),
             #[cfg(feature = "test-hooks")]
             "test_quiet" => {
