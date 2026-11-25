@@ -21,6 +21,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use iroh::{PublicKey, SecretKey, Signature};
 use personal_rns::engine::LinkClosedReason;
+use personal_rns::interfaces::{ConnectionState, IfacContext, IfacSize, InterfaceId};
 use personal_rns::identity::IdentityHash;
 use personal_rns::prelude::*;
 use personal_rns::wifi_auto::AutoWifiStatus;
@@ -65,6 +66,14 @@ pub fn is_not_linked(e: &anyhow::Error) -> bool {
 }
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
 const PATH_EVERY: Duration = Duration::from_secs(5);
+/// While connected, an entry point is announced on once every this long (and once when it connects), so a path survives an rnsd restart.
+pub const ENTRY_ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// An entry point that is not connected for this long is [`EntryState::NotAnswering`].
+pub const NOT_ANSWERING_AFTER: Duration = Duration::from_secs(20);
+/// An entry point connected this long with bytes arriving but no valid frame is [`EntryState::Mismatch`].
+pub const MISMATCH_AFTER: Duration = Duration::from_secs(30);
+/// How often entry points are looked at.
+const ENTRY_POLL: Duration = Duration::from_secs(1);
 /// A linked device whose announce is heard again after this long without one (three of its announces missed) is reachable again.
 pub const REACHABLE_GAP: Duration = Duration::from_secs(95);
 
@@ -180,12 +189,63 @@ pub fn destination_for(device: &SecretKey) -> Result<DestinationHash> {
 }
 
 /// How a heard announce reached us.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Via {
     /// Over Wi-Fi/LAN discovery (auto Wi-Fi, or one of its peers).
     Wifi,
+    /// Through the entry point (an rnsd the person entered) with this id ([`EntryPoint::id`]).
+    Entry(String),
     /// Over anything else (TCP, hubs, radio).
     Other,
+}
+
+/// An entry point: an rnsd the person entered (an address and port, and for a private one its IFAC network name and passphrase).
+/// Cache connects to it as a TCP client, never relays for others (transport stays off), and announces on it only when it connects.
+#[derive(Clone)]
+pub struct EntryPoint {
+    /// The entry's own id (16 random bytes in hex, made by whoever stores the list); the key every change is matched by.
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    /// The IFAC network name. `None` or empty is no name.
+    pub network_name: Option<String>,
+    /// The IFAC passphrase. `None` or empty is no passphrase. Wiped when dropped.
+    pub passphrase: Option<Zeroizing<String>>,
+    /// Switched on. Off keeps the settings but is not connected.
+    pub on: bool,
+}
+
+impl std::fmt::Debug for EntryPoint {
+    // Never the passphrase (this is what a log line or a failed assert would print).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntryPoint")
+            .field("id", &self.id)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("network_name", &self.network_name)
+            .field("has_passphrase", &self.passphrase.as_ref().is_some_and(|p| !p.is_empty()))
+            .field("on", &self.on)
+            .finish()
+    }
+}
+
+/// Where an entry point stands ([`RnsNode::entry_status`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryState {
+    /// Switched off (the settings are kept).
+    Off,
+    /// Not connected yet, or lost for less than [`NOT_ANSWERING_AFTER`].
+    Connecting,
+    /// Connected and at least one valid frame has arrived on it.
+    Connected,
+    /// Reconnecting, failed or disconnected for more than [`NOT_ANSWERING_AFTER`].
+    NotAnswering,
+    /// Inferred, not read: connected, bytes arrive, but none has been a valid frame for [`MISMATCH_AFTER`]. The network name or
+    /// passphrase most likely does not match (Prns drops a frame that fails IFAC without a counter or event; see the plan, decision 2).
+    Mismatch,
+    /// Connected, but nothing at all has been heard yet: a quiet rnsd, or one that answers a wrong passphrase with silence.
+    /// Cache cannot tell which.
+    NothingHeard,
 }
 
 /// One network attachment.
@@ -198,6 +258,9 @@ pub enum Iface {
     /// Wi-Fi/LAN auto-discovery (Prns's `AutoWifi`): finds other devices on the local network with no address typed.
     /// Which discovery group it uses is [`Config::wifi_group`].
     WifiAuto,
+    /// An entry point the person entered (an rnsd). Attached at start like any other; the list can change later with
+    /// [`RnsNode::set_entry_points`], which never restarts the node.
+    Entry(EntryPoint),
     #[cfg(feature = "rnode")]
     /// An RNode (LoRa), by a name for the interface, where it is, and its radio settings ([`rnode`]).
     RNode { name: String, port: rnode::RNodePort, radio: rnode::Radio },
@@ -279,12 +342,18 @@ struct State {
     down: HashSet<[u8; 32]>,
     /// Link -> when it was seen first and the round trip time it opened with (for the line that says why it closed).
     link_info: HashMap<LinkId, (std::time::Instant, Option<u64>)>,
+    /// The entry points known to the node (on or off), by id.
+    entries: HashMap<String, Slot>,
+    /// The interface of each attached entry point, back to its id.
+    iface_entry: HashMap<InterfaceId, String>,
 }
 
 enum Ev {
     Announce {
         destination: DestinationHash,
         via: Via,
+        /// The interface the announce came in on.
+        iface: InterfaceId,
     },
     Identified {
         link: LinkId,
@@ -335,6 +404,8 @@ pub struct RnsNode {
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
     state: Arc<Mutex<State>>,
+    /// Random per node: keys the fingerprint of an entry point's settings, so a changed passphrase is noticed without keeping it.
+    entry_salt: [u8; 32],
     /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
     reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -480,6 +551,7 @@ impl RnsNode {
                                     ..
                                 }) => Ev::Announce {
                                     destination,
+                                    iface: source_interface,
                                     via: match source_interface.kind() {
                                         Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
                                         _ => Via::Other,
@@ -674,7 +746,21 @@ impl RnsNode {
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
-                        Ev::Announce { destination, via } => {
+                        Ev::Announce { destination, via, iface } => {
+                            // A frame that passed the interface's IFAC check and parsed as an announce: on an entry point that is
+                            // the proof the network name and passphrase match.
+                            let via = {
+                                let mut s = state.lock().unwrap();
+                                match s.iface_entry.get(&iface).cloned() {
+                                    Some(id) => {
+                                        if let Some(slot) = s.entries.get_mut(&id) {
+                                            slot.t.valid = true;
+                                        }
+                                        Via::Entry(id)
+                                    }
+                                    None => via,
+                                }
+                            };
                             if destination == me {
                                 continue;
                             }
@@ -888,22 +974,35 @@ impl RnsNode {
             }));
         }
 
-        // Announces (empty app data): at start, then every 30 s.
+        // Announces (empty app data): at start, then every 30 s, on every interface that is not an entry point (Wi-Fi, and
+        // the carriers tests attach). An entry point is announced on once when it connects, then every 6 h ([`entry_monitor`]).
         {
             let handle = handle.clone();
+            let state = state.clone();
             tasks.push(tokio::spawn(async move {
                 let mut tick = tokio::time::interval(ANNOUNCE_EVERY);
                 loop {
                     tick.tick().await;
-                    let _ = handle
-                        .announce_now(AnnounceNow {
-                            destination: me,
-                            target: AnnounceTarget::AllInterfaces,
-                            app_data: AnnounceAppData::Data(Default::default()),
-                        })
-                        .await;
+                    announce_off_entries(&handle, &state, me).await;
                 }
             }));
+        }
+
+        // The entry points given at start; later changes come through `set_entry_points`.
+        let entry_salt: [u8; 32] = rand::random();
+        let first: Vec<EntryPoint> = cfg
+            .interfaces
+            .iter()
+            .filter_map(|i| if let Iface::Entry(e) = i { Some(e.clone()) } else { None })
+            .collect();
+        if !first.is_empty() {
+            apply_entries(&handle, &state, &entry_salt, &first);
+        }
+        // Entry point status, the announce when one connects, and the path requests that follow.
+        {
+            let handle = handle.clone();
+            let state = state.clone();
+            tasks.push(tokio::spawn(entry_monitor(handle, state, me)));
         }
 
         Ok(RnsNode {
@@ -917,6 +1016,7 @@ impl RnsNode {
             nearby,
             peers_dest,
             state,
+            entry_salt,
             reach_gap_ms,
             tasks,
             stop: Mutex::new(Some(stop_tx)),
@@ -992,19 +1092,35 @@ impl RnsNode {
 
     /// What `peer`'s route comes in on (its first hop's interface): [`Via::Wifi`] only for Wi-Fi auto interfaces.
     pub fn via(&self, peer: &PublicKey) -> Option<Via> {
-        self.state.lock().unwrap().heard.get(peer.as_bytes()).copied()
+        self.state.lock().unwrap().heard.get(peer.as_bytes()).cloned()
     }
 
-    /// Announces now (for example after a network change). The app data is empty.
+    /// Announces now (for example after a network change), on every interface but the entry points ([`entry_monitor`] announces
+    /// on those when they connect). The app data is empty.
     pub async fn announce(&self) -> Result<()> {
-        self.handle
-            .announce_now(AnnounceNow {
-                destination: self.me,
-                target: AnnounceTarget::AllInterfaces,
-                app_data: AnnounceAppData::Data(Default::default()),
-            })
-            .await
-            .map_err(|e| anyhow!("{e:?}"))
+        announce_off_entries(&self.handle, &self.state, self.me).await;
+        Ok(())
+    }
+
+    /// Makes the entry points the ones listed, by id, on the running node (it is never restarted): a new entry that is on, or
+    /// one newly switched on, is attached; one switched off or removed is detached and its routes dropped (`forget_interface`);
+    /// an edited one is detached and attached again. Each is keyed with its IFAC network name and passphrase (either may be
+    /// empty). The passphrase copies made here are wiped once the key is derived, and only a salted hash of the settings is
+    /// kept to notice an edit.
+    pub fn set_entry_points(&self, entries: &[EntryPoint]) {
+        apply_entries(&self.handle, &self.state, &self.entry_salt, entries);
+    }
+
+    /// Where each entry point stands, by id, with when that was checked (ms since the Unix epoch): sorted by id.
+    pub fn entry_status(&self) -> Vec<(String, EntryState, u64)> {
+        observe_entries(&self.handle, &self.state);
+        let now = std::time::Instant::now();
+        let checked = unix_ms();
+        let s = self.state.lock().unwrap();
+        let mut out: Vec<(String, EntryState, u64)> =
+            s.entries.iter().map(|(id, slot)| (id.clone(), judge(slot, now), checked)).collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Wi-Fi auto discovery's current members (interfaces to other devices found on the local network).
@@ -1302,4 +1418,244 @@ fn exact(t: Duration) -> personal_rns::engine::RequestResponseTimeout {
     personal_rns::engine::RequestResponseTimeout::Exact(personal_rns::units::DurationMillis(
         t.as_millis() as u64,
     ))
+}
+
+/// What the node keeps of one entry point.
+struct Slot {
+    /// A salted hash of (host, port, network name, passphrase): an edit is a different fingerprint.
+    fp: [u8; 32],
+    on: bool,
+    /// Its interface while attached.
+    iid: Option<InterfaceId>,
+    t: Tracker,
+}
+
+#[derive(Default)]
+struct Tracker {
+    attached_at: Option<std::time::Instant>,
+    /// The interface's connection state when last looked at.
+    conn: Option<ConnectionState>,
+    /// Since when it has not been Connected (first seen, from attach on).
+    not_connected_since: Option<std::time::Instant>,
+    connected_since: Option<std::time::Instant>,
+    /// Receive counter when this connection was first seen up, and now.
+    rx_base: u64,
+    rx_now: u64,
+    /// A valid frame has arrived on this attachment (it passed IFAC and parsed: an announce was heard, or a route or link exists).
+    valid: bool,
+    announced_at: Option<std::time::Instant>,
+    /// Became Connected since the monitor last ran: announce once on it and ask for paths.
+    up_pending: bool,
+    /// Connected and [`ENTRY_ANNOUNCE_EVERY`] has passed since the last announce on it.
+    due_pending: bool,
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn judge(slot: &Slot, now: std::time::Instant) -> EntryState {
+    if !slot.on || slot.iid.is_none() {
+        return EntryState::Off;
+    }
+    let t = &slot.t;
+    match t.conn {
+        Some(ConnectionState::Connected | ConnectionState::Degraded) => {
+            if t.valid {
+                EntryState::Connected
+            } else if t.rx_now > t.rx_base
+                && t.connected_since.is_some_and(|c| now.duration_since(c) >= MISMATCH_AFTER)
+            {
+                EntryState::Mismatch
+            } else {
+                EntryState::NothingHeard
+            }
+        }
+        Some(ConnectionState::Disabled) => EntryState::Off,
+        _ => {
+            let since = t.not_connected_since.or(t.attached_at);
+            if since.is_some_and(|c| now.duration_since(c) > NOT_ANSWERING_AFTER) {
+                EntryState::NotAnswering
+            } else {
+                EntryState::Connecting
+            }
+        }
+    }
+}
+
+/// Looks at every attached entry point's interface once and updates what is known of it.
+fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
+    if state.lock().unwrap().entries.values().all(|s| s.iid.is_none()) {
+        return;
+    }
+    let snaps = handle.interfaces();
+    let now = std::time::Instant::now();
+    let mut s = state.lock().unwrap();
+    for slot in s.entries.values_mut() {
+        let Some(iid) = slot.iid else { continue };
+        let Some(sn) = snaps.iter().find(|x| x.id == iid) else { continue };
+        let t = &mut slot.t;
+        let was_connected = matches!(t.conn, Some(ConnectionState::Connected));
+        let connected = matches!(sn.connection, ConnectionState::Connected);
+        t.conn = Some(sn.connection);
+        t.rx_now = sn.rx_bytes;
+        if sn.destinations > 0 || sn.links > 0 {
+            t.valid = true;
+        }
+        if connected {
+            t.not_connected_since = None;
+            if !was_connected {
+                t.connected_since = Some(now);
+                t.rx_base = sn.rx_bytes;
+                t.up_pending = true;
+                t.announced_at = Some(now);
+            } else if t.announced_at.is_some_and(|a| now.duration_since(a) >= ENTRY_ANNOUNCE_EVERY) {
+                t.due_pending = true;
+                t.announced_at = Some(now);
+            }
+        } else {
+            t.connected_since = None;
+            if t.not_connected_since.is_none() {
+                t.not_connected_since = Some(now);
+            }
+        }
+    }
+}
+
+/// Entry points: looks at them every second; when one has connected, announces on it once and sends path requests for every stored
+/// linked device; announces on a connected one again every [`ENTRY_ANNOUNCE_EVERY`].
+async fn entry_monitor(handle: PrnsNodeHandle, state: Arc<Mutex<State>>, me: DestinationHash) {
+    let mut tick = tokio::time::interval(ENTRY_POLL);
+    loop {
+        tick.tick().await;
+        observe_entries(&handle, &state);
+        let (announce, connected, dests) = {
+            let mut s = state.lock().unwrap();
+            let mut announce = Vec::new();
+            let mut connected = false;
+            for slot in s.entries.values_mut() {
+                let Some(iid) = slot.iid else { continue };
+                if slot.t.up_pending {
+                    slot.t.up_pending = false;
+                    slot.t.due_pending = false;
+                    announce.push(iid);
+                    connected = true;
+                } else if slot.t.due_pending {
+                    slot.t.due_pending = false;
+                    announce.push(iid);
+                }
+            }
+            let dests: Vec<([u8; 32], DestinationHash)> =
+                s.destination_of.iter().map(|(k, d)| (*k, *d)).collect();
+            (announce, connected, dests)
+        };
+        for iid in announce {
+            let _ = handle
+                .announce_now(AnnounceNow {
+                    destination: me,
+                    target: AnnounceTarget::Interface(iid),
+                    app_data: AnnounceAppData::Data(Default::default()),
+                })
+                .await;
+        }
+        if connected {
+            // Every stored linked device, at once (the periodic loop asks only for the ones not heard yet).
+            for (k, d) in dests {
+                let (handle, state) = (handle.clone(), state.clone());
+                tokio::spawn(async move {
+                    find_path(&handle, &state, k, d).await;
+                });
+            }
+        }
+    }
+}
+
+/// The periodic announce: on every interface except the entry points.
+async fn announce_off_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, me: DestinationHash) {
+    let ids: Vec<InterfaceId> = {
+        let s = state.lock().unwrap();
+        handle
+            .interfaces()
+            .iter()
+            .map(|x| x.id)
+            .filter(|id| !s.iface_entry.contains_key(id))
+            .collect()
+    };
+    for id in ids {
+        let _ = handle
+            .announce_now(AnnounceNow {
+                destination: me,
+                target: AnnounceTarget::Interface(id),
+                app_data: AnnounceAppData::Data(Default::default()),
+            })
+            .await;
+    }
+}
+
+fn fingerprint(salt: &[u8; 32], e: &EntryPoint) -> [u8; 32] {
+    let mut h = blake3::Hasher::new_keyed(salt);
+    let field = |h: &mut blake3::Hasher, b: &[u8]| {
+        h.update(&(b.len() as u64).to_le_bytes());
+        h.update(b);
+    };
+    field(&mut h, e.host.as_bytes());
+    field(&mut h, &e.port.to_le_bytes());
+    field(&mut h, e.network_name.as_deref().unwrap_or("").as_bytes());
+    field(&mut h, e.passphrase.as_ref().map_or("", |p| p.as_str()).as_bytes());
+    *h.finalize().as_bytes()
+}
+
+/// Detaches an entry point's interface (dropping its routes at once) and forgets what was heard through it.
+fn detach_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) {
+    let Some(slot) = s.entries.get_mut(id) else { return };
+    if let Some(iid) = slot.iid.take() {
+        handle.forget_interface(iid);
+        s.iface_entry.remove(&iid);
+    }
+    let me = Via::Entry(id.to_string());
+    s.heard.retain(|_, v| *v != me);
+}
+
+fn attach_entry(handle: &PrnsNodeHandle, s: &mut State, e: &EntryPoint) {
+    let host = if e.host.contains(':') && !e.host.starts_with('[') { format!("[{}]", e.host) } else { e.host.clone() };
+    let client = TcpClientInterface::new(format!("{host}:{}", e.port));
+    let name = e.network_name.clone().filter(|n| !n.is_empty());
+    let pass = e.passphrase.clone().filter(|p| !p.is_empty());
+    // WIDE, as Prns's config gives a TCP client and RNS's TCP default. The copy of the passphrase is wiped as it goes out of scope.
+    let ifac = IfacContext::derive(name.as_deref(), pass.as_ref().map(|p| p.as_str()), IfacSize::WIDE);
+    drop(pass);
+    let attached = match ifac {
+        Some(ifac) => handle.attach_with_ifac_name(client, ifac, name),
+        None => handle.attach(client),
+    };
+    let iid = attached.id();
+    if let Some(slot) = s.entries.get_mut(&e.id) {
+        slot.iid = Some(iid);
+        slot.t = Tracker { attached_at: Some(std::time::Instant::now()), ..Default::default() };
+    }
+    s.iface_entry.insert(iid, e.id.clone());
+}
+
+fn apply_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, salt: &[u8; 32], entries: &[EntryPoint]) {
+    let mut s = state.lock().unwrap();
+    let want: HashSet<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    let gone: Vec<String> = s.entries.keys().filter(|k| !want.contains(k.as_str())).cloned().collect();
+    for id in gone {
+        detach_entry(handle, &mut s, &id);
+        s.entries.remove(&id);
+    }
+    for e in entries {
+        let fp = fingerprint(salt, e);
+        // Already as wanted: same settings, and attached exactly when it is on.
+        if s.entries.get(&e.id).is_some_and(|sl| sl.fp == fp && sl.iid.is_some() == e.on) {
+            continue;
+        }
+        detach_entry(handle, &mut s, &e.id);
+        s.entries.insert(e.id.clone(), Slot { fp, on: e.on, iid: None, t: Tracker::default() });
+        if e.on {
+            attach_entry(handle, &mut s, e);
+        }
+    }
 }
