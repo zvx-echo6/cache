@@ -83,6 +83,15 @@ class MemStore implements NotebookStore {
   }
 
   @override
+  Future<Notebook?> storedNotebook(String id) async => notebook(id);
+
+  @override
+  Future<void> deleteNotebook(String id) async {
+    _books.removeWhere((b) => b.id == id);
+    _entries.removeWhere((_, e) => e.notebookId == id);
+  }
+
+  @override
   Future<Notebook> ensureSavedPlaces() => saveNotebook(template: 'places', def: const NotebookDef(name: 'Places', fields: [], sort: NotebookSort.recent));
 
   @override
