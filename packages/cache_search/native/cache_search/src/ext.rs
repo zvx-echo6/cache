@@ -189,17 +189,62 @@ impl crate::handle::Handle {
 /// The map layer engine's elevation layer (the starter `elevation`: Mapterhorn's tiles) as the off-road router's z12 elevation.
 pub const ELEVATION_LAYER: &str = "elevation";
 
-/// z12 elevation tiles from the layer engine: its downloaded areas and the tiles viewed before, never the network (a route is
-/// worked out from what is on the phone, as it was from an elevation file).
-struct LayerElevationTiles(std::sync::Arc<cache_layers::core::Inner>);
+/// How long the router stops asking the network for elevation tiles after one failed or timed out.
+const ELEVATION_NET_PAUSE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// z12 elevation tiles from the layer engine: stored data first (downloaded areas, then the tiles viewed before); a tile
+/// that is not stored is streamed when the phone is online, and kept in the viewed-tile cache (the same path the map
+/// uses, `Inner::tile_upstream`). Offline there is none, as with no file. The network is bounded two ways: each fetch has
+/// the map's upstream timeout, and after one fetch fails or times out no more are tried for `ELEVATION_NET_PAUSE`, so a
+/// dead connection costs one wait, not one per tile; the tiles that failed are simply missing elevation (as offline).
+struct LayerElevationTiles {
+    inner: std::sync::Arc<cache_layers::core::Inner>,
+    /// No network fetch before this moment (set by a failed or timed-out fetch).
+    paused_until: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl LayerElevationTiles {
+    fn new(inner: std::sync::Arc<cache_layers::core::Inner>) -> Self {
+        Self { inner, paused_until: std::sync::Mutex::new(None) }
+    }
+
+    fn net_paused(&self) -> bool {
+        self.paused_until.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    fn pause_net(&self) {
+        *self.paused_until.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + ELEVATION_NET_PAUSE);
+    }
+}
 
 impl cache_navigate::ElevationTiles for LayerElevationTiles {
     fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, String> {
-        match self.0.tile_local(ELEVATION_LAYER, 12, x as u32, y as u32) {
-            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => Ok(Some(bytes)),
-            Ok(_) => Ok(None),
+        let (x, y) = (x as u32, y as u32);
+        match self.inner.tile_local(ELEVATION_LAYER, 12, x, y) {
+            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => return Ok(Some(bytes)),
+            // stored as "no tile here", or offline: none
+            Ok(Some(_)) => return Ok(None),
             // no elevation layer installed: no elevation, as with no file
+            Err(e) if e.code == "not_found" => return Ok(None),
+            Err(e) => return Err(e.message),
+            // not stored: stream it below, when online
+            Ok(None) => {}
+        }
+        if !self.inner.is_online() || self.net_paused() {
+            return Ok(None);
+        }
+        match self.inner.tile_upstream(ELEVATION_LAYER, 12, x, y) {
+            Ok(cache_layers::core::TileOut::Tile { bytes, .. }) => Ok(Some(bytes)),
+            Ok(cache_layers::core::TileOut::Busy) => {
+                self.pause_net();
+                Ok(None)
+            }
+            Ok(_) => Ok(None),
             Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) if e.code == "fetch_failed" || e.code == "upstream_timeout" => {
+                self.pause_net();
+                Ok(None)
+            }
             Err(e) => Err(e.message),
         }
     }
@@ -209,7 +254,7 @@ impl Ext {
     /// The navigate tool's region packs read elevation from the map's elevation layer, when both are configured.
     pub fn plug_elevation(&self) {
         if let (Some(nav), Some(l)) = (&self.nav, &self.layers) {
-            let source = cache_navigate::TileElevation::new(LayerElevationTiles(l.inner.clone()));
+            let source = cache_navigate::TileElevation::new(LayerElevationTiles::new(l.inner.clone()));
             nav.set_elevation(Some(std::sync::Arc::new(source)));
         }
     }
@@ -675,5 +720,94 @@ impl crate::handle::Handle {
             (None, None) => return Err(Error::bad_json("route_id (or a route object) is required")),
         };
         Ok(route.progress(&req).to_string())
+    }
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    use super::*;
+    use cache_navigate::ElevationTiles;
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A fake elevation host on 127.0.0.1: `status` for every request, the tile's name as the body when 200.
+    fn host(status: u16) -> (u16, Arc<AtomicUsize>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(mut s) = s else { continue };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
+                h.fetch_add(1, Ordering::SeqCst);
+                let body = if status == 200 { line.split_whitespace().nth(1).unwrap_or("").as_bytes().to_vec() } else { vec![] };
+                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(&body);
+            }
+        });
+        (port, hits)
+    }
+
+    fn engine(port: u16, online: bool) -> (Arc<cache_layers::core::Inner>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("elev-{}-{port}-{online}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let inner = cache_layers::core::Inner::open(cache_layers::core::LayersCfg {
+            dir: dir.to_string_lossy().into_owned(),
+            defs_dirs: vec![],
+            catalogue_urls: vec![],
+            cache_max_bytes: 16 * 1024 * 1024,
+            online,
+        })
+        .unwrap();
+        let def = serde_json::json!({
+            "format": 1, "id": ELEVATION_LAYER, "title": "elevation", "kind": "elevation", "transform": "as_is",
+            "source": {"type": "xyz", "url": format!("http://127.0.0.1:{port}/{{z}}/{{x}}/{{y}}"), "minzoom": 0, "maxzoom": 12,
+                       "encoding": "terrarium", "tile_format": "webp", "tile_size": 512},
+            "attribution": "test", "license": "test", "update": {"version": "1"}
+        });
+        inner.save_user_def(&def.to_string()).unwrap();
+        (Arc::new(inner), dir)
+    }
+
+    fn tiles(inner: Arc<cache_layers::core::Inner>) -> LayerElevationTiles {
+        LayerElevationTiles::new(inner)
+    }
+
+    #[test]
+    fn missing_tile_is_streamed_and_kept() {
+        let (port, hits) = host(200);
+        let (inner, dir) = engine(port, true);
+        let t = tiles(inner);
+        assert_eq!(t.z12(5, 7).unwrap().as_deref(), Some(&b"/12/5/7"[..]), "streamed from the source");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(t.z12(5, 7).unwrap().as_deref(), Some(&b"/12/5/7"[..]), "kept: served again");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call needed no network");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_is_none_with_no_network() {
+        let (port, hits) = host(200);
+        let (inner, dir) = engine(port, false);
+        let t = tiles(inner);
+        assert_eq!(t.z12(5, 7), Ok(None));
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "offline never touches the network");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_network_costs_one_try_not_one_per_tile() {
+        let (port, hits) = host(500);
+        let (inner, dir) = engine(port, true);
+        let t = tiles(inner);
+        assert_eq!(t.z12(5, 7), Ok(None), "no error: no elevation for that tile");
+        assert_eq!(t.z12(6, 7), Ok(None));
+        assert_eq!(t.z12(7, 7), Ok(None));
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "after one failure the router stops asking for a while");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
