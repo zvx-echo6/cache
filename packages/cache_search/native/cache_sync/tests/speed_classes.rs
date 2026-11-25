@@ -373,3 +373,31 @@ fn a_wrong_inline_byte_is_rejected_and_the_file_stays_wanted() {
     t.a.close();
     t.b.close();
 }
+
+/// Item 4: what waits for a faster connection is fetched when the link gets faster, without waiting for the next round (the timer is
+/// an hour here, and no round is asked for after the link changes): the device measures the link of a device it holds files back
+/// from, and once the class allows them and has for 30 seconds, or a new link with a low round trip time is up, a round for that
+/// device runs.
+#[test]
+fn a_waiting_file_is_fetched_by_itself_when_the_link_gets_faster() {
+    let t = pair(&["fam"], &[("fam", "first.txt", "one")]);
+    t.until("the first file on B", 60, || read(&t.fb("fam").join("first.txt")).as_deref() == Some(b"one"));
+    t.link_is(900, "slow");
+    let big = random(3 * 1024 * 1024, 51);
+    std::fs::write(t.fa("fam").join("big.bin"), &big).unwrap();
+    t.until("the file to be held back", 120, || waiting(&t.b).iter().any(|x| x.2 == "big.bin"));
+    // The path gets fast. From here nobody asks for a round: the engine has to notice by itself.
+    t.delay.store(1, Ordering::Relaxed);
+    let from = Instant::now();
+    let end = from + Duration::from_secs(120);
+    while read(&t.fb("fam").join("big.bin")).is_none() {
+        assert!(Instant::now() < end, "the waiting file came by itself within two minutes\nB: {}", brief(&t.b));
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let took = from.elapsed();
+    assert!(took < Duration::from_secs(75), "about 30 seconds after the link got fast, not at the next round: {took:?}");
+    assert!(read(&t.fb("fam").join("big.bin")).unwrap() == big, "byte for byte");
+    assert!(waiting(&t.b).is_empty(), "{:?} after {took:?}", waiting(&t.b));
+    t.a.close();
+    t.b.close();
+}

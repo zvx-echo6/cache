@@ -292,3 +292,31 @@ async fn a_file_that_slows_mid_way_is_cancelled_to_waiting_and_resumes_from_its_
     assert_eq!((f.skipped, f.windows), (1, 2), "the verified window was skipped, the other two fetched");
     assert!(l.b_store.get_bytes(&hash).unwrap() == data);
 }
+
+/// Item 4: a link that got faster under an idle link. B (asking) learns it from its probe and does not close the link; A (answering,
+/// asking nothing itself) still holds the round trip time the link came up with, so it refuses the file as too slow. B takes that
+/// refusal, from an answering end whose class says Slow while B's own says Fast, to be a stale estimate: it makes the link again
+/// once (A learns the new round trip time when the link comes up) and asks again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_answering_end_is_made_to_learn_a_faster_link_by_one_new_link_when_it_refuses() {
+    let l = link(900).await;
+    touch(&l).await;
+    assert_eq!(l.b.speeds().ask_speed(&l.ka), Speed::Slow);
+    let data = random(3 * 1024 * 1024, 4);
+    let hash = l.a_store.add_bytes(&data).unwrap().hash;
+    assert!(is_too_slow(&fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(60), |_| {}).await.expect_err("slow")));
+    l.delay.store(1, Ordering::Relaxed);
+    let end = Instant::now() + Duration::from_secs(90);
+    while l.b.speeds().ask_speed(&l.ka) != Speed::Fast {
+        assert!(Instant::now() < end, "B judges the link fast");
+        touch(&l).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let before = l.b.link_id_to(&l.ka).unwrap();
+    assert_eq!(l.a.speeds().serve_speed(&l.kb), Speed::Slow, "A has only the round trip time the link came up with");
+    let f = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(60), |_| {}).await.expect("the file comes after one new link");
+    assert_eq!(f.size, 3 * 1024 * 1024);
+    assert!(l.b_store.get_bytes(&hash).unwrap() == data);
+    assert_ne!(l.b.link_id_to(&l.ka).unwrap(), before, "made again once");
+    assert_eq!(l.a.speeds().serve_speed(&l.kb), Speed::Fast, "and A learned it");
+}

@@ -1173,6 +1173,23 @@ impl RnsNode {
         Ok(link)
     }
 
+    /// Measures the link to `peer` now with a small request (making the link first if there is none), whatever the time since the
+    /// last measurement. Whether a new link had to come up since the last call.
+    pub async fn measure(&self, peer: &PublicKey, timeout: Duration) -> Result<bool> {
+        let link = self.link_to(peer, timeout).await?;
+        self.probe(peer, link, timeout).await?;
+        Ok(self.speeds.take_fresh(peer))
+    }
+
+    /// Closes the link this device has to `peer` and lets the next request make a new one: the other end learns the round trip
+    /// time of the new link when it comes up (the only way an answering end that asks nothing itself can).
+    pub fn relink(&self, peer: &PublicKey) {
+        let link = self.state.lock().unwrap().link_to.remove(peer.as_bytes());
+        if let Some(l) = link {
+            let _ = self.handle.close_link(l);
+        }
+    }
+
     /// The link this device has open to `peer` (one it opened), as Prns numbers it: for telling whether a link was kept or made
     /// again.
     pub fn link_id_to(&self, peer: &PublicKey) -> Option<impl std::fmt::Debug + PartialEq + Clone> {

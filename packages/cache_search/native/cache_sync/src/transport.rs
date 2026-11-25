@@ -172,6 +172,11 @@ pub trait Transport: Send + Sync + 'static {
     fn speed(&self, _peer: &str) -> Speed {
         Speed::Fast
     }
+    /// Measures the link to a linked device now with a small request, and says whether a new link came up since the last call
+    /// (a held back item resumes on that when its class now allows it). Nothing over iroh.
+    fn measure(&self, _peer: &str) -> BoxFut<'_, bool> {
+        Box::pin(async { false })
+    }
     /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
     /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
     fn pair_short(&self, _dest_hex: &str, _body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {

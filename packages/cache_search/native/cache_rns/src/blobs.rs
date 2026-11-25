@@ -150,6 +150,8 @@ pub async fn fetch(
     // The next chunk wanted.
     let mut at = 0u64;
     let mut watch = WindowWatch::default();
+    // The answering end may hold an old round trip time for this link: one refusal is taken for that and the link is made again.
+    let mut relinked = false;
     loop {
         if f.size > 0 && at * CHUNK >= f.size {
             break;
@@ -184,13 +186,24 @@ pub async fn fetch(
         let asked = std::time::Instant::now();
         let reply = match node.request(peer, BLOB_PATH, &encode_want(&hash, at, at + len), window_timeout.min(budget)).await {
             Ok(r) => r,
-            Err(_) if asked.elapsed() >= budget => return Err(too_slow("the window was not done within a minute, the connection is too slow")),
+            Err(_) if asked.elapsed() >= budget => {
+                // Not done in the budget: at best the window's size over the budget, which the rate now says (and a probe cannot).
+                speeds.note_transfer(peer, len * CHUNK, budget);
+                return Err(too_slow("the window was not done within a minute, the connection is too slow"));
+            }
             Err(e) => return Err(e),
         };
         match reply.first() {
             Some(&OK) => {}
             Some(&MISSING) => bail!("the other device does not have this file"),
             Some(&NOT_READY) => bail!("the other device is not ready to send files yet (its file store is being updated)"),
+            Some(&TOO_SLOW) if !relinked && class != Speed::Slow => {
+                // This end judged the link good enough for what it asked and the other end did not: the other end's judgment may
+                // be the round trip time the link came up with (it measures nothing newer). A new link tells it the current one.
+                relinked = true;
+                node.relink(peer);
+                continue;
+            }
             Some(&TOO_SLOW) => {
                 // The other end's judgment is Slow (or this file or window is more than its class carries): the slower wins.
                 speeds.note_refused(peer);

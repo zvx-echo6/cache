@@ -179,6 +179,8 @@ struct PeerSpeed {
     refused: bool,
     /// When this link was last measured (opened, probed or carried a transfer).
     measured: Option<Instant>,
+    /// A link this device opened has come up since [`Speeds::take_fresh`] last said so.
+    fresh: bool,
 }
 
 impl PeerSpeed {
@@ -216,6 +218,7 @@ impl Speeds {
     /// A link this device opened is up, with this round trip time. Anything held against the link from before is dropped.
     pub fn set_opened_rtt(&self, peer: &PublicKey, ms: u64) {
         self.with(peer, |p| {
+            p.fresh = true;
             p.rtt = Some(ms);
             p.rtt_at = Some(Instant::now());
             p.refused = false;
@@ -299,6 +302,12 @@ impl Speeds {
             };
             classify(rtt, None, p.hop)
         })
+    }
+
+    /// Whether a link to `peer` has come up (this device opened it) since the last call: a new link's round trip time is the
+    /// first thing a held back item can resume on.
+    pub fn take_fresh(&self, peer: &PublicKey) -> bool {
+        self.with(peer, |p| std::mem::take(&mut p.fresh))
     }
 
     /// The moving rate of the transfers measured with `peer` over the last [`RATE_WINDOW`], in bytes a second.

@@ -368,6 +368,16 @@ impl Transport for MultiTransport {
         peer.parse::<PublicKey>().ok().zip(self.node()).map_or(Speed::Fast, |(k, n)| speed_of(n.speeds().ask_speed(&k)))
     }
 
+    fn measure(&self, peer: &str) -> BoxFut<'_, bool> {
+        let key = peer.parse::<PublicKey>().ok().zip(self.node()).filter(|_| self.reached_over_rns(peer));
+        Box::pin(async move {
+            match key {
+                Some((k, n)) => n.measure(&k, Duration::from_secs(30)).await.unwrap_or(false),
+                None => false,
+            }
+        })
+    }
+
     fn reached_over_rns(&self, peer: &str) -> bool {
         let reached = self.last_via.lock().unwrap().get(peer) == Some(&Net::Reticulum);
         reached && peer.parse::<PublicKey>().ok().zip(self.node()).is_some_and(|(k, n)| n.reachable(&k))

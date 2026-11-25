@@ -309,6 +309,12 @@ pub struct Config {
     /// measures it, in ms (default 10 s).
     #[serde(default)]
     pub speed_probe_ms: Option<u64>,
+    /// How often the link of a device this device holds files back from is measured, in ms (default 5 s).
+    #[serde(default)]
+    pub resume_check_ms: Option<u64>,
+    /// How long a link must allow what was held back before a round for that device is started, in ms (default 30 s, design 2b).
+    #[serde(default)]
+    pub resume_hold_ms: Option<u64>,
 }
 
 fn default_bulk() -> Vec<String> {
@@ -967,6 +973,11 @@ struct Inner {
     heard_from: Mutex<HashSet<String>>,
     /// Linked devices heard reachable again, and when a round with each becomes due ([`REACHABLE_DELAY`]).
     reach_pending: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_check_ms`] and [`Config::resume_hold_ms`].
+    resume_check: Duration,
+    resume_hold: Duration,
+    /// Per device: since when its link has allowed what was held back from it.
+    resume_since: Mutex<HashMap<String, Instant>>,
     /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
     waiting: Mutex<BTreeMap<WaitKey, u64>>,
     /// [`Config::bulk`].
@@ -2150,6 +2161,43 @@ impl Inner {
             .filter_map(|id| self.last_contact.lock().unwrap().get(id).map(|t| (*t + self.safety).saturating_duration_since(now)))
             .min();
         [pending, safety].into_iter().flatten().min().map(|d| d.max(Duration::from_millis(500)))
+    }
+
+    /// Watches the devices this device holds files or lists back from because their link was too slow (design 2b, "It speeds up"):
+    /// each is measured every few seconds, and when its class allows what waits, a round for it is started at once if a new link
+    /// came up, or once the class has allowed it for 30 seconds. The rate cannot be measured while nothing flows, so the round
+    /// that follows is the measurement: a link that is not fast after all gives the item back to waiting.
+    async fn resume_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(self.resume_check).await;
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if !self.network.load(Ordering::Relaxed) {
+                continue;
+            }
+            let mut held: BTreeMap<String, Vec<(String, String, u64)>> = BTreeMap::new();
+            for ((peer, share, path), size) in self.waiting.lock().unwrap().iter() {
+                held.entry(peer.clone()).or_default().push((share.clone(), path.clone(), *size));
+            }
+            self.resume_since.lock().unwrap().retain(|p, _| held.contains_key(p));
+            for (peer, items) in held {
+                let fresh = self.net.measure(&peer).await;
+                let class = self.class_of(&peer);
+                let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) });
+                if !allowed {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    continue;
+                }
+                let since = *self.resume_since.lock().unwrap().entry(peer.clone()).or_insert_with(Instant::now);
+                if fresh || since.elapsed() >= self.resume_hold {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    self.due.lock().unwrap().insert(peer.clone());
+                    self.due_why.lock().unwrap().insert(peer.clone(), format!("faster connection to {}", self.peer_name(&peer)));
+                    self.wake_due.notify_one();
+                }
+            }
+        }
     }
 
     /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
@@ -3736,6 +3784,8 @@ impl SyncEngine {
         });
         let inner5 = inner.clone();
         rt.spawn(async move { inner5.notice_loop().await });
+        let inner6 = inner.clone();
+        rt.spawn(async move { inner6.resume_loop().await });
         if let Some(secs) = cfg.lifetime_secs {
             let inner4 = inner.clone();
             let net4 = inner.net.clone();
@@ -3899,6 +3949,9 @@ impl SyncEngine {
             heard_from: Mutex::new(HashSet::new()),
             reach_pending: Mutex::new(HashMap::new()),
             waiting: Mutex::new(BTreeMap::new()),
+            resume_check: Duration::from_millis(cfg.resume_check_ms.unwrap_or(5_000).max(50)),
+            resume_hold: Duration::from_millis(cfg.resume_hold_ms.unwrap_or(30_000)),
+            resume_since: Mutex::new(HashMap::new()),
             bulk: cfg.bulk.iter().cloned().collect(),
             medium_page: cfg.medium_page_bytes.unwrap_or(transport::MEDIUM_PAGE_BYTES).max(512),
             store_ready: AtomicBool::new(false),
