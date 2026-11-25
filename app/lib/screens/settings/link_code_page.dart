@@ -175,7 +175,7 @@ class _LinkCodePageState extends State<LinkCodePage> {
     );
   }
 
-  static final ButtonStyle _pill = OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48), shape: const StadiumBorder());
+  static final ButtonStyle _pill = OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48));
 
   Widget _section(BuildContext context) {
     final busy = _nearby.linking != null || _nearby.state.active;
