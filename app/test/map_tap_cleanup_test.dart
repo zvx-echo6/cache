@@ -1,3 +1,4 @@
+import 'dart:async';
 // Map tap cleanup: a tap on open ground drops a pin (and a second one moves it), an area opens only from its label, the pin card's
 // county line opens the county, an area's card has no dot and a pin and a destination are a map pin, and while choosing directions a
 // tap on empty map, a swipe down on the panel and the system Back each return to the place card (Back again closes it). Every name
@@ -14,6 +15,10 @@ import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/route_panel.dart';
 import 'package:cache/regions/area_lookup.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/roads/road_event.dart';
+import 'package:cache/roads/road_events_state.dart';
+import 'package:cache/roads/road_geo.dart';
+import 'package:cache/roads/road_map_layers.dart';
 import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
@@ -57,14 +62,27 @@ Map<String, dynamic> _square(double w, double s, double e, double n) => {
       ],
     };
 
-class _Areas implements AreaSource {
+class _Areas implements AreaSource, AreaFetcher {
   AreaHit? hit = AreaHit(town: _town, county: _county, state: _state);
+
+  /// Whether the outline is on the phone; [fetch] is what a fetch of a missing one does (null: it fails). A fetched one is then kept.
+  bool stored = true;
+  Future<Map<String, dynamic>?> Function(RegionRecord r)? fetch;
+  int fetches = 0;
+
+  @override
+  Future<Map<String, dynamic>?> fetchGeometry(RegionRecord r) async {
+    fetches++;
+    final g = await fetch?.call(r);
+    if (g != null) stored = true;
+    return g;
+  }
 
   @override
   Future<AreaHit?> areaAtPoint(double lat, double lon) async => hit;
 
   @override
-  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+  Future<Map<String, dynamic>?> storedGeometry(RegionRecord r) async => !stored ? null : _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
 
   @override
   List<RegionRecord> townsIn(RegionRecord county, {int limit = 3}) => [_town];
@@ -102,7 +120,7 @@ class _Maps {
 
   DriveNav get nav => rig.nav;
 
-  Future<void> pump(WidgetTester tester, {Size size = const Size(390, 844), Future<void> Function()? beforeMount, Future<void> Function()? beforeReady}) async {
+  Future<void> pump(WidgetTester tester, {Size size = const Size(390, 844), Future<void> Function()? beforeMount, Future<void> Function()? beforeReady, RoadEventsState? roads}) async {
     areaFitSettle = Duration.zero;
     addTearDown(() => areaFitSettle = const Duration(milliseconds: 300));
     tester.view.physicalSize = size * 3;
@@ -152,6 +170,7 @@ class _Maps {
         elevation: rig.elevation,
         userLayers: userLayers,
         areas: areas,
+        roadEvents: roads,
       ),
     ));
     for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
@@ -242,6 +261,98 @@ void main() {
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(_outlineFeatures(m), 1);
       expect(find.text('About 49,800 people'), findsOneWidget);
+      await m.finish(tester);
+    });
+
+    testWidgets('a town\'s label wins over a road-event icon on it: a tap where both are hit opens the town', (tester) async {
+      final m = _Maps();
+      const closure = RoadEvent(
+        id: 'e1',
+        source: RoadEventSource.event511,
+        sourceId: 'idaho511-events',
+        kind: RoadEventKind.work,
+        road: 'US-20',
+        line: [],
+        point: LL(42.5, -113.5),
+      );
+      final roads = RoadEventsState(changes: ChangeNotifier(), debounce: Duration.zero, read: () async => [closure]);
+      await m.pump(tester, roads: roads);
+      await tester.runAsync(() async => roads.refresh());
+      await m.settle(tester);
+      expect(roads.events, isNotEmpty, reason: 'the road event is known to the map');
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      m.camera.hits[kRoadEventChips] = [_raw('Point', [-113.5, 42.5], {'id': 'e1'})];
+      await m.tap(tester, 42.5, -113.5);
+      expect(roads.selectedId, isNull, reason: 'the road-event icon did not take the tap');
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor', reason: 'the town label opened the town');
+      expect(_outlineFeatures(m), 1);
+      // With no label under the tap the icon still wins over what is behind it.
+      m.camera.hits.remove('places_locality');
+      await m.tap(tester, 42.5, -113.5);
+      expect(roads.selectedId, 'e1');
+      await m.finish(tester);
+    });
+
+    // An outline that is not on the phone is fetched after the card opens (4 s at most) and drawn if that card is still shown.
+    (List<String>, void Function()) captureLog() {
+      final lines = <String>[];
+      final old = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) => lines.add(message ?? '');
+      return (lines, () => debugPrint = old);
+    }
+
+    testWidgets('a town label with no outline stored fetches it, draws it and keeps it; the log says source=fetched', (tester) async {
+      final (log, restoreLog) = captureLog();
+      final m = _Maps();
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => _square(r.bbox![0], r.bbox![1], r.bbox![2], r.bbox![3]);
+      await m.pump(tester);
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(m.areas.fetches, 1);
+      expect(_outlineFeatures(m), 1, reason: 'the fetched outline is drawn');
+      expect(m.areas.stored, isTrue, reason: 'and kept for next time');
+      expect(log.where((l) => l.contains('map area us-id-quillmoor') && l.contains('source=fetched')), hasLength(1));
+      restoreLog();
+      await m.finish(tester);
+    });
+
+    testWidgets('a failing fetch: the card opens with no outline, and the log says source=none with a reason', (tester) async {
+      final (log, restoreLog) = captureLog();
+      final m = _Maps();
+      m.areas.stored = false;
+      m.areas.fetch = (r) async => throw Exception('offline');
+      await m.pump(tester);
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      await m.tap(tester, 42.5, -113.5);
+      await m.settle(tester);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor', reason: 'the card opened');
+      expect(_outlineFeatures(m), 0);
+      expect(log.where((l) => l.contains('map area us-id-quillmoor') && l.contains('source=none reason=')), hasLength(1), reason: log.where((l) => l.contains('map area')).join('\n'));
+      restoreLog();
+      await m.finish(tester);
+    });
+
+    testWidgets('a slow fetch that arrives after the selection changed draws nothing on the new card', (tester) async {
+      final (log, restoreLog) = captureLog();
+      final m = _Maps();
+      m.areas.stored = false;
+      final late = Completer<Map<String, dynamic>?>();
+      m.areas.fetch = (r) => late.future;
+      await m.pump(tester);
+      m.camera.hits['places_locality'] = [_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'})];
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      m.camera.hits.clear();
+      await m.tap(tester, 42.8, -113.1);
+      expect(m.nav.selected?.matched, 'pin', reason: 'another card is shown now');
+      late.complete(_square(-113.6, 42.4, -113.4, 42.6));
+      await m.settle(tester);
+      expect(_outlineFeatures(m), 0, reason: 'the late outline is not drawn over the newer selection');
+      expect(log.where((l) => l.contains('map area us-id-quillmoor') && l.contains('source=none')), hasLength(1));
+      restoreLog();
       await m.finish(tester);
     });
 

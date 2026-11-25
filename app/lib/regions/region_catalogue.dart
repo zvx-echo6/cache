@@ -344,7 +344,7 @@ class RegionIndex {
 /// The region catalogue, read from the public host and kept in [dir] so it works offline once seen. A file is fetched again
 /// when it is older than [maxAge] (a month: the catalogue follows the monthly map releases); when that fails, the copy on
 /// the phone is used.
-class RegionCatalogue implements AreaSource {
+class RegionCatalogue implements AreaSource, AreaFetcher {
   RegionCatalogue({required this.dir, FetchBytes? fetch, DateTime Function()? now, this.base = kRegionCatalogueBase, this.maxAge = const Duration(days: 30)})
     : _fetch = fetch ?? ((u) => fetchBytes(u, maxBytes: 64 * 1024 * 1024)),
       _now = now ?? DateTime.now;
@@ -425,6 +425,16 @@ class RegionCatalogue implements AreaSource {
     }
     if (type == 'Feature') return (j['geometry'] as Map).cast<String, dynamic>();
     return j;
+  }
+
+  /// The outline of [r], fetched when it is not on the phone and kept (the same fetch-and-keep as [geometry]); null when it cannot be had.
+  @override
+  Future<Map<String, dynamic>?> fetchGeometry(RegionRecord r) async {
+    try {
+      return await geometry(r);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The outline of [r] as it is kept on the phone, never fetched: null when it is not there or cannot be read (a part-written or

@@ -16,6 +16,13 @@ abstract class AreaSource {
   List<RegionRecord> townsIn(RegionRecord county, {int limit = 3});
 }
 
+/// An [AreaSource] that can also fetch an outline that is not on the phone (and keeps it for next time). Asked only after a card is
+/// open: a tap never waits for it.
+abstract class AreaFetcher {
+  /// The region's outline, fetched and kept; null when it cannot be had (no connection, not published).
+  Future<Map<String, dynamic>?> fetchGeometry(RegionRecord r);
+}
+
 /// The result of [areaAt]: the smallest city or town holding the point, the county, the state. Any may be null.
 class AreaHit {
   const AreaHit({this.town, this.county, this.state});
