@@ -18,6 +18,7 @@
 pub mod blobs;
 pub mod bridge;
 pub mod delta;
+pub mod entries;
 pub mod identity;
 pub mod index;
 pub mod transport;
@@ -286,10 +287,12 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
-    /// Run Reticulum beside iroh (Android and Linux; ignored elsewhere). Off unless asked: with no `rns_interfaces`, it listens
-    /// and finds devices on the local network (Wi-Fi auto).
+    /// Run Reticulum beside iroh (Android and Linux; ignored elsewhere): `true`, `false`, or `"entries"`. Off unless asked: with no
+    /// `rns_interfaces`, it listens and finds devices on the local network (Wi-Fi auto) and connects to the entry points that
+    /// are on. `"entries"` is Reticulum with the entry points only and no Wi-Fi auto (what the background-sync service runs,
+    /// which holds no multicast lock).
     #[serde(default)]
-    pub reticulum: bool,
+    pub reticulum: Reticulum,
     /// For tests: the Reticulum interfaces to use instead of Wi-Fi auto.
     #[serde(default)]
     pub rns_interfaces: Option<RnsInterfaces>,
@@ -297,6 +300,28 @@ pub struct Config {
     /// else counts as not set).
     #[serde(default)]
     pub device_kind: Option<String>,
+}
+
+/// How much of Reticulum to run ([`Config::reticulum`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reticulum {
+    #[default]
+    Off,
+    /// With Wi-Fi auto (or the test block's interfaces) and the entry points.
+    On,
+    /// With the entry points only.
+    Entries,
+}
+
+impl<'de> Deserialize<'de> for Reticulum {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        match Option::<Value>::deserialize(d)? {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(Reticulum::Off),
+            Some(Value::Bool(true)) => Ok(Reticulum::On),
+            Some(Value::String(s)) if s == "entries" => Ok(Reticulum::Entries),
+            Some(_) => Err(serde::de::Error::custom("reticulum must be true, false or \"entries\"")),
+        }
+    }
 }
 
 /// The Reticulum interfaces a test asks for ([`Config::rns_interfaces`]).
@@ -315,6 +340,9 @@ pub struct RnsInterfaces {
     /// production, where a pairing announce is only ever sent on local Wi-Fi/LAN interfaces.
     #[serde(default)]
     pub pair_local_tcp: bool,
+    /// Entry points to connect to besides those in `entry_points.json` (never saved there).
+    #[serde(default)]
+    pub entries: Vec<entries::EntryPoint>,
 }
 
 /// A linked device's Reticulum address, as saved in `sync.json` (absent for links with no Reticulum address yet, and in files
@@ -622,6 +650,10 @@ struct RemoteIndex {
     /// has got, no path. It is how a device that only sends sees a transfer to the other one (older versions do not say).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fetching: Option<Fetching>,
+    /// A hash of the sender's entry points, removals included ([`entries::version`]); the device that sees another one than its own
+    /// asks for the list (`cache.entries`). Older versions do not say, and are not asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entries_v: Option<String>,
 }
 
 /// What a device says of the file it is fetching at the moment: no path, only the folder and the progress.
@@ -895,6 +927,14 @@ struct Inner {
     /// Linked devices whose file list said they answer summaries and differences ([`RemoteIndex::summary`]); in memory only
     /// (a saved mirror also says so, see [`Inner::peer_has_summary`]).
     summary_peers: Mutex<HashSet<String>>,
+    /// This device's entry points (the rnsds the person entered) and the removals still remembered: `entry_points.json`.
+    entries: Mutex<Vec<entries::Record>>,
+    /// Entry points the test block gave, always on the node beside the list (never saved).
+    extra_entries: Vec<entries::EntryPoint>,
+    /// The `entries_v` each linked device had when its list was last taken, so a list is not asked for twice.
+    entries_seen: Mutex<HashMap<String, String>>,
+    /// How many times another device has been asked for its entry points: for the tests.
+    asked_entries: AtomicU64,
     /// How many summary, differences and whole-list requests this device has made: for the tests.
     asked_summary: AtomicU64,
     asked_diff: AtomicU64,
@@ -1889,6 +1929,7 @@ impl Inner {
             removed: self.removals_to_offer(&s),
             summary: true,
             fetching: None,
+            entries_v: Some(self.entries_version()),
         };
         if !full {
             out.fetching = self.run.lock().unwrap().transfer.as_ref().map(|t| Fetching { share: t.share_id.clone(), size: t.size, done: t.done });
@@ -1896,6 +1937,11 @@ impl Inner {
             if self.dir.join("no-summary-fetching").exists() {
                 out.fetching = None;
             }
+        }
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-entries-v").exists() {
+            // Acts as a build from before entry points.
+            out.entries_v = None;
         }
         #[cfg(feature = "test-hooks")]
         if self.dir.join("no-summary").exists() {
@@ -2502,6 +2548,69 @@ impl Inner {
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
     }
 
+    /// The hash of this device's entry points ([`entries::version`]).
+    fn entries_version(&self) -> String {
+        entries::version(&self.entries.lock().unwrap())
+    }
+
+    /// Tells the network the entry points it is to have: this device's list (without removals) and the test block's.
+    fn push_entries(&self) {
+        let mut points: Vec<entries::EntryPoint> = self.entries.lock().unwrap().iter().filter(|r| !r.removed).map(|r| r.point()).collect();
+        points.extend(self.extra_entries.iter().cloned());
+        self.net.set_entry_points(points);
+    }
+
+    /// Changes the list under its lock, saves it (a temporary file, then a rename) and tells the network. What `f` returns, or its
+    /// refusal (then nothing is changed or saved).
+    fn change_entries<R>(&self, f: impl FnOnce(&mut Vec<entries::Record>) -> Result<R>) -> Result<R> {
+        let out = {
+            let mut list = self.entries.lock().unwrap();
+            let mut next = list.clone();
+            let out = f(&mut next)?;
+            let next = entries::tidied(next, now_ms());
+            if next != *list {
+                entries::save(&self.dir, &next)?;
+                *list = next;
+            }
+            out
+        };
+        self.push_entries();
+        self.wake.notify_one();
+        Ok(out)
+    }
+
+    /// Asks `peer` for its entry points.
+    async fn fetch_entries(&self, peer: &str) -> Result<Vec<entries::Record>> {
+        let (bytes, _) = self.net.ask(peer, Ask::Entries, &AtomicU32::new(0)).await?;
+        self.asked_entries.fetch_add(1, Ordering::Relaxed);
+        let list: Vec<entries::Record> = serde_json::from_slice(&bytes).context("the entry points from the device are not valid")?;
+        Ok(list.into_iter().filter(|r| entries::id_ok(&r.id)).collect())
+    }
+
+    /// Takes what another device's list adds to this one's: per entry the newer change, a removal over an older entry. Saved, and
+    /// the network told, when it changed anything. `v` is the hash the device said, noted so the same list is not asked for again.
+    fn take_entries(&self, peer: &str, name: &str, theirs: Vec<entries::Record>, v: String) {
+        let changed = {
+            let mut list = self.entries.lock().unwrap();
+            let next = entries::merge(&list, &theirs, now_ms());
+            if next == *list {
+                false
+            } else if let Err(e) = entries::save(&self.dir, &next) {
+                drop(list);
+                self.note(format!("Entry points from {name}: could not save them: {e:#}"));
+                return;
+            } else {
+                *list = next;
+                true
+            }
+        };
+        self.entries_seen.lock().unwrap().insert(peer.to_string(), v);
+        if changed {
+            self.push_entries();
+            self.note(format!("Entry points updated from {name}"));
+        }
+    }
+
     /// Free bytes now on the volume holding `path` (or its nearest existing parent): the figure shown on screen.
     fn free_bytes(path: &Path) -> Option<u64> {
         Self::volume_free(&Self::existing(path)?, false)
@@ -2625,7 +2734,7 @@ impl Inner {
                         learned = Some((idx.name.clone(), via.clone()));
                         st.via = Some(via);
                         st.error = None;
-                        asks = Some((idx.link.clone(), idx.secrets.clone()));
+                        asks = Some((idx.link.clone(), idx.secrets.clone(), idx.entries_v.clone()));
                         st.index = Some(idx);
                     }
                     Err(e) => {
@@ -2644,7 +2753,7 @@ impl Inner {
                     let _ = self.save();
                 }
             }
-            let Some((link, secrets)) = asks else { continue };
+            let Some((link, secrets, entries_v)) = asks else { continue };
             if let Some(l) = link {
                 self.adopt_link(&p.id, l);
             }
@@ -2656,6 +2765,15 @@ impl Inner {
                             self.received.lock().unwrap().insert(p.id.clone(), (secrets_digest(&m), Some(m)));
                         }
                         Err(e) => self.note(format!("Keys from {}: {e:#}", p.name)),
+                    }
+                }
+            }
+            // A device that says its entry points are not the same as these (an older one says nothing and is not asked).
+            if let Some(v) = entries_v {
+                if v != self.entries_version() && self.entries_seen.lock().unwrap().get(&p.id) != Some(&v) {
+                    match self.fetch_entries(&p.id).await {
+                        Ok(list) => self.take_entries(&p.id, &p.name, list, v),
+                        Err(e) => self.note(format!("Entry points from {}: {e:#}", p.name)),
                     }
                 }
             }
@@ -3189,6 +3307,27 @@ struct PairHello {
     rns: Option<RnsProof>,
 }
 
+/// The Reticulum interfaces to start with: the test block's (or Wi-Fi auto, unless the mode is `"entries"`), and every entry point that
+/// is on (this device's, and the test block's own).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn rns_ifaces(cfg: &Config, entries: &[entries::EntryPoint]) -> Vec<cache_rns::Iface> {
+    let mut v = Vec::new();
+    match &cfg.rns_interfaces {
+        Some(t) => {
+            v.extend(t.tcp_listen.iter().map(|a| cache_rns::Iface::TcpListen(a.clone())));
+            v.extend(t.tcp_connect.iter().map(|a| cache_rns::Iface::TcpConnect(a.clone())));
+            if t.wifi {
+                v.push(cache_rns::Iface::WifiAuto);
+            }
+        }
+        None if cfg.reticulum == Reticulum::Entries => {}
+        None => v.push(cache_rns::Iface::WifiAuto),
+    }
+    let block = cfg.rns_interfaces.iter().flat_map(|t| t.entries.iter());
+    v.extend(entries.iter().chain(block).filter(|e| e.on).map(|e| cache_rns::Iface::Entry(rns_transport::to_rns(e))));
+    v
+}
+
 /// What the network asks of the engine: answers linking requests that carry the code being shown, and the questions of linked devices.
 impl Serve for Inner {
     fn pair_hello(&self, peer: &str, bytes: &[u8]) -> Vec<u8> {
@@ -3271,6 +3410,11 @@ impl Serve for Inner {
 
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> transport::BoxFut<'static, Vec<u8>> {
         Box::pin(async move {
+            // The entry points hold passphrases: only a device that is linked is answered, and nothing else happens for one that is not.
+            if ask == Ask::Entries && !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+                say("entry points asked for by a device that is not linked: refused");
+                return b"not linked".to_vec();
+            }
             // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
             self.confirm_peer(&peer);
             self.heard_from.lock().unwrap().insert(peer.clone());
@@ -3280,6 +3424,7 @@ impl Serve for Inner {
                     let mine = self.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
                     serde_json::to_vec(&mine).unwrap_or_default()
                 }
+                Ask::Entries => serde_json::to_vec(&*self.entries.lock().unwrap()).unwrap_or_default(),
                 Ask::Index => tokio::task::spawn_blocking(move || serde_json::to_vec(&self.our_index_for(&peer)).unwrap_or_default())
                     .await
                     .unwrap_or_default(),
@@ -3598,6 +3743,8 @@ impl SyncEngine {
         if let Some(port) = cfg.port.filter(|p| *p != 0) {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
+        // This device's entry points, from their file (the network is told after it starts).
+        let entry_list = entries::tidied(entries::load(&cfg.dir), now_ms());
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         // Hashes whose files in the store the iroh bridge reads (see `bridge`): the store never deletes or moves those.
         let lent: Arc<Mutex<HashSet<Hash>>> = Arc::default();
@@ -3605,7 +3752,7 @@ impl SyncEngine {
         let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone(), bridge).await?;
         // Reticulum beside iroh (Android and Linux), when asked: the saved links with the destination saved for each.
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        let multi = cfg.reticulum.then(|| {
+        let multi = (cfg.reticulum != Reticulum::Off).then(|| {
             rns_transport::MultiTransport::new(iroh_net.clone(), saved.peers.iter().map(|p| (p.id.clone(), p.rns.as_ref().map(|r| r.dest.clone()))))
         });
         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -3671,6 +3818,10 @@ impl SyncEngine {
             device_kind: cfg.device_kind.clone().filter(|k| matches!(k.as_str(), "phone" | "tablet" | "computer")),
             received: Mutex::new(HashMap::new()),
             summary_peers: Mutex::new(HashSet::new()),
+            entries: Mutex::new(entry_list),
+            extra_entries: cfg.rns_interfaces.as_ref().map(|t| t.entries.clone()).unwrap_or_default(),
+            entries_seen: Mutex::new(HashMap::new()),
+            asked_entries: AtomicU64::new(0),
             asked_summary: AtomicU64::new(0),
             asked_diff: AtomicU64::new(0),
             asked_full: AtomicU64::new(0),
@@ -3698,18 +3849,7 @@ impl SyncEngine {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(m) = &multi {
             // After the store has opened: the node serves from it. Without Reticulum the device carries on over iroh alone.
-            let ifaces = match &cfg.rns_interfaces {
-                Some(t) => {
-                    let mut v = Vec::new();
-                    v.extend(t.tcp_listen.iter().map(|a| cache_rns::Iface::TcpListen(a.clone())));
-                    v.extend(t.tcp_connect.iter().map(|a| cache_rns::Iface::TcpConnect(a.clone())));
-                    if t.wifi {
-                        v.push(cache_rns::Iface::WifiAuto);
-                    }
-                    v
-                }
-                None => vec![cache_rns::Iface::WifiAuto],
-            };
+            let ifaces = rns_ifaces(&cfg, &inner.entries.lock().unwrap().iter().filter(|r| !r.removed).map(|r| r.point()).collect::<Vec<_>>());
             let pair_local_tcp = cfg.rns_interfaces.as_ref().is_some_and(|t| t.pair_local_tcp);
             inner.push_former();
             #[cfg(feature = "test-hooks")]
@@ -3863,6 +4003,7 @@ impl SyncEngine {
                 "full": inner.asked_full.load(Ordering::Relaxed),
                 "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
                 "notice_got": inner.notice_got.load(Ordering::Relaxed),
+                "entries": inner.asked_entries.load(Ordering::Relaxed),
             })),
             #[cfg(feature = "test-hooks")]
             "test_quiet" => {
@@ -4306,6 +4447,124 @@ impl SyncEngine {
                 }
                 inner.save()?;
                 Ok(json!({"ok": true}))
+            }
+            "entry_points" => {
+                // The entry points (the rnsds the person entered), each with where it stands now. Never the passphrase: only whether
+                // there is one.
+                let status: HashMap<String, (&'static str, u64)> = inner.net.entry_status().into_iter().map(|e| (e.id, (e.state, e.checked))).collect();
+                let mut list: Vec<entries::Record> = inner.entries.lock().unwrap().iter().filter(|r| !r.removed).cloned().collect();
+                list.sort_by(|a, b| (a.host.to_lowercase(), a.port, &a.id).cmp(&(b.host.to_lowercase(), b.port, &b.id)));
+                let out: Vec<Value> = list
+                    .iter()
+                    .map(|r| {
+                        let (state, checked) = match (r.on, status.get(&r.id)) {
+                            (false, _) => ("off", now_ms()),
+                            (true, Some(s)) => *s,
+                            (true, None) => ("not_running", now_ms()),
+                        };
+                        json!({
+                            "id": r.id, "host": r.host, "port": r.port, "private": r.private, "network_name": r.network_name,
+                            "has_passphrase": r.passphrase.is_some(), "on": r.on, "cap_bytes": r.cap_bytes, "t": r.t, "dev": r.dev,
+                            "status": state, "checked": checked,
+                        })
+                    })
+                    .collect();
+                Ok(json!({"entries": out}))
+            }
+            "entry_point_set" => {
+                // Adds an entry point (no `id`), or edits one (its `id`). Every field may be given; one left out stays as it was (a new
+                // entry: on, no name, no passphrase, the default cap). A passphrase left out keeps the one saved.
+                let id = s("id");
+                let me = inner.me.clone();
+                let id = inner.change_entries(|list| {
+                    let have = match &id {
+                        Some(i) => Some(list.iter().find(|r| r.id == *i && !r.removed).cloned().ok_or_else(|| anyhow!("There is no such entry point."))?),
+                        None => None,
+                    };
+                    let text = |k: &str| -> Result<Option<Option<String>>> {
+                        match args.get(k) {
+                            None | Some(Value::Null) => Ok(None),
+                            Some(Value::String(v)) => Ok(Some(Some(v.clone()).filter(|v| !v.is_empty()))),
+                            Some(_) => bail!("{k} must be text"),
+                        }
+                    };
+                    let host = match args.get("host") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.host.clone()).unwrap_or_default(),
+                        Some(Value::String(h)) => h.trim().to_string(),
+                        Some(_) => bail!("host must be text"),
+                    };
+                    let port: u32 = match args.get("port") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.port as u32).unwrap_or(0),
+                        Some(v) => v.as_u64().map(|n| n.min(u32::MAX as u64) as u32).ok_or_else(|| anyhow!("The port has to be a number from 1 to 65535."))?,
+                    };
+                    let private = match args.get("private") {
+                        None | Some(Value::Null) => have.as_ref().is_some_and(|h| h.private),
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => bail!("private must be true or false"),
+                    };
+                    let name = text("network_name")?.unwrap_or_else(|| have.as_ref().and_then(|h| h.network_name.clone()));
+                    let pass = text("passphrase")?.unwrap_or_else(|| have.as_ref().and_then(|h| h.passphrase.clone()));
+                    let (name, pass) = if private { (name, pass) } else { (None, None) };
+                    entries::validate(&host, port, private, name.as_deref(), pass.as_deref()).map_err(|e| anyhow!(e))?;
+                    let on = match args.get("on") {
+                        None | Some(Value::Null) => have.as_ref().is_none_or(|h| h.on),
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => bail!("on must be true or false"),
+                    };
+                    let cap_bytes = match args.get("cap_bytes") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.cap_bytes).unwrap_or(entries::DEFAULT_CAP_BYTES),
+                        Some(v) => v.as_u64().filter(|n| *n > 0).ok_or_else(|| anyhow!("The file limit has to be a number of bytes above zero."))?,
+                    };
+                    let new_id = have.as_ref().map(|h| h.id.clone()).unwrap_or_else(entries::new_id);
+                    let same = |r: &entries::Record| !r.removed && r.id != new_id && r.port as u32 == port && r.host.eq_ignore_ascii_case(&host);
+                    if list.iter().any(same) {
+                        bail!("That entry point is already in your list.");
+                    }
+                    // Later than anything this id has had here, so the change always wins over the one it follows.
+                    let t = list.iter().find(|r| r.id == new_id).map(|r| r.t + 1).unwrap_or(0).max(now_ms());
+                    let rec = entries::Record { id: new_id.clone(), removed: false, host, port: port as u16, private, network_name: name, passphrase: pass, on, cap_bytes, t, dev: me };
+                    list.retain(|r| r.id != new_id);
+                    list.push(rec);
+                    Ok(new_id)
+                })?;
+                Ok(json!({"ok": true, "id": id}))
+            }
+            "entry_point_on" => {
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let on = args.get("on").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("on is required"))?;
+                let me = inner.me.clone();
+                inner.change_entries(|list| {
+                    let r = list.iter_mut().find(|r| r.id == id && !r.removed).ok_or_else(|| anyhow!("There is no such entry point."))?;
+                    if r.on != on {
+                        r.on = on;
+                        r.t = (r.t + 1).max(now_ms());
+                        r.dev = me;
+                    }
+                    Ok(())
+                })?;
+                Ok(json!({"ok": true}))
+            }
+            "entry_point_remove" => {
+                // A removal is kept (60 days) so the devices that were away learn of it.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let me = inner.me.clone();
+                inner.change_entries(|list| {
+                    let r = list.iter_mut().find(|r| r.id == id && !r.removed).ok_or_else(|| anyhow!("There is no such entry point."))?;
+                    *r = entries::Record::tombstone(&id, (r.t + 1).max(now_ms()), &me);
+                    Ok(())
+                })?;
+                Ok(json!({"ok": true}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_answer_entries" => {
+                // What this device answers when `peer` asks for its entry points.
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let inner2 = inner.clone();
+                let reply = self.rt.block_on(async move { Serve::answer(inner2, peer, Ask::Entries).await });
+                Ok(match serde_json::from_slice::<Value>(&reply) {
+                    Ok(list) => json!({"refused": false, "list": list}),
+                    Err(_) => json!({"refused": true}),
+                })
             }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {

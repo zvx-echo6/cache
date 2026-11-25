@@ -442,22 +442,25 @@ fn a_peer_reached_through_an_entry_point_is_said_to_be_so_in_the_status() {
     let a = engine_entries(&da, "Desk", json!(true));
     let b = engine_entries(&db, "Phone", json!(true));
     wait("both to connect", 40, || status_of(&a, id) == "connected" && status_of(&b, id) == "connected");
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    call(&a, "network_changed", json!({}));
-    call(&b, "network_changed", json!({}));
-    std::thread::sleep(std::time::Duration::from_secs(3));
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     assert_eq!(call(&b, "link", json!({"code": code}))["name"], "Desk");
-    wait("B to hear A", 60, || {
+    // An entry point is announced on once, when it connects; a device only knows another's destination once they are linked, so
+    // each switches its entry off and on now (the other hears that announce), as when the person turns it back on. (A device found
+    // only by a path request counts as plain "reticulum" until an announce of it comes in on the entry point.)
+    for e in [&a, &b] {
+        call(e, "entry_point_on", json!({"id": id, "on": false}));
+        call(e, "entry_point_on", json!({"id": id, "on": true}));
+    }
+    wait("both to connect again", 40, || status_of(&a, id) == "connected" && status_of(&b, id) == "connected");
+    // What a route came in on is learned from the announce that answers (until then it is plain "reticulum"), so this waits for it.
+    wait("B to hear A through its entry point", 90, || {
         call(&b, "sync_now", json!({}));
-        via(&b, "Desk").is_some()
+        via(&b, "Desk") == Some(format!("entry:{id}"))
     });
-    assert_eq!(via(&b, "Desk"), Some(format!("entry:{id}")), "reached through B's entry point");
-    wait("A to hear B", 60, || {
+    wait("A to hear B through its entry point", 90, || {
         call(&a, "sync_now", json!({}));
-        via(&a, "Phone").is_some()
+        via(&a, "Phone") == Some(format!("entry:{id}"))
     });
-    assert_eq!(via(&a, "Phone"), Some(format!("entry:{id}")));
     a.close();
     b.close();
 }

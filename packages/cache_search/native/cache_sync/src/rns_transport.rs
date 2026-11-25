@@ -19,7 +19,8 @@ use n0_future::Stream;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::transport::{Ask, BoxFut, BoxStream, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
+use crate::entries::EntryPoint;
+use crate::transport::{Ask, BoxFut, BoxStream, Delta, EntryStatus, FetchEvent, IrohTransport, PairTarget, Serve, Transport, NO_REACH};
 use crate::MAX_INDEX;
 
 /// How long iroh waits before it starts when Reticulum has a path to the device: Reticulum answers first when it can, and
@@ -45,6 +46,8 @@ const PATH_SUMMARY: &str = "/cache/summary";
 const PATH_DIFF: &str = "/cache/diff";
 /// "Folder F is at counter N", from a linked device that changed it (step 3 part 2); never open to an unlinked device.
 const PATH_NOTICE: &str = "/cache/notice";
+/// The entry points (with their passphrases), answered to a linked device only.
+const PATH_ENTRIES: &str = "/cache/entries";
 const PATH_PAIR: &str = "/cache/pair";
 
 /// The network that last answered a device.
@@ -82,6 +85,29 @@ pub struct MultiTransport {
     former: Mutex<Vec<String>>,
     /// Tests only: how long without an announce makes a device reachable again, in ms (0: the node's own).
     reach_gap_ms: AtomicU64,
+    /// The entry points (on and off) the node is to have, kept to start it again.
+    entries: Mutex<Vec<cache_rns::EntryPoint>>,
+}
+
+/// An entry point as the node takes it (the passphrase in a string that is wiped when dropped).
+pub(crate) fn to_rns(e: &EntryPoint) -> cache_rns::EntryPoint {
+    cache_rns::EntryPoint {
+        id: e.id.clone(),
+        host: e.host.clone(),
+        port: e.port,
+        network_name: e.network_name.clone(),
+        passphrase: e.passphrase.clone().map(cache_rns::Zeroizing::new),
+        on: e.on,
+    }
+}
+
+/// How a route comes in, as the status says it: "wifi", "entry:<id>" through an entry point, or "reticulum".
+fn via_name(node: &RnsNode, key: &PublicKey) -> String {
+    match node.via(key) {
+        Some(Via::Wifi) => "wifi".into(),
+        Some(Via::Entry(id)) => format!("entry:{id}"),
+        _ => "reticulum".into(),
+    }
 }
 
 fn hex(b: &[u8]) -> String {
@@ -98,12 +124,15 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0) })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default() })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
     /// requests answered by `serve`. `interfaces` are the test block's; none means Wi-Fi auto.
     pub async fn start_rns(&self, device: SecretKey, store: &Store, serve: Arc<dyn Serve>, interfaces: Vec<Iface>, pair_local_tcp: bool) -> Result<()> {
+        // The entry points among the interfaces are kept apart: a start again (a used-up Nearby pool) uses the list as it is then.
+        let (entries, interfaces): (Vec<Iface>, Vec<Iface>) = interfaces.into_iter().partition(|i| matches!(i, Iface::Entry(_)));
+        *self.entries.lock().unwrap() = entries.into_iter().filter_map(|i| if let Iface::Entry(e) = i { Some(e) } else { None }).collect();
         *self.start_args.lock().unwrap() = Some(StartArgs { device, blobs: store.clone(), serve, interfaces, pair_local_tcp });
         self.launch().await
     }
@@ -112,10 +141,10 @@ impl MultiTransport {
         let a = self.start_args.lock().unwrap().clone().ok_or_else(|| anyhow!("Reticulum was not set up"))?;
         let cfg = RnsConfig {
             device: a.device.clone(),
-            interfaces: a.interfaces.clone(),
+            interfaces: a.interfaces.iter().cloned().chain(self.entries.lock().unwrap().iter().filter(|e| e.on).cloned().map(Iface::Entry)).collect(),
             peers: self.peer_list(),
             wifi_group: None,
-            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into(), PATH_NOTICE.into()],
+            paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into(), PATH_NOTICE.into(), PATH_ENTRIES.into()],
             open_paths: vec![PATH_PAIR.into()],
             max_bytes: MAX_INDEX as u64,
             blobs: Some(a.blobs.clone()),
@@ -217,12 +246,12 @@ impl Transport for MultiTransport {
             let (path, wait) = match ask {
                 Ask::Index => (PATH_INDEX, Duration::from_secs(120)),
                 Ask::Secrets => (PATH_SECRETS, Duration::from_secs(30)),
+                Ask::Entries => (PATH_ENTRIES, Duration::from_secs(30)),
             };
             let over_rns = async {
                 let body = node.request(&key, path, b"ask", wait).await?;
                 // "wifi" is what the app's Same Wi-Fi row keys on: the route comes in on a Wi-Fi interface.
-                let via = if node.via(&key) == Some(Via::Wifi) { "wifi" } else { "reticulum" };
-                Ok::<_, anyhow::Error>((body, via.to_string()))
+                Ok::<_, anyhow::Error>((body, via_name(&node, &key)))
             };
             let over_iroh = async {
                 tokio::time::sleep(IROH_HEAD_START).await;
@@ -289,8 +318,7 @@ impl Transport for MultiTransport {
             match node.request(&key, path, &body, wait).await {
                 Ok(reply) => {
                     self.note(peer, Net::Reticulum);
-                    let via = if node.via(&key) == Some(Via::Wifi) { "wifi" } else { "reticulum" };
-                    Ok((reply, via.to_string()))
+                    Ok((reply, via_name(&node, &key)))
                 }
                 Err(e) => {
                     if cache_rns::is_not_linked(&e) {
@@ -380,6 +408,32 @@ impl Transport for MultiTransport {
         self.peers.lock().unwrap().insert(peer.to_string(), Some(cache_rns::dest_hex(&d)));
         self.push_peers();
         true
+    }
+
+    fn set_entry_points(&self, entries: Vec<EntryPoint>) {
+        let all: Vec<cache_rns::EntryPoint> = entries.iter().map(to_rns).collect();
+        *self.entries.lock().unwrap() = all.clone();
+        if let Some(n) = self.node() {
+            n.set_entry_points(&all);
+        }
+    }
+
+    fn entry_status(&self) -> Vec<EntryStatus> {
+        let Some(n) = self.node() else { return Vec::new() };
+        n.entry_status()
+            .into_iter()
+            .map(|(id, st, checked)| {
+                let state = match st {
+                    cache_rns::EntryState::Off => "off",
+                    cache_rns::EntryState::Connecting => "connecting",
+                    cache_rns::EntryState::Connected => "connected",
+                    cache_rns::EntryState::NotAnswering => "not_answering",
+                    cache_rns::EntryState::Mismatch => "mismatch",
+                    cache_rns::EntryState::NothingHeard => "nothing_heard",
+                };
+                EntryStatus { id, state, checked }
+            })
+            .collect()
     }
 
     fn allow(&self, peer: &str) {
@@ -589,6 +643,11 @@ impl Handler for Serving {
                         serve.asked(&peer);
                     }
                     Ok(reply)
+                }
+                PATH_ENTRIES => {
+                    // The list holds passphrases: a linked device only, and asking for it does not start a round.
+                    let Asker::Linked(peer) = asker else { bail!("not a linked device") };
+                    Ok(serve.clone().answer(peer.to_string(), Ask::Entries).await)
                 }
                 PATH_SUMMARY | PATH_DIFF => {
                     let Asker::Linked(peer) = asker else { bail!("not a linked device") };

@@ -31,13 +31,15 @@ use crate::{closed_403, closed_code, is_no_space, now_ms, GateState, MAX_INDEX, 
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-/// The two things one linked device asks another.
+/// The three things one linked device asks another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ask {
     /// Its index (all shares).
     Index,
     /// The secrets it holds for the asking device.
     Secrets,
+    /// Its entry points (the rnsds the person entered, with their passphrases), removals included. Only a linked device is answered.
+    Entries,
 }
 
 impl Ask {
@@ -45,6 +47,7 @@ impl Ask {
         match self {
             Ask::Index => b"index",
             Ask::Secrets => b"secrets",
+            Ask::Entries => b"entries",
         }
     }
 }
@@ -73,6 +76,16 @@ pub enum FetchEvent {
 pub struct PairTarget {
     pub iroh: EndpointAddr,
     pub rns: Option<String>,
+}
+
+/// Where one entry point stands, as the network says it ([`Transport::entry_status`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryStatus {
+    pub id: String,
+    /// `"off"`, `"connecting"`, `"connected"`, `"not_answering"`, `"mismatch"` or `"nothing_heard"`.
+    pub state: &'static str,
+    /// When that was looked at, in ms since the Unix epoch.
+    pub checked: u64,
 }
 
 /// What the engine asks of the network.
@@ -121,6 +134,13 @@ pub trait Transport: Send + Sync + 'static {
     }
     /// Lets iroh reach a device at the address it gave in a pairing (a short code carries none).
     fn learn_iroh(&self, _addr: EndpointAddr) {}
+    /// Makes the entry points (rnsds the person entered) the ones listed: on the running network, never a restart. Only Reticulum
+    /// has any; elsewhere this does nothing.
+    fn set_entry_points(&self, _entries: Vec<crate::entries::EntryPoint>) {}
+    /// Where each entry point stands (none where there is no Reticulum).
+    fn entry_status(&self) -> Vec<EntryStatus> {
+        Vec::new()
+    }
     /// Lets a device connect (linked, or about to be).
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
@@ -302,6 +322,7 @@ impl Transport for IrohTransport {
             let (wait, limit, late) = match ask {
                 Ask::Index => (120, MAX_INDEX, "timed out reading the file list"),
                 Ask::Secrets => (30, 1024 * 1024, "timed out reading the keys"),
+                Ask::Entries => (30, 4 * 1024 * 1024, "timed out reading the entry points"),
             };
             let bytes = tokio::time::timeout(Duration::from_secs(wait), recv.read_to_end(limit))
                 .await
@@ -455,7 +476,11 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
-        let what = if ask == b"secrets" { Ask::Secrets } else { Ask::Index };
+        let what = match ask.as_slice() {
+            b"secrets" => Ask::Secrets,
+            b"entries" => Ask::Entries,
+            _ => Ask::Index,
+        };
         let body = self.0.clone().answer(peer.clone(), what).await;
         send.write_all(&body).await.map_err(AcceptError::from_err)?;
         send.finish()?;

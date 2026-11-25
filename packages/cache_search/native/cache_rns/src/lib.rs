@@ -24,6 +24,8 @@ use personal_rns::engine::LinkClosedReason;
 use personal_rns::interfaces::{ConnectionState, IfacContext, IfacSize, InterfaceId};
 use personal_rns::identity::IdentityHash;
 use personal_rns::prelude::*;
+/// The wiping string an [`EntryPoint`]'s passphrase is held in.
+pub use personal_rns::prelude::Zeroizing;
 use personal_rns::wifi_auto::AutoWifiStatus;
 use personal_rns::routing::links::channel::MessageType;
 use personal_rns::routing::links::LinkId;
