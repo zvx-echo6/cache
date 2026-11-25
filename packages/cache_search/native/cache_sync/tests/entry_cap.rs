@@ -87,6 +87,11 @@ impl T {
 /// A (Desk, holds the files) and B (Phone) linked through one entry point both have (the default 50 MB cap), no other way between
 /// them. A's folder holds the files `files` (name, MB), each random.
 fn pair(files: &[(&str, usize)]) -> T {
+    pair_with_cap(files, 52428800)
+}
+
+/// The same, with the entry point's cap `cap` bytes.
+fn pair_with_cap(files: &[(&str, usize)], cap: u64) -> T {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let (fa, fb) = (tmp.path().join("fa"), tmp.path().join("fb"));
@@ -99,7 +104,7 @@ fn pair(files: &[(&str, usize)]) -> T {
     let rnsd = rnsd::server(p1, Some((NAME1, PASS1)));
     rns_only_dirs(&[&da, &db]);
     let record = json!([{"id": ID, "host": "127.0.0.1", "port": p1, "private": true, "network_name": NAME1, "passphrase": PASS1, "on": true,
-                         "cap_bytes": 52428800, "t": 1_790_000_000_000u64, "dev": "dev-x"}])
+                         "cap_bytes": cap, "t": 1_790_000_000_000u64, "dev": "dev-x"}])
     .to_string();
     std::fs::write(da.join("entry_points.json"), &record).unwrap();
     std::fs::write(db.join("entry_points.json"), &record).unwrap();
@@ -159,20 +164,24 @@ fn an_asker_that_ignores_its_cap_is_refused_by_the_answering_end() {
 #[test]
 fn a_waiting_file_goes_by_itself_once_the_cap_is_raised() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    let t = pair(&[("big.bin", 60)]);
-    t.until("the 60 MB file to be held back", 120, || waiting(&t.b).iter().any(|w| w.0 == "big.bin"));
+    // A file of 2 MB under a cap of 1 MiB, raised to 4 MiB. The cap is what holds it, and the size does not matter to it: a small file
+    // keeps this test about the cap and not about how fast the machine moves bytes. The stand-in rnsd and the Reticulum windows run in
+    // a debug build and move well under 1 MB/s on a loaded machine; a window that is not done in a minute is given up (the file then
+    // waits for a faster link), and a 9 MB file did not come in 180 s with two cores shared with busy loops, where this one does.
+    let t = pair_with_cap(&[("big.bin", 2)], MB as u64);
+    t.until("the 2 MB file to be held back", 120, || waiting(&t.b).iter().any(|w| w.0 == "big.bin"));
     assert_eq!(waiting(&t.b).iter().find(|w| w.0 == "big.bin").unwrap().1, REASON);
     assert!(read(&t.fb.join("big.bin")).is_none());
     // The person raises the cap on one device; the list reaches the other, and each end then lets the file through.
-    call(&t.a, "entry_point_set", json!({"id": ID, "cap_bytes": 100 * MB as u64}));
+    call(&t.a, "entry_point_set", json!({"id": ID, "cap_bytes": 4 * MB as u64}));
     wait("B to hold the raised cap", 90, || {
         call(&t.a, "sync_now", json!({}));
         call(&t.b, "sync_now", json!({}));
-        cap_of(&t.b) == Some(100 * MB as u64)
+        cap_of(&t.b) == Some(4 * MB as u64)
     });
     // From here nobody asks for a round: the watcher has to notice by itself.
     let end = Instant::now() + Duration::from_secs(180);
-    while read(&t.fb.join("big.bin")).is_none_or(|b| b.len() != 60 * MB) {
+    while read(&t.fb.join("big.bin")).is_none_or(|b| b.len() != 2 * MB) {
         assert!(Instant::now() < end, "the waiting file came by itself\nA: {}\nB: {}", brief(&t.a), brief(&t.b));
         std::thread::sleep(Duration::from_millis(500));
     }
