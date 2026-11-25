@@ -385,7 +385,7 @@ pub fn decode_lines(b: &[u8]) -> Vec<Vec<(f64, f64)>> {
 /// Schema used by the builder (kept here so reader and writer cannot drift).
 pub const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
-CREATE TABLE tiles(layer TEXT NOT NULL, tx INTEGER NOT NULL, ty INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(layer, tx, ty)) WITHOUT ROWID;
+CREATE TABLE tiles(layer TEXT NOT NULL, tx INTEGER NOT NULL, ty INTEGER NOT NULL, data BLOB NOT NULL, UNIQUE(layer, tx, ty));
 CREATE TABLE parking(id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, parking_type TEXT, access TEXT);
 CREATE VIRTUAL TABLE parking_idx USING rtree(id, min_lon, max_lon, min_lat, max_lat);
 CREATE TABLE trailheads(id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, highway_class TEXT);
