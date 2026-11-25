@@ -678,6 +678,8 @@ struct Serving {
 
 /// A device that is served windows is "fetching from this one" until this long after the last window.
 const SERVING_FOR: Duration = Duration::from_secs(10);
+/// The key in the notice queues for "this device's entry points changed" (not a folder's id: those are never empty or start with NUL).
+const ENTRIES_NOTICE: &str = "\u{0}entries";
 /// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
 const NOTICE_EVERY: Duration = Duration::from_millis(800);
 /// A device heard reachable again is asked this long after: a round at that very instant can ask before the link can be made.
@@ -2135,11 +2137,17 @@ impl Inner {
                 break;
             }
             tokio::time::sleep(NOTICE_EVERY).await;
-            let dirty: Vec<String> = std::mem::take(&mut *self.notice_dirty.lock().unwrap()).into_iter().collect();
+            let mut dirty: Vec<String> = std::mem::take(&mut *self.notice_dirty.lock().unwrap()).into_iter().collect();
+            // A change of the entry points goes to every linked device (whatever it shares), coalesced like a folder's.
+            let entries = dirty.iter().any(|d| d == ENTRIES_NOTICE);
+            dirty.retain(|d| d != ENTRIES_NOTICE);
             let peers: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
             for peer in peers {
-                let wanted: Vec<String> = dirty.iter().filter(|sh| self.shares_with(sh, &peer)).cloned().collect();
-                if !wanted.is_empty() && self.peer_has_summary(&peer) {
+                let mut wanted: Vec<String> = if self.peer_has_summary(&peer) { dirty.iter().filter(|sh| self.shares_with(sh, &peer)).cloned().collect() } else { Vec::new() };
+                if entries {
+                    wanted.push(ENTRIES_NOTICE.to_string());
+                }
+                if !wanted.is_empty() {
                     self.queue_notices(&peer, wanted);
                 }
             }
@@ -2177,11 +2185,20 @@ impl Inner {
                 if self.dir.join("no-notice").exists() {
                     continue;
                 }
+                if share == ENTRIES_NOTICE {
+                    let Ok(body) = serde_json::to_vec(&delta::Notice { s: String::new(), e: String::new(), c: 0, v: Some(self.entries_version()) }) else { continue };
+                    self.notice_sent.fetch_add(1, Ordering::Relaxed);
+                    let name = self.peer_name(peer);
+                    if self.net.send_notice(peer, body).await.is_ok() {
+                        say(&format!("notice sent to {name}: entry points"));
+                    }
+                    continue;
+                }
                 let idx = self.load_index(&share);
                 if idx.epoch.is_empty() {
                     continue;
                 }
-                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share.clone(), e: idx.epoch, c: idx.counter }) else { continue };
+                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share.clone(), e: idx.epoch, c: idx.counter, v: None }) else { continue };
                 self.notice_sent.fetch_add(1, Ordering::Relaxed);
                 let (name, sh, c) = (self.peer_name(peer), self.share_name(&share), idx.counter);
                 if self.net.send_notice(peer, body).await.is_ok() {
@@ -2560,6 +2577,13 @@ impl Inner {
         self.net.set_entry_points(points);
     }
 
+    /// Tells the linked devices (a notice with the new `entries_v`, coalesced with others to the same device) that this device's
+    /// list changed.
+    fn entries_changed(&self) {
+        self.notice_dirty.lock().unwrap().insert(ENTRIES_NOTICE.to_string());
+        self.notice_wake.notify_one();
+    }
+
     /// Changes the list under its lock, saves it (a temporary file, then a rename) and tells the network. What `f` returns, or its
     /// refusal (then nothing is changed or saved).
     fn change_entries<R>(&self, f: impl FnOnce(&mut Vec<entries::Record>) -> Result<R>) -> Result<R> {
@@ -2571,6 +2595,7 @@ impl Inner {
             if next != *list {
                 entries::save(&self.dir, &next)?;
                 *list = next;
+                self.entries_changed();
             }
             out
         };
@@ -2604,6 +2629,9 @@ impl Inner {
                 true
             }
         };
+        if changed {
+            self.entries_changed();
+        }
         self.entries_seen.lock().unwrap().insert(peer.to_string(), v);
         if changed {
             self.push_entries();
@@ -3466,6 +3494,18 @@ impl Serve for Inner {
         let Ok(n) = serde_json::from_slice::<delta::Notice>(body) else { return b"not a notice".to_vec() };
         self.notice_got.fetch_add(1, Ordering::Relaxed);
         self.heard_from.lock().unwrap().insert(peer.to_string());
+        if let Some(v) = &n.v {
+            // Its entry points changed: when its list is not the one this device has, nor the one last taken from it, a round with
+            // it is due now (it asks `cache.entries`), so a quiet device does not wait for its safety round.
+            let differs = *v != self.entries_version() && self.entries_seen.lock().unwrap().get(peer) != Some(v);
+            say(&format!("notice from {}: entry points{}", self.peer_name(peer), if differs { "" } else { " (already up to date)" }));
+            if differs {
+                self.make_due(peer);
+            }
+            if n.s.is_empty() {
+                return b"ok".to_vec();
+            }
+        }
         // Caught up already (the saved mirror is at this epoch and counter or past it): nothing to ask.
         let behind = self.load_mirror(peer, &n.s).is_none_or(|m| m.epoch != n.e || n.c > m.ctr || m.after.is_some());
         say(&format!("notice from {}: {} at {}{}", self.peer_name(peer), self.share_name(&n.s), n.c, if behind { "" } else { " (already up to date)" }));

@@ -56,6 +56,11 @@ pub struct Notice {
     pub s: String,
     pub e: String,
     pub c: u64,
+    /// The sender's `entries_v` ([`crate::entries::version`]) when its entry points changed: a notice of that kind has no folder
+    /// (`s` is empty). The receiver whose own value differs makes the device due, so it asks `cache.entries` at once. Absent in
+    /// a folder notice and from older builds, which read it as unknown and ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v: Option<String>,
 }
 
 /// One path that changed: its entry in the asking device's view, or `None` when it is not in that view now (it left the view
