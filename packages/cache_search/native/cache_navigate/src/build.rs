@@ -277,7 +277,7 @@ impl OffroadGap {
 
     pub fn detail(self) -> &'static str {
         match self {
-            OffroadGap::NotDownloaded => "Off-road data for this area isn't on the phone; it loads when the phone is online.",
+            OffroadGap::NotDownloaded => "Off-road data for this area isn't on the phone. Download a region that covers it in Maps › Layers › Download a region; if that region is already downloaded, open it there and tap Add.",
             OffroadGap::NoData => "There is no off-road data for this area.",
             OffroadGap::NoWayFound => "Cache couldn't find an off-road way between the road and this point.",
         }
@@ -496,7 +496,7 @@ mod direction_tests {
         let w = |gap| offroad_unavailable("to", (44.2210004, -114.93180049), 1234, gap).to_string();
         assert_eq!(
             w(OffroadGap::NotDownloaded),
-            r#"{"code":"offroad_unavailable","end":"to","road_point":{"lat":44.221,"lon":-114.9318},"gap_m":1234,"reason":"not_downloaded","detail":"Off-road data for this area isn't on the phone; it loads when the phone is online."}"#
+            r#"{"code":"offroad_unavailable","end":"to","road_point":{"lat":44.221,"lon":-114.9318},"gap_m":1234,"reason":"not_downloaded","detail":"Off-road data for this area isn't on the phone. Download a region that covers it in Maps › Layers › Download a region; if that region is already downloaded, open it there and tap Add."}"#
         );
         assert_eq!(
             w(OffroadGap::NoData),
