@@ -228,3 +228,25 @@ async fn a_class_change_keeps_the_same_link() {
         assert_eq!(l.a.speeds().serve_speed(&l.kb), answering, "the answering end keeps its own estimate");
     }
 }
+
+/// A device that also asks the other one (it has a link of its own to it) learns from its own probes: the answering end's class for
+/// the other device's link then follows the path too, with no link closed or made again. (The path is the same one both ways.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_answering_end_follows_through_its_own_probes_when_it_asks_too() {
+    let l = link(1).await;
+    touch(&l).await;
+    // A asks B too, so A has a link of its own to B.
+    l.a.request(&l.kb, "/x", b"", Duration::from_secs(60)).await.unwrap();
+    assert_eq!(l.a.speeds().serve_speed(&l.kb), Speed::Fast);
+    let (ib, ia) = (l.b.link_id_to(&l.ka).unwrap(), l.a.link_id_to(&l.kb).unwrap());
+    l.delay.store(900, Ordering::Relaxed);
+    let end = Instant::now() + Duration::from_secs(120);
+    while l.a.speeds().serve_speed(&l.kb) != Speed::Slow || l.b.speeds().ask_speed(&l.ka) != Speed::Slow {
+        assert!(Instant::now() < end, "both ends follow: A answers {:?}, B asks {:?}", l.a.speeds().serve_speed(&l.kb), l.b.speeds().ask_speed(&l.ka));
+        let _ = l.b.request(&l.ka, "/x", b"", Duration::from_secs(60)).await.unwrap();
+        let _ = l.a.request(&l.kb, "/x", b"", Duration::from_secs(60)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!((l.b.link_id_to(&l.ka).unwrap(), l.a.link_id_to(&l.kb).unwrap()), (ib, ia), "both links kept");
+    assert_eq!(l.closed.0.load(Ordering::SeqCst) + l.closed.1.load(Ordering::SeqCst), 0, "no link closed");
+}

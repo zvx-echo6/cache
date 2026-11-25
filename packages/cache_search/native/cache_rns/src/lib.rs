@@ -800,8 +800,8 @@ impl RnsNode {
                                     if s.peers.contains(device.as_bytes()) {
                                         s.verified.insert(token.link_id, (*device.as_bytes(), id));
                                         // The round trip time this link came up with is this end's measure of the device's link.
-                                        if let Some(ms) = s.link_info.get(&token.link_id).and_then(|i| i.1) {
-                                            speeds.set_accepted_rtt(&device, ms);
+                                        if let Some((up, Some(ms))) = s.link_info.get(&token.link_id).copied() {
+                                            speeds.set_accepted_rtt_at(&device, ms, up);
                                         }
                                         Some(&b"ok"[..])
                                     } else if s.former.contains(device.as_bytes()) {
@@ -1154,8 +1154,10 @@ impl RnsNode {
     /// goes on. Returns the link to use.
     ///
     /// How each end learns the new class: the asking end (this one) takes the probe's time as its round trip time. The answering
-    /// end cannot: Prns fixes a link's round trip time when the link comes up (the `rtt` on a request is that one, and nothing
-    /// newer reaches the app), so it keeps its own estimate, the round trip time it was given at link-up and the first hop. That
+    /// end cannot learn it from the link: Prns fixes a link's round trip time when the link comes up (the `rtt` on a request is
+    /// that one, and nothing newer reaches the app). It keeps its own estimate: the round trip time it was given at link-up and
+    /// the first hop, or, when it asks this device too and so probes a link of its own, that newer measurement (the path is the
+    /// same both ways, [`Speeds::serve_speed`]). That
     /// is enough because the asker never asks for what its own class forbids; the answering end's check is the backstop for an
     /// asker that does. A link that has got faster is the one case where a stale answering end refuses what the asker may now ask
     /// for: [`RnsNode::relink`] is for that (the asking end calls it when it is refused as too slow while its own class says the

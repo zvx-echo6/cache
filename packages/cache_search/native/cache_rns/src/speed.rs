@@ -125,8 +125,12 @@ pub fn classify(rtt_ms: Option<u64>, rate: Option<f64>, first_hop_bps: Option<u6
 struct PeerSpeed {
     /// The round trip time of the link this device opened, or of the latest small request: the later one counts.
     rtt: Option<u64>,
+    /// When `rtt` was measured.
+    rtt_at: Option<Instant>,
     /// The round trip time of the newest link the other device opened to this one.
     accepted: Option<u64>,
+    /// When `accepted` was measured (the link came up, or its hello checked out).
+    accepted_at: Option<Instant>,
     /// The nominal bitrate of the interface the route leaves by.
     hop: Option<u64>,
     /// Transfers (when they ended, bytes, how long they took), newest last.
@@ -172,6 +176,7 @@ impl Speeds {
     pub fn set_opened_rtt(&self, peer: &PublicKey, ms: u64) {
         self.with(peer, |p| {
             p.rtt = Some(ms);
+            p.rtt_at = Some(Instant::now());
             p.refused = false;
             p.measured = Some(Instant::now());
         });
@@ -179,7 +184,19 @@ impl Speeds {
 
     /// A link the other device opened is up on this end, with the round trip time Reticulum measured when it came up.
     pub fn set_accepted_rtt(&self, peer: &PublicKey, ms: u64) {
-        self.with(peer, |p| p.accepted = Some(ms));
+        self.set_accepted_rtt_at(peer, ms, Instant::now());
+    }
+
+    /// The same, for a round trip time measured at `at` (when that link came up): a hello repeated on the same link must not make
+    /// an old measurement look new.
+    pub fn set_accepted_rtt_at(&self, peer: &PublicKey, ms: u64, at: Instant) {
+        self.with(peer, |p| {
+            if p.accepted_at.is_some_and(|t| t > at) {
+                return;
+            }
+            p.accepted = Some(ms);
+            p.accepted_at = Some(at);
+        });
     }
 
     /// The nominal bitrate of the interface the route to `peer` leaves by (its first hop).
@@ -191,6 +208,7 @@ impl Speeds {
     pub fn note_probe(&self, peer: &PublicKey, ms: u64) {
         self.with(peer, |p| {
             p.rtt = Some(ms);
+            p.rtt_at = Some(Instant::now());
             p.refused = false;
             p.measured = Some(Instant::now());
         });
@@ -228,10 +246,18 @@ impl Speeds {
         })
     }
 
-    /// The class for what this device answers `peer`: from the link `peer` opened (or, with none, the one this device opened)
-    /// and the first hop. This end sees no rate of its own, so a rate is not part of it.
+    /// The class for what this device answers `peer`: from the round trip time of the link `peer` opened (measured when it came up:
+    /// Prns gives the answering end no newer one) or, when this device has measured its own link to `peer` since (it asks `peer`
+    /// too, and probes that link), that newer measurement: the path is the same both ways. Plus the first hop. This end sees no
+    /// rate of its own, so a rate is not part of it.
     pub fn serve_speed(&self, peer: &PublicKey) -> Speed {
-        self.with(peer, |p| classify(p.accepted.or(p.rtt), None, p.hop))
+        self.with(peer, |p| {
+            let rtt = match (p.accepted, p.accepted_at, p.rtt, p.rtt_at) {
+                (Some(a), Some(at), Some(r), Some(rt)) => Some(if rt > at { r } else { a }),
+                (a, _, r, _) => a.or(r),
+            };
+            classify(rtt, None, p.hop)
+        })
     }
 
     /// The link to `peer` has gone without a measurement for [`Speeds::set_probe_every`]: a small request should come first.
