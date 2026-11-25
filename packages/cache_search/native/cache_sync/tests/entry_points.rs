@@ -368,6 +368,51 @@ fn changes_made_on_both_devices_at_once_end_as_the_same_list() {
 }
 
 #[test]
+fn the_same_address_entered_on_two_devices_at_once_ends_as_one_entry_and_stays() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let a = old_engine(&da, "Desk", None);
+    let b = old_engine(&db, "Phone", None);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    let (a_id, b_id) = (call(&a, "status", json!({}))["id"].clone(), call(&b, "status", json!({}))["id"].clone());
+    call(&a, "set_policy", json!({"network": false}));
+    call(&b, "set_policy", json!({"network": false}));
+    let ida = add(&a, "rt.example.net", 4965, None, None);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let idb = add(&b, "RT.example.net", 4965, None, None);
+    assert_ne!(ida, idb);
+    call(&a, "set_policy", json!({"network": true}));
+    call(&b, "set_policy", json!({"network": true}));
+    let v = |e: &SyncEngine, peer: &Value| call(e, "test_view", json!({"peer": peer}))["entries_v"].clone();
+    wait("one entry and the same version on both", 90, || {
+        call(&a, "sync_now", json!({}));
+        call(&b, "sync_now", json!({}));
+        list(&a).len() == 1 && list(&b).len() == 1 && v(&a, &b_id) == v(&b, &a_id)
+    });
+    // B's was entered later: both keep it.
+    assert_eq!(list(&a)[0]["id"], json!(idb));
+    assert_eq!(list(&b)[0]["id"], json!(idb));
+    let (va, la) = (v(&a, &b_id), records(&da));
+    let lb = records(&db);
+    // Three more rounds each: nothing changes, and nothing is asked again.
+    let asked = (call(&a, "test_asked", json!({}))["entries"].as_u64().unwrap(), call(&b, "test_asked", json!({}))["entries"].as_u64().unwrap());
+    for _ in 0..3 {
+        call(&a, "test_round", json!({}));
+        call(&b, "test_round", json!({}));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    assert_eq!((v(&a, &b_id), v(&b, &a_id)), (va.clone(), va));
+    assert_eq!((records(&da), records(&db)), (la, lb));
+    assert_eq!(list(&a).len(), 1);
+    assert_eq!(list(&b).len(), 1);
+    let again = (call(&a, "test_asked", json!({}))["entries"].as_u64().unwrap(), call(&b, "test_asked", json!({}))["entries"].as_u64().unwrap());
+    assert_eq!(again, asked, "no ping-pong: the equal lists are not asked for again");
+    a.close();
+    b.close();
+}
+
+#[test]
 fn a_device_that_does_not_say_entries_v_is_not_asked_for_its_list() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));

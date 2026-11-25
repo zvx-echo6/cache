@@ -138,3 +138,76 @@ fn a_removal_is_remembered_for_60_days_and_at_most_500() {
     assert!(m.iter().all(|r| r.id != format!("{:032x}", 599)), "the oldest of them goes");
     assert!(m.iter().any(|r| !r.removed), "the entry stays beside them");
 }
+
+// --- The same host:port under two ids (step 4, part 3) ---
+//
+// Two devices that each enter the same address while apart make two ids for one rnsd. After the merge there is one live entry: the
+// newer `t` wins, on the same `t` the greater device id, then the greater id. Every loser becomes a removal whose `t` and `dev` are
+// the WINNER's, so the removal is the same record whichever device makes it (equal lists, equal `entries_v`, nothing to send back),
+// and it is never older than the loser it replaces (the same `t` with the winner's greater device, or the same device and `t` with
+// `removed` set), so it beats the loser on every device.
+
+fn live(list: &[Record]) -> Vec<&Record> {
+    list.iter().filter(|r| !r.removed).collect()
+}
+
+#[test]
+fn the_same_host_and_port_under_two_ids_ends_as_one_entry_the_newer() {
+    let a = e("a1", "Rt.Example.NET", NOW - 2000, "dev-a");
+    let b = e("b1", "rt.example.net", NOW - 1000, "dev-b");
+    for (mine, theirs) in [(&a, &b), (&b, &a)] {
+        let m = merge(std::slice::from_ref(mine), std::slice::from_ref(theirs), NOW);
+        assert_eq!(live(&m).len(), 1, "one live entry: {m:?}");
+        assert_eq!(live(&m)[0].id, "b1", "the newer t wins");
+        let lost = find(&m, "a1");
+        assert!(lost.removed, "the loser is a removal");
+        assert_eq!((lost.t, lost.dev.as_str()), (NOW - 1000, "dev-b"), "carrying the winner's t and device");
+    }
+    // The same address on another port is another entry.
+    let c = Record::entry("c1", "rt.example.net", 4966, NOW, "dev-a");
+    assert_eq!(live(&merge(&[b.clone()], &[c], NOW)).len(), 2);
+}
+
+#[test]
+fn on_the_same_t_the_greater_device_wins_and_the_removal_beats_the_loser_everywhere() {
+    let a = e("a1", "rt.example.net", NOW - 1000, "dev-a");
+    let b = e("b1", "rt.example.net", NOW - 1000, "dev-b");
+    let ab = merge(std::slice::from_ref(&a), std::slice::from_ref(&b), NOW);
+    let ba = merge(std::slice::from_ref(&b), std::slice::from_ref(&a), NOW);
+    assert_eq!(ab, ba);
+    assert_eq!(live(&ab)[0].id, "b1");
+    // The same device and the same moment (a clock that stood still): the greater id.
+    let p = e("p1", "x.example", NOW - 1000, "dev-a");
+    let q = e("q1", "x.example", NOW - 1000, "dev-a");
+    let pq = merge(std::slice::from_ref(&p), std::slice::from_ref(&q), NOW);
+    assert_eq!(pq, merge(std::slice::from_ref(&q), std::slice::from_ref(&p), NOW));
+    assert_eq!(live(&pq)[0].id, "q1");
+    // Whatever a device still holds of a loser is replaced by the removal, and nothing comes back.
+    for old in [&a, &p] {
+        assert_eq!(merge(&pq, std::slice::from_ref(old), NOW), pq);
+        assert_eq!(merge(&ab, std::slice::from_ref(old), NOW), ab);
+    }
+}
+
+#[test]
+fn the_dedupe_is_stable_and_gives_equal_versions() {
+    let a = vec![e("a1", "rt.example.net", NOW - 3000, "dev-a"), e("a2", "other.example", NOW - 100, "dev-a")];
+    let b = vec![e("b1", "RT.example.net", NOW - 2000, "dev-b")];
+    let on_a = merge(&a, &b, NOW);
+    let on_b = merge(&b, &a, NOW);
+    assert_eq!(on_a, on_b);
+    assert_eq!(version(&on_a), version(&on_b));
+    assert_eq!(live(&on_a).len(), 2);
+    // Round after round, in any direction, nothing moves.
+    let mut x = on_a.clone();
+    for _ in 0..3 {
+        x = merge(&x, &on_b, NOW);
+        assert_eq!(x, on_a);
+        assert_eq!(version(&x), version(&on_a));
+    }
+    // A removal of the winner does not bring the loser back.
+    let gone = Record::tombstone("b1", NOW, "dev-a");
+    let m = merge(&on_a, std::slice::from_ref(&gone), NOW);
+    assert_eq!(live(&m).len(), 1);
+    assert!(find(&m, "a1").removed);
+}
