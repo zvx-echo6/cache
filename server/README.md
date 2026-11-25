@@ -141,21 +141,41 @@ bookworm (64-bit)+, on x86_64 and aarch64. Older systems are not supported. The 
 ## Install (Linux, systemd)
 
 The release tarball (built by `.github/workflows/server-release.yml`) holds `cache`, `helper/cache-core-helper`,
-`lib/libcache_search.so`, `web/` (the Flutter web build), `cache.service` and a `VERSION` file. As root:
+`lib/libcache_search.so`, `web/` (the Flutter web build), `cache.service` and a `VERSION` file. With sudo, from the account
+of the person Cache is for:
 
-    packaging/install.sh <path-to-release-tarball>
+    sudo sh packaging/install.sh <path-to-release-tarball>
+    sudo sh packaging/install.sh --user <name> <path-to-release-tarball>    (for another account, or to hand it over)
 
 Where things are: the program and its releases are in `/opt/cache-app`; your library and settings are in `/var/lib/cache-app`
 (the libraries you build in `app/docs/libraries`, ZIM files in `app/docs/zims`, the password and sign-in settings in `auth.json`);
 there is no configuration folder, the few settings are files in the data folder. The names say `cache-app` on purpose: a folder
 simply called `cache` reads as safe to delete, and nothing is ever written under any system cache folder (a test fails if a
-default path does).
+default path does). The data folder belongs to the person Cache runs as (`<person>:<their group>`, mode 0750).
 
-Nothing has been released yet, so there is no migration from earlier paths: a test machine gets a fresh install.
+**Cache runs as the person who installed it**, as a system service that starts at boot with no login, so the folder picker
+and folder sync can open any folder that person can open, starting at their home. The person is `--user <name>`, else the
+account that ran `sudo` (`SUDO_USER`; also `DOAS_USER` and `PKEXEC_UID`), else, on an update, the one recorded in
+`/etc/cache-app/person`. It refuses root, the `cache` account, system accounts (uid outside `UID_MIN`..`UID_MAX` of
+`/etc/login.defs`) and an account with no home folder. The release's `cache.service` keeps `User=cache` only as a fallback
+(it never runs as root) and carries the marker `X-Cache-RunsAs=person`; the person is named in the drop-in
+`/etc/systemd/system/cache.service.d/person.conf`, written again on every install. The unit has `ProtectHome=no` and
+`ProtectSystem=full` (`/usr`, `/boot`, `/efi` and `/etc` read-only): the person's own permissions are the boundary.
 
-It creates the `cache` user, unpacks to `/opt/cache-app/releases/<version>`, points `/opt/cache-app/current`
-at it, installs and starts the service, and on a first install asks for the password twice. Running it again with a
-newer tarball is an update; the data and the password stay. It installs no packages.
+It unpacks to `/opt/cache-app/releases/<version>`, points `/opt/cache-app/current` at it, writes the record and the
+drop-in, installs and starts the service, and on a first install makes the data folder for the person and asks for the
+password twice (set as the person). It makes no system user. Running it again with a newer tarball is an update; the data
+and the password stay. It installs no packages.
+
+An update from a release that ran as the `cache` user keeps the data where it is and changes only its owner: it stops the
+service, writes the drop-in, runs `chown -R <person>:<group> /var/lib/cache-app` (systemd re-owns it too, but only when the
+top folder's owner differs, so a run cut short is finished here), starts the service and waits for it. It then checks that
+every file belongs to the person and that `sync/identity.key` (the device identity the linked phones know), `auth.json` and
+`tls/cert.pem` have the same SHA-256 as before (the hashes are never printed), and that `sync/sync.json` is still there; if a
+check fails it stops the service and names the check. The `cache` user is kept, for a rollback to such a release.
+
+One Cache per computer: an update run by another account is refused with the owner's name; `--user <name>` hands it over
+(the drop-in and the record change, and the data is re-owned).
 
 The version is `<Cargo version>+<short git sha>`, for example `0.1.0+d5145e6`, so two builds of the same Cargo version
 are two releases. `cache --version` and the first line of the service log (`journalctl -u cache`) show it.
@@ -166,10 +186,21 @@ An install keeps exactly one earlier release: the one that was running becomes `
 older is removed. The release in use is never removed. Installing the same build again replaces that release's folder
 (the old copy stays reachable until the new one is in place, so `current` never points at nothing). To go back:
 
-    sudo packaging/install.sh --rollback
+    sudo sh packaging/install.sh --rollback
 
 It swaps `current` and `previous`, installs that release's unit file and restarts the service. Running it again goes
-forward again. The data folder is shared by both releases and is not touched.
+forward again. The data folder is shared by both releases and is never moved or copied. The release now current decides
+who it runs as:
+
+- its `cache.service` has `X-Cache-RunsAs=person`: the drop-in is written again from `/etc/cache-app/person` (refused when
+  there is no record), and the data is re-owned to the person if any of it is not theirs;
+- it has no marker (a release from before Cache ran as the person): the drop-in is removed (the record stays), the `cache`
+  user and group are made again if they are missing, and the data goes back to `cache:cache`, exactly as that release ran.
+
+Both check ownership and the identity hashes as an update does. Roll back across this change with the newer `install.sh`
+(the one in the newer release or tarball): an older release's own `install.sh --rollback` does not know the drop-in, so
+the older release keeps running as the person. That still works (it only needs `/var/lib/cache-app`), but it is not the
+release exactly as it ran before.
 
 ## Signing in
 
@@ -205,16 +236,19 @@ A key is either of two kinds:
 
 The settings page will not let you lock yourself out: Key only and Password and key are disabled while no key is
 registered, and the last key cannot be removed while the setting needs one. Wrong passwords, keys and files are slowed
-down together (see below). Registered keys are listed and can be removed on the server too:
+down together (see below). Registered keys are listed and can be removed on the computer too, as the person Cache runs as
+(no sudo needed):
 
-    sudo -u cache /opt/cache-app/current/cache keys --data /var/lib/cache-app --list
-    sudo -u cache /opt/cache-app/current/cache keys --data /var/lib/cache-app --remove <id>
+    /opt/cache-app/current/cache keys --data /var/lib/cache-app --list
+    /opt/cache-app/current/cache keys --data /var/lib/cache-app --remove <id>
 
 (removing the last key while the setting needs one puts sign-in back to password only).
 
 ## Set or reset the password
 
-    sudo -u cache /opt/cache-app/current/cache set-password --data /var/lib/cache-app [--sign-out-all]
+    /opt/cache-app/current/cache set-password --data /var/lib/cache-app [--sign-out-all]
+
+(as the person Cache runs as; on a release from before this, `sudo -u cache` in front)
 
 No restart is needed. The running server re-reads `auth.json` at the next sign-in after it changed, so the old password
 stops working and the new one works at once. Browsers that are already signed in stay signed in, unless you add
