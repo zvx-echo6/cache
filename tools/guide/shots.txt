@@ -67,6 +67,7 @@ settings-location-blocked | Settings > Cache model and web search, Location grou
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
 settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks switched on under "Shared with linked devices", Models off, each with its line
+settings-ways-to-connect | Settings > Sharing and sync > Ways to connect: three entry points under "Over the internet" (rt.example.net Private and Connected, reticulum.example.org Not answering, one Private and Off), each with its switch, then "Add an entry point"
 settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, and "More sources (9 more)"
 source-page | A data source's page: "Use this source", the "NASA FIRMS API key" row (opens Settings > API keys) and the About this source facts
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
