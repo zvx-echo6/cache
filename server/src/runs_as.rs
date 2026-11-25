@@ -38,13 +38,40 @@ impl Paths {
 
 /// True when the card should show: `running` is the account this process runs as (None when it cannot be named).
 pub fn needs_installer(running: Option<&str>, paths: &Paths) -> bool {
-    let _ = (running, paths);
-    false
+    // only the fallback account: a hand-over half done (running as someone else) is the installer's to explain
+    if running != Some(FALLBACK_USER) {
+        return false;
+    }
+    // a person is recorded (not the running cache account itself), and the running release is one that runs as the person
+    let Some(person) = recorded_person(&paths.record) else { return false };
+    person != FALLBACK_USER && release_runs_as_person(&paths.units)
+}
+
+/// The first line of the record, without spaces; None when there is no record or it is empty.
+fn recorded_person(record: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(record).ok()?;
+    let name: String = text.lines().next().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether the first unit file that exists carries the marker line.
+fn release_runs_as_person(units: &[PathBuf]) -> bool {
+    let Some(text) = units.iter().find_map(|u| std::fs::read_to_string(u).ok()) else { return false };
+    text.lines().any(|l| l.trim() == MARKER)
 }
 
 /// The name of the account this process runs as (its effective uid), through the system's account database; None when it has none.
 pub fn running_user() -> Option<String> {
-    None
+    let uid = unsafe { libc::geteuid() };
+    let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut out: *mut libc::passwd = std::ptr::null_mut();
+    let mut buf = vec![0u8; 16 * 1024];
+    let rc = unsafe { libc::getpwuid_r(uid, &mut pw, buf.as_mut_ptr().cast(), buf.len(), &mut out) };
+    if rc != 0 || out.is_null() || pw.pw_name.is_null() {
+        return None;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(pw.pw_name) }.to_str().ok()?.to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 static NEEDED: AtomicBool = AtomicBool::new(false);

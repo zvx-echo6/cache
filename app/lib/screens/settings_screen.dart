@@ -11,6 +11,7 @@ import '../search/index_overview.dart';
 
 import '../nav/units.dart';
 import '../layout/adaptive.dart';
+import '../linux_ui.dart';
 import '../theme.dart';
 import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
@@ -21,6 +22,7 @@ import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
+import 'settings/run_installer_card.dart';
 import 'settings/sharing_page.dart';
 import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
@@ -43,11 +45,19 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingsDeps get d => widget.deps;
 
+  /// Cache on Linux: the "Run the installer again" card shows at the top (asked once each time Settings opens; never on a phone).
+  bool _runInstaller = false;
+
   @override
   void initState() {
     super.initState();
     d.hub.storage.readFree();
     d.hub.storage.measure();
+    if (linuxUi) {
+      unawaited(widget.runInstallerAgain().then((v) {
+        if (mounted && v != _runInstaller) setState(() => _runInstaller = v);
+      }));
+    }
   }
 
   /// Opens a Settings page: beside the list on a tablet (the two panes), else as a page of its own.
@@ -165,6 +175,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
+            if (_runInstaller) const Padding(padding: EdgeInsets.only(bottom: 12), child: RunInstallerCard()),
             SettingsGroup(
               rows: [
                 SettingsRow(
