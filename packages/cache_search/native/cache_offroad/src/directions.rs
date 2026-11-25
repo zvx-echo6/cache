@@ -500,6 +500,8 @@ impl Env<'_> {
     fn offroad_error(e: &RouteError) -> DirectionsError {
         match e {
             RouteError::TooLong { .. } => DirectionsError::new("route_too_long", e.to_string()),
+            // the data is not on the phone: the same words as an area with no off-road data
+            RouteError::ElevationUnavailable => DirectionsError::new("not_set_up", OFFROAD_DATA_MISSING),
             _ => DirectionsError::new("no_route", e.to_string()),
         }
     }
@@ -652,11 +654,12 @@ impl Env<'_> {
                 match self.last_mile(a, b, req, end == "to", fc, tc) {
                     Err(e) => warnings.push(Warning {
                         message: e.message.clone(),
-                        reason: if e.code == "no_route" { None } else { Some(e.code.clone()) },
+                        reason: if e.code == "no_route" || e.code == "not_set_up" { None } else { Some(e.code.clone()) },
                         end: end.into(),
                         road_point: road,
                         gap_m: round_i(haversine_m(p.0, p.1, road.0, road.1)),
-                        covered: self.pack.covers(p.0, p.1),
+                        // an elevation tile that could not be had is "not downloaded" (the end is not covered), not "no way found"
+                        covered: self.pack.covers(p.0, p.1) && e.code != "not_set_up",
                     }),
                     Ok(got) => {
                         if end == "from" {

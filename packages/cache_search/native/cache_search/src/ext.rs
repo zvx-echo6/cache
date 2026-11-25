@@ -194,9 +194,11 @@ const ELEVATION_NET_PAUSE: std::time::Duration = std::time::Duration::from_secs(
 
 /// z12 elevation tiles from the layer engine: stored data first (downloaded areas, then the tiles viewed before); a tile
 /// that is not stored is streamed when the phone is online, and kept in the viewed-tile cache (the same path the map
-/// uses, `Inner::tile_upstream`). Offline there is none, as with no file. The network is bounded two ways: each fetch has
-/// the map's upstream timeout, and after one fetch fails or times out no more are tried for `ELEVATION_NET_PAUSE`, so a
-/// dead connection costs one wait, not one per tile; the tiles that failed are simply missing elevation (as offline).
+/// uses, `Inner::tile_upstream`). A tile that cannot be had (offline, no elevation layer, a failed or timed-out fetch) is
+/// `ElevError::Unavailable`, never "no tile here": the router then reports the off-road data as not downloaded instead of
+/// treating the hole as impassable ground and detouring. `None` is only the source's own "no tile here" (ocean).
+/// The network is bounded two ways: each fetch has the map's upstream timeout, and after one fetch fails or times out no
+/// more are tried for `ELEVATION_NET_PAUSE`, so a dead connection costs one wait, not one per tile.
 struct LayerElevationTiles {
     inner: std::sync::Arc<cache_layers::core::Inner>,
     /// No network fetch before this moment (set by a failed or timed-out fetch).
@@ -218,34 +220,38 @@ impl LayerElevationTiles {
 }
 
 impl cache_navigate::ElevationTiles for LayerElevationTiles {
-    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, String> {
+    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, cache_navigate::ElevError> {
+        use cache_navigate::ElevError;
         let (x, y) = (x as u32, y as u32);
         match self.inner.tile_local(ELEVATION_LAYER, 12, x, y) {
             Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => return Ok(Some(bytes)),
-            // stored as "no tile here", or offline: none
-            Ok(Some(_)) => return Ok(None),
-            // no elevation layer installed: no elevation, as with no file
-            Err(e) if e.code == "not_found" => return Ok(None),
-            Err(e) => return Err(e.message),
+            // stored as "the source has no tile here"
+            Ok(Some(cache_layers::core::TileOut::Empty)) => return Ok(None),
+            // offline and not stored
+            Ok(Some(_)) => return Err(ElevError::Unavailable),
+            // no elevation layer installed
+            Err(e) if e.code == "not_found" => return Err(ElevError::Unavailable),
+            Err(e) => return Err(ElevError::Msg(e.message)),
             // not stored: stream it below, when online
             Ok(None) => {}
         }
         if !self.inner.is_online() || self.net_paused() {
-            return Ok(None);
+            return Err(ElevError::Unavailable);
         }
         match self.inner.tile_upstream(ELEVATION_LAYER, 12, x, y) {
             Ok(cache_layers::core::TileOut::Tile { bytes, .. }) => Ok(Some(bytes)),
+            Ok(cache_layers::core::TileOut::Empty) => Ok(None),
             Ok(cache_layers::core::TileOut::Busy) => {
                 self.pause_net();
-                Ok(None)
+                Err(ElevError::Unavailable)
             }
-            Ok(_) => Ok(None),
-            Err(e) if e.code == "not_found" => Ok(None),
+            Ok(_) => Err(ElevError::Unavailable),
+            Err(e) if e.code == "not_found" => Err(ElevError::Unavailable),
             Err(e) if e.code == "fetch_failed" || e.code == "upstream_timeout" => {
                 self.pause_net();
-                Ok(None)
+                Err(ElevError::Unavailable)
             }
-            Err(e) => Err(e.message),
+            Err(e) => Err(ElevError::Msg(e.message)),
         }
     }
 }
@@ -794,8 +800,19 @@ mod elevation_tests {
         let (port, hits) = host(200);
         let (inner, dir) = engine(port, false);
         let t = tiles(inner);
-        assert_eq!(t.z12(5, 7), Ok(None));
+        assert!(matches!(t.z12(5, 7), Err(cache_navigate::ElevError::Unavailable)), "offline: not available, not 'no tile'");
         assert_eq!(hits.load(Ordering::SeqCst), 0, "offline never touches the network");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_router_gets_an_error_not_nan_cells_for_a_tile_it_cannot_have() {
+        use cache_navigate::ElevationSource;
+        let (port, _hits) = host(200);
+        let (inner, dir) = engine(port, false);
+        let source = cache_navigate::TileElevation::new(tiles(inner));
+        let r = source.read_elevation(5 * 512, 7 * 512, 4, 4);
+        assert!(matches!(r, Err(cache_navigate::ElevError::Unavailable)), "{r:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -804,9 +821,9 @@ mod elevation_tests {
         let (port, hits) = host(500);
         let (inner, dir) = engine(port, true);
         let t = tiles(inner);
-        assert_eq!(t.z12(5, 7), Ok(None), "no error: no elevation for that tile");
-        assert_eq!(t.z12(6, 7), Ok(None));
-        assert_eq!(t.z12(7, 7), Ok(None));
+        for x in [5, 6, 7] {
+            assert!(matches!(t.z12(x, 7), Err(cache_navigate::ElevError::Unavailable)), "tile {x}");
+        }
         assert_eq!(hits.load(Ordering::SeqCst), 1, "after one failure the router stops asking for a while");
         let _ = std::fs::remove_dir_all(dir);
     }

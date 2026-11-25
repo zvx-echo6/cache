@@ -17,6 +17,10 @@ pub const ZOOM: u8 = 12;
 pub enum ElevError {
     #[error("elevation: {0}")]
     Msg(String),
+    /// A tile the route needs could not be had (not on the phone and not fetchable now). Not "no elevation here": the
+    /// route is not worked out from a grid with holes in it, the caller reports the off-road data as not downloaded.
+    #[error("elevation: a tile is not available")]
+    Unavailable,
 }
 
 /// Terrarium decode, same f32 operations as the reference server's `terrarium_decode`: (R*256 + G + B/256) - 32768.
@@ -51,14 +55,14 @@ pub fn decode_terrarium_webp(bytes: &[u8]) -> Result<Vec<u32>, ElevError> {
 }
 
 /// Where z12 elevation tiles come from: the Mapterhorn tile at (x, y) as its bytes (lossless Terrarium WebP, uncompressed),
-/// `None` where there is none.
+/// `None` where there is none (the source says so), `Err(ElevError::Unavailable)` where it could not be had.
 pub trait ElevationTiles: Send + Sync {
-    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String>;
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, ElevError>;
 }
 
 impl ElevationTiles for PmTiles {
-    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String> {
-        self.get_decompressed(ZOOM, x, y)
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, ElevError> {
+        self.get_decompressed(ZOOM, x, y).map_err(ElevError::Msg)
     }
 }
 
@@ -84,7 +88,7 @@ impl<T: ElevationTiles> TileElevation<T> {
         if let Some((_, t)) = self.cache.lock().unwrap().iter().find(|(k, _)| *k == (tx, ty)) {
             return Ok(Some(t.clone()));
         }
-        let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else { return Ok(None) };
+        let Some(bytes) = self.tiles.z12(tx as u64, ty as u64)? else { return Ok(None) };
         let q = decode_terrarium_webp(&bytes)?;
         let t = Arc::new(q.iter().map(|&v| terrarium_f32(v)).collect::<Vec<f32>>());
         let mut c = self.cache.lock().unwrap();
@@ -144,7 +148,7 @@ impl<T: ElevationTiles> ElevationSource for TileElevation<T> {
         let tiles: Vec<(i64, i64, Option<Vec<f32>>)> = keys
             .into_par_iter()
             .map(|(tx, ty)| -> Result<_, ElevError> {
-                let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else {
+                let Some(bytes) = self.tiles.z12(tx as u64, ty as u64)? else {
                     return Ok((tx, ty, None));
                 };
                 let q = decode_terrarium_webp(&bytes)?;

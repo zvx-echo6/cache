@@ -123,6 +123,9 @@ pub enum RouteError {
     TooLong { estimated: usize, max: usize },
     #[error("Failed to load terrain: {0}")]
     Terrain(String),
+    /// An elevation tile the route needs is not on the phone and could not be fetched.
+    #[error("Elevation data for this area is not available")]
+    ElevationUnavailable,
     #[error("Endpoint outside grid bounds")]
     OutsideGrid,
     #[error("No unified route found")]
@@ -458,7 +461,10 @@ impl<'a> Router<'a> {
         let (south, north, west, east) = meta.bounds;
         let (rows, cols) = (meta.rows, meta.cols);
         let terr = |e: crate::pack::PackError| RouteError::Terrain(e.to_string());
-        let elev_err = |e: crate::elevation::ElevError| RouteError::Terrain(e.to_string());
+        let elev_err = |e: crate::elevation::ElevError| match e {
+            crate::elevation::ElevError::Unavailable => RouteError::ElevationUnavailable,
+            e => RouteError::Terrain(e.to_string()),
+        };
         let elevation = self.elevation.read_elevation(meta.global_row0, meta.global_col0, rows, cols).map_err(elev_err)?;
         let rd = |l: Layer| self.pack.read_u8(l, meta.global_row0, meta.global_col0, rows, cols);
         let friction_raw = rd(Layer::Friction).map_err(terr)?;
