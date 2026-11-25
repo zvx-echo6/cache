@@ -450,7 +450,7 @@ fn write_tiles(pm: &pmtiles::PmTiles, layers: &Layers, bbox: (f64, f64, f64, f64
         std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
     let conn = Connection::open(&out).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA page_size=16384; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;").map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;").map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
 
     // tiles: workers -> channel -> this thread
