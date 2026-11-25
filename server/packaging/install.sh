@@ -154,6 +154,34 @@ runs_as_person() {
     grep -q '^X-Cache-RunsAs=person$' "$1/cache.service" 2>/dev/null
 }
 
+# The identity guard. This computer's device key (sync/identity.key: what every linked phone knows it by), the password file and
+# the certificate must come through a hand-over between accounts unchanged. Their SHA-256 is kept before (in variables, never
+# printed) and compared after the start; a missing key would be replaced by a new one, and every link lost.
+sum_of() {
+    if [ -f "$1" ]; then sha256sum "$1" | cut -d ' ' -f 1; else echo absent; fi
+}
+guard_before() {
+    G_KEY=$(sum_of "$DATA/sync/identity.key")
+    G_AUTH=$(sum_of "$DATA/auth.json")
+    G_CERT=$(sum_of "$DATA/tls/cert.pem")
+    G_SYNC=absent
+    [ ! -f "$DATA/sync/sync.json" ] || G_SYNC=present
+}
+guard_after() {
+    if [ "$G_KEY" != absent ] && [ "$(sum_of "$DATA/sync/identity.key")" != "$G_KEY" ]; then
+        check_failed "sync/identity.key (this computer's identity for its linked devices) changed while Cache started"
+    fi
+    if [ "$G_AUTH" != absent ] && [ "$(sum_of "$DATA/auth.json")" != "$G_AUTH" ]; then
+        check_failed "auth.json (the password) changed while Cache started"
+    fi
+    if [ "$G_CERT" != absent ] && [ "$(sum_of "$DATA/tls/cert.pem")" != "$G_CERT" ]; then
+        check_failed "tls/cert.pem (the certificate) changed while Cache started"
+    fi
+    if [ "$G_SYNC" = present ] && [ ! -f "$DATA/sync/sync.json" ]; then
+        check_failed "sync/sync.json (the links and shares) is gone"
+    fi
+}
+
 USAGE="usage: install.sh [--user <name>] <path-to-release-tarball> | install.sh --rollback"
 ROLLBACK=0
 WANT_USER=
@@ -195,6 +223,7 @@ if [ "$ROLLBACK" -eq 1 ]; then
     PREV=$(link_of "$OPT/previous")
     [ -n "$PREV" ] && [ -d "$PREV" ] || die "there is no previous release to go back to"
     [ -n "$CUR" ] && [ -d "$CUR" ] || die "there is no current release"
+    guard_before
     if runs_as_person "$PREV"; then
         # a release that runs as the person: the drop-in comes back from the record
         PERSON=$(recorded_person)
@@ -239,6 +268,7 @@ if [ "$ROLLBACK" -eq 1 ]; then
     if data_not_owned_by "$OWNER_UID"; then
         check_failed "some files in $DATA do not belong to $RUNS_AS"
     fi
+    guard_after
     if [ "$RUNS_AS" = cache ]; then
         echo "Rolled back: Cache $(basename "$PREV") is running, as the cache account (as that release did)."
     else
@@ -344,6 +374,7 @@ MIGRATE=0
 if [ "$(cat "$DROPIN" 2>/dev/null || true)" != "$(dropin_text)" ] || data_not_owned_by "$PUID"; then
     MIGRATE=1
 fi
+guard_before
 if [ "$MIGRATE" -eq 1 ] && [ -f "$UNIT" ]; then
     systemctl stop cache || true
 fi
@@ -401,6 +432,7 @@ wait_active
 if data_not_owned_by "$PUID"; then
     check_failed "some files in $DATA do not belong to $PERSON"
 fi
+guard_after
 
 HOST=$(hostname -f 2>/dev/null || hostname)
 echo "Cache $VERSION is running. Open https://$HOST:$PORT/"
