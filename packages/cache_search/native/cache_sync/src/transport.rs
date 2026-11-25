@@ -177,6 +177,11 @@ pub trait Transport: Send + Sync + 'static {
     fn measure(&self, _peer: &str) -> BoxFut<'_, bool> {
         Box::pin(async { false })
     }
+    /// A number that changes when an interface of this device comes up or goes down (a held back item resumes on that). Nothing
+    /// over iroh.
+    fn interface_gen(&self) -> u64 {
+        0
+    }
     /// Tests only: the link to `peer` drops (the next request makes a new one).
     #[cfg(feature = "test-hooks")]
     fn test_relink(&self, _peer: &str) {}
@@ -265,6 +270,11 @@ pub trait Serve: Send + Sync + 'static {
     /// not go over it (the big kinds on a Medium link).
     fn blob_allowed(&self, _peer: &str, _hash: &str, _speed: Speed) -> bool {
         true
+    }
+    /// Tests only: every window is refused as too slow.
+    #[cfg(feature = "test-hooks")]
+    fn test_refuse_blobs(&self) -> bool {
+        false
     }
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);

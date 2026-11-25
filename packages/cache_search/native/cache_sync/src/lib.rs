@@ -315,6 +315,9 @@ pub struct Config {
     /// How long a link must allow what was held back before a round for that device is started, in ms (default 30 s, design 2b).
     #[serde(default)]
     pub resume_hold_ms: Option<u64>,
+    /// The most that hold grows to after repeated slow cancels, in ms (default 10 min).
+    #[serde(default)]
+    pub resume_backoff_max_ms: Option<u64>,
 }
 
 fn default_bulk() -> Vec<String> {
@@ -691,7 +694,8 @@ type WaitKey = (String, String, String);
 
 /// How long a link must allow what is held back before a retry, after `cancels` slow cancels in a row: the base, doubled for each
 /// one, up to `cap`.
-fn backoff_hold(base: Duration, _cancels: u32, _cap: Duration) -> Duration {
+fn backoff_hold(base: Duration, cancels: u32, cap: Duration) -> Duration {
+    let _ = (cancels, cap);
     base
 }
 
@@ -984,6 +988,15 @@ struct Inner {
     resume_hold: Duration,
     /// Per device: since when its link has allowed what was held back from it.
     resume_since: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_backoff_max_ms`].
+    resume_cap: Duration,
+    /// Per device: how many retries the watcher started ended as a slow cancel, one after the other (the hold doubles for each).
+    resume_cancels: Mutex<HashMap<String, u32>>,
+    /// Devices the watcher started a round for whose result is not known yet: the next item of one that goes back to waiting is a
+    /// slow cancel.
+    resume_trial: Mutex<HashSet<String>>,
+    /// Per device: the node's interface count of changes when the watcher last looked.
+    resume_gen: Mutex<HashMap<String, u64>>,
     /// Tests only: when (ms since 1970) a round was started by the resume watcher.
     #[cfg(feature = "test-hooks")]
     resume_fires: Mutex<Vec<u64>>,
@@ -2190,8 +2203,20 @@ impl Inner {
                 held.entry(peer.clone()).or_default().push((share.clone(), path.clone(), *size));
             }
             self.resume_since.lock().unwrap().retain(|p, _| held.contains_key(p));
+            // Nothing held from a device any more (it all came, or went): its backoff is over.
+            let gone: Vec<String> = self.resume_cancels.lock().unwrap().keys().chain(self.resume_trial.lock().unwrap().iter()).filter(|p| !held.contains_key(*p)).cloned().collect();
+            for p in gone {
+                self.end_backoff(&p);
+            }
+            let iface_gen = self.net.interface_gen();
             for (peer, items) in held {
-                let fresh = self.net.measure(&peer).await;
+                let mut fresh = self.net.measure(&peer).await;
+                // An interface of this device came up or went down since the watcher last looked: the path may be faster.
+                fresh |= self.resume_gen.lock().unwrap().insert(peer.clone(), iface_gen).is_some_and(|g| g != iface_gen);
+                if fresh {
+                    // A new link or a change of interface ends the backoff at once, so a real speed-up is caught right away.
+                    self.end_backoff(&peer);
+                }
                 let class = self.class_of(&peer);
                 let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) });
                 if !allowed {
@@ -2201,6 +2226,7 @@ impl Inner {
                 let since = *self.resume_since.lock().unwrap().entry(peer.clone()).or_insert_with(Instant::now);
                 if fresh || since.elapsed() >= self.resume_hold_for(&peer) {
                     self.resume_since.lock().unwrap().remove(&peer);
+                    self.resume_trial.lock().unwrap().insert(peer.clone());
                     #[cfg(feature = "test-hooks")]
                     self.resume_fires.lock().unwrap().push(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64));
                     self.due.lock().unwrap().insert(peer.clone());
@@ -2212,8 +2238,22 @@ impl Inner {
     }
 
     /// How long the link of `peer` must allow what is held back before a round for it is started.
-    fn resume_hold_for(&self, _peer: &str) -> Duration {
-        self.resume_hold
+    fn resume_hold_for(&self, peer: &str) -> Duration {
+        let cancels = self.resume_cancels.lock().unwrap().get(peer).copied().unwrap_or(0);
+        backoff_hold(self.resume_hold, cancels, self.resume_cap)
+    }
+
+    /// A round the watcher started for `peer` gave an item back to waiting: a slow cancel, the next retry waits twice as long.
+    fn note_slow_cancel(&self, peer: &str) {
+        if self.resume_trial.lock().unwrap().remove(peer) {
+            *self.resume_cancels.lock().unwrap().entry(peer.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// What the watcher held against `peer` is over: the backoff starts again.
+    fn end_backoff(&self, peer: &str) {
+        self.resume_trial.lock().unwrap().remove(peer);
+        self.resume_cancels.lock().unwrap().remove(peer);
     }
 
     /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
@@ -3021,6 +3061,7 @@ impl Inner {
                     match self.fetch(sh, &path, entry, conflict, from).await {
                         Ok(true) => {
                             self.waiting.lock().unwrap().remove(&wkey);
+                            self.end_backoff(from);
                             if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
                                 say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
                             }
@@ -3036,6 +3077,7 @@ impl Inner {
                         // the next round asks again), and not an error.
                         Err(e) if is_waiting(&e) => {
                             held = true;
+                            self.note_slow_cancel(from);
                             self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
                             self.waiting.lock().unwrap().insert(wkey, size);
                         }
@@ -3567,13 +3609,13 @@ impl Serve for Inner {
 
     /// The big kinds do not go over a Medium link: a window is refused when every folder kept with `peer` that lists the file is
     /// one of them. A file no folder lists (or any folder that is not a big kind lists) goes, subject to its size.
+    #[cfg(feature = "test-hooks")]
+    fn test_refuse_blobs(&self) -> bool {
+        // A device with `<dir>/refuse-blobs` refuses every window as too slow (a link that turned out slow at the answering end).
+        self.dir.join("refuse-blobs").exists()
+    }
+
     fn blob_allowed(&self, peer: &str, hash: &str, speed: Speed) -> bool {
-        // Tests only: a device with `<dir>/refuse-blobs` refuses every window as too slow (a link that turned out slow at the
-        // answering end), whatever the link measures.
-        #[cfg(feature = "test-hooks")]
-        if self.dir.join("refuse-blobs").exists() {
-            return false;
-        }
         if speed != Speed::Medium {
             return true;
         }
@@ -3974,6 +4016,10 @@ impl SyncEngine {
             resume_check: Duration::from_millis(cfg.resume_check_ms.unwrap_or(5_000).max(50)),
             resume_hold: Duration::from_millis(cfg.resume_hold_ms.unwrap_or(30_000)),
             resume_since: Mutex::new(HashMap::new()),
+            resume_cap: Duration::from_millis(cfg.resume_backoff_max_ms.unwrap_or(600_000)),
+            resume_cancels: Mutex::new(HashMap::new()),
+            resume_trial: Mutex::new(HashSet::new()),
+            resume_gen: Mutex::new(HashMap::new()),
             #[cfg(feature = "test-hooks")]
             resume_fires: Mutex::new(Vec::new()),
             bulk: cfg.bulk.iter().cloned().collect(),

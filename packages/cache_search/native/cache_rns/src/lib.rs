@@ -229,6 +229,12 @@ pub trait Handler: Send + Sync + 'static {
     fn blob_allowed(&self, _peer: PublicKey, _hash: cache_store::Hash, _speed: Speed) -> bool {
         true
     }
+    /// Tests only: every window is answered "too slow", whatever the link measures (an answering end that judges a link slow
+    /// that the asking end thinks is fine).
+    #[cfg(feature = "test-hooks")]
+    fn refuse_blobs(&self) -> bool {
+        false
+    }
     fn notify(&self, from: PublicKey, body: Vec<u8>);
     /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
     /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
@@ -350,6 +356,9 @@ pub struct RnsNode {
     speeds: Arc<Speeds>,
     /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
     reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// What the node's interfaces looked like when [`RnsNode::interface_gen`] last looked, and how many changes it has seen.
+    iface_sig: Mutex<Option<u64>>,
+    iface_gen: std::sync::atomic::AtomicU64,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -855,9 +864,13 @@ impl RnsNode {
                                     let want = blobs::decode_want(&data);
                                     if let Some((hash, start, end)) = want {
                                         // The class this end judges the link to be decides first, whatever the asker thinks of it.
-                                        if speed != Speed::Fast
-                                            && (speed.window_chunks().is_none_or(|w| end.saturating_sub(start) > w) || !handler.blob_allowed(from, hash, speed))
-                                        {
+                                        #[cfg(feature = "test-hooks")]
+                                        let refused = handler.refuse_blobs();
+                                        #[cfg(not(feature = "test-hooks"))]
+                                        let refused = false;
+                                        let slow_for_this = speed != Speed::Fast
+                                            && (speed.window_chunks().is_none_or(|w| end.saturating_sub(start) > w) || !handler.blob_allowed(from, hash, speed));
+                                        if refused || slow_for_this {
                                             let _ = handle.respond_owned_bytes(token, vec![blobs::TOO_SLOW]);
                                             return;
                                         }
@@ -955,6 +968,8 @@ impl RnsNode {
             state,
             speeds,
             reach_gap_ms,
+            iface_sig: Mutex::new(None),
+            iface_gen: std::sync::atomic::AtomicU64::new(0),
             tasks,
             stop: Mutex::new(Some(stop_tx)),
         })
@@ -1179,6 +1194,31 @@ impl RnsNode {
         let link = self.link_to(peer, timeout).await?;
         self.probe(peer, link, timeout).await?;
         Ok(self.speeds.take_fresh(peer))
+    }
+
+    /// [`RnsNode::relink`] for a link this device ends itself to tell the answering end the current round trip time: the link that
+    /// comes up in its place is not taken as a new link by [`Speeds::take_fresh`] (the path did not change, only the other end's
+    /// number for it).
+    pub fn relink_own(&self, peer: &PublicKey) {
+        self.speeds.note_own_relink(peer);
+        self.relink(peer);
+    }
+
+    /// A number that changes when an interface of this node comes up, goes down or is added or removed since the last call that
+    /// saw it change (the first call sets the baseline). A held back item resumes at once on a change: the path may be faster.
+    pub fn interface_gen(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher};
+        let mut states: Vec<String> = self.handle.interfaces().iter().map(|i| format!("{:?}:{:?}", i.id, i.connection)).collect();
+        states.sort();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        states.hash(&mut h);
+        let sig = h.finish();
+        let mut last = self.iface_sig.lock().unwrap();
+        if last.is_some_and(|s| s != sig) {
+            self.iface_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        *last = Some(sig);
+        self.iface_gen.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Closes the link this device has to `peer` and lets the next request make a new one: the other end learns the round trip

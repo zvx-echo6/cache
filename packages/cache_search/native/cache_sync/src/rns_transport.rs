@@ -378,6 +378,10 @@ impl Transport for MultiTransport {
         })
     }
 
+    fn interface_gen(&self) -> u64 {
+        self.node().map_or(0, |n| n.interface_gen())
+    }
+
     #[cfg(feature = "test-hooks")]
     fn test_relink(&self, peer: &str) {
         if let Some((k, n)) = peer.parse::<PublicKey>().ok().zip(self.node()) {
@@ -732,6 +736,11 @@ impl Handler for Serving {
         }
         let body = if linked && path == PATH_DIFF { cap_page(&body, self.serve.page_cap(speed_of(speed))) } else { body };
         self.request(asker, path, body)
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn refuse_blobs(&self) -> bool {
+        self.serve.test_refuse_blobs()
     }
 
     fn blob_allowed(&self, peer: PublicKey, hash: Hash, speed: cache_rns::Speed) -> bool {

@@ -27,6 +27,8 @@ pub const MEDIUM_RTT_MS: u64 = 1500;
 pub const FAST_RATE: f64 = 1_000_000.0;
 /// Medium: a measured rate of at least 20 KB/s; under it, Slow.
 pub const MEDIUM_RATE: f64 = 20_000.0;
+/// How long after this device closes a link itself the next one to come up is taken as made by that.
+const OWN_RELINK_FOR: Duration = Duration::from_secs(60);
 /// A first-hop interface under 100 kbit/s is Slow.
 pub const SLOW_FIRST_HOP_BPS: u64 = 100_000;
 /// The moving rate looks back this far.
@@ -181,6 +183,9 @@ struct PeerSpeed {
     measured: Option<Instant>,
     /// A link this device opened has come up since [`Speeds::take_fresh`] last said so.
     fresh: bool,
+    /// This device closed the link itself to make a new one (so the answering end learns the current round trip time): the
+    /// next link to come up is not news.
+    own_relink: Option<Instant>,
 }
 
 impl PeerSpeed {
@@ -218,7 +223,10 @@ impl Speeds {
     /// A link this device opened is up, with this round trip time. Anything held against the link from before is dropped.
     pub fn set_opened_rtt(&self, peer: &PublicKey, ms: u64) {
         self.with(peer, |p| {
-            p.fresh = true;
+            // A link made again by this device itself is no sign the path changed.
+            if !p.own_relink.take().is_some_and(|t| t.elapsed() < OWN_RELINK_FOR) {
+                p.fresh = true;
+            }
             p.rtt = Some(ms);
             p.rtt_at = Some(Instant::now());
             p.refused = false;
@@ -302,6 +310,11 @@ impl Speeds {
             };
             classify(rtt, None, p.hop)
         })
+    }
+
+    /// This device is about to close its link to `peer` itself and make a new one: that link does not count as a fresh one.
+    pub fn note_own_relink(&self, peer: &PublicKey) {
+        self.with(peer, |p| p.own_relink = Some(Instant::now()));
     }
 
     /// Whether a link to `peer` has come up (this device opened it) since the last call: a new link's round trip time is the

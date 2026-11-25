@@ -201,7 +201,7 @@ pub async fn fetch(
                 // This end judged the link good enough for what it asked and the other end did not: the other end's judgment may
                 // be the round trip time the link came up with (it measures nothing newer). A new link tells it the current one.
                 relinked = true;
-                node.relink(peer);
+                node.relink_own(peer);
                 continue;
             }
             Some(&TOO_SLOW) => {
