@@ -448,6 +448,8 @@ class _CacheAppState extends State<CacheApp> {
     // (the network rule, the folders, background rounds).
     remote: plat.isWeb ? HttpTransport() : null,
     kinds: dataKinds,
+    // Sync now first runs the notebook pass, so the round carries the latest notebook change (the phone only: a browser has none).
+    beforeSync: plat.isWeb ? null : () => connections.syncAllAndWait(),
     // The notebooks are told in the notebook sync's own words (connections.dart say), never file by file.
     quiet: const ['notebooks'],
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
