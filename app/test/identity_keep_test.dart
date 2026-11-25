@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:cache/sharing/identity_keep.dart';
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
-import 'package:cache/sharing/install_marker.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 

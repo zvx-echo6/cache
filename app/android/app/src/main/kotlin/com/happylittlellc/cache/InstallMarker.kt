@@ -12,10 +12,26 @@ import java.io.File
  *
  * "read" gives the install id or null; "write" keeps one; "excludeFromBackup" does nothing here (Android's backup rules are in
  * res/xml: data_extraction_rules.xml and full_backup_content.xml).
+ *
+ * "readIdentity" / "writeIdentity": the second copy of the device's sync key with its install id (lib/sharing/identity_keep.dart),
+ * one text in the same no-backup folder. "readIdentity" gives null only when the file is missing; a file that cannot be read is
+ * an error, so the app never takes it for "every copy is gone".
  */
 object InstallMarker {
     const val CHANNEL = "co.cache/install_marker"
     private const val FILE = "install-id"
+    private const val IDENTITY = "identity-keep"
+
+    /** Written under a temporary name and renamed over the file, so nothing reads half of it. */
+    private fun keep(dir: File, name: String, text: String) {
+        val f = File(dir, name)
+        val tmp = File(dir, "$name.tmp")
+        tmp.writeText(text)
+        if (!tmp.renameTo(f)) {
+            f.writeText(text)
+            tmp.delete()
+        }
+    }
 
     fun attach(messenger: BinaryMessenger, context: Context) {
         val app = context.applicationContext
@@ -38,6 +54,27 @@ object InstallMarker {
                             tmp.delete()
                         }
                         result.success(null)
+                    }
+                }
+                "readIdentity" -> {
+                    val f = File(app.noBackupFilesDir, IDENTITY)
+                    try {
+                        result.success(if (f.exists()) f.readText() else null)
+                    } catch (e: Exception) {
+                        result.error("identity_read", e.message, null)
+                    }
+                }
+                "writeIdentity" -> {
+                    val v = call.argument<String>("value")
+                    if (v.isNullOrBlank()) {
+                        result.error("bad_value", "no value given", null)
+                    } else {
+                        try {
+                            keep(app.noBackupFilesDir, IDENTITY, v)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("identity_write", e.message, null)
+                        }
                     }
                 }
                 "excludeFromBackup" -> result.success(null)

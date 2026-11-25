@@ -1,35 +1,98 @@
 //! The device's identity: the iroh key pair kept as `identity.key` (the 32 secret-key bytes) in the sync folder. One
 //! implementation, used by the sync engine when it starts and by anything that needs the device's id without starting the
 //! endpoint (Cache on Linux's book builder).
+//!
+//! Once a device has an identity it keeps it: a key that is there but cannot be read is never replaced (the load fails and is
+//! tried again at the next start, the links kept). Only a key that is missing, or not 32 bytes, is replaced, and then first from
+//! the second copy when there is one (`keep`: Cache on Linux's `<data>/identity-keep`, outside the sync folder). Only when every
+//! copy is gone is it a new device. On a phone the second copy is kept by the app beside the install marker
+//! (app/lib/sharing/identity_keep.dart), which restores the key before the engine opens.
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use iroh::SecretKey;
+use std::io::ErrorKind;
 use std::path::Path;
 
-/// The identity file's name in the sync folder.
+/// The identity file's name in the sync folder (and in the `keep` folder).
 pub const KEY_FILE: &str = "identity.key";
 
-/// Loads the identity in `dir`, or makes one: a missing file, one that cannot be read, or one that is not exactly 32 bytes is
-/// replaced by a new key (written through a temporary file, owner-only on Unix). Returns the key and the device's id as
-/// cache_sync shows it everywhere (the EndpointId's text: lower-case letters and digits, safe as a file name).
+/// The start of every error that says the identity could not be had; the app shows it as the reason sharing did not start.
+pub const UNREADABLE: &str = "Can't read this device's identity";
+
+/// Loads the identity in `dir`, or makes one when it is missing or not exactly 32 bytes (written through a temporary file,
+/// owner-only on Unix). A key file that exists but cannot be read is an error, and the file is left as it is. Returns the key and
+/// the device's id as cache_sync shows it everywhere (the EndpointId's text: lower-case letters and digits, safe as a file name).
 pub fn load_or_create(dir: &Path) -> Result<(SecretKey, String)> {
     load(dir, None, true)
 }
 
-/// Red stub (to be replaced): today's behaviour whatever `keep` and `make` say.
-pub fn load(dir: &Path, _keep: Option<&Path>, _make: bool) -> Result<(SecretKey, String)> {
+/// What a key file holds: the key, nothing usable (missing or the wrong length), or an error reading it.
+fn read_key(p: &Path) -> Result<Option<SecretKey>, std::io::Error> {
+    match std::fs::read(p) {
+        Ok(b) => Ok(<[u8; 32]>::try_from(b.as_slice()).ok().map(|a| SecretKey::from_bytes(&a))),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// [`load_or_create`] with a second copy in `keep` (a folder of its own, made owner-only on Unix) and with `make` saying whether a
+/// new key may be made when no copy has one (a phone's background round passes false: the app's own start restores the key).
+/// - the key in `dir` reads fine: it is used, and the copy is written or refreshed when it is missing or different (a copy that
+///   cannot be written is tried again at the next load);
+/// - missing or the wrong length: the copy's key, if it has one, is written back to `dir`; otherwise a new key (when `make`),
+///   written to both;
+/// - either file there but unreadable: an error starting with [`UNREADABLE`], and nothing is written.
+pub fn load(dir: &Path, keep: Option<&Path>, make: bool) -> Result<(SecretKey, String)> {
     std::fs::create_dir_all(dir)?;
     let key_path = dir.join(KEY_FILE);
-    let secret = match std::fs::read(&key_path) {
-        Ok(b) if b.len() == 32 => SecretKey::from_bytes(&b.try_into().unwrap()),
-        _ => {
-            let k = SecretKey::generate();
-            write_secret(&key_path, &k.to_bytes())?;
+    let keep_path = keep.map(|k| k.join(KEY_FILE));
+    let main = read_key(&key_path).context(UNREADABLE)?;
+    let secret = match main {
+        Some(k) => {
+            if let Some(kp) = &keep_path {
+                if !matches!(read_key(kp), Ok(Some(c)) if c.to_bytes() == k.to_bytes()) {
+                    let _ = write_kept(kp, &k.to_bytes());
+                }
+            }
             k
+        }
+        None => {
+            let kept = match &keep_path {
+                Some(kp) => read_key(kp).context(UNREADABLE)?,
+                None => None,
+            };
+            match kept {
+                Some(k) => {
+                    write_secret(&key_path, &k.to_bytes())?;
+                    k
+                }
+                None if make => {
+                    let k = SecretKey::generate();
+                    write_secret(&key_path, &k.to_bytes())?;
+                    if let Some(kp) = &keep_path {
+                        let _ = write_kept(kp, &k.to_bytes());
+                    }
+                    k
+                }
+                None => return Err(anyhow!("{UNREADABLE}: it is missing, and a new one may not be made here")),
+            }
         }
     };
     let id = secret.public().to_string();
     Ok((secret, id))
+}
+
+/// The second copy: its folder owner-only (0700), the file 0600.
+fn write_kept(p: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    write_secret(p, bytes)
 }
 
 fn write_secret(p: &Path, bytes: &[u8]) -> Result<()> {
