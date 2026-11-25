@@ -66,7 +66,12 @@ fn proxy(to: u16, delay_ms: Arc<AtomicU64>) -> u16 {
 // --- the two devices ---
 
 fn eng(dir: &Path, name: &str, listen: Option<u16>, connect: Option<u16>) -> SyncEngine {
-    let cfg = json!({
+    eng_with(dir, name, listen, connect, json!({}))
+}
+
+/// `eng` with more of the config (`extra`'s keys are added over it).
+fn eng_with(dir: &Path, name: &str, listen: Option<u16>, connect: Option<u16>, extra: Value) -> SyncEngine {
+    let mut cfg = json!({
         "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false,
         "interval_secs": 3600, "reserve_bytes": 0, "reticulum": true,
         // A link is measured again at every request, so a changed link is judged at the next round.
@@ -76,6 +81,9 @@ fn eng(dir: &Path, name: &str, listen: Option<u16>, connect: Option<u16>) -> Syn
             "tcp_connect": connect.map(|p| format!("127.0.0.1:{p}")),
         },
     });
+    for (k, v) in extra.as_object().unwrap() {
+        cfg[k] = v.clone();
+    }
     SyncEngine::open(serde_json::from_value::<Config>(cfg).unwrap()).unwrap()
 }
 
@@ -157,6 +165,11 @@ impl T {
 
 /// A and B linked (over a fast stand-in link), each keeping the shares `ids`: A's folders hold `files` (share, name, bytes).
 fn pair(ids: &[&str], files: &[(&str, &str, &str)]) -> T {
+    pair_with(ids, files, json!({}))
+}
+
+/// `pair`, with `extra_b` added to B's config.
+fn pair_with(ids: &[&str], files: &[(&str, &str, &str)], extra_b: Value) -> T {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let folders = tmp.path().join("folders");
@@ -172,7 +185,7 @@ fn pair(ids: &[&str], files: &[(&str, &str, &str)]) -> T {
     let pport = proxy(port, delay.clone());
     rns_only_dirs(&[&da, &db]);
     let a = eng(&da, "Desk", Some(port), None);
-    let b = eng(&db, "Phone", None, Some(pport));
+    let b = eng_with(&db, "Phone", None, Some(pport), extra_b);
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     call(&b, "link", json!({"code": code}));
     wait("both sides to hold the address", 30, || saved_peer(&da)["rns"]["dest"].is_string() && saved_peer(&db)["rns"]["dest"].is_string());
@@ -398,6 +411,92 @@ fn a_waiting_file_is_fetched_by_itself_when_the_link_gets_faster() {
     assert!(took < Duration::from_secs(75), "about 30 seconds after the link got fast, not at the next round: {took:?}");
     assert!(read(&t.fb("fam").join("big.bin")).unwrap() == big, "byte for byte");
     assert!(waiting(&t.b).is_empty(), "{:?} after {took:?}", waiting(&t.b));
+    t.a.close();
+    t.b.close();
+}
+
+// --- the retry gap after slow cancels (step 3 part 3c) ---
+
+/// B's watcher, made quick: it looks every 100 ms, waits 600 ms before a retry, and the gap doubles after each slow cancel up to 3 s
+/// (the real ones are 5 s, 30 s and 10 min).
+fn quick_resume() -> Value {
+    json!({"resume_check_ms": 100, "resume_hold_ms": 600, "resume_backoff_max_ms": 3000})
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
+/// (when the watcher started rounds, ms since 1970; the hold it now waits for the device).
+fn resumes(e: &SyncEngine) -> (Vec<u64>, u64) {
+    let v = call(e, "test_resume", json!({}));
+    (v["fires"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect(), v["hold_ms"].as_u64().unwrap())
+}
+
+/// A and B linked over a fast link, A refusing every window as too slow (a link that is slow at the answering end only), and a
+/// 2 MB file on A that B holds back: every retry B's watcher starts ends as a slow cancel.
+fn held_back() -> T {
+    let t = pair_with(&["fam"], &[("fam", "first.txt", "one")], quick_resume());
+    t.until("the first file on B", 60, || read(&t.fb("fam").join("first.txt")).as_deref() == Some(b"one"));
+    std::fs::write(t.da.join("refuse-blobs"), b"").unwrap();
+    std::fs::write(t.fa("fam").join("big.bin"), random(2 * 1024 * 1024, 77)).unwrap();
+    t.until("the file to be held back", 60, || waiting(&t.b).iter().any(|x| x.2 == "big.bin"));
+    t
+}
+
+/// Waits (without asking for rounds: the watcher does that) until `ok` of what the watcher has done.
+fn watch_until(t: &T, what: &str, secs: u64, ok: impl Fn(&(Vec<u64>, u64)) -> bool) -> (Vec<u64>, u64) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    loop {
+        let r = resumes(&t.b);
+        if ok(&r) {
+            return r;
+        }
+        assert!(Instant::now() < end, "timed out waiting for {what}: {r:?}\nB: {}", brief(&t.b));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Three slow cancels in a row: the gap between the retries doubles (here 0.6 s, 1.2 s, 2.4 s, then the 3 s cap), and a retry's own
+/// new link (made to tell the answering end the current round trip time) does not count as a new link.
+#[test]
+fn the_retry_gap_doubles_after_each_slow_cancel_up_to_the_cap() {
+    let t = held_back();
+    let (fires, _) = watch_until(&t, "five retries", 90, |r| r.0.len() >= 5);
+    let gaps: Vec<u64> = fires.windows(2).map(|w| w[1] - w[0]).collect();
+    // After 1, 2, 3 and 4 slow cancels: 1.2 s, 2.4 s, then the cap (3 s) twice. A gap is at least the hold and a little over it.
+    for (gap, hold) in gaps.iter().zip([1200u64, 2400, 3000, 3000]) {
+        assert!(*gap >= hold && *gap < hold + 1500, "gaps {gaps:?}, wanted {hold} ms and a little over for one of them");
+    }
+    t.a.close();
+    t.b.close();
+}
+
+/// After two slow cancels, a new link to the device ends the backoff at once: the next retry is within the watcher's interval,
+/// not after the doubled gap.
+#[test]
+fn a_new_link_to_the_device_resets_the_backoff() {
+    let t = held_back();
+    let r = watch_until(&t, "two slow cancels", 60, |r| r.0.len() >= 2 && r.1 >= 2400);
+    assert_eq!(r.1, 2400, "the gap after two slow cancels");
+    let (n, at) = (r.0.len(), now_ms());
+    call(&t.b, "test_relink", json!({"peer": saved_peer(&t.db)["id"]}));
+    let r = watch_until(&t, "a retry after the new link", 10, |r| r.0.len() > n);
+    assert!(r.0[n] - at < 1500, "the retry came {} ms after the new link, not after the 2.4 s gap", r.0[n] - at);
+    t.a.close();
+    t.b.close();
+}
+
+/// The same for an interface coming up on this device (getting home onto Wi-Fi).
+#[test]
+fn an_interface_coming_up_resets_the_backoff() {
+    let t = held_back();
+    let r = watch_until(&t, "two slow cancels", 60, |r| r.0.len() >= 2 && r.1 >= 2400);
+    assert_eq!(r.1, 2400, "the gap after two slow cancels");
+    let (n, at) = (r.0.len(), now_ms());
+    call(&t.b, "test_attach_iface", json!({}));
+    let r = watch_until(&t, "a retry after the interface came up", 10, |r| r.0.len() > n);
+    assert!(r.0[n] - at < 1500, "the retry came {} ms after the interface came up, not after the 2.4 s gap", r.0[n] - at);
     t.a.close();
     t.b.close();
 }

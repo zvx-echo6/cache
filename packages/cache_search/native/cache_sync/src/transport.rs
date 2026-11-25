@@ -177,6 +177,12 @@ pub trait Transport: Send + Sync + 'static {
     fn measure(&self, _peer: &str) -> BoxFut<'_, bool> {
         Box::pin(async { false })
     }
+    /// Tests only: the link to `peer` drops (the next request makes a new one).
+    #[cfg(feature = "test-hooks")]
+    fn test_relink(&self, _peer: &str) {}
+    /// Tests only: another network interface comes up on this device.
+    #[cfg(feature = "test-hooks")]
+    fn test_attach_iface(&self) {}
     /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
     /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
     fn pair_short(&self, _dest_hex: &str, _body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {

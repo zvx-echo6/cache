@@ -378,6 +378,21 @@ impl Transport for MultiTransport {
         })
     }
 
+    #[cfg(feature = "test-hooks")]
+    fn test_relink(&self, peer: &str) {
+        if let Some((k, n)) = peer.parse::<PublicKey>().ok().zip(self.node()) {
+            n.relink(&k);
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn test_attach_iface(&self) {
+        if let Some(n) = self.node() {
+            // Nothing listens there: the interface exists (and is trying to connect), which is all a test needs.
+            n.attach_tcp_client("127.0.0.1:9");
+        }
+    }
+
     fn reached_over_rns(&self, peer: &str) -> bool {
         let reached = self.last_via.lock().unwrap().get(peer) == Some(&Net::Reticulum);
         reached && peer.parse::<PublicKey>().ok().zip(self.node()).is_some_and(|(k, n)| n.reachable(&k))

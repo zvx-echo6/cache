@@ -1190,6 +1190,12 @@ impl RnsNode {
         }
     }
 
+    /// Tests only: attaches one more TCP client interface to the running node (an interface coming up).
+    #[cfg(feature = "test-hooks")]
+    pub fn attach_tcp_client(&self, addr: &str) {
+        self.handle.attach(TcpClientInterface::new(addr.to_string()));
+    }
+
     /// The link this device has open to `peer` (one it opened), as Prns numbers it: for telling whether a link was kept or made
     /// again.
     pub fn link_id_to(&self, peer: &PublicKey) -> Option<impl std::fmt::Debug + PartialEq + Clone> {

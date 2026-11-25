@@ -10,6 +10,8 @@ description = "Reticulum for Cache (1.2 spike): a device's Reticulum node on Prn
 default = []
 # RNode (USB/BLE) is out of the first rollout, and Prns's rnode feature pulls in bluer/dbus.
 rnode = ["personal-rns/rnode"]
+# Tests only: lets a test attach another interface to a running node.
+test-hooks = []
 
 [dependencies]
 # Prns, pinned to a git tag: crates.io still serves 0.3.7, which hangs on two request paths fixed in 0.3.8 (Prns #286, #287).
