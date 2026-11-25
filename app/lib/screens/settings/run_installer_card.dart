@@ -30,8 +30,17 @@ class RunInstallerCard extends StatelessWidget {
         key: const ValueKey('settings-run-installer'),
         leading: Icon(Icons.folder_off_outlined, size: 22, color: toneColor(context.t, Tone.warn)),
         title: kRunInstallerLine,
-        titleLines: 3,
-        trailing: TextButton(key: const ValueKey('settings-run-installer-how'), onPressed: () => showHowToRunInstaller(context), child: const Text('How')),
+        // the whole sentence, never cut: the How link sits under it, not beside it
+        titleLines: 4,
+        statusWidget: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            key: const ValueKey('settings-run-installer-how'),
+            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4), minimumSize: const Size(48, 32), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            onPressed: () => showHowToRunInstaller(context),
+            child: const Text('How'),
+          ),
+        ),
       ),
     ],
   );
