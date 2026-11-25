@@ -410,6 +410,8 @@ pub struct RnsNode {
     entry_salt: [u8; 32],
     /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
     reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// How often the periodic path request loop asks (ms); tests lengthen it ([`RnsNode::set_path_every`]).
+    path_every_ms: Arc<std::sync::atomic::AtomicU64>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -739,6 +741,7 @@ impl RnsNode {
         }));
 
         let reach_gap_ms = Arc::new(std::sync::atomic::AtomicU64::new(REACHABLE_GAP.as_millis() as u64));
+        let path_every_ms = Arc::new(std::sync::atomic::AtomicU64::new(PATH_EVERY.as_millis() as u64));
         // Events: heard announces, identities on links, hellos, requests, notifications.
         {
             let reach_gap_ms = reach_gap_ms.clone();
@@ -957,10 +960,9 @@ impl RnsNode {
         {
             let handle = handle.clone();
             let state = state.clone();
+            let path_every_ms = path_every_ms.clone();
             tasks.push(tokio::spawn(async move {
-                let mut tick = tokio::time::interval(PATH_EVERY);
                 loop {
-                    tick.tick().await;
                     let missing: Vec<([u8; 32], DestinationHash)> = {
                         let s = state.lock().unwrap();
                         s.destination_of
@@ -971,6 +973,11 @@ impl RnsNode {
                     };
                     for (k, d) in missing {
                         find_path(&handle, &state, k, d).await;
+                    }
+                    // The wait is read again every 200 ms, so a test that lengthens it takes effect at once.
+                    let from = std::time::Instant::now();
+                    while from.elapsed() < Duration::from_millis(path_every_ms.load(std::sync::atomic::Ordering::Relaxed)) {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
                     }
                 }
             }));
@@ -1020,6 +1027,7 @@ impl RnsNode {
             state,
             entry_salt,
             reach_gap_ms,
+            path_every_ms,
             tasks,
             stop: Mutex::new(Some(stop_tx)),
         })
@@ -1059,6 +1067,12 @@ impl RnsNode {
     /// Tests only: how long without an announce makes a linked device reachable again.
     pub fn set_reach_gap(&self, d: Duration) {
         self.reach_gap_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tests only: how often the periodic path request loop asks for the devices not heard yet (a long time leaves finding a path
+    /// to the requests sent when an entry point connects).
+    pub fn set_path_every(&self, d: Duration) {
+        self.path_every_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Replaces the list of devices that used to be linked (not linked now): a signed hello from one is answered "not linked".

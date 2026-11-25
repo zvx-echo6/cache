@@ -288,6 +288,98 @@ async fn a_peer_found_by_path_request_alone_shows_the_entry_it_came_through() {
     assert_eq!(a.via(&kb.public()), Some(Via::Entry("e1".to_string())), "a path request through an entry shows the entry");
 }
 
+/// Direct tests of three things the larger test above only passes through (a mutation check asked for them): the path requests
+/// sent when an entry connects, the routes dropped with an entry, and the `Via::Entry` a route is reported with.
+
+/// Every stored linked device is asked for a path when an entry becomes Connected. The periodic loop is made too slow to cover for it
+/// (set to an hour, and the one wait it may still be in is let pass first), and neither device announces after A connects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn path_requests_go_out_for_every_stored_device_when_an_entry_connects() {
+    let p1 = free_port();
+    let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let (ka, kb, kc) = (SecretKey::generate(), SecretKey::generate(), SecretKey::generate());
+    // B and C announce once each (when their entry connects), before A is on the rnsd.
+    let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    let (_c, _) = start(&kc, vec![Iface::Entry(entry("c1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let (a, _) = start(&ka, vec![], vec![]).await;
+    a.set_path_every(Duration::from_secs(3600));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    a.set_peers(&[peer(&kb), peer(&kc)]);
+    // Nothing is connected, and the periodic loop does not run: nothing is found.
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    assert!(!a.reachable(&kb.public()) && !a.reachable(&kc.public()));
+    a.set_entry_points(&[entry("e1", p1, Some(NAME1), Some(PASS1), true)]);
+    until("both found through the requests sent on connect", 30, || a.reachable(&kb.public()) && a.reachable(&kc.public())).await;
+    assert_eq!(a.via(&kb.public()), Some(Via::Entry("e1".to_string())));
+    assert_eq!(a.via(&kc.public()), Some(Via::Entry("e1".to_string())));
+}
+
+/// What was learned through an entry is gone from the node's routing table (not only from what Cache remembers) when the entry is
+/// switched off, and again when it is removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn routes_learned_through_an_entry_are_dropped_when_it_is_off_or_removed() {
+    let p1 = free_port();
+    let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    let db = destination_for(&kb).unwrap();
+    let (a, _) = start(&ka, vec![Iface::Entry(entry("e1", p1, Some(NAME1), Some(PASS1), true))], vec![&kb]).await;
+    until("B found through e1", 40, || a.via(&kb.public()) == Some(Via::Entry("e1".to_string()))).await;
+    assert_eq!(a.route_via(db).await, Some(Via::Entry("e1".to_string())), "the node holds the route");
+
+    a.set_entry_points(&[entry("e1", p1, Some(NAME1), Some(PASS1), false)]);
+    // `forget_interface` is a command to the node: a moment, not the same instant.
+    let mut left = a.route_via(db).await;
+    for _ in 0..25 {
+        if left.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        left = a.route_via(db).await;
+    }
+    assert_eq!(left, None, "off: the route is gone from the routing table");
+    assert_eq!(a.via(&kb.public()), None);
+
+    a.set_entry_points(&[entry("e1", p1, Some(NAME1), Some(PASS1), true)]);
+    until("B found again", 40, || a.via(&kb.public()) == Some(Via::Entry("e1".to_string()))).await;
+    assert_eq!(a.route_via(db).await, Some(Via::Entry("e1".to_string())));
+    a.set_entry_points(&[]);
+    let mut left = a.route_via(db).await;
+    for _ in 0..25 {
+        if left.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        left = a.route_via(db).await;
+    }
+    assert_eq!(left, None, "removed: the route is gone");
+    assert_eq!(a.via(&kb.public()), None);
+}
+
+/// A peer reached through an entry is reported as `Via::Entry` with that entry's own id, one for each entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn via_reports_the_entry_each_peer_is_reached_through() {
+    let (p1, p2) = (free_port(), free_port());
+    let (_s1, _s2) = (StandIn::server(p1, Some((NAME1, PASS1)), true), StandIn::server(p2, Some((NAME2, PASS2)), true));
+    let (ka, kb, kc) = (SecretKey::generate(), SecretKey::generate(), SecretKey::generate());
+    let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    let (_c, _) = start(&kc, vec![Iface::Entry(entry("c1", p2, Some(NAME2), Some(PASS2), true))], vec![]).await;
+    let (a, _) = start(
+        &ka,
+        vec![
+            Iface::Entry(entry("e1", p1, Some(NAME1), Some(PASS1), true)),
+            Iface::Entry(entry("e2", p2, Some(NAME2), Some(PASS2), true)),
+        ],
+        vec![&kb, &kc],
+    )
+    .await;
+    until("B through e1 and C through e2", 40, || {
+        a.via(&kb.public()) == Some(Via::Entry("e1".to_string())) && a.via(&kc.public()) == Some(Via::Entry("e2".to_string()))
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_periodic_announce_skips_entries_and_the_connect_announce_goes_to_one() {
     let (p1, p2, p3, pa) = (free_port(), free_port(), free_port(), free_port());
