@@ -43,7 +43,7 @@ fn random(n: usize, seed: u64) -> Vec<u8> {
 }
 
 /// One direction: bytes read are written `delay` later (the delay is read as each chunk arrives, so it can change).
-async fn pipe(delay_ms: Arc<AtomicU64>, mut r: tokio::net::tcp::OwnedReadHalf, mut w: tokio::net::tcp::OwnedWriteHalf) {
+async fn pipe(delay_ms: Arc<AtomicU64>, rate: Arc<AtomicU64>, mut r: tokio::net::tcp::OwnedReadHalf, mut w: tokio::net::tcp::OwnedWriteHalf) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 16 * 1024];
@@ -61,13 +61,18 @@ async fn pipe(delay_ms: Arc<AtomicU64>, mut r: tokio::net::tcp::OwnedReadHalf, m
     });
     while let Some((due, bytes)) = rx.recv().await {
         tokio::time::sleep_until(due.into()).await;
+        // A cap on the way through, in bytes a second (0: none): the link slows without its round trip time changing.
+        let cap = rate.load(Ordering::Relaxed);
+        if cap > 0 {
+            tokio::time::sleep(Duration::from_secs_f64(bytes.len() as f64 / cap as f64)).await;
+        }
         if w.write_all(&bytes).await.is_err() {
             break;
         }
     }
 }
 
-async fn proxy(to: u16, delay_ms: Arc<AtomicU64>) -> u16 {
+async fn proxy(to: u16, delay_ms: Arc<AtomicU64>, rate: Arc<AtomicU64>) -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -76,8 +81,8 @@ async fn proxy(to: u16, delay_ms: Arc<AtomicU64>) -> u16 {
             let Ok(s) = TcpStream::connect(("127.0.0.1", to)).await else { continue };
             let (cr, cw) = c.into_split();
             let (sr, sw) = s.into_split();
-            tokio::spawn(pipe(delay_ms.clone(), cr, sw));
-            tokio::spawn(pipe(delay_ms.clone(), sr, cw));
+            tokio::spawn(pipe(delay_ms.clone(), rate.clone(), cr, sw));
+            tokio::spawn(pipe(delay_ms.clone(), rate.clone(), sr, cw));
         }
     });
     port
@@ -91,6 +96,8 @@ struct Link {
     a_store: Store,
     b_store: Store,
     delay: Arc<AtomicU64>,
+    /// The cap on the proxy, bytes a second each way (0: none).
+    rate: Arc<AtomicU64>,
     /// Links that closed, as each end's handler was told.
     closed: (Arc<AtomicU64>, Arc<AtomicU64>),
     _dirs: (tempfile::TempDir, tempfile::TempDir),
@@ -104,7 +111,8 @@ async fn link(delay_ms: u64) -> Link {
     let b_store = Store::open(&db.path().join("store"), Options::default()).unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let delay = Arc::new(AtomicU64::new(delay_ms));
-    let pport = proxy(port, delay.clone()).await;
+    let rate = Arc::new(AtomicU64::new(0));
+    let pport = proxy(port, delay.clone(), rate.clone()).await;
     let cfg = |k: &SecretKey, i: Iface, peer: &SecretKey, store: &Store| Config {
         device: k.clone(),
         interfaces: vec![i],
@@ -130,7 +138,7 @@ async fn link(delay_ms: u64) -> Link {
         let _ = b.announce().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    Link { a, b, ka: ska.public(), kb: skb.public(), a_store, b_store, delay, closed, _dirs: (da, db) }
+    Link { a, b, ka: ska.public(), kb: skb.public(), a_store, b_store, delay, rate, closed, _dirs: (da, db) }
 }
 
 /// B asks A something small, so a link exists and its round trip time is known on both ends.
@@ -249,4 +257,38 @@ async fn the_answering_end_follows_through_its_own_probes_when_it_asks_too() {
     }
     assert_eq!((l.b.link_id_to(&l.ka).unwrap(), l.a.link_id_to(&l.kb).unwrap()), (ib, ia), "both links kept");
     assert_eq!(l.closed.0.load(Ordering::SeqCst) + l.closed.1.load(Ordering::SeqCst), 0, "no link closed");
+}
+
+/// Item 3 (design 2b, "when a link's speed changes mid-transfer"): a file that slows down mid-way is cancelled to waiting, not
+/// failed: the windows already verified stay in the store, and the next fetch asks only for the rest (item 4's "from its verified
+/// pieces"). Here the link's rate collapses under the transfer (the proxy's cap) while the second 16 MiB window is in flight: the
+/// window would take over the budget (a minute; ten seconds here), so it is given up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_that_slows_mid_way_is_cancelled_to_waiting_and_resumes_from_its_verified_windows() {
+    let l = link(1).await;
+    touch(&l).await;
+    l.b.speeds().set_window_budget(Duration::from_secs(10));
+    let data = random(40 * 1024 * 1024 + 5, 41);
+    let hash = l.a_store.add_bytes(&data).unwrap().hash;
+    let rate = l.rate.clone();
+    let started = Instant::now();
+    let r = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(120), move |f| {
+        if f.have >= 16 * 1024 * 1024 {
+            rate.store(200_000, Ordering::Relaxed);
+        }
+    })
+    .await;
+    let e = r.expect_err("the slowed transfer is cancelled");
+    assert!(is_too_slow(&e), "waiting, not failed: {e:#}");
+    assert!(started.elapsed() < Duration::from_secs(60), "given up at the budget, not left to run: {:?}", started.elapsed());
+    // What was verified stays: one whole window, not the file.
+    match l.b_store.status(&hash).unwrap() {
+        cache_store::Status::Partial { have, .. } => assert!(have.is_superset(&cache_store::ChunkRanges::from(cache_store::ChunkNum(0)..cache_store::ChunkNum(16 * 1024)))),
+        other => panic!("a partial file is kept: {other:?}"),
+    }
+    // The link is as fast as before: the same file comes on from where it stopped, the first window not asked for again.
+    l.rate.store(0, Ordering::Relaxed);
+    let f = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(120), |_| {}).await.unwrap();
+    assert_eq!((f.skipped, f.windows), (1, 2), "the verified window was skipped, the other two fetched");
+    assert!(l.b_store.get_bytes(&hash).unwrap() == data);
 }

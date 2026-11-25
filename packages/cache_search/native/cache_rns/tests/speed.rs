@@ -108,3 +108,35 @@ fn what_the_other_device_refused_as_too_slow_holds_until_this_device_measures_ag
     t.set_opened_rtt(&a, 20);
     assert_eq!(t.ask_speed(&a), Speed::Fast);
 }
+
+#[test]
+fn two_windows_in_a_row_under_the_class_floor_cancel_a_transfer() {
+    use cache_rns::speed::{takes_too_long, WindowWatch};
+    let mib = 1024 * 1024u64;
+    // Medium: the floor is 20 KB/s, so a 1 MiB window in 60 s (17 KB/s) is under it.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)), "one slow window does not cancel");
+    assert!(w.done(Speed::Medium, mib, Duration::from_secs(60)), "two in a row do");
+    // A window at or over the floor in between starts the count again.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(10)));
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    assert!(w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    // Fast: the floor is 1 MB/s; 16 MiB in 20 s (0.84 MB/s) is under it, 16 MiB in 10 s is not.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(20)));
+    assert!(w.done(Speed::Fast, 16 * mib, Duration::from_secs(20)));
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(10)));
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(10)));
+    // A Slow link carries no file, so it has no floor to be under.
+    assert!(!WindowWatch::default().done(Speed::Slow, mib, Duration::from_secs(600)));
+    // The one minute rule: a window that would take over the budget at the measured rate.
+    assert!(takes_too_long(16 * mib, 200_000.0, Duration::from_secs(60)), "16 MiB at 200 KB/s is 84 s");
+    assert!(!takes_too_long(16 * mib, 400_000.0, Duration::from_secs(60)), "16 MiB at 400 KB/s is 42 s");
+    let s = Speeds::new();
+    assert_eq!(s.window_budget(), Duration::from_secs(60));
+    s.set_window_budget(Duration::from_secs(3));
+    assert_eq!(s.window_budget(), Duration::from_secs(3));
+}

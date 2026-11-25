@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Result};
 use cache_store::{ChunkNum, ChunkRanges, Hash, Status, Store};
 use iroh::PublicKey;
 
-use crate::speed::Speed;
+use crate::speed::{takes_too_long, Speed, WindowWatch};
 use crate::RnsNode;
 
 /// The request path for a window of a blob.
@@ -149,6 +149,7 @@ pub async fn fetch(
     }
     // The next chunk wanted.
     let mut at = 0u64;
+    let mut watch = WindowWatch::default();
     loop {
         if f.size > 0 && at * CHUNK >= f.size {
             break;
@@ -173,8 +174,19 @@ pub async fn fetch(
                 continue;
             }
         }
+        // Design 2b, "when a link's speed changes mid-transfer": a window that would take over the budget (a minute) at the rate
+        // measured so far is not started, and one that is not done by then is given up. Either way the file waits for a faster
+        // link, and the windows already verified stay in the store.
+        let budget = speeds.window_budget();
+        if speeds.rate(peer).is_some_and(|r| takes_too_long(len.min(f.size.div_ceil(CHUNK).saturating_sub(at).max(1)) * CHUNK, r, budget)) {
+            return Err(too_slow("finishing the next window would take over a minute at this speed"));
+        }
         let asked = std::time::Instant::now();
-        let reply = node.request(peer, BLOB_PATH, &encode_want(&hash, at, at + len), window_timeout).await?;
+        let reply = match node.request(peer, BLOB_PATH, &encode_want(&hash, at, at + len), window_timeout.min(budget)).await {
+            Ok(r) => r,
+            Err(_) if asked.elapsed() >= budget => return Err(too_slow("the window was not done within a minute, the connection is too slow")),
+            Err(e) => return Err(e),
+        };
         match reply.first() {
             Some(&OK) => {}
             Some(&MISSING) => bail!("the other device does not have this file"),
@@ -187,6 +199,8 @@ pub async fn fetch(
             _ => bail!("the other device refused the request"),
         }
         speeds.note_transfer(peer, reply.len() as u64, asked.elapsed());
+        // Two windows in a row under the floor of the class they were asked in: cancel to waiting (after this one is stored).
+        let slow_for_class = watch.done(class, reply.len() as u64, asked.elapsed());
         let bao = &reply[1..];
         if bao.len() < 8 {
             bail!("the answer is too short");
@@ -213,6 +227,9 @@ pub async fn fetch(
         at += len;
         f.have = (at * CHUNK).min(f.size);
         progress(&f);
+        if slow_for_class && f.have < f.size {
+            return Err(too_slow("the connection stayed under this class's speed for two windows"));
+        }
     }
     let done = self::held(store, hash).await?;
     if !done.1 {

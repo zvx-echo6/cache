@@ -42,6 +42,36 @@ pub const FAST_WINDOW_CHUNKS: u64 = 16 * 1024;
 /// The window of a file on a Medium link: 1 MiB.
 pub const MEDIUM_WINDOW_CHUNKS: u64 = 1024;
 
+/// How many windows in a row under the class floor cancel a transfer to waiting.
+pub const SLOW_WINDOWS: u32 = 2;
+/// A window that would take longer than this to finish is not carried on with.
+pub const WINDOW_BUDGET: Duration = Duration::from_secs(60);
+
+/// Watches the windows of one file transfer: what each took against the floor of the class it was asked in.
+#[derive(Debug, Default)]
+pub struct WindowWatch {
+    slow: u32,
+}
+
+impl WindowWatch {
+    /// A window of `bytes` that took `took` was fetched in class `class`. True when the transfer should be cancelled to waiting.
+    pub fn done(&mut self, class: Speed, bytes: u64, took: Duration) -> bool {
+        let Some(floor) = class.floor() else { return false };
+        let rate = bytes as f64 / took.as_secs_f64().max(0.001);
+        if rate < floor {
+            self.slow += 1;
+        } else {
+            self.slow = 0;
+        }
+        self.slow >= SLOW_WINDOWS
+    }
+}
+
+/// Finishing `bytes` at `rate` (bytes a second) would take longer than `budget`.
+pub fn takes_too_long(bytes: u64, rate: f64, budget: Duration) -> bool {
+    rate > 0.0 && bytes as f64 / rate > budget.as_secs_f64()
+}
+
 /// What an answering end says (as the text of a failed request) when its class for the asking device does not allow what was
 /// asked: the asker reads it as a refusal, not as a broken answer ([`is_refusal`]).
 pub const TOO_SLOW_TEXT: &str = "the connection is too slow for this";
@@ -72,6 +102,16 @@ impl Speed {
         match self {
             Speed::Fast => Some(FAST_WINDOW_CHUNKS),
             Speed::Medium => Some(MEDIUM_WINDOW_CHUNKS),
+            Speed::Slow => None,
+        }
+    }
+
+    /// The rate under which a link no longer belongs to this class, in bytes a second: 1 MB/s on Fast, 20 KB/s on Medium (design 2b).
+    /// A Slow link carries no file, so it has none.
+    pub fn floor(self) -> Option<f64> {
+        match self {
+            Speed::Fast => Some(FAST_RATE),
+            Speed::Medium => Some(MEDIUM_RATE),
             Speed::Slow => None,
         }
     }
@@ -160,11 +200,12 @@ impl PeerSpeed {
 pub struct Speeds {
     peers: Mutex<HashMap<[u8; 32], PeerSpeed>>,
     probe_every: Mutex<Duration>,
+    window_budget: Mutex<Duration>,
 }
 
 impl Speeds {
     pub fn new() -> Arc<Speeds> {
-        Arc::new(Speeds { peers: Mutex::new(HashMap::new()), probe_every: Mutex::new(PROBE_EVERY) })
+        Arc::new(Speeds { peers: Mutex::new(HashMap::new()), probe_every: Mutex::new(PROBE_EVERY), window_budget: Mutex::new(WINDOW_BUDGET) })
     }
 
     fn with<R>(&self, peer: &PublicKey, f: impl FnOnce(&mut PeerSpeed) -> R) -> R {
@@ -258,6 +299,21 @@ impl Speeds {
             };
             classify(rtt, None, p.hop)
         })
+    }
+
+    /// The moving rate of the transfers measured with `peer` over the last [`RATE_WINDOW`], in bytes a second.
+    pub fn rate(&self, peer: &PublicKey) -> Option<f64> {
+        self.with(peer, |p| p.rate())
+    }
+
+    /// The most a window may be given to finish ([`WINDOW_BUDGET`] unless a test changed it).
+    pub fn window_budget(&self) -> Duration {
+        *self.window_budget.lock().unwrap()
+    }
+
+    /// Tests make the budget short.
+    pub fn set_window_budget(&self, d: Duration) {
+        *self.window_budget.lock().unwrap() = d;
     }
 
     /// The link to `peer` has gone without a measurement for [`Speeds::set_probe_every`]: a small request should come first.
