@@ -1097,6 +1097,13 @@ impl RnsNode {
         self.state.lock().unwrap().heard.get(peer.as_bytes()).cloned()
     }
 
+    /// What the node's own route to `destination` comes in on, from its routing table (the first hop's interface): the entry point
+    /// it came through, Wi-Fi, or anything else; `None` when the node holds no route. This is what a path found by a path request
+    /// (which brings no announce of its own to hear) is tied to an entry point by.
+    pub async fn route_via(&self, destination: DestinationHash) -> Option<Via> {
+        route_via(&self.handle, &self.state, destination).await
+    }
+
     /// Announces now (for example after a network change), on every interface but the entry points ([`entry_monitor`] announces
     /// on those when they connect). The app data is empty.
     pub async fn announce(&self) -> Result<()> {
@@ -1361,9 +1368,22 @@ impl RnsNode {
     }
 }
 
+/// What `destination`'s route in the node's routing table comes in on (its next-hop interface: Prns `NodeIntrospection::route`).
+async fn route_via(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, destination: DestinationHash) -> Option<Via> {
+    let route = handle.route(destination).await?;
+    let s = state.lock().unwrap();
+    Some(match s.iface_entry.get(&route.interface) {
+        Some(id) => Via::Entry(id.clone()),
+        None => match route.interface.kind() {
+            Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+            _ => Via::Other,
+        },
+    })
+}
+
 /// A standard Reticulum path request for a stored destination; a returned path makes it reachable (over whatever
 /// transport nodes carry it: nothing here needs a direct neighbour). The interface it came in on is learned from the
-/// announce that answers, so until then it counts as [`Via::Other`].
+/// announce that answers, or else from the routing table ([`route_via`]).
 async fn find_path(
     handle: &PrnsNodeHandle,
     state: &Arc<Mutex<State>>,
@@ -1372,7 +1392,17 @@ async fn find_path(
 ) -> bool {
     match tokio::time::timeout(Duration::from_secs(10), handle.request_path(destination)).await {
         Ok(Ok(_)) => {
-            state.lock().unwrap().heard.entry(peer).or_insert(Via::Other);
+            // A path found by a request brings no announce of its own to hear (it may already be in the table), so the interface of
+            // the route is read from the routing table. An announce heard meanwhile (or before) has set the better answer: only
+            // "not known" and "anything else" give way to it.
+            let via = route_via(handle, state, destination).await.unwrap_or(Via::Other);
+            let mut s = state.lock().unwrap();
+            match s.heard.get(&peer) {
+                None | Some(Via::Other) => {
+                    s.heard.insert(peer, via);
+                }
+                Some(_) => {}
+            }
             true
         }
         _ => false,

@@ -258,6 +258,36 @@ async fn entry_points_attach_off_edit_remove_without_a_restart() {
     );
 }
 
+/// A path found by a path request, with no announce on the entry to hear, is still tied to the entry it came in on: the node's own
+/// routing table says which interface the route uses (Prns `NodeIntrospection::route`, `RouteSnapshot::interface`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_peer_found_by_path_request_alone_shows_the_entry_it_came_through() {
+    let p1 = free_port();
+    let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    // A is on e1 and knows no device yet, so B's announce (made when B connects, once) is heard by no one's account.
+    let (a, _) = start(&ka, vec![], vec![]).await;
+    a.set_entry_points(&[entry("e1", p1, Some(NAME1), Some(PASS1), true)]);
+    until("e1 connected", 30, || state_of(&a, "e1") == Some(EntryState::Connected)).await;
+    let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    let db = destination_for(&kb).unwrap();
+    // The route is in A's table, through e1.
+    let mut via = None;
+    for _ in 0..100 {
+        via = a.route_via(db).await;
+        if via.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(via, Some(Via::Entry("e1".to_string())), "the routing table says which entry the route is through");
+    // Only now is B a linked device: nothing about it was heard as a stored destination, so the path request is all there is.
+    a.set_peers(&[peer(&kb)]);
+    assert_eq!(a.via(&kb.public()), None);
+    assert!(a.find_path_to(&kb.public()).await);
+    assert_eq!(a.via(&kb.public()), Some(Via::Entry("e1".to_string())), "a path request through an entry shows the entry");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_periodic_announce_skips_entries_and_the_connect_announce_goes_to_one() {
     let (p1, p2, p3, pa) = (free_port(), free_port(), free_port(), free_port());
