@@ -68,7 +68,7 @@ void main() {
   test('a copy with another install id is not used: the engine makes a new key, which the copy then takes', () async {
     final store = FakeKeepStore(encodeKept('OTHER', keyOf(1)));
     expect(await keepIdentity(syncDir: sync, installId: 'X', store: store), KeepState.missing);
-    expect(main().existsSync(), isFalse, 'nothing restored');
+    expect(main().existsSync(), isFalse, reason: 'nothing restored');
     writeMain(keyOf(2)); // the engine's new key
     expect(await keepIdentity(syncDir: sync, installId: 'X', store: store), KeepState.written);
     expect(kept(store), {'install_id': 'X', 'key': base64Encode(keyOf(2))});
