@@ -1559,13 +1559,26 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   /// The dropped pin the map was slid to, where its card's top was then, and how often the slide was repeated (the card's lines
   /// settle a moment after it opens: the facts about the spot arrive).
   String? _pinShown;
+  ({double lat, double lon})? _pinAt;
   double? _pinTop;
   int _pinRefits = 0;
 
   /// A dropped pin: the map slides so the pin shows in the free room above its card, not under it. The card is measured once it is
   /// laid out (the next frame), and the slide is made again when the card grows or shrinks and no finger has moved the map since.
-  void _focusPin(MapPlace pin) {
-    _pinShown = pin.id;
+  void _focusPin(MapPlace pin) => _focusCard(pin.id, pin.lat, pin.lon);
+
+  /// The id of the card showing over the map now: the chosen place's, or the chosen repeater's (null when there is none).
+  String? get _cardId {
+    final sel = nav.selected;
+    if (sel != null) return sel.id;
+    final r = widget.userLayers?.selectedRepeater.value;
+    return r == null ? null : 'repeater:${r.address}';
+  }
+
+  /// The slide for any card over a spot: a dropped pin, a place, a repeater.
+  void _focusCard(String id, double lat, double lon) {
+    _pinShown = id;
+    _pinAt = (lat: lat, lon: lon);
     _pinTop = null;
     _pinRefits = 0;
     _fitTouched = false;
@@ -1574,15 +1587,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _slideToPin() async {
-    final pin = nav.selected;
-    if (!mounted || pin == null || pin.id != _pinShown || nav.phase != NavPhase.browsing) return;
+    final at = _pinAt;
+    if (!mounted || at == null || _cardId != _pinShown || nav.phase != NavPhase.browsing) return;
     _pinTop = _boxOf(_panelKey)?.top;
-    await _showSpot(pin.lat, pin.lon);
+    await _showSpot(at.lat, at.lon);
   }
 
   /// The card changed height under a pin already brought into view, and no finger has moved the map since: slide again.
   void _reslidePin() {
-    if (!mounted || _fitTouched || _pinRefits >= 3 || nav.phase != NavPhase.browsing || nav.selected?.id != _pinShown) return;
+    if (!mounted || _fitTouched || _pinRefits >= 3 || nav.phase != NavPhase.browsing || _cardId != _pinShown) return;
     final was = _pinTop, top = _boxOf(_panelKey)?.top;
     if (was == null || top == null || (top - was).abs() < 1) return;
     _pinRefits++;
@@ -1720,7 +1733,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (u != null && r != null && u.focusPending) {
       u.focusPending = false;
       if (nav.selected != null) nav.clearSelection();
-      if (r.located) _focusOn(r.lat!, r.lon!);
+      if (r.located) _focusCard('repeater:${r.address}', r.lat!, r.lon!);
     }
     if (mounted) setState(() {});
   }
@@ -2842,7 +2855,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched && _step == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
     }
-    if (_pinShown != null && !_fitTouched && nav.phase == NavPhase.browsing && nav.selected?.id == _pinShown) {
+    if (_pinShown != null && !_fitTouched && nav.phase == NavPhase.browsing && _cardId == _pinShown) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _reslidePin());
     }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept

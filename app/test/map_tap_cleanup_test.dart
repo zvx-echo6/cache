@@ -320,6 +320,22 @@ void main() {
       });
     }
 
+    testWidgets('a repeater opened from outside the map (its list, a search) slides the map so its pin shows above its card', (tester) async {
+      final m = _Maps();
+      await m.pump(tester);
+      m.camera.cameras.clear();
+      const rep = Repeater(listId: 'l2', listName: 'Magic Valley', item: 1, address: 'repeater:l2/1', name: 'K7ABC', town: 'Twin Falls', lat: 42.56, lon: -113.46);
+      m.userLayers.showRepeater(rep);
+      await m.settle(tester);
+      expect(m.userLayers.selectedRepeater.value?.name, 'K7ABC');
+      expect(m.camera.cameras, isNotEmpty, reason: 'the map moved');
+      final last = m.camera.cameras.last as List;
+      expect(last.first, 'newCameraPosition', reason: 'moved to an offset centre, not onto the repeater itself: $last');
+      final target = (last[1] as Map)['target'] as List;
+      expect(target[0] as num, lessThan(42.56), reason: 'the centre is south of the repeater, so it is drawn above the card');
+      await m.finish(tester);
+    });
+
     testWidgets('an area\'s card draws no dot (only its outline); a dropped pin is drawn as a map pin image', (tester) async {
       final m = _Maps();
       await m.pump(tester);
