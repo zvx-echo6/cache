@@ -116,7 +116,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
     expect(find.text('Connected through a relay'), findsOneWidget);
-    expect(find.text('Last seen 5 min ago'), findsOneWidget);
+    expect(find.text('Last seen 5 min ago'), findsNothing, reason: 'connected: the page does not say when it was last seen');
     expect(find.byKey(const ValueKey('device-unlink-never')), findsNothing);
     s.dispose();
     await tester.pumpWidget(const SizedBox());

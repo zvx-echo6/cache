@@ -330,7 +330,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
     expect(find.text('Connected directly'), findsOneWidget);
-    expect(find.text('Last seen 2 min ago'), findsOneWidget);
+    expect(find.text('Last seen 2 min ago'), findsNothing, reason: 'connected: the page does not say when it was last seen');
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));

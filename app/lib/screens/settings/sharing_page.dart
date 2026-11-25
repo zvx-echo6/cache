@@ -812,9 +812,10 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // How it is reached, then when it was last seen: the row's line, with its first part as the heading.
+                        // The row's line, with its first part as the heading.
                         Text(status.first.text, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
-                        if (status.length > 1) ...[
+                        // While it is connected the heading is all (it is here now); otherwise when it was last seen.
+                        if (status.length > 1 && status.first.tone != Tone.ok) ...[
                           const SizedBox(height: 2),
                           statusText(context, [Part(status.skip(1).map((x) => x.text).join().replaceFirst(' · ', ''))], size: 14, maxLines: null),
                         ],
@@ -860,7 +861,7 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
             ),
             FilledButton(
               key: const ValueKey('device-sync'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: const StadiumBorder()),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
               onPressed: _busy
                   ? null
                   : () => _run(() async {
@@ -874,7 +875,6 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
               key: const ValueKey('device-unlink'),
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size.fromHeight(52),
-                shape: const StadiumBorder(),
                 foregroundColor: k.emergency,
                 side: BorderSide(color: k.emergency.withValues(alpha: 0.7), width: 1.5),
               ),

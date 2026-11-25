@@ -48,7 +48,7 @@ void main() {
       expect(find.text('Over the internet'.toUpperCase()), findsOneWidget);
       expect(find.text("Add Reticulum entry points to reach your devices from anywhere. Every one that's on is used at the same time."), findsOneWidget);
       expect(find.text('No entry points yet'), findsOneWidget);
-      expect(find.text('For now your devices connect only over Wi-Fi and Bluetooth.'), findsOneWidget);
+      expect(find.text('For now your devices connect only over Wi-Fi.'), findsOneWidget);
       expect(find.text('Add an entry point'), findsOneWidget);
       expect(find.text('Cache comes with none and only uses ones you add. They sync to your other linked devices. Nothing goes through our servers.'), findsOneWidget);
     });
@@ -127,7 +127,7 @@ void main() {
       expect(find.text('Connected'), findsOneWidget);
       expect(find.text('Checked just now · 3 of your devices are online through it'), findsOneWidget);
       expect(find.text('Up to 50 MB each'), findsOneWidget);
-      expect(find.text('Bigger files wait for Wi-Fi or Bluetooth'), findsOneWidget);
+      expect(find.text('Bigger files wait for Wi-Fi'), findsOneWidget);
       expect(find.textContaining('The person who runs it can see when your devices are online'), findsOneWidget);
       expect(find.text('Save'), findsOneWidget);
       expect(find.text('Remove from all my devices'), findsOneWidget);
@@ -340,7 +340,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('peer-p1')));
       await tester.pumpAndSettle();
       expect(find.text('Through rt.example.net'), findsOneWidget);
-      expect(find.text('Last seen just now'), findsOneWidget);
+      expect(find.text('Last seen just now'), findsNothing, reason: 'connected: no last seen on the page');
     });
 
     testWidgets('each class of link: Wi-Fi, a slow link, and no wording the engine cannot know', (tester) async {
@@ -375,7 +375,7 @@ void main() {
       expect(find.text('STATUS'), findsOneWidget);
       final card = find.byKey(const ValueKey('device-status'));
       expect(find.descendant(of: card, matching: find.text('Connected, slow link: small items only')), findsOneWidget);
-      expect(find.descendant(of: card, matching: find.text('Last seen 5 min ago')), findsOneWidget);
+      expect(find.descendant(of: card, matching: find.textContaining('Last seen')), findsNothing, reason: 'connected: no last seen on the page');
       expect(find.textContaining('Also reachable'), findsNothing);
       expect(find.textContaining('adio'), findsNothing);
       expect(find.text('WAITING FOR A FASTER CONNECTION'), findsOneWidget);
@@ -413,7 +413,7 @@ void main() {
       final sync = FakeSync()..peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': now, 'via': 'wifi', 'speed': 'fast', 'live': true, 'error': null});
       await open(tester, sync, (s) => SharingDevicePage(sharing: s, peer: 'p1'));
       expect(find.text('Same Wi-Fi'), findsOneWidget);
-      expect(find.text('Last seen just now'), findsOneWidget);
+      expect(find.text('Last seen just now'), findsNothing);
       expect(find.byKey(const ValueKey('device-waiting')), findsNothing);
     });
   });

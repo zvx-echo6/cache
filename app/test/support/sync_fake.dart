@@ -56,6 +56,9 @@ class FakeSync implements SyncCoreLike {
   /// dev, status, checked}`; a test sets `status` by hand to walk the states the engine reports.
   final entries = <Map<String, Object?>>[];
 
+  /// The engine's log lines `status` answers (`{at, text}`, newest first).
+  final log = <Map<String, Object?>>[];
+
   /// What `status` lists as waiting (step 3): `{peer, peer_name, share_id, share, path, what, size, reason}`.
   final waiting = <Map<String, Object?>>[];
 
@@ -115,7 +118,7 @@ class FakeSync implements SyncCoreLike {
           if (waiting.isNotEmpty) 'waiting': waiting,
           'transfer': null,
           'paused': null,
-          'log': [],
+          'log': log,
         };
       case 'entry_points':
         return {'entries': [for (final e in entries) Map<String, Object?>.of(e)]};

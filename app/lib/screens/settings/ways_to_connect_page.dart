@@ -109,7 +109,7 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
                         children: [
                           Text('No entry points yet', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
                           SizedBox(height: 2),
-                          _Plain('For now your devices connect only over Wi-Fi and Bluetooth.'),
+                          _Plain('For now your devices connect only over Wi-Fi.'),
                         ],
                       ),
                     ),
@@ -124,7 +124,7 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
               key: const ValueKey('add-entry'),
               icon: const Icon(Icons.add),
               label: const Text('Add an entry point'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: const StadiumBorder()),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
               onPressed: _add,
             ),
             const NoteText('Cache comes with none and only uses ones you add. They sync to your other linked devices. Nothing goes through our servers.'),

@@ -395,7 +395,7 @@ class _EntryPointPageState extends State<EntryPointPage> {
                 SettingsRow(
                   key: const ValueKey('entry-cap'),
                   title: _capText(_cap),
-                  status: const [Part('Bigger files wait for Wi-Fi or Bluetooth')],
+                  status: const [Part('Bigger files wait for Wi-Fi')],
                   onTap: _busy ? null : _pickCap,
                 ),
               ],
@@ -406,7 +406,7 @@ class _EntryPointPageState extends State<EntryPointPage> {
             ),
             FilledButton(
               key: const ValueKey('entry-save'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: const StadiumBorder()),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
               onPressed: _busy ? null : _save,
               child: Text(_adding ? 'Add and connect' : 'Save', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
@@ -415,8 +415,7 @@ class _EntryPointPageState extends State<EntryPointPage> {
                 key: const ValueKey('entry-remove'),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(52),
-                  shape: const StadiumBorder(),
-                  foregroundColor: k.emergency,
+                    foregroundColor: k.emergency,
                   side: BorderSide(color: k.emergency.withValues(alpha: 0.7), width: 1.5),
                 ),
                 onPressed: _busy ? null : () => _remove(e!),

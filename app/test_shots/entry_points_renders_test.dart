@@ -260,4 +260,26 @@ void main() {
       sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': _now - 1000, 'via': 'wifi', 'speed': 'fast', 'live': true, 'error': null, 'free_bytes': 612 << 30, 'link_known': true, 'link': {'mode': 'match'}});
     },
   );
+
+  // A device's Activity page: the log, newest first.
+  shot(
+    '07-activity',
+    (s, ss) => SharingDevicePage(sharing: s, peer: 'p1', settingsSync: ss),
+    settings: true,
+    height: 900,
+    prepare: (sync) {
+      sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': _now - 1000, 'via': 'wifi', 'speed': 'fast', 'live': true, 'error': null, 'free_bytes': 612 << 30, 'link_known': true, 'link': {'mode': 'match'}});
+      sync.log.addAll([
+        {'at': _now - 40000, 'text': 'Notebooks: 3 entries arrived from your other devices'},
+        {'at': _now - 11 * 60000, 'text': 'fetch from Desk resumed and finished (212 MB)'},
+        {'at': _now - 3 * 3600000, 'text': 'Library from Desk: 2 files added'},
+        {'at': _now - 5 * 3600000, 'text': 'Linked with Desk'},
+      ]);
+    },
+    act: (tester) async {
+      await tester.ensureVisible(find.byKey(const ValueKey('device-activity')));
+      await tester.tap(find.byKey(const ValueKey('device-activity')));
+      await _settle(tester);
+    },
+  );
 }
