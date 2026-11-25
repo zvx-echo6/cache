@@ -585,6 +585,13 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Object(o)) => {
                 let num = |k: &str| o.get(k).and_then(serde_json::Value::as_f64);
                 let text = |k: &str| o.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+                // an id's place may be in a tile that is not on the phone yet (a chip or result in another area): fetch the tiles around
+                // the end first, as a map search does (it fetches only online, and waits at most as long as a search does)
+                if let (Some(c), Some(id), Some(la), Some(lo)) = (places, text("id"), num("lat"), num("lon")) {
+                    if !id.starts_with("kind:") && !id.starts_with("loc:") {
+                        c.feed.prepare(la, lo, cache_places::feed::SEARCH_PREPARE_WAIT);
+                    }
+                }
                 // a kind: id is the nearest place of that kind to the GPS fix, and the end is that place
                 let found = text("id").and_then(|id| places.and_then(|c| c.lookup_near(&id, near)));
                 let of_kind = text("id").is_some_and(|i| i.starts_with("kind:"));
@@ -675,5 +682,82 @@ impl crate::handle::Handle {
             (None, None) => return Err(Error::bad_json("route_id (or a route object) is required")),
         };
         Ok(route.progress(&req).to_string())
+    }
+}
+
+#[cfg(test)]
+mod end_prepare_tests {
+    use crate::handle::Handle;
+    use cache_places::fixture::{fixture_tiles, write_fixture_common, write_fixture_shard, FIXTURE_BUILD};
+    use cache_places::{merged, PlacesFeed, PrepareAnswer};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const BURLEY: (f64, f64) = (42.5357, -113.7928);
+
+    fn merged_db(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let common = dir.join("common-src.sqlite");
+        write_fixture_common(&common, FIXTURE_BUILD);
+        let mut c = merged::create(&dir.join(format!("{FIXTURE_BUILD}.sqlite")), &common).unwrap();
+        for tile in fixture_tiles() {
+            let shard = dir.join(format!("{tile}.shard"));
+            write_fixture_shard(&shard, tile, FIXTURE_BUILD);
+            merged::merge_tile(&mut c, tile, &shard, "0", 0).unwrap();
+        }
+        merged::set_regions(&c, "Idaho").unwrap();
+        drop(c);
+        std::fs::write(dir.join("CURRENT"), FIXTURE_BUILD).unwrap();
+    }
+
+    /// The regions engine's part: asked for the tiles around a point, it puts the places on the phone.
+    struct Installs {
+        asked: Mutex<Vec<(f64, f64, Duration)>>,
+        dir: std::path::PathBuf,
+        core: Mutex<Option<Arc<cache_places::PlacesCore>>>,
+    }
+    impl PlacesFeed for Installs {
+        fn prepare(&self, lat: f64, lon: f64, wait: Duration) -> PrepareAnswer {
+            self.asked.lock().unwrap().push((lat, lon, wait));
+            merged_db(&self.dir);
+            if let Some(c) = self.core.lock().unwrap().as_ref() {
+                c.packs.recheck();
+            }
+            PrepareAnswer { fetched: 1, ok: true, ..Default::default() }
+        }
+        fn generation(&self) -> u64 {
+            0
+        }
+    }
+
+    fn open(dir: &std::path::Path) -> Handle {
+        Handle::open(&serde_json::json!({"sources": [], "places": {"packs": [], "merged_dir": dir}}).to_string()).unwrap()
+    }
+
+    #[test]
+    fn an_id_end_in_an_area_not_on_the_phone_is_fetched_then_enriched() {
+        let root = std::env::temp_dir().join(format!("cs-endprep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // a place with an osm category, found in a handle that has the tiles
+        let (have, installed) = (root.join("have"), root.join("empty"));
+        merged_db(&have);
+        let h = open(&have);
+        let core = h.ext.map_places.clone().unwrap();
+        let hits = core.search("pharmacy", &cache_places::map::SearchOpts { near: Some(BURLEY), meaning: false, ..Default::default() }, None).unwrap();
+        let id = hits["results"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).find(|id| core.lookup(id).is_some_and(|e| e.osm_category.is_some())).expect("a place with an osm category").to_string();
+        let wanted = core.lookup(&id).unwrap();
+        // the phone with no places: the end is only its id and point
+        let h = open(&installed);
+        let core = h.ext.map_places.clone().unwrap();
+        assert!(core.lookup(&id).is_none());
+        let feed = Arc::new(Installs { asked: Mutex::new(vec![]), dir: installed.clone(), core: Mutex::new(Some(core)) });
+        h.ext.map_places.as_ref().unwrap().plug_feed(feed.clone());
+        let end = h.map_end(Some(&serde_json::json!({"id": id, "lat": wanted.lat, "lon": wanted.lon})), "to").unwrap();
+        assert_eq!(feed.asked.lock().unwrap().as_slice(), [(wanted.lat, wanted.lon, Duration::from_secs(3))], "the tiles around the end are fetched first");
+        assert_eq!(end.osm_category, wanted.osm_category, "the end got the place's own details");
+        // a kind or coordinate end needs no tile of its own
+        h.map_end(Some(&serde_json::json!({"id": "loc:42.5,-113.7", "lat": 42.5, "lon": -113.7})), "to").unwrap();
+        assert_eq!(feed.asked.lock().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
