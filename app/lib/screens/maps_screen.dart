@@ -25,6 +25,9 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
+import '../maps/stack/icon_groups.dart';
+import '../maps/stack/stack_fan.dart';
+import '../maps/stack/stack_images.dart';
 import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource, pointInGeometry;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
@@ -42,6 +45,7 @@ import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
 import '../roads/road_chips.dart';
+import '../roads/road_event.dart' show RoadEventKind;
 import '../roads/road_event_card.dart';
 import '../roads/road_events_state.dart';
 import '../roads/road_map_layers.dart';
@@ -888,6 +892,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     await _pushUser();
     await _pushMeasure();
     await _pushRoadEvents();
+    // The new style has none of the group markers or the pictures: made again for the groups now.
+    _stackSig = '';
+    _stackGroups = const [];
+    _discPngs.clear();
+    await _updateStacks();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     if (_slideWaits) {
       _slideWaits = false;
@@ -921,6 +930,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       await c.setGeoJsonSource(kRoadEventSource, roadEventsGeoJson(r.events, selectedId: r.selectedId));
     } catch (_) {}
+    unawaited(_updateStacks());
   }
 
   /// A road event was read or chosen: drawn again; a chosen one's card shows over a place card and replaces it.
@@ -1000,8 +1010,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   void _onCameraMove(CameraPosition p) {
     _lat = p.target.latitude;
     _lon = p.target.longitude;
+    final zoomed = (_zoom - p.zoom).abs() > 1e-6;
     _zoom = p.zoom;
     nav.setMapCentre(_lat, _lon);
+    // A fan folds when the map is panned or zoomed.
+    if (_fan != null && (zoomed || (_lat - _fanLat).abs() > 1e-9 || (_lon - _fanLon).abs() > 1e-9)) _foldFan();
+    _fanLat = _lat;
+    _fanLon = _lon;
     if ((_bearing - p.bearing).abs() > 0.5 || (p.bearing != 0 && _bearing == 0) || (p.bearing == 0 && _bearing != 0)) {
       setState(() => _bearing = p.bearing);
     } else {
@@ -1011,7 +1026,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (mounted) setState(() {});
   }
 
+  double _fanLat = 0, _fanLon = 0;
+
   void _onCameraIdle() {
+    unawaited(_updateStacks());
     final c = _controller;
     final p = c?.cameraPosition;
     if (p != null) maps.rememberCamera(p.target.latitude, p.target.longitude, p.zoom);
@@ -1038,6 +1056,207 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         await maps.checkCoverage(view, _zoom.floor());
       } catch (_) {}
     });
+  }
+
+
+  // ---- stacked icons: grouped into one marker, fanned out on a tap -------------------------------------------
+
+  List<IconGroup> _stackGroups = const [];
+  String _stackSig = '';
+
+  /// The open fan (null: none), where it is on the screen, and the pictures of its discs.
+  IconGroup? _fan;
+  FanLayout? _fanLayout;
+  final Map<String, Uint8List> _discPngs = {};
+
+  /// The icons that may be grouped: a repeater list's repeaters and the road events (never the person's own pins, the chosen place,
+  /// the search results, the position or the route's markers), with where each is on the map's plane at the zoom now.
+  List<StackIcon> _stackIcons() {
+    final out = <StackIcon>[];
+    final scale = 512 * math.pow(2, _zoom).toDouble();
+    ({double x, double y}) plane(double lat, double lon) {
+      final sinLat = math.sin(lat * math.pi / 180).clamp(-0.9999, 0.9999);
+      return (x: (lon + 180) / 360 * scale, y: (0.5 - math.log((1 + sinLat) / (1 - sinLat)) / (4 * math.pi)) * scale);
+    }
+
+    final u = widget.userLayers;
+    if (u != null) {
+      for (final r in u.drawnRepeaters) {
+        final lat = r.lat, lon = r.lon;
+        if (lat == null || lon == null) continue;
+        final p = plane(lat, lon);
+        out.add(StackIcon(id: 'repeater:${r.listId}/${r.item}', kind: StackKind.repeater, name: r.name, lat: lat, lon: lon, x: p.x, y: p.y));
+      }
+    }
+    final roads = widget.roadEvents;
+    if (roads != null) {
+      for (final e in roads.events) {
+        final at = e.chipAt;
+        final p = plane(at.lat, at.lon);
+        out.add(StackIcon(id: 'road:${e.id}', kind: StackKind.roadEvent, name: e.road, lat: at.lat, lon: at.lon, x: p.x, y: p.y));
+      }
+    }
+    return out;
+  }
+
+  /// One drawn diameter at this zoom, in points: the larger of a repeater's disc and a road chip's, each by the zoom curve.
+  double _stackDiameter() => math.max(kFanDisc * iconScaleAt(_zoom), 18 * (0.8 + (1.15 - 0.8) * ((_zoom - 9) / 6).clamp(0.0, 1.0)));
+
+  /// Groups the icons that overlap now, and when the groups changed draws their markers and leaves their members out of the layers.
+  Future<void> _updateStacks() async {
+    final c = _controller;
+    if (c == null || !_styleReady || !mounted) return;
+    final groups = groupIcons(_stackIcons(), diameter: _stackDiameter(), previous: _stackGroups);
+    final sig = groups.map((g) => g.key).join(';');
+    if (sig == _stackSig) return;
+    _stackSig = sig;
+    _stackGroups = groups;
+    if (_fan != null && !groups.any((g) => g.key == _fan!.key)) _foldFan();
+    final images = _pinImages;
+    final p = _palette;
+    final ratio = images?.ratio ?? 3;
+    final features = <Map<String, dynamic>>[];
+    try {
+      for (final g in groups) {
+        final road = g.members.where((m) => m.kind == StackKind.roadEvent).firstOrNull;
+        final name = 'stack-${g.kind.name}-${g.badge}${g.kind == StackKind.roadEvent ? '-${_roadKindOf(road)?.name}' : ''}';
+        await images?.ensureNamed(name, () => renderStackMarkerPng(g.kind, g.badge, p, road: _roadKindOf(road) ?? RoadEventKind.work, ratio: ratio));
+        features.add({
+          'type': 'Feature',
+          'geometry': {'type': 'Point', 'coordinates': [g.lon, g.lat]},
+          'properties': {'img': name, 'gkey': g.key},
+        });
+      }
+      await c.setGeoJsonSource(kStackSource, {'type': 'FeatureCollection', 'features': features});
+      final keys = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.repeater) m.id.substring('repeater:'.length)];
+      final ids = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.roadEvent) m.id.substring('road:'.length)];
+      await c.setFilter(kUserRepeaters, userRepeatersFilter(keys));
+      await c.setFilter(kRoadEventChips, roadChipsFilter(ids));
+    } catch (_) {}
+  }
+
+  RoadEventKind? _roadKindOf(StackIcon? m) {
+    if (m == null) return null;
+    final id = m.id.substring('road:'.length);
+    return widget.roadEvents?.events.where((e) => e.id == id).firstOrNull?.kind;
+  }
+
+  /// A tap on a group marker: its fan opens (or, over 8 members, its list).
+  Future<bool> _tapStack(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || _stackGroups.isEmpty) return false;
+    try {
+      for (final h in await _query(c, point, const [kStackMarkers])) {
+        final key = h is Map && h['properties'] is Map ? (h['properties'] as Map)['gkey'] : null;
+        final g = _stackGroups.where((x) => x.key == key).firstOrNull;
+        if (g != null) {
+          HapticFeedback.selectionClick();
+          await _openGroup(g);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<Uint8List> _discPng(StackIcon m) async {
+    final road = m.kind == StackKind.roadEvent ? _roadKindOf(m) : null;
+    final key = '${m.kind.name}-${road?.name}';
+    return _discPngs[key] ??= await renderStackDiscPng(m.kind, _palette, road: road ?? RoadEventKind.work, ratio: _images3());
+  }
+
+  double _images3() => _pinImages?.ratio ?? 3;
+
+  Future<void> _openGroup(IconGroup g) async {
+    final c = _controller;
+    if (c == null) return;
+    if (g.needsSheet) {
+      if (mounted) await _showStackSheet(g);
+      return;
+    }
+    try {
+      final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      Future<({double x, double y})> screen(double lat, double lon) async {
+        final p = await c.toScreenLocation(LatLng(lat, lon));
+        return (x: p.x / ratio, y: p.y / ratio);
+      }
+
+      final centre = await screen(g.lat, g.lon);
+      final truth = [for (final m in g.members) await screen(m.lat, m.lon)];
+      for (final m in g.members) {
+        await _discPng(m);
+      }
+      if (!mounted) return;
+      final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+      final size = stack != null && stack.hasSize ? stack.size : _mapSize;
+      final top = _boxOf(_headerKey)?.bottom ?? 0, bottom = _boxOf(_panelKey)?.top ?? size.height;
+      final radius = fanRadius(g.count);
+      final at = fanCentre(centre, free: (left: 0, top: top, right: size.width, bottom: bottom), radius: radius);
+      final discs = fanDiscs(centre: at, from: truth, radius: radius);
+      setState(() {
+        _fan = g;
+        _fanLayout = FanLayout(centre: at, discs: discs, truth: truth);
+      });
+    } catch (_) {}
+  }
+
+  /// The fan folds: a tap on the map or the dim, Back, a pan or zoom, a card that opens.
+  void _foldFan() {
+    if (_fan == null) return;
+    if (mounted) {
+      setState(() {
+        _fan = null;
+        _fanLayout = null;
+      });
+    } else {
+      _fan = null;
+      _fanLayout = null;
+    }
+  }
+
+  /// A disc of a fan (or a row of the list) was chosen: the icon's usual card opens, and the fan folds.
+  void _pickStackMember(StackIcon m) {
+    _foldFan();
+    HapticFeedback.selectionClick();
+    if (m.id.startsWith('repeater:')) {
+      final ref = m.id.substring('repeater:'.length).split('/');
+      final u = widget.userLayers;
+      if (u != null && ref.length == 2 && u.selectRepeater(ref[0], int.tryParse(ref[1]) ?? -1) != null) {
+        if (nav.selected != null) nav.clearSelection();
+      }
+    } else if (m.id.startsWith('road:')) {
+      final r = widget.roadEvents;
+      if (r != null) {
+        if (nav.selected != null) nav.clearSelection();
+        widget.userLayers?.clearRepeater();
+        r.select(m.id.substring('road:'.length));
+      }
+    }
+  }
+
+  Future<void> _showStackSheet(IconGroup g) async {
+    final pngs = [for (final m in g.members) await _discPng(m)];
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<StackIcon>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => StackListSheet(group: g, pictures: pngs),
+    );
+    if (picked != null && mounted) _pickStackMember(picked);
+  }
+
+  Widget? _fanOverlay() {
+    final g = _fan, layout = _fanLayout;
+    if (g == null || layout == null) return null;
+    return StackFan(
+      key: const ValueKey('stack-fan'),
+      group: g,
+      layout: layout,
+      pictures: {for (final m in g.members) m.id: _discPngs['${m.kind.name}-${m.kind == StackKind.roadEvent ? _roadKindOf(m)?.name : null}']},
+      onPick: _pickStackMember,
+      onFold: _foldFan,
+    );
   }
 
   // ---- position -----------------------------------------------------------------------------------------
@@ -1707,6 +1926,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       await c.setGeoJsonSource(kUserSource, await u.mapGeoJson());
     } catch (_) {}
+    unawaited(_updateStacks());
   }
 
   /// A tap on a notebook pin opens its card; true when there was one.
@@ -2250,7 +2470,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       await _pushMeasure();
       return;
     }
+    // An open fan folds on any tap that is not on one of its discs (those take their own taps).
+    if (_fan != null) {
+      _foldFan();
+      return;
+    }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
+    if (!nav.searchOpen && await _tapStack(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
     // A road event (a closure over a road's name) wins over what is under it, except a town's name (see _tapRoadEvent).
     if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point, at)) return;
@@ -2862,12 +3088,17 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_ring == null && _step == null && !_peek && !_cardOpen && nav.phase != NavPhase.previewing && widget.onBackToJump == null) || !widget.active,
+      canPop: (_ring == null && _fan == null && _step == null && !_peek && !_cardOpen && nav.phase != NavPhase.previewing && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         // With the long-press ring open, Back closes the ring and nothing else.
         if (_ring != null) {
           setState(() => _ring = null);
+          return;
+        }
+        // An open fan of stacked icons folds, and nothing else.
+        if (_fan != null) {
+          _foldFan();
           return;
         }
         if (_peek) {
@@ -3058,6 +3289,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
               child: NoticePill(text: maps.baseProblem!),
             ),
           ),
+        // An open fan of stacked icons: over the map, under the cards, the panel and the buttons (they are not dimmed).
+        if (!drawing) ?_fanOverlay(),
         if (!drawing && MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null)
           _sideLayers(context, fix, follow)
         else if (!drawing) ...[

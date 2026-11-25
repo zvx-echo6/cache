@@ -1,9 +1,10 @@
+import 'dart:math' as math;
 import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
-import '../../notebook/pin_image.dart' show PinStyle, iconSizeByZoom, pinIconSize;
+import '../../notebook/pin_image.dart' show PinStyle, iconSizeByZoom, kIconZoomCurve, pinIconSize;
 import '../../roads/road_map_layers.dart';
 import '../../theme.dart' show CacheThemeId, isFlatIconTheme;
 import '../layers/layer_def.dart';
@@ -57,6 +58,10 @@ const String kAreaLine = 'area-line';
 const String kUserAreas = 'user-areas';
 const String kUserLines = 'user-lines';
 const String kUserRepeaters = 'user-repeaters';
+
+/// The markers of grouped icons (a disc with a count badge): one point per group, naming its picture (`img`) and its number (`gid`).
+const String kStackSource = 'cache-stack';
+const String kStackMarkers = 'stack-markers';
 
 /// A distance being measured (the ring's Measure): its line and its points.
 const String kMeasureSource = 'cache-measure';
@@ -254,12 +259,21 @@ Map<String, dynamic> buildMapStyle({
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
+  sources[kStackSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
   // Road-event icons and a repeater list's icons take part in symbol collision with the place names, and a name wins: they are put just
   // under the first place-name layer (MapLibre places the layers from the top of the style down, so a layer above gets its place first),
   // above the public places' chips. The order, first placed first: place names, repeaters, road events, public places. Everything else
   // (the person's own pins, the route, the destination, the position) stays on top and is always drawn.
   final routeLayers = _routeLayers(palette, pinStyle);
-  final under = [...roadEventLayers(palette).where((l) => l['id'] == kRoadEventChips), ...routeLayers.where((l) => l['id'] == kUserRepeaters && l['type'] == 'symbol')];
+  // The markers of grouped icons go with them, above the repeaters (they stand in for the members, which are filtered out), always drawn.
+  final under = [
+    ...roadEventLayers(palette).where((l) => l['id'] == kRoadEventChips),
+    ...routeLayers.where((l) => l['id'] == kUserRepeaters && l['type'] == 'symbol'),
+    _stackLayer(),
+  ];
   final nameAt = all.indexWhere((l) => _placeNameLayers.contains(l['id']));
   if (nameAt >= 0) {
     all.insertAll(nameAt, under);
@@ -479,6 +493,32 @@ List<Map<String, dynamic>> _areaLayers(MapPalette p) => [
       },
     ];
 
+/// The filter of the repeaters layer: the points, without the repeaters in [grouped] (their `key` values): a group marker stands for those.
+List<Object> userRepeatersFilter([Iterable<String> grouped = const []]) => [
+      'all',
+      ['==', ['geometry-type'], 'Point'],
+      if (grouped.isNotEmpty) ['!', ['in', ['get', 'key'], ['literal', grouped.toList()]]],
+    ];
+
+/// The markers of grouped icons: the picture the group names, never smaller than 0.75 of full size so the badge can be read.
+Map<String, dynamic> _stackLayer() => {
+      'id': kStackMarkers,
+      'type': 'symbol',
+      'source': kStackSource,
+      'layout': {
+        'icon-image': ['get', 'img'],
+        'icon-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          for (final (z, m) in kIconZoomCurve) ...[z, math.max(0.75, m) * pinIconSize()],
+        ],
+        'icon-anchor': 'center',
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+    };
+
 /// The first place-name layer of each base map layout (Protomaps, OpenMapTiles).
 const Set<String> _placeNameLayers = {'places_subplace', 'label_other'};
 
@@ -568,7 +608,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'id': kUserRepeaters,
           'type': 'symbol',
           'source': kUserSource,
-          'filter': ['==', ['geometry-type'], 'Point'],
+          'filter': userRepeatersFilter(),
           'layout': {
             'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical, flat: isFlatIconTheme(p.id)),
             'icon-size': iconSizeByZoom(pinIconSize()),
@@ -737,6 +777,7 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kUserAreas,
     kUserLines,
     kUserRepeaters,
+    kStackMarkers,
     kNotebookPins,
     kMeasureLine,
     kMeasurePoints,

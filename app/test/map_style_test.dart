@@ -6,7 +6,7 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
-import 'package:cache/notebook/pin_image.dart' show PinStyle;
+import 'package:cache/notebook/pin_image.dart' show PinStyle, pinIconSize;
 import 'package:cache/roads/road_map_layers.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,6 +85,16 @@ void main() {
             expect(at(style, kUserRepeaters), greaterThan(at(style, kRoadEventChips)));
             expect(at(style, kRoadEventChips), greaterThan(at(style, 'pois')));
           }
+          // The markers of grouped icons: always drawn, never smaller than 0.75, right above the repeaters.
+          final m = layer(style, kStackMarkers)['layout'] as Map<String, dynamic>;
+          expect(on(m['icon-allow-overlap']), isTrue);
+          expect(on(m['icon-ignore-placement']), isTrue);
+          expect(at(style, kStackMarkers), at(style, kUserRepeaters) + 1);
+          final size = (m['icon-size'] as List).skip(3).toList();
+          for (var i = 1; i < size.length; i += 2) {
+            expect((size[i] as num) * (1 / pinIconSize()), greaterThanOrEqualTo(0.75 - 1e-9), reason: 'a marker is never smaller than 0.75');
+          }
+          expect((style['sources'] as Map).containsKey(kStackSource), isTrue);
           // The person's own pins and the route, destination and position markers are always drawn.
           for (final id in [kNotebookPins, kPinSelectedIcon, kPinResultsIcon, kRouteTime, kPositionHeading]) {
             final l = layer(style, id)['layout'] as Map<String, dynamic>;
