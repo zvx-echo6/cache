@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cache_rns::{
-    destination_for, Asker, BoxFut, Config, EntryPoint, EntryState, Handler, Iface, RnsNode, Via,
+    destination_for, Asker, DROP_REANNOUNCE_GAP, BoxFut, Config, EntryPoint, EntryState, Handler, Iface, RnsNode, Via,
 };
 use iroh::{PublicKey, SecretKey};
 use personal_rns::interfaces::{IfacContext, IfacSize};
@@ -466,6 +466,130 @@ async fn a_silent_rnsd_is_connected_with_nothing_heard_yet() {
     tokio::time::sleep(Duration::from_secs(35)).await;
     // Nothing ever arrived, so it is not "doesn't match" and not Connected: it can't be told.
     assert_eq!(state_of(&a, "e1"), Some(EntryState::NothingHeard));
+}
+
+/// Step 4 failover: A and B each have entries e1 (S1) and e2 (S2), the two stand-ins not joined. A request to B runs over the entry
+/// the route is through; that stand-in then stops. Within ~30 s A reaches B through the other entry (the route and `via` move to
+/// it) and a request goes through again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn when_the_entry_in_use_dies_the_peer_is_reached_through_the_other_entry() {
+    let (p1, p2) = (free_port(), free_port());
+    let mut s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let mut s2 = StandIn::server(p2, Some((NAME2, PASS2)), true);
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    let two = |p: &str| {
+        vec![
+            Iface::Entry(entry(&format!("{p}1"), p1, Some(NAME1), Some(PASS1), true)),
+            Iface::Entry(entry(&format!("{p}2"), p2, Some(NAME2), Some(PASS2), true)),
+        ]
+    };
+    let (a, _) = start(&ka, two("e"), vec![&kb]).await;
+    let (_b, _) = start(&kb, two("f"), vec![&ka]).await;
+    until("a reaches b", 60, || matches!(a.via(&kb.public()), Some(Via::Entry(_)))).await;
+    let first = match a.via(&kb.public()) {
+        Some(Via::Entry(id)) => id,
+        v => panic!("not through an entry: {v:?}"),
+    };
+    let r = a.request(&kb.public(), "/x", b"one", Duration::from_secs(20)).await;
+    assert_eq!(r.expect("a request over the first entry"), b"one".to_vec());
+    // Stop the stand-in the route runs through.
+    let (dead, other) = if first == "e1" { (&mut s1, "e2") } else { (&mut s2, "e1") };
+    dead.stop();
+    let stopped = Instant::now();
+    until("the route moves to the other entry", 30, || {
+        a.via(&kb.public()) == Some(Via::Entry(other.to_string()))
+    })
+    .await;
+    println!("failover took {:?}", stopped.elapsed());
+    assert_eq!(a.route_via(destination_for(&kb).unwrap()).await, Some(Via::Entry(other.to_string())), "the routing table agrees");
+    let mut got = None;
+    for _ in 0..4 {
+        match a.request(&kb.public(), "/x", b"two", Duration::from_secs(15)).await {
+            Ok(r) => {
+                got = Some(r);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    assert_eq!(got, Some(b"two".to_vec()), "a request goes through the other entry");
+}
+
+/// An entry that was Connected (a valid frame was seen on it) and then goes quiet stays Connected for as long as the connection
+/// holds: quiet is not "the passphrase does not match".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_quiet_entry_that_was_connected_never_becomes_a_mismatch() {
+    let p1 = free_port();
+    // Not chatty: it announces nothing of its own, so after B's one announce nothing more crosses.
+    let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), false);
+    let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+    let (a, _) = start(&ka, vec![Iface::Entry(entry("e1", p1, Some(NAME1), Some(PASS1), true))], vec![&kb]).await;
+    let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![&ka]).await;
+    until("e1 connected (B was heard)", 30, || state_of(&a, "e1") == Some(EntryState::Connected)).await;
+    let end = Instant::now() + Duration::from_secs(62);
+    while Instant::now() < end {
+        let s = state_of(&a, "e1");
+        assert!(matches!(s, Some(EntryState::Connected | EntryState::NothingHeard)), "quiet after Connected is never Mismatch: {s:?}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// The memory is per connection: an entry whose connection dropped and came back is judged afresh (nothing heard, then Connected when
+/// a frame comes), and never Mismatch while frames are valid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_entry_that_drops_and_returns_is_judged_afresh_and_is_never_a_mismatch() {
+    let p1 = free_port();
+    let mut s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let ka = SecretKey::generate();
+    let (a, _) = start(&ka, vec![Iface::Entry(entry("e1", p1, Some(NAME1), Some(PASS1), true))], vec![]).await;
+    until("e1 connected", 30, || state_of(&a, "e1") == Some(EntryState::Connected)).await;
+    s1.stop();
+    until("e1 lost", 30, || !matches!(state_of(&a, "e1"), Some(EntryState::Connected)) ).await;
+    let _s1b = StandIn::server(p1, Some((NAME1, PASS1)), true);
+    let end = Instant::now() + Duration::from_secs(45);
+    let mut back = false;
+    while Instant::now() < end {
+        let s = state_of(&a, "e1");
+        assert_ne!(s, Some(EntryState::Mismatch), "never a mismatch");
+        if s == Some(EntryState::Connected) {
+            back = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(back, "e1 is Connected again within 45 s");
+}
+
+/// When an interface drops, the node announces itself once on each remaining interface that is up (entries included), so peers learn
+/// the new path to it. Three entries drop, a few seconds apart, inside [`DROP_REANNOUNCE_GAP`]: the one still up hears one re-announce
+/// (not three), and nothing more later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drop_makes_one_announce_on_the_remaining_entry_and_drops_close_together_make_one() {
+    let (p1, p2, p3, p4) = (free_port(), free_port(), free_port(), free_port());
+    let mut s1 = StandIn::server(p1, Some((NAME1, PASS1)), false);
+    let s2 = StandIn::server(p2, Some((NAME2, PASS2)), false);
+    let mut s3 = StandIn::server(p3, None, false);
+    let mut s4 = StandIn::server(p4, None, false);
+    let ka = SecretKey::generate();
+    let (a, _) = start(&ka, vec![], vec![]).await;
+    let me = a.destination();
+    a.set_entry_points(&[
+        entry("e1", p1, Some(NAME1), Some(PASS1), true),
+        entry("e2", p2, Some(NAME2), Some(PASS2), true),
+        entry("e3", p3, None, None, true),
+        entry("e4", p4, None, None, true),
+    ]);
+    until("every entry heard the connect announce", 40, || [&s1, &s2, &s3, &s4].iter().all(|s| s.heard_of(me) >= 1)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(s2.heard_of(me), 1, "e2 heard only the connect announce so far");
+    s1.stop();
+    until("e2 heard the re-announce after e1 dropped", 15, || s2.heard_of(me) >= 2).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    s3.stop();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    s4.stop();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(s2.heard_of(me), 2, "three drops within {:?} made one re-announce, exactly one", DROP_REANNOUNCE_GAP);
 }
 
 /// The real test rnsd on cache-build-1 (`~/rns4/run.sh start hub1` first; it starts nothing itself). The address, network name and

@@ -74,6 +74,9 @@ pub const ENTRY_ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 pub const NOT_ANSWERING_AFTER: Duration = Duration::from_secs(20);
 /// An entry point connected this long with bytes arriving but no valid frame is [`EntryState::Mismatch`].
 pub const MISMATCH_AFTER: Duration = Duration::from_secs(30);
+/// At least this long between two re-announces made because an interface dropped (node-wide), so a flapping interface cannot spam
+/// anyone's rnsd.
+pub const DROP_REANNOUNCE_GAP: Duration = Duration::from_secs(30);
 /// How often entry points are looked at.
 const ENTRY_POLL: Duration = Duration::from_secs(1);
 /// A linked device whose announce is heard again after this long without one (three of its announces missed) is reachable again.
@@ -1470,10 +1473,23 @@ fn exact(t: Duration) -> personal_rns::engine::RequestResponseTimeout {
 struct Slot {
     /// A salted hash of (host, port, network name, passphrase): an edit is a different fingerprint.
     fp: [u8; 32],
+    /// What it takes to attach the interface again (the derived IFAC key, never the passphrase): a lost connection's routes are dropped
+    /// by detaching the interface, and a fresh one then keeps trying to reconnect.
+    wire: Wire,
+    /// Lost its connection: the old interface (same id as the next one will have) was forgotten, and the new one is attached once
+    /// the old one is gone from the node, since the same id re-attached too soon would be taken down with it.
+    reattach: Option<(InterfaceId, std::time::Instant)>,
     on: bool,
     /// Its interface while attached.
     iid: Option<InterfaceId>,
     t: Tracker,
+}
+
+/// The address and the derived IFAC key of an entry point (what [`attach_wire`] needs).
+struct Wire {
+    addr: String,
+    ifac: Option<IfacContext>,
+    name: Option<String>,
 }
 
 #[derive(Default)]
@@ -1492,6 +1508,8 @@ struct Tracker {
     announced_at: Option<std::time::Instant>,
     /// Became Connected since the monitor last ran: announce once on it and ask for paths.
     up_pending: bool,
+    /// Was online and now is Reconnecting, Failed or Disconnected, since the monitor last ran: its routes are dropped.
+    lost_pending: bool,
     /// Connected and [`ENTRY_ANNOUNCE_EVERY`] has passed since the last announce on it.
     due_pending: bool,
 }
@@ -1503,7 +1521,7 @@ fn unix_ms() -> u64 {
 }
 
 fn judge(slot: &Slot, now: std::time::Instant) -> EntryState {
-    if !slot.on || slot.iid.is_none() {
+    if !slot.on || (slot.iid.is_none() && slot.reattach.is_none()) {
         return EntryState::Off;
     }
     let t = &slot.t;
@@ -1544,7 +1562,13 @@ fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
         let Some(sn) = snaps.iter().find(|x| x.id == iid) else { continue };
         let t = &mut slot.t;
         let was_connected = matches!(t.conn, Some(ConnectionState::Connected));
+        let was_online = matches!(t.conn, Some(ConnectionState::Connected | ConnectionState::Degraded));
         let connected = matches!(sn.connection, ConnectionState::Connected);
+        if was_online
+            && matches!(sn.connection, ConnectionState::Reconnecting | ConnectionState::Failed | ConnectionState::Disconnected)
+        {
+            t.lost_pending = true;
+        }
         t.conn = Some(sn.connection);
         t.rx_now = sn.rx_bytes;
         if sn.destinations > 0 || sn.links > 0 {
@@ -1574,11 +1598,47 @@ fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
 /// linked device; announces on a connected one again every [`ENTRY_ANNOUNCE_EVERY`].
 async fn entry_monitor(handle: PrnsNodeHandle, state: Arc<Mutex<State>>, me: DestinationHash) {
     let mut tick = tokio::time::interval(ENTRY_POLL);
+    // Which interfaces were online when last looked at, and when the last re-announce for a drop was made (node-wide).
+    let mut was_online: HashMap<InterfaceId, bool> = HashMap::new();
+    let mut last_drop_announce: Option<std::time::Instant> = None;
     loop {
         tick.tick().await;
         observe_entries(&handle, &state);
-        let (announce, connected, dests) = {
+        // An interface that was up and is not any more (an entry lost, Wi-Fi gone): once per [`DROP_REANNOUNCE_GAP`] at most, the node
+        // announces itself once on each interface still up, entries included, so peers learn the new path to it.
+        {
+            let snaps = handle.interfaces();
+            let online = |c: ConnectionState| matches!(c, ConnectionState::Connected | ConnectionState::Degraded);
+            let dropped = snaps.iter().any(|x| was_online.get(&x.id) == Some(&true) && !online(x.connection));
+            was_online = snaps.iter().map(|x| (x.id, online(x.connection))).collect();
+            let now = std::time::Instant::now();
+            if dropped && last_drop_announce.is_none_or(|t| now.duration_since(t) >= DROP_REANNOUNCE_GAP) {
+                last_drop_announce = Some(now);
+                for x in snaps.iter().filter(|x| online(x.connection)) {
+                    let _ = handle
+                        .announce_now(AnnounceNow {
+                            destination: me,
+                            target: AnnounceTarget::Interface(x.id),
+                            app_data: AnnounceAppData::Data(Default::default()),
+                        })
+                        .await;
+                }
+            }
+        }
+        let (announce, connected, dests, lost) = {
             let mut s = state.lock().unwrap();
+            // Entries that lost their connection: their routes go, and the devices reached through them are asked for a path at once
+            // (a path through another entry, or Wi-Fi, is then learned); the periodic loop keeps asking while they are unreachable.
+            let ids: Vec<String> = s
+                .entries
+                .iter_mut()
+                .filter_map(|(id, sl)| std::mem::take(&mut sl.t.lost_pending).then(|| id.clone()))
+                .collect();
+            let mut lost = Vec::new();
+            for id in ids {
+                lost.extend(drop_lost_entry(&handle, &mut s, &id));
+            }
+            finish_reattach(&handle, &mut s);
             let mut announce = Vec::new();
             let mut connected = false;
             for slot in s.entries.values_mut() {
@@ -1595,8 +1655,14 @@ async fn entry_monitor(handle: PrnsNodeHandle, state: Arc<Mutex<State>>, me: Des
             }
             let dests: Vec<([u8; 32], DestinationHash)> =
                 s.destination_of.iter().map(|(k, d)| (*k, *d)).collect();
-            (announce, connected, dests)
+            (announce, connected, dests, lost)
         };
+        for (k, d) in lost {
+            let (handle, state) = (handle.clone(), state.clone());
+            tokio::spawn(async move {
+                find_path(&handle, &state, k, d).await;
+            });
+        }
         for iid in announce {
             let _ = handle
                 .announce_now(AnnounceNow {
@@ -1656,6 +1722,7 @@ fn fingerprint(salt: &[u8; 32], e: &EntryPoint) -> [u8; 32] {
 /// Detaches an entry point's interface (dropping its routes at once) and forgets what was heard through it.
 fn detach_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) {
     let Some(slot) = s.entries.get_mut(id) else { return };
+    slot.reattach = None;
     if let Some(iid) = slot.iid.take() {
         handle.forget_interface(iid);
         s.iface_entry.remove(&iid);
@@ -1664,24 +1731,72 @@ fn detach_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) {
     s.heard.retain(|_, v| *v != me);
 }
 
-fn attach_entry(handle: &PrnsNodeHandle, s: &mut State, e: &EntryPoint) {
+fn wire_of(e: &EntryPoint) -> Wire {
     let host = if e.host.contains(':') && !e.host.starts_with('[') { format!("[{}]", e.host) } else { e.host.clone() };
-    let client = TcpClientInterface::new(format!("{host}:{}", e.port));
     let name = e.network_name.clone().filter(|n| !n.is_empty());
     let pass = e.passphrase.clone().filter(|p| !p.is_empty());
     // WIDE, as Prns's config gives a TCP client and RNS's TCP default. The copy of the passphrase is wiped as it goes out of scope.
     let ifac = IfacContext::derive(name.as_deref(), pass.as_ref().map(|p| p.as_str()), IfacSize::WIDE);
     drop(pass);
-    let attached = match ifac {
-        Some(ifac) => handle.attach_with_ifac_name(client, ifac, name),
+    Wire { addr: format!("{host}:{}", e.port), ifac, name }
+}
+
+fn attach_wire(handle: &PrnsNodeHandle, w: &Wire) -> InterfaceId {
+    let client = TcpClientInterface::new(w.addr.clone());
+    let attached = match w.ifac.clone() {
+        Some(ifac) => handle.attach_with_ifac_name(client, ifac, w.name.clone()),
         None => handle.attach(client),
     };
-    let iid = attached.id();
-    if let Some(slot) = s.entries.get_mut(&e.id) {
-        slot.iid = Some(iid);
-        slot.t = Tracker { attached_at: Some(std::time::Instant::now()), ..Default::default() };
-    }
+    attached.id()
+}
+
+fn attach_entry(handle: &PrnsNodeHandle, s: &mut State, e: &EntryPoint) {
+    let Some(slot) = s.entries.get_mut(&e.id) else { return };
+    let iid = attach_wire(handle, &slot.wire);
+    slot.iid = Some(iid);
+    slot.t = Tracker { attached_at: Some(std::time::Instant::now()), ..Default::default() };
     s.iface_entry.insert(iid, e.id.clone());
+}
+
+/// An entry point that was online and has lost its connection: the routes learned through it point at a dead interface, and Prns
+/// keeps routing through them (a path response for the same announce does not replace a live-looking route), so the interface is
+/// detached with its routes dropped at once and attached again (it keeps reconnecting), and what was heard through it is
+/// forgotten. Returns the linked devices that were reached through it: they are asked for a path now.
+fn drop_lost_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) -> Vec<([u8; 32], DestinationHash)> {
+    let me = Via::Entry(id.to_string());
+    let lost: Vec<[u8; 32]> = s.heard.iter().filter(|(_, v)| **v == me).map(|(k, _)| *k).collect();
+    let Some(slot) = s.entries.get_mut(id) else { return Vec::new() };
+    let Some(old) = slot.iid.take() else { return Vec::new() };
+    let now = std::time::Instant::now();
+    handle.forget_interface(old);
+    // Still not answering since the old connection was lost; a new connection (nothing seen on it yet) is attached in a moment.
+    slot.t = Tracker { attached_at: Some(now), not_connected_since: Some(slot.t.not_connected_since.unwrap_or(now)), ..Default::default() };
+    slot.reattach = Some((old, now));
+    s.iface_entry.remove(&old);
+    s.heard.retain(|_, v| *v != me);
+    lost.into_iter().filter_map(|k| s.destination_of.get(&k).map(|d| (k, *d))).collect()
+}
+
+/// Attaches the interface of every entry point that lost its connection, once the old one is gone from the node (or after 5 s).
+fn finish_reattach(handle: &PrnsNodeHandle, s: &mut State) {
+    if s.entries.values().all(|sl| sl.reattach.is_none()) {
+        return;
+    }
+    let present: Vec<InterfaceId> = handle.interfaces().iter().map(|x| x.id).collect();
+    let ids: Vec<String> = s
+        .entries
+        .iter()
+        .filter(|(_, sl)| sl.reattach.is_some_and(|(old, at)| !present.contains(&old) || at.elapsed() >= Duration::from_secs(5)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        let Some(slot) = s.entries.get_mut(&id) else { continue };
+        slot.reattach = None;
+        let iid = attach_wire(handle, &slot.wire);
+        slot.iid = Some(iid);
+        slot.t.attached_at = Some(std::time::Instant::now());
+        s.iface_entry.insert(iid, id);
+    }
 }
 
 fn apply_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, salt: &[u8; 32], entries: &[EntryPoint]) {
@@ -1695,11 +1810,11 @@ fn apply_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, salt: &[u8;
     for e in entries {
         let fp = fingerprint(salt, e);
         // Already as wanted: same settings, and attached exactly when it is on.
-        if s.entries.get(&e.id).is_some_and(|sl| sl.fp == fp && sl.iid.is_some() == e.on) {
+        if s.entries.get(&e.id).is_some_and(|sl| sl.fp == fp && (sl.iid.is_some() || sl.reattach.is_some()) == e.on) {
             continue;
         }
         detach_entry(handle, &mut s, &e.id);
-        s.entries.insert(e.id.clone(), Slot { fp, on: e.on, iid: None, t: Tracker::default() });
+        s.entries.insert(e.id.clone(), Slot { fp, wire: wire_of(e), reattach: None, on: e.on, iid: None, t: Tracker::default() });
         if e.on {
             attach_entry(handle, &mut s, e);
         }
