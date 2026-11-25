@@ -176,8 +176,11 @@ List<Map<String, dynamic>> roadEventLayers(MapPalette p) {
       'layout': {
         'icon-image': ['get', 'icon'],
         'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 15, 1.15],
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
+        // Takes part in collision, as the public places' chips do: it gives way to a town's name (the style puts these under the place
+        // names) and to the person's own pins, until the map is zoomed in.
+        'icon-allow-overlap': false,
+        'icon-ignore-placement': false,
+        'icon-padding': 2,
       },
       'paint': {'icon-opacity': dimOpacity},
     },

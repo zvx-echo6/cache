@@ -302,8 +302,15 @@ void main() {
       expect(asked, isNotEmpty, reason: 'an empty folder: every outline is fetched');
       expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isTrue);
       final first = asked.length;
+      final lines = <String>[];
+      final old = debugPrint;
+      debugPrint = (String? m, {int? wrapWidth}) => lines.add(m ?? '');
       await tester.runAsync(() => r.regions.backfillOutlines());
+      debugPrint = old;
       expect(asked.length, first, reason: 'the marker is there: nothing is fetched again');
+      final summary = lines.where((l) => l.contains('outlines backfill region=${r.county.id}')).toList();
+      expect(summary, hasLength(1), reason: 'one summary line even though nothing was missing: ${lines.join('|')}');
+      expect(summary.single, matches(RegExp(r'wanted=(\d+) present=\1 fetched=0 failed=0')));
       await r.dispose(tester);
     });
 
