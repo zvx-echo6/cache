@@ -2,7 +2,7 @@
 //! Slow by its round trip time; each end checks what it asks and what it answers; a modified asker that ignores its class is
 //! refused; and a link that gets faster is judged again.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,12 +14,19 @@ use iroh::{PublicKey, SecretKey};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-struct Small;
+/// Answers "ok" and counts the links that closed on its end.
+#[derive(Default)]
+struct Small {
+    closed: Arc<AtomicU64>,
+}
 impl Handler for Small {
     fn request(&self, _: Asker, _: &str, _: Vec<u8>) -> BoxFut<Result<Vec<u8>>> {
         Box::pin(async { Ok(b"ok".to_vec()) })
     }
     fn notify(&self, _: PublicKey, _: Vec<u8>) {}
+    fn link_closed(&self, _: PublicKey, _: &str, _: Option<u64>, _: Option<u64>) {
+        self.closed.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn random(n: usize, seed: u64) -> Vec<u8> {
@@ -84,6 +91,8 @@ struct Link {
     a_store: Store,
     b_store: Store,
     delay: Arc<AtomicU64>,
+    /// Links that closed, as each end's handler was told.
+    closed: (Arc<AtomicU64>, Arc<AtomicU64>),
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
@@ -107,8 +116,10 @@ async fn link(delay_ms: u64) -> Link {
         blobs: Some(store.clone()),
         pair_local_tcp: false,
     };
-    let a = RnsNode::start(cfg(&ska, Iface::TcpListen(format!("127.0.0.1:{port}")), &skb, &a_store), Arc::new(Small)).await.unwrap();
-    let b = RnsNode::start(cfg(&skb, Iface::TcpConnect(format!("127.0.0.1:{pport}")), &ska, &b_store), Arc::new(Small)).await.unwrap();
+    let (ha, hb) = (Small::default(), Small::default());
+    let closed = (ha.closed.clone(), hb.closed.clone());
+    let a = RnsNode::start(cfg(&ska, Iface::TcpListen(format!("127.0.0.1:{port}")), &skb, &a_store), Arc::new(ha)).await.unwrap();
+    let b = RnsNode::start(cfg(&skb, Iface::TcpConnect(format!("127.0.0.1:{pport}")), &ska, &b_store), Arc::new(hb)).await.unwrap();
     // The probes in these tests are made at every request, so a changed link is judged at the next one.
     a.speeds().set_probe_every(Duration::ZERO);
     b.speeds().set_probe_every(Duration::ZERO);
@@ -119,7 +130,7 @@ async fn link(delay_ms: u64) -> Link {
         let _ = b.announce().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    Link { a, b, ka: ska.public(), kb: skb.public(), a_store, b_store, delay, _dirs: (da, db) }
+    Link { a, b, ka: ska.public(), kb: skb.public(), a_store, b_store, delay, closed, _dirs: (da, db) }
 }
 
 /// B asks A something small, so a link exists and its round trip time is known on both ends.
@@ -193,29 +204,27 @@ async fn a_fast_link_is_as_it_was() {
     let _ = Hash::new(b"");
 }
 
+/// Item 1 (cache-pm): an idle-link measurement that changes the class updates the class on the asking end and does NOT close or
+/// re-make the link. The answering end keeps its own estimate (the round trip time Reticulum gave it when the link came up, plus
+/// the first hop): Prns fixes a link's round trip time when it comes up and gives the app no newer one, so nothing but a new link
+/// would change it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_link_that_gets_faster_is_judged_again_on_both_ends() {
-    let l = link(900).await;
-    touch(&l).await;
-    assert_eq!(l.b.speeds().ask_speed(&l.ka), Speed::Slow);
-    let data = random(3 * 1024 * 1024, 4);
-    let hash = l.a_store.add_bytes(&data).unwrap().hash;
-    assert!(is_too_slow(&fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(60), |_| {}).await.expect_err("slow")));
-    // The path gets fast under the idle link: the next small request is the measurement, and the link is made again so the
-    // answering end gets the new round trip time too.
-    l.delay.store(1, Ordering::Relaxed);
-    let stop = Arc::new(AtomicBool::new(false));
-    let _ = &stop;
-    let end = Instant::now() + Duration::from_secs(90);
-    loop {
+async fn a_class_change_keeps_the_same_link() {
+    for (from, to, was, now) in [(900u64, 1u64, Speed::Slow, Speed::Fast), (1, 900, Speed::Fast, Speed::Slow)] {
+        let l = link(from).await;
         touch(&l).await;
-        if l.b.speeds().ask_speed(&l.ka) == Speed::Fast && l.a.speeds().serve_speed(&l.kb) == Speed::Fast {
-            break;
+        assert_eq!(l.b.speeds().ask_speed(&l.ka), was);
+        let id = l.b.link_id_to(&l.ka).expect("B has a link to A");
+        let answering = l.a.speeds().serve_speed(&l.kb);
+        l.delay.store(to, Ordering::Relaxed);
+        let end = Instant::now() + Duration::from_secs(90);
+        while l.b.speeds().ask_speed(&l.ka) != now {
+            assert!(Instant::now() < end, "B's class follows the measurement: now {:?}", l.b.speeds().ask_speed(&l.ka));
+            let _ = l.b.request(&l.ka, "/x", b"", Duration::from_secs(60)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        assert!(Instant::now() < end, "both ends judge the link fast: B {:?}, A {:?}", l.b.speeds().ask_speed(&l.ka), l.a.speeds().serve_speed(&l.kb));
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(l.b.link_id_to(&l.ka), Some(id), "the same link, not made again");
+        assert_eq!(l.closed.0.load(Ordering::SeqCst) + l.closed.1.load(Ordering::SeqCst), 0, "no link closed on either end");
+        assert_eq!(l.a.speeds().serve_speed(&l.kb), answering, "the answering end keeps its own estimate");
     }
-    let f = fetch(&l.b, &l.ka, &l.b_store, hash, Duration::from_secs(60), |_| {}).await.unwrap();
-    assert_eq!(f.size, 3 * 1024 * 1024);
-    assert!(l.b_store.get_bytes(&hash).unwrap() == data);
 }

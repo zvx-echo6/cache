@@ -1149,11 +1149,18 @@ impl RnsNode {
     }
 
     /// A link that has gone without a measurement is measured before it is used: the time of a small request (the hello again,
-    /// which every build answers) is its round trip time now. If that puts it in another class than the link was set up with, the
-    /// path changed under the link (a link stays on the interface it started on): it is closed and made again, so both ends
-    /// learn the new round trip time, and only what the new class allows goes on. Returns the link to use.
+    /// which every build answers) is its round trip time now. If that puts it in another class than before, the class changes on
+    /// this end and the link stays: it is neither closed nor made again (cache-pm, 2026-11-24), and only what the new class allows
+    /// goes on. Returns the link to use.
+    ///
+    /// How each end learns the new class: the asking end (this one) takes the probe's time as its round trip time. The answering
+    /// end cannot: Prns fixes a link's round trip time when the link comes up (the `rtt` on a request is that one, and nothing
+    /// newer reaches the app), so it keeps its own estimate, the round trip time it was given at link-up and the first hop. That
+    /// is enough because the asker never asks for what its own class forbids; the answering end's check is the backstop for an
+    /// asker that does. A link that has got faster is the one case where a stale answering end refuses what the asker may now ask
+    /// for: [`RnsNode::relink`] is for that (the asking end calls it when it is refused as too slow while its own class says the
+    /// file is fine).
     async fn probe(&self, peer: &PublicKey, link: LinkId, timeout: Duration) -> Result<LinkId> {
-        let before = self.speeds.ask_speed(peer);
         let sent = std::time::Instant::now();
         if let Err(e) = self.hello(link, timeout.min(Duration::from_secs(30))).await {
             self.forget_link(peer);
@@ -1161,12 +1168,13 @@ impl RnsNode {
             return Err(e);
         }
         self.speeds.note_probe(peer, sent.elapsed().as_millis() as u64);
-        if self.speeds.ask_speed(peer) == before {
-            return Ok(link);
-        }
-        let _ = self.handle.close_link(link);
-        self.state.lock().unwrap().link_to.remove(peer.as_bytes());
-        self.link_to(peer, timeout).await
+        Ok(link)
+    }
+
+    /// The link this device has open to `peer` (one it opened), as Prns numbers it: for telling whether a link was kept or made
+    /// again.
+    pub fn link_id_to(&self, peer: &PublicKey) -> Option<impl std::fmt::Debug + PartialEq + Clone> {
+        self.state.lock().unwrap().link_to.get(peer.as_bytes()).copied()
     }
 
     fn forget_link(&self, peer: &PublicKey) {
