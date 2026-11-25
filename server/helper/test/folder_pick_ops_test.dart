@@ -92,6 +92,17 @@ void main() {
     await expectLater(list('${home.path}/a.txt'), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'io_error')));
   });
 
+  test('with no home folder (HOME=/nonexistent, a system account) or a home that is not a folder, no path starts at "/"', () async {
+    for (final h in ['/nonexistent', '${tmp.path}/a-file']) {
+      File('${tmp.path}/a-file').writeAsStringSync('x');
+      final r = (await FolderPickOps(home: h).handle('devfs.list', {}) as Map).cast<String, dynamic>();
+      expect(r['path'], '/', reason: h);
+      expect(r['home'], '/', reason: h);
+      expect(r['parent'], isNull, reason: h);
+      expect(names(r), isNotEmpty, reason: h);
+    }
+  });
+
   test('the parent goes up past home to "/", which has none', () async {
     final up = await list(home.parent.path);
     expect(up['parent'], tmp.path);
