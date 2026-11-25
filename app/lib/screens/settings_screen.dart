@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../browse/web/device_api.dart' show readRunInstallerAgain;
 import '../car/car_voice_access.dart';
 import '../discover/discover_state.dart';
 import '../discover/ui/wizard.dart' show openSetupAgain;
@@ -28,9 +29,12 @@ import 'settings/widgets.dart';
 /// Settings: only things that can be changed, each row with its state in one line and opening one page. What's new and Credits
 /// and licences are in Library > Cache Documentation (1.1: each has one home).
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.deps});
+  const SettingsScreen({super.key, required this.deps, this.runInstallerAgain = readRunInstallerAgain});
 
   final SettingsDeps deps;
+
+  /// Cache on Linux: whether the "Run the installer again" card shows at the top (the server's answer; the tests give their own).
+  final Future<bool> Function() runInstallerAgain;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();

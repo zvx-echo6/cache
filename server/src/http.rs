@@ -1202,6 +1202,8 @@ mod tests {
         assert_eq!(r.status, 200);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+        // whether the browser shows "Run the installer again" in Settings (`runs_as`): never set in tests, so false
+        assert_eq!(v["result"]["run_installer_again"], json!(false));
     }
 
     /// Writes `n` bytes to `<data>/<rel>`, making the folders.
