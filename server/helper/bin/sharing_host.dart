@@ -83,6 +83,9 @@ class SharingHost {
   File get flagFile => File('${dataDir.path}/sharing.json');
   Directory get syncDir => Directory('${dataDir.path}/sync');
 
+  /// `<data>/identity-keep`: the engine's second copy of the device's key (cache_sync identity.rs; mode 600 in a 700 folder).
+  Directory get keepDir => Directory('${dataDir.path}/identity-keep');
+
   bool get enabled => _enabled;
 
   /// The engine's own device id (from its status); null before the engine runs.
@@ -200,6 +203,10 @@ class SharingHost {
         'gate': await _gates(),
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
+        // The second copy of the device's key, outside the sync folder: a key gone from <data>/sync comes back from it, so the
+        // server keeps its id and its links (the Rust server's book builder reads the same pair, server/src/libbuild/booklog.rs).
+        // Linux has no install marker (no phone backups travel here), so the copy is used without an install-id check.
+        'identity_keep': keepDir.path,
         ...engineConfig,
       }).whenComplete(_drain);
       _core = core;
