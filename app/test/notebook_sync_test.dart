@@ -798,6 +798,79 @@ void main() {
       expect(again.written, 0, reason: 'once');
       expect(marks(r), isEmpty);
     });
+
+    // R1 (build 57): a delete made in Cache came back on every device. The delete writes the marker and then removes the
+    // file; the share sync's scan listed the removal at once but held the just-written marker back as still settling, so a
+    // device that fetched in between got the removal alone and wrote the file back. Since the fix the share sync never
+    // delivers the removal ahead of the marker (cache_sync tests/delete_after_marker.rs): the two come together, or the
+    // removal after. This models that sync per path (each change gets a version, and a fetch takes every path that is newer
+    // on the other device), so a scan can hold the removal back a round, and pins the end state for both orders.
+    Future<void> r1Delete({required bool removalAfterMarker}) async {
+      final (a, b, nb, ids) = await pair();
+      final mk = '_deleted/${ids[0]}.json';
+      var ver = 0;
+      final index = {a: <String, (String?, int)>{}, b: <String, (String?, int)>{}};
+      void scan(_Rig r, {bool holdDeletes = false}) {
+        final idx = index[r]!;
+        for (final e in r.folder.text.entries) {
+          if (hidden(e.key)) continue;
+          if (idx[e.key]?.$1 != e.value) idx[e.key] = (e.value, ++ver);
+        }
+        if (holdDeletes) return;
+        for (final p in [for (final x in idx.entries) if (x.value.$1 != null && !r.folder.text.containsKey(x.key)) x.key]) {
+          idx[p] = (null, ++ver);
+        }
+      }
+
+      void fetch(_Rig to, _Rig from) {
+        for (final e in index[from]!.entries) {
+          if ((index[to]![e.key]?.$2 ?? 0) >= e.value.$2) continue;
+          index[to]![e.key] = e.value;
+          if (e.value.$1 == null) {
+            to.folder.text.remove(e.key);
+          } else {
+            to.folder.text[e.key] = e.value.$1!;
+          }
+        }
+      }
+
+      scan(a);
+      fetch(b, a);
+      scan(b);
+      // A deletes X: marker written, then the file removed; A's next scan lists both, or the marker and not yet the removal.
+      await a.nb.deleteEntry(ids[0]);
+      await a.engine.run();
+      expect(marks(a), [mk]);
+      expect(mds(a), hasLength(1));
+      scan(a, holdDeletes: removalAfterMarker);
+      // B fetches in between and runs its pass; then A's next scan lists the rest.
+      fetch(b, a);
+      await b.engine.run();
+      scan(b);
+      scan(a);
+      for (var k = 0; k < 5; k++) {
+        fetch(a, b);
+        fetch(b, a);
+        await a.engine.run();
+        await b.engine.run();
+        scan(a);
+        scan(b);
+      }
+      Future<String> state(String name, _Rig r) async =>
+          '$name: X ${await r.nb.entry(ids[0]) == null ? 'deleted' : 'BACK'}, other ${await r.nb.entry(ids[1]) == null ? 'gone' : 'kept'}, '
+          'marker ${marks(r).contains(mk) ? 'kept' : 'GONE'}, ${mds(r).length} file(s)';
+      expect([await state('A', a), await state('B', b)],
+          ['A: X deleted, other kept, marker kept, 1 file(s)', 'B: X deleted, other kept, marker kept, 1 file(s)'],
+          reason: 'R1: the delete stays done on both devices and the marker stays');
+    }
+
+    test('R1-delete control: the file removal and the marker go out in the same scan: X stays deleted on both', () async {
+      await r1Delete(removalAfterMarker: false);
+    });
+
+    test('R1-delete: the marker goes out one scan ahead of the file removal and the other device fetches in between: X stays deleted on both and the marker stays', () async {
+      await r1Delete(removalAfterMarker: true);
+    });
   });
 
   group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
