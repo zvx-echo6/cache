@@ -1102,11 +1102,18 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   /// One drawn diameter at this zoom, in points: the larger of a repeater's disc and a road chip's, each by the zoom curve.
   double _stackDiameter() => math.max(kFanDisc * iconScaleAt(_zoom), 18 * (0.8 + (1.15 - 0.8) * ((_zoom - 9) / 6).clamp(0.0, 1.0)));
 
+  /// The disc of a group marker at this zoom, in points: no smaller than 0.75 of full size (see the style's stack layer).
+  double _markerDiameter() => kFanDisc * math.max(kMarkerMin, iconScaleAt(_zoom));
+
+  /// When a tap on the dim folded a fan: the map under the dim is told of that tap too, and it is not a second one.
+  DateTime _dimTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset _dimTapPos = Offset.zero;
+
   /// Groups the icons that overlap now, and when the groups changed draws their markers and leaves their members out of the layers.
   Future<void> _updateStacks() async {
     final c = _controller;
     if (c == null || !_styleReady || !mounted) return;
-    final groups = groupIcons(_stackIcons(), diameter: _stackDiameter(), previous: _stackGroups);
+    final groups = groupIcons(_stackIcons(), diameter: _stackDiameter(), markerDiameter: _markerDiameter(), previous: _stackGroups);
     final sig = groups.map((g) => g.key).join(';');
     if (sig == _stackSig) return;
     _stackSig = sig;
@@ -1139,6 +1146,42 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (m == null) return null;
     final id = m.id.substring('road:'.length);
     return widget.roadEvents?.events.where((e) => e.id == id).firstOrNull?.kind;
+  }
+
+  /// A tap on a group marker by where it is drawn: its disc and its badge, each with a 44 point target at the least. It wins over the
+  /// single icons beneath it (the map's own query can miss the marker's edge or return a repeater under it).
+  Future<bool> _tapStackMarker(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || _stackGroups.isEmpty) return false;
+    try {
+      final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      final tx = point.x / ratio, ty = point.y / ratio;
+      final md = _markerDiameter();
+      IconGroup? best;
+      var bestD = double.infinity;
+      for (final g in _stackGroups) {
+        final p = await c.toScreenLocation(LatLng(g.lat, g.lon));
+        final cx = p.x / ratio, cy = p.y / ratio;
+        for (final (i, k) in markerCircles(0, 0, g.count, md).indexed) {
+          final px = cx + k.x, py = cy + k.y;
+          final d = math.sqrt((tx - px) * (tx - px) + (ty - py) * (ty - py));
+          if (d <= math.max(kStackTargetMin / 2, k.r)) {
+            // The disc's own centre is the better guess where both are reached.
+            final score = i == 0 ? d : d + 0.001;
+            if (score < bestD) {
+              bestD = score;
+              best = g;
+            }
+          }
+        }
+      }
+      if (best != null) {
+        HapticFeedback.selectionClick();
+        await _openGroup(best);
+        return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   /// A tap on a group marker: its fan opens (or, over 8 members, its list).
@@ -1256,6 +1299,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       pictures: {for (final m in g.members) m.id: _discPngs['${m.kind.name}-${m.kind == StackKind.roadEvent ? _roadKindOf(m)?.name : null}']},
       onPick: _pickStackMember,
       onFold: _foldFan,
+      onDimTap: (at) {
+        _dimTapAt = DateTime.now();
+        _dimTapPos = at;
+      },
     );
   }
 
@@ -2470,12 +2517,18 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       await _pushMeasure();
       return;
     }
+    // The tap that folded a fan from the dim also reaches the map: it is the same tap.
+    if (DateTime.now().difference(_dimTapAt) < const Duration(milliseconds: 800)) {
+      final r = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      if ((Offset(point.x / r, point.y / r) - _dimTapPos).distance < 24) return;
+    }
     // An open fan folds on any tap that is not on one of its discs (those take their own taps).
     if (_fan != null) {
       _foldFan();
       return;
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
+    if (!nav.searchOpen && await _tapStackMarker(point)) return;
     if (!nav.searchOpen && await _tapStack(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
     // A road event (a closure over a road's name) wins over what is under it, except a town's name (see _tapRoadEvent).

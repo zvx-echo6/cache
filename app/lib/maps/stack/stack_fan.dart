@@ -27,7 +27,7 @@ const double kFanTarget = 44;
 /// other share one dot) and the discs. A tap on a disc picks it; a tap anywhere else folds the fan. Put it over the map and under the
 /// cards, so they are not dimmed.
 class StackFan extends StatelessWidget {
-  const StackFan({super.key, required this.group, required this.layout, required this.pictures, required this.onPick, required this.onFold});
+  const StackFan({super.key, required this.group, required this.layout, required this.pictures, required this.onPick, required this.onFold, this.onDimTap});
 
   final IconGroup group;
   final FanLayout layout;
@@ -37,6 +37,9 @@ class StackFan extends StatelessWidget {
   final void Function(StackIcon member) onPick;
   final VoidCallback onFold;
 
+  /// The fan folded because of a tap on the dim (the map under it gets that tap too: the screen ignores it).
+  final void Function(Offset at)? onDimTap;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -45,12 +48,7 @@ class StackFan extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         Positioned.fill(
-          child: GestureDetector(
-            key: const ValueKey('stack-fan-dim'),
-            behavior: HitTestBehavior.opaque,
-            onTap: onFold,
-            child: Container(color: Colors.black.withValues(alpha: kFanDim)),
-          ),
+          child: _Dim(onFold: onFold, onTap: onDimTap),
         ),
         Positioned.fill(
           child: IgnorePointer(
@@ -75,6 +73,50 @@ class StackFan extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// The dim. It only listens: a tap on it folds the fan, and so does a drag that starts on it (past the touch slop); but it never takes
+/// part in the gesture arena and lets every pointer through to the map beneath, so the same drag also pans the map.
+class _Dim extends StatefulWidget {
+  const _Dim({required this.onFold, this.onTap});
+
+  final VoidCallback onFold;
+  final void Function(Offset at)? onTap;
+
+  @override
+  State<_Dim> createState() => _DimState();
+}
+
+class _DimState extends State<_Dim> {
+  static const double _slop = 10;
+  final Map<int, Offset> _down = {};
+  final Set<int> _moved = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      key: const ValueKey('stack-fan-dim'),
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (e) => _down[e.pointer] = e.position,
+      onPointerMove: (e) {
+        final d = _down[e.pointer];
+        if (d != null && (e.position - d).distance > _slop && _moved.add(e.pointer)) widget.onFold();
+      },
+      onPointerUp: (e) {
+        final d = _down.remove(e.pointer);
+        final moved = _moved.remove(e.pointer);
+        if (d != null && !moved) {
+          widget.onTap?.call(e.localPosition);
+          widget.onFold();
+        }
+      },
+      onPointerCancel: (e) {
+        _down.remove(e.pointer);
+        _moved.remove(e.pointer);
+      },
+      child: IgnorePointer(child: Container(color: Colors.black.withValues(alpha: kFanDim))),
     );
   }
 }

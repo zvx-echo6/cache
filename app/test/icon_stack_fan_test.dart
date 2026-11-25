@@ -253,6 +253,49 @@ void main() {
     await m.finish(tester);
   });
 
+  testWidgets('a drag that starts on the dim folds the fan AND reaches the map (so it pans too)', (tester) async {
+    final m = _Maps();
+    await m.pump(tester, near);
+    await m.tapMarker(tester);
+    expect(fan, findsOneWidget);
+    // The map's own listener moves the follow mode to free when a finger travels over it: it sees the drag only if the dim lets it through.
+    m.maps.setFollow(FollowMode.follow);
+    final g = await tester.startGesture(const Offset(30, 700));
+    for (var i = 1; i <= 8; i++) {
+      await g.moveBy(const Offset(0, -12));
+    }
+    await g.up();
+    await m.settle(tester);
+    expect(fan, findsNothing, reason: 'the drag folded the fan');
+    expect(m.maps.follow, FollowMode.free, reason: 'the map under the dim got the drag');
+    await m.finish(tester);
+  });
+
+  testWidgets('a tap at the marker\'s edge opens the fan, not the single icon under it', (tester) async {
+    final m = _Maps();
+    await m.pump(tester, near);
+    // The marker is where the three average out (195 + 4.7, 400); a tap 18 points off its middle is on its target (44 minimum) though
+    // off its drawn disc. The map's own query finds nothing there, or a repeater beneath.
+    m.camera.hits[kUserRepeaters] = [
+      {'properties': {'list': 'l2', 'item': 1, 'key': 'l2/1'}},
+    ];
+    m.map.onMapClick!(const math.Point<double>(195 + 4.7 + 18, 400), const LatLng(_lat, _lon));
+    await m.settle(tester);
+    m.camera.hits.clear();
+    expect(fan, findsOneWidget, reason: 'the marker won');
+    expect(m.userLayers.selectedRepeater.value, isNull, reason: 'the repeater beneath did not open');
+    await m.finish(tester);
+  });
+
+  testWidgets('a tap well outside the marker\'s target does not open it', (tester) async {
+    final m = _Maps();
+    await m.pump(tester, near);
+    m.map.onMapClick!(const math.Point<double>(195 + 4.7 + 60, 400), const LatLng(_lat, _lon));
+    await m.settle(tester);
+    expect(fan, findsNothing);
+    await m.finish(tester);
+  });
+
   testWidgets('more than 8 in a group open a list, not a fan; a row opens that repeater\'s card', (tester) async {
     final m = _Maps();
     await m.pump(tester, [for (var i = 0; i < 9; i++) i * 0.00005]);

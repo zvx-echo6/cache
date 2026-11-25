@@ -8,6 +8,36 @@ import 'package:flutter_test/flutter_test.dart';
 StackIcon icon(String id, double x, double y, {StackKind kind = StackKind.repeater, double? lat, double? lon}) =>
     StackIcon(id: id, kind: kind, name: id, lat: lat ?? 40 + y / 1000, lon: lon ?? -110 + x / 1000, x: x, y: y);
 
+/// What is drawn for a group (a disc of [d] and its badge up-right of it) or a single icon (a disc of [d]); pairs of drawn things that touch.
+List<String> _overlaps(List<StackIcon> all, List<IconGroup> groups, double d) {
+  final inGroup = {for (final g in groups) for (final m in g.members) m.id};
+  final things = <String, List<({double x, double y, double r})>>{};
+  for (final g in groups) {
+    final len = g.badge.length;
+    final w = (len * 6.8 + 9).clamp(17.0, 40.0) * d / 27;
+    final gx = g.members.map((m) => m.x).reduce((a, b) => a + b) / g.count, gy = g.members.map((m) => m.y).reduce((a, b) => a + b) / g.count;
+    things[g.key] = [(x: gx, y: gy, r: d / 2), (x: gx + 14 * d / 27, y: gy - 14 * d / 27, r: w / 2)];
+  }
+  for (final i in all) {
+    if (!inGroup.contains(i.id)) things[i.id] = [(x: i.x, y: i.y, r: d / 2)];
+  }
+  final keys = things.keys.toList();
+  final out = <String>[];
+  for (var a = 0; a < keys.length; a++) {
+    for (var b = a + 1; b < keys.length; b++) {
+      for (final p in things[keys[a]]!) {
+        for (final q in things[keys[b]]!) {
+          // A hair of tolerance: touching is not overlapping.
+          if (math.sqrt(math.pow(p.x - q.x, 2) + math.pow(p.y - q.y, 2)) < p.r + q.r - 0.01) {
+            out.add('${keys[a]} / ${keys[b]}');
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 void main() {
   group('who is grouped', () {
     test('two icons in one cell (closer than a diameter) are one group; far ones are alone', () {
@@ -18,11 +48,10 @@ void main() {
       expect(g.single.badge, '2');
     });
 
-    test('a grid, not a chain: a long string of icons does not melt into one group', () {
+    test('a long string of icons that overlap one another: no two drawn things overlap afterwards (they melt where they must)', () {
       final line = [for (var i = 0; i < 20; i++) icon('i$i', i * 20.0, 5)];
       final g = groupIcons(line, diameter: 28);
-      expect(g.length, greaterThan(1));
-      expect(g.every((x) => x.count <= 3), isTrue, reason: 'cells of one diameter hold at most two or three of these');
+      expect(_overlaps(line, g, 28), isEmpty);
     });
 
     test('identical coordinates are one spot: they group at every zoom, however small the diameter', () {
@@ -56,6 +85,70 @@ void main() {
     test('fewer than two icons, or no size: no groups', () {
       expect(groupIcons([icon('a', 0, 0)], diameter: 28), isEmpty);
       expect(groupIcons([icon('a', 0, 0), icon('b', 1, 1)], diameter: 0), isEmpty);
+    });
+  });
+
+  group('iterative: nothing drawn overlaps anything drawn', () {
+    // Piles like Boise and Twin Falls: tight clumps whose grid cells are neighbours, so each cell makes its own marker.
+    List<StackIcon> piles() {
+      final rnd = math.Random(7);
+      final out = <StackIcon>[];
+      for (final (cx, cy) in [(300.0, 300.0), (345.0, 310.0), (320.0, 350.0), (900.0, 900.0)]) {
+        for (var i = 0; i < 40; i++) {
+          out.add(icon('p${out.length}', cx + rnd.nextDouble() * 70 - 35, cy + rnd.nextDouble() * 70 - 35));
+        }
+      }
+      return out;
+    }
+
+    test('a dense fixture: after grouping no two markers, and no marker and single, overlap', () {
+      final icons = piles();
+      final g = groupIcons(icons, diameter: 28);
+      expect(g, isNotEmpty);
+      expect(_overlaps(icons, g, 28), isEmpty);
+    });
+
+    test('neighbouring cells do not leave markers lying over each other', () {
+      // Two pairs, each in its own cell, the cells side by side: their markers would sit 30 points apart (badges touching).
+      final icons = [icon('a', 10, 10), icon('b', 14, 12), icon('c', 40, 10), icon('d', 44, 12)];
+      final g = groupIcons(icons, diameter: 28);
+      expect(_overlaps(icons, g, 28), isEmpty);
+      expect(g, hasLength(1), reason: 'the two markers overlapped, so they are one group of four');
+      expect(g.single.count, 4);
+    });
+
+    test('a single icon under a marker (or its badge) joins the group', () {
+      final icons = [icon('a', 100, 100), icon('b', 102, 101), icon('s', 100, 124)]; // s: under the marker's disc, not within a cell
+      final g = groupIcons(icons, diameter: 28);
+      expect(_overlaps(icons, g, 28), isEmpty);
+      expect(g.single.members.map((m) => m.id), ['a', 'b', 's']);
+    });
+
+    test('same-spot icons still never split; and a lone far icon stays single', () {
+      final icons = [icon('a', 0, 0, lat: 1, lon: 2), icon('b', 900, 900, lat: 1, lon: 2), icon('far', 5000, 5000)];
+      final g = groupIcons(icons, diameter: 4);
+      expect(g, hasLength(1));
+      expect(g.single.sameSpot, isTrue);
+    });
+
+    test('speed: about 500 icons (the Idaho fixture) group in well under 16 ms', () {
+      final rnd = math.Random(3);
+      final icons = [
+        for (var i = 0; i < 500; i++) icon('i$i', rnd.nextDouble() * 1200, rnd.nextDouble() * 2400),
+        for (var i = 0; i < 60; i++) icon('c$i', 300 + rnd.nextDouble() * 30, 700 + rnd.nextDouble() * 30),
+      ];
+      groupIcons(icons, diameter: 28); // warm up
+      final sw = Stopwatch()..start();
+      const runs = 20;
+      late List<IconGroup> g;
+      for (var i = 0; i < runs; i++) {
+        g = groupIcons(icons, diameter: 28);
+      }
+      final ms = sw.elapsedMicroseconds / runs / 1000;
+      // ignore: avoid_print
+      print('groupIcons: ${icons.length} icons -> ${g.length} groups, ${ms.toStringAsFixed(2)} ms per call');
+      expect(_overlaps(icons, g, 28), isEmpty);
+      expect(ms, lessThan(16));
     });
   });
 

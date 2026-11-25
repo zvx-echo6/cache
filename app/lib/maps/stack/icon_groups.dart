@@ -41,6 +41,13 @@ class IconGroup {
 
   int get count => members.length;
 
+  /// Where the marker is on the map's plane (points): the average of the members' points.
+  double get x => members.map((m) => m.x).reduce((a, b) => a + b) / members.length;
+  double get y => members.map((m) => m.y).reduce((a, b) => a + b) / members.length;
+
+  /// What the marker draws at [markerDiameter] (its disc's size, points): its disc and its badge.
+  List<DrawnCircle> circles(double markerDiameter) => markerCircles(x, y, count, markerDiameter);
+
   /// More than [kFanMost] members: a list sheet opens instead of a fan.
   bool get needsSheet => members.length > kFanMost;
 
@@ -49,6 +56,34 @@ class IconGroup {
 
   /// What the count badge says: the number, or "99+".
   String get badge => count > 99 ? '99+' : '$count';
+}
+
+/// The smallest target of a group marker's disc or badge for a finger, in points.
+const double kStackTargetMin = 44;
+
+/// A drawn disc on the map's plane, in points.
+typedef DrawnCircle = ({double x, double y, double r});
+
+/// The group marker is drawn no smaller than this much of full size (so the badge can be read).
+const double kMarkerMin = 0.75;
+
+/// What a group marker of [count] members draws when its disc is [markerDiameter] points across: the disc, and the count badge up and
+/// to the right of it (the badge is drawn at the same scale as the disc: its pill is 17 to 40 points wide at full size).
+List<DrawnCircle> markerCircles(double x, double y, int count, double markerDiameter) {
+  final s = markerDiameter / kFanDisc;
+  final len = count > 99 ? 3 : '$count'.length;
+  final w = (len * 6.8 + 9).clamp(17.0, 40.0);
+  return [(x: x, y: y, r: markerDiameter / 2), (x: x + 14 * s, y: y - 14 * s, r: w * s / 2)];
+}
+
+bool _circlesTouch(List<DrawnCircle> a, List<DrawnCircle> b) {
+  for (final p in a) {
+    for (final q in b) {
+      final dx = p.x - q.x, dy = p.y - q.y, r = p.r + q.r;
+      if (dx * dx + dy * dy < r * r) return true;
+    }
+  }
+  return false;
 }
 
 /// The most icons a fan shows (more: a list sheet).
@@ -61,7 +96,11 @@ const double kSplitAt = 1.15;
 /// of neighbours, so a long string of icons does not melt into one huge group. Icons with identical coordinates are one spot and are
 /// never apart. [previous] is the last result: a group of it whose members are all still within [kSplitAt] diameters of each other
 /// stays one group (hysteresis). Only groups of two or more are returned.
-List<IconGroup> groupIcons(Iterable<StackIcon> icons, {required double diameter, List<IconGroup> previous = const []}) {
+///
+/// Then, repeatedly, any two things that are DRAWN (a group's marker, [markerDiameter] across (default: the larger of [diameter] and
+/// 0.75 of a full disc) with its count badge, or a single icon, [diameter] across) and whose discs overlap are merged into one group,
+/// until no two drawn things overlap: neighbouring cells do not leave markers lying over each other or over single icons.
+List<IconGroup> groupIcons(Iterable<StackIcon> icons, {required double diameter, double? markerDiameter, List<IconGroup> previous = const []}) {
   final list = icons.toList();
   if (list.length < 2 || diameter <= 0) return const [];
   final byId = {for (final i in list) i.id: i};
@@ -106,6 +145,60 @@ List<IconGroup> groupIcons(Iterable<StackIcon> icons, {required double diameter,
         union(here.first.id, here[k].id);
       }
     }
+  }
+
+  // Drawn overlap: merge until nothing drawn touches anything else.
+  final md = markerDiameter ?? math.max(diameter, kFanDisc * kMarkerMin);
+  final maxR = math.max(md, diameter) / 2 + 20 * md / kFanDisc;
+  final cell = maxR * 2;
+  while (true) {
+    final comps = <String, List<StackIcon>>{};
+    for (final i in list) {
+      (comps[find(i.id)] ??= []).add(i);
+    }
+    final items = comps.values.toList();
+    final shapes = <List<DrawnCircle>>[];
+    for (final m in items) {
+      if (m.length == 1) {
+        shapes.add([(x: m.first.x, y: m.first.y, r: diameter / 2)]);
+      } else {
+        var sx = 0.0, sy = 0.0;
+        for (final e in m) {
+          sx += e.x;
+          sy += e.y;
+        }
+        shapes.add(markerCircles(sx / m.length, sy / m.length, m.length, md));
+      }
+    }
+    final grid = <(int, int), List<int>>{};
+    for (var n = 0; n < items.length; n++) {
+      final seen = <(int, int)>{};
+      for (final c in shapes[n]) {
+        final k = ((c.x / cell).floor(), (c.y / cell).floor());
+        if (seen.add(k)) (grid[k] ??= []).add(n);
+      }
+    }
+    var merged = false;
+    for (var n = 0; n < items.length; n++) {
+      final near = <int>{};
+      for (final c in shapes[n]) {
+        final cx = (c.x / cell).floor(), cy = (c.y / cell).floor();
+        for (var dx = -1; dx <= 1; dx++) {
+          for (var dy = -1; dy <= 1; dy++) {
+            for (final o in grid[(cx + dx, cy + dy)] ?? const <int>[]) {
+              if (o > n) near.add(o);
+            }
+          }
+        }
+      }
+      for (final o in near) {
+        if (find(items[n].first.id) != find(items[o].first.id) && _circlesTouch(shapes[n], shapes[o])) {
+          union(items[n].first.id, items[o].first.id);
+          merged = true;
+        }
+      }
+    }
+    if (!merged) break;
   }
 
   final byRoot = <String, List<StackIcon>>{};
