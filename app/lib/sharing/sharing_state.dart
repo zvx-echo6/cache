@@ -13,6 +13,7 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
+import 'identity_keep.dart';
 import 'install_marker.dart';
 import 'share_rules.dart' show kSettingsShareId;
 
@@ -45,6 +46,8 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    IdentityKeepStore? identityKeep,
+    this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _drainLog = drainLog ?? drainSyncLog,
@@ -55,8 +58,22 @@ class SharingState extends ChangeNotifier {
        // The install marker (install_marker.dart) is for Android and iPhone only: on Linux the folder is a file in the person's own
        // data folder, under their own backup choices.
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
+       // The second copy of the device's key beside the marker (identity_keep.dart): phones only, as the marker.
+       _keep = identityKeep ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelIdentityKeepStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
+
+  /// Run, and waited for, before a Sync now round starts: the notebook pass that writes pending notebook changes into the share
+  /// folder (it otherwise runs 2 s after a change and every 2 minutes), so the round carries the latest change.
+  final Future<void> Function()? beforeSync;
+
+  Future<void> _prepare() async {
+    try {
+      await beforeSync?.call();
+    } catch (e) {
+      _log('Sync now: the notebook pass failed ($e)');
+    }
+  }
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -81,6 +98,9 @@ class SharingState extends ChangeNotifier {
 
   /// The device-only install marker checked before the engine opens its folder; null where there is none (Linux, a browser).
   final InstallMarkerStore? _marker;
+
+  /// The second copy of the device's key, beside the marker; null where there is no marker.
+  final IdentityKeepStore? _keep;
 
   /// This device was started as a new, unlinked one because its sync folder came from another phone (a restore). Said once on
   /// the Sharing and sync page ([dismissNewDevice]); kept in sharing.json until then.
@@ -379,10 +399,14 @@ class SharingState extends ChangeNotifier {
   Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
 
   /// Sync now: everything ("Sync all now").
-  Future<void> syncNow() => _call('sync_now');
+  Future<void> syncNow() async {
+    await _prepare();
+    await _call('sync_now');
+  }
 
   /// Sync now for one kind ("Sync all" on its page): its shared folders only.
   Future<void> syncKind(DataKind k) async {
+    await _prepare();
     final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
     if (ids.isEmpty) return;
     await _call('sync_now', {'shares': ids});
@@ -395,7 +419,10 @@ class SharingState extends ChangeNotifier {
   });
 
   /// Sync now with one linked device only.
-  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+  Future<void> syncPeer(String peer) async {
+    await _prepare();
+    await _call('sync_now', {'peer': peer});
+  }
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
   /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
@@ -596,6 +623,15 @@ class _PhoneDriver implements SharingDriver {
           await _save();
         }
       }
+      // The device's key: a key missing from the folder (or the wrong length) comes back from the copy kept beside the marker, for
+      // this install id only; when the copy cannot be checked the engine may not make a new one (identity_keep.dart).
+      final keep = s._keep;
+      var makeIdentity = true;
+      if (marker != null && keep != null) {
+        final kept = await keepIdentity(syncDir: dir, installId: await marker.read(), store: keep);
+        if (kept == KeepState.restored) s._log("Sharing: this device's identity was brought back from its second copy");
+        makeIdentity = kept != KeepState.unknown;
+      }
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
       // given time to close its engine, before this one opens (two engines on one folder made "Sharing could not start").
       final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await s.supportDir()).path)));
@@ -625,10 +661,19 @@ class _PhoneDriver implements SharingDriver {
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
         'quiet': s.quiet,
+        if (!makeIdentity) 'make_identity': false,
       };
       _lastConfig = config;
       _core = await s._opener(config);
       lock.engineStarted(kSyncWork);
+      // A key the engine has just made (every copy was gone) is kept now; a copy that cannot be written is tried at the next start.
+      if (marker != null && keep != null) {
+        try {
+          await keepIdentity(syncDir: dir, installId: await marker.read(), store: keep);
+        } catch (e) {
+          logError("Sharing: the second copy of this device's identity could not be kept", error: e);
+        }
+      }
       await _writeSnapshot();
       await _applyPolicy();
       await refresh();

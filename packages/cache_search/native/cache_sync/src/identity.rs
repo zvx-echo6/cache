@@ -1,30 +1,98 @@
 //! The device's identity: the iroh key pair kept as `identity.key` (the 32 secret-key bytes) in the sync folder. One
 //! implementation, used by the sync engine when it starts and by anything that needs the device's id without starting the
 //! endpoint (Cache on Linux's book builder).
+//!
+//! Once a device has an identity it keeps it: a key that is there but cannot be read is never replaced (the load fails and is
+//! tried again at the next start, the links kept). Only a key that is missing, or not 32 bytes, is replaced, and then first from
+//! the second copy when there is one (`keep`: Cache on Linux's `<data>/identity-keep`, outside the sync folder). Only when every
+//! copy is gone is it a new device. On a phone the second copy is kept by the app beside the install marker
+//! (app/lib/sharing/identity_keep.dart), which restores the key before the engine opens.
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use iroh::SecretKey;
+use std::io::ErrorKind;
 use std::path::Path;
 
-/// The identity file's name in the sync folder.
+/// The identity file's name in the sync folder (and in the `keep` folder).
 pub const KEY_FILE: &str = "identity.key";
 
-/// Loads the identity in `dir`, or makes one: a missing file, one that cannot be read, or one that is not exactly 32 bytes is
-/// replaced by a new key (written through a temporary file, owner-only on Unix). Returns the key and the device's id as
-/// cache_sync shows it everywhere (the EndpointId's text: lower-case letters and digits, safe as a file name).
+/// The start of every error that says the identity could not be had; the app shows it as the reason sharing did not start.
+pub const UNREADABLE: &str = "Can't read this device's identity";
+
+/// Loads the identity in `dir`, or makes one when it is missing or not exactly 32 bytes (written through a temporary file,
+/// owner-only on Unix). A key file that exists but cannot be read is an error, and the file is left as it is. Returns the key and
+/// the device's id as cache_sync shows it everywhere (the EndpointId's text: lower-case letters and digits, safe as a file name).
 pub fn load_or_create(dir: &Path) -> Result<(SecretKey, String)> {
+    load(dir, None, true)
+}
+
+/// What a key file holds: the key, nothing usable (missing or the wrong length), or an error reading it.
+fn read_key(p: &Path) -> Result<Option<SecretKey>, std::io::Error> {
+    match std::fs::read(p) {
+        Ok(b) => Ok(<[u8; 32]>::try_from(b.as_slice()).ok().map(|a| SecretKey::from_bytes(&a))),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// [`load_or_create`] with a second copy in `keep` (a folder of its own, made owner-only on Unix) and with `make` saying whether a
+/// new key may be made when no copy has one (a phone's background round passes false: the app's own start restores the key).
+/// - the key in `dir` reads fine: it is used, and the copy is written or refreshed when it is missing or different (a copy that
+///   cannot be written is tried again at the next load);
+/// - missing or the wrong length: the copy's key, if it has one, is written back to `dir`; otherwise a new key (when `make`),
+///   written to both;
+/// - either file there but unreadable: an error starting with [`UNREADABLE`], and nothing is written.
+pub fn load(dir: &Path, keep: Option<&Path>, make: bool) -> Result<(SecretKey, String)> {
     std::fs::create_dir_all(dir)?;
     let key_path = dir.join(KEY_FILE);
-    let secret = match std::fs::read(&key_path) {
-        Ok(b) if b.len() == 32 => SecretKey::from_bytes(&b.try_into().unwrap()),
-        _ => {
-            let k = SecretKey::generate();
-            write_secret(&key_path, &k.to_bytes())?;
+    let keep_path = keep.map(|k| k.join(KEY_FILE));
+    let main = read_key(&key_path).context(UNREADABLE)?;
+    let secret = match main {
+        Some(k) => {
+            if let Some(kp) = &keep_path {
+                if !matches!(read_key(kp), Ok(Some(c)) if c.to_bytes() == k.to_bytes()) {
+                    let _ = write_kept(kp, &k.to_bytes());
+                }
+            }
             k
+        }
+        None => {
+            let kept = match &keep_path {
+                Some(kp) => read_key(kp).context(UNREADABLE)?,
+                None => None,
+            };
+            match kept {
+                Some(k) => {
+                    write_secret(&key_path, &k.to_bytes())?;
+                    k
+                }
+                None if make => {
+                    let k = SecretKey::generate();
+                    write_secret(&key_path, &k.to_bytes())?;
+                    if let Some(kp) = &keep_path {
+                        let _ = write_kept(kp, &k.to_bytes());
+                    }
+                    k
+                }
+                None => return Err(anyhow!("{UNREADABLE}: it is missing, and a new one may not be made here")),
+            }
         }
     };
     let id = secret.public().to_string();
     Ok((secret, id))
+}
+
+/// The second copy: its folder owner-only (0700), the file 0600.
+fn write_kept(p: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    write_secret(p, bytes)
 }
 
 fn write_secret(p: &Path, bytes: &[u8]) -> Result<()> {
@@ -77,5 +145,140 @@ mod tests {
         let (_, id) = load_or_create(&dir).unwrap();
         assert!(dir.join(KEY_FILE).exists());
         assert_eq!(load_or_create(&dir).unwrap().1, id);
+    }
+    /// Root reads a mode-000 file anyway: then the test cannot make an unreadable file and says so.
+    #[cfg(unix)]
+    fn unreadable(p: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(p).is_ok() {
+            eprintln!("running as root: a mode-000 file is still readable, test skipped");
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)).unwrap();
+            return false;
+        }
+        true
+    }
+
+    #[cfg(unix)]
+    fn readable_again(p: &Path) -> Vec<u8> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::read(p).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_that_cannot_be_read_fails_the_load_and_is_left_byte_identical() {
+        let d = tempfile::tempdir().unwrap();
+        let (k, _) = load_or_create(d.path()).unwrap();
+        let p = d.path().join(KEY_FILE);
+        if !unreadable(&p) {
+            return;
+        }
+        let e = load_or_create(d.path()).expect_err("an unreadable key is never replaced by a new one");
+        assert!(format!("{e:#}").starts_with("Can't read this device's identity"), "{e:#}");
+        assert_eq!(readable_again(&p), k.to_bytes(), "the key file is untouched");
+        assert!(!d.path().join("identity.tmp").exists());
+    }
+
+    #[test]
+    fn a_missing_key_gives_a_new_one() {
+        let d = tempfile::tempdir().unwrap();
+        let (_, id1) = load_or_create(d.path()).unwrap();
+        std::fs::remove_file(d.path().join(KEY_FILE)).unwrap();
+        let (k2, id2) = load_or_create(d.path()).unwrap();
+        assert_ne!(id1, id2, "no copy anywhere: a new device");
+        assert_eq!(std::fs::read(d.path().join(KEY_FILE)).unwrap(), k2.to_bytes());
+    }
+
+    #[test]
+    fn a_wrong_length_key_with_no_copy_gives_a_new_one() {
+        let d = tempfile::tempdir().unwrap();
+        let keep = d.path().join("keep");
+        std::fs::create_dir_all(d.path().join("sync")).unwrap();
+        std::fs::write(d.path().join("sync").join(KEY_FILE), [7u8; 33]).unwrap();
+        let (k, _) = load(&d.path().join("sync"), Some(&keep), true).unwrap();
+        assert_eq!(std::fs::read(d.path().join("sync").join(KEY_FILE)).unwrap(), k.to_bytes());
+        assert_eq!(std::fs::read(keep.join(KEY_FILE)).unwrap(), k.to_bytes(), "the new key is kept in the copy too");
+    }
+
+    // ---- the second copy (`keep`, Cache on Linux: <data>/identity-keep)
+
+    #[test]
+    fn a_good_key_is_copied_to_keep_and_the_copy_is_refreshed_when_different() {
+        let d = tempfile::tempdir().unwrap();
+        let (sync, keep) = (d.path().join("sync"), d.path().join("identity-keep"));
+        let (k, _) = load(&sync, Some(&keep), true).unwrap();
+        assert_eq!(std::fs::read(keep.join(KEY_FILE)).unwrap(), k.to_bytes());
+        std::fs::write(keep.join(KEY_FILE), [9u8; 32]).unwrap();
+        let (k2, _) = load(&sync, Some(&keep), true).unwrap();
+        assert_eq!(k2.to_bytes(), k.to_bytes(), "the main key wins");
+        assert_eq!(std::fs::read(keep.join(KEY_FILE)).unwrap(), k.to_bytes(), "the copy follows it");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(keep.join(KEY_FILE)).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(&keep).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+    }
+
+    #[test]
+    fn a_missing_or_wrong_length_key_is_restored_from_the_copy() {
+        let d = tempfile::tempdir().unwrap();
+        let (sync, keep) = (d.path().join("sync"), d.path().join("identity-keep"));
+        let (k, id) = load(&sync, Some(&keep), true).unwrap();
+        std::fs::remove_file(sync.join(KEY_FILE)).unwrap();
+        assert_eq!(load(&sync, Some(&keep), true).unwrap().1, id, "missing: the same device");
+        assert_eq!(std::fs::read(sync.join(KEY_FILE)).unwrap(), k.to_bytes());
+        std::fs::write(sync.join(KEY_FILE), [1u8; 5]).unwrap();
+        assert_eq!(load(&sync, Some(&keep), true).unwrap().1, id, "wrong length: the same device");
+        assert_eq!(std::fs::read(sync.join(KEY_FILE)).unwrap(), k.to_bytes());
+        std::fs::remove_dir_all(&sync).unwrap();
+        assert_eq!(load(&sync, Some(&keep), true).unwrap().1, id, "the whole sync folder gone: still the same device");
+    }
+
+    #[test]
+    fn a_bad_copy_is_not_used_and_both_get_the_new_key() {
+        let d = tempfile::tempdir().unwrap();
+        let (sync, keep) = (d.path().join("sync"), d.path().join("identity-keep"));
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join(KEY_FILE), [3u8; 12]).unwrap();
+        let (k, _) = load(&sync, Some(&keep), true).unwrap();
+        assert_eq!(std::fs::read(sync.join(KEY_FILE)).unwrap(), k.to_bytes());
+        assert_eq!(std::fs::read(keep.join(KEY_FILE)).unwrap(), k.to_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_key_with_a_copy_that_cannot_be_read_fails_and_makes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let (sync, keep) = (d.path().join("sync"), d.path().join("identity-keep"));
+        let (k, _) = load(&sync, Some(&keep), true).unwrap();
+        std::fs::remove_file(sync.join(KEY_FILE)).unwrap();
+        if !unreadable(&keep.join(KEY_FILE)) {
+            return;
+        }
+        let e = load(&sync, Some(&keep), true).expect_err("the copy may still hold the identity");
+        assert!(format!("{e:#}").starts_with("Can't read this device's identity"), "{e:#}");
+        assert!(!sync.join(KEY_FILE).exists(), "no new key was made");
+        assert_eq!(readable_again(&keep.join(KEY_FILE)), k.to_bytes());
+    }
+
+    #[test]
+    fn with_make_off_a_missing_key_and_no_copy_fails_and_makes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let sync = d.path().join("sync");
+        let e = load(&sync, None, false).expect_err("not allowed to make a new identity");
+        assert!(format!("{e:#}").starts_with("Can't read this device's identity"), "{e:#}");
+        assert!(!sync.join(KEY_FILE).exists());
+        std::fs::write(sync.join(KEY_FILE), [7u8; 31]).unwrap();
+        assert!(load(&sync, None, false).is_err(), "a wrong length is not replaced either");
+        assert_eq!(std::fs::read(sync.join(KEY_FILE)).unwrap(), [7u8; 31]);
+        // the copy still restores with make off
+        let keep = d.path().join("identity-keep");
+        std::fs::create_dir_all(&keep).unwrap();
+        let k = SecretKey::generate();
+        std::fs::write(keep.join(KEY_FILE), k.to_bytes()).unwrap();
+        assert_eq!(load(&sync, Some(&keep), false).unwrap().1, k.public().to_string());
     }
 }

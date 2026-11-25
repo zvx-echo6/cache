@@ -76,7 +76,7 @@ class AppUpdates extends ChangeNotifier {
 
   /// The banner's words and its button's.
   String get bannerText => linux
-      ? 'New version available: update the server'
+      ? 'New version available: update Cache on this computer'
       : android
       ? 'New version available'
       : 'New version available: open TestFlight';
@@ -194,7 +194,7 @@ Future<void> showHowToUpdate(BuildContext context, AppUpdates updates, {String i
     context: context,
     builder: (ctx) => AlertDialog(
       key: const ValueKey('how-to-update'),
-      title: const Text('Update Cache on this server'),
+      title: const Text('Update Cache on this computer'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,

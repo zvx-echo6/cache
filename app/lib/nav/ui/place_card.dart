@@ -17,7 +17,7 @@ import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry, this.area, this.facts});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about, this.maxHeight, this.onOpenEntry, this.area, this.facts, this.county, this.onOpenCounty});
 
   final NavState nav;
   final MapPlace place;
@@ -39,6 +39,11 @@ class PlaceCard extends StatelessWidget {
   /// Where the card looks up the elevation and the land manager of its point; null leaves those rows out.
   final PointFacts? facts;
 
+  /// The county line ("Ada County, ID") of a dropped pin (when the region catalogue knows the county there) or of a town's card: a tap
+  /// opens that county's card ([onOpenCounty]). Null leaves it out.
+  final String? county;
+  final VoidCallback? onOpenCounty;
+
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
     final m = ScaffoldMessenger.of(context);
@@ -56,8 +61,10 @@ class PlaceCard extends StatelessWidget {
     final saved = nav.savedFor(place);
     final hours = hoursViewFor(place, use24h: MediaQuery.alwaysUse24HourFormatOf(context));
     final detail = <Widget>[
-      if (place.address.isNotEmpty)
+      // A town's address line is its county ("Ada County, ID"): that line is the one that opens the county.
+      if (place.address.isNotEmpty && !(a != null && county != null))
         _line(context, Icons.place_outlined, place.address),
+      if (county != null && onOpenCounty != null) _countyLine(context, county!),
       if (a?.people != null) _line(context, Icons.groups_outlined, a!.people!),
       if (a?.squareArea != null) _line(context, Icons.square_foot, a!.squareArea!),
       if (a?.largestTowns != null) _line(context, Icons.location_city, a!.largestTowns!),
@@ -200,6 +207,35 @@ class PlaceCard extends StatelessWidget {
                     label: const Text('Add to Home'),
                   ),
                 ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The county of a dropped pin: a line that opens the county's card.
+  Widget _countyLine(BuildContext context, String text) {
+    final k = context.t;
+    return Semantics(
+      button: true,
+      label: text,
+      child: InkWell(
+        key: const ValueKey('place-county'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: onOpenCounty,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(Icons.map_outlined, size: 20, color: k.secondary),
+                const SizedBox(width: 10),
+                Expanded(child: Text(text, style: TextStyle(fontSize: 16, color: k.accent, decoration: TextDecoration.underline, decorationColor: k.accent))),
+                Icon(Icons.chevron_right, size: 20, color: k.secondary),
+                const SizedBox(width: 8),
               ],
             ),
           ),

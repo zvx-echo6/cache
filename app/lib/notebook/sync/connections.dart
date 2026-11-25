@@ -118,6 +118,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing, Sync
   bool _read = false;
   bool _running = false;
   bool _again = false;
+  Completer<void>? _passDone;
   Timer? _debounce;
   final Map<String, String> _status = {};
   final Map<String, List<SyncConflict>> _conflicts = {};
@@ -357,6 +358,19 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing, Sync
     _debounce = Timer(const Duration(seconds: 2), () => unawaited(syncAll()));
   }
 
+  /// For the Sync now buttons: waits for a pass already running, then runs one fresh pass and waits for it to finish, so the
+  /// notebook changes saved up to the tap are in the share folder before the round with the other devices starts.
+  Future<void> syncAllAndWait() async {
+    await init();
+    while (_running) {
+      await _passDone?.future;
+    }
+    await syncAll();
+    while (_running) {
+      await _passDone?.future;
+    }
+  }
+
   /// Syncs every connected folder that is not paused, one after the other (a call while one runs runs again after it).
   @override
   Future<void> syncAll() async {
@@ -366,6 +380,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing, Sync
       return;
     }
     _running = true;
+    final done = _passDone = Completer<void>();
     try {
       do {
         _again = false;
@@ -411,6 +426,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing, Sync
       } while (_again);
     } finally {
       _running = false;
+      done.complete();
       notifyListeners();
     }
   }

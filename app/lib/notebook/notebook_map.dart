@@ -28,7 +28,7 @@ class PinLook {
 /// The colour of a repeater list's pins (purple; red in Tactical) and the name of their image in the map style: a radio tower in the
 /// person's pin style. The style layer names it, and the map screen adds it with the notebook pins' images.
 Color repeaterTint({bool tactical = false}) => tactical ? cacheTokens[CacheThemeId.tactical]!.accent : markerColor('purple').color;
-String repeaterPinName(PinStyle style, {bool tactical = false}) => pinImageId(style, kRepeaterIcon, repeaterTint(tactical: tactical), tactical: tactical);
+String repeaterPinName(PinStyle style, {bool tactical = false, bool flat = false}) => pinImageId(style, kRepeaterIcon, repeaterTint(tactical: tactical), tactical: tactical, flat: flat);
 
 /// The map's notebook pins (kNotebookSource): one point per entry with a place, carrying its entry and notebook ids, its title
 /// and, for a place with a marker colour, that colour. [pinImages] names each pin's image in the map style (by entry id, see

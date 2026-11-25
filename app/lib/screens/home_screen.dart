@@ -387,8 +387,8 @@ class _HomeScreenState extends State<HomeScreen> {
       filled: true,
       fillColor: k.surface,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide(color: k.accent, width: 1.5)),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide(color: k.accent, width: 1.5)),
     ),
   );
 

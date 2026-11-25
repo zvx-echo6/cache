@@ -94,7 +94,7 @@ void main() {
 
       expect(_names(await areaAt(42.5629, -114.4609, _all, broken)), '- / Twin Falls County / Idaho');
       expect(_names(await areaAt(42.53442, -114.36522, _all, broken)), '- / Twin Falls County / Idaho');
-      expect(_names(await areaAt(43.5, -116.2, _all, broken)), '- / - / Idaho', reason: 'Ada County has no outline here');
+      expect(_names(await areaAt(43.5, -116.2, _all, broken)), '- / Ada County / Idaho', reason: 'Ada County has no outline here: its record (the point is in its box) stands for it');
     });
 
     test('the box is the first cut: no outline is read for a region whose box misses the point', () async {
@@ -186,6 +186,33 @@ void main() {
       expect({for (final r in c.areaRecordsOf(shard['us-id-kimberly']!)) r.id}, {'us-id', 'us-id-twin-falls-county', 'us-id-kimberly'});
       expect(c.areaRecordsOf(RegionRecord.fromJson({'id': 'us', 'name': 'United States', 'kind': 'country'})), isEmpty);
       expect(c.areaRecordsOf(RegionRecord.drawn(const GeoBounds(south: 42, west: -115, north: 43, east: -114))), isEmpty);
+    });
+
+    test('areaAtPoint: a county whose outline file is missing is still found from its record (the point is in its box); a town is not guessed', () async {
+      final c = RegionCatalogue(dir: () async => dir, fetch: fetch);
+      final shard = await c.shard('us');
+      await c.storeAreaPolygons(shard['us-id-twin-falls-county']!);
+      File('${dir.path}/polygons/us-id-twin-falls-county.geojson').deleteSync();
+      File('${dir.path}/polygons/us-id-twin-falls.geojson').deleteSync();
+      final b = shard['us-id-twin-falls-county']!.bounds!;
+      final lat = (b.south + b.north) / 2, lon = (b.west + b.east) / 2;
+      final hit = await c.areaAtPoint(lat, lon);
+      expect(hit?.county?.id, 'us-id-twin-falls-county', reason: 'found from the catalogue record, without its outline');
+      expect(hit?.town, isNull, reason: 'a town is only found from its outline');
+    });
+
+    test('fetchGeometry fetches an outline that is not on the phone, keeps its file, and reads null offline or when it is not published', () async {
+      final c = RegionCatalogue(dir: () async => dir, fetch: fetch);
+      final shard = await c.shard('us');
+      final kimberly = shard['us-id-kimberly']!;
+      expect(await c.storedGeometry(kimberly), isNull, reason: 'not on the phone yet');
+      expect(await c.fetchGeometry(kimberly), isNotNull);
+      expect(File('${dir.path}/polygons/us-id-kimberly.geojson').existsSync(), isTrue, reason: 'kept for next time');
+      expect(await c.storedGeometry(kimberly), isNotNull);
+      offline = true;
+      expect(await c.fetchGeometry(shard['us-id-buhl']!), isNull, reason: 'a half file or no connection: no outline, no error');
+      final c2 = RegionCatalogue(dir: () async => dir, fetch: fetch);
+      expect(await c2.fetchGeometry((await c2.shard('us'))['us-id-twin-falls']!), isNull, reason: 'offline: no outline, no error');
     });
 
     test('downloading Idaho keeps the outlines that can be fetched; one that fails is left out; then a tap is answered offline', () async {

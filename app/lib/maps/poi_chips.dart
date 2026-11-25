@@ -5,8 +5,8 @@ import 'package:flutter/painting.dart';
 import 'package:flutter/widgets.dart' show IconData;
 import 'package:material_symbols_icons/symbols.dart';
 
-import '../notebook/pin_image.dart' show pinGlyph;
-import '../theme.dart' show CacheThemeId;
+import '../notebook/pin_image.dart' show flatEdgeWidth, kFlatIconEdge, pinGlyph;
+import '../theme.dart' show CacheThemeId, isFlatIconTheme;
 import 'palette/map_palette.dart';
 
 /// The public places the base map draws (its `pois` layer): one round chip per category, a Material Symbols glyph on a disc in the
@@ -30,6 +30,10 @@ class PoiIcon {
   final List<String> kinds;
 
   String get image => 'poi-$id';
+
+  /// The image of the chip in a theme: the flat look (light and Parchment: no ring, a fine edge) has its own name, so a theme
+  /// switch never shows the other look's image.
+  String imageFor({required bool flat}) => flat ? 'poi-$id-f' : image;
 }
 
 /// The nine group colours, as palette roles.
@@ -110,10 +114,15 @@ PoiChipLook poiChipLook(MapPalette p, String group) {
   }
 }
 
-/// Draws one chip centred on [centre] of [canvas] (in points).
-void paintPoiChip(Canvas canvas, Offset centre, IconData? symbol, PoiChipLook look) {
-  canvas.drawCircle(centre, _edgeR, Paint()..color = look.edge);
-  canvas.drawCircle(centre, _ringR, Paint()..color = look.ring);
+/// Draws one chip centred on [centre] of [canvas] (in points). [flat] (the light and Parchment themes): no white ring, and the disc has the
+/// same 2 pixel near-black edge ([ratio] pixels per point) as the flat icon pins; dark and Tactical keep their ring.
+void paintPoiChip(Canvas canvas, Offset centre, IconData? symbol, PoiChipLook look, {bool flat = false, double ratio = 3}) {
+  if (flat) {
+    canvas.drawCircle(centre, _discR + flatEdgeWidth(ratio), Paint()..color = kFlatIconEdge);
+  } else {
+    canvas.drawCircle(centre, _edgeR, Paint()..color = look.edge);
+    canvas.drawCircle(centre, _ringR, Paint()..color = look.ring);
+  }
   canvas.drawCircle(centre, _discR, Paint()..color = look.fill);
   if (symbol == null) return; // The plain dot: the disc and ring alone.
   final tp = pinGlyph(symbol, 12.5, color: look.glyph);
@@ -125,7 +134,7 @@ void paintPoiChip(Canvas canvas, Offset centre, IconData? symbol, PoiChipLook lo
 Future<Uint8List> renderPoiChipPng(PoiIcon icon, MapPalette p, {double ratio = 3, bool dot = false}) async {
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), dot ? null : icon.symbol, poiChipLook(p, icon.group));
+  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), dot ? null : icon.symbol, poiChipLook(p, icon.group), flat: isFlatIconTheme(p.id), ratio: ratio);
   final px = (kPoiChipSize * ratio).round();
   final img = await rec.endRecording().toImage(px, px);
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
@@ -145,7 +154,7 @@ Future<void> addPoiChips(
     var done = false;
     for (var attempt = 1; attempt <= 2 && !done; attempt++) {
       try {
-        await add(i.image, await render(i, p, ratio: ratio, dot: false));
+        await add(i.imageFor(flat: isFlatIconTheme(p.id)), await render(i, p, ratio: ratio, dot: false));
         done = true;
       } catch (e) {
         log?.call('POI chip ${i.image} failed (attempt $attempt): $e');
@@ -153,7 +162,7 @@ Future<void> addPoiChips(
     }
     if (done) continue;
     try {
-      await add(i.image, await render(i, p, ratio: ratio, dot: true));
+      await add(i.imageFor(flat: isFlatIconTheme(p.id)), await render(i, p, ratio: ratio, dot: true));
       log?.call('POI chip ${i.image} is the plain dot');
     } catch (e) {
       log?.call('POI chip ${i.image} has no image at all: $e');

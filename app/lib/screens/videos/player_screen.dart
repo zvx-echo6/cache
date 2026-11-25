@@ -1104,7 +1104,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: Container(
                     key: const ValueKey('player-skip-flash'),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(28)),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(kControlRadius)),
                     child: Text(_flash! < 0 ? '−10 s' : '+10 s', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
                   ),
                 ),

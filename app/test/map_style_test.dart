@@ -6,6 +6,7 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
+import 'package:cache/notebook/pin_image.dart' show PinStyle;
 import 'package:cache/roads/road_map_layers.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,46 @@ void main() {
       }
     }
   }
+
+  group('icons and town names: the icons take part in collision and the names win', () {
+    bool on(Object? v) => v == true;
+    Map<String, dynamic> layer(Map<String, dynamic> style, String id) => ((style['layers'] as List).cast<Map<String, dynamic>>()).firstWhere((l) => l['id'] == id);
+    int at(Map<String, dynamic> style, String id) => (style['layers'] as List).indexWhere((l) => (l as Map)['id'] == id);
+
+    for (final (name, base, firstName) in [('Protomaps', protomaps, 'places_subplace'), ('OpenMapTiles', openFreeMap, 'label_other')]) {
+      for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+        test('$name, ${theme.name}: road-event icons and repeater icons collide, with padding, and sit under the place names', () {
+          final style = buildMapStyle(
+            palette: mapPaletteFor(theme),
+            omtTemplate: template,
+            protomapsTemplate: pmTemplate,
+            layers: withBase(base),
+            tilesUrl: (d) => 'http://127.0.0.1:9/layers/${d.id}/{z}/{x}/{y}',
+            glyphsUrl: 'file:///fonts/{fontstack}/{range}.pbf',
+            pinStyle: PinStyle.icon,
+          );
+          for (final id in [kRoadEventChips, kUserRepeaters]) {
+            final l = layer(style, id)['layout'] as Map<String, dynamic>;
+            expect(on(l['icon-allow-overlap']), isFalse, reason: '$id takes part in collision');
+            expect(on(l['icon-ignore-placement']), isFalse, reason: '$id is placed, so others make way for it');
+            expect(l['icon-padding'], 2, reason: '$id: near-touching icons separate');
+            expect(at(style, id), lessThan(at(style, firstName)), reason: '$id is under the place names, so a town name wins the collision');
+          }
+          // Priority, first placed first: the place names, then the repeaters, then the road events, then the public places' chips.
+          if (name == 'Protomaps') {
+            expect(at(style, kUserRepeaters), greaterThan(at(style, kRoadEventChips)));
+            expect(at(style, kRoadEventChips), greaterThan(at(style, 'pois')));
+          }
+          // The person's own pins and the route, destination and position markers are always drawn.
+          for (final id in [kNotebookPins, kPinSelectedIcon, kPinResultsIcon, kRouteTime, kPositionHeading]) {
+            final l = layer(style, id)['layout'] as Map<String, dynamic>;
+            expect(on(l['icon-allow-overlap']), isTrue, reason: '$id stays visible');
+            expect(on(l['icon-ignore-placement']), isTrue, reason: '$id hides nothing');
+          }
+        });
+      }
+    }
+  });
 
   test('every palette defines every role', () {
     for (final id in CacheThemeId.values) {
@@ -117,6 +158,26 @@ void main() {
     });
   }
 
+  test('the other routes are the route colour at 40% opacity and thinner than the chosen route, under it; each route has a time label layer', () {
+    for (final id in CacheThemeId.values) {
+      final palette = mapPaletteFor(id);
+      final layers = {for (final l in build(id, all)['layers'] as List) (l as Map)['id'] as String: l};
+      final alt = layers[kRouteAlt]!['paint'] as Map;
+      expect(alt['line-color'], palette.css('route'), reason: '$id: the route colour, not the grey of routeAlternate');
+      expect(alt['line-color'], isNot(palette.css('routeAlternate')));
+      expect(alt['line-opacity'], 0.4);
+      final road = layers[kRouteRoad]!['paint'] as Map;
+      expect(alt['line-width'] as num, lessThan(road['line-width'] as num), reason: 'thinner than the chosen route');
+      final order = (build(id, all)['layers'] as List).map((l) => (l as Map)['id']).toList();
+      expect(order.indexOf(kRouteAlt), lessThan(order.indexOf(kRouteCasing)), reason: 'under the chosen route\'s casing');
+      final time = layers[kRouteTime]!;
+      expect(time['type'], 'symbol');
+      expect((time['layout'] as Map)['icon-image'], ['get', 'img']);
+      expect((time['layout'] as Map)['symbol-sort-key'], isNotNull, reason: 'the chosen route\'s label is drawn on top');
+      expect(order.indexOf(kRouteTime), greaterThan(order.indexOf(kRouteOffroad)));
+    }
+  });
+
   test('the four palettes give four different styles from the same layout', () {
     final styles = {for (final id in CacheThemeId.values) id: jsonEncode(build(id, all))};
     expect(styles.values.toSet().length, 4);
@@ -129,7 +190,7 @@ void main() {
   test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRoadEventCasing, kRoadEventClosure, kRoadEventWork, kRoadEventDetour, kRoadEventSelected, kRoadEventChips, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRoadEventCasing, kRoadEventClosure, kRoadEventWork, kRoadEventDetour, kRoadEventSelected, kRoadEventChips, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kRouteTime, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
   });
 
   test('a tapped area\'s outline is above the roads and buildings and under the labels (Protomaps layout)', () {

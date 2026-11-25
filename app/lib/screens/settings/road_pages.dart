@@ -137,7 +137,7 @@ class _SearchBox extends StatelessWidget {
         filled: true,
         fillColor: k.surface,
         contentPadding: const EdgeInsets.symmetric(vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
       ),
     );
   }

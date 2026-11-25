@@ -3,7 +3,9 @@
 //! * `meta(key, value)`: grid definition, layer list, source versions, mode-profile hash, build time.
 //! * `tiles(layer, tx, ty, data)`: 256x256-cell tiles of the global z12 pixel grid (tx = global col / 256,
 //!   ty = global row / 256), zstd(raw 65536 bytes). A missing tile reads 0. Elevation is NOT in the pack
-//!   (see `elevation`).
+//!   (see `elevation`). The builder omits all-zero tiles, so an absent tile is real zeros; a pack with `meta.covered_v`
+//!   also has `covered(layer, z, x, y)` (z = 13, the same x, y as `tiles`) listing EVERY tile it processed, and there a tile
+//!   in neither table is missing data, not zeros (see `PackSource::missing_rects`).
 //! * `parking`, `trailheads`, `mvum` with R*Tree indexes `*_idx`.
 use crate::grid::PACK_TILE;
 use rayon::prelude::*;
@@ -105,6 +107,12 @@ pub trait PackSource: Send + Sync {
     /// Whether the pack's data covers the point (a pack that does not know its extent says yes).
     fn covers(&self, _lat: f64, _lon: f64) -> bool {
         true
+    }
+    /// The pack tiles of this window (global z12 pixel rectangles `(row0, col0, row1, col1)`, ends excluded) that are missing data
+    /// rather than zeros: a pack that lists the tiles it processed (`meta.covered_v`) has no tile and no listing for them. A pack that
+    /// does not list them (older packs, in-memory packs) says none: an absent tile there is zeros, as it always was.
+    fn missing_rects(&self, _row0: i64, _col0: i64, _rows: usize, _cols: usize) -> Vec<(i64, i64, i64, i64)> {
+        Vec::new()
     }
     /// Whether the pack says it carries land-access rules: `Some(true)` (US data), `Some(false)` (none), `None` when it does not say.
     fn land_rules(&self) -> Option<bool> {
@@ -288,6 +296,31 @@ impl PackSource for SqlitePack {
     fn trailheads_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
         self.points("trailheads", a, b, c, d)
     }
+    fn missing_rects(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Vec<(i64, i64, i64, i64)> {
+        if rows == 0 || cols == 0 || !self.info.meta.contains_key("covered_v") {
+            return Vec::new();
+        }
+        let (r1, c1) = (row0 + rows as i64, col0 + cols as i64);
+        let (ty0, ty1) = (row0.div_euclid(PACK_TILE), (r1 - 1).div_euclid(PACK_TILE));
+        let (tx0, tx1) = (col0.div_euclid(PACK_TILE), (c1 - 1).div_euclid(PACK_TILE));
+        let all: std::collections::BTreeSet<(i64, i64)> = (tx0..=tx1).flat_map(|x| (ty0..=ty1).map(move |y| (x, y))).collect();
+        let mut lacking: std::collections::BTreeSet<(i64, i64)> = Default::default();
+        let conn = self.conn.lock().unwrap();
+        for layer in Layer::ALL.into_iter().filter(|l| self.has_layer(*l)) {
+            // a tile of this layer that the pack has, or lists as processed (all zeros)
+            let mut have: std::collections::BTreeSet<(i64, i64)> = Default::default();
+            for sql in [
+                "SELECT tx, ty FROM tiles WHERE layer=?1 AND tx BETWEEN ?2 AND ?3 AND ty BETWEEN ?4 AND ?5",
+                "SELECT x, y FROM covered WHERE layer=?1 AND z=13 AND x BETWEEN ?2 AND ?3 AND y BETWEEN ?4 AND ?5",
+            ] {
+                let Ok(mut st) = conn.prepare_cached(sql) else { continue };
+                let Ok(found) = st.query_map(params![layer.name(), tx0, tx1, ty0, ty1], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) else { continue };
+                have.extend(found.flatten());
+            }
+            lacking.extend(all.difference(&have).copied());
+        }
+        lacking.into_iter().map(|(x, y)| (y * PACK_TILE, x * PACK_TILE, (y + 1) * PACK_TILE, (x + 1) * PACK_TILE)).collect()
+    }
     fn land_rules(&self) -> Option<bool> {
         // `land_access` says it outright; the older Alberta/BC packs carry `cov_land_access`. A pack that says neither says nothing.
         let says = |k: &str| match self.info.meta.get(k).map(|s| s.as_str()) {
@@ -385,7 +418,7 @@ pub fn decode_lines(b: &[u8]) -> Vec<Vec<(f64, f64)>> {
 /// Schema used by the builder (kept here so reader and writer cannot drift).
 pub const SCHEMA: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
-CREATE TABLE tiles(layer TEXT NOT NULL, tx INTEGER NOT NULL, ty INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(layer, tx, ty)) WITHOUT ROWID;
+CREATE TABLE tiles(layer TEXT NOT NULL, tx INTEGER NOT NULL, ty INTEGER NOT NULL, data BLOB NOT NULL, UNIQUE(layer, tx, ty));
 CREATE TABLE parking(id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, parking_type TEXT, access TEXT);
 CREATE VIRTUAL TABLE parking_idx USING rtree(id, min_lon, max_lon, min_lat, max_lat);
 CREATE TABLE trailheads(id INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, highway_class TEXT);

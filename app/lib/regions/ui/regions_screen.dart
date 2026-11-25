@@ -123,10 +123,7 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
     if (_query.isEmpty) return;
     final asked = _query;
     try {
-      final rows = <RegionHit>[...await r.catalogue.globalSearch()];
-      for (final s in r.catalogue.loadedShards.toList()) {
-        rows.addAll(await r.catalogue.shardSearch(s.id));
-      }
+      final rows = await r.searchRows();
       if (!mounted || asked != _query) return;
       setState(() => _hits = searchRegions(asked, rows));
     } catch (_) {

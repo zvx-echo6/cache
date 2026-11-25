@@ -31,8 +31,8 @@ import 'support/test_layer_engine.dart';
 Future<void> settle([int ms = 30]) => Future<void>.delayed(Duration(milliseconds: ms));
 
 /// A made-up picture: says what it was drawn for, so the tests can read it back.
-Future<Uint8List> _fakePng(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical}) async =>
-    Uint8List.fromList(utf8.encode('${icon.codePoint}|${tint.toARGB32()}|${style.name}|$ratio|$tactical'));
+Future<Uint8List> _fakePng(IconData icon, Color tint, PinStyle style, {required double ratio, required bool tactical, bool flat = false}) async =>
+    Uint8List.fromList(utf8.encode('${icon.codePoint}|${tint.toARGB32()}|${style.name}|$ratio|$tactical${flat ? '|flat' : ''}'));
 
 /// The repeater lists of the user's map data, standing in for the core: one list, shown or hidden.
 class _Repeaters {
@@ -116,9 +116,9 @@ void main() {
       pinStyle: () => style.value,
       changes: [notebooks, repeaters.state],
       pinStyleChanges: style,
-      render: (icon, tint, s, {required double ratio, required bool tactical}) {
+      render: (icon, tint, s, {required double ratio, required bool tactical, required bool flat}) {
         renders++;
-        return _fakePng(icon, tint, s, ratio: ratio, tactical: tactical);
+        return _fakePng(icon, tint, s, ratio: ratio, tactical: tactical, flat: flat);
       },
       debounce: Duration.zero,
     );
@@ -273,6 +273,27 @@ void main() {
       pins.setTactical(false);
       await settle();
       expect(sent, hasLength(3));
+      expect(features(sent.last).first['properties']['pin'], repeaterPinName(PinStyle.icon));
+    });
+
+    test('a Light or Parchment car map gets the flat pictures (no white ring), and back; Tactical is never flat', () async {
+      await place(trails, 'Copper Hollow Trailhead', 43.2, -115.1);
+      connected.value = true;
+      await settle();
+      pins.setFlat(true);
+      await settle();
+      expect(sent, hasLength(2));
+      expect(sent.last['reset'], isTrue);
+      final names = [for (final f in features(sent.last)) f['properties']['pin'] as String];
+      expect(names.first, repeaterPinName(PinStyle.icon, flat: true));
+      expect(names, everyElement(startsWith('pin-icon-f-')));
+      expect(images(sent.last).keys.toSet(), names.toSet());
+      pins.setTactical(true);
+      await settle();
+      expect([for (final f in features(sent.last)) f['properties']['pin'] as String], everyElement(startsWith('pin-icon-t-')), reason: 'Tactical wins');
+      pins.setTactical(false);
+      pins.setFlat(false);
+      await settle();
       expect(features(sent.last).first['properties']['pin'], repeaterPinName(PinStyle.icon));
     });
 

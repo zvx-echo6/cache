@@ -8,8 +8,8 @@ import 'package:flutter/widgets.dart' show IconData;
 
 /// The three pin styles (Maps settings > Pin style), per device.
 enum PinStyle {
-  /// Icon: the icon itself in the colour, with a halo so it reads on any map. The default.
-  icon('Icon', 'The icon itself, with a halo'),
+  /// Icon: the icon on a disc in the colour (a halo around the icon itself on the dark and Tactical themes). The default.
+  icon('Icon', 'The icon on a colored disc'),
 
   /// Teardrop: a map-pin shape in the colour, carrying the icon; its point is the place.
   teardrop('Teardrop', 'A map pin carrying the icon'),
@@ -77,7 +77,12 @@ TextPainter pinGlyph(IconData icon, double fontSize, {Color color = const Color(
 /// A map pin of [size] points in [style]: [at] is the place (the centre; for the teardrop, its point). On the light and dark
 /// themes the shape or halo is white with a dark edge and the shape is filled with [tint]. In [tactical] (red only) there is no
 /// white: the halo and the inner fill are dark, and the glyph, the shape's ring and the icon are [tint] (the theme's red).
-void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tint, PinStyle style, {bool tactical = false}) {
+///
+/// [flat] (the light and Parchment themes): no white halo or ring on any style. The Icon style is a solid disc in [tint] with the glyph
+/// inside it (the map's own public-place chip, scaled: disc 9/20 of [size], glyph 12.5/20); the teardrop and the badge keep their shapes.
+/// All have a 2 pixel edge ([kFlatIconEdge]; [ratio] is the pixels per point the image is drawn at). The dark and Tactical themes
+/// keep the white they have always had.
+void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tint, PinStyle style, {bool tactical = false, bool flat = false, double ratio = 3}) {
   final halo = tactical ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
   final edge = tactical ? const Color(0xFF000000) : const Color(0xB3000000);
   final fill = tactical ? const Color(0xFF160505) : tint;
@@ -86,47 +91,100 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
   final ringGrow = _ringGrow(size, tactical);
   switch (style) {
     case PinStyle.icon:
+      if (flat && !tactical) {
+        final k = size / 20;
+        canvas.drawCircle(at, 9 * k + flatEdgeWidth(ratio), Paint()..color = kFlatIconEdge);
+        canvas.drawCircle(at, 9 * k, Paint()..color = tint);
+        _paintGlyph(canvas, at, _glyph(icon, 12.5 * k, color: glyphOn(tint)));
+        return;
+      }
       final fs = size * 1.0;
       for (final (w, c) in [(size * 0.3, edge), (size * 0.2, halo)]) {
         _paintGlyph(canvas, at, _glyph(icon, fs, foreground: Paint()..style = PaintingStyle.stroke..strokeWidth = w..strokeJoin = StrokeJoin.round..color = c));
       }
       _paintGlyph(canvas, at, _glyph(icon, fs, color: tint));
     case PinStyle.teardrop:
-      final head = teardropHead(at, size, tactical: tactical);
-      final r = head.radius;
-      final c = head.centre;
-      final apex = Offset(at.dx, at.dy - pinOutline(size, tactical: tactical));
-      final th = math.acos(r / (apex.dy - c.dy));
-      final tl = c + Offset(-r * math.sin(th), r * math.cos(th));
-      final tr = c + Offset(r * math.sin(th), r * math.cos(th));
-      final needle = Path()
-        ..moveTo(apex.dx, apex.dy)
-        ..lineTo(tl.dx, tl.dy)
-        ..arcToPoint(tr, radius: Radius.circular(r), largeArc: true, clockwise: true)
-        ..close();
-      Paint line(Color col, double grow) => Paint()
-        ..color = col
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = grow * 2
-        ..strokeJoin = StrokeJoin.round;
-      canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
-      canvas.drawPath(needle, line(ring, ringGrow));
-      canvas.drawPath(needle, Paint()..color = fill);
-      final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
-      tp.paint(canvas, teardropIconBox(at, size, tp.size, tactical: tactical).topLeft);
+      _paintTeardrop(canvas, at, size, tint, tactical: tactical, icon: icon, flat: flat, ratio: ratio);
     case PinStyle.badge:
       final rect = Rect.fromCenter(center: at, width: size, height: size);
       RRect rr(double grow) => RRect.fromRectAndRadius(rect.inflate(grow), Radius.circular(size * 0.26 + grow));
-      canvas.drawRRect(rr(ringGrow + size * 0.05), Paint()..color = edge);
-      canvas.drawRRect(rr(ringGrow), Paint()..color = ring);
+      if (flat && !tactical) {
+        canvas.drawRRect(rr(flatEdgeWidth(ratio)), Paint()..color = kFlatIconEdge);
+      } else {
+        canvas.drawRRect(rr(ringGrow + size * 0.05), Paint()..color = edge);
+        canvas.drawRRect(rr(ringGrow), Paint()..color = ring);
+      }
       canvas.drawRRect(rr(0), Paint()..color = fill);
       _paintGlyph(canvas, at, _glyph(icon, size * 0.64, color: glyphColor));
   }
 }
 
+/// The edge of the flat icons (pins and public-place discs): a 2 pixel line, near black at full opacity.
+const Color kFlatIconEdge = Color(0xFF14141A);
+
+/// The width of that edge on the screen, in pixels, and how wide it is in points for an image drawn at [ratio] pixels per point
+/// (the one width every flat painter uses).
+const double kFlatEdgePixels = 2;
+double flatEdgeWidth(double ratio) => kFlatEdgePixels / ratio;
+
+/// The teardrop (needle pin) of [size] whose point is [at], filled with [tint]: with an [icon] drawn in its head, or with none a round
+/// hole (a plain pin, which needs no icon font).
+void _paintTeardrop(Canvas canvas, Offset at, double size, Color tint, {required bool tactical, IconData? icon, bool flat = false, double ratio = 3}) {
+  final edge = tactical ? const Color(0xFF000000) : const Color(0xB3000000);
+  final fill = tactical ? const Color(0xFF160505) : tint;
+  final ring = tactical ? tint : const Color(0xFFFFFFFF);
+  final glyphColor = tactical ? tint : glyphOn(tint);
+  final ringGrow = _ringGrow(size, tactical);
+  final head = teardropHead(at, size, tactical: tactical);
+  final r = head.radius;
+  final c = head.centre;
+  final apex = Offset(at.dx, at.dy - pinOutline(size, tactical: tactical));
+  final th = math.acos(r / (apex.dy - c.dy));
+  final tl = c + Offset(-r * math.sin(th), r * math.cos(th));
+  final tr = c + Offset(r * math.sin(th), r * math.cos(th));
+  final needle = Path()
+    ..moveTo(apex.dx, apex.dy)
+    ..lineTo(tl.dx, tl.dy)
+    ..arcToPoint(tr, radius: Radius.circular(r), largeArc: true, clockwise: true)
+    ..close();
+  Paint line(Color col, double grow) => Paint()
+    ..color = col
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = grow * 2
+    ..strokeJoin = StrokeJoin.round;
+  if (flat && !tactical) {
+    canvas.drawPath(needle, line(kFlatIconEdge, flatEdgeWidth(ratio)));
+  } else {
+    canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
+    canvas.drawPath(needle, line(ring, ringGrow));
+  }
+  canvas.drawPath(needle, Paint()..color = fill);
+  if (icon != null) {
+    final tp = _glyph(icon, teardropGlyphSize(size), color: glyphColor);
+    tp.paint(canvas, teardropIconBox(at, size, tp.size, tactical: tactical).topLeft);
+  } else {
+    canvas.drawCircle(c, r * 0.4, Paint()..color = glyphColor);
+  }
+}
+
+/// A plain map pin (a teardrop with a round hole, no icon font: a font that is not ready when the image is drawn would leave it empty)
+/// as PNG bytes, for a dropped pin and a route's destination. Its point is at the bottom middle of the image for the teardrop style's
+/// symbol layer (anchor at the bottom), and at the middle of an image twice as tall for the other styles' (anchor in the centre).
+Future<Uint8List> renderPlainPinPng(Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false, bool flat = false}) async {
+  final one = pinImageSize(PinStyle.teardrop, size);
+  final tall = style != PinStyle.teardrop;
+  final box = tall ? Size(one.width, one.height * 2 - size * 0.34) : one;
+  final at = tall ? Offset(box.width / 2, box.height / 2) : pinImageAt(PinStyle.teardrop, size, tactical: tactical);
+  final rec = ui.PictureRecorder();
+  final c = Canvas(rec)..scale(ratio);
+  _paintTeardrop(c, at, size, tint, tactical: tactical, flat: flat, ratio: ratio);
+  final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
+  return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+}
+
 /// The image's name in the map style: one per style, icon and colour.
-String pinImageId(PinStyle style, String iconId, Color tint, {bool tactical = false}) =>
-    'pin-${style.name}${tactical ? '-t' : ''}-$iconId-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+String pinImageId(PinStyle style, String iconId, Color tint, {bool tactical = false, bool flat = false}) =>
+    'pin-${style.name}${tactical ? '-t' : ''}${flat && !tactical ? '-f' : ''}-$iconId-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
 // How big the map draws a pin. A pin is 30 points ([renderPinPng]), in an image half as wide again. The map does not take an
 // added image the same way everywhere, so the pixels the image is drawn at and the size its symbol layer draws it at go together:
@@ -141,6 +199,19 @@ const double kPinImageRatio = 3;
 
 /// Pixels per point the pin images are drawn at for a screen of [devicePixelRatio] pixels per point ([web]: in a browser).
 double pinImageRatio(double devicePixelRatio, {bool web = kIsWeb}) => web ? kPinImageRatio : devicePixelRatio;
+
+/// The map's icons (pins, repeaters, public-place chips) are drawn smaller zoomed out, so a country is not a pile of them: as a
+/// multiplier on their size, 0.4 at zoom 5, 0.55 at 9, 0.8 at 12 and 1.0 from 15 up, between them linear. [stops] is that curve.
+const List<(double, double)> kIconZoomCurve = [(5, 0.4), (9, 0.55), (12, 0.8), (15, 1.0)];
+
+/// The `icon-size` of a symbol layer whose icon is [scale] big at full size: [kIconZoomCurve] times [scale], as the one top-level
+/// interpolate on the zoom that a style allows.
+List<Object> iconSizeByZoom(double scale) => [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      for (final (z, m) in kIconZoomCurve) ...[z, m * scale],
+    ];
 
 /// The `icon-size` of the symbol layers that draw the pin images ([web]: in a browser).
 double pinIconSize({bool web = kIsWeb}) => web ? 1 / kPinImageRatio : 1;
@@ -158,11 +229,11 @@ Offset pinImageAt(PinStyle style, double size, {bool tactical = false}) {
 
 /// The pin as PNG bytes of [pinImageSize] points at [ratio] pixels per point (room for the edge, the teardrop's point at the
 /// bottom middle), for `addImage` with the anchor at the bottom for the teardrop and the centre for the others.
-Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false}) async {
+Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {double size = 30, double ratio = 3, bool tactical = false, bool flat = false}) async {
   final box = pinImageSize(style, size);
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  paintMapPin(c, pinImageAt(style, size, tactical: tactical), size, icon, tint, style, tactical: tactical);
+  paintMapPin(c, pinImageAt(style, size, tactical: tactical), size, icon, tint, style, tactical: tactical, flat: flat, ratio: ratio);
   final img = await rec.endRecording().toImage((box.width * ratio).round(), (box.height * ratio).round());
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 }
@@ -170,11 +241,14 @@ Future<Uint8List> renderPinPng(IconData icon, Color tint, PinStyle style, {doubl
 /// Which pin images the map style already has, so each style, icon and colour is drawn and added once ([add] is the style's
 /// `addImage`). A new style (a theme change drops the images) is a new cache: call [reset].
 class PinImages {
-  PinImages(this.add, this.style, {this.tactical = false, required this.ratio});
+  PinImages(this.add, this.style, {this.tactical = false, this.flat = false, required this.ratio});
 
   final Future<void> Function(String name, Uint8List png) add;
   final PinStyle style;
   final bool tactical;
+
+  /// The light and Parchment themes' flat look of the Icon style (see [paintMapPin]).
+  final bool flat;
 
   /// Pixels per point the images are drawn at: [pinImageRatio] of the screen the map is on.
   final double ratio;
@@ -182,9 +256,21 @@ class PinImages {
 
   /// The image name for [iconId] in [tint], added on first use.
   Future<String> ensure(String iconId, IconData icon, Color tint) async {
-    final name = pinImageId(style, iconId, tint, tactical: tactical);
-    if (_have.add(name)) await add(name, await renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical));
+    final name = pinImageId(style, iconId, tint, tactical: tactical, flat: flat);
+    if (_have.add(name)) await add(name, await renderPinPng(icon, tint, style, ratio: ratio, tactical: tactical, flat: flat));
     return name;
+  }
+
+  /// The image name of the plain pin in [tint] (see [renderPlainPinPng]), added on first use.
+  Future<String> ensurePlain(Color tint) async {
+    final name = 'pin-plain-${style.name}${tactical ? '-t' : ''}${flat && !tactical ? '-f' : ''}-${(tint.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+    if (_have.add(name)) await add(name, await renderPlainPinPng(tint, style, ratio: ratio, tactical: tactical, flat: flat));
+    return name;
+  }
+
+  /// Adds a ready-drawn image under [name] once (the route time labels), and says whether it was added now.
+  Future<void> ensureNamed(String name, Future<Uint8List> Function() draw) async {
+    if (_have.add(name)) await add(name, await draw());
   }
 
   void reset() => _have.clear();

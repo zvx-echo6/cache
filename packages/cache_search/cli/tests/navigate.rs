@@ -422,7 +422,7 @@ fn compare_to_recorded(example: &str, cache: &Value) {
             assert_eq!(sorted(names(&w[0])), sorted(want));
         }
         let detail = match w[0]["reason"].as_str() {
-            Some("not_downloaded") => "Off-road data for this area isn't on the phone; it loads when the phone is online.",
+            Some("not_downloaded") => "Off-road data for this area isn't on the phone. Download a region that covers it in Maps › Layers › Download a region; if that region is already downloaded, open it there and tap Add.",
             Some("no_way_found") => "Cache couldn't find an off-road way between the road and this point.",
             Some("no_data") => "There is no off-road data for this area.",
             other => panic!("{example}: offroad_unavailable reason {other:?}"),

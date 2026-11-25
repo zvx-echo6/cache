@@ -227,6 +227,15 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
+    /// A second copy of the device's key, in a folder outside `dir` (Cache on Linux: `<data>/identity-keep`): written at every open,
+    /// and the key comes back from it when the one in `dir` is missing or the wrong length (see [`identity::load`]). Absent on a
+    /// phone, whose app keeps its own copy beside the install marker.
+    #[serde(default)]
+    pub identity_keep: Option<PathBuf>,
+    /// Whether this open may make a new identity when none can be found (default true). A phone's background round passes false:
+    /// the open then fails, and the app's own start restores the key or makes the new one.
+    #[serde(default = "t")]
+    pub make_identity: bool,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -1361,10 +1370,8 @@ impl Inner {
             let _ = self.store.delete_tag(Self::tag_name(&share.id, &p).as_bytes()).await;
             changed = true;
         }
+        // Whether this scan holds back a file as still being written: then its deletes wait too (below).
         let mut unsettled = false;
-        // The sizes of the files this scan holds back as still being written: a file that went and one of the same size that
-        // is still settling may be a rename, whose delete waits for the scan that also lists the new path (below).
-        let mut settling_sizes: HashSet<u64> = HashSet::new();
         // The files dated in the future that the last rescan held back, and the ones this rescan holds back ([`Inner::settling`]).
         let watched = self.settling.lock().unwrap().get(&share.id).cloned().unwrap_or_default();
         let mut watching: HashMap<String, Settling> = HashMap::new();
@@ -1395,7 +1402,6 @@ impl Inner {
                         watching.insert(rel.clone(), (key, since));
                     }
                     unsettled = true;
-                    settling_sizes.insert(m.len());
                     continue;
                 }
             }
@@ -1444,10 +1450,13 @@ impl Inner {
                 continue;
             }
             let old = idx.files[&p].clone();
-            // Perhaps renamed to a file still being written (a rename of a file that arrived moments ago keeps that file's
-            // time): the delete waits for the next scan, so the other devices learn the new path in the same list and write
-            // it before they delete the old one, while their store can still read the content from it.
-            if settling_sizes.contains(&old.size) {
+            // While any file of the share is held back as still being written, its deletes wait for the scan that lists it, so
+            // the other devices never take a delete ahead of a change made before it:
+            // - a rename of a file that arrived moments ago (it keeps that file's time): they learn the new path in the same
+            //   list and write it before they delete the old one, while their store can still read the content from it;
+            // - R1: a notebook delete writes `_deleted/<id>.json` and then removes the entry's file. A device that took the
+            //   removal without the marker wrote the file back from its notebook, and the delete was undone on every device.
+            if unsettled {
                 continue;
             }
             stale.push(old.hash.clone());
@@ -1832,6 +1841,10 @@ impl Inner {
         });
         // Something did not come or go in this call (it failed, or was put off): what says the rest has come must wait too.
         let mut held = false;
+        // A fetch failed, stalled or was put off in this call: the share's deletes wait for a later round (R1). A delete can
+        // depend on a file that comes with it, such as a notebook's `_deleted/<id>.json` with the removal of the entry's file:
+        // taken alone, the notebook writes the file back. Not for a file with no room for it: a delete may be what makes room.
+        let mut deletes_wait = false;
         let mut no_room: Option<anyhow::Error> = None;
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
@@ -1857,6 +1870,9 @@ impl Inner {
                     }
                 }
                 Action::Delete { path, entry } => {
+                    if deletes_wait {
+                        continue;
+                    }
                     let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
                     let done: Result<()> = async {
                         let mut idx = self.load_index(&sh.id);
@@ -1895,10 +1911,16 @@ impl Inner {
                     }
                     match self.fetch(sh, &path, entry, conflict, from).await {
                         Ok(true) => {}
-                        Ok(false) => held = true,
+                        Ok(false) => {
+                            held = true;
+                            deletes_wait = true;
+                        }
                         Err(e) => {
                             held = true;
                             let msg = format!("{e:#}");
+                            if !msg.starts_with("Paused:") {
+                                deletes_wait = true;
+                            }
                             // With no network it may use nothing else can come either: the round says sync is paused.
                             if !self.may_use_network() || msg.starts_with("Paused: no network") || msg.contains("paused, no network") {
                                 return Err(e);
@@ -2389,7 +2411,7 @@ impl SyncEngine {
         let gate = Arc::new(GateState::default());
         gate.grace_until.store(links_grace_until(&cfg.dir, fresh || saved_note.is_some())?, Ordering::SeqCst);
         steps.step("links loaded");
-        let (secret, _) = identity::load_or_create(&cfg.dir)?;
+        let (secret, _) = identity::load(&cfg.dir, cfg.identity_keep.as_deref(), cfg.make_identity)?;
         steps.step("identity loaded");
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());

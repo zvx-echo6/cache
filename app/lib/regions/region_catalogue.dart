@@ -344,7 +344,7 @@ class RegionIndex {
 /// The region catalogue, read from the public host and kept in [dir] so it works offline once seen. A file is fetched again
 /// when it is older than [maxAge] (a month: the catalogue follows the monthly map releases); when that fails, the copy on
 /// the phone is used.
-class RegionCatalogue implements AreaSource {
+class RegionCatalogue implements AreaSource, AreaFetcher {
   RegionCatalogue({required this.dir, FetchBytes? fetch, DateTime Function()? now, this.base = kRegionCatalogueBase, this.maxAge = const Duration(days: 30)})
     : _fetch = fetch ?? ((u) => fetchBytes(u, maxBytes: 64 * 1024 * 1024)),
       _now = now ?? DateTime.now;
@@ -389,6 +389,54 @@ class RegionCatalogue implements AreaSource {
     return list;
   }
 
+  /// Every region the search looks through: the global list (countries, states, the larger places) and the full list of each country
+  /// whose shard is loaded and of each of [countries] (country ids, "us"): the towns and counties are only in those. A list that
+  /// cannot be read is left out.
+  Future<List<RegionHit>> searchRows({Iterable<String> countries = const []}) async {
+    final rows = <RegionHit>[...await globalSearch()];
+    final ids = <String>{for (final s in loadedShards) s.id, ...countries};
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
+  /// The rows the setup wizard's place search looks through for [query]: the global list, the lists already read, and a few more read
+  /// now, at most [maxLists] (each is opened once and kept): the country at [position]; the country or state of the global list that a
+  /// word of the query names ("Hilo Hawaii": Hawaii, in the US list); and, when neither gives one, the country of the device's
+  /// [localeCountry] ("US"). A list that cannot be read is left out.
+  Future<List<RegionHit>> searchRowsFor(String query, {({double lat, double lon})? position, String? localeCountry, int maxLists = 3}) async {
+    final global = await globalSearch();
+    final rows = <RegionHit>[...global];
+    final ids = <String>{for (final s in loadedShards) s.id};
+    final fresh = <String>[];
+    if (position != null) {
+      try {
+        await readShardAt(position.lat, position.lon);
+      } catch (_) {}
+      ids.addAll([for (final s in loadedShards) s.id]);
+    }
+    final named = global.where((h) => const {'country', 'dependency', 'region', 'sub_state', 'multi_state'}.contains(h.kind)).toList();
+    for (final w in _words(query)) {
+      if (w.length < 3) continue;
+      for (final h in searchRegions(w, named, limit: 2)) {
+        if (!ids.contains(h.shardId) && !fresh.contains(h.shardId)) fresh.add(h.shardId);
+      }
+    }
+    if (fresh.isEmpty && position == null && localeCountry != null && localeCountry.isNotEmpty) fresh.add(localeCountry.toLowerCase());
+    for (final id in fresh.take(maxLists)) {
+      ids.add(id);
+    }
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
   /// One country's full search list (every region it holds).
   Future<List<RegionHit>> shardSearch(String id) async {
     final known = _search[id];
@@ -425,6 +473,16 @@ class RegionCatalogue implements AreaSource {
     }
     if (type == 'Feature') return (j['geometry'] as Map).cast<String, dynamic>();
     return j;
+  }
+
+  /// The outline of [r], fetched when it is not on the phone and kept (the same fetch-and-keep as [geometry]); null when it cannot be had.
+  @override
+  Future<Map<String, dynamic>?> fetchGeometry(RegionRecord r) async {
+    try {
+      return await geometry(r);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The outline of [r] as it is kept on the phone, never fetched: null when it is not there or cannot be read (a part-written or
@@ -514,6 +572,7 @@ class RegionCatalogue implements AreaSource {
     final want = areaRecordsOf(r);
     if (want.length > maxFiles) return AreaStoreResult(wanted: want.length, stored: 0, failed: 0, tooMany: true);
     var stored = 0, failed = 0, next = 0;
+    final present = await _presentOutlines(want);
     Future<void> worker() async {
       while (next < want.length) {
         final x = want[next++];
@@ -527,7 +586,79 @@ class RegionCatalogue implements AreaSource {
     }
 
     await Future.wait([for (var i = 0; i < parallel; i++) worker()]);
-    return AreaStoreResult(wanted: want.length, stored: stored, failed: failed);
+    // Every outline of the region is on the phone: the back-fill need not look at this region again.
+    if (failed == 0 && want.isNotEmpty) {
+      await _markOutlinesDone(r.id);
+    } else {
+      await _unmarkOutlines(r.id); // a marker is only true while every file is there
+    }
+    return AreaStoreResult(wanted: want.length, stored: stored, failed: failed, present: present);
+  }
+
+  /// The marker that says every outline of region [regionId] was kept: written only when a store ended with none failed and not too
+  /// many. Next to the outline files, so removing the files' folder removes it.
+  File _doneMarker(Directory d, String regionId) => File('${d.path}/polygons/.done-$regionId');
+
+  /// Whether the outlines of region [regionId] were all kept once (its marker). False in a browser, which keeps no files.
+  /// How many outlines region [r] wants and how many of those files are on the phone now (a stat of each).
+  Future<({int wanted, int present})> outlinesCount(RegionRecord r) async {
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return (wanted: want.length, present: await _presentOutlines(want));
+    } catch (_) {
+      return (wanted: 0, present: 0);
+    }
+  }
+
+  Future<bool> outlinesDone(String regionId) async {
+    if (plat.isWeb) return false;
+    try {
+      return await _doneMarker(await dir(), regionId).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _unmarkOutlines(String regionId) async {
+    if (plat.isWeb) return;
+    try {
+      final f = _doneMarker(await dir(), regionId);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  /// Whether every outline of [r] is on the phone: its marker is there and each expected file is (a stat of each, no reads). The marker
+  /// alone is not trusted: files that were lost since make this false, so the back-fill fetches them again.
+  Future<bool> outlinesComplete(RegionRecord r) async {
+    if (!await outlinesDone(r.id)) return false;
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return want.isNotEmpty && await _presentOutlines(want) == want.length;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _markOutlinesDone(String regionId) async {
+    if (plat.isWeb) return;
+    try {
+      await _doneMarker(await dir(), regionId).create(recursive: true);
+    } catch (_) {}
+  }
+
+  /// How many of [records]' outline files are on the phone now.
+  Future<int> _presentOutlines(List<RegionRecord> records) async {
+    if (plat.isWeb) return 0;
+    var n = 0;
+    try {
+      final d = await dir();
+      for (final x in records) {
+        if (await File('${d.path}/polygons/${x.id}.geojson').exists()) n++;
+      }
+    } catch (_) {}
+    return n;
   }
 
   /// The town, county and state of a point from the outlines kept on the phone (never fetched). The shards of the countries around
@@ -628,11 +759,17 @@ class RegionCatalogue implements AreaSource {
 
 /// What [RegionCatalogue.storeAreaPolygons] did: outlines asked for, kept, and not fetched; [tooMany] when it did none for lack of room.
 class AreaStoreResult {
-  const AreaStoreResult({required this.wanted, required this.stored, required this.failed, this.tooMany = false});
+  const AreaStoreResult({required this.wanted, required this.stored, required this.failed, this.tooMany = false, this.present = 0});
 
   final int wanted;
   final int stored;
   final int failed;
+
+  /// How many of the outlines were already on the phone when it started (they are not fetched again).
+  final int present;
+
+  /// How many were fetched by this run.
+  int get fetched => (stored - present).clamp(0, stored);
   final bool tooMany;
 }
 
@@ -644,7 +781,7 @@ Future<T> _off<T>(T Function() work) => plat.isWeb ? Future<T>.sync(work) : Isol
 
 /// Finds regions by name in [rows]: every word of the query must start a word of the name (or of one of its other names).
 /// Exact names first, then names that start with the query, then the rest; larger places first within each.
-List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40}) {
+List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40, bool includeInside = false}) {
   final words = _words(query);
   if (words.isEmpty) return const [];
   final seen = <String>{};
@@ -660,6 +797,14 @@ List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit
       final joined = w.join(' ');
       final s = (joined == q ? 0 : (joined.startsWith(q) ? 2 : 4)) + (i == 0 ? 0 : 1);
       if (best < 0 || s < best) best = s;
+    }
+    // [includeInside]: a word may also be one of the place it is in ("Hilo Hawaii": Hilo, in Hawaii County, Hawaii), as long as one
+    // word is in the name itself.
+    if (best < 0 && includeInside && r.inside.isNotEmpty) {
+      final own = {for (final n in [r.name, ...r.alt]) ..._words(n)};
+      final all = {...own, ..._words(r.inside)};
+      bool starts(Set<String> set, String x) => set.any((y) => y.startsWith(x));
+      if (words.every((x) => starts(all, x)) && words.any((x) => starts(own, x))) best = 6;
     }
     if (best < 0) continue;
     seen.add(r.id);

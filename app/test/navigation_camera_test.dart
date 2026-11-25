@@ -75,6 +75,16 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
     return true;
   }
 
+  /// Where the map shows a position, in the map's own pixels (a test sets it); null: the middle of a 100 x 100 map. [screenAsked] counts the asks.
+  math.Point<num> Function(LatLng at)? screenOf;
+  int screenAsked = 0;
+
+  @override
+  Future<math.Point<num>> toScreenLocation(LatLng latLng) async {
+    screenAsked++;
+    return screenOf?.call(latLng) ?? const math.Point<num>(50, 50);
+  }
+
   /// The camera moves made at once (no animation), as [cameras] records them; they are in [cameras] too, in order.
   final List<dynamic> moves = [];
 
@@ -430,7 +440,7 @@ void main() {
       final bottom = _fitPad(fit, 14);
       // The scale is the top of what covers the map's foot: under it the credits and the panel.
       final covered = map.height - tester.getTopLeft(find.byType(ScaleBarWidget)).dy;
-      expect(covered, greaterThan(420), reason: 'with Off-road chosen the panel covers more than the room the fit used to leave');
+      expect(covered, greaterThan(300), reason: 'with Off-road chosen the panel (the three rows and the ETA line) covers more than the room the fit used to leave');
       // No position, so no chip: nothing is on the left, a bare edge of the map, and the route keeps the wider room from it.
       expect(bottom, greaterThanOrEqualTo(covered), reason: 'the route\'s lower end is under the panel or the credits');
       expect(_fitPad(fit, 11), kRouteFitBareEdge);
@@ -449,7 +459,8 @@ void main() {
       final route = MapRoute.fromJson(json);
       // A position whose text is short: in a test every letter is a square as wide as the text is tall, and a longer position
       // would make the chip reach the buttons, with no column between them.
-      await _withFittedRoute(tester, size: const Size(430, 932), route: json, position: fixAt(1, 2), check: (fit, map) {
+      // The panel is short now (three rows and one line): a shorter window keeps the strip above it smaller than the column beside the chip.
+      await _withFittedRoute(tester, size: tall ? const Size(430, 640) : const Size(430, 932), route: json, position: fixAt(1, 2), check: (fit, map) {
         expect(find.byKey(const ValueKey('land-pragmatic')), findsOneWidget, reason: 'Off-road is not chosen');
         final chip = tester.getRect(find.ancestor(of: find.text('1.00000, 2.00000'), matching: find.byType(Container)).first);
         final layers = tester.getRect(find.byType(MapButton).first), findMe = tester.getRect(find.byType(MapButton).last);

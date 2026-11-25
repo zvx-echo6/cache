@@ -170,7 +170,13 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
 
     await settle();
     expect(find.byKey(const ValueKey('land-pragmatic')), findsOneWidget, reason: 'Off-road is not chosen');
+    // The elevation chart is in the Routes sheet now: open it, see the chart, and close it again.
+    await tester.tap(find.byKey(const ValueKey('routes-chip')));
+    await settle();
     expect(find.byKey(const ValueKey('preview-elevation-chart')), findsOneWidget, reason: 'the elevation chart is not shown');
+    await tester.tapAt(const Offset(195, 40));
+    await settle();
+    expect(find.text('Routes'), findsNothing, reason: 'the Routes sheet did not close');
 
     // The map as the screen's last fit leaves it.
     final size = tester.getSize(find.byType(MapLibreMap));
@@ -217,15 +223,15 @@ Future<void> _offroad(WidgetTester tester, CacheThemeId theme) async {
     expect(ends.values.last.top, greaterThanOrEqualTo(over['the header']!.bottom + kRouteFitGap - 0.5), reason: 'the pin is nearer to the header than the gap a fitted route keeps');
     await snap(tester, _out, 'offroad-fit-390-$name');
 
-    // The panel's choices scroll: at their end the off-road note is in full, above Start.
+    // The short panel has no choices to scroll: the routes and the off-road note are in the Routes sheet now. Open it and scroll it
+    // to its end: the off-road note is in full, on the screen.
+    await tester.tap(find.byKey(const ValueKey('routes-chip')));
+    await settle();
     await tester.ensureVisible(find.byKey(const ValueKey('offroad-note')));
     await settle();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(
-      tester.getBottomLeft(find.byKey(const ValueKey('offroad-note'))).dy,
-      lessThanOrEqualTo(tester.getTopLeft(find.byKey(const ValueKey('route-start'))).dy),
-      reason: 'the off-road note cannot be scrolled into view',
-    );
+    final note = tester.getRect(find.byKey(const ValueKey('offroad-note')));
+    expect(note.top >= 0 && note.bottom <= tester.view.physicalSize.height / tester.view.devicePixelRatio, isTrue, reason: 'the off-road note cannot be scrolled into view: $note');
     await snap(tester, _out, 'offroad-panel-end-390-$name');
   } finally {
     await tester.pumpWidget(const SizedBox.shrink());

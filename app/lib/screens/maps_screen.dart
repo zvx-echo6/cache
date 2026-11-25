@@ -25,7 +25,7 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
-import '../regions/area_lookup.dart' show AreaHit, AreaSource;
+import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource, pointInGeometry;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
@@ -56,6 +56,7 @@ import '../nav/ui/drive_screen.dart';
 import '../nav/ui/elevation_dock.dart';
 import '../nav/ui/elevation_panel.dart';
 import '../nav/nav_geojson.dart';
+import '../maps/ui/route_time_image.dart';
 import '../notebook/map_icons.dart';
 import '../notebook/notebook_map.dart';
 import '../notebook/pin_image.dart';
@@ -296,26 +297,6 @@ const double kRouteTapReach = 16;
 /// The metres one point of the map covers at [lat] and [zoom] (the map's world is 512 points wide at zoom 0).
 double metresPerPoint(double lat, double zoom) => 40075016.686 * math.cos(lat * math.pi / 180) / (512 * math.pow(2, zoom));
 
-/// The metres from ([lat], [lon]) to the nearest point of the line [pts] (flat-earth, which is close enough at a tap's reach).
-double metresToLine(List<GeoPoint> pts, double lat, double lon) {
-  if (pts.isEmpty) return double.infinity;
-  final kx = 111320 * math.cos(lat * math.pi / 180), ky = 110574.0;
-  (double, double) at(GeoPoint p) => ((p.lon - lon) * kx, (p.lat - lat) * ky);
-  var best = double.infinity;
-  var (ax, ay) = at(pts.first);
-  if (pts.length == 1) return math.sqrt(ax * ax + ay * ay);
-  for (final p in pts.skip(1)) {
-    final (bx, by) = at(p);
-    final dx = bx - ax, dy = by - ay;
-    final len = dx * dx + dy * dy;
-    final t = len <= 0 ? 0.0 : ((-ax * dx - ay * dy) / len).clamp(0.0, 1.0);
-    final x = ax + t * dx, y = ay + t * dy;
-    best = math.min(best, math.sqrt(x * x + y * y));
-    (ax, ay) = (bx, by);
-  }
-  return best;
-}
-
 /// The route whose grey line a tap at ([lat], [lon]) is on in the route preview: the nearest of the routes other than the
 /// [selected] one, within [kRouteTapReach] points, and nearer than the selected route's own line (where the lines run together a
 /// tap keeps the route chosen). Null when the tap is on none.
@@ -344,6 +325,15 @@ const int kRouteRefits = 4;
 /// one style generator and the active theme's palette.
 /// How long the card is given to settle before an area's outline is fitted above it (tests set it to zero).
 Duration areaFitSettle = const Duration(milliseconds: 300);
+
+/// The credit line is shown once per app launch (this lives as long as the process): when the map first opens. It folds to the
+/// small (i) on the first pan, zoom or tap, or after [kCreditsFoldAfter]; a screen opened later in the same launch starts folded.
+bool _creditsShownThisLaunch = false;
+const Duration kCreditsFoldAfter = Duration(seconds: 5);
+
+/// For tests: the next Maps screen is the first of a launch again.
+@visibleForTesting
+void resetCreditsLaunch() => _creditsShownThisLaunch = false;
 
 class MapsScreen extends StatefulWidget {
   const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.onOpenNotebook, this.onOpenList, this.about, this.elevation, this.snapshotter, this.imagePixelRatio, this.drive, this.active = true, this.onBackToJump, this.areas, this.roadEvents});
@@ -426,6 +416,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   String? _appliedKey;
   bool _styleReady = false;
   Timer? _restyleTimer;
+
+  /// The credit line is folded to the (i) ([_creditsShownThisLaunch]); the timer folds it after five seconds.
+  bool _creditsFolded = false;
+  Timer? _creditsTimer;
+
+  void _foldCredits() {
+    _creditsTimer?.cancel();
+    if (_creditsFolded || !mounted) return;
+    setState(() => _creditsFolded = true);
+  }
   Timer? _idleTimer;
 
   double _lat = 39.8;
@@ -694,6 +694,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    if (_creditsShownThisLaunch) {
+      _creditsFolded = true;
+    } else {
+      _creditsShownThisLaunch = true;
+      _creditsTimer = Timer(kCreditsFoldAfter, _foldCredits);
+    }
     maps.addListener(_onMaps);
     location.addListener(_onLocation);
     nav.addListener(_onNav);
@@ -701,6 +707,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.notebooks?.addListener(_notebooksChanged);
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
+    // A repeater chosen before this screen existed (a cold launch from its list): the listener will not tell of it, so look once.
+    if (widget.userLayers?.focusPending ?? false) WidgetsBinding.instance.addPostFrameCallback((_) => _onRepeater());
     widget.roadEvents?.addListener(_onRoadEvents);
     unawaited(widget.roadEvents?.refresh());
     _elevation.addListener(_onElevation);
@@ -770,11 +778,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.roadEvents?.removeListener(_onRoadEvents);
     _elevation.removeListener(_onElevation);
     if (widget.elevation == null) _elevation.dispose();
+    _swapTimer?.cancel();
     _overviewPosition.dispose();
     _insetPicture?.image.dispose();
     _fullPicture?.image.dispose();
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
+    _creditsTimer?.cancel();
     _glideTicker?.dispose();
     _glideTicker = null;
     super.dispose();
@@ -861,7 +871,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     _keepOnline(c);
     final tactical = widget.themeId == CacheThemeId.tactical;
     final screenRatio = widget.imagePixelRatio ?? (mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0);
-    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical, ratio: pinImageRatio(screenRatio));
+    final images = _pinImages = PinImages((name, png) => c.addImage(name, png), maps.pinStyle, tactical: tactical, flat: isFlatIconTheme(widget.themeId), ratio: pinImageRatio(screenRatio));
     try {
       await images.ensure(kRepeaterIcon, mapIcon(kRepeaterIcon).icon, repeaterTint(tactical: tactical));
     } catch (_) {}
@@ -880,6 +890,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     await _pushMeasure();
     await _pushRoadEvents();
     _onNav(); // A route may have been loaded before this screen/listener existed.
+    if (_slideWaits) {
+      _slideWaits = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _slideToPin());
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
     _afterCameraSettles();
     await _addPoiChips(c, screenRatio);
     await _addRoadChips(c, screenRatio);
@@ -919,7 +934,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// A tap on a road event's chip or line chooses it (its card opens); true when there was one. Asked before the base map's labels, so a
   /// closure wins over the road's name under it. Where two events overlap the tap, a full closure wins, then the nearest.
-  Future<bool> _tapRoadEvent(math.Point<double> point) async {
+  Future<bool> _tapRoadEvent(math.Point<double> point, LatLng at) async {
     final c = _controller, r = widget.roadEvents;
     if (c == null || r == null || r.events.isEmpty) return false;
     try {
@@ -927,11 +942,38 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final ids = [for (final h in hits) if (h is Map && h['properties'] is Map && (h['properties'] as Map)['id'] is String) (h['properties'] as Map)['id'] as String];
       final id = pickEvent(ids, r.events);
       if (id != null) {
+        // A town's name label under the icon is what was meant: the town opens. Own pins, repeaters and the route lines were asked before.
+        // Only a name whose TEXT is under the finger (a query at the point itself): the label layer is text only, so its hit is the text.
+        if (await _tapTownLabel(point, at, exact: true)) return true;
         HapticFeedback.selectionClick();
         if (nav.selected != null) nav.clearSelection();
         widget.userLayers?.clearRepeater();
         r.select(id);
         return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// A tap on a city or town's own name label opens that town (card and outline); true when it did. Asked when a road event's icon is
+  /// also under the tap, so the icon on the name does not take the tap.
+  Future<bool> _tapTownLabel(math.Point<double> point, LatLng at, {bool exact = false}) async {
+    final c = _controller;
+    if (c == null || _areaSource == null) return false;
+    final placeIds = [for (final l in _basemapLabels()) if (l.startsWith('places_locality')) l];
+    if (placeIds.isEmpty) return false;
+    final seq = ++_tapSeq;
+    try {
+      // [exact]: only a name whose text is under the point itself (not one in the box around it).
+      final found = exact ? await c.queryRenderedFeatures(point, placeIds, null) : await _query(c, point, placeIds);
+      for (final raw in found) {
+        final f = tapFeatureFrom(raw, source: TapSource.basemap, kind: '', tapLat: at.latitude, tapLon: at.longitude);
+        if (f == null || f.name == null) continue;
+        HapticFeedback.selectionClick();
+        if (await _openArea(f.lat, f.lon, seq, townOnly: true, name: f.name)) {
+          widget.roadEvents?.select(null);
+          return true;
+        }
       }
     } catch (_) {}
     return false;
@@ -1192,14 +1234,34 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final c = _controller;
     if (c == null || !_styleReady) return;
     final mark = _stepPoint() ?? _spot;
-    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${_area?.place.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.phase == NavPhase.previewing}|${_area?.place.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}|${mark?.lat},${mark?.lon}|$_notebookSig';
     if (sig == _navSig) return;
     _navSig = sig;
     try {
-      await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
-      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
-    } catch (_) {}
+      await _ensureRouteTimeImages();
+      await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex, fmt: nav.phase == NavPhase.previewing ? nav.fmt : null));
+      // An area's card draws its outline only: no dot.
+      final areaOn = _area != null && nav.selected?.id == _area!.place.id;
+      await c.setGeoJsonSource(kPinSource, pinGeoJson(areaOn ? null : nav.selected, nav.searchOpen ? nav.results : const [], mark: mark, pinImages: await _placePinImages()));
+    } catch (e) {
+      appLog.add(LogLevel.standard, 'ERROR', 'map pins and routes not drawn: $e');
+    }
     await _pushArea(c);
+  }
+
+  /// The images of the routes' time labels the map is about to name (one per text and state), added once each.
+  Future<void> _ensureRouteTimeImages() async {
+    final images = _pinImages;
+    if (images == null || nav.phase != NavPhase.previewing || nav.routes.isEmpty) return;
+    final ratio = pinImageRatio(widget.imagePixelRatio ?? (mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
+    final route = _palette['route'];
+    try {
+      for (final l in routeLabels(nav.routes, nav.routeIndex, nav.fmt)) {
+        await images.ensureNamed(l.image, () => renderRouteTimePng(l.text, selected: l.selected, route: route, ratio: ratio));
+      }
+    } catch (e) {
+      appLog.add(LogLevel.standard, 'ERROR', 'map route time labels not drawn: $e');
+    }
   }
 
   /// The map images of the chosen place and the search results that are notebook entries: the entry's icon in the pin style, as its
@@ -1207,8 +1269,19 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Future<Map<String, String>> _placePinImages() async {
     final images = _pinImages, nb = widget.notebooks;
     final out = <String, String>{};
-    if (images == null || nb == null || _pins.isEmpty) return out;
-    final places = [if (nav.selected != null) nav.selected!, if (nav.searchOpen) ...nav.results];
+    if (images == null) return out;
+    // A dropped pin, and the destination while choosing directions, are a map pin in the person's pin style (not a dot).
+    final sel = nav.selected;
+    if (sel != null && !sel.isCategory && (sel.matched == 'pin' || sel.isCoordinates || nav.phase == NavPhase.previewing)) {
+      try {
+        out[sel.id] = await images.ensurePlain(_palette['pin']);
+        appLog.add(LogLevel.standard, 'INFO', 'map pin image ${out[sel.id]} for ${sel.id}');
+      } catch (e) {
+        appLog.add(LogLevel.standard, 'ERROR', 'map pin image failed: $e');
+      }
+    }
+    if (nb == null || _pins.isEmpty) return out;
+    final places = [?sel, if (nav.searchOpen) ...nav.results];
     for (final p in places) {
       if (p.isCategory) continue;
       final e = notebookEntryFor(p, _pins, savedKey: nav.savedFor(p)?.key);
@@ -1260,8 +1333,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     final r = nav.route;
     // A new set of routes: show all of the chosen one.
-    if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
-      _fitFor = r.routeId;
+    if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != _routesKey) {
+      _fitFor = _routesKey;
       _refits = 0;
       _fitRoute(r);
     }
@@ -1278,8 +1351,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final a = _area;
       if (a != null && a.place.id == sel.id) {
         _fitAreaOutline(a);
+      } else if (sel.matched == 'pin') {
+        unawaited(_lookUpPinCounty(sel));
+        _focusPin(sel);
       } else {
-        _focusOn(sel.lat, sel.lon);
+        // Any other place with a card (a coordinate search, a searched or saved place): the same slide, so its pin shows above the card.
+        _focusPin(sel);
       }
     }
     if (sel == null) _focusFor = null;
@@ -1331,10 +1408,29 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (covers == null) {
       return routeFitPadding(screen: screen, map: map, coveredFoot: _coveredFoot(), coveredLeft: _coveredLeft(), coveredRight: _coveredRight());
     }
-    final b = r.bounds;
+    final b = _fitBounds(r);
     final rect = routeFitRect(map: map, covers: covers, spanX: (b[3] - b[1]) / 360, spanY: _mercatorY(b[0]) - _mercatorY(b[2]));
     return EdgeInsets.fromLTRB(rect.left, rect.top, map.width - rect.right, map.height - rect.bottom);
   }
+
+  /// What the route preview frames: every route (the chosen one and its alternatives, so all of them show above the panel); [r]'s own
+  /// box when it is alone or the preview is not the one on screen. South, west, north, east.
+  List<double> _fitBounds(MapRoute r) {
+    if (nav.phase != NavPhase.previewing || nav.routes.length < 2) return r.bounds;
+    var s = 90.0, w = 180.0, n = -90.0, e = -180.0;
+    for (final x in nav.routes) {
+      if (x.points.isEmpty) continue;
+      final b = x.bounds;
+      s = math.min(s, b[0]);
+      w = math.min(w, b[1]);
+      n = math.max(n, b[2]);
+      e = math.max(e, b[3]);
+    }
+    return n < s ? r.bounds : [s, w, n, e];
+  }
+
+  /// The set of routes shown (their ids): a change of it, not the choice of another route, frames the routes again.
+  String get _routesKey => nav.routes.map((x) => x.routeId).join('+');
 
   /// The size of the map a route is fitted on: the stack's, as laid out (the screen's before that).
   Size _fitMapSize() {
@@ -1384,7 +1480,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The room what covers the map leaves ([_fitPad]: a change of it fits the route again). On a phone the pin and the
     // position dot at the route's ends are fitted into that free rectangle too, whole.
     final room = _fitPad = _fitPaddingFor(r);
-    final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: r.bounds, marks: _phoneCovers() == null ? const [] : _routeEndMarks());
+    final fit = routeFitWithMarks(map: _fitMapSize(), room: room, bounds: _fitBounds(r), marks: _phoneCovers() == null ? const [] : _routeEndMarks());
     final b = fit.bounds, pad = fit.padding;
     // On Android the map keeps the fit's padding for the moves after it (MapLibre's camera for bounds carries it): whatever moves
     // the camera next sets the padding it means ([_padTo]).
@@ -1403,7 +1499,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (!mounted) return;
     final r = nav.route;
     final was = _fitPad;
-    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != r.routeId || _step != null) return;
+    if (r == null || was == null || _fitTouched || nav.routing || nav.phase != NavPhase.previewing || _fitFor != _routesKey || _step != null) return;
     if (maps.follow != FollowMode.free) return; // Find me was tapped since: the map is on the position.
     if (_refits >= kRouteRefits) return;
     final now = _fitPaddingFor(r);
@@ -1493,6 +1589,60 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       await _padTo(c, EdgeInsets.zero);
       await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(clat, clon), zoom: zoom, bearing: 0)), duration: const Duration(milliseconds: 500));
     } catch (_) {}
+  }
+
+  /// The dropped pin the map was slid to, where its card's top was then, and how often the slide was repeated (the card's lines
+  /// settle a moment after it opens: the facts about the spot arrive).
+  String? _pinShown;
+  ({double lat, double lon})? _pinAt;
+  double? _pinTop;
+  int _pinRefits = 0;
+
+  /// A slide asked for before the map was ready: made once its style has loaded.
+  bool _slideWaits = false;
+
+  /// A dropped pin: the map slides so the pin shows in the free room above its card, not under it. The card is measured once it is
+  /// laid out (the next frame), and the slide is made again when the card grows or shrinks and no finger has moved the map since.
+  void _focusPin(MapPlace pin) => _focusCard(pin.id, pin.lat, pin.lon);
+
+  /// The id of the card showing over the map now: the chosen place's, or the chosen repeater's (null when there is none).
+  String? get _cardId {
+    final sel = nav.selected;
+    if (sel != null) return sel.id;
+    final r = widget.userLayers?.selectedRepeater.value;
+    return r == null ? null : 'repeater:${r.address}';
+  }
+
+  /// The slide for any card over a spot: a dropped pin, a place, a repeater.
+  void _focusCard(String id, double lat, double lon) {
+    _pinShown = id;
+    _pinAt = (lat: lat, lon: lon);
+    _pinTop = null;
+    _pinRefits = 0;
+    _fitTouched = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _slideToPin());
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  Future<void> _slideToPin() async {
+    final at = _pinAt;
+    if (!mounted || at == null || _cardId != _pinShown || nav.phase != NavPhase.browsing) return;
+    // The map is not made yet (a cold launch): the slide waits for it, and is made when its style has loaded.
+    if (_controller == null || !_styleReady) {
+      _slideWaits = true;
+      return;
+    }
+    _pinTop = _boxOf(_panelKey)?.top;
+    await _showSpot(at.lat, at.lon);
+  }
+
+  /// The card changed height under a pin already brought into view, and no finger has moved the map since: slide again.
+  void _reslidePin() {
+    if (!mounted || _fitTouched || _pinRefits >= 3 || nav.phase != NavPhase.browsing || _cardId != _pinShown) return;
+    final was = _pinTop, top = _boxOf(_panelKey)?.top;
+    if (was == null || top == null || (top - was).abs() < 1) return;
+    _pinRefits++;
+    unawaited(_slideToPin());
   }
 
   Future<void> _focusOn(double lat, double lon) async {
@@ -1626,7 +1776,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (u != null && r != null && u.focusPending) {
       u.focusPending = false;
       if (nav.selected != null) nav.clearSelection();
-      if (r.located) _focusOn(r.lat!, r.lon!);
+      if (r.located) _focusCard('repeater:${r.address}', r.lat!, r.lon!);
     }
     if (mounted) setState(() {});
   }
@@ -1660,6 +1810,76 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// A place or area card is showing over the map (not while a search list or a route is): Back closes it.
   bool get _cardOpen => nav.phase == NavPhase.browsing && nav.selected != null && !(nav.searchOpen && nav.query.trim().isNotEmpty);
+
+  /// The county line of the shown dropped pin ("Ada County, ID") and the place id it was looked up for; null until found or when the
+  /// catalogue has no county there.
+  (String, AreaHit)? _pinCounty;
+  String? _pinCountyFor;
+
+  /// Looks up the county of a dropped pin from what is on the phone (the catalogue's lookup never fetches).
+  Future<void> _lookUpPinCounty(MapPlace pin) async {
+    final src = _areaSource;
+    _pinCountyFor = pin.id;
+    _pinCounty = null;
+    if (src == null) return;
+    AreaHit? hit;
+    try {
+      hit = await src.areaAtPoint(pin.lat, pin.lon);
+    } catch (_) {}
+    if (!mounted || _pinCountyFor != pin.id) return;
+    final c = hit?.county;
+    if (hit == null || c == null) return;
+    final guesses = hit.countyCandidates;
+    // A county found from its outline is certain. One named from the boxes alone is a guess: it shows only when no other county's box
+    // holds the point, and the outline is fetched right away to check it (below).
+    if (guesses.length <= 1) setState(() => _pinCounty = (_countyText(c, hit!), hit));
+    if (guesses.isNotEmpty) unawaited(_verifyPinCounty(pin, hit, guesses));
+  }
+
+  String _countyText(RegionRecord c, AreaHit hit) {
+    final st = stateShort(c, hit);
+    return [c.name, if (st.isNotEmpty) st].join(', ');
+  }
+
+  /// Checks a county guessed from the boxes against its real outline: each candidate's outline is fetched (kept on the phone) and the
+  /// first that holds the pin is the county. None does: no county line. Offline, blocked by the mobile data setting or failing: the
+  /// line stays as it was (shown only when one box held the point).
+  Future<void> _verifyPinCounty(MapPlace pin, AreaHit hit, List<RegionRecord> candidates) async {
+    final src = _areaSource;
+    if (src is! AreaFetcher) return;
+    try {
+      final policy = widget.regions?.policy;
+      if (policy != null && await policy.blocksDownload()) return;
+    } catch (_) {}
+    for (final cand in candidates) {
+      Map<String, dynamic>? g;
+      try {
+        g = await (src as AreaFetcher).fetchGeometry(cand).timeout(_outlineFetchWait);
+      } catch (_) {
+        return;
+      }
+      if (!mounted || _pinCountyFor != pin.id) return;
+      if (g == null) return;
+      if (pointInGeometry(g, pin.lat, pin.lon)) {
+        setState(() => _pinCounty = (_countyText(cand, hit), AreaHit(county: cand, state: hit.state)));
+        return;
+      }
+    }
+    if (mounted && _pinCountyFor == pin.id) setState(() => _pinCounty = null);
+  }
+
+  /// The county line of the card of [sel]: a dropped pin's looked-up county, or a town card's own "county, state" line; null for others.
+  String? _countyLineFor(MapPlace sel) {
+    final a = _area;
+    if (a != null && a.place.id == sel.id) return a.isTown && sel.address.isNotEmpty ? sel.address : null;
+    return _pinCountyFor == sel.id ? _pinCounty?.$1 : null;
+  }
+
+  /// The card's county line: the county's own card and outline replace the card shown.
+  Future<void> _openCountyOf(MapPlace from) async {
+    if (nav.selected?.id != from.id || nav.phase != NavPhase.browsing) return;
+    await _openArea(from.lat, from.lon, ++_tapSeq, townOnly: false, countyOnly: true);
+  }
 
   /// The room the shown area's outline was fitted into (its padding), for the fill's fade; null when none is shown.
   EdgeInsets? _areaPad;
@@ -1736,10 +1956,14 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// A tap on a base-map label (a place, a town, a point of interest, a road's name), else on a line or an area of an overlay or
   /// of a file imported into a Places notebook, opens its card (map_tap.dart chooses). Only on a tap: nothing runs while panning.
-  /// True when there was one.
-  Future<bool> _tapMapFeature(math.Point<double> point, LatLng at) async {
+  /// True when there was one. [probe]: only asks whether something is under the tap and opens nothing (the directions are being chosen
+  /// and a tap on empty map is Back, one on a label or a chip is not).
+  Future<bool> _tapMapFeature(math.Point<double> point, LatLng at, {bool probe = false}) async {
     final c = _controller;
     if (c == null) return false;
+    // A tap on a town's name TEXT wins over a public-place chip overlapping it; a chip merely beside the name (the tap on the chip) is
+    // still the chip's (it is asked below, in the box around the tap).
+    if (!probe && _areaSource != null && await _tapTownLabel(point, at, exact: true)) return true;
     final seq = ++_tapSeq;
     final hits = <TapFeature>[];
     // One line in the app log per tap: what was asked and what came back (Settings > Log, Standard).
@@ -1814,11 +2038,15 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     final f = pickTapFeature(hits);
     logTap(f == null ? 'nothing (${hits.length} read)' : '${f.source.name}/${f.tier.name} named=${f.named} of ${hits.length} read');
     if (seq != _tapSeq || !mounted) return false;
-    // A town's label opens the town; empty ground opens the town or county there, but only when no card is open (a tap then
-    // just closes it, in [_onMapTap]). Chips, own pins, lines and overlays rank above both.
+    if (probe) return f != null;
+    // A town's label opens the town. Empty ground drops a pin there (or moves the pin that is shown): its card has Directions, and
+    // its county line opens the county. Chips, own pins, lines and overlays rank above both.
     if (f == null) {
-      if (areas != null && nav.selected == null) return _openArea(at.latitude, at.longitude, seq, townOnly: false);
-      return false;
+      HapticFeedback.selectionClick();
+      _tappedBook = null;
+      widget.userLayers?.clearRepeater();
+      unawaited(nav.dropPin(at.latitude, at.longitude));
+      return true;
     }
     if (f.placeLabel && areas != null && await _openArea(f.lat, f.lon, seq, townOnly: true, name: f.name)) return true;
     if (!mounted || seq != _tapSeq) return false;
@@ -1861,7 +2089,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   /// The card and outline of the town (or, on empty ground, the county) at a point, from what is on the phone: the catalogue's kept
   /// outlines ([AreaSource.storedGeometry] only reads files, it never fetches, so a tap never waits for the network). The outline is
   /// left out when its file is not there: the card then opens with the selection dot alone. True when a card opened.
-  Future<bool> _openArea(double lat, double lon, int seq, {required bool townOnly, String? name}) async {
+  Future<bool> _openArea(double lat, double lon, int seq, {required bool townOnly, String? name, bool countyOnly = false}) async {
     final src = _areaSource;
     if (src == null) return false;
     AreaHit? hit;
@@ -1869,7 +2097,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       hit = await src.areaAtPoint(lat, lon);
     } catch (_) {}
     if (seq != _tapSeq || !mounted) return true;
-    final rec = hit == null ? null : (townOnly ? hit.town : areaOf(hit));
+    final rec = hit == null ? null : (townOnly ? hit.town : (countyOnly ? hit.county : areaOf(hit)));
     if (hit == null || rec == null) {
       appLog.add(LogLevel.standard, 'INFO', 'map area at (${lat.toStringAsFixed(5)},${lon.toStringAsFixed(5)}) -> none');
       return false;
@@ -1879,9 +2107,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       geometry = await src.storedGeometry(rec);
     } catch (_) {}
     if (seq != _tapSeq || !mounted || nav.phase != NavPhase.browsing) return true;
+    // The county's own card, even where a town is also there (the pin card's county line).
+    if (countyOnly) hit = AreaHit(county: hit.county, state: hit.state);
     final towns = hit.town == null && rec.kind == 'county' ? src.townsIn(rec) : const <RegionRecord>[];
     final choice = areaChoice(hit, geometry: geometry, fmt: nav.fmt, towns: towns);
-    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline=${geometry == null ? 'not stored, none drawn' : 'from stored file, no network'}');
+    // One line per area opened: where its outline came from. A missing one is fetched below and its line is written when that ends.
+    if (geometry != null) appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=stored reason=from stored file, no network');
     HapticFeedback.selectionClick();
     _tappedBook = null;
     widget.userLayers?.clearRepeater();
@@ -1890,7 +2121,41 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The card and the outline are up at once; the town's summary (from the places data, which may be slow or not there) joins the card
     // when it is found.
     if (hit.town != null && rec.id == hit.town!.id) unawaited(_addTownSummary(hit, geometry, towns, lat, lon, seq, choice));
+    if (geometry == null) unawaited(_fetchOutline(src, rec, choice));
     return true;
+  }
+
+  /// The fetch of an outline that is not on the phone is the normal path (it starts as the card opens and is drawn as soon as it arrives);
+  /// this only bounds a hung request.
+  static const Duration _outlineFetchWait = Duration(seconds: 10);
+
+  /// The outline of an area opened without one: fetched (and kept for next time) and drawn when it arrives, if that card is still the one
+  /// shown. Offline, failed or late: the card stays as it is, with no outline. Writes the area's one log line.
+  Future<void> _fetchOutline(AreaSource src, RegionRecord rec, AreaChoice shown) async {
+    Map<String, dynamic>? g;
+    var reason = 'no fetch available';
+    if (src is AreaFetcher) {
+      try {
+        g = await (src as AreaFetcher).fetchGeometry(rec).timeout(_outlineFetchWait);
+        if (g == null) reason = 'not available (offline or not published)';
+      } on TimeoutException {
+        reason = 'timeout after ${_outlineFetchWait.inSeconds} s';
+      } catch (e) {
+        reason = 'fetch failed (${e.runtimeType})';
+      }
+    }
+    final c = _controller;
+    final same = mounted && _area != null && _area!.place.id == shown.place.id && nav.selected?.id == shown.place.id;
+    if (g == null || c == null || !same) {
+      appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=none reason=${g != null ? 'arrived after the selection changed' : reason}');
+      return;
+    }
+    appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} (${rec.kind}) outline source=fetched reason=kept for next time');
+    final cur = _area!;
+    final next = AreaChoice(place: cur.place, info: cur.info, region: cur.region, geometry: g);
+    _area = next;
+    await _pushArea(c);
+    unawaited(_fitAreaOutline(next));
   }
 
   Future<void> _addTownSummary(AreaHit hit, Map<String, dynamic>? geometry, List<RegionRecord> towns, double lat, double lon, int seq, AreaChoice shown) async {
@@ -1904,7 +2169,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     appLog.add(LogLevel.standard, 'INFO', 'map area ${rec.id} places record: ${pack == null ? 'none' : pack.id}');
     // Only if that card is still the one on screen (a later tap, or the X, was not waited for).
     if (pack == null || !mounted || seq != _tapSeq || _area != shown || nav.selected?.id != shown.place.id) return;
-    final next = areaChoice(hit, pack: pack, geometry: geometry, fmt: nav.fmt, towns: towns);
+    // The outline may have arrived (fetched) while the summary was being looked for: keep it.
+    final geo = (_area != null && _area!.place.id == shown.place.id ? _area!.geometry : null) ?? geometry;
+    final next = areaChoice(hit, pack: pack, geometry: geo, fmt: nav.fmt, towns: towns);
     _area = next;
     nav.select(next.place);
     // The card grew with its summary: fit again into what is left above it.
@@ -1976,6 +2243,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _onMapTap(math.Point<double> point, LatLng at) async {
+    _foldCredits();
     final m = _measure;
     if (m != null) {
       HapticFeedback.selectionClick();
@@ -1985,8 +2253,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
-    // A road event (a closure over a road's name) wins over what is under it.
-    if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point)) return;
+    // A road event (a closure over a road's name) wins over what is under it, except a town's name (see _tapRoadEvent).
+    if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point, at)) return;
     // A search result's pin opens that result, as its row in the list does.
     if (nav.searchOpen && await _tapResultPin(point)) return;
     // Another route's line chooses that route, as its card in the panel does.
@@ -1997,6 +2265,18 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         nav.selectRoute(i);
         return;
       }
+    }
+    // Empty map while choosing directions: back to the place card the directions came from (as the arrow on the top does). A
+    // repeater's or a notebook pin's tap was taken above; the open turn card has its own close.
+    if (nav.phase == NavPhase.previewing && _step == null) {
+      // The chosen route's own line, a label, a chip or a line under the tap is not empty map: nothing happens, as it did.
+      final own = nav.route;
+      if (own != null && metresToLine(own.points, at.latitude, at.longitude) <= kRouteTapReach * metresPerPoint(at.latitude, _zoom)) return;
+      if (await _tapMapFeature(point, at, probe: true)) return;
+      if (!mounted || nav.phase != NavPhase.previewing || _step != null) return;
+      HapticFeedback.selectionClick();
+      nav.cancelDirections();
+      return;
     }
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
@@ -2433,6 +2713,40 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final f = location.fix;
       if (mounted && f != null && maps.follow != FollowMode.free) _followTo(f);
     });
+    final seq = ++_swapSeq;
+    _swapTimer?.cancel();
+    _swapTimer = Timer(_swapSettle, () => unawaited(_afterSwap(seq)));
+  }
+
+  int _swapSeq = 0;
+  Timer? _swapTimer;
+
+  /// How long after a swap the live map is left to take its new size before it is checked (a browser resizes the map's canvas a moment
+  /// after the layout changes).
+  static const Duration _swapSettle = Duration(milliseconds: 700);
+
+  /// Whichever way the views were swapped, the live map carries the position and the route: both are written to it again, and when it
+  /// is the small one and the position shows outside its frame (the camera was left where it was when the map shrank, which a browser
+  /// shows as a corner with no dot and no route), the camera comes back to the position. One line in the log says what was seen.
+  Future<void> _afterSwap(int seq) async {
+    if (!mounted || seq != _swapSeq) return;
+    _navSig = null;
+    await _pushNav();
+    await _pushPosition();
+    final c = _controller, f = location.fix;
+    if (!_swapped || c == null || f == null || _mapSize.isEmpty || !_insetOn) return;
+    try {
+      final p = await c.toScreenLocation(LatLng(f.lat, f.lon));
+      if (!mounted || seq != _swapSeq || !_swapped) return;
+      final ratio = plat.isAndroid ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      final x = p.x / ratio, y = p.y / ratio;
+      final inside = x >= 0 && y >= 0 && x <= _mapSize.width && y <= _mapSize.height;
+      appLog.add(LogLevel.standard, 'INFO', 'map swap live=${_mapSize.width.round()}x${_mapSize.height.round()} position=(${x.round()},${y.round()}) inside=$inside');
+      if (inside) return;
+      _stopGlide();
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(f.lat, f.lon), zoom: math.max(_zoom, 16).toDouble(), bearing: maps.follow == FollowMode.headingUp ? (f.heading ?? _bearing) : 0)), duration: const Duration(milliseconds: 400));
+    } catch (_) {}
   }
 
   /// The padding of the full-screen picture: the route stays clear of the banner, the card and the buttons.
@@ -2583,7 +2897,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_ring == null && _step == null && !_peek && !_cardOpen && widget.onBackToJump == null) || !widget.active,
+      canPop: (_ring == null && _step == null && !_peek && !_cardOpen && nav.phase != NavPhase.previewing && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         // With the long-press ring open, Back closes the ring and nothing else.
@@ -2595,6 +2909,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           _endPeek();
         } else if (_step != null) {
           _closeSteps();
+        } else if (nav.phase == NavPhase.previewing) {
+          // Choosing directions: Back returns to the place card the directions came from (the Android back gesture and button, and
+          // the iOS edge swipe, all arrive here).
+          nav.cancelDirections();
         } else if (widget.onBackToJump != null) {
           // The card was opened by a jump from another tab (Show on map): Back returns there first, as it always did.
           widget.onBackToJump!.call();
@@ -2689,6 +3007,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (nav.phase == NavPhase.previewing && _fitPad != null && !_fitTouched && _step == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _refitIfCoverChanged());
     }
+    if (_pinShown != null && !_fitTouched && nav.phase == NavPhase.browsing && _cardId == _pinShown) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reslidePin());
+    }
     // Swapped, the live map (the same widget, so the same map) moves into the inset's frame; hidden with the inset, it is kept
     // but not drawn.
     final corner = swapped ? _insetRect?.deflate(2) : null;
@@ -2718,8 +3039,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
             child: LayoutBuilder(builder: (context, box) {
             _mapSize = box.biggest;
               return Listener(
+              behavior: HitTestBehavior.translucent,
               // A finger moving on the map while it follows the phone means the user wants to look elsewhere.
+              onPointerSignal: (_) => _foldCredits(),
               onPointerDown: (e) {
+                // A finger or a mouse button on the map (a tap, a pan, the start of a pinch): the credit line folds to the (i).
+                _foldCredits();
                 // The ring is drawn inside the Stack, so its centre is kept in the Stack's own coordinates (not the screen's, which a
                 // side rail shifts, and not this Listener's, which the inset frame offsets).
                 final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
@@ -2903,6 +3228,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         maxHeight: maxHeight,
         elevation: RouteElevationSummary(elevation: _elevation, fmt: nav.fmt, palette: _palette, onSpot: nav.showAlongRoute),
         onNextTurn: _openSteps,
+        // A swipe down on the panel: back to the place card, as the arrow on the top pill does.
+        onSwipeDown: nav.cancelDirections,
         // A route error that names missing data: the download for the route's area.
         onDownloadArea: regions == null ? null : () => getRouteArea(context, regions, nav.routeEnds),
         onAddOffroad: regions == null ? null : () => addRouteOffroad(context, regions, nav.routeEnds),
@@ -2917,7 +3244,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final VoidCallback? onOpen = entry != null
           ? () => open!(entry)
           : (book != null && openBook != null ? () => openBook(book) : null);
-      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null, facts: _pointFacts);
+      return PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about, maxHeight: maxHeight, onOpenEntry: onOpen, area: _area != null && _area!.place.id == sel.id ? _area!.info : null, facts: _pointFacts, county: _countyLineFor(sel), onOpenCounty: () => _openCountyOf(sel));
     }
     if (!searching && nav.phase == NavPhase.browsing) return _roadEventCard(maxHeight) ?? _repeaterCard();
     return null;
@@ -3019,7 +3346,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                         ),
                         // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                         const SizedBox(height: 6),
-                        Align(alignment: desk ? Alignment.centerRight : Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
+                        Align(alignment: desk ? Alignment.centerRight : Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits, folded: _creditsFolded)))),
                       ],
                     ),
                 ],
@@ -3085,7 +3412,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
                 ),
                 // The one readable credit, the whole width under the row (beside the corner picture it wrapped to two lines).
                 const SizedBox(height: 6),
-                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits)))),
+                Align(alignment: Alignment.centerLeft, child: KeyedSubtree(key: _creditsKey, child: MapOverlay(child: AttributionChip(lines: maps.attributions, onTap: _showCredits, folded: _creditsFolded)))),
                 const SizedBox(height: 8),
               ],
               // (From kSideCardWidth wide the panels sit in a column on the left: see _sideLayers.)

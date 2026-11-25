@@ -144,17 +144,18 @@ String _counter(WidgetTester tester) => tester.widget<Text>(find.byKey(const Val
 /// From the whole route (the route panel): its next arrow shows the first turn.
 Future<void> _open(WidgetTester tester) async {
   expect(find.byKey(const ValueKey('step-card')), findsNothing);
-  await tester.tap(find.byKey(const ValueKey('step-next')));
+  await tester.tap(find.byKey(const ValueKey('route-turns')));
   await _settle(tester);
   expect(find.byKey(const ValueKey('step-card')), findsOneWidget);
 }
 
-/// The whole route on the route panel: the arrows beside Start, back off and next on, no counter and no close.
+/// The whole route on the route panel: the next arrow beside Start (no back arrow), no counter and no close.
 void _expectWholeRoute(WidgetTester tester) {
   expect(find.byKey(const ValueKey('step-card')), findsNothing);
   expect(find.byType(RoutePanel), findsOneWidget);
-  expect(_enabled(tester, 'step-back'), isFalse);
-  expect(_enabled(tester, 'step-next'), isTrue);
+  expect(find.byKey(const ValueKey('step-back')), findsNothing, reason: 'the panel has no arrows: "Turns" opens the turn list');
+  expect(find.byKey(const ValueKey('step-next')), findsNothing);
+  expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('route-turns'))).onPressed, isNotNull);
   expect(find.byKey(const ValueKey('step-counter')), findsNothing);
   expect(find.byKey(const ValueKey('step-close')), findsNothing);
 }
@@ -179,10 +180,11 @@ void _expectCameraOn(WidgetTester tester, CameraController camera, MapRoute rout
 void main() {
   testWidgets('the step card goes forward and back through the turns, one at a time, and the map follows each turn', (tester) async {
     await _withPreview(tester, route: (n, mode) => stepRouteJson(id: 's$n', turns: 5, lanes: true), body: (nav, camera, backend) async {
-      // The whole route first: back is off, next is on, no counter and no close.
+      // The whole route first: "Turns" (no arrows), no counter and no close.
       _expectWholeRoute(tester);
-      expect(find.byTooltip('Previous'), findsOneWidget);
-      expect(find.byTooltip('Next'), findsOneWidget);
+      expect(find.byTooltip('Previous'), findsNothing);
+      expect(find.byTooltip('Next'), findsNothing, reason: 'the panel has "Turns", not an arrow');
+      expect(find.text('Turns'), findsOneWidget);
       await _open(tester);
       final r = nav.route!;
       expect(_counter(tester), stepCounterText(1, 5));
