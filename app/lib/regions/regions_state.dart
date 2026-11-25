@@ -1996,6 +1996,19 @@ class RegionsState extends ChangeNotifier {
     await refresh();
   }
 
+  /// What the region search looks through (see [RegionCatalogue.searchRows]).
+  /// The towns and counties are in each country's own list, which is read when its shard is: the phone reads the one at its position
+  /// (the map, the setup), a browser often has no position and nothing opened yet. So the countries of the regions kept here and of the
+  /// position, when there is one, are read too.
+  Future<List<RegionHit>> searchRows() async {
+    final here = position?.call();
+    if (here != null) await catalogue.readShardAt(here.lat, here.lon);
+    return catalogue.searchRows(countries: {
+      for (final l in local)
+        if (l.kind != kDrawnRegionKind && l.kind != kAreaRegionKind) l.id.split('-').first,
+    });
+  }
+
   bool _backfilling = false;
 
   /// The town, county and state outlines of every kept region that has not had them all kept once (no marker): fetched, only the ones

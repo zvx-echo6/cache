@@ -778,6 +778,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.roadEvents?.removeListener(_onRoadEvents);
     _elevation.removeListener(_onElevation);
     if (widget.elevation == null) _elevation.dispose();
+    _swapTimer?.cancel();
     _overviewPosition.dispose();
     _insetPicture?.image.dispose();
     _fullPicture?.image.dispose();
@@ -2712,6 +2713,40 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final f = location.fix;
       if (mounted && f != null && maps.follow != FollowMode.free) _followTo(f);
     });
+    final seq = ++_swapSeq;
+    _swapTimer?.cancel();
+    _swapTimer = Timer(_swapSettle, () => unawaited(_afterSwap(seq)));
+  }
+
+  int _swapSeq = 0;
+  Timer? _swapTimer;
+
+  /// How long after a swap the live map is left to take its new size before it is checked (a browser resizes the map's canvas a moment
+  /// after the layout changes).
+  static const Duration _swapSettle = Duration(milliseconds: 700);
+
+  /// Whichever way the views were swapped, the live map carries the position and the route: both are written to it again, and when it
+  /// is the small one and the position shows outside its frame (the camera was left where it was when the map shrank, which a browser
+  /// shows as a corner with no dot and no route), the camera comes back to the position. One line in the log says what was seen.
+  Future<void> _afterSwap(int seq) async {
+    if (!mounted || seq != _swapSeq) return;
+    _navSig = null;
+    await _pushNav();
+    await _pushPosition();
+    final c = _controller, f = location.fix;
+    if (!_swapped || c == null || f == null || _mapSize.isEmpty || !_insetOn) return;
+    try {
+      final p = await c.toScreenLocation(LatLng(f.lat, f.lon));
+      if (!mounted || seq != _swapSeq || !_swapped) return;
+      final ratio = plat.isAndroid ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      final x = p.x / ratio, y = p.y / ratio;
+      final inside = x >= 0 && y >= 0 && x <= _mapSize.width && y <= _mapSize.height;
+      appLog.add(LogLevel.standard, 'INFO', 'map swap live=${_mapSize.width.round()}x${_mapSize.height.round()} position=(${x.round()},${y.round()}) inside=$inside');
+      if (inside) return;
+      _stopGlide();
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(f.lat, f.lon), zoom: math.max(_zoom, 16).toDouble(), bearing: maps.follow == FollowMode.headingUp ? (f.heading ?? _bearing) : 0)), duration: const Duration(milliseconds: 400));
+    } catch (_) {}
   }
 
   /// The padding of the full-screen picture: the route stays clear of the banner, the card and the buttons.

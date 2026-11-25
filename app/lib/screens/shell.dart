@@ -500,7 +500,7 @@ class _ShellState extends State<Shell> {
     },
     choosePlace: widget.hub.regions == null
         ? null
-        : (c) => Navigator.of(c).push<DiscoverPlace>(MaterialPageRoute<DiscoverPlace>(builder: (_) => PlacePage(catalogue: widget.hub.regions!.catalogue))),
+        : (c) => Navigator.of(c).push<DiscoverPlace>(MaterialPageRoute<DiscoverPlace>(builder: (_) => PlacePage(catalogue: widget.hub.regions!.catalogue, position: widget.location.fix == null ? null : (lat: widget.location.fix!.lat, lon: widget.location.fix!.lon)))),
   );
 
   late final AppUpdates? _updates = plat.isIOS || plat.isAndroid

@@ -10,9 +10,15 @@ import 'kit.dart';
 /// "Choose a place" in the wizard: the region list searched by name (a town, a county, a state); the place is the middle of the
 /// region chosen.
 class PlacePage extends StatefulWidget {
-  const PlacePage({super.key, required this.catalogue});
+  const PlacePage({super.key, required this.catalogue, this.position, this.localeCountry});
 
   final RegionCatalogue catalogue;
+
+  /// Where the person is, when that is known: the country there is searched.
+  final ({double lat, double lon})? position;
+
+  /// The device's country ("US", from its locale), for a search that names no country and has no position; null when there is none.
+  final String? localeCountry;
 
   @override
   State<PlacePage> createState() => _PlacePageState();
@@ -48,10 +54,17 @@ class _PlacePageState extends State<PlacePage> {
 
   void _changed(String q) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 200), () {
-      if (mounted) setState(() => _found = searchRegions(q, _all, limit: 30));
+    _debounce = Timer(const Duration(milliseconds: 200), () async {
+      List<RegionHit> rows = _all;
+      try {
+        rows = await widget.catalogue.searchRowsFor(q, position: widget.position, localeCountry: widget.localeCountry ?? _deviceCountry());
+      } catch (_) {}
+      if (mounted && q == _query.text) setState(() => _found = searchRegions(q, rows, limit: 30, includeInside: true));
     });
   }
+
+  /// The country of the device's locale ("US" from en_US; a browser says its language this way); null when the locale has none.
+  String? _deviceCountry() => WidgetsBinding.instance.platformDispatcher.locale.countryCode;
 
   Future<void> _pick(RegionHit h) async {
     setState(() => _busy = true);

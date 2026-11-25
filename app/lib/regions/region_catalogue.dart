@@ -389,6 +389,54 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     return list;
   }
 
+  /// Every region the search looks through: the global list (countries, states, the larger places) and the full list of each country
+  /// whose shard is loaded and of each of [countries] (country ids, "us"): the towns and counties are only in those. A list that
+  /// cannot be read is left out.
+  Future<List<RegionHit>> searchRows({Iterable<String> countries = const []}) async {
+    final rows = <RegionHit>[...await globalSearch()];
+    final ids = <String>{for (final s in loadedShards) s.id, ...countries};
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
+  /// The rows the setup wizard's place search looks through for [query]: the global list, the lists already read, and a few more read
+  /// now, at most [maxLists] (each is opened once and kept): the country at [position]; the country or state of the global list that a
+  /// word of the query names ("Hilo Hawaii": Hawaii, in the US list); and, when neither gives one, the country of the device's
+  /// [localeCountry] ("US"). A list that cannot be read is left out.
+  Future<List<RegionHit>> searchRowsFor(String query, {({double lat, double lon})? position, String? localeCountry, int maxLists = 3}) async {
+    final global = await globalSearch();
+    final rows = <RegionHit>[...global];
+    final ids = <String>{for (final s in loadedShards) s.id};
+    final fresh = <String>[];
+    if (position != null) {
+      try {
+        await readShardAt(position.lat, position.lon);
+      } catch (_) {}
+      ids.addAll([for (final s in loadedShards) s.id]);
+    }
+    final named = global.where((h) => const {'country', 'dependency', 'region', 'sub_state', 'multi_state'}.contains(h.kind)).toList();
+    for (final w in _words(query)) {
+      if (w.length < 3) continue;
+      for (final h in searchRegions(w, named, limit: 2)) {
+        if (!ids.contains(h.shardId) && !fresh.contains(h.shardId)) fresh.add(h.shardId);
+      }
+    }
+    if (fresh.isEmpty && position == null && localeCountry != null && localeCountry.isNotEmpty) fresh.add(localeCountry.toLowerCase());
+    for (final id in fresh.take(maxLists)) {
+      ids.add(id);
+    }
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
   /// One country's full search list (every region it holds).
   Future<List<RegionHit>> shardSearch(String id) async {
     final known = _search[id];
@@ -733,7 +781,7 @@ Future<T> _off<T>(T Function() work) => plat.isWeb ? Future<T>.sync(work) : Isol
 
 /// Finds regions by name in [rows]: every word of the query must start a word of the name (or of one of its other names).
 /// Exact names first, then names that start with the query, then the rest; larger places first within each.
-List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40}) {
+List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40, bool includeInside = false}) {
   final words = _words(query);
   if (words.isEmpty) return const [];
   final seen = <String>{};
@@ -749,6 +797,14 @@ List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit
       final joined = w.join(' ');
       final s = (joined == q ? 0 : (joined.startsWith(q) ? 2 : 4)) + (i == 0 ? 0 : 1);
       if (best < 0 || s < best) best = s;
+    }
+    // [includeInside]: a word may also be one of the place it is in ("Hilo Hawaii": Hilo, in Hawaii County, Hawaii), as long as one
+    // word is in the name itself.
+    if (best < 0 && includeInside && r.inside.isNotEmpty) {
+      final own = {for (final n in [r.name, ...r.alt]) ..._words(n)};
+      final all = {...own, ..._words(r.inside)};
+      bool starts(Set<String> set, String x) => set.any((y) => y.startsWith(x));
+      if (words.every((x) => starts(all, x)) && words.any((x) => starts(own, x))) best = 6;
     }
     if (best < 0) continue;
     seen.add(r.id);
