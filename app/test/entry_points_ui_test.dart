@@ -1,5 +1,5 @@
 // Step 4's pages: Ways to connect, an entry point's page and the add form, the Remove confirm, and how Sharing and sync and a device's page
-// say a device is reached (through an entry point, over radio) and what waits for a faster connection.
+// say a device is reached (through an entry point, on a slow link) and what waits for a faster connection.
 
 import 'dart:io';
 
@@ -39,11 +39,12 @@ void main() {
   String field(WidgetTester tester, String key) => tester.widget<TextField>(find.byKey(ValueKey(key))).controller!.text;
 
   group('Ways to connect', () {
-    testWidgets('no entry points yet: the empty card, Wi-Fi and Bluetooth, and the add button', (tester) async {
+    testWidgets('no entry points yet: the empty card, no Wi-Fi or Bluetooth rows, and the add button', (tester) async {
       await open(tester, FakeSync(), (s) => WaysToConnectPage(sharing: s));
       expect(find.text("Cache uses every way that's on to reach your other devices."), findsOneWidget);
-      expect(find.text('Wi-Fi and local network'), findsOneWidget);
-      expect(find.text('Bluetooth'), findsOneWidget);
+      expect(find.text('Wi-Fi and local network'), findsNothing, reason: 'no Wi-Fi or Bluetooth switch rows until there are switches that do something');
+      expect(find.text('Bluetooth'), findsNothing);
+      expect(find.byType(Switch), findsNothing);
       expect(find.text('Over the internet'.toUpperCase()), findsOneWidget);
       expect(find.text("Add Reticulum entry points to reach your devices from anywhere. Every one that's on is used at the same time."), findsOneWidget);
       expect(find.text('No entry points yet'), findsOneWidget);
@@ -69,7 +70,8 @@ void main() {
       expect(find.textContaining('Not answering'), findsOneWidget);
       expect(find.textContaining('Off'), findsOneWidget);
       expect(find.textContaining('Connected, nothing heard yet'), findsOneWidget);
-      expect(find.textContaining("Network name or passphrase doesn't match"), findsOneWidget);
+      expect(find.textContaining(kMismatchInferred), findsOneWidget);
+      expect(find.textContaining(kMismatchExact), findsNothing, reason: 'the exact wording is kept for later, not shown');
       expect(find.textContaining('Connecting…'), findsOneWidget);
     });
 
@@ -134,7 +136,7 @@ void main() {
     testWidgets('not answering, mismatch, nothing heard yet and off each say so', (tester) async {
       for (final (state, title, sub) in [
         ('not_answering', 'Not answering', 'Checked just now'),
-        ('mismatch', "Network name or passphrase doesn't match", 'Check both with whoever runs it, then Save. Checked just now.'),
+        ('mismatch', 'Probably the wrong network name or passphrase', 'Check both with whoever runs it, then Save. Checked just now.'),
         ('nothing_heard', 'Connected, nothing heard yet', 'Checked just now'),
         ('off', 'Off', null),
       ]) {
@@ -314,9 +316,9 @@ void main() {
         ..addEntry('c', '192.168.1.20', 4242, on: false);
       await open(tester, sync, (s) => SharingPage(sharing: s));
       expect(find.text('Test phone'), findsOneWidget);
-      expect(find.textContaining('Wi-Fi, Bluetooth and 2 entry points · 10.0 GB free'), findsOneWidget);
+      expect(find.textContaining('Wi-Fi and 2 entry points · 10.0 GB free'), findsOneWidget);
       expect(find.text('WAYS TO CONNECT'), findsOneWidget);
-      expect(find.text('Wi-Fi and local network, Bluetooth, 2 entry points'), findsOneWidget);
+      expect(find.text('Wi-Fi and local network, 2 entry points'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('ways-to-connect')));
       await tester.pumpAndSettle();
       expect(find.text('Over the internet'.toUpperCase()), findsOneWidget);
@@ -324,8 +326,8 @@ void main() {
 
     testWidgets('with none, the lines leave the count out', (tester) async {
       await open(tester, FakeSync(), (s) => SharingPage(sharing: s));
-      expect(find.textContaining('Wi-Fi and Bluetooth · 10.0 GB free'), findsOneWidget);
-      expect(find.text('Wi-Fi and local network, Bluetooth'), findsOneWidget);
+      expect(find.textContaining('Wi-Fi · 10.0 GB free'), findsOneWidget);
+      expect(find.text('Wi-Fi and local network'), findsOneWidget);
     });
 
     testWidgets('a device through an entry point says Through <host>', (tester) async {
@@ -337,10 +339,11 @@ void main() {
       expect(find.text('Through rt.example.net · Last seen just now'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('peer-p1')));
       await tester.pumpAndSettle();
-      expect(find.text('Through rt.example.net · Last seen just now'), findsOneWidget);
+      expect(find.text('Through rt.example.net'), findsOneWidget);
+      expect(find.text('Last seen just now'), findsOneWidget);
     });
 
-    testWidgets('each class of link: Wi-Fi, Bluetooth, radio', (tester) async {
+    testWidgets('each class of link: Wi-Fi, a slow link, and no wording the engine cannot know', (tester) async {
       final sync = FakeSync()
         ..peers.addAll([
           {'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': now, 'via': 'wifi', 'speed': 'fast', 'live': true, 'error': null},
@@ -349,34 +352,68 @@ void main() {
         ]);
       await open(tester, sync, (s) => SharingPage(sharing: s));
       expect(find.text('Same Wi-Fi · Last seen just now'), findsOneWidget);
-      expect(find.text('Bluetooth · Last seen 2 min ago'), findsOneWidget);
-      expect(find.text('Radio, small items only · Last seen 5 min ago'), findsOneWidget);
+      expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
+      expect(find.text('Connected, slow link: small items only · Last seen 5 min ago'), findsOneWidget);
+      expect(find.textContaining('Bluetooth'), findsNothing);
+      expect(find.textContaining('adio'), findsNothing);
     });
 
-    testWidgets('a device on a slow link: its page says how, and lists what waits for a faster connection', (tester) async {
+    testWidgets('a device on a slow link: the page in mockup 5\'s order, with what waits grouped by kind', (tester) async {
+      final w = {'peer': 'p3', 'peer_name': "Partner's phone", 'reason': 'Waiting for a faster connection'};
       final sync = FakeSync()
         ..addEntry('a', 'rt.example.net', 4242)
-        ..peers.add({'id': 'p3', 'name': "Partner's phone", 'linked': 1, 'last_seen': now - 300000, 'via': 'reticulum', 'speed': 'slow', 'live': true, 'error': null})
+        ..peers.add({'id': 'p3', 'name': "Partner's phone", 'linked': 1, 'last_seen': now - 300000, 'via': 'reticulum', 'speed': 'slow', 'live': true, 'error': null, 'free_bytes': 48 << 30})
         ..waiting.addAll([
-          {'peer': 'p3', 'peer_name': "Partner's phone", 'share_id': 'regions', 'share': 'Region map', 'path': '', 'what': 'list', 'size': 0, 'reason': 'Waiting for a faster connection'},
-          {'peer': 'p3', 'peer_name': "Partner's phone", 'share_id': 'notes', 'share': 'Notebooks', 'path': 'photos/IMG_0412.jpg', 'what': 'file', 'size': 4400000, 'reason': 'Waiting for a faster connection'},
-          {'peer': 'other', 'peer_name': 'Elsewhere', 'share_id': 'notes', 'share': 'Notebooks', 'path': 'x.jpg', 'what': 'file', 'size': 1, 'reason': 'Waiting for a faster connection'},
+          {...w, 'share_id': 'maps', 'share': 'Maps', 'path': 'store/streets.sqlite', 'what': 'file', 'size': 1288490189},
+          {...w, 'share_id': 'notebooks', 'share': 'Notebooks', 'path': 'Journal/a.jpg', 'what': 'file', 'size': 4400000},
+          {...w, 'share_id': 'notebooks', 'share': 'Notebooks', 'path': 'Journal/b.png', 'what': 'file', 'size': 4400000},
+          {...w, 'share_id': 'models', 'share': 'Models', 'path': 'gemma.gguf', 'what': 'file', 'size': 3 << 30},
+          {...w, 'share_id': 'library', 'share': 'Library', 'path': '', 'what': 'list', 'size': 0},
+          {...w, 'peer': 'other', 'share_id': 'notebooks', 'share': 'Notebooks', 'path': 'x.jpg', 'what': 'file', 'size': 1},
         ]);
       await open(tester, sync, (s) => SharingDevicePage(sharing: s, peer: 'p3'));
-      expect(find.text('Connected over radio'), findsOneWidget);
-      expect(find.text('Slow: notes, places, positions and check-ins only'), findsOneWidget);
+      expect(find.text('STATUS'), findsOneWidget);
+      final card = find.byKey(const ValueKey('device-status'));
+      expect(find.descendant(of: card, matching: find.text('Connected, slow link: small items only')), findsOneWidget);
+      expect(find.descendant(of: card, matching: find.text('Last seen 5 min ago')), findsOneWidget);
+      expect(find.textContaining('Also reachable'), findsNothing);
+      expect(find.textContaining('adio'), findsNothing);
       expect(find.text('WAITING FOR A FASTER CONNECTION'), findsOneWidget);
       expect(find.text('Region map'), findsOneWidget);
-      expect(find.text('IMG_0412.jpg'), findsOneWidget);
-      expect(find.text('4.2 MB'), findsOneWidget);
-      expect(find.text('x.jpg'), findsNothing, reason: "another device's waiting items are not listed here");
-      expect(find.text('These go the next time the devices are on the same Wi-Fi or in Bluetooth range, or both use an entry point that allows files this big.'), findsOneWidget);
+      expect(find.text('1.2 GB'), findsOneWidget);
+      expect(find.text('2 photos'), findsOneWidget);
+      expect(find.text('8.4 MB'), findsOneWidget);
+      expect(find.text('Models'), findsOneWidget, reason: 'a kind the mockup does not name shows its share name');
+      expect(find.text('3.0 GB'), findsOneWidget);
+      expect(find.text('Library'), findsOneWidget);
+      expect(find.text('1 photo'), findsNothing, reason: "another device's items are not listed here");
+      expect(find.text('These go the next time the devices are on the same Wi-Fi, or both use an entry point that allows files this big.'), findsOneWidget);
+      // The rest of the page: Activity and Rename with chevrons, Sync now filled, Unlink outlined.
+      expect(find.byKey(const ValueKey('device-activity')), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-rename')), findsOneWidget);
+      expect(find.byType(FilledButton), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('device-sync')), matching: find.text('Sync now')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('device-unlink')), matching: find.text('Unlink')), findsOneWidget);
+      expect(find.byType(OutlinedButton), findsOneWidget);
+    });
+
+    test('waiting items are grouped by kind', () {
+      Map<String, dynamic> w(String share, String path, int size, {String what = 'file', String? name}) => {'share_id': share, 'share': name ?? share, 'path': path, 'what': what, 'size': size};
+      final g = waitingGroups([
+        w('maps', 'a.sqlite', 100),
+        w('regions', 'b', 50),
+        w('notebooks', 'p.JPG', 10),
+        w('notebooks', 'note.txt', 5, name: 'Notebooks'),
+        w('videos', 'v', 7, name: 'Videos'),
+      ]);
+      expect([for (final x in g) (x.label, x.bytes)], [('Region map', 150), ('1 photo', 10), ('Notebooks', 5), ('Videos', 7)]);
     });
 
     testWidgets('a device with nothing waiting has no waiting list', (tester) async {
       final sync = FakeSync()..peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': now, 'via': 'wifi', 'speed': 'fast', 'live': true, 'error': null});
       await open(tester, sync, (s) => SharingDevicePage(sharing: s, peer: 'p1'));
-      expect(find.text('Same Wi-Fi · Last seen just now'), findsOneWidget);
+      expect(find.text('Same Wi-Fi'), findsOneWidget);
+      expect(find.text('Last seen just now'), findsOneWidget);
       expect(find.byKey(const ValueKey('device-waiting')), findsNothing);
     });
   });

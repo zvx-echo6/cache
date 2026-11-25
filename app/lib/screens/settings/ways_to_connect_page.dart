@@ -5,20 +5,27 @@ import '../../theme.dart';
 import 'entry_point_page.dart';
 import 'widgets.dart';
 
-/// "Wi-Fi and local network, Bluetooth, 2 entry points": what the Ways to connect row on Sharing and sync says. The count is of the
-/// entry points that are on; with none, it is left out.
+/// "Wi-Fi and local network, 2 entry points": what the Ways to connect row on Sharing and sync says. The count is of the entry points
+/// that are on; with none, it is left out. (Only what the engine does today: no Bluetooth until there is a Bluetooth link to say.)
 String waysSummary(int entriesOn) => switch (entriesOn) {
-  0 => 'Wi-Fi and local network, Bluetooth',
-  1 => 'Wi-Fi and local network, Bluetooth, 1 entry point',
-  _ => 'Wi-Fi and local network, Bluetooth, $entriesOn entry points',
+  0 => 'Wi-Fi and local network',
+  1 => 'Wi-Fi and local network, 1 entry point',
+  _ => 'Wi-Fi and local network, $entriesOn entry points',
 };
 
-/// "Wi-Fi and Bluetooth", "Wi-Fi, Bluetooth and 2 entry points": the first part of This device's line on Sharing and sync.
+/// "Wi-Fi", "Wi-Fi and 2 entry points": the first part of This device's line on Sharing and sync.
 String thisDeviceWays(int entriesOn) => switch (entriesOn) {
-  0 => 'Wi-Fi and Bluetooth',
-  1 => 'Wi-Fi, Bluetooth and 1 entry point',
-  _ => 'Wi-Fi, Bluetooth and $entriesOn entry points',
+  0 => 'Wi-Fi',
+  1 => 'Wi-Fi and 1 entry point',
+  _ => 'Wi-Fi and $entriesOn entry points',
 };
+
+/// What an entry point's status says when Cache has only inferred that the network name or passphrase is wrong (it can't see the
+/// rejection itself yet).
+const String kMismatchInferred = 'Probably the wrong network name or passphrase';
+
+/// The exact wording for when the engine can tell for sure. Kept for later; not shown now.
+const String kMismatchExact = "Network name or passphrase doesn't match";
 
 /// "Checked just now", "Checked 2 min ago".
 String checkedText(int? ms) {
@@ -35,23 +42,19 @@ Part entryStateWord(EntryPoint e) => switch (e.state) {
   'off' => const Part('Off'),
   'connected' => const Part('Connected', Tone.ok),
   'not_answering' => const Part('Not answering', Tone.danger, Icons.warning_amber_rounded),
-  'mismatch' => const Part("Network name or passphrase doesn't match", Tone.danger, Icons.warning_amber_rounded),
+  'mismatch' => const Part(kMismatchInferred, Tone.danger, Icons.warning_amber_rounded),
   'nothing_heard' => const Part('Connected, nothing heard yet'),
   'not_running' => const Part('Not running'),
   _ => const Part('Connecting…'),
 };
 
-/// Settings > Sharing and sync > Ways to connect: Wi-Fi and Bluetooth, and under "Over the internet" the entry points the person
-/// added, each opening its page with its own switch beside it, then "Add an entry point".
-///
-/// The Wi-Fi and Bluetooth switches show the ways as on; nothing behind them can be turned off yet ([onWifi] and [onBluetooth] are
-/// where that goes).
+/// Settings > Sharing and sync > Ways to connect: the entry points under "Over the internet" the ones the person
+/// added, each opening its page with its own switch beside it, then "Add an entry point". The Wi-Fi and Bluetooth rows of the design are
+/// left out until there are switches that do something.
 class WaysToConnectPage extends StatefulWidget {
-  const WaysToConnectPage({super.key, required this.sharing, this.wifiOn = true, this.bluetoothOn = true, this.onWifi, this.onBluetooth});
+  const WaysToConnectPage({super.key, required this.sharing});
 
   final SharingState sharing;
-  final bool wifiOn, bluetoothOn;
-  final ValueChanged<bool>? onWifi, onBluetooth;
 
   @override
   State<WaysToConnectPage> createState() => _WaysToConnectPageState();
@@ -88,28 +91,6 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
           title: 'Ways to connect',
           children: [
             const NoteText("Cache uses every way that's on to reach your other devices."),
-            SettingsGroup(
-              rows: [
-                SettingsRow(
-                  key: const ValueKey('way-wifi'),
-                  icon: Icons.wifi,
-                  title: 'Wi-Fi and local network',
-                  status: const [Part('Finds your devices on the same network or a phone hotspot. No internet needed.')],
-                  statusLines: null,
-                  trailing: Switch(value: widget.wifiOn, onChanged: (v) => widget.onWifi?.call(v)),
-                  onTap: () => widget.onWifi?.call(!widget.wifiOn),
-                ),
-                SettingsRow(
-                  key: const ValueKey('way-bluetooth'),
-                  icon: Icons.bluetooth,
-                  title: 'Bluetooth',
-                  status: const [Part('Phone to phone when there is no network. Big files wait for a faster connection.')],
-                  statusLines: null,
-                  trailing: Switch(value: widget.bluetoothOn, onChanged: (v) => widget.onBluetooth?.call(v)),
-                  onTap: () => widget.onBluetooth?.call(!widget.bluetoothOn),
-                ),
-              ],
-            ),
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

@@ -68,7 +68,8 @@ void main() {
     expect(find.text('Not reachable · Never connected since linking'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Not reachable · Never connected since linking'), findsOneWidget);
+    expect(find.text('Not reachable'), findsOneWidget, reason: 'the page says it in two lines: the state, then when');
+    expect(find.text('Never connected since linking'), findsOneWidget);
     expect(find.text("This device hasn't connected since it was linked."), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('device-unlink-never')), matching: find.text('Unlink')), findsOneWidget, reason: 'the button says Unlink');
     await tester.ensureVisible(find.byKey(const ValueKey('device-unlink-never')));
@@ -76,7 +77,7 @@ void main() {
     await tester.pumpAndSettle();
     // One question first: Cancel leaves it linked.
     expect(find.text('Unlink Android device?'), findsOneWidget);
-    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNWidgets(2), reason: 'in the question and under the Unlink row');
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget, reason: 'in the question; the Unlink button has no line under it');
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(sync.argsOf['unlink'], isNull, reason: 'Cancel does nothing');
@@ -114,7 +115,8 @@ void main() {
     expect(find.text('Connected through a relay · Last seen 5 min ago'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected through a relay · Last seen 5 min ago'), findsOneWidget);
+    expect(find.text('Connected through a relay'), findsOneWidget);
+    expect(find.text('Last seen 5 min ago'), findsOneWidget);
     expect(find.byKey(const ValueKey('device-unlink-never')), findsNothing);
     s.dispose();
     await tester.pumpWidget(const SizedBox());

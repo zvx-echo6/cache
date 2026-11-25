@@ -329,7 +329,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
+    expect(find.text('Connected directly'), findsOneWidget);
+    expect(find.text('Last seen 2 min ago'), findsOneWidget);
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));
@@ -346,7 +347,7 @@ void main() {
     expect(r.calls('set_peer_name').last, {'peer': 'p1', 'name': 'Office'});
     expect(find.text('Office'), findsOneWidget, reason: 'the page takes the new name');
 
-    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget);
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
     await tester.pumpAndSettle();
     // One question first; Cancel leaves the device linked.
