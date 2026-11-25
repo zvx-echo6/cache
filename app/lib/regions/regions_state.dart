@@ -2111,8 +2111,18 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Set by [dispose]: work that was still under way (a refresh, a download step) finishes quietly, with no notice to listeners.
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _poll?.cancel();
     _askRenew?.cancel();
     _net?.cancel();
