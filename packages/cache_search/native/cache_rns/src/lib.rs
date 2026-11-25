@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use iroh::{PublicKey, SecretKey, Signature};
+use personal_rns::engine::LinkClosedReason;
 use personal_rns::identity::IdentityHash;
 use personal_rns::prelude::*;
 use personal_rns::wifi_auto::AutoWifiStatus;
@@ -220,6 +221,9 @@ pub trait Handler: Send + Sync + 'static {
     /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
     /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
     fn reachable(&self, _peer: PublicKey) {}
+    /// A link to or from a linked device closed: why (`reason`), how long it had been open, and the round trip time measured
+    /// when it opened (when known). Called from the node's event task: do not block. Prns's event carries nothing more.
+    fn link_closed(&self, _peer: PublicKey, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
     /// Whether the file store may be served yet (false while it is being moved to a new format). While false, a window request
     /// is answered "not ready" (a temporary failure for the asker), never "missing". Called per request; do not block.
     fn blobs_ready(&self) -> bool {
@@ -273,6 +277,8 @@ struct State {
     /// Linked devices a link to which closed, or a request to which failed, since their announce was last heard: the next
     /// announce says they are reachable again ([`Handler::reachable`]).
     down: HashSet<[u8; 32]>,
+    /// Link -> when it was seen first and the round trip time it opened with (for the line that says why it closed).
+    link_info: HashMap<LinkId, (std::time::Instant, Option<u64>)>,
 }
 
 enum Ev {
@@ -286,6 +292,11 @@ enum Ev {
     },
     Closed {
         link: LinkId,
+        reason: &'static str,
+    },
+    Established {
+        link: LinkId,
+        rtt_ms: u64,
     },
     Request {
         token: RespondToken,
@@ -481,9 +492,19 @@ impl RnsNode {
                                     link: link_id,
                                     identity,
                                 },
-                                PrnsEvent::Diagnostic(Diagnostic::LinkClosed {
-                                    link_id, ..
-                                }) => Ev::Closed { link: link_id },
+                                PrnsEvent::Diagnostic(Diagnostic::LinkClosed { link_id, reason }) => Ev::Closed {
+                                    link: link_id,
+                                    reason: match reason {
+                                        LinkClosedReason::Timeout => "timeout (nothing heard on it for too long)",
+                                        LinkClosedReason::PeerClosed => "closed by the other device",
+                                        LinkClosedReason::LocallyClosed => "closed on this device",
+                                        _ => "closed (bad round trip message)",
+                                    },
+                                },
+                                PrnsEvent::Diagnostic(Diagnostic::LinkEstablished(e)) => Ev::Established {
+                                    link: e.link_id,
+                                    rtt_ms: e.rtt_millis,
+                                },
                                 PrnsEvent::Message(Message::Request {
                                     destination: request_destination,
                                     link_id,
@@ -691,9 +712,26 @@ impl RnsNode {
                         }
                         Ev::PairAnnounce { destination, local, hops } => nearby.on_announce(destination, local, hops),
                         Ev::Pair { link, data } => nearby.on_message(link, &data),
-                        Ev::Closed { link } => {
+                        Ev::Established { link, rtt_ms } => {
+                            state
+                                .lock()
+                                .unwrap()
+                                .link_info
+                                .entry(link)
+                                .and_modify(|i| i.1 = Some(rtt_ms))
+                                .or_insert((std::time::Instant::now(), Some(rtt_ms)));
+                        }
+                        Ev::Closed { link, reason } => {
                             nearby.on_link_closed(link);
                             let mut s = state.lock().unwrap();
+                            // Which linked device it was (an unlinked or unknown one is not logged), and how long it was open.
+                            let who = s
+                                .link_to
+                                .iter()
+                                .find(|(_, l)| **l == link)
+                                .map(|(k, _)| *k)
+                                .or_else(|| s.verified.get(&link).map(|(k, _)| *k));
+                            let info = s.link_info.remove(&link);
                             s.identity_on_link.remove(&link);
                             if let Some((d, _)) = s.verified.remove(&link) {
                                 s.down.insert(d);
@@ -701,6 +739,10 @@ impl RnsNode {
                             let gone: Vec<[u8; 32]> = s.link_to.iter().filter(|(_, l)| **l == link).map(|(k, _)| *k).collect();
                             s.down.extend(gone);
                             s.link_to.retain(|_, l| *l != link);
+                            drop(s);
+                            if let Some(k) = who.and_then(|k| PublicKey::from_bytes(&k).ok()) {
+                                handler.link_closed(k, reason, info.map(|(t, _)| t.elapsed().as_secs()), info.and_then(|(_, r)| r));
+                            }
                         }
                         Ev::Request {
                             token,
@@ -1018,11 +1060,12 @@ impl RnsNode {
             let _ = self.handle.close_link(link);
             return Err(e);
         }
-        self.state
-            .lock()
-            .unwrap()
-            .link_to
-            .insert(*peer.as_bytes(), link);
+        {
+            let mut s = self.state.lock().unwrap();
+            s.link_to.insert(*peer.as_bytes(), link);
+            // The other end of a link is told its round trip time when it is up; this end only knows when it opened.
+            s.link_info.entry(link).or_insert((std::time::Instant::now(), None));
+        }
         Ok(link)
     }
 

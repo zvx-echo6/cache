@@ -182,6 +182,8 @@ pub trait Serve: Send + Sync + 'static {
     fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
+    /// A Reticulum link to or from a linked device closed (cache_rns says why): the app's log says it.
+    fn link_closed(&self, _peer: &str, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
     /// A linked device says a folder changed (`body`: [`crate::delta::Notice`]); the answer to send back.
     fn notice(&self, _peer: &str, _body: &[u8]) -> Vec<u8> {
         b"ok".to_vec()

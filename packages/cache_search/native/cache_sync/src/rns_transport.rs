@@ -639,6 +639,10 @@ impl Handler for Serving {
         self.serve.reachable(&peer.to_string());
     }
 
+    fn link_closed(&self, peer: PublicKey, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) {
+        self.serve.link_closed(&peer.to_string(), reason, open_secs, rtt_ms);
+    }
+
     fn blobs_ready(&self) -> bool {
         self.serve.blobs_ready()
     }

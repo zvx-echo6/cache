@@ -91,6 +91,14 @@ pub fn take_log() -> Vec<String> {
     std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
+/// The cache.log line for a Reticulum link that closed. Prns's close event carries the reason only (not the keepalive or the
+/// time of the last packet), so the line has the reason, how long the link was open and the round trip time it opened with.
+fn link_closed_line(name: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) -> String {
+    let after = open_secs.map(|s| format!(" after {s} s")).unwrap_or_default();
+    let rtt = rtt_ms.map(|r| format!(" (rtt {r} ms)")).unwrap_or_default();
+    format!("reticulum link to {name} closed: {reason}{after}{rtt}")
+}
+
 /// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
@@ -3300,6 +3308,10 @@ impl Serve for Inner {
         self.asked_wakes(peer);
     }
 
+    fn link_closed(&self, peer: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) {
+        say(&link_closed_line(&self.peer_name(peer), reason, open_secs, rtt_ms));
+    }
+
     fn notice(&self, peer: &str, body: &[u8]) -> Vec<u8> {
         // The network lets only a linked device's notice through; the engine checks again, since a notice starts a round.
         if !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
@@ -4742,6 +4754,15 @@ mod short_code_tests {
 #[cfg(test)]
 mod former_tests {
     use super::*;
+
+    #[test]
+    fn a_closed_link_line_names_the_device_the_reason_and_what_is_known() {
+        assert_eq!(
+            link_closed_line("Pixel", "timeout (nothing heard on it for too long)", Some(44), Some(90)),
+            "reticulum link to Pixel closed: timeout (nothing heard on it for too long) after 44 s (rtt 90 ms)"
+        );
+        assert_eq!(link_closed_line("Pixel", "closed by the other device", None, None), "reticulum link to Pixel closed: closed by the other device");
+    }
 
     #[test]
     fn a_saved_file_without_former_devices_loads_and_does_not_write_the_field() {
