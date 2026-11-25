@@ -16,10 +16,13 @@ import 'line_protocol.dart';
 /// name, hidden ones (a name that starts with ".") left out, each with its own kind and whether Cache can open it. Errors: bad_path
 /// (not absolute), not_found, io_error (the folder cannot be read).
 class FolderPickOps implements OpHandler {
-  FolderPickOps({String? home}) : home = _clean(home ?? Platform.environment['HOME'] ?? '/');
+  FolderPickOps({String? home}) : home = _homeOrRoot(_clean(home ?? Platform.environment['HOME'] ?? '/'));
 
-  /// The home folder of the user Cache runs as ("/" when it has none).
+  /// The home folder of the user Cache runs as ("/" when it has none: a system account's HOME=/nonexistent, or a home that is
+  /// not a folder), so the picker always opens somewhere.
   final String home;
+
+  static String _homeOrRoot(String path) => FileSystemEntity.isDirectorySync(path) ? path : '/';
 
   @override
   bool handles(String op) => op == 'devfs.list';
