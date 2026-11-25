@@ -707,6 +707,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.notebooks?.addListener(_notebooksChanged);
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
+    // A repeater chosen before this screen existed (a cold launch from its list): the listener will not tell of it, so look once.
+    if (widget.userLayers?.focusPending ?? false) WidgetsBinding.instance.addPostFrameCallback((_) => _onRepeater());
     widget.roadEvents?.addListener(_onRoadEvents);
     unawaited(widget.roadEvents?.refresh());
     _elevation.addListener(_onElevation);
@@ -887,6 +889,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     await _pushMeasure();
     await _pushRoadEvents();
     _onNav(); // A route may have been loaded before this screen/listener existed.
+    if (_slideWaits) {
+      _slideWaits = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _slideToPin());
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
     _afterCameraSettles();
     await _addPoiChips(c, screenRatio);
     await _addRoadChips(c, screenRatio);
@@ -1563,6 +1570,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   double? _pinTop;
   int _pinRefits = 0;
 
+  /// A slide asked for before the map was ready: made once its style has loaded.
+  bool _slideWaits = false;
+
   /// A dropped pin: the map slides so the pin shows in the free room above its card, not under it. The card is measured once it is
   /// laid out (the next frame), and the slide is made again when the card grows or shrinks and no finger has moved the map since.
   void _focusPin(MapPlace pin) => _focusCard(pin.id, pin.lat, pin.lon);
@@ -1589,6 +1599,11 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Future<void> _slideToPin() async {
     final at = _pinAt;
     if (!mounted || at == null || _cardId != _pinShown || nav.phase != NavPhase.browsing) return;
+    // The map is not made yet (a cold launch): the slide waits for it, and is made when its style has loaded.
+    if (_controller == null || !_styleReady) {
+      _slideWaits = true;
+      return;
+    }
     _pinTop = _boxOf(_panelKey)?.top;
     await _showSpot(at.lat, at.lon);
   }
