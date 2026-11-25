@@ -171,3 +171,80 @@ pub fn rns_only_dirs(dirs: &[&Path]) {
         std::fs::write(d.join("no-iroh-in-hello"), b"").unwrap();
     }
 }
+
+/// Another stand-in for rnsd, as the entry-point tests use it: a Prns transport node that listens on `listen`, keyed with IFAC
+/// when `ifac` is given (network name, passphrase) and announcing a destination of its own every second (so bytes keep arriving
+/// on a client's connection, as on an rnsd with traffic). Dropping the returned sender stops it.
+pub mod rnsd {
+    use personal_rns::interfaces::{IfacContext, IfacSize};
+    use personal_rns::prelude::*;
+    use std::time::Duration;
+
+    pub fn server(listen: u16, ifac: Option<(&str, &str)>) -> tokio::sync::oneshot::Sender<()> {
+        let ifac = ifac.map(|(n, p)| (n.to_string(), p.to_string()));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&rt, async move {
+                    let destination = PreConfiguredDestination::Single {
+                        resource_strategy: ResourceStrategy::AcceptNone,
+                        maximum_request_bytes: Default::default(),
+                        app_name: "cache-test",
+                        aspects: &["standin"],
+                        identity: try_generate_identity_secret().unwrap(),
+                        announce_app_data: b"",
+                        proof: ProofStrategy::ProveAll,
+                        link_requests: LinkRequestPolicy::AcceptAll,
+                        ratchet: RatchetPolicy::NoRatchets,
+                        request_endpoints: ServeMyRequestEndpoints::No,
+                    };
+                    let mine = destination.destination_hash().unwrap();
+                    let node = PrnsNode::new(PrnsNodeRecipe {
+                        transport_identity: Some(try_generate_identity_secret().unwrap()),
+                        remote_control: RemoteControlService::Unavailable.into(),
+                        pre_configured_destinations: [destination],
+                        app_state: personal_rns::runtime::NoRemoteControlHostControls,
+                        storage: GrowableHeap,
+                        request_endpoints: request_endpoints![],
+                        on_event: |_event, _state| {},
+                        interfaces: |_node: &PrnsNodeHandle| {},
+                        persistence: NoPersistence,
+                    });
+                    let handle = node.handle();
+                    let server = TcpServer::bind(format!("127.0.0.1:{listen}")).await.unwrap();
+                    let _guard = match ifac {
+                        Some((n, k)) => {
+                            let ctx = IfacContext::derive(Some(&n), Some(&k), IfacSize::WIDE).unwrap();
+                            handle.supervise_with_ifac_name(server, ctx, Some(n))
+                        }
+                        None => handle.supervise(server),
+                    };
+                    let h = handle.clone();
+                    tokio::task::spawn_local(async move {
+                        loop {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            let _ = h
+                                .announce_now(AnnounceNow {
+                                    destination: mine,
+                                    target: AnnounceTarget::AllInterfaces,
+                                    app_data: AnnounceAppData::Data(Default::default()),
+                                })
+                                .await;
+                        }
+                    });
+                    ready_tx.send(()).unwrap();
+                    tokio::select! {
+                        _ = node.run() => {}
+                        _ = stop_rx => {}
+                    }
+                });
+            })
+            .unwrap();
+        ready_rx.recv().unwrap();
+        stop_tx
+    }
+}

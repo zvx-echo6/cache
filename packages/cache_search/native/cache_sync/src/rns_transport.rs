@@ -698,4 +698,41 @@ mod tests {
             }
         }
     }
+
+    /// A Serve that answers a linked device's `cache.entries` with a marker.
+    struct Lists;
+
+    impl Serve for Lists {
+        fn pair_hello(&self, _: &str, _: &[u8]) -> Vec<u8> {
+            panic!("pair_hello reached")
+        }
+        fn pair_short(self: Arc<Self>, _: Vec<u8>) -> BoxFut<'static, Vec<u8>> {
+            panic!("pair_short reached")
+        }
+        fn answer(self: Arc<Self>, _: String, ask: Ask) -> BoxFut<'static, Vec<u8>> {
+            assert_eq!(ask, Ask::Entries);
+            Box::pin(async { b"the list".to_vec() })
+        }
+        fn answer_delta(self: Arc<Self>, _: String, _: Delta, _: Vec<u8>) -> BoxFut<'static, Vec<u8>> {
+            panic!("answer_delta reached")
+        }
+        fn asked(&self, _: &str) {
+            panic!("asking for the entry points is not asking for the file list: no round is woken")
+        }
+        fn nearby_linked(&self, _: &str, _: &str, _: &str, _: &str) {
+            panic!("nearby_linked reached")
+        }
+    }
+
+    /// `cache.entries` is answered to a linked device only: a device that is not linked is refused before the engine is asked
+    /// anything (the list holds passphrases).
+    #[tokio::test]
+    async fn the_entry_points_are_answered_only_to_a_linked_device() {
+        let unreached = Serving { serve: Arc::new(Unreached) };
+        let e = unreached.request(Asker::Unlinked, PATH_ENTRIES, b"ask".to_vec()).await.expect_err("an unlinked device is refused");
+        assert_eq!(e.to_string(), "not a linked device");
+        let lists = Serving { serve: Arc::new(Lists) };
+        let linked = Asker::Linked(SecretKey::generate().public());
+        assert_eq!(lists.request(linked, PATH_ENTRIES, b"ask".to_vec()).await.unwrap(), b"the list");
+    }
 }

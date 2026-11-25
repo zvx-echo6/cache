@@ -4773,4 +4773,47 @@ mod former_tests {
         let with: Saved = serde_json::from_str(r#"{"name":"Desk","former":[{"id":"x","t":5}]}"#).unwrap();
         assert_eq!(with.former.len(), 1);
     }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn plan_entry(id: &str, on: bool) -> entries::EntryPoint {
+        entries::EntryPoint { id: id.into(), host: "rt.example.net".into(), port: 4965, network_name: None, passphrase: None, on }
+    }
+
+    /// The background mode (`"reticulum": "entries"`) starts the entry points that are on and no Wi-Fi auto (the background service
+    /// holds no multicast lock); the plain mode keeps Wi-Fi auto beside them; the test block still replaces Wi-Fi auto.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn the_entries_mode_has_the_entries_that_are_on_and_no_wifi_auto() {
+        let cfg = |v: Value| -> Config { serde_json::from_value(json!({"dir": "/x", "reticulum": v})).unwrap() };
+        let list = [plan_entry("aa", true), plan_entry("bb", false)];
+        let wifi = |p: &[cache_rns::Iface]| p.iter().filter(|i| matches!(i, cache_rns::Iface::WifiAuto)).count();
+        let ents = |p: &[cache_rns::Iface]| p.iter().filter(|i| matches!(i, cache_rns::Iface::Entry(_))).count();
+        let p = rns_ifaces(&cfg(json!("entries")), &list);
+        assert_eq!((wifi(&p), ents(&p)), (0, 1), "{p:?}");
+        let p = rns_ifaces(&cfg(json!(true)), &list);
+        assert_eq!((wifi(&p), ents(&p)), (1, 1), "{p:?}");
+        let mut with_block = cfg(json!(true));
+        with_block.rns_interfaces = Some(RnsInterfaces { tcp_connect: Some("127.0.0.1:1".into()), ..RnsInterfaces::default() });
+        let p = rns_ifaces(&with_block, &list);
+        assert_eq!((wifi(&p), ents(&p)), (0, 1), "{p:?}");
+        // The test block's own entries come with the file's.
+        with_block.rns_interfaces = Some(RnsInterfaces { entries: vec![plan_entry("cc", true)], ..RnsInterfaces::default() });
+        assert_eq!(ents(&rns_ifaces(&with_block, &list)), 2);
+        // Every spelling the app may send for the plain modes still works: absent, false, true.
+        assert!(matches!(cfg(json!(false)).reticulum, Reticulum::Off));
+        assert!(matches!(cfg(json!(true)).reticulum, Reticulum::On));
+        assert!(matches!(cfg(json!("entries")).reticulum, Reticulum::Entries));
+        let none: Config = serde_json::from_value(json!({"dir": "/x"})).unwrap();
+        assert!(matches!(none.reticulum, Reticulum::Off));
+    }
+
+    /// An entry's passphrase is never in what a log line or a failed assert prints of the config.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn an_entry_point_prints_without_its_passphrase() {
+        let mut e = plan_entry("aa", true);
+        e.passphrase = Some("sekret-in-debug".into());
+        assert!(!format!("{e:?}").contains("sekret-in-debug"));
+        assert!(format!("{e:?}").contains("has_passphrase: true"));
+    }
 }
