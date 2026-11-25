@@ -8,17 +8,12 @@ import 'widgets.dart';
 /// says so in `GET /api/version` (`run_installer_again`); it is gone after the next start as the person. No dismiss.
 const kRunInstallerLine = "Cache can't open your folders. Run the installer again to fix this.";
 
-/// What "How" shows: the README's `sudo sh install.sh <tarball>`, with the installer first taken out of the download (it sits at
-/// the top of the tarball as ./install.sh).
+/// What "How" shows: install.sh --repair from the release in use (its folder holds install.sh), which puts the person back from
+/// /etc/cache-app/person with no download.
 const kRunInstallerTitle = 'Run the installer again';
-const kRunInstallerSteps =
-    'On this computer, open a terminal in the folder with your newest Cache download (the file whose name starts with cache- '
-    'and ends in .tar.gz). Then run these two commands:';
-const kRunInstallerCommands = 'tar -xzf cache-*.tar.gz ./install.sh\nsudo sh install.sh cache-*.tar.gz';
-const kRunInstallerAfter =
-    'The first takes the installer out of the download, and the second runs it. When sudo asks for a password, type your own. '
-    'Keep only the newest Cache download in that folder.';
-const kRunInstallerDone = 'Cache starts again by itself. Reload this page and this message is gone. Your library, notebooks and settings stay.';
+const kRunInstallerSteps = 'On this computer, open a terminal and run:';
+const kRunInstallerCommand = 'sudo sh /opt/cache-app/current/install.sh --repair';
+const kRunInstallerAfter = 'When sudo asks for a password, type your own. Cache starts again by itself; reload this page.';
 
 class RunInstallerCard extends StatelessWidget {
   const RunInstallerCard({super.key});
@@ -64,12 +59,10 @@ Future<void> showHowToRunInstaller(BuildContext context) {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(color: k.background, borderRadius: BorderRadius.circular(8)),
-              child: SelectableText(kRunInstallerCommands, style: TextStyle(fontFamily: 'monospace', fontSize: 14, color: k.text, height: 1.5)),
+              child: SelectableText(kRunInstallerCommand, style: TextStyle(fontFamily: 'monospace', fontSize: 14, color: k.text, height: 1.5)),
             ),
             const SizedBox(height: 10),
             const Text(kRunInstallerAfter),
-            const SizedBox(height: 10),
-            const Text(kRunInstallerDone),
           ],
         ),
       ),
