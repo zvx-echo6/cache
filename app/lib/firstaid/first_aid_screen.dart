@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../net/web_link.dart';
+import '../platform/app_log.dart';
 import '../platform/screen_awake.dart';
 import '../theme.dart';
 import 'cpr_feedback.dart';
@@ -87,6 +88,7 @@ class _CprScreenState extends State<CprScreen> {
         CprMetronome(
           feedback: widget.feedback ?? ChannelCprFeedback(),
           keepAwake: keepScreenOn,
+          log: (line) => appLog.add(LogLevel.detailed, 'INFO', line),
           sound: widget.prefs.sound,
           vibration: widget.prefs.vibration,
         );

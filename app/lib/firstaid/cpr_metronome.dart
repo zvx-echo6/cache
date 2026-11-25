@@ -54,6 +54,7 @@ class CprMetronome extends ChangeNotifier {
     DateTime Function()? now,
     CprTimerFactory? timer,
     this.keepAwake,
+    this.log,
     this.sound = true,
     this.vibration = true,
   })  : _now = now ?? DateTime.now,
@@ -63,6 +64,10 @@ class CprMetronome extends ChangeNotifier {
   final DateTime Function() _now;
   final CprTimerFactory _timer;
   final Future<void> Function(bool on)? keepAwake;
+
+  /// Where lines about the session go (the app's log at the Detailed level): when it starts and stops, and each compression with its
+  /// time since Start, so the rhythm can be checked afterwards.
+  final void Function(String line)? log;
 
   CprMode mode;
   bool sound;
@@ -129,6 +134,7 @@ class CprMetronome extends ChangeNotifier {
     }
     unawaited(_safe(feedback.begin()));
     notifyListeners();
+    log?.call('CPR metronome start mode=${mode.name} rate=$kCprPerMinute sound=$sound vibration=$vibration');
     _begin(_now());
     _tickClock();
   }
@@ -137,6 +143,7 @@ class CprMetronome extends ChangeNotifier {
   Future<void> stop() async {
     if (!running) return;
     _cancelTimers();
+    log?.call('CPR metronome stop after ${elapsed.inSeconds} s, $totalBeats compressions');
     _phase = CprPhase.ready;
     _count = 0;
     _breathsLeft = 0;
@@ -193,6 +200,7 @@ class CprMetronome extends ChangeNotifier {
     if (_phase != CprPhase.pushing || _disposed) return;
     _count++;
     totalBeats++;
+    log?.call('CPR beat $totalBeats at ${_now().difference(_startedAt!).inMilliseconds} ms');
     if (sound) unawaited(_safe(feedback.tick()));
     if (vibration) unawaited(_safe(feedback.buzz()));
     notifyListeners();
@@ -208,6 +216,7 @@ class CprMetronome extends ChangeNotifier {
     _phase = CprPhase.breaths;
     _breathsLeft = kCprBreathsSeconds;
     _breathsAt = _now();
+    log?.call('CPR breaths pause at ${_now().difference(_startedAt!).inMilliseconds} ms');
     if (sound || vibration) unawaited(_safe(feedback.breathsCue(sound: sound, vibration: vibration)));
     notifyListeners();
     _scheduleBreaths(1);

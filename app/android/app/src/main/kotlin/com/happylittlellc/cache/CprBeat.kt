@@ -7,6 +7,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.VibrationEffect
+import android.util.Log
 import android.os.Vibrator
 import android.os.VibratorManager
 import io.flutter.plugin.common.MethodCall
@@ -22,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 object CprBeat {
     private const val CHANNEL = "co.cache/cpr"
     private const val WAV_HEADER = 44
+    private const val TAG = "CprBeat"
 
     private val attributes: AudioAttributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ALARM)
@@ -91,8 +93,10 @@ object CprBeat {
             .setAudioAttributes(attributes)
             .setOnAudioFocusChangeListener { }
             .build()
-        audio.requestAudioFocus(request)
+        val granted = audio.requestAudioFocus(request)
         focus = request
+        // For the emulator and Pixel proofs: what the ticks will be played on.
+        Log.i(TAG, "begin: alarm stream, ringer=${audio.ringerMode} (0 silent, 1 vibrate, 2 normal), alarm volume=${audio.getStreamVolume(AudioManager.STREAM_ALARM)}/${audio.getStreamMaxVolume(AudioManager.STREAM_ALARM)}, music volume=${audio.getStreamVolume(AudioManager.STREAM_MUSIC)}, focus granted=${granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED}, $rate Hz")
     }
 
     private fun tick() {
@@ -114,6 +118,7 @@ object CprBeat {
             context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         vibrator?.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        if (vibrator == null) Log.w(TAG, "no vibrator")
     }
 
     fun end(context: Context) {

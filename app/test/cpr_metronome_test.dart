@@ -181,6 +181,21 @@ void main() {
     });
   });
 
+  test('the session writes its start, each beat with its time, the pause and the stop to the log', () async {
+    final c = FakeClock(), f = FakeFeedback(c), a = AwakeLog();
+    final lines = <String>[];
+    final m = CprMetronome(feedback: f, mode: CprMode.withBreaths, now: () => c.now, timer: c.timer, keepAwake: a.call, log: lines.add);
+    await m.start();
+    c.advance(Duration(microseconds: (29 * kCprBeatMicros).round() + 1000));
+    await m.stop();
+    expect(lines.first, contains('start mode=withBreaths rate=110'));
+    expect(lines.where((l) => l.startsWith('CPR beat ')), hasLength(30));
+    expect(lines.firstWhere((l) => l.startsWith('CPR beat 2 ')), 'CPR beat 2 at 545 ms');
+    expect(lines.any((l) => l.startsWith('CPR breaths pause')), isTrue);
+    expect(lines.last, contains('stop after'));
+    m.dispose();
+  });
+
   test('the rate is 110 and the beat 545 ms', () {
     expect(kCprPerMinute, 110);
     expect(kCprBeatMicros / 1000, closeTo(545.45, 0.01));
