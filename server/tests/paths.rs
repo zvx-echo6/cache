@@ -80,3 +80,15 @@ fn the_install_runs_cache_as_the_person_who_installed_it() {
     }
     assert!(!INSTALL.contains("runuser -u cache") && !INSTALL.contains("install -d -o cache"), "nothing else is done as cache");
 }
+
+#[test]
+fn the_install_can_be_repaired_from_the_current_release() {
+    // The browser's "Run the installer again" (Settings) gives one command, run from the release in use: it puts the person back
+    // from the record, with no tarball. The release folder holds install.sh (the tarball's top level is unpacked into it).
+    assert!(INSTALL.contains("--repair) REPAIR=1 ;;"), "install.sh takes --repair");
+    assert!(INSTALL.contains("install.sh --repair"), "its usage names --repair");
+    let wf = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/server-release.yml")).unwrap();
+    assert!(wf.contains("install -m 755 server/packaging/install.sh \"$stage/install.sh\""), "the tarball carries install.sh at its top level");
+    let card = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../app/lib/screens/settings/run_installer_card.dart")).unwrap();
+    assert!(card.contains("'sudo sh /opt/cache-app/current/install.sh --repair'"), "the app's command is the one install.sh takes");
+}

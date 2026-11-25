@@ -446,6 +446,87 @@ run --rollback
 check "with the key unchanged a rollback succeeds (exit $RC)" rc_ok
 end_case "$f0"
 
+f0=$FAIL
+start_case 10 "--repair from the fallback: the drop-in is gone, so Cache runs as the cache user"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+with_sudo alice run "$R/new.tgz"
+# the drop-in lost (an update with an older install.sh, a hand edit): the unit falls back to the cache user
+rm -f "$CACHE_INSTALL_UNIT.d/person.conf"
+: >"$R/calls.log"
+with_sudo alice run --repair
+check "it succeeds (exit $RC)" rc_ok
+check "the drop-in names alice again, from the record" dropin_names alice alice
+check "the record still names alice" [ "$(record)" = alice ]
+check "the service is stopped before the drop-in is written" logged '^systemctl stop cache \[dropin absent\]'
+check "then the data is given to alice" before '^systemctl stop cache' "^chown -R alice:alice $CACHE_INSTALL_DATA\$"
+check "systemd reads the drop-in before the start" before '^systemctl daemon-reload' '^systemctl start cache'
+check "then the service starts, with the drop-in" before "^chown -R alice:alice $CACHE_INSTALL_DATA\$" '^systemctl start cache \[dropin User=alice\]'
+check "the release is not changed" [ "$(readlink "$CACHE_INSTALL_OPT/current")" = "$CACHE_INSTALL_OPT/releases/0.1.0+new" ]
+check "no account is made" not_logged '^useradd'
+check "no password is asked" not_logged '^runuser'
+check "the linked device's key is untouched" [ "$(cat "$CACHE_INSTALL_DATA/sync/identity.key")" = 'the device key' ]
+check "it says whose account Cache runs as" has 'Cache runs as alice'
+# the identity guard holds on a repair too
+rm -f "$CACHE_INSTALL_UNIT.d/person.conf"
+STUB_FLIP_IDENTITY=1
+export STUB_FLIP_IDENTITY
+run --repair
+check "a repair that changes the device key fails" rc_fail
+check "and names the check" has 'check failed: sync/identity.key'
+unset STUB_FLIP_IDENTITY
+end_case "$f0"
+
+f0=$FAIL
+start_case 11 "--repair with no record"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+with_sudo alice run "$R/new.tgz"
+rm -f "$CACHE_INSTALL_UNIT.d/person.conf" "$CACHE_INSTALL_ETC/person"
+: >"$R/calls.log"
+with_sudo alice run --repair
+check "it is refused" rc_fail
+check "it says there is no record of whose Cache this is" has 'no record'
+check "no service command runs" not_logged '^systemctl'
+check "no drop-in is written" [ ! -e "$CACHE_INSTALL_UNIT.d/person.conf" ]
+check "nothing is handed over" not_logged '^chown'
+end_case "$f0"
+
+f0=$FAIL
+start_case 12 "--repair on a release from before Cache ran as the person (no marker)"
+old_layout
+mkdir -p "$CACHE_INSTALL_ETC"
+echo alice >"$CACHE_INSTALL_ETC/person"
+: >"$R/calls.log"
+with_sudo alice run --repair
+check "it is refused" rc_fail
+check "it says this release runs as the cache account" has 'runs as the cache account'
+check "no service command runs" not_logged '^systemctl'
+check "no drop-in is written" [ ! -e "$CACHE_INSTALL_UNIT.d/person.conf" ]
+check "nothing is handed over" not_logged '^chown'
+end_case "$f0"
+
+f0=$FAIL
+start_case 13 "--repair when everything is already right"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+with_sudo alice run "$R/new.tgz"
+cp "$CACHE_INSTALL_UNIT.d/person.conf" "$R/dropin.before"
+: >"$R/calls.log"
+run --repair
+check "it succeeds (exit $RC)" rc_ok
+check "the data is not handed over again" not_logged '^chown'
+check "it is not stopped" not_logged '^systemctl stop'
+check "it is only restarted" logged '^systemctl restart cache \[dropin User=alice\]'
+check "the drop-in is the same" cmp -s "$R/dropin.before" "$CACHE_INSTALL_UNIT.d/person.conf"
+check "it says whose account Cache runs as" has 'Cache runs as alice'
+# --repair takes nothing else
+run --repair "$R/new.tgz"
+check "--repair with a tarball is refused" rc_fail
+run --repair --user alice
+check "--repair with --user is refused" rc_fail
+end_case "$f0"
+
 echo
 echo "install_test.sh: $PASS passed, $FAIL failed (install.sh run with $SH)"
 if [ "$FAIL" -ne 0 ]; then

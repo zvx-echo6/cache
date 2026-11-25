@@ -202,6 +202,18 @@ Both check ownership and the identity hashes as an update does. Roll back across
 the older release keeps running as the person. That still works (it only needs `/var/lib/cache-app`), but it is not the
 release exactly as it ran before.
 
+If Cache ever runs as the `cache` account although the release in use runs as the person (the drop-in is missing, for example
+after an update with an older release's `install.sh`), it cannot open the person's folders, and the browser says so at the top
+of Settings ("Cache can't open your folders. Run the installer again to fix this."). To put the person back, with no tarball:
+
+    sudo sh /opt/cache-app/current/install.sh --repair
+
+It reads the person from `/etc/cache-app/person` and checks them as an install does, then stops the service, writes the record
+and the drop-in, gives the data folder to the person, starts the service and makes the same ownership and identity checks as an
+update. When everything is already right it only restarts the service. It is refused when there is no record, and on a release
+without the `X-Cache-RunsAs=person` marker (that release runs as `cache` on purpose). The card in Settings is gone once Cache
+runs as the person.
+
 ## Signing in
 
 Anyone without a session gets the sign-in page for every page request (`/`, `/index.html`, any path without a file

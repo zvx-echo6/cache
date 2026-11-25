@@ -4,6 +4,7 @@
 #   sudo sh install.sh <path-to-release-tarball>
 #   sudo sh install.sh --user <name> <path-to-release-tarball>    (Cache for another person, or to hand it over)
 #   sudo sh install.sh --rollback
+#   sudo sh install.sh --repair    (Cache runs as the cache account although it should run as you: put the person back)
 #
 # The tarball holds `cache` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
 # `lib/libcache_search.so` (the core library the helper loads), `lib/libzim.so.9` (libzim with Xapian and ICU, which
@@ -182,13 +183,15 @@ guard_after() {
     fi
 }
 
-USAGE="usage: install.sh [--user <name>] <path-to-release-tarball> | install.sh --rollback"
+USAGE="usage: install.sh [--user <name>] <path-to-release-tarball> | install.sh --rollback | install.sh --repair"
 ROLLBACK=0
+REPAIR=0
 WANT_USER=
 TARBALL=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --rollback) ROLLBACK=1 ;;
+        --repair) REPAIR=1 ;;
         --user)
             [ "$#" -ge 2 ] && [ -n "$2" ] || die "$USAGE"
             WANT_USER=$2
@@ -203,7 +206,8 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-if [ "$ROLLBACK" -eq 1 ]; then
+if [ "$ROLLBACK" -eq 1 ] || [ "$REPAIR" -eq 1 ]; then
+    [ "$ROLLBACK" -eq 0 ] || [ "$REPAIR" -eq 0 ] || die "$USAGE"
     [ -z "$TARBALL" ] && [ -z "$WANT_USER" ] || die "$USAGE"
 else
     [ -n "$TARBALL" ] || die "$USAGE"
@@ -275,6 +279,42 @@ if [ "$ROLLBACK" -eq 1 ]; then
         echo "Rolled back: Cache $(basename "$PREV") is running as $RUNS_AS."
     fi
     echo "$(basename "$CUR") is now the previous release. (run install.sh --rollback again to go forward)"
+    exit 0
+fi
+
+# Repair: the release in use runs as the person, but Cache runs as the fallback cache account (the drop-in is gone, for example
+# after an update with an older install.sh). Put the person back from the record, with no tarball and no release switched: the
+# same steps as an update from the cache user (stop, drop-in, hand the data over, start, then the ownership and identity checks).
+if [ "$REPAIR" -eq 1 ]; then
+    CUR=$(link_of "$OPT/current")
+    [ -n "$CUR" ] && [ -d "$CUR" ] || die "Cache is not installed here (there is no current release in $OPT)."
+    PERSON=$(recorded_person)
+    [ -n "$PERSON" ] || die "there is no record of whose Cache this is ($RECORD). Install it again from the newest download instead: sudo sh install.sh <path-to-release-tarball>"
+    runs_as_person "$CUR" || die "this release ($(basename "$CUR")) runs as the cache account, so there is nothing to repair. To have Cache run as you, install a newer release: sudo sh install.sh <path-to-release-tarball>"
+    check_person
+    MIGRATE=0
+    if [ "$(cat "$DROPIN" 2>/dev/null || true)" != "$(dropin_text)" ] || data_not_owned_by "$PUID"; then
+        MIGRATE=1
+    fi
+    guard_before
+    [ "$MIGRATE" -eq 0 ] || systemctl stop cache || true
+    mkdir -p "$ETC" "$UNIT.d"
+    write_atomic "$RECORD" "$PERSON"
+    write_atomic "$DROPIN" "$(dropin_text)"
+    [ "$MIGRATE" -eq 0 ] || chown -R "$PERSON:$PGROUP" "$DATA"
+    systemctl daemon-reload
+    if [ "$MIGRATE" -eq 1 ]; then
+        systemctl start cache
+    else
+        systemctl restart cache
+    fi
+    wait_active
+    if data_not_owned_by "$PUID"; then
+        check_failed "some files in $DATA do not belong to $PERSON"
+    fi
+    guard_after
+    echo "Cache $(basename "$CUR") is running again. Cache runs as $PERSON. It can open the folders you can open."
+    echo "Reload Cache in the browser."
     exit 0
 fi
 

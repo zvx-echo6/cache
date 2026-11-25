@@ -16,7 +16,8 @@
 //!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
 //!                                              one engine and its source list; "sources.rescan" is refused (only the server calls it)
 //!   GET  /api/status                        -> the same, for the "status" op
-//!   GET  /api/version                       -> {"version"}: this server's own version ("0.1.0+1c6891f"), shown in Credits and licenses
+//!   GET  /api/version                       -> {"version", "run_installer_again"}: this server's own version ("0.1.0+1c6891f"), shown in
+//!                                              Credits and licenses; and whether Settings asks to run the installer again (`runs_as`)
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
 //!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
@@ -651,7 +652,7 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
     }
     match (method, path) {
         ("GET", "/api/status") => core_call(app, "status", json!({})).await,
-        ("GET", "/api/version") => ok(json!({"version": crate::VERSION})),
+        ("GET", "/api/version") => ok(json!({"version": crate::VERSION, "run_installer_again": crate::runs_as::needed()})),
         ("POST", "/api/core") => {
             let parsed: Result<Value, _> = serde_json::from_slice(body);
             let Ok(req) = parsed else { return Reply::error(400, "bad_json", "the body is not JSON") };
@@ -1202,6 +1203,8 @@ mod tests {
         assert_eq!(r.status, 200);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!((v["ok"].clone(), v["result"]["version"].clone()), (json!(true), json!(crate::VERSION)));
+        // whether the browser shows "Run the installer again" in Settings (`runs_as`): never set in tests, so false
+        assert_eq!(v["result"]["run_installer_again"], json!(false));
     }
 
     /// Writes `n` bytes to `<data>/<rel>`, making the folders.
