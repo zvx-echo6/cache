@@ -373,6 +373,53 @@ check "the record then names bob" [ "$(record)" = bob ]
 check "the drop-in then names bob" dropin_names bob alice
 end_case "$f0"
 
+f0=$FAIL
+start_case 6 "--rollback to a release that runs as the cache user"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+with_sudo alice run "$R/new.tgz"
+# a computer that never had the cache account (or lost it): the rollback makes it again
+grep -v '^cache:' "$R/fake/passwd" >"$R/fake/p" && mv "$R/fake/p" "$R/fake/passwd"
+: >"$R/calls.log"
+run --rollback
+check "it succeeds (exit $RC)" rc_ok
+check "the old release is current" [ "$(readlink "$CACHE_INSTALL_OPT/current")" = "$CACHE_INSTALL_OPT/releases/0.1.0+old" ]
+check "the drop-in is removed" [ ! -e "$CACHE_INSTALL_UNIT.d/person.conf" ]
+check "the record is kept" [ "$(record)" = alice ]
+check "the old unit is installed" cmp -s "$R/old.service" "$CACHE_INSTALL_UNIT"
+check "the cache group is made" logged '^groupadd --system cache'
+check "the cache user is made, as before" logged '^useradd --system --gid cache --no-create-home --home-dir /nonexistent --shell .* cache$'
+check "the service is stopped first" before '^systemctl stop cache' "^chown -R cache:cache $CACHE_INSTALL_DATA\$"
+check "the data goes back to cache, then the service starts without the drop-in" \
+    before "^chown -R cache:cache $CACHE_INSTALL_DATA\$" '^systemctl \(start\|restart\) cache \[dropin absent\]'
+check "the user is made before the data is given to it" before '^useradd' "^chown -R cache:cache $CACHE_INSTALL_DATA\$"
+check "the linked device's key is untouched" [ "$(cat "$CACHE_INSTALL_DATA/sync/identity.key")" = 'the device key' ]
+end_case "$f0"
+
+f0=$FAIL
+start_case 7 "--rollback again, forward to the release that runs as the person"
+old_layout
+make_tarball "$R/new.tgz" 0.1.0+new "$NEW_UNIT"
+with_sudo alice run "$R/new.tgz"
+run --rollback
+: >"$R/calls.log"
+run --rollback
+check "it succeeds (exit $RC)" rc_ok
+check "the new release is current" [ "$(readlink "$CACHE_INSTALL_OPT/current")" = "$CACHE_INSTALL_OPT/releases/0.1.0+new" ]
+check "the drop-in is back, from /etc/cache-app/person" dropin_names alice alice
+check "the new unit is installed" cmp -s "$NEW_UNIT" "$CACHE_INSTALL_UNIT"
+check "the service is stopped before the drop-in comes back" logged '^systemctl stop cache \[dropin absent\]'
+check "the data goes to alice, then the service starts with the drop-in" \
+    before "^chown -R alice:alice $CACHE_INSTALL_DATA\$" '^systemctl \(start\|restart\) cache \[dropin User=alice\]'
+check "no account is made" not_logged '^useradd'
+# with no record, a rollback to a release that runs as the person has no one to run as: refused, nothing switched
+rm -f "$CACHE_INSTALL_ETC/person"
+run --rollback
+run --rollback
+check "with no record it is refused" rc_fail
+check "and nothing is switched" [ "$(readlink "$CACHE_INSTALL_OPT/current")" = "$CACHE_INSTALL_OPT/releases/0.1.0+old" ]
+end_case "$f0"
+
 echo
 echo "install_test.sh: $PASS passed, $FAIL failed (install.sh run with $SH)"
 if [ "$FAIL" -ne 0 ]; then
