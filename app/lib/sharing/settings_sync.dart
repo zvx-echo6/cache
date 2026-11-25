@@ -117,6 +117,7 @@ class SettingsSync extends ChangeNotifier {
     required this.dir,
     this.downloadModel,
     this.placesHere,
+    this.onServerKeysChanged,
     DateTime Function()? now,
     this.every = const Duration(seconds: 10),
   }) : _now = now ?? DateTime.now,
@@ -159,6 +160,10 @@ class SettingsSync extends ChangeNotifier {
   /// Starts the download of a model a linked device uses ([waitingModelDownload]); only when the person taps Download.
   final Future<void> Function(Map<String, Object?> download)? downloadModel;
 
+  /// In a browser: told when the keys the server holds change (one saved in another tab, or sent by a linked device), so the tab reads
+  /// its own key list again (the Settings row "API keys").
+  final void Function()? onServerKeysChanged;
+
   /// The saved places on this device, by key.
   final Future<Set<String>> Function()? placesHere;
 
@@ -170,6 +175,7 @@ class SettingsSync extends ChangeNotifier {
   Map<String, String> get _last => _kept.last;
   Map<String, Set<String>> get _keysFor => _kept.keysFor;
   Map<String, Set<String>> get _keysAll => _kept.keysAll;
+  Map<String, Set<String>> get _keysHeld => _kept.keysHeld;
   Map<String, SettingsEvent> get _waiting => _kept.waiting;
   Map<String, Object?> get _notes => _kept.notes;
 
@@ -496,6 +502,8 @@ class SettingsSync extends ChangeNotifier {
       _wasRunning = true;
       _pushed.clear();
       _links = _linkSignature();
+      // choices kept for a device that is no longer linked (an unlink while this was not watching) go before the keys are given
+      await _forgetUnlinked();
       await pushKeys();
     }
     await takeKeys();
@@ -511,6 +519,7 @@ class SettingsSync extends ChangeNotifier {
       final id = p['id'];
       if (id is String && (p['link'] as Map?)?['mode'] == null && sharing.linkedSinceAsking(id)) unawaited(markNew(id));
     }
+    unawaited(_forgetUnlinked());
     final sig = _linkSignature();
     if (sig == _links) return;
     _links = sig;
@@ -519,6 +528,23 @@ class SettingsSync extends ChangeNotifier {
       await pull();
       _tell();
     }());
+  }
+
+  /// A device that is no longer linked takes its key choices with it ("Include API keys" and the keys left out), so a device that
+  /// links again starts with the switch off. Not in a browser: the server forgets them when the device is unlinked.
+  Future<void> _forgetUnlinked() async {
+    if (sharing.onServer || !sharing.running) return;
+    final linked = {for (final p in sharing.peers) if (p['id'] is String) p['id'] as String};
+    final gone = {..._keysAll.keys, ..._keysFor.keys, ..._keysHeld.keys}.where((id) => !linked.contains(id)).toList();
+    if (gone.isEmpty) return;
+    for (final id in gone) {
+      _keysAll.remove(id);
+      _keysFor.remove(id);
+      _keysHeld.remove(id);
+      _pushed.remove(id);
+    }
+    await _saveState();
+    _tell();
   }
 
   /// Applies what the devices whose settings this one takes changed since the last look.
@@ -625,15 +651,9 @@ class SettingsSync extends ChangeNotifier {
 
   // ---------------------------------------------------------------- keys
 
-  /// "Include API keys" is on for [peer]. Off for a newly linked device. In a browser the server holds the ticks: on when every key it can
-  /// send is ticked for [peer].
-  bool includeKeys(String peer) {
-    if (sharing.onServer) {
-      final ks = keys();
-      return ks.isNotEmpty && ks.every((k) => keyOn(peer, k.name));
-    }
-    return _keysAll.containsKey(peer);
-  }
+  /// "Include API keys" is on for [peer]. Off for a newly linked device. The switch is its own choice, as on a phone: it stays on while a
+  /// key is left out, and on with no key saved. In a browser the server holds it.
+  bool includeKeys(String peer) => sharing.onServer ? _serverInclude.contains(peer) : _keysAll.containsKey(peer);
 
   /// The key [name] goes to [peer]: the switch is on and the key is not left out. A key saved later follows the switch.
   bool keyOn(String peer, String name) {
@@ -650,15 +670,21 @@ class SettingsSync extends ChangeNotifier {
   /// sends none.
   Future<void> setIncludeKeys(String peer, bool on) async {
     if (sharing.onServer) {
-      for (final k in keys()) {
-        await _setServerKeyOn(peer, k.name, on);
+      try {
+        _takeServerKeys(await sharing.setServerIncludeKeys(peer, on));
+      } catch (e) {
+        logError('Settings sync: the server did not take the Include API keys switch', error: e);
+        await refreshServerKeys();
       }
+      _tell();
       return;
     }
     if (on) {
-      _keysAll[peer] = <String>{};
+      // the keys left out before the switch went off stay left out
+      _keysAll[peer] = _keysHeld.remove(peer) ?? <String>{};
     } else {
-      _keysAll.remove(peer);
+      final out = _keysAll.remove(peer);
+      if (out != null && out.isNotEmpty) _keysHeld[peer] = out;
     }
     _keysFor.remove(peer);
     await _saveState();
@@ -692,6 +718,7 @@ class SettingsSync extends ChangeNotifier {
       // The switch is off: a single key can only be left out of an included set.
       if (!on) return;
       _keysAll[peer] = {for (final k in keys()) if (k.name != name) k.name};
+      _keysHeld.remove(peer);
     } else {
       on ? all.remove(name) : all.add(name);
     }
@@ -703,6 +730,7 @@ class SettingsSync extends ChangeNotifier {
   // The server's keys, in a browser (the server is the device: it keeps the keys and the ticks, and sends them itself).
   List<String> _serverNames = const [];
   Map<String, Set<String>> _serverOn = const {};
+  Set<String> _serverInclude = const {};
   Timer? _serverTimer;
   bool _serverKeysBusy = false;
   bool _serverKeysRead = false;
@@ -734,13 +762,16 @@ class SettingsSync extends ChangeNotifier {
     }
   }
 
-  void _takeServerKeys(List<({String name, Set<String> on})> list) {
+  void _takeServerKeys(ServerKeys got) {
     _serverKeysRead = true;
-    final names = [for (final k in list) k.name];
-    final on = {for (final k in list) k.name: k.on};
-    final same = listEquals(names, _serverNames) && names.every((n) => setEquals(on[n], _serverOn[n]));
+    final names = [for (final k in got.keys) k.name];
+    final on = {for (final k in got.keys) k.name: k.on};
+    final namesSame = listEquals(names, _serverNames);
+    final same = namesSame && names.every((n) => setEquals(on[n], _serverOn[n])) && setEquals(got.include, _serverInclude);
     _serverNames = names;
     _serverOn = on;
+    _serverInclude = got.include;
+    if (!namesSame) onServerKeysChanged?.call();
     if (!same) _tell();
   }
 

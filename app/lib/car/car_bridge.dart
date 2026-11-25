@@ -467,6 +467,7 @@ class CarBridge {
     final palette = mapPaletteFor(carShows);
     // The pins' pictures follow the map's look (Tactical has its own).
     pins?.setTactical(palette.id == CacheThemeId.tactical);
+    pins?.setFlat(isFlatIconTheme(palette.id));
     final String glyphs;
     try {
       glyphs = await _glyphs();

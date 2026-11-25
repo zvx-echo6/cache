@@ -18,7 +18,7 @@ mod config;
 pub mod map;
 mod resolve;
 
-pub use cache_offroad::{ElevationSource, ElevationTiles, TileElevation};
+pub use cache_offroad::{elevation::ElevError, ElevationSource, ElevationTiles, TileElevation};
 pub use config::{NavigateCfg, OffroadCfg, ValhallaCfg};
 pub use resolve::parse_latlon;
 

@@ -110,6 +110,7 @@ import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
+import 'package:cache/screens/settings/ways_to_connect_page.dart';
 import 'package:cache/screens/settings_screen.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/app_state.dart' show ModelEntry;
@@ -384,6 +385,32 @@ void main() {
     await tester.runAsync(() => sharing.setShared(sharing.kinds[2], true));
     await settle(tester);
     await shot(tester, 'settings-sharing');
+    await tester.pumpWidget(const SizedBox());
+    sharing.dispose();
+    await r.dispose(tester);
+  });
+
+  testWidgets('settings-ways-to-connect', (tester) async {
+    final r = await _rig(tester);
+    // Example entry points only: one private and connected, one not answering, one private and switched off.
+    r.sync
+      ..addEntry('a', 'rt.example.net', 4242, private: true, network: 'example-net', pass: true)
+      ..addEntry('b', 'reticulum.example.org', 4965, status: 'not_answering')
+      ..addEntry('c', 'lab.example.net', 4242, private: true, network: 'lab', pass: true, on: false);
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: const [],
+      deviceName: 'Android device',
+      phone: true,
+      reticulum: true,
+      opener: (_) async => r.sync,
+    );
+    await show(tester, WaysToConnectPage(sharing: sharing));
+    await tester.runAsync(() => sharing.setUp());
+    await tester.runAsync(sharing.refresh);
+    await settle(tester);
+    await shot(tester, 'settings-ways-to-connect');
     await tester.pumpWidget(const SizedBox());
     sharing.dispose();
     await r.dispose(tester);
@@ -1381,6 +1408,18 @@ void main() {
   /// where the map is, tells the screen the camera the map has (the scale bar and the compass follow it), and takes the picture.
   Future<void> mapShot(WidgetTester tester, _MapRig m, String id, String scene) async {
     await m.kit.loadChips(tester);
+    // The screen draws the map's own images (the pins, the routes' time labels) with real work after the state changes: let it finish
+    // before the scene is read, so the scene is the same in every run.
+    // It is finished when what the map was given (its sources and its images) has stayed the same for three looks in a row.
+    String seen() => '${jsonEncode(m.kit.controller.sources)}|${(m.kit.controller.images.keys.toList()..sort()).join(',')}';
+    var last = '', still = 0;
+    for (var i = 0; i < 60 && still < 3; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 150)));
+      await tester.pump();
+      final now = seen();
+      still = now == last ? still + 1 : 0;
+      last = now;
+    }
     final map = mapOf(tester);
     final size = tester.getSize(find.byType(MapLibreMap));
     final cam = m.kit.cameraOf(map, size);
@@ -1391,7 +1430,12 @@ void main() {
       size: size,
       ratio: tester.view.devicePixelRatio,
       sources: m.kit.controller.sources,
-      images: m.kit.controller.images,
+      // Only the images the map's data names: the screen adds an image once and keeps it, so a label of a state the map has left (the
+      // other route selected a moment ago) would otherwise be in the scene in one run and not in the next.
+      images: {
+        for (final e in m.kit.controller.images.entries)
+          if (jsonEncode(m.kit.controller.sources).contains(e.key) || m.kit.style.contains(e.key)) e.key: e.value,
+      },
     );
     m.kit.show(scene);
     map.onCameraMove!(CameraPosition(target: LatLng(cam.lat, cam.lon), zoom: cam.zoom, bearing: cam.bearing));

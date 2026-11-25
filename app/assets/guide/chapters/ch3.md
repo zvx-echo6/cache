@@ -348,11 +348,19 @@ When one device has answered, the other device's question becomes a short notice
 
 Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
-Under "Linked devices", each device shows whether it is connected directly or through a relay. Tap a device to open its page:
-- how it is connected, when it was last seen, and its free space, if it says;
-- "Settings": whether settings go between the two. See Sharing and sync: settings between devices;
-- "Sync now" syncs with that device only;
+Under "Linked devices", each device says how it is connected now:
+- "Same Wi-Fi": on the same network or phone hotspot as this device;
+- "Through rt.example.net": through an entry point you added (see Sharing and sync: ways to connect);
+- "Connected, slow link: small items only": on a slow connection. Notes, places and other small items go now; bigger files wait (see
+  Files that wait for a faster connection).
+
+Tap a device to open its page:
+- "Status": how it is connected, and its free space, if it says. When it is not connected, when it was last seen;
+- "Waiting for a faster connection": what is held back, if anything (see below);
+- "This link": whether settings go between the two. See Sharing and sync: settings between devices;
+- "Activity": what Sharing and sync has done lately;
 - "Rename" changes what this device calls it;
+- "Sync now" syncs with that device only;
 - "Unlink" stops it connecting. Files already here stay.
 
 - If a device shows "Not reachable", open Cache on it.
@@ -428,6 +436,54 @@ A setting changes on the other device at once. Nothing restarts.
 - If the other device uses a model this one doesn't have, "Model" says, for example, "Uses Gemma 4 E4B · Q4_K_M, not downloaded here". Tap "Download" to get it. Cache never downloads it on its own.
 - A watched place whose saved place hasn't come to this device yet is not listed under "What weather watches". It is listed, and its weather loads, by itself when it comes with the notebooks.
 - Your Bookshelves are kept the same only with devices set to "Match both ways".
+
+## Sharing and sync: ways to connect
+
+Cache uses every way that's on to reach your other devices. On the same Wi-Fi or phone hotspot, your devices find each other with no
+internet needed. To reach them from anywhere, add an entry point.
+
+An entry point is a Reticulum server that someone runs, at an address and port. Cache comes with none and only uses ones you add. Every
+one that's on is used at the same time. Cache has no servers of its own; nothing goes through one.
+
+![Ways to connect](shot:settings-ways-to-connect)
+
+1. Go to "Settings" > "Sharing and sync" > "Ways to connect".
+2. Under "Over the internet", tap "Add an entry point".
+3. Enter its "Address" and "Port".
+4. If it is a private network, switch on "Private network" and enter the "Network name" and "Passphrase". Ask whoever runs it.
+5. Tap "Add and connect".
+
+The entry point is added on all your linked devices.
+
+Each row shows its address, "Private" if it has a passphrase, the port, and how it is doing:
+- "Connected";
+- "Connected, nothing heard yet": connected, but nothing has come through it yet. A quiet private network can stay like this;
+- "Probably the wrong network name or passphrase": check both with whoever runs it, then tap "Save";
+- "Not answering": Cache keeps trying;
+- "Off".
+
+To stop using one for a while, switch it off on its row. Off keeps its settings. To change one, tap its row, change it and tap "Save".
+To delete it, tap its row, then "Remove from all my devices". It is removed on all your linked devices.
+
+### Files through an entry point
+
+Each entry point lets files up to 50 MB each through. Bigger files wait for Wi-Fi. To change the limit, tap the entry point, then
+"Files through this entry point", and pick a size.
+
+### What an entry point's operator can see
+
+The person who runs it can see when your devices are online and which ones use it. Other people on it can see when your devices are
+online. No one can read what you send.
+
+## Files that wait for a faster connection
+
+On a slow connection, Cache sends notes, places and other small items, and holds bigger files back. A held-back file is not lost: it
+waits and goes by itself the next time the devices are on the same Wi-Fi, or both use an entry point that allows files this big.
+
+To see what is waiting, open the device's page. "Waiting for a faster connection" lists it, for example "Region map" or "2 photos", with
+its size.
+
+- If a transfer slows down part way, Cache stops it and keeps what has arrived. It goes on from there later.
 
 ## Search indexes on linked devices
 

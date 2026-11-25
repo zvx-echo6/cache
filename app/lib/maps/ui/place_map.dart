@@ -323,7 +323,7 @@ class _PlaceMapState extends State<PlaceMap> {
       String? image;
       if (look != null && widget.showPin) {
         final images = _images ??= PinImages((name, png) => c.addImage(name, png), widget.maps.pinStyle,
-            tactical: widget.themeId == CacheThemeId.tactical, ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
+            tactical: widget.themeId == CacheThemeId.tactical, flat: isFlatIconTheme(widget.themeId), ratio: pinImageRatio(mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0));
         image = await images.ensure(look.icon.id, look.glyph, look.tint);
       }
       Map<String, dynamic> one(bool on, Map<String, dynamic> props) => {

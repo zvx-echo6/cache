@@ -1071,7 +1071,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InkWell(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(kControlRadius),
           onTap: _toggleSources,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),

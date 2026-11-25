@@ -189,18 +189,69 @@ impl crate::handle::Handle {
 /// The map layer engine's elevation layer (the starter `elevation`: Mapterhorn's tiles) as the off-road router's z12 elevation.
 pub const ELEVATION_LAYER: &str = "elevation";
 
-/// z12 elevation tiles from the layer engine: its downloaded areas and the tiles viewed before, never the network (a route is
-/// worked out from what is on the phone, as it was from an elevation file).
-struct LayerElevationTiles(std::sync::Arc<cache_layers::core::Inner>);
+/// How long the router stops asking the network for elevation tiles after one failed or timed out.
+const ELEVATION_NET_PAUSE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// z12 elevation tiles from the layer engine: stored data first (downloaded areas, then the tiles viewed before); a tile
+/// that is not stored is streamed when the phone is online, and kept in the viewed-tile cache (the same path the map
+/// uses, `Inner::tile_upstream`). A tile that cannot be had (offline, no elevation layer, a failed or timed-out fetch) is
+/// `ElevError::Unavailable`, never "no tile here": the router then reports the off-road data as not downloaded instead of
+/// treating the hole as impassable ground and detouring. `None` is only the source's own "no tile here" (ocean).
+/// The network is bounded two ways: each fetch has the map's upstream timeout, and after one fetch fails or times out no
+/// more are tried for `ELEVATION_NET_PAUSE`, so a dead connection costs one wait, not one per tile.
+struct LayerElevationTiles {
+    inner: std::sync::Arc<cache_layers::core::Inner>,
+    /// No network fetch before this moment (set by a failed or timed-out fetch).
+    paused_until: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl LayerElevationTiles {
+    fn new(inner: std::sync::Arc<cache_layers::core::Inner>) -> Self {
+        Self { inner, paused_until: std::sync::Mutex::new(None) }
+    }
+
+    fn net_paused(&self) -> bool {
+        self.paused_until.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    fn pause_net(&self) {
+        *self.paused_until.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + ELEVATION_NET_PAUSE);
+    }
+}
 
 impl cache_navigate::ElevationTiles for LayerElevationTiles {
-    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, String> {
-        match self.0.tile_local(ELEVATION_LAYER, 12, x as u32, y as u32) {
-            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => Ok(Some(bytes)),
-            Ok(_) => Ok(None),
-            // no elevation layer installed: no elevation, as with no file
-            Err(e) if e.code == "not_found" => Ok(None),
-            Err(e) => Err(e.message),
+    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, cache_navigate::ElevError> {
+        use cache_navigate::ElevError;
+        let (x, y) = (x as u32, y as u32);
+        match self.inner.tile_local(ELEVATION_LAYER, 12, x, y) {
+            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => return Ok(Some(bytes)),
+            // stored as "the source has no tile here"
+            Ok(Some(cache_layers::core::TileOut::Empty)) => return Ok(None),
+            // offline and not stored
+            Ok(Some(_)) => return Err(ElevError::Unavailable),
+            // no elevation layer installed
+            Err(e) if e.code == "not_found" => return Err(ElevError::Unavailable),
+            Err(e) => return Err(ElevError::Msg(e.message)),
+            // not stored: stream it below, when online
+            Ok(None) => {}
+        }
+        if !self.inner.is_online() || self.net_paused() {
+            return Err(ElevError::Unavailable);
+        }
+        match self.inner.tile_upstream(ELEVATION_LAYER, 12, x, y) {
+            Ok(cache_layers::core::TileOut::Tile { bytes, .. }) => Ok(Some(bytes)),
+            Ok(cache_layers::core::TileOut::Empty) => Ok(None),
+            Ok(cache_layers::core::TileOut::Busy) => {
+                self.pause_net();
+                Err(ElevError::Unavailable)
+            }
+            Ok(_) => Err(ElevError::Unavailable),
+            Err(e) if e.code == "not_found" => Err(ElevError::Unavailable),
+            Err(e) if e.code == "fetch_failed" || e.code == "upstream_timeout" => {
+                self.pause_net();
+                Err(ElevError::Unavailable)
+            }
+            Err(e) => Err(ElevError::Msg(e.message)),
         }
     }
 }
@@ -209,7 +260,7 @@ impl Ext {
     /// The navigate tool's region packs read elevation from the map's elevation layer, when both are configured.
     pub fn plug_elevation(&self) {
         if let (Some(nav), Some(l)) = (&self.nav, &self.layers) {
-            let source = cache_navigate::TileElevation::new(LayerElevationTiles(l.inner.clone()));
+            let source = cache_navigate::TileElevation::new(LayerElevationTiles::new(l.inner.clone()));
             nav.set_elevation(Some(std::sync::Arc::new(source)));
         }
     }
@@ -585,6 +636,13 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Object(o)) => {
                 let num = |k: &str| o.get(k).and_then(serde_json::Value::as_f64);
                 let text = |k: &str| o.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+                // an id's place may be in a tile that is not on the phone yet (a chip or result in another area): fetch the tiles around
+                // the end first, as a map search does (it fetches only online, and waits at most as long as a search does)
+                if let (Some(c), Some(id), Some(la), Some(lo)) = (places, text("id"), num("lat"), num("lon")) {
+                    if !id.starts_with("kind:") && !id.starts_with("loc:") {
+                        c.feed.prepare(la, lo, cache_places::feed::SEARCH_PREPARE_WAIT);
+                    }
+                }
                 // a kind: id is the nearest place of that kind to the GPS fix, and the end is that place
                 let found = text("id").and_then(|id| places.and_then(|c| c.lookup_near(&id, near)));
                 let of_kind = text("id").is_some_and(|i| i.starts_with("kind:"));
@@ -675,5 +733,185 @@ impl crate::handle::Handle {
             (None, None) => return Err(Error::bad_json("route_id (or a route object) is required")),
         };
         Ok(route.progress(&req).to_string())
+    }
+}
+
+#[cfg(test)]
+mod end_prepare_tests {
+    use crate::handle::Handle;
+    use cache_places::fixture::{fixture_tiles, write_fixture_common, write_fixture_shard, FIXTURE_BUILD};
+    use cache_places::{merged, PlacesFeed, PrepareAnswer};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const BURLEY: (f64, f64) = (42.5357, -113.7928);
+
+    fn merged_db(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let common = dir.join("common-src.sqlite");
+        write_fixture_common(&common, FIXTURE_BUILD);
+        let mut c = merged::create(&dir.join(format!("{FIXTURE_BUILD}.sqlite")), &common).unwrap();
+        for tile in fixture_tiles() {
+            let shard = dir.join(format!("{tile}.shard"));
+            write_fixture_shard(&shard, tile, FIXTURE_BUILD);
+            merged::merge_tile(&mut c, tile, &shard, "0", 0).unwrap();
+        }
+        merged::set_regions(&c, "Idaho").unwrap();
+        drop(c);
+        std::fs::write(dir.join("CURRENT"), FIXTURE_BUILD).unwrap();
+    }
+
+    /// The regions engine's part: asked for the tiles around a point, it puts the places on the phone.
+    struct Installs {
+        asked: Mutex<Vec<(f64, f64, Duration)>>,
+        dir: std::path::PathBuf,
+        core: Mutex<Option<Arc<cache_places::PlacesCore>>>,
+    }
+    impl PlacesFeed for Installs {
+        fn prepare(&self, lat: f64, lon: f64, wait: Duration) -> PrepareAnswer {
+            self.asked.lock().unwrap().push((lat, lon, wait));
+            merged_db(&self.dir);
+            if let Some(c) = self.core.lock().unwrap().as_ref() {
+                c.packs.recheck();
+            }
+            PrepareAnswer { fetched: 1, ok: true, ..Default::default() }
+        }
+        fn generation(&self) -> u64 {
+            0
+        }
+    }
+
+    fn open(dir: &std::path::Path) -> Handle {
+        Handle::open(&serde_json::json!({"sources": [], "places": {"packs": [], "merged_dir": dir}}).to_string()).unwrap()
+    }
+
+    #[test]
+    fn an_id_end_in_an_area_not_on_the_phone_is_fetched_then_enriched() {
+        let root = std::env::temp_dir().join(format!("cs-endprep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // a place with an osm category, found in a handle that has the tiles
+        let (have, installed) = (root.join("have"), root.join("empty"));
+        merged_db(&have);
+        let h = open(&have);
+        let core = h.ext.map_places.clone().unwrap();
+        let hits = core.search("pharmacy", &cache_places::map::SearchOpts { near: Some(BURLEY), meaning: false, ..Default::default() }, None).unwrap();
+        let id = hits["results"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).find(|id| core.lookup(id).is_some_and(|e| e.osm_category.is_some())).expect("a place with an osm category").to_string();
+        let wanted = core.lookup(&id).unwrap();
+        // the phone with no places: the end is only its id and point
+        let h = open(&installed);
+        let core = h.ext.map_places.clone().unwrap();
+        assert!(core.lookup(&id).is_none());
+        let feed = Arc::new(Installs { asked: Mutex::new(vec![]), dir: installed.clone(), core: Mutex::new(Some(core)) });
+        h.ext.map_places.as_ref().unwrap().plug_feed(feed.clone());
+        let end = h.map_end(Some(&serde_json::json!({"id": id, "lat": wanted.lat, "lon": wanted.lon})), "to").unwrap();
+        assert_eq!(feed.asked.lock().unwrap().as_slice(), [(wanted.lat, wanted.lon, Duration::from_secs(3))], "the tiles around the end are fetched first");
+        assert_eq!(end.osm_category, wanted.osm_category, "the end got the place's own details");
+        // a kind or coordinate end needs no tile of its own
+        h.map_end(Some(&serde_json::json!({"id": "loc:42.5,-113.7", "lat": 42.5, "lon": -113.7})), "to").unwrap();
+        assert_eq!(feed.asked.lock().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    use super::*;
+    use cache_navigate::ElevationTiles;
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A fake elevation host on 127.0.0.1: `status` for every request, the tile's name as the body when 200.
+    fn host(status: u16) -> (u16, Arc<AtomicUsize>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(mut s) = s else { continue };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
+                h.fetch_add(1, Ordering::SeqCst);
+                let body = if status == 200 { line.split_whitespace().nth(1).unwrap_or("").as_bytes().to_vec() } else { vec![] };
+                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(&body);
+            }
+        });
+        (port, hits)
+    }
+
+    fn engine(port: u16, online: bool) -> (Arc<cache_layers::core::Inner>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("elev-{}-{port}-{online}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let inner = cache_layers::core::Inner::open(cache_layers::core::LayersCfg {
+            dir: dir.to_string_lossy().into_owned(),
+            defs_dirs: vec![],
+            catalogue_urls: vec![],
+            cache_max_bytes: 16 * 1024 * 1024,
+            online,
+        })
+        .unwrap();
+        let def = serde_json::json!({
+            "format": 1, "id": ELEVATION_LAYER, "title": "elevation", "kind": "elevation", "transform": "as_is",
+            "source": {"type": "xyz", "url": format!("http://127.0.0.1:{port}/{{z}}/{{x}}/{{y}}"), "minzoom": 0, "maxzoom": 12,
+                       "encoding": "terrarium", "tile_format": "webp", "tile_size": 512},
+            "attribution": "test", "license": "test", "update": {"version": "1"}
+        });
+        inner.save_user_def(&def.to_string()).unwrap();
+        (Arc::new(inner), dir)
+    }
+
+    fn tiles(inner: Arc<cache_layers::core::Inner>) -> LayerElevationTiles {
+        LayerElevationTiles::new(inner)
+    }
+
+    #[test]
+    fn missing_tile_is_streamed_and_kept() {
+        let (port, hits) = host(200);
+        let (inner, dir) = engine(port, true);
+        let t = tiles(inner);
+        assert_eq!(t.z12(5, 7).unwrap().as_deref(), Some(&b"/12/5/7"[..]), "streamed from the source");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(t.z12(5, 7).unwrap().as_deref(), Some(&b"/12/5/7"[..]), "kept: served again");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call needed no network");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn offline_is_none_with_no_network() {
+        let (port, hits) = host(200);
+        let (inner, dir) = engine(port, false);
+        let t = tiles(inner);
+        assert!(matches!(t.z12(5, 7), Err(cache_navigate::ElevError::Unavailable)), "offline: not available, not 'no tile'");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "offline never touches the network");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_tile_it_cannot_have_reads_as_nan_and_is_reported_as_a_gap() {
+        use cache_navigate::ElevationSource;
+        let (port, _hits) = host(200);
+        let (inner, dir) = engine(port, false);
+        let source = cache_navigate::TileElevation::new(tiles(inner));
+        let (row0, col0) = (5 * 512, 7 * 512);
+        let v = source.read_elevation(row0, col0, 4, 4).unwrap();
+        assert!(v.iter().all(|x| x.is_nan()));
+        assert_eq!(source.unavailable_rects(row0, col0, 4, 4), vec![(5 * 512, 7 * 512, 6 * 512, 8 * 512)]);
+        assert!(source.unavailable_rects(row0 + 100 * 512, col0, 4, 4).is_empty(), "a window elsewhere sees no gap");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_network_costs_one_try_not_one_per_tile() {
+        let (port, hits) = host(500);
+        let (inner, dir) = engine(port, true);
+        let t = tiles(inner);
+        for x in [5, 6, 7] {
+            assert!(matches!(t.z12(x, 7), Err(cache_navigate::ElevError::Unavailable)), "tile {x}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "after one failure the router stops asking for a while");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

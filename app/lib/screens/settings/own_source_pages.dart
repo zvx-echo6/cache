@@ -255,7 +255,7 @@ class _OwnSourceFormPageState extends State<OwnSourceFormPage> {
       side: BorderSide(color: k.accent, width: 1.5),
       minimumSize: const Size(0, 40),
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      shape: const StadiumBorder(),
+      shape: kControlShape,
     ),
     child: Text(label, style: const TextStyle(fontSize: 14)),
   )));
@@ -646,13 +646,13 @@ class _OwnImportPageState extends State<OwnImportPage> {
             children: [
               OutlinedButton(
                 onPressed: _busy ? null : () => setState(() => _preview = null),
-                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: const StadiumBorder(), foregroundColor: k.text, side: BorderSide(color: k.secondary.withValues(alpha: 0.6), width: 1.5)),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: kControlShape, foregroundColor: k.text, side: BorderSide(color: k.secondary.withValues(alpha: 0.6), width: 1.5)),
                 child: const Text('Cancel', style: TextStyle(fontSize: 16)),
               ),
               FilledButton(
                 key: const ValueKey('import-add'),
                 onPressed: _busy ? null : _add,
-                style: FilledButton.styleFrom(minimumSize: const Size(0, 48), shape: const StadiumBorder()),
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 48), shape: kControlShape),
                 child: const Text('Add these sources', style: TextStyle(fontSize: 16)),
               ),
             ],

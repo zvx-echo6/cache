@@ -448,6 +448,8 @@ class _CacheAppState extends State<CacheApp> {
     // (the network rule, the folders, background rounds).
     remote: plat.isWeb ? HttpTransport() : null,
     kinds: dataKinds,
+    // Sync now first runs the notebook pass, so the round carries the latest notebook change (the phone only: a browser has none).
+    beforeSync: plat.isWeb ? null : () => connections.syncAllAndWait(),
     // The notebooks are told in the notebook sync's own words (connections.dart say), never file by file.
     quiet: const ['notebooks'],
     // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
@@ -487,6 +489,7 @@ class _CacheAppState extends State<CacheApp> {
       recommended: () => RecommendedModels.shared.models,
     ),
     keys: () => appSyncedKeys(weather: weather, webSearch: webSearch, secrets: plat.isWeb ? const NoTokenStore() : const SecureTokenStore()),
+    onServerKeysChanged: () => unawaited(hub.apiKeys.rescan()),
     storeKey: (name, value) => keepSyncedKey(name, value, weather: weather, webSearch: webSearch),
     dir: () async => _support(kSettingsShareDir),
     // Only when the person taps Download: a model a linked device uses is never downloaded on its own.

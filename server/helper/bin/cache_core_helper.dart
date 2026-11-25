@@ -123,6 +123,9 @@ Future<void> main() async {
     host.keyNames = settingsSync.keyNames;
     host.onLinkSet = settingsSync.linkSetByBrowser;
     host.setKeyOn = settingsSync.setKeyOnFromBrowser;
+    host.includeKeys = settingsSync.includeKeyDevices;
+    host.setIncludeKeys = settingsSync.setIncludeKeys;
+    host.onUnlinked = settingsSync.forgetPeer;
     unawaited(settingsSync.start());
   }
   // Not awaited: the helper is ready at once, and sharing starts (when it was set up) in the background.

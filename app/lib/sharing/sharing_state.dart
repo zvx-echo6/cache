@@ -49,6 +49,7 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _drainLog = drainLog ?? drainSyncLog,
@@ -67,6 +68,18 @@ class SharingState extends ChangeNotifier {
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
+
+  /// Run, and waited for, before a Sync now round starts: the notebook pass that writes pending notebook changes into the share
+  /// folder (it otherwise runs 2 s after a change and every 2 minutes), so the round carries the latest change.
+  final Future<void> Function()? beforeSync;
+
+  Future<void> _prepare() async {
+    try {
+      await beforeSync?.call();
+    } catch (e) {
+      _log('Sync now: the notebook pass failed ($e)');
+    }
+  }
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -209,17 +222,23 @@ class SharingState extends ChangeNotifier {
   Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
 
   /// Cache Server only: the names of the keys the server keeps that can go to a linked device, each with the devices it is ticked
-  /// for. Names and ticks only: a key itself never reaches a browser.
-  Future<List<({String name, Set<String> on})>> serverKeys() async => _serverKeys(await _call('key_names'));
+  /// for, and the devices with "Include API keys" on. Names and ticks only: a key itself never reaches a browser.
+  Future<ServerKeys> serverKeys() async => _serverKeys(await _call('key_names'));
 
   /// Cache Server only: ticks or unticks the key [name] for [peer]; answers like [serverKeys].
-  Future<List<({String name, Set<String> on})>> setServerKeyOn(String peer, String name, bool on) async =>
+  Future<ServerKeys> setServerKeyOn(String peer, String name, bool on) async =>
       _serverKeys(await _call('set_key_on', {'peer': peer, 'name': name, 'on': on}));
 
-  List<({String name, Set<String> on})> _serverKeys(Map<String, dynamic> r) => [
-    for (final k in (r['keys'] as List? ?? const []))
-      if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
-  ];
+  /// Cache Server only: the "Include API keys" switch for [peer]; answers like [serverKeys].
+  Future<ServerKeys> setServerIncludeKeys(String peer, bool on) async => _serverKeys(await _call('set_include_keys', {'peer': peer, 'on': on}));
+
+  ServerKeys _serverKeys(Map<String, dynamic> r) => (
+    keys: [
+      for (final k in (r['keys'] as List? ?? const []))
+        if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
+    ],
+    include: {for (final p in (r['include'] as List? ?? const [])) '$p'},
+  );
 
   /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
   Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
@@ -349,6 +368,70 @@ class SharingState extends ChangeNotifier {
 
   String get name => (status['name'] as String?) ?? deviceName;
 
+  /// The entry points the person entered (the engine's `entry_points`), as last read; empty until the first read, and in a browser
+  /// (Cache Server's sharing host does not carry them yet).
+  List<EntryPoint> entries = const [];
+
+  /// The entry point with this id, or null (removed, or not read yet).
+  EntryPoint? entryOf(String id) => entries.where((e) => e.id == id).firstOrNull;
+
+  /// The host of the entry point [id], or null when it is not in the list.
+  String? entryHostOf(String id) => entryOf(id)?.host;
+
+  /// How many entry points are on (the count the Sharing page says).
+  int get entriesOn => entries.where((e) => e.on).length;
+
+  /// The id of the entry point a route comes in through (`entry:ID` in a peer's `via`), or null for any other route.
+  static String? entryIdOfVia(Object? via) => via is String && via.startsWith('entry:') ? via.substring(6) : null;
+
+  /// How many of the linked devices answer through the entry point [id] right now.
+  int onlineThrough(String id) => peers.where((p) => p['live'] != false && p['error'] == null && entryIdOfVia(p['via']) == id).length;
+
+  /// How the link to the linked device [peer] is judged now ("fast", "medium" or "slow"; step 3), or null when the engine does not say.
+  String? speedOf(String peer) => peerOf(peer)?['speed'] as String?;
+
+  /// What the engine holds back from [peer] until a faster connection (`waiting` in the status): `{peer, peer_name, share_id, share,
+  /// path, what: "file" or "list", size, reason}`.
+  List<Map<String, dynamic>> waitingFor(String peer) => [
+    for (final w in (status['waiting'] as List? ?? const []))
+      if (w is Map && w['peer'] == peer) w.cast<String, dynamic>(),
+  ];
+
+  /// Reads the entry points again (the poll does it with the status).
+  Future<void> refreshEntries() => _driver.refresh();
+
+  /// Adds an entry point (no [id]) or edits one. A field left null stays as it was; a [passphrase] left null keeps the one saved.
+  /// Returns the id. The engine refuses an address it can't use, a port outside 1 to 65535, a private one with no network name or
+  /// passphrase, and one already in the list, each with its own plain message.
+  Future<String> entryPointSet({
+    String? id,
+    String? host,
+    int? port,
+    bool? private,
+    String? networkName,
+    String? passphrase,
+    bool? on,
+    int? capBytes,
+  }) async {
+    final r = await _call('entry_point_set', {
+      'id': ?id,
+      'host': ?host,
+      'port': ?port,
+      'private': ?private,
+      'network_name': ?networkName,
+      'passphrase': ?passphrase,
+      'on': ?on,
+      'cap_bytes': ?capBytes,
+    });
+    return (r['id'] as String?) ?? id ?? '';
+  }
+
+  /// Turns one entry point on or off (off keeps its settings).
+  Future<void> entryPointOn(String id, bool on) => _call('entry_point_on', {'id': id, 'on': on});
+
+  /// Removes one entry point from this device and every linked device.
+  Future<void> entryPointRemove(String id) => _call('entry_point_remove', {'id': id});
+
   final List<Map<String, dynamic>> _extraLog = [];
 
   /// A line this app adds to the Activity (the notebook sync's: the engine's own log has the file transfers).
@@ -395,10 +478,14 @@ class SharingState extends ChangeNotifier {
   Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
 
   /// Sync now: everything ("Sync all now").
-  Future<void> syncNow() => _call('sync_now');
+  Future<void> syncNow() async {
+    await _prepare();
+    await _call('sync_now');
+  }
 
   /// Sync now for one kind ("Sync all" on its page): its shared folders only.
   Future<void> syncKind(DataKind k) async {
+    await _prepare();
     final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
     if (ids.isEmpty) return;
     await _call('sync_now', {'shares': ids});
@@ -411,7 +498,10 @@ class SharingState extends ChangeNotifier {
   });
 
   /// Sync now with one linked device only.
-  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+  Future<void> syncPeer(String peer) async {
+    await _prepare();
+    await _call('sync_now', {'peer': peer});
+  }
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
   /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch, a
@@ -825,6 +915,11 @@ class _PhoneDriver implements SharingDriver {
       s.status = await c.call('status');
       s._drainNow();
       s._noteShareChanges();
+      s._changed();
+    } catch (_) {}
+    // The entry points (step 4); an engine without them leaves the list as it was.
+    try {
+      s.entries = EntryPoint.listFrom(await c.call('entry_points'));
       s._changed();
     } catch (_) {}
   }
@@ -1289,6 +1384,62 @@ class _WebDriver implements SharingDriver {
 /// A folder linked devices keep the same whatever the person ticks, and its sync rules (the sync engine's patterns, see
 /// cache_sync's Config): [exclude] never travels, a delete under [localDeletes] stays on the device that made it, a file under
 /// [last] comes after the rest of what arrives with it. What it fetches is set with [SharingState.setOnly].
+/// An entry point: an rnsd the person entered (address and port, plus a network name and passphrase for a private one), as the
+/// engine's `entry_points` lists it. The passphrase is never given back, only whether there is one.
+class EntryPoint {
+  const EntryPoint({
+    required this.id,
+    required this.host,
+    required this.port,
+    this.private = false,
+    this.networkName,
+    this.hasPassphrase = false,
+    this.on = true,
+    this.capBytes = defaultCapBytes,
+    this.state = 'connecting',
+    this.checked,
+  });
+
+  /// The biggest file that goes through an entry point unless the person says otherwise (50 MB).
+  static const int defaultCapBytes = 50 * 1024 * 1024;
+
+  final String id;
+  final String host;
+  final int port;
+  final bool private;
+  final String? networkName;
+  final bool hasPassphrase;
+  final bool on;
+  final int capBytes;
+
+  /// Where it stands now: `off`, `connecting`, `connected`, `not_answering`, `mismatch`, `nothing_heard` or `not_running`.
+  final String state;
+
+  /// When that was looked at (ms since the Unix epoch).
+  final int? checked;
+
+  static EntryPoint? from(Object? v) {
+    if (v is! Map || v['id'] is! String || v['host'] is! String) return null;
+    return EntryPoint(
+      id: v['id'] as String,
+      host: v['host'] as String,
+      port: (v['port'] as num?)?.toInt() ?? 0,
+      private: v['private'] == true,
+      networkName: v['network_name'] as String?,
+      hasPassphrase: v['has_passphrase'] == true,
+      on: v['on'] != false,
+      capBytes: (v['cap_bytes'] as num?)?.toInt() ?? defaultCapBytes,
+      state: (v['status'] as String?) ?? 'connecting',
+      checked: (v['checked'] as num?)?.toInt(),
+    );
+  }
+
+  /// The list the engine's `entry_points` answers (`{"entries": [...]}`).
+  static List<EntryPoint> listFrom(Map<String, dynamic> r) => [
+    for (final e in (r['entries'] as List? ?? const [])) ?from(e),
+  ];
+}
+
 class AlwaysShared {
   const AlwaysShared({
     required this.id,
@@ -1351,6 +1502,10 @@ abstract class SyncCoreLike {
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args]);
   Future<void> close();
 }
+
+/// What a Cache Server tells a browser about keys: the keys it holds with the devices each is ticked for, and the devices with
+/// "Include API keys" on.
+typedef ServerKeys = ({List<({String name, Set<String> on})> keys, Set<String> include});
 
 typedef SyncOpener = Future<SyncCoreLike> Function(Map<String, Object?> config);
 

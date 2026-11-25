@@ -9,7 +9,10 @@ import '../../guide/place_link.dart' show LinkText;
 /// and API keys while they go. The device it is chosen on is where settings come from. On the device that follows the other's
 /// settings, the middle choice says so ("Follows Desk's settings").
 class DeviceSettingsSection extends StatelessWidget {
-  const DeviceSettingsSection({super.key, required this.sync, required this.peer, required this.name, this.known = true, this.busy = false});
+  const DeviceSettingsSection({super.key, required this.sync, required this.peer, required this.name, this.known = true, this.busy = false, this.label = 'Settings'});
+
+  /// The heading over the choices (a device's page calls it "This link").
+  final String label;
 
   final SettingsSync sync;
   final String peer;
@@ -55,7 +58,7 @@ class DeviceSettingsSection extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const GroupLabel('Settings'),
+            GroupLabel(label),
             SettingsGroup(
               rows: [
                 choice('match', SettingsLink.match, 'Match both ways', 'Changes on either device go to both.'),
@@ -353,6 +356,9 @@ class _SettingsGroupPageState extends State<SettingsGroupPage> {
   }
 }
 
+/// The line under "Include API keys" while it is on: "All keys shared", or "3 keys, 2 shared" when some are left out.
+String _sharedLine(int keys, int shared) => shared >= keys ? 'All keys shared' : '$keys keys, $shared shared';
+
 /// Settings > Sharing and sync > a device > API keys: one "Include API keys" switch (off for a newly linked device), and under it each key
 /// that can be left out. Keys saved later follow the switch. Keys are never written to a synced folder.
 class ApiKeysPage extends StatelessWidget {
@@ -377,7 +383,7 @@ class ApiKeysPage extends StatelessWidget {
                 SwitchRow(
                   key: const ValueKey('include-keys'),
                   title: 'Include API keys',
-                  status: [Part(on ? 'All keys go to $name' : 'No keys go to $name')],
+                  status: [Part(on ? _sharedLine(keys.length, sync.keysOn(peer)) : 'No keys go to $name')],
                   value: on,
                   onChanged: (v) => sync.setIncludeKeys(peer, v),
                 ),

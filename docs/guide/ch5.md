@@ -155,7 +155,7 @@ The wedges are:
 - "Save": keeps the spot in a notebook.
 - "Measure": measures distance from the spot.
 
-Tap the center to open the spot's coordinate card. It shows latitude and longitude, grid reference, Plus Code and nearest town.
+Tap the center to open the spot's coordinate card. It shows latitude and longitude, grid reference, Plus Code and nearest town. A tap on open ground on the map opens the same card.
 
 - "Add stop" shows only while a route is shown.
 
@@ -363,6 +363,8 @@ The row's menu has "Sync now", "Pause" or "Resume", and "Disconnect".
 - If Cache can't read a file, it leaves it alone. Tap "Ignore".
 
 Your other devices are on the same "Connections" screen. See Sharing and sync: choose what to share in chapter 3.
+
+Deleting an entry in Cache deletes it on your other linked devices too. A notebook file removed outside Cache never deletes anything; Cache puts it back.
 
 ## Ask Cache to add to a notebook
 

@@ -7,6 +7,7 @@ import 'package:material_symbols_icons/symbols.dart';
 
 import '../maps/palette/map_palette.dart';
 import '../maps/poi_chips.dart' show kPoiChipSize, paintPoiChip, poiChipLook;
+import '../theme.dart' show isFlatIconTheme;
 import 'road_event.dart';
 import 'road_map_layers.dart';
 
@@ -25,7 +26,7 @@ IconData roadChipGlyph(RoadEventKind kind) => switch (kind) {
 Future<Uint8List> renderRoadChipPng(RoadEventKind kind, MapPalette p, {double ratio = 3}) async {
   final rec = ui.PictureRecorder();
   final c = Canvas(rec)..scale(ratio);
-  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), roadChipGlyph(kind), poiChipLook(p, roadEventRole(kind)));
+  paintPoiChip(c, const Offset(kPoiChipSize / 2, kPoiChipSize / 2), roadChipGlyph(kind), poiChipLook(p, roadEventRole(kind)), flat: isFlatIconTheme(p.id), ratio: ratio);
   final px = (kPoiChipSize * ratio).round();
   final img = await rec.endRecording().toImage(px, px);
   return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();

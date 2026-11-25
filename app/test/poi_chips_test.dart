@@ -83,7 +83,7 @@ void main() {
           for (final k in i.kinds) {
             expect(match, contains('"$k"'));
           }
-          expect(match, contains('"${i.image}"'));
+          expect(match, contains('"${i.imageFor(flat: isFlatIconTheme(id))}"'), reason: 'the chip image of the $id theme');
         }
         expect(jsonEncode(layout['symbol-sort-key']), contains('"hospital"'));
         // The filter: a drawn kind whose min_zoom (two less for the early kinds) has been reached.
@@ -124,7 +124,7 @@ void main() {
         final bytes = (await img.toByteData())!;
         int a(int x, int y) => bytes.getUint8((y * img.width + x) * 4 + 3);
         expect(a(0, 0), 0, reason: 'the corner is clear: the chip is round');
-        expect(a(36, 8), greaterThan(200), reason: 'inside the edge ring at the top of the disc');
+        expect(a(36, 12), greaterThan(200), reason: 'inside the disc, near its top');
       });
     });
 
@@ -137,10 +137,15 @@ void main() {
             names.add(n);
             expect(png.length, greaterThan(100));
           }, mapPaletteFor(id), ratio: 3);
-          expect(names, [for (final i in poiIcons) i.image]);
+          expect(names, [for (final i in poiIcons) i.imageFor(flat: isFlatIconTheme(id))]);
           seen[id.name] = await renderPoiChipPng(poiIcons[1], mapPaletteFor(id), ratio: 3);
         }
-        expect({for (final b in seen.values) base64Encode(b)}.length, 4);
+        // Dark and Tactical differ from each other and from the flat look; light and Parchment now share the flat look (they differ by
+        // the group colour only, which is the same for this chip in both).
+        final distinct = {for (final b in seen.values) base64Encode(b)}.length;
+        expect(distinct, greaterThanOrEqualTo(3));
+        expect(base64Encode(seen['dark']!), isNot(base64Encode(seen['light']!)));
+        expect(base64Encode(seen['tactical']!), isNot(base64Encode(seen['dark']!)));
       });
     });
 
@@ -168,9 +173,9 @@ void main() {
           return renderPoiChipPng(icon, p, ratio: ratio, dot: dot);
         });
         expect(fuelTries, 2, reason: 'tried, then once more');
-        expect(added.keys.toSet(), {for (final i in poiIcons) i.image}, reason: 'every kind has an image');
+        expect(added.keys.toSet(), {for (final i in poiIcons) i.imageFor(flat: true)}, reason: 'every kind has an image (the flat look of the light theme)');
         final full = await renderPoiChipPng(poiIcons.first, mapPaletteFor(CacheThemeId.light), ratio: 3);
-        expect(added['poi-fuel'], isNot(full), reason: 'the dot is not the chip');
+        expect(added['poi-fuel-f'], isNot(full), reason: 'the dot is not the chip');
         expect(log.where((l) => l.contains('poi-fuel')).length, 3, reason: 'two failures and the dot, logged');
       });
     });
@@ -184,7 +189,7 @@ void main() {
           if (icon.id == 'food' && !dot && ++tries == 1) throw StateError('once');
           return renderPoiChipPng(icon, p, ratio: ratio, dot: dot);
         });
-        expect(added['poi-food'], await renderPoiChipPng(poiIcons.firstWhere((i) => i.id == 'food'), mapPaletteFor(CacheThemeId.light), ratio: 3));
+        expect(added['poi-food-f'], await renderPoiChipPng(poiIcons.firstWhere((i) => i.id == 'food'), mapPaletteFor(CacheThemeId.light), ratio: 3));
       });
     });
 

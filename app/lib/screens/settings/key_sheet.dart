@@ -207,7 +207,7 @@ class _KeySheetState extends State<KeySheet> {
                       OutlinedButton(
                         key: const ValueKey('paste-key'),
                         onPressed: _busy ? null : _paste,
-                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: const StadiumBorder(), side: BorderSide(color: k.accent, width: 1.5)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: kControlShape, side: BorderSide(color: k.accent, width: 1.5)),
                         child: const Text('Paste'),
                       ),
                     ],
@@ -243,13 +243,13 @@ class _KeySheetState extends State<KeySheet> {
               children: [
                 OutlinedButton(
                   onPressed: _busy ? null : () => Navigator.pop(context, false),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: const StadiumBorder(), foregroundColor: k.text, side: BorderSide(color: k.secondary.withValues(alpha: 0.6), width: 1.5)),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48), shape: kControlShape, foregroundColor: k.text, side: BorderSide(color: k.secondary.withValues(alpha: 0.6), width: 1.5)),
                   child: const Text('Cancel', style: TextStyle(fontSize: 16)),
                 ),
                 FilledButton(
                   key: const ValueKey('check-and-save'),
                   onPressed: _busy || empty ? null : _save,
-                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48), shape: const StadiumBorder()),
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48), shape: kControlShape),
                   child: _busy
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5))
                       : const Text('Check and save', style: TextStyle(fontSize: 16)),

@@ -608,6 +608,8 @@ class NavState extends ChangeNotifier {
     final base = MapPlace.pin(lat, lon, name: pinName(lat, lon), formats: {'decimal': formatDecimal(lat, lon), 'dms': formatDms(lat, lon)});
     selected = base;
     searchOpen = false;
+    // The search bar shows the pin's name, as it does for any chosen place.
+    query = base.name;
     notifyListeners();
     try {
       final r = await backend.search('${lat.toStringAsFixed(6)},${lon.toStringAsFixed(6)}', near: here, limit: 1, meaning: false);
@@ -916,9 +918,10 @@ class NavState extends ChangeNotifier {
         outsideMaps = r.errors.isNotEmpty && r.errors.first.code == 'out_of_coverage';
       } else {
         routes = [r, ...r.alternatives];
-        if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
-          _events.add(const NavNotice('Part of this trip is off the roads, and the off-road map data is not on this device'));
-        }
+        final off = r.warnings.where((w) => w.code == 'offroad_unavailable').firstOrNull;
+        if (off != null) _events.add(NavNotice(offroadNoticeText(off.reason)));
+        // The off-road data has a hole along the way and the route goes around it (the core's offroad_data_gap warning).
+        if (r.warnings.any((w) => w.code == 'offroad_data_gap')) _events.add(const NavNotice('Off-road data missing here, so the route goes around it.'));
       }
     } catch (e) {
       if (seq != _routeSeq) return;
@@ -928,6 +931,14 @@ class NavState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// The notice for a route with a leg off the roads that got no off-road way, by the warning's reason (the first warning's, when several).
+  static String offroadNoticeText(String? reason) => switch (reason) {
+        'not_downloaded' => 'Part of this trip is off the roads, and the off-road data for this area isn\'t on the phone.',
+        'no_data' => 'Part of this trip is off the roads, and there is no off-road data for this area.',
+        'no_way_found' => 'Part of this trip is off the roads, and Cache couldn\'t find an off-road way there.',
+        _ => 'Part of this trip is off the roads, and the off-road map data is not on this device',
+      };
 
   /// A route the core could not make, in words for people.
   static String routeErrorText(MapRoute r) {

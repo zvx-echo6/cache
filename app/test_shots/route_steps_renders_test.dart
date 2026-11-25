@@ -124,8 +124,10 @@ Future<void> _draw(WidgetTester tester, {required String name, required Size siz
     await settle();
     expect(nav.phase, NavPhase.previewing);
     if (step != null) {
-      // The panel's next arrow shows the first turn; each next after it the one after.
-      for (var i = 0; i <= step; i++) {
+      // "Turns" on the panel shows the first turn; the card's next arrow shows each one after it.
+      await tester.tap(find.byKey(const ValueKey('route-turns')));
+      await settle();
+      for (var i = 0; i < step; i++) {
         await tester.tap(find.byKey(const ValueKey('step-next')));
         await settle();
       }

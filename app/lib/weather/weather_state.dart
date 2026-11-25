@@ -737,6 +737,12 @@ class WeatherState extends ChangeNotifier {
     return cats.any((c) => _now().difference(c.fetchedAt) > const Duration(days: 1));
   }
 
+  /// Reads again which keys are saved (a browser's server keystore changed under this tab).
+  Future<void> rescanKeys() async {
+    await _readKeys();
+    notifyListeners();
+  }
+
   Future<void> _readKeys() async {
     _keys.clear();
     final aliases = <String>{for (final c in [..._builtIn, for (final k in _catalogues) ...k.connectors, ...?roads?.connectors]) ?c.keyAlias, ...?roads?.allKeyAliases};

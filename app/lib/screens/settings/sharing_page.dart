@@ -13,6 +13,7 @@ import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
 import 'link_code_page.dart';
+import 'ways_to_connect_page.dart';
 import 'link_scan_screen.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
@@ -311,7 +312,7 @@ class _SharingPageState extends State<SharingPage> {
               NoteText(
                 'Link your Cache devices and keep their library, maps, models and videos the same, over Wi-Fi nearby or the internet. '
                 'Devices talk to each other directly; nothing goes through a Cache server. '
-                '${s.onServer ? 'Setting up gives this server its own identity for linking with your devices.' : 'Setting up creates this device\'s identity.'}',
+                '${s.onServer ? 'Setting up gives Cache on this computer its own identity for linking with your devices.' : 'Setting up creates this device\'s identity.'}',
               ),
               FilledButton(onPressed: _busy ? null : () => _run(s.setUp), child: const Text('Set up sharing')),
             ],
@@ -343,9 +344,11 @@ class _SharingPageState extends State<SharingPage> {
                   icon: s.onServer ? Icons.dns : Icons.smartphone,
                   title: s.name,
                   status: [
-                    online ? Part(relay != null ? 'Online' : 'Local network only', relay != null ? Tone.ok : Tone.warn) : const Part('Paused: no network it may use', Tone.warn),
-                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free, keeps ${formatBytes(st['reserve_bytes'] as int)} free'),
+                    // "Wi-Fi and 2 entry points · 10.0 GB free" (a browser's server has no entry points to list).
+                    online ? Part(s.onServer ? (relay != null ? 'Online' : 'Local network only') : thisDeviceWays(s.entriesOn), s.onServer ? (relay != null ? Tone.ok : Tone.warn) : Tone.normal) : const Part('Paused: no network it may use', Tone.warn),
+                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free'),
                   ],
+                  statusLines: 2,
                   onTap: _rename,
                 ),
               ],
@@ -358,7 +361,7 @@ class _SharingPageState extends State<SharingPage> {
                     key: ValueKey('peer-${p['id']}'),
                     icon: Icons.devices_other,
                     title: p['name'] as String? ?? '',
-                    status: peerStatus(p),
+                    status: peerStatus(p, entryHost: s.entryHostOf),
                     statusLines: 2,
                     onTap: () => _peer(p),
                   ),
@@ -366,6 +369,19 @@ class _SharingPageState extends State<SharingPage> {
                 SettingsRow(key: const ValueKey('enter-code'), icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
               ],
             ),
+            if (!s.onServer)
+              SettingsGroup(
+                label: 'Ways to connect',
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('ways-to-connect'),
+                    title: 'Ways to connect',
+                    status: [Part(waysSummary(s.entriesOn))],
+                    statusLines: 2,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WaysToConnectPage(sharing: s))),
+                  ),
+                ],
+              ),
             SettingsGroup(
               label: 'Shared with linked devices',
               rows: [
@@ -436,19 +452,51 @@ class _SharingPageState extends State<SharingPage> {
   }
 }
 
-/// "Same Wi-Fi · Last seen just now", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
-/// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
-/// via a relay"), not as a connection.
-List<Part> peerStatus(Map<String, dynamic> p) {
+/// How a linked device is reached now, from the engine's `via` and `speed` (step 3's class of the link).
+enum RouteKind { wifi, entry, slow, relay, direct }
+
+/// The way [p] is reached, and, through an entry point, the host it comes in through ([entryHost] gives it for an id; null or an
+/// unknown id says "the internet"). Only what the engine knows: Wi-Fi, an entry point, or a link it judges slow (a slow link that is
+/// not Wi-Fi and not through an entry point, and live now). Through an entry point or on Wi-Fi the route is named as it is, however
+/// fast it measures.
+({RouteKind kind, String? host}) peerRoute(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
+  final via = p['via'];
+  final entryId = SharingState.entryIdOfVia(via);
+  if (entryId != null) return (kind: RouteKind.entry, host: entryHost?.call(entryId));
+  if (via == 'wifi') return (kind: RouteKind.wifi, host: null);
+  if (p['speed'] == 'slow' && p['live'] != false) return (kind: RouteKind.slow, host: null);
+  return (kind: via == 'relay' ? RouteKind.relay : RouteKind.direct, host: null);
+}
+
+/// "Same Wi-Fi · Last seen just now", "Through rt.example.net · Last seen just now", "Connected, slow link: small items only · Last seen
+/// 5 min ago", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since
+/// linking". The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h
+/// ago via a relay"), not as a connection.
+List<Part> peerStatus(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
-  final relay = p['via'] == 'relay';
-  final wifi = p['via'] == 'wifi';
+  final r = peerRoute(p, entryHost: entryHost);
+  final through = r.host ?? 'the internet';
   final lastSeen = seen == null ? 'Never connected since linking' : 'Last seen ${_ago(seen)}';
   if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · $lastSeen')];
   if (seen == null) return const [Part('Checking…')];
-  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : (wifi ? 'Wi-Fi' : 'direct')}')];
-  return [Part(relay ? 'Connected through a relay' : (wifi ? 'Same Wi-Fi' : 'Connected directly'), Tone.ok), Part(' · $lastSeen')];
+  if (p['live'] == false) {
+    final how = switch (r.kind) {
+      RouteKind.relay => 'a relay',
+      RouteKind.wifi => 'Wi-Fi',
+      RouteKind.entry => through,
+      RouteKind.slow || RouteKind.direct => 'direct',
+    };
+    return [Part('$lastSeen via $how')];
+  }
+  final now = switch (r.kind) {
+    RouteKind.relay => 'Connected through a relay',
+    RouteKind.wifi => 'Same Wi-Fi',
+    RouteKind.entry => 'Through $through',
+    RouteKind.slow => 'Connected, slow link: small items only',
+    RouteKind.direct => 'Connected directly',
+  };
+  return [Part(now, Tone.ok), Part(' · $lastSeen')];
 }
 
 /// Asks before a linked device is unlinked. True when the person said Unlink.
@@ -747,35 +795,49 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
         final name = p['name'] as String? ?? '';
         final free = p['free_bytes'];
         final k = context.t;
+        final status = peerStatus(p, entryHost: s.entryHostOf);
         return SettingsPage(
           title: name,
           children: [
-            Material(
-              key: const ValueKey('device-status'),
-              color: k.surface,
-              borderRadius: BorderRadius.circular(16),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    statusText(context, peerStatus(p), size: 14, maxLines: null),
-                    if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
-                    if (neverReached(p)) ...[
-                      const SizedBox(height: 10),
-                      Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        key: const ValueKey('device-unlink-never'),
-                        icon: Icon(Icons.link_off, size: 18, color: k.emergency),
-                        label: Text('Unlink', style: TextStyle(color: k.emergency)),
-                        onPressed: _busy ? null : () => _unlink(name),
-                      ),
-                    ],
-                  ],
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const GroupLabel('Status'),
+                Material(
+                  key: const ValueKey('device-status'),
+                  color: k.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // The row's line, with its first part as the heading.
+                        Text(status.first.text, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                        // While it is connected the heading is all (it is here now); otherwise when it was last seen.
+                        if (status.length > 1 && status.first.tone != Tone.ok) ...[
+                          const SizedBox(height: 2),
+                          statusText(context, [Part(status.skip(1).map((x) => x.text).join().replaceFirst(' · ', ''))], size: 14, maxLines: null),
+                        ],
+                        if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
+                        if (neverReached(p)) ...[
+                          const SizedBox(height: 10),
+                          Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const ValueKey('device-unlink-never'),
+                            icon: Icon(Icons.link_off, size: 18, color: k.emergency),
+                            label: Text('Unlink', style: TextStyle(color: k.emergency)),
+                            onPressed: _busy ? null : () => _unlink(name),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
+            if (s.waitingFor(widget.peer).isNotEmpty) _Waiting(items: s.waitingFor(widget.peer)),
             if (widget.settingsSync != null)
               DeviceSettingsSection(
                 key: const ValueKey('device-settings'),
@@ -785,42 +847,139 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 // Known once it has answered: an older version never says it keeps links.
                 known: p['link_known'] == true || p['last_seen'] == null,
                 busy: _busy,
+                label: 'This link',
               ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton.icon(
-                  key: const ValueKey('device-sync'),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Sync now'),
-                  onPressed: _busy
-                      ? null
-                      : () => _run(() async {
-                          final result = s.syncResult(peer: widget.peer, working: 'Syncing with $name');
-                          await s.syncPeer(widget.peer);
-                          if (context.mounted) say(context, result);
-                        }),
-                ),
-              ],
-            ),
             SettingsGroup(
               rows: [
-                SettingsRow(key: const ValueKey('device-rename'), icon: Icons.edit_outlined, title: 'Rename', chevron: false, onTap: _busy ? null : () => _rename(name)),
                 SettingsRow(
-                  key: const ValueKey('device-unlink'),
-                  leading: Icon(Icons.link_off, size: 22, color: k.emergency),
-                  title: 'Unlink',
-                  danger: true,
-                  status: const [Part('It can no longer connect to this device. Files already here stay.')],
-                  statusLines: null,
-                  chevron: false,
-                  onTap: _busy ? null : () => _unlink(name),
+                  key: const ValueKey('device-activity'),
+                  title: 'Activity',
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _ActivityPage(sharing: s))),
                 ),
+                SettingsRow(key: const ValueKey('device-rename'), title: 'Rename', onTap: _busy ? null : () => _rename(name)),
               ],
+            ),
+            FilledButton(
+              key: const ValueKey('device-sync'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              onPressed: _busy
+                  ? null
+                  : () => _run(() async {
+                      final result = s.syncResult(peer: widget.peer, working: 'Syncing with $name');
+                      await s.syncPeer(widget.peer);
+                      if (context.mounted) say(context, result);
+                    }),
+              child: const Text('Sync now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            OutlinedButton(
+              key: const ValueKey('device-unlink'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                foregroundColor: k.emergency,
+                side: BorderSide(color: k.emergency.withValues(alpha: 0.7), width: 1.5),
+              ),
+              onPressed: _busy ? null : () => _unlink(name),
+              child: const Text('Unlink', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// A device's Activity: the engine's log and this app's own lines, newest first (the same list as the Activity on Sharing and sync).
+class _ActivityPage extends StatelessWidget {
+  const _ActivityPage({required this.sharing});
+
+  final SharingState sharing;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: sharing,
+    builder: (context, _) {
+      final entries = sharing.activity;
+      return SettingsPage(
+        title: 'Activity',
+        children: [
+          if (entries.isEmpty) const NoteText('Nothing yet.'),
+          for (final e in entries.take(30))
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+              title: Text(e['text'] as String? ?? ''),
+              trailing: Text(_ago(e['at'] as int?), style: TextStyle(color: context.t.secondary, fontSize: 12)),
+            ),
+        ],
+      );
+    },
+  );
+}
+
+/// What waits for a faster connection, grouped by kind the way mockup 5 names it: "Region map" for the map files (any number) and "N
+/// photos" for a notebook's photos. Any other kind is named by its share's name (a library, models, videos...), and a folder's whole
+/// list by its share's name too; each row adds up the sizes of its files.
+List<({String label, int bytes})> waitingGroups(List<Map<String, dynamic>> items) {
+  const maps = {'maps', 'regions'};
+  const photoExt = {'jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'gif'};
+  final order = <String>[];
+  final bytes = <String, int>{};
+  final photos = <String, int>{};
+  final names = <String, String>{};
+  for (final w in items) {
+    final share = (w['share_id'] as String?) ?? '';
+    final path = (w['path'] as String?) ?? '';
+    final ext = path.contains('.') ? path.split('.').last.toLowerCase() : '';
+    final String key;
+    if (maps.contains(share)) {
+      key = 'maps';
+      names[key] = 'Region map';
+    } else if (share == 'notebooks' && w['what'] == 'file' && photoExt.contains(ext)) {
+      key = 'photos';
+      photos[key] = (photos[key] ?? 0) + 1;
+    } else {
+      key = 'share:$share';
+      names[key] = (w['share'] as String?) ?? share;
+    }
+    if (!order.contains(key)) order.add(key);
+    bytes[key] = (bytes[key] ?? 0) + ((w['size'] as num?)?.toInt() ?? 0);
+  }
+  return [
+    for (final key in order)
+      (
+        label: key == 'photos' ? (photos[key] == 1 ? '1 photo' : '${photos[key]} photos') : names[key]!,
+        bytes: bytes[key]!,
+      ),
+  ];
+}
+
+/// "Waiting for a faster connection": what the engine holds back from a device until a faster link, one row per kind with its size.
+class _Waiting extends StatelessWidget {
+  const _Waiting({required this.items});
+
+  final List<Map<String, dynamic>> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      key: const ValueKey('device-waiting'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('Waiting for a faster connection'),
+        SettingsGroup(
+          rows: [
+            for (final g in waitingGroups(items))
+              SettingsRow(
+                title: g.label,
+                chevron: false,
+                trailing: g.bytes > 0 ? Text(formatBytes(g.bytes), style: TextStyle(fontSize: 15, color: k.secondary)) : null,
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const NoteText('These go the next time the devices are on the same Wi-Fi, or both use an entry point that allows files this big.'),
+      ],
     );
   }
 }

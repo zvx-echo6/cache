@@ -255,6 +255,9 @@ void main() {
   });
 
   testWidgets('Sync now: everything, a kind, an item', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
@@ -326,7 +329,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
+    expect(find.text('Connected directly'), findsOneWidget);
+    expect(find.text('Last seen 2 min ago'), findsNothing, reason: 'connected: the page does not say when it was last seen');
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));
@@ -343,7 +347,7 @@ void main() {
     expect(r.calls('set_peer_name').last, {'peer': 'p1', 'name': 'Office'});
     expect(find.text('Office'), findsOneWidget, reason: 'the page takes the new name');
 
-    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget);
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
     await tester.pumpAndSettle();
     // One question first; Cancel leaves the device linked.
@@ -520,6 +524,9 @@ void main() {
   });
 
   testWidgets('Sync now says what happened: nothing shared, up to date, or syncing', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
