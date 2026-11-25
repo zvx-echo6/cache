@@ -137,6 +137,23 @@ check_failed() {
     die "check failed: $*. Cache is stopped. To go back to the previous release, run: install.sh --rollback"
 }
 
+# the cache system user and group, made exactly as releases from before Cache ran as the person made them; only a rollback to
+# such a release needs them
+ensure_cache_user() {
+    if ! getent group cache >/dev/null 2>&1; then
+        groupadd --system cache
+    fi
+    if ! getent passwd cache >/dev/null 2>&1; then
+        NOLOGIN=$(command -v nologin || echo /usr/sbin/nologin)
+        useradd --system --gid cache --no-create-home --home-dir /nonexistent --shell "$NOLOGIN" cache
+    fi
+}
+
+# whether the release folder $1 runs as the person (its cache.service carries the marker)
+runs_as_person() {
+    grep -q '^X-Cache-RunsAs=person$' "$1/cache.service" 2>/dev/null
+}
+
 USAGE="usage: install.sh [--user <name>] <path-to-release-tarball> | install.sh --rollback"
 ROLLBACK=0
 WANT_USER=
@@ -178,14 +195,56 @@ if [ "$ROLLBACK" -eq 1 ]; then
     PREV=$(link_of "$OPT/previous")
     [ -n "$PREV" ] && [ -d "$PREV" ] || die "there is no previous release to go back to"
     [ -n "$CUR" ] && [ -d "$CUR" ] || die "there is no current release"
-    # current takes the previous release first, so it always points at a real folder; then previous takes the old current
-    point "$OPT/current" "$PREV"
-    point "$OPT/previous" "$CUR"
-    install_unit
+    if runs_as_person "$PREV"; then
+        # a release that runs as the person: the drop-in comes back from the record
+        PERSON=$(recorded_person)
+        [ -n "$PERSON" ] || die "$RECORD names no one, so there is no one to run $(basename "$PREV") as; install its tarball with --user <name> instead"
+        check_person
+        MIGRATE=0
+        if [ "$(cat "$DROPIN" 2>/dev/null || true)" != "$(dropin_text)" ] || data_not_owned_by "$PUID"; then
+            MIGRATE=1
+        fi
+        [ "$MIGRATE" -eq 0 ] || systemctl stop cache || true
+        # current takes the previous release first, so it always points at a real folder; then previous takes the old current
+        point "$OPT/current" "$PREV"
+        point "$OPT/previous" "$CUR"
+        mkdir -p "$UNIT.d"
+        write_atomic "$DROPIN" "$(dropin_text)"
+        install_unit
+        [ "$MIGRATE" -eq 0 ] || chown -R "$PERSON:$PGROUP" "$DATA"
+        RUNS_AS=$PERSON
+        OWNER_UID=$PUID
+    else
+        # a release from before Cache ran as the person: back to the cache user exactly as it was (the record stays, for the next
+        # update or a rollback forward)
+        systemctl stop cache || true
+        point "$OPT/current" "$PREV"
+        point "$OPT/previous" "$CUR"
+        rm -f "$DROPIN"
+        rmdir "$UNIT.d" 2>/dev/null || true
+        install_unit
+        ensure_cache_user
+        chown -R cache:cache "$DATA"
+        MIGRATE=1
+        RUNS_AS=cache
+        OWNER_UID=$(getent passwd cache | cut -d: -f3)
+    fi
     systemctl daemon-reload
-    systemctl restart cache
-    echo "Rolled back: Cache $(basename "$PREV") is running; $(basename "$CUR") is now the previous release."
-    echo "(run install.sh --rollback again to go forward)"
+    if [ "$MIGRATE" -eq 1 ]; then
+        systemctl start cache
+    else
+        systemctl restart cache
+    fi
+    wait_active
+    if data_not_owned_by "$OWNER_UID"; then
+        check_failed "some files in $DATA do not belong to $RUNS_AS"
+    fi
+    if [ "$RUNS_AS" = cache ]; then
+        echo "Rolled back: Cache $(basename "$PREV") is running, as the cache account (as that release did)."
+    else
+        echo "Rolled back: Cache $(basename "$PREV") is running as $RUNS_AS."
+    fi
+    echo "$(basename "$CUR") is now the previous release. (run install.sh --rollback again to go forward)"
     exit 0
 fi
 
