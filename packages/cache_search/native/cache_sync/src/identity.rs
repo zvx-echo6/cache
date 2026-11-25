@@ -64,6 +64,8 @@ pub fn load(dir: &Path, keep: Option<&Path>, make: bool) -> Result<(SecretKey, S
             match kept {
                 Some(k) => {
                     write_secret(&key_path, &k.to_bytes())?;
+                    // Into `take_log`'s buffer (the helper drains it into the journal); the phone's Dart side says the same words.
+                    crate::say("this device's identity was brought back from its second copy");
                     k
                 }
                 None if make => {
