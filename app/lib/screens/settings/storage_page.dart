@@ -340,7 +340,7 @@ class _IndexingSpeedPageState extends State<IndexingSpeedPage> {
                   ),
               ],
             ),
-            NoteText('The log stays on ${linuxUi ? 'the server' : 'this device'}. Nothing leaves it unless you tap Share log.'),
+            NoteText('The log stays on ${linuxUi ? 'this computer' : 'this device'}. Nothing leaves it unless you tap Share log.'),
             SettingsGroup(
               rows: [
                 SettingsRow(
