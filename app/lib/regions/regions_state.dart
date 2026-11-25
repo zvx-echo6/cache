@@ -2014,12 +2014,17 @@ class RegionsState extends ChangeNotifier {
       for (final l in local) {
         if (only != null && l.id != only) continue;
         if (l.kind == kDrawnRegionKind || l.kind == kAreaRegionKind) continue;
-        if (await catalogue.outlinesDone(l.id)) continue;
         RegionRecord? rec;
         try {
           rec = await catalogue.record(l.id);
         } catch (_) {}
         if (rec == null || rec.isDrawn || rec.kind == kAreaRegionKind) continue;
+        if (await catalogue.outlinesDone(l.id)) {
+          // One line per region and run even when nothing is missing: the log shows that the back-fill ran.
+          final have = await catalogue.outlinesCount(rec);
+          appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${have.wanted} present=${have.present} fetched=0 failed=0');
+          continue;
+        }
         final r = await catalogue.storeAreaPolygons(rec);
         appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${r.wanted} present=${r.present} fetched=${r.fetched} failed=${r.failed}');
       }

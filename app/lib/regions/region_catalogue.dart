@@ -548,6 +548,17 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
   File _doneMarker(Directory d, String regionId) => File('${d.path}/polygons/.done-$regionId');
 
   /// Whether the outlines of region [regionId] were all kept once (its marker). False in a browser, which keeps no files.
+  /// How many outlines region [r] wants and how many of those files are on the phone now (a stat of each).
+  Future<({int wanted, int present})> outlinesCount(RegionRecord r) async {
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return (wanted: want.length, present: await _presentOutlines(want));
+    } catch (_) {
+      return (wanted: 0, present: 0);
+    }
+  }
+
   Future<bool> outlinesDone(String regionId) async {
     if (plat.isWeb) return false;
     try {

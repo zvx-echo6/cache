@@ -254,8 +254,20 @@ Map<String, dynamic> buildMapStyle({
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
-  all.addAll(roadEventLayers(palette));
-  all.addAll(_routeLayers(palette, pinStyle));
+  // Road-event icons and a repeater list's icons take part in symbol collision with the place names, and a name wins: they are put just
+  // under the first place-name layer (MapLibre places the layers from the top of the style down, so a layer above gets its place first),
+  // above the public places' chips. The order, first placed first: place names, repeaters, road events, public places. Everything else
+  // (the person's own pins, the route, the destination, the position) stays on top and is always drawn.
+  final routeLayers = _routeLayers(palette, pinStyle);
+  final under = [...roadEventLayers(palette).where((l) => l['id'] == kRoadEventChips), ...routeLayers.where((l) => l['id'] == kUserRepeaters && l['type'] == 'symbol')];
+  final nameAt = all.indexWhere((l) => _placeNameLayers.contains(l['id']));
+  if (nameAt >= 0) {
+    all.insertAll(nameAt, under);
+    all.addAll([...roadEventLayers(palette).where((l) => l['id'] != kRoadEventChips), ...routeLayers.where((l) => !under.contains(l))]);
+  } else {
+    all.addAll(roadEventLayers(palette));
+    all.addAll(routeLayers);
+  }
   all.addAll(_positionLayers(palette));
 
   return {
@@ -467,6 +479,9 @@ List<Map<String, dynamic>> _areaLayers(MapPalette p) => [
       },
     ];
 
+/// The first place-name layer of each base map layout (Protomaps, OpenMapTiles).
+const Set<String> _placeNameLayers = {'places_subplace', 'label_other'};
+
 List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
       {
         'id': kRouteAlt,
@@ -558,8 +573,10 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
             'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical, flat: isFlatIconTheme(p.id)),
             'icon-size': iconSizeByZoom(pinIconSize()),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
-            'icon-allow-overlap': true,
-            'icon-ignore-placement': true,
+            // Takes part in collision and gives way to a town's name (see [_underPlaceNames]); a notebook's own pins below do not.
+            'icon-allow-overlap': false,
+            'icon-ignore-placement': false,
+            'icon-padding': 2,
           },
         },
       if (pinStyle == null)
