@@ -373,23 +373,25 @@ fn the_same_address_entered_on_two_devices_at_once_ends_as_one_entry_and_stays()
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let a = old_engine(&da, "Desk", None);
     let b = old_engine(&db, "Phone", None);
-    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
-    call(&b, "link", json!({"code": code}));
-    let (a_id, b_id) = (call(&a, "status", json!({}))["id"].clone(), call(&b, "status", json!({}))["id"].clone());
-    call(&a, "set_policy", json!({"network": false}));
-    call(&b, "set_policy", json!({"network": false}));
+    // Each enters the address while the devices are not linked (so neither can have the other's yet), B's a little later.
     let ida = add(&a, "rt.example.net", 4965, None, None);
     std::thread::sleep(std::time::Duration::from_millis(20));
     let idb = add(&b, "RT.example.net", 4965, None, None);
     assert_ne!(ida, idb);
-    call(&a, "set_policy", json!({"network": true}));
-    call(&b, "set_policy", json!({"network": true}));
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    let (a_id, b_id) = (call(&a, "status", json!({}))["id"].clone(), call(&b, "status", json!({}))["id"].clone());
     let v = |e: &SyncEngine, peer: &Value| call(e, "test_view", json!({"peer": peer}))["entries_v"].clone();
-    wait("one entry and the same version on both", 90, || {
-        call(&a, "sync_now", json!({}));
-        call(&b, "sync_now", json!({}));
-        list(&a).len() == 1 && list(&b).len() == 1 && v(&a, &b_id) == v(&b, &a_id)
-    });
+    wait_dbg(
+        "one entry and the same version on both",
+        90,
+        || {
+            call(&a, "sync_now", json!({}));
+            call(&b, "sync_now", json!({}));
+            list(&a).len() == 1 && list(&b).len() == 1 && v(&a, &b_id) == v(&b, &a_id)
+        },
+        || format!("A: {:?} {}\nB: {:?} {}\nfiles A {:?}\nfiles B {:?}", list(&a), v(&a, &b_id), list(&b), v(&b, &a_id), records(&da), records(&db)),
+    );
     // B's was entered later: both keep it.
     assert_eq!(list(&a)[0]["id"], json!(idb));
     assert_eq!(list(&b)[0]["id"], json!(idb));

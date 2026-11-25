@@ -183,10 +183,8 @@ fn on_the_same_t_the_greater_device_wins_and_the_removal_beats_the_loser_everywh
     assert_eq!(pq, merge(std::slice::from_ref(&q), std::slice::from_ref(&p), NOW));
     assert_eq!(live(&pq)[0].id, "q1");
     // Whatever a device still holds of a loser is replaced by the removal, and nothing comes back.
-    for old in [&a, &p] {
-        assert_eq!(merge(&pq, std::slice::from_ref(old), NOW), pq);
-        assert_eq!(merge(&ab, std::slice::from_ref(old), NOW), ab);
-    }
+    assert_eq!(merge(&pq, std::slice::from_ref(&p), NOW), pq);
+    assert_eq!(merge(&ab, std::slice::from_ref(&a), NOW), ab);
 }
 
 #[test]

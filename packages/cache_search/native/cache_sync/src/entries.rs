@@ -213,7 +213,31 @@ pub fn merge(mine: &[Record], theirs: &[Record], now: u64) -> Vec<Record> {
             }
         }
     }
+    dedupe(&mut by_id);
     tidy(by_id.into_values().collect(), now)
+}
+
+/// One live entry per address. Two devices that each enter the same host and port (any letter case of the host) while apart make two
+/// ids for one rnsd; of such entries the newer `t` stays, on the same `t` the greater device id, then the greater id. Every other
+/// becomes a removal that carries the WINNER's `t` and device: it is then the same record on every device whichever makes it, so the
+/// lists and their `entries_v` end equal with nothing to send back, and it is never older than the entry it replaces (the same or a
+/// later `t`; on the same `t` the winner's device is not the lesser; on both the same, a removal beats an entry), so it replaces that
+/// entry wherever it is still held. A made-up time such as now would differ by device and never settle.
+fn dedupe(by_id: &mut std::collections::HashMap<String, Record>) {
+    let mut groups: std::collections::HashMap<(String, u16), Vec<&Record>> = std::collections::HashMap::new();
+    for r in by_id.values().filter(|r| !r.removed) {
+        groups.entry((r.host.to_lowercase(), r.port)).or_default().push(r);
+    }
+    let mut lost: Vec<Record> = Vec::new();
+    for group in groups.into_values().filter(|g| g.len() > 1) {
+        let winner = group.iter().copied().max_by(|a, b| (a.t, &a.dev, &a.id).cmp(&(b.t, &b.dev, &b.id))).expect("a group has a member");
+        for r in group.iter().filter(|r| r.id != winner.id) {
+            lost.push(Record::tombstone(&r.id, winner.t, &winner.dev));
+        }
+    }
+    for t in lost {
+        by_id.insert(t.id.clone(), t);
+    }
 }
 
 /// A list as a device holds it: normalised, removals past their time forgotten, in order.
