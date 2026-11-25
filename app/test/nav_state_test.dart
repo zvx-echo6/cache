@@ -390,6 +390,40 @@ void main() {
       });
     }
 
+    test('a route with the off-road data gap warning shows the notice; a route without it shows none', () async {
+      location.publish(fixAt(42.5, -113.8));
+      const text = 'Off-road data missing here, so the route goes around it.';
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
+            ...routeJson,
+            'warnings': [
+              {'code': 'offroad_data_gap', 'reason': 'missing_data'},
+            ],
+          });
+      await nav.openDirections(place('place:4', 'Far'));
+      await settle(5);
+      expect([for (final e in events) if (e is NavNotice) e.text], [text]);
+      events.clear();
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
+      await nav.openDirections(place('place:5', 'Near'));
+      await settle(5);
+      expect(events.whereType<NavNotice>().where((n) => n.text.contains('Off-road data missing')), isEmpty);
+    });
+
+    test('both warnings: the off-road-unavailable notice first, then the data gap notice', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
+            ...routeJson,
+            'warnings': [
+              {'code': 'offroad_data_gap', 'reason': 'missing_data'},
+              {'code': 'offroad_unavailable', 'end': 'to', 'gap_m': 900, 'reason': 'no_data'},
+            ],
+          });
+      await nav.openDirections(place('place:4', 'Far'));
+      await settle(5);
+      final texts = [for (final e in events) if (e is NavNotice) e.text];
+      expect(texts, ['Part of this trip is off the roads, and there is no off-road data for this area.', 'Off-road data missing here, so the route goes around it.']);
+    });
+
     test('backing out returns to the map with the place still chosen', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);

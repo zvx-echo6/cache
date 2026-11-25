@@ -920,6 +920,8 @@ class NavState extends ChangeNotifier {
         routes = [r, ...r.alternatives];
         final off = r.warnings.where((w) => w.code == 'offroad_unavailable').firstOrNull;
         if (off != null) _events.add(NavNotice(offroadNoticeText(off.reason)));
+        // The off-road data has a hole along the way and the route goes around it (the core's offroad_data_gap warning).
+        if (r.warnings.any((w) => w.code == 'offroad_data_gap')) _events.add(const NavNotice('Off-road data missing here, so the route goes around it.'));
       }
     } catch (e) {
       if (seq != _routeSeq) return;
