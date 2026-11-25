@@ -955,14 +955,16 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
 
   /// A tap on a city or town's own name label opens that town (card and outline); true when it did. Asked when a road event's icon is
   /// also under the tap, so the icon on the name does not take the tap.
-  Future<bool> _tapTownLabel(math.Point<double> point, LatLng at) async {
+  Future<bool> _tapTownLabel(math.Point<double> point, LatLng at, {bool exact = false}) async {
     final c = _controller;
     if (c == null || _areaSource == null) return false;
     final placeIds = [for (final l in _basemapLabels()) if (l.startsWith('places_locality')) l];
     if (placeIds.isEmpty) return false;
     final seq = ++_tapSeq;
     try {
-      for (final raw in await _query(c, point, placeIds)) {
+      // [exact]: only a name whose text is under the point itself (not one in the box around it).
+      final found = exact ? await c.queryRenderedFeatures(point, placeIds, null) : await _query(c, point, placeIds);
+      for (final raw in found) {
         final f = tapFeatureFrom(raw, source: TapSource.basemap, kind: '', tapLat: at.latitude, tapLon: at.longitude);
         if (f == null || f.name == null) continue;
         HapticFeedback.selectionClick();
@@ -1922,6 +1924,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   Future<bool> _tapMapFeature(math.Point<double> point, LatLng at, {bool probe = false}) async {
     final c = _controller;
     if (c == null) return false;
+    // A tap on a town's name TEXT wins over a public-place chip overlapping it; a chip merely beside the name (the tap on the chip) is
+    // still the chip's (it is asked below, in the box around the tap).
+    if (!probe && _areaSource != null && await _tapTownLabel(point, at, exact: true)) return true;
     final seq = ++_tapSeq;
     final hits = <TapFeature>[];
     // One line in the app log per tap: what was asked and what came back (Settings > Log, Standard).
