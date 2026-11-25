@@ -26,6 +26,10 @@ Future<({int w, int h, ByteData px})> _decode(List<int> png) async {
   return (w: img.width, h: img.height, px: (await img.toByteData())!);
 }
 
+/// A pixel of the fine edge: the colour 0xFF14141A (kFlatIconEdge) at a good part of full strength (the 1 pixel ring is anti-aliased
+/// across two pixels, so a pixel may hold half of it); the old edge was 40% black, which has alpha 102 at most.
+bool _isDarkEdge(List<int> p) => p[3] >= 120 && (p[0] - 0x14).abs() <= 16 && (p[1] - 0x14).abs() <= 16 && (p[2] - 0x1A).abs() <= 16;
+
 List<int> _rgba(({int w, int h, ByteData px}) i, int x, int y) => [for (var k = 0; k < 4; k++) i.px.getUint8((y * i.w + x) * 4 + k)];
 
 void main() {
@@ -91,7 +95,7 @@ void main() {
       });
     });
 
-    testWidgets('light and Parchment: no white ring, a faint edge, the same shape', (tester) async {
+    testWidgets('light and Parchment: no white ring, a fine near-black edge, the same shape', (tester) async {
       await tester.runAsync(() async {
         for (final style in [PinStyle.icon, PinStyle.teardrop]) {
           final halo = await _decode(await renderPlainPinPng(const Color(0xFFFF6B5E), style, ratio: 3));
@@ -128,7 +132,7 @@ void main() {
   });
 
   group('the flat Icon pin (light and Parchment)', () {
-    testWidgets('is a solid disc in the tint with no white halo, and a faint edge', (tester) async {
+    testWidgets('is a solid disc in the tint with no white halo, and a fine near-black edge', (tester) async {
       await tester.runAsync(() async {
         for (final tint in [purple, yellow]) {
           final i = await _decode(await renderPinPng(Icons.place, tint, PinStyle.icon, ratio: 3, flat: true));
@@ -140,8 +144,7 @@ void main() {
           expect(top[3], 255);
           // The edge: just outside the disc, faint and dark; further out, nothing.
           final edge = _rgba(i, cx + 41, cy);
-          expect(edge[3], inInclusiveRange(40, 130), reason: 'a faint edge: $edge');
-          expect(edge[0], lessThan(60), reason: 'near black');
+          expect(_isDarkEdge(edge), isTrue, reason: 'the fine near-black edge (0xFF14141A, not 40% black): $edge');
           expect(_rgba(i, cx + 44, cy)[3], 0, reason: 'no halo beyond the edge');
           // No white pixel at all (the old halo was white and 3 points wide).
           var white = 0;
@@ -158,7 +161,7 @@ void main() {
       });
     });
 
-    testWidgets('the Teardrop and the Badge lose the white ring too: a faint 1 pixel edge, their own shape, no white outside it', (tester) async {
+    testWidgets('the Teardrop and the Badge lose the white ring too: a fine near-black 1 pixel edge, their own shape, no white outside it', (tester) async {
       await tester.runAsync(() async {
         for (final style in [PinStyle.teardrop, PinStyle.badge]) {
           for (final tint in [purple, yellow]) {
@@ -186,11 +189,11 @@ void main() {
               for (var x = 0; x < flat.w; x++) {
                 final p = _rgba(flat, x, y);
                 if (p[3] == 255 && p[0] == (tint.r * 255).round() && p[1] == (tint.g * 255).round()) tinted++;
-                if (p[3] > 0 && p[3] < 140 && p[0] < 60) faint++;
+                if (_isDarkEdge(p)) faint++;
               }
             }
             expect(tinted, greaterThan(200), reason: style.name);
-            expect(faint, greaterThan(20), reason: '${style.name}: the faint edge is drawn');
+            expect(faint, greaterThan(20), reason: '${style.name}: the near-black edge is drawn');
           }
         }
       });
@@ -205,7 +208,7 @@ void main() {
   });
 
   group('the flat chip (light and Parchment)', () {
-    testWidgets('has no ring: just the disc and the faint edge; dark keeps its dark ring', (tester) async {
+    testWidgets('has no ring: just the disc and the fine near-black edge; dark keeps its dark ring', (tester) async {
       await tester.runAsync(() async {
         for (final id in [CacheThemeId.light, CacheThemeId.parchment]) {
           final i = await _decode(await renderPoiChipPng(poiIcons.first, mapPaletteFor(id), ratio: 3));
@@ -214,12 +217,16 @@ void main() {
           final ring = _rgba(i, c + 29, c);
           expect(ring[3], lessThan(0x80), reason: '${id.name}: no opaque ring, only the faint edge ($ring)');
           expect(_rgba(i, c + 20, c)[3], 255, reason: 'the disc');
-          expect(_rgba(i, c + 27, c)[3], inInclusiveRange(40, 130), reason: 'the faint 1 pixel edge');
+          expect(_isDarkEdge(_rgba(i, c + 27, c)), isTrue, reason: 'the fine near-black 1 pixel edge: ${_rgba(i, c + 27, c)}');
         }
         final dark = await _decode(await renderPoiChipPng(poiIcons.first, mapPaletteFor(CacheThemeId.dark), ratio: 3));
         expect(_rgba(dark, dark.w ~/ 2 + 29, dark.w ~/ 2)[3], 255, reason: 'dark keeps its ring');
       });
     });
+  });
+
+  test('the flat edge is near black at full opacity (0xFF14141A)', () {
+    expect(kFlatIconEdge, const Color(0xFF14141A));
   });
 
   test('the Settings > Maps hint of the Icon pin style says what the light themes draw', () {

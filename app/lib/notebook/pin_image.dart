@@ -119,8 +119,8 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
   }
 }
 
-/// The faint edge of the flat icons (pins and public-place discs): 1 pixel, near black at about 40%.
-const Color kFlatIconEdge = Color(0x66000000);
+/// The edge of the flat icons (pins and public-place discs): a fine 1 pixel line, near black at full opacity.
+const Color kFlatIconEdge = Color(0xFF14141A);
 
 /// The teardrop (needle pin) of [size] whose point is [at], filled with [tint]: with an [icon] drawn in its head, or with none a round
 /// hole (a plain pin, which needs no icon font).

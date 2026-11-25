@@ -31,7 +31,7 @@ class PoiIcon {
 
   String get image => 'poi-$id';
 
-  /// The image of the chip in a theme: the flat look (light and Parchment: no ring, a faint edge) has its own name, so a theme
+  /// The image of the chip in a theme: the flat look (light and Parchment: no ring, a fine edge) has its own name, so a theme
   /// switch never shows the other look's image.
   String imageFor({required bool flat}) => flat ? 'poi-$id-f' : image;
 }
@@ -115,7 +115,7 @@ PoiChipLook poiChipLook(MapPalette p, String group) {
 }
 
 /// Draws one chip centred on [centre] of [canvas] (in points). [flat] (the light and Parchment themes): no white ring, and the disc has the
-/// same faint 1 pixel edge ([ratio] pixels per point) as the flat icon pins; dark and Tactical keep their ring.
+/// same fine near-black 1 pixel edge ([ratio] pixels per point) as the flat icon pins; dark and Tactical keep their ring.
 void paintPoiChip(Canvas canvas, Offset centre, IconData? symbol, PoiChipLook look, {bool flat = false, double ratio = 3}) {
   if (flat) {
     canvas.drawCircle(centre, _discR + 1 / ratio, Paint()..color = kFlatIconEdge);
