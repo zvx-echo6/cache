@@ -130,3 +130,41 @@ fn a_failed_access_rules_query_is_missing_data_not_no_restrictions() {
     let d = route(&w, &w);
     assert!(d.ok && !d.data_gap);
 }
+
+/// The pack, plus pack tiles it says are missing (neither stored nor listed as processed).
+struct MissingPackTiles<'a>(&'a MemPack, (i64, i64, i64, i64));
+impl PackSource for MissingPackTiles<'_> {
+    fn has_layer(&self, l: Layer) -> bool {
+        self.0.has_layer(l)
+    }
+    fn read_u8(&self, l: Layer, r: i64, c: i64, rows: usize, cols: usize) -> PResult<Vec<u8>> {
+        self.0.read_u8(l, r, c, rows, cols)
+    }
+    fn parking_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
+        self.0.parking_in_box(a, b, c, d)
+    }
+    fn trailheads_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
+        self.0.trailheads_in_box(a, b, c, d)
+    }
+    fn mvum_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<MvumFeature>> {
+        self.0.mvum_in_box(a, b, c, d)
+    }
+    fn covers(&self, a: f64, b: f64) -> bool {
+        self.0.covers(a, b)
+    }
+    fn missing_rects(&self, _: i64, _: i64, _: usize, _: usize) -> Vec<(i64, i64, i64, i64)> {
+        vec![self.1]
+    }
+}
+
+#[test]
+fn a_pack_tile_the_pack_says_is_missing_in_the_corridor_is_missing_data() {
+    let (w, mid) = world();
+    let v = NoRoads;
+    let rect = (mid.0 - 30, mid.1 - 30, mid.0 + 30, mid.1 + 30);
+    let p = MissingPackTiles(&w, rect);
+    let env = Env { pack: &p, elevation: &w, valhalla: &v, options: Default::default(), namer: None, version: "t".into() };
+    let d = env.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot));
+    assert!(d.ok, "{:?}", d.errors);
+    assert!(d.data_gap);
+}

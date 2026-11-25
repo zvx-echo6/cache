@@ -192,8 +192,9 @@ pub struct RouteResult {
     pub notes: Vec<String>,
     /// Data the route needed was missing, so it was made without it: an elevation tile the search corridor needed (not stored,
     /// not streamed; its cells were left out of the search as if impassable, so the route goes around ground it could not see;
-    /// not real terrain, and not "no tile here", sea), or an access-rules (MVUM) query that failed. Pack raster tiles that are
-    /// absent are NOT counted: the pack builder omits all-zero tiles, so an absent tile is real zeros.
+    /// not real terrain, and not "no tile here", sea), a pack raster tile that is in neither the pack's `tiles` nor its `covered`
+    /// listing (packs that have `meta.covered_v`; in older packs an absent tile is real zeros, as the builder omits all-zero
+    /// tiles), or an access-rules (MVUM) query that failed.
     pub data_gap: bool,
 }
 
@@ -548,7 +549,8 @@ impl<'a> Router<'a> {
             }
         }
         // missing elevation data inside the corridor (the cells the search may use): the route is made without it
-        let gap_rects = self.elevation.unavailable_rects(meta.global_row0, meta.global_col0, rows, cols);
+        let mut gap_rects = self.elevation.unavailable_rects(meta.global_row0, meta.global_col0, rows, cols);
+        gap_rects.extend(self.pack.missing_rects(meta.global_row0, meta.global_col0, rows, cols));
         let data_gap = gap_rects.iter().any(|&(r0, c0, r1, c1)| {
             let (rs, re) = ((r0 - meta.global_row0).max(0), (r1 - meta.global_row0).min(rows as i64));
             let (cs, ce) = ((c0 - meta.global_col0).max(0), (c1 - meta.global_col0).min(cols as i64));
