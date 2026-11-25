@@ -289,7 +289,7 @@ void main() {
     });
   });
 
-  testWidgets('a note on the route (the data it lacks) shows under the route', (tester) async {
+  testWidgets('a note on the route (the data it lacks) shows in the Routes sheet, not in the short panel', (tester) async {
     backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
           ...fakeRouteJson(mode: mode, offroad: true),
           'notes': ['This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.'],
@@ -297,7 +297,11 @@ void main() {
     await nav.setMode('offroad_moto');
     await tester.pumpWidget(_panel(nav));
     await tester.pump();
-    expect(find.text('This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.'), findsOneWidget);
+    const note = 'This off-road data has no dirt bike trail rules yet, so ATV trail rules were used.';
+    expect(find.text(note), findsNothing, reason: 'the panel is short: notes are in the sheet');
+    await tester.tap(find.byKey(const ValueKey('route-summary')));
+    await tester.pumpAndSettle();
+    expect(find.text(note), findsOneWidget);
   });
 
   group('one line, equal segments, one text size per row', () {

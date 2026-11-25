@@ -252,6 +252,10 @@ void _pureTests() {
 class _TapCamera extends CameraController {
   final List<Map<String, dynamic>> labels = [];
 
+  /// What a query at the tapped POINT itself (not the box around it) finds in the town-label layer: the labels whose text is under the
+  /// finger. Null: the same as [labels].
+  List<Map<String, dynamic>>? labelsAtPoint;
+
   /// What the public places' chip layer answers.
   final List<Map<String, dynamic>> pois = [];
   final List<Map<String, dynamic>> trails = [];
@@ -272,7 +276,7 @@ class _TapCamera extends CameraController {
       } else if (layers.any((l) => l.startsWith('test-trails-'))) {
         out = trails;
       } else if (layers.contains('places_locality')) {
-        out = labels;
+        out = i.memberName == #queryRenderedFeatures ? (labelsAtPoint ?? labels) : labels;
       } else if (layers.contains('pois')) {
         out = pois;
       } else {
@@ -420,7 +424,7 @@ class _FakeAreas implements AreaSource {
 int _outlineFeatures(_Maps m) => ((m.camera.sources[kAreaSource]?['features'] as List?) ?? const []).length;
 
 void _areaScreenTests() {
-  group('a tap on a town or on empty ground', () {
+  group('a tap on a town\'s label; empty ground drops a pin', () {
     testWidgets('a town\'s label opens the town: its card, an outline, About N people, Directions', (tester) async {
       final m = _Maps();
       final a = m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
@@ -447,6 +451,7 @@ void _areaScreenTests() {
       await m.pump(tester);
       final gate = Completer<MapSearchResponse>();
       m.rig.backend.onSearch = (q, {near, meaning}) => gate.future;
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(find.byKey(const ValueKey('place-card-summary')), findsNothing, reason: 'the card did not wait for the search');
@@ -463,43 +468,36 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('empty ground inside a town opens the town; in the county only, the county (no Directions)', (tester) async {
+    testWidgets('empty ground inside a town drops a pin and opens no area (a town opens from its label; a county from the pin card\'s county line)', (tester) async {
       final m = _Maps();
       final a = m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
       await m.tap(tester, 42.5, -113.5);
-      expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(m.nav.selected?.matched, 'pin');
+      expect(_outlineFeatures(m), 0);
       m.nav.clearSelection();
       await tester.pump();
-      expect(_outlineFeatures(m), 0);
-
       a.hit = AreaHit(county: _county, state: _state);
       await m.tap(tester, 42.9, -113.1);
-      expect(m.nav.selected?.id, 'area:us-id-quill-county');
-      expect(find.text('Quill County'), findsWidgets);
-      expect(find.text('County in Idaho'), findsOneWidget);
-      expect(find.text('About 82,400 people'), findsOneWidget);
-      expect(find.text('About 1,930 square miles'), findsOneWidget);
-      expect(find.text('Largest towns: Quillmoor, Kimberly, Buhl'), findsOneWidget);
-      expect(find.byKey(const ValueKey('place-directions')), findsNothing, reason: 'a county has no Directions');
-      expect(find.byKey(const ValueKey('place-save')), findsOneWidget);
-      expect(find.byKey(const ValueKey('place-add-home')), findsOneWidget);
-      expect(_outlineFeatures(m), 1);
+      expect(m.nav.selected?.matched, 'pin', reason: 'in the county only: still a pin, not the county');
+      expect(_outlineFeatures(m), 0);
       await m.finish(tester);
     });
 
-    testWidgets('with a card open an empty tap only closes it and clears the outline; the next one opens again', (tester) async {
+    testWidgets('with a town card open an empty tap drops a pin in its place and clears the outline; the next one moves the pin', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
-      expect(m.nav.selected, isNotNull);
-      expect(_outlineFeatures(m), 1);
-      await m.tap(tester, 42.45, -113.45);
-      expect(m.nav.selected, isNull, reason: 'closed, not replaced');
-      expect(_outlineFeatures(m), 0);
-      await m.tap(tester, 42.45, -113.45);
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
+      expect(_outlineFeatures(m), 1);
+      m.camera.labels.clear();
+      await m.tap(tester, 42.45, -113.45);
+      expect(m.nav.selected?.matched, 'pin', reason: 'a pin, not the card closed');
+      expect(_outlineFeatures(m), 0);
+      await m.tap(tester, 42.4, -113.4);
+      expect(m.nav.selected?.id, 'loc:42.400000,-113.400000', reason: 'moved');
       await m.finish(tester);
     });
 
@@ -507,6 +505,7 @@ void _areaScreenTests() {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
       expect(_outlineFeatures(m), 1);
       await tester.tap(find.byTooltip('Close'));
@@ -521,9 +520,11 @@ void _areaScreenTests() {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
       expect(_outlineFeatures(m), 1);
       m.nav.clearSelection();
+      m.camera.labels.clear();
       m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.name, 'Cascade Park', reason: 'a chip ranks above an area');
@@ -531,15 +532,29 @@ void _areaScreenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('a chip beside a town\'s label wins over the town', (tester) async {
+    testWidgets('a chip beside a town\'s label (the tap on the chip, not on the text) wins over the town', (tester) async {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labelsAtPoint = [];
       m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.name, 'Cascade Park');
       expect(_outlineFeatures(m), 0);
+      await m.finish(tester);
+    });
+
+    testWidgets('a chip on top of a town\'s label text (the tap on the text) loses to the town', (tester) async {
+      final m = _Maps();
+      m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
+      await m.pump(tester);
+      // The label's text is under the finger (a query at the point finds it) and a chip overlaps it.
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
+      m.camera.pois.add(_raw('Point', [-113.5, 42.5], {'name': 'Cascade Park', 'kind': 'park'}));
+      await m.tap(tester, 42.5, -113.5);
+      expect(m.nav.selected?.id, 'area:us-id-quillmoor', reason: 'the town opened, not the chip');
+      expect(_outlineFeatures(m), 1);
       await m.finish(tester);
     });
 
@@ -578,6 +593,7 @@ void _areaScreenTests() {
       final m = _Maps();
       m.areas = _FakeAreas()..hit = AreaHit(town: _town, county: _county, state: _state);
       await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(_outlineFeatures(m), 1);
@@ -604,7 +620,10 @@ void _areaScreenTests() {
       await tester.runAsync(() => m.nav.openDirections(driveDestination));
       await tester.pump();
       expect(m.nav.phase, NavPhase.previewing);
-      expect(await tester.binding.handlePopRoute(), isFalse, reason: 'a route preview is not a card');
+      expect(await tester.binding.handlePopRoute(), isTrue, reason: 'choosing directions: Back returns to the place card (it does not leave Maps)');
+      await tester.pump();
+      expect(m.nav.phase, NavPhase.browsing);
+      expect(m.nav.selected?.id, driveDestination.id);
       await m.finish(tester);
     });
 
@@ -614,18 +633,20 @@ void _areaScreenTests() {
         ..hit = AreaHit(town: _town, county: _county, state: _state)
         ..noOutline.add('us-id-quillmoor');
       await m.pump(tester);
+      m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
       await m.tap(tester, 42.5, -113.5);
       expect(m.nav.selected?.id, 'area:us-id-quillmoor');
       expect(_outlineFeatures(m), 0);
       await m.finish(tester);
     });
 
-    testWidgets('empty ground outside every outline opens nothing; a town label with no stored town keeps the old card', (tester) async {
+    testWidgets('empty ground outside every outline drops a pin all the same; a town label with no stored town keeps the old card', (tester) async {
       final m = _Maps();
       final a = m.areas = _FakeAreas();
       await m.pump(tester);
       await m.tap(tester, 44.0, -118.0);
-      expect(m.nav.selected, isNull);
+      expect(m.nav.selected?.matched, 'pin');
+      m.nav.clearSelection();
       m.camera.labels.add(_raw('Point', [-113.51, 42.51], {'name': 'Larkspur Flats'}));
       a.hit = AreaHit(county: _county, state: _state);
       await m.tap(tester, 42.5, -113.5);
@@ -664,6 +685,7 @@ void _screenTests() {
     testWidgets('a chip beside a town\'s label opens the chip\'s place, by its link', (tester) async {
       final m = _Maps();
       await m.pump(tester);
+      m.camera.labelsAtPoint = [];
       final shop = _place('place:test:s1', 'Sorrel Bakery', 42.5001, -113.5001, kind: 'Bakery');
       m.rig.backend.links[('bakery', 'Sorrel Bakery')] = shop;
       m.camera.labels.add(_raw('Point', [-113.5, 42.5], {'name': 'Quillmoor'}));
@@ -822,12 +844,12 @@ void _screenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('an unnamed line of the base map opens nothing', (tester) async {
+    testWidgets('an unnamed line of the base map opens no card of its own', (tester) async {
       final m = _Maps();
       await m.pump(tester);
       m.camera.baseLines.add(_raw('LineString', [[-113.6, 42.5], [-113.4, 42.5]], {'class': 'track'}));
       await m.tap(tester, 42.5, -113.5);
-      expect(m.nav.selected, isNull);
+      expect(m.nav.selected?.matched, 'pin', reason: 'no card of the line (it has no name): the spot is open ground, a pin');
       await m.finish(tester);
     });
 
@@ -848,14 +870,15 @@ void _screenTests() {
       await m.finish(tester);
     });
 
-    testWidgets('a tap on nothing opens nothing and closes the card that was open', (tester) async {
+    testWidgets('a tap on nothing drops a pin where it was, in place of the card that was open (no search of a name)', (tester) async {
       final m = _Maps();
       await m.pump(tester);
       m.nav.select(_place('place:test:x', 'Sorrel Bakery', 42.5, -113.5, kind: 'Bakery'));
       await tester.pump();
       await m.tap(tester, 42.7, -113.2);
-      expect(m.nav.selected, isNull);
-      expect(m.rig.backend.calls.where((c) => c.startsWith('search:')), isEmpty);
+      expect(m.nav.selected?.id, 'loc:42.700000,-113.200000');
+      expect(m.nav.selected?.matched, 'pin');
+      expect(m.rig.backend.calls.where((c) => c.startsWith('search:') && !c.startsWith('search:42.7')), isEmpty);
       await m.finish(tester);
     });
 

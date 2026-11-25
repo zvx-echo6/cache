@@ -49,6 +49,7 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
        _drainLog = drainLog ?? drainSyncLog,
@@ -67,6 +68,18 @@ class SharingState extends ChangeNotifier {
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
+
+  /// Run, and waited for, before a Sync now round starts: the notebook pass that writes pending notebook changes into the share
+  /// folder (it otherwise runs 2 s after a change and every 2 minutes), so the round carries the latest change.
+  final Future<void> Function()? beforeSync;
+
+  Future<void> _prepare() async {
+    try {
+      await beforeSync?.call();
+    } catch (e) {
+      _log('Sync now: the notebook pass failed ($e)');
+    }
+  }
 
   /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
   final List<AlwaysShared> always;
@@ -209,17 +222,23 @@ class SharingState extends ChangeNotifier {
   Future<void> setSecrets(String peer, Map<String, String> secrets) => _driver.setSecrets(peer, secrets);
 
   /// Cache Server only: the names of the keys the server keeps that can go to a linked device, each with the devices it is ticked
-  /// for. Names and ticks only: a key itself never reaches a browser.
-  Future<List<({String name, Set<String> on})>> serverKeys() async => _serverKeys(await _call('key_names'));
+  /// for, and the devices with "Include API keys" on. Names and ticks only: a key itself never reaches a browser.
+  Future<ServerKeys> serverKeys() async => _serverKeys(await _call('key_names'));
 
   /// Cache Server only: ticks or unticks the key [name] for [peer]; answers like [serverKeys].
-  Future<List<({String name, Set<String> on})>> setServerKeyOn(String peer, String name, bool on) async =>
+  Future<ServerKeys> setServerKeyOn(String peer, String name, bool on) async =>
       _serverKeys(await _call('set_key_on', {'peer': peer, 'name': name, 'on': on}));
 
-  List<({String name, Set<String> on})> _serverKeys(Map<String, dynamic> r) => [
-    for (final k in (r['keys'] as List? ?? const []))
-      if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
-  ];
+  /// Cache Server only: the "Include API keys" switch for [peer]; answers like [serverKeys].
+  Future<ServerKeys> setServerIncludeKeys(String peer, bool on) async => _serverKeys(await _call('set_include_keys', {'peer': peer, 'on': on}));
+
+  ServerKeys _serverKeys(Map<String, dynamic> r) => (
+    keys: [
+      for (final k in (r['keys'] as List? ?? const []))
+        if (k is Map && k['name'] is String) (name: k['name'] as String, on: {for (final p in (k['on'] as List? ?? const [])) '$p'}),
+    ],
+    include: {for (final p in (r['include'] as List? ?? const [])) '$p'},
+  );
 
   /// The keys linked devices sent since the last call, by device ({device: {name: key}}), handed over once.
   Future<Map<String, Map<String, String>>> takeSecrets() => _driver.takeSecrets();
@@ -459,10 +478,14 @@ class SharingState extends ChangeNotifier {
   Future<void> renamePeer(String peer, String name) => _call('set_peer_name', {'peer': peer, 'name': name});
 
   /// Sync now: everything ("Sync all now").
-  Future<void> syncNow() => _call('sync_now');
+  Future<void> syncNow() async {
+    await _prepare();
+    await _call('sync_now');
+  }
 
   /// Sync now for one kind ("Sync all" on its page): its shared folders only.
   Future<void> syncKind(DataKind k) async {
+    await _prepare();
     final ids = [for (final id in k.shared().keys) if (shareOf(id) != null) id];
     if (ids.isEmpty) return;
     await _call('sync_now', {'shares': ids});
@@ -475,7 +498,10 @@ class SharingState extends ChangeNotifier {
   });
 
   /// Sync now with one linked device only.
-  Future<void> syncPeer(String peer) => _call('sync_now', {'peer': peer});
+  Future<void> syncPeer(String peer) async {
+    await _prepare();
+    await _call('sync_now', {'peer': peer});
+  }
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
   /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch, a
@@ -1476,6 +1502,10 @@ abstract class SyncCoreLike {
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args]);
   Future<void> close();
 }
+
+/// What a Cache Server tells a browser about keys: the keys it holds with the devices each is ticked for, and the devices with
+/// "Include API keys" on.
+typedef ServerKeys = ({List<({String name, Set<String> on})> keys, Set<String> include});
 
 typedef SyncOpener = Future<SyncCoreLike> Function(Map<String, Object?> config);
 

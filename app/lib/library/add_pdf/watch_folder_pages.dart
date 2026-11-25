@@ -206,7 +206,7 @@ class _Pill extends StatelessWidget {
       foregroundColor: k.onPrimary,
       minimumSize: Size(0, height),
       padding: const EdgeInsets.symmetric(horizontal: 22),
-      shape: const StadiumBorder(),
+      shape: kControlShape,
     );
     final text = Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700));
     return icon == null
@@ -747,7 +747,7 @@ class WatchCheckSummary extends StatelessWidget {
               if (guess != null)
                 FilledButton(
                   key: ValueKey('watch-place-${job.id}'),
-                  style: FilledButton.styleFrom(backgroundColor: k.primary, foregroundColor: k.onPrimary, minimumSize: const Size(0, 40), shape: const StadiumBorder()),
+                  style: FilledButton.styleFrom(backgroundColor: k.primary, foregroundColor: k.onPrimary, minimumSize: const Size(0, 40), shape: kControlShape),
                   onPressed: placer == null || book == null
                       ? null
                       : () async {

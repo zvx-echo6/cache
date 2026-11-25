@@ -139,9 +139,9 @@ class ScaledSegments extends StatelessWidget {
         if (!joined) return Row(children: kids);
         final line = k.secondary.withValues(alpha: 0.5);
         return DecoratedBox(
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(24), border: Border.all(color: line)),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(kControlRadius), border: Border.all(color: line)),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(23),
+            borderRadius: BorderRadius.circular(kControlRadius - 1),
             child: Row(
               children: [
                 for (var i = 0; i < n; i++) ...[

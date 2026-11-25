@@ -16,10 +16,10 @@ Future<bool> showLocationPrePrompt(BuildContext context, {bool weather = false})
         content: Text(
           weather
               ? "Your browser will ask to share this computer's location with Cache. Cache uses it for the weather where you are. "
-                    'It is used by the live weather and alerts sources that fetch for a place, and by the tools on your Cache server. '
+                    'It is used by the live weather and alerts sources that fetch for a place, and by the tools in Cache on this computer. '
                     'It never goes to web search.'
               : "Your browser will ask to share this computer's location with Cache. Cache uses it to show where you are and to answer "
-                    'questions about places near you. It is used exactly as on the phone: by the tools on your Cache server, and by live '
+                    'questions about places near you. It is used exactly as on the phone: by the tools in Cache on this computer, and by live '
                     'sources that fetch for a place, such as weather and alerts. It never goes to web search.',
         ),
         actions: [

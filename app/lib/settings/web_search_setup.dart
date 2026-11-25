@@ -168,6 +168,16 @@ class WebSearchSetup extends ChangeNotifier {
   /// Web search is on: a key is saved and the switch is on.
   bool get active => _hasKey && settings.webSearchOn;
 
+  /// Reads again whether a key is saved.
+  Future<void> rescanKey() async {
+    try {
+      _hasKey = (await secrets.read(keyName))?.isNotEmpty == true;
+    } catch (_) {
+      _hasKey = false;
+    }
+    notifyListeners();
+  }
+
   Future<void> init() async {
     try {
       _hasKey = (await secrets.read(keyName))?.isNotEmpty == true;

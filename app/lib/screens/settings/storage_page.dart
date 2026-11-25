@@ -100,7 +100,7 @@ class _StoragePageState extends State<StoragePage> {
                   key: const ValueKey('kept-free'),
                   compact: desktop,
                   icon: linuxUi ? Icons.dns_outlined : Icons.phone_android,
-                  title: linuxUi ? 'Kept free on the server' : 'Kept free for the device',
+                  title: linuxUi ? 'Kept free on this computer' : 'Kept free for the device',
                   status: const [Part('10% of storage, 5 to 20 GB')],
                   trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
                 ),
@@ -116,7 +116,7 @@ class _StoragePageState extends State<StoragePage> {
                 Text(
                   [
                     u.measured ? '${formatBytes(u.usedBytes)} used by Cache' : 'Measuring…',
-                    free == null ? 'free space unknown' : '${formatBytes(free)} free on ${linuxUi ? 'the server' : 'this device'}',
+                    free == null ? 'free space unknown' : '${formatBytes(free)} free on ${linuxUi ? 'this computer' : 'this device'}',
                   ].join(' · '),
                   key: const ValueKey('storage-line'),
                   maxLines: 1,
@@ -340,7 +340,7 @@ class _IndexingSpeedPageState extends State<IndexingSpeedPage> {
                   ),
               ],
             ),
-            NoteText('The log stays on ${linuxUi ? 'the server' : 'this device'}. Nothing leaves it unless you tap Share log.'),
+            NoteText('The log stays on ${linuxUi ? 'this computer' : 'this device'}. Nothing leaves it unless you tap Share log.'),
             SettingsGroup(
               rows: [
                 SettingsRow(

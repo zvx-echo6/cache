@@ -247,7 +247,7 @@ class PillButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    const shape = StadiumBorder();
+    const shape = kControlShape;
     final text = buttonText(context, 16, FontWeight.w700);
     if (outlined) {
       final c = danger ? k.emergency : k.accent;
@@ -441,7 +441,7 @@ class TileButton extends StatelessWidget {
             style: TextButton.styleFrom(
               minimumSize: const Size(64, 32),
               padding: const EdgeInsets.symmetric(horizontal: 18),
-              shape: StadiumBorder(side: BorderSide(color: fill ? k.primary : k.accent, width: 2)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kControlRadius), side: BorderSide(color: fill ? k.primary : k.accent, width: 2)),
               backgroundColor: fill ? k.primary : null,
               foregroundColor: fill ? k.onPrimary : k.accent,
               textStyle: buttonText(context, 13, FontWeight.w700),
@@ -710,8 +710,8 @@ class DSearchBox extends StatelessWidget {
         fillColor: k.surface,
         isDense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide(color: k.accent, width: 1.5)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide(color: k.accent, width: 1.5)),
       ),
     );
   }

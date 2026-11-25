@@ -34,6 +34,12 @@ MarkerColor markerColor(String? id) => kMarkerColors.firstWhere((c) => c.id == i
 /// True in the Tactical theme (red only).
 bool isTactical(BuildContext context) => context.t.accent == cacheTokens[CacheThemeId.tactical]!.accent;
 
+/// True in the light and Parchment themes, whose Icon pins are flat discs (see paintMapPin).
+bool isFlatIcons(BuildContext context) {
+  final a = context.t.accent;
+  return a == cacheTokens[CacheThemeId.light]!.accent || a == cacheTokens[CacheThemeId.parchment]!.accent;
+}
+
 /// [own] on the light and dark themes; the red of the theme in Tactical, where every pin is red and its icon tells them apart.
 Color pinTint(BuildContext context, Color own) => isTactical(context) ? context.t.accent : own;
 
@@ -55,18 +61,20 @@ class PinGlyph extends StatelessWidget {
     return SizedBox(
       width: size,
       height: size,
-      child: CustomPaint(painter: _PinGlyphPainter(icon, tint, style, tactical)),
+      child: CustomPaint(painter: _PinGlyphPainter(icon, tint, style, tactical, isFlatIcons(context), MediaQuery.devicePixelRatioOf(context))),
     );
   }
 }
 
 class _PinGlyphPainter extends CustomPainter {
-  _PinGlyphPainter(this.icon, this.tint, this.style, this.tactical);
+  _PinGlyphPainter(this.icon, this.tint, this.style, this.tactical, this.flat, this.ratio);
 
   final IconData icon;
   final Color tint;
   final PinStyle style;
   final bool tactical;
+  final bool flat;
+  final double ratio;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -74,12 +82,12 @@ class _PinGlyphPainter extends CustomPainter {
     if (style == PinStyle.teardrop) {
       paintMapPin(canvas, Offset(s / 2, s * 0.96), s * 0.45, icon, tint, style, tactical: tactical);
     } else {
-      paintMapPin(canvas, Offset(s / 2, s / 2), s * 0.74, icon, tint, style, tactical: tactical);
+      paintMapPin(canvas, Offset(s / 2, s / 2), s * 0.74, icon, tint, style, tactical: tactical, flat: flat, ratio: ratio);
     }
   }
 
   @override
-  bool shouldRepaint(_PinGlyphPainter old) => old.icon != icon || old.tint != tint || old.style != style || old.tactical != tactical;
+  bool shouldRepaint(_PinGlyphPainter old) => old.icon != icon || old.tint != tint || old.style != style || old.tactical != tactical || old.flat != flat || old.ratio != ratio;
 }
 
 /// A place's marker: filled in its colour when it is on the map, an outline with a slash when it is hidden (colour never

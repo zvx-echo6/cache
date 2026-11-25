@@ -325,7 +325,7 @@ class PlaceChip extends StatelessWidget {
     final style = ButtonStyle(
       minimumSize: const WidgetStatePropertyAll(Size(0, 36)),
       padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-      shape: const WidgetStatePropertyAll(StadiumBorder()),
+      shape: const WidgetStatePropertyAll(kControlShape),
       side: best ? null : WidgetStatePropertyAll(BorderSide(color: k.secondary, width: 1.5)),
     );
     final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500));

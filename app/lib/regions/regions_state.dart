@@ -539,10 +539,13 @@ class RegionsState extends ChangeNotifier {
     this.focus,
     this.spaceOf,
     this.syncedWithOtherDevice,
-  }) : _opener = opener ?? openRealRegions,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now,
+       _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
   final DataPolicy policy;
+  final DateTime Function() _clock;
 
   /// Whether a region deleted here is deleted on other devices too: the Maps share is on and at least one device is linked. It
   /// decides whether the delete asks with the line "Deleting this will delete this from all synced devices." (null: not synced).
@@ -687,6 +690,7 @@ class RegionsState extends ChangeNotifier {
     focus?.addListener(_onAskFocus);
     await refresh();
     unawaited(recheckPublished().catchError((_) {}));
+    unawaited(backfillOutlines().catchError((_) {}));
   }
 
   void _onMaps() {
@@ -1987,7 +1991,42 @@ class RegionsState extends ChangeNotifier {
     for (final a in k?.areas ?? const <String>[]) {
       await maps.engine.update(a, anyway: anyway);
     }
+    // The region's outlines are brought up to date too (a person asked for it, so the quiet hours do not apply).
+    await backfillOutlines(only: id, anyway: anyway, automatic: false);
     await refresh();
+  }
+
+  bool _backfilling = false;
+
+  /// The town, county and state outlines of every kept region that has not had them all kept once (no marker): fetched, only the ones
+  /// that are missing, and a marker is left when none failed. Outlines only. Runs by itself after the regions load, and for one region
+  /// inside [updateRegion] ([only]). An automatic run does nothing from 1 to 8 AM (the phone's local time) and follows the mobile data
+  /// setting for downloads (DataPolicy.blocksDownload, settings/data_policy.dart); [anyway] is the person's "Update now".
+  Future<void> backfillOutlines({String? only, bool anyway = false, bool automatic = true}) async {
+    if (plat.isWeb || _backfilling) return;
+    if (automatic) {
+      final h = _clock().hour;
+      if (h >= 1 && h < 8) return;
+    }
+    if (!anyway && await policy.blocksDownload()) return;
+    _backfilling = true;
+    try {
+      for (final l in local) {
+        if (only != null && l.id != only) continue;
+        if (l.kind == kDrawnRegionKind || l.kind == kAreaRegionKind) continue;
+        if (await catalogue.outlinesDone(l.id)) continue;
+        RegionRecord? rec;
+        try {
+          rec = await catalogue.record(l.id);
+        } catch (_) {}
+        if (rec == null || rec.isDrawn || rec.kind == kAreaRegionKind) continue;
+        final r = await catalogue.storeAreaPolygons(rec);
+        appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${r.wanted} present=${r.present} fetched=${r.fetched} failed=${r.failed}');
+      }
+    } catch (_) {
+    } finally {
+      _backfilling = false;
+    }
   }
 
   /// A region on the phone that has no places part while places can be downloaded (one downloaded before they were part of
@@ -2111,8 +2150,18 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Set by [dispose]: work that was still under way (a refresh, a download step) finishes quietly, with no notice to listeners.
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     _poll?.cancel();
     _askRenew?.cancel();
     _net?.cancel();

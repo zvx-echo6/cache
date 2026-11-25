@@ -6,7 +6,7 @@ import '../update/update_ui.dart';
 AppUpdateSource? debugLinuxUpdateSource;
 
 /// The update check for Cache on Linux: the same release file as the phones (the build the file names for `linux`, else its top-level
-/// build), with the banner on Home saying "New version available: update the server" and "How to update" explaining that the update is a
+/// build), with the banner on Home saying "New version available: update Cache on this computer" and "How to update" explaining that the update is a
 /// new tarball and install.sh on the computer that runs Cache.
 AppUpdates linuxAppUpdates({required Future<void> Function(String url) openUrl}) => AppUpdates(
   source: debugLinuxUpdateSource ?? ReleaseFileSource(installedBuild: installedBuild, platform: 'linux'),

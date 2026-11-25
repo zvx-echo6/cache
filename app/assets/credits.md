@@ -56,6 +56,7 @@ No data, library content or language model ships inside Cache. The maps, library
 
 - Roboto Mono (Bold; the Library's call and shelf numbers): SIL Open Font License 1.1, Copyright 2015 The Roboto Mono Project Authors. https://github.com/googlefonts/robotomono (the license is at app/assets/fonts/RobotoMono-OFL.txt)
 - Libre Baskerville (the book page's catalog card): SIL Open Font License 1.1, Copyright 2012 The Libre Baskerville Project Authors, with Reserved Font Name Libre Baskerville. https://github.com/impallari/Libre-Baskerville (the license is at app/assets/fonts/LibreBaskerville-OFL.txt)
+- Noto Sans (three glyphs, U+02BB to U+02BD, so the okina in Hawaiʻi shows in the browser): SIL Open Font License 1.1, Copyright 2022 The Noto Project Authors. https://github.com/notofonts/latin-greek-cyrillic (the license is at app/assets/fonts/NotoSans-OFL.txt)
 
 ## Flutter and Dart packages
 

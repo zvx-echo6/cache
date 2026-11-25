@@ -195,7 +195,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
                       },
                     ),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(kControlRadius),
                 borderSide: BorderSide.none,
               ),
               filled: true,

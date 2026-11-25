@@ -334,6 +334,13 @@ class ApiKeys extends ChangeNotifier {
     return const KeyCheck.ok();
   }
 
+  /// Reads which keys are saved again (a browser: the server's keystore changed without this tab saving anything), and tells the lists.
+  Future<void> rescan() async {
+    await webSearch.rescanKey();
+    await weather.rescanKeys();
+    _note();
+  }
+
   /// Test key: one request with the saved key. The result is kept for the row's Status.
   Future<KeyCheck> test(KeyProvider p) async {
     final key = await _read(p);

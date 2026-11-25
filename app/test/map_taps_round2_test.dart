@@ -124,13 +124,14 @@ void main() {
       expect(lines.every((g) => g % 5 == 0), isTrue, reason: '$lines');
     });
 
-    test('a hilly route keeps its lines: a nice step of its span, every other one in the preview', () {
+    test('a hilly route keeps its lines: a nice step of its span, from one at or below the lowest to one at or above the highest; the preview keeps both ends and thins between', () {
       // 2,000 ft over the window: the step is niceStep(span / 2.2) as ever.
       final step = niceStep(2000 / 2.2);
-      final (yMin, yMax) = chartWindow(4900, 6900, floor: floor);
-      final all = <double>[for (var g = (yMin / step).ceil() * step; g <= yMax; g += step) g];
-      expect(chartGridLines(4900, 6900, floor: floor, plotHeight: 98, full: true), all);
-      expect(chartGridLines(4900, 6900, floor: floor, plotHeight: 64, full: false), [for (var i = 0; i < all.length; i += 2) all[i]]);
+      expect(step, 1000);
+      // 4,900 to 6,900 ft: the lines run 4,000 to 7,000, so the lowest and the highest are inside the labelled range (the old lines
+      // began at 5,000, above the 4,900 ft low point).
+      expect(chartGridLines(4900, 6900, floor: floor, plotHeight: 98, full: true), [4000, 5000, 6000, 7000]);
+      expect(chartGridLines(4900, 6900, floor: floor, plotHeight: 64, full: false), [4000, 7000]);
     });
   });
 }
