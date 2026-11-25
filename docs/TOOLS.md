@@ -362,13 +362,13 @@ Fields:
 
   | `reason` | when | `detail` |
   |---|---|---|
-  | `not_downloaded` | no off-road data is installed, or the end is outside it | `Off-road data for this area isn't on the phone; it loads when the phone is online.` |
+  | `not_downloaded` | no off-road data is installed, or the end is outside it | `Off-road data for this area isn't on the phone. Download a region that covers it in Maps › Layers › Download a region; if that region is already downloaded, open it there and tap Add.` |
   | `no_way_found` | the off-road data covers the end, but the off-road router found no way to it (or the area was too large) | `Cache couldn't find an off-road way between the road and this point.` |
   | `no_data` | no off-road data exists for the area (not produced yet: it needs the tiled off-road data, which knows its empty cells) | `There is no off-road data for this area.` |
 
   ```json
   {"code": "offroad_unavailable", "end": "to", "road_point": {"lat": 44.221, "lon": -114.9318}, "gap_m": 1234,
-   "reason": "not_downloaded", "detail": "Off-road data for this area isn't on the phone; it loads when the phone is online."}
+   "reason": "not_downloaded", "detail": "Off-road data for this area isn't on the phone. Download a region that covers it in Maps › Layers › Download a region; if that region is already downloaded, open it there and tap Add."}
   ```
 - `map_region` and `map_region_age` name the installed map region and how old it is ("12 days old"; "unknown" when
   the age cannot be read).
