@@ -20,7 +20,8 @@ use serde_json::{json, Value};
 type RoadPiece = (Vec<Step>, Vec<(f64, f64)>, Vec<Maneuver>, f64);
 
 /// An off-road piece of a route: its steps, its points and its length.
-type OffroadPiece = (Vec<Step>, Vec<(f64, f64)>, f64);
+/// Steps, shape, km, and whether missing elevation data was routed around.
+type OffroadPiece = (Vec<Step>, Vec<(f64, f64)>, f64, bool);
 
 pub const DEFAULT_OFFROAD_SNAP_M: f64 = 150.0;
 pub const DEFAULT_MERGE_BEARING_DEG: f64 = 60.0;
@@ -245,6 +246,8 @@ pub struct Directions {
     /// Plain-words notes about how an off-road route was made (see `router::RouteResult::notes`). Not in [`Directions::to_json`]
     /// (the reference server's shape, and the assistant's); the map's route object carries them.
     pub notes: Vec<String>,
+    /// Part of the off-road data the route needed was missing (see `router::RouteResult::data_gap`); the route went around it.
+    pub data_gap: bool,
 }
 
 impl DirectionsRequest {
@@ -518,14 +521,14 @@ impl Env<'_> {
         if asm.steps.is_empty() {
             return Err(DirectionsError::new("no_route", "Off-road router returned no usable path"));
         }
-        Ok((asm.steps, asm.shape, asm.km))
+        Ok((asm.steps, asm.shape, asm.km, result.data_gap))
     }
 
     fn fail(&self, req: &DirectionsRequest, rid: &str, e: DirectionsError) -> Directions {
         Directions {
             ok: false, route_id: rid.into(), mode: req.mode, from: None, to: None, distance_km: 0.0, distance_mi: 0.0,
             duration_s: 0, major_roads: vec![], steps: vec![], shape: String::new(), routing: String::new(),
-            leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m), warnings: vec![], errors: vec![e], notes: vec![],
+            leg_params: (req.offroad_snap_m, req.merge_bearing_deg, req.min_leg_m), warnings: vec![], errors: vec![e], notes: vec![], data_gap: false,
         }
     }
 
@@ -562,6 +565,7 @@ impl Env<'_> {
             warnings: vec![],
             errors: vec![],
             notes: result.notes.clone(),
+            data_gap: result.data_gap,
         }
     }
 
@@ -640,6 +644,7 @@ impl Env<'_> {
         let mut to_end = end_info(req.to, *shape.last().unwrap());
         let mut warnings = Vec::new();
         let mut routing = "road".to_string();
+        let mut data_gap = false;
         let mut out_shape = trip.shape_encoded.clone();
         if req.offroad == OffroadChoice::Auto {
             let (mut lead, mut tail) = (None, None);
@@ -667,6 +672,7 @@ impl Env<'_> {
                     }
                 }
             }
+            data_gap = lead.as_ref().is_some_and(|l| l.3) || tail.as_ref().is_some_and(|t| t.3);
             if lead.is_some() || tail.is_some() {
                 routing = "offroad".into();
                 if tail.is_some() {
@@ -721,6 +727,7 @@ impl Env<'_> {
             warnings,
             errors: vec![],
             notes: vec![],
+            data_gap,
         }
     }
 }
