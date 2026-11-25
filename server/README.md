@@ -291,9 +291,25 @@ The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), 
   engine on `<data>/sync`, shares the folders of the share table (the phone's share ids on the server's folders), polls the engine's
   status every 2 s into a cache, and keeps `<data>/sharing.json` (the phone's format). It starts with the helper when `sharing.json`
   says sharing is set up, and stops when the helper's input ends. A browser asks it through `sharing.state`, `sharing.setup`,
-  `sharing.set_kind`, `sharing.set_item`, `sharing.link_start` and `sharing.call` (only `link_code`, `unlink`, `set_name`,
+  `sharing.set_kind`, `sharing.set_item`, `sharing.set_private`, `sharing.link_start` and `sharing.call` (only `link_code`, `unlink`, `set_name`,
   `set_peer_name`, `set_link`, `sync_now`, `share_items`, and `status` from the cache; the keys, `set_secrets` and `take_secrets`,
   are never reachable from a browser). The network settings are the engine's own defaults, as on the phone; nothing here opens a port.
+  Shares are removed with `keep_history`, and a gated folder (the notebooks' `photos`) sends only the files the host lists.
+- **Notebook sync** (`server/helper/bin/notebook_sync_host.dart`, with `core_notebook_store.dart`): the phone's notebook sync engine
+  with no Flutter, over the core's notebooks, keeps `<support>/notebook-share` the same as the notebooks while the Notebooks kind is
+  on. The helper is the one writer of that folder. It runs a pass at start and when the core opens, when the engine reports a change
+  in the `notebooks` share (import), a moment after any write to the core's notebooks (export) and when the kind is switched on. A
+  private notebook stays out of the share until its "Include in sync and sharing" is on (`sharing.set_private`; kept in
+  `<support>/notebook-sync/targets.json`). A photo that arrives is stored in `<support>/notebook/photos/<id>.jpg` (and `thumbs/`,
+  the same bytes: the helper has no image library). The built-in templates come from the web build (`CACHE_NOTEBOOK_TEMPLATES`).
+- **Notes folders** (Obsidian and Logseq on this computer; `server/helper/bin/folder_pick_ops.dart` and `folder_connections.dart`): the
+  person picks a folder of the computer Cache runs on in the browser's own folder picker, which lists folders with `devfs.list {path?}`
+  (from the home folder of the user Cache runs as, up to `/`; subfolders only, hidden ones left out, each marked `obsidian` when it has
+  `.obsidian` and `logseq` when it has `logseq/config.edn`, with whether it can be opened; `io_error` for one that cannot be read). The
+  `nbfolders.*` ops (`state`, `connect`, `disconnect`, `pause`, `sync`, `set_tag`, `resolve`) connect a folder, and the helper then
+  keeps it the same as the notebooks with the phone's engine over `core_notebook_store.dart` (the phone's triggers: at start, 2 s after
+  a write to the notebooks, every 2 minutes; the phone's merge rules and status lines), with no tab open. The connections are kept in
+  `<support>/notebook-sync/folders.json` and each one's record in `<support>/notebook-sync/<obsidian|logseq>.json`.
 
 - **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
   (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the

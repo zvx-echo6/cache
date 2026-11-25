@@ -374,10 +374,10 @@ After linking, pick what to share.
 
 Each kind's line says how many of its items are shared and their size, or "Not shared".
 
-To choose single items, tap the kind. Its page lists every item, on this device and on your linked devices, each with its own switch:
+To choose single items, tap the kind. Its page lists the items on this device, and on a phone the items on your linked devices too, each with its own switch:
 - the switch at the top turns the whole kind on or off;
 - new items you add follow that switch;
-- private notebooks are listed, but start off;
+- private notebooks are listed, but start off. A computer lists only its own notebooks; switch on a phone's private notebook from that phone ("Settings" > "Sharing and sync" > "Notebooks");
 - turning an item off keeps your copy and theirs.
 
 Sync now works at three levels:

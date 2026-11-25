@@ -71,6 +71,7 @@ class SharingHost {
   Map<String, dynamic> status = const {};
   Timer? _poll;
   bool _polling = false;
+  int _ticks = 0;
   int? _askSince;
   final Map<String, Set<String>> _off = {};
   final Map<String, List<String>> _sentOff = {};
@@ -195,6 +196,8 @@ class SharingHost {
         'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
         // The items switched off, from the start, so the first round already leaves them out.
         'off': {for (final k in table.kinds) for (final id in k.shares.keys) id: _sentOff[id] = _offOf(k, id)},
+        // What may be sent from a folder every item uses (the notebooks' photos): only what something shared refers to.
+        'gate': await _gates(),
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
         ...engineConfig,
@@ -286,6 +289,8 @@ class SharingHost {
     _polling = true;
     try {
       await _refresh();
+      // The photos an entry refers to change with the notebooks: the gate is kept current (the phone's every 30 s).
+      if (++_ticks % 15 == 0) await refreshGate();
     } finally {
       _polling = false;
     }
@@ -362,6 +367,7 @@ class SharingHost {
         'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: ([...e.value]..sort())},
         'changed': {..._changed},
         'settings_applied': settingsApplied?.call() ?? 0,
+        'private_included': privateIncluded?.call() ?? const <String>[],
         'link': {..._link},
       };
 
@@ -377,9 +383,83 @@ class SharingHost {
     throw CacheSearchException('bad_args', 'No such kind to share: $id');
   }
 
-  /// The paths switched off in the share [id] of [k], as the engine's patterns (the server has no private items yet).
-  List<String> _offOf(ShareKind k, String id) =>
-      ({for (final key in _off[k.id] ?? const <String>{}) if (key.startsWith('$id/')) key.substring(id.length + 1)}).toList()..sort();
+  /// Private items left out of a share: the paths the helper says are private and not switched on (the notebooks' folders). Set by
+  /// the helper ([attachNotebookSync]).
+  List<String> Function(String shareId)? extraOff;
+
+  /// The files the engine may send from the gated folder of share [id] (the notebooks' photos), given the share's off list. Set by the
+  /// helper; a gated share with none sends nothing.
+  Future<List<String>> Function(String shareId, List<String> off)? photosAllowed;
+
+  /// The private notebooks switched on ("Include in sync and sharing"), and the switch. Set by the helper.
+  List<String> Function()? privateIncluded;
+  Future<void> Function(String notebookId, bool on)? setPrivateIncluded;
+
+  /// The paths switched off in the share [id] of [k], as the engine's patterns: the items switched off, and the private items not
+  /// switched on.
+  List<String> _offOf(ShareKind k, String id) => ({
+        for (final key in _off[k.id] ?? const <String>{})
+          if (key.startsWith('$id/')) key.substring(id.length + 1),
+        ...?extraOff?.call(id),
+      }).toList()
+        ..sort();
+
+  /// The off lists last given to the engine's `set_off` are in [_sentOff]; the gate each share was last given:
+  final Map<String, Map<String, Object?>> _sentGate = {};
+
+  /// The gate for [id] of [k] as it is now: null when the share has none. A failure to work it out sends nothing from the folder
+  /// rather than everything.
+  Future<Map<String, Object?>?> _gateOf(ShareKind k, String id) async {
+    final dir = k.gated[id];
+    if (dir == null) return null;
+    final allowed = photosAllowed;
+    if (allowed == null) return {'dir': dir, 'allow': const <String>[]};
+    try {
+      return {'dir': dir, 'allow': await allowed(id, _offOf(k, id))};
+    } catch (e) {
+      log?.call('sharing: could not work out which files may be sent ($id): $e');
+      return {'dir': dir, 'allow': const <String>[]};
+    }
+  }
+
+  Future<Map<String, Map<String, Object?>>> _gates() async {
+    final out = <String, Map<String, Object?>>{};
+    for (final k in table.kinds) {
+      for (final id in k.shares.keys) {
+        final g = await _gateOf(k, id);
+        if (g != null) out[id] = _sentGate[id] = g;
+      }
+    }
+    return out;
+  }
+
+  Future<void> _applyGate(ShareKind k, String id) async {
+    final g = await _gateOf(k, id);
+    if (_core == null || g == null) return;
+    if (_sentGate[id] != null && jsonEncode(_sentGate[id]) == jsonEncode(g)) return;
+    try {
+      await _engine('set_gate', {'id': id, ...g});
+      _sentGate[id] = g;
+    } catch (e) {
+      log?.call('sharing: could not set which files may be sent ($id): $e');
+    }
+  }
+
+  /// Before something writes files into a gated folder (notebook sync, its photos), and every 30 s: the engine's list of what may be
+  /// sent from it is made current.
+  Future<void> refreshGate() => _locked(() async {
+        for (final k in table.kinds) {
+          for (final id in k.shares.keys) {
+            if (k.gated[id] != null) await _applyGate(k, id);
+          }
+        }
+      });
+
+  /// The off lists (and what they change, the photo gate) are given to the engine again: the private notebooks left out changed.
+  Future<void> refreshOff() => _locked(() async {
+        if (_core == null) return;
+        await _applyOff();
+      });
 
   Future<void> _applyOff() async {
     for (final k in table.kinds) {
@@ -392,6 +472,8 @@ class SharingHost {
         } catch (e) {
           log?.call('sharing: could not set the items switched off ($id): $e');
         }
+        // An item switched on or off changes which photos something shared refers to.
+        await _applyGate(k, id);
       }
     }
   }
@@ -402,16 +484,32 @@ class SharingHost {
         _needCore();
         if (!on) {
           for (final id in k.shares.keys) {
-            if (shareOf(id) != null) await _engine('share_remove', {'id': id});
+            // The engine keeps the share's history, so the kind switched on again keeps both devices' edits and deletes.
+            if (shareOf(id) != null) await _engine('share_remove', {'id': id, 'keep_history': true});
           }
           return;
         }
         await _addKind(k);
       });
 
+  /// Told after a kind was switched on (not awaited): notebook sync makes the notebooks and its folder the same at once. Set by the
+  /// helper.
+  Future<void> Function(String kind, bool on)? kindSet;
+
+  /// Run before a kind's off list is given to the engine and its folders are shared (notebook sync reads which private notebooks are
+  /// left out). Set by the helper; a failure is only logged.
+  Future<void> Function(String kind)? beforeKindOn;
+
   Future<void> _addKind(ShareKind k) async {
+    try {
+      await beforeKindOn?.call(k.id);
+    } catch (e) {
+      log?.call('sharing: could not prepare ${k.id}: $e');
+    }
     await _applyOff();
     await _addShares(k);
+    final told = kindSet;
+    if (told != null) unawaited(told(k.id, true));
   }
 
   Future<void> _addShares(ShareKind k) async {
@@ -627,6 +725,14 @@ class SharingHost {
         final all = a['all'];
         await setItem(_str(a, 'kind'), _str(a, 'key'), a['on'] == true, all: all is List ? [for (final x in all) '$x'] : null);
         return snapshot();
+      case 'sharing.set_private':
+        // A private notebook's "Include in sync and sharing" (the notebooks' own switch, kept by the notebook sync).
+        final set = setPrivateIncluded;
+        if (set == null) throw const CacheSearchException('sync', 'Notebooks are not synced on this server');
+        final on = a['on'];
+        if (on is! bool) throw const CacheSearchException('bad_args', '"on" (true or false) is required');
+        await set(_str(a, 'notebook'), on);
+        return snapshot();
       case 'sharing.link_start':
         return await linkStart(_str(a, 'code'));
       case 'sharing.call':
@@ -660,7 +766,7 @@ class SharingOps implements OpHandler {
 
   final SharingHost host;
 
-  static const Set<String> ops = {'sharing.state', 'sharing.setup', 'sharing.set_kind', 'sharing.set_item', 'sharing.link_start', 'sharing.call'};
+  static const Set<String> ops = {'sharing.state', 'sharing.setup', 'sharing.set_kind', 'sharing.set_item', 'sharing.set_private', 'sharing.link_start', 'sharing.call'};
 
   @override
   bool handles(String op) => op.startsWith('sharing.');
@@ -694,7 +800,7 @@ class _RealCore implements SyncCoreLike {
 /// One kind of thing that can be shared (the phone's `DataKind`, as far as sharing goes): its folders by their fixed share ids
 /// (the same ids as on a phone, so a kind on two linked devices is one shared folder) and what never syncs in them.
 class ShareKind {
-  const ShareKind({required this.id, required this.label, required this.shares, this.notShared = const {}});
+  const ShareKind({required this.id, required this.label, required this.shares, this.notShared = const {}, this.gated = const {}});
 
   final String id;
   final String label;
@@ -702,6 +808,10 @@ class ShareKind {
   /// Share id -> the folder on the server.
   final Map<String, String> shares;
   final Map<String, List<String>> notShared;
+
+  /// Share id -> a folder inside it that every item uses (the notebooks' `photos`), from which the engine sends only the files the
+  /// host says may go (the engine's `gate`).
+  final Map<String, String> gated;
 }
 
 /// A folder shared whatever is ticked once sharing is set up (the search indexes), with its sync rules.
@@ -765,7 +875,13 @@ class ShareTable {
           // The embedder's download is `<file>.part` in this folder and is not hidden, so the engine would offer it.
           notShared: {'models': kServerModelsNotShared},
         ),
-        ShareKind(id: 'notebooks', label: 'Notebooks', shares: {'notebooks': '$support/$kNotebookShareDir'}),
+        ShareKind(
+          id: 'notebooks',
+          label: 'Notebooks',
+          shares: {'notebooks': '$support/$kNotebookShareDir'},
+          // Every notebook's photos share one folder; a photo goes only when an entry of a shared notebook refers to it.
+          gated: {'notebooks': 'photos'},
+        ),
         ShareKind(id: 'videos', label: 'Videos and weather', shares: {'videos': '$docs/videos'}),
       ],
       always: [

@@ -259,7 +259,7 @@ void main() {
       ..writeAsStringSync('x');
     await h.invoke('sharing.set_kind', {'kind': 'models', 'on': false});
     expect(c.argsOf('share_remove'), [
-      {'id': 'models'},
+      {'id': 'models', 'keep_history': true},
     ]);
     expect(File('${data.path}/models/a.gguf').existsSync(), isTrue);
     await expectLater(h.invoke('sharing.set_kind', {'kind': 'nonsense', 'on': true}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')));
