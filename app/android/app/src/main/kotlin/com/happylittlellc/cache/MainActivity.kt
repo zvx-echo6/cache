@@ -251,6 +251,7 @@ class MainActivity : FlutterActivity() {
             }
         }
         FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
+        CprBeat.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -322,6 +323,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
+        CprBeat.detach(this, flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)

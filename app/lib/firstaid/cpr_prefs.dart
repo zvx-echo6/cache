@@ -17,6 +17,20 @@ class CprPrefs extends ChangeNotifier {
 
   static const String _name = 'first-aid.json';
 
+  bool _disposed = false;
+
+  // The screen that made this can be gone before the file is read: it then ends quietly.
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   Future<void> init() async {
     try {
       final fs = createAppFs(supportOverride: settingsDirOverride);
