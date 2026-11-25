@@ -116,7 +116,7 @@ impl Record {
 
     /// What the node and the engine's start take of it (an entry, not a removal).
     pub fn point(&self) -> EntryPoint {
-        EntryPoint { id: self.id.clone(), host: self.host.clone(), port: self.port, network_name: self.network_name.clone(), passphrase: self.passphrase.clone(), on: self.on }
+        EntryPoint { id: self.id.clone(), host: self.host.clone(), port: self.port, network_name: self.network_name.clone(), passphrase: self.passphrase.clone(), on: self.on, cap_bytes: self.cap_bytes }
     }
 
     /// The facts that decide a tie: the same moment from the same device with different contents still has one answer.
@@ -139,6 +139,9 @@ pub struct EntryPoint {
     pub passphrase: Option<String>,
     #[serde(default = "yes")]
     pub on: bool,
+    /// The most a file may be to go through this entry point (bytes).
+    #[serde(default = "cap")]
+    pub cap_bytes: u64,
 }
 
 impl std::fmt::Debug for EntryPoint {
@@ -151,6 +154,7 @@ impl std::fmt::Debug for EntryPoint {
             .field("network_name", &self.network_name)
             .field("has_passphrase", &self.passphrase.as_ref().is_some_and(|p| !p.is_empty()))
             .field("on", &self.on)
+            .field("cap_bytes", &self.cap_bytes)
             .finish()
     }
 }

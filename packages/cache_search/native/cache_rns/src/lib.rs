@@ -315,6 +315,9 @@ pub trait Handler: Send + Sync + 'static {
     fn blob_allowed(&self, _peer: PublicKey, _hash: cache_store::Hash, _speed: Speed) -> bool {
         true
     }
+    /// A window of the blob `hash` was refused to `peer` because the file is bigger than the cap of the entry point its route comes
+    /// in through ([`blobs::OVER_CAP`]). Called per refusal; do not block.
+    fn refused_over_cap(&self, _peer: PublicKey, _hash: cache_store::Hash) {}
     /// Tests only: every window is answered "too slow", whatever the link measures (an answering end that judges a link slow
     /// that the asking end thinks is fine).
     #[cfg(feature = "test-hooks")]
@@ -391,6 +394,9 @@ struct State {
     entries: HashMap<String, Slot>,
     /// The interface of each attached entry point, back to its id.
     iface_entry: HashMap<InterfaceId, String>,
+    /// The most a file may be to go through each entry point (bytes), by entry id ([`RnsNode::set_entry_caps`]). An entry with no
+    /// number here has no cap.
+    caps: HashMap<String, u64>,
     /// Where each linked device's route last went through, as the words a log line uses ([`route_label`]); kept when an entry
     /// is lost or removed, so the move to another one can say what it was.
     last_route: HashMap<[u8; 32], String>,
@@ -986,6 +992,7 @@ impl RnsNode {
                                     Asker::Unlinked => continue,
                                 });
                                 let speed = speeds.serve_speed(&from);
+                                let state = state.clone();
                                 tokio::spawn(async move {
                                     if !handler.blobs_ready() {
                                         let _ = handle.respond_owned_bytes(token, blobs::not_ready());
@@ -1006,7 +1013,13 @@ impl RnsNode {
                                         }
                                         handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
                                     }
-                                    let reply = blobs::serve_window(&store, &data, speed).await;
+                                    // The most this file may be for the route the asker's windows come back by: the entry point it comes in
+                                    // through has a cap, and a bigger file is not served over it, whatever the asker thinks of it.
+                                    let cap = asker_cap(&handle, &state, from).await;
+                                    let reply = blobs::serve_window(&store, &data, speed, cap).await;
+                                    if let (Some((hash, _, _)), true) = (want, reply.first() == Some(&blobs::OVER_CAP)) {
+                                        handler.refused_over_cap(from, hash);
+                                    }
                                     if let Some((hash, _, end)) = want {
                                         handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
                                     }
@@ -1231,6 +1244,18 @@ impl RnsNode {
     /// kept to notice an edit.
     pub fn set_entry_points(&self, entries: &[EntryPoint]) {
         apply_entries(&self.handle, &self.state, &self.entry_salt, entries);
+    }
+
+    /// The most a file may be to go through each entry point (by id, in bytes). A device answering a window for a file bigger than the
+    /// cap of the entry its asker's route comes in through refuses it ([`blobs::OVER_CAP`]). Not a setting of the entry itself, so
+    /// changing one does not reconnect it. The ids not listed have no cap.
+    pub fn set_entry_caps(&self, caps: &[(String, u64)]) {
+        self.state.lock().unwrap().caps = caps.iter().cloned().collect();
+    }
+
+    /// The cap of the entry point `id`, if it has one.
+    pub fn entry_cap(&self, id: &str) -> Option<u64> {
+        self.state.lock().unwrap().caps.get(id).copied()
     }
 
     /// Where each entry point stands, by id, with when that was checked (ms since the Unix epoch): sorted by id.
@@ -1597,6 +1622,22 @@ async fn route_via(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, destinati
             _ => Via::Other,
         },
     })
+}
+
+/// The cap of the entry point `asker`'s route goes through (none: it does not go through an entry point, or the entry has none).
+/// The route table is asked first; with no route in it, the entry the asker's announce was last heard through.
+async fn asker_cap(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, asker: PublicKey) -> Option<u64> {
+    let destination = state.lock().unwrap().destination_of.get(asker.as_bytes()).copied();
+    let via = match destination {
+        Some(d) => route_via(handle, state, d).await,
+        None => None,
+    };
+    let s = state.lock().unwrap();
+    let via = via.or_else(|| s.heard.get(asker.as_bytes()).cloned());
+    match via {
+        Some(Via::Entry(id)) => s.caps.get(&id).copied(),
+        _ => None,
+    }
 }
 
 /// How a route is named in the log: an entry point by its address, Wi-Fi, or anything else.

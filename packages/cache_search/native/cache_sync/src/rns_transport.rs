@@ -87,6 +87,8 @@ pub struct MultiTransport {
     reach_gap_ms: AtomicU64,
     /// The entry points (on and off) the node is to have, kept to start it again.
     entries: Mutex<Vec<cache_rns::EntryPoint>>,
+    /// The cap of each entry point (id, bytes), kept to give a node that starts again.
+    entry_caps: Mutex<Vec<(String, u64)>>,
     /// How long a link may go without a measurement before the next request is preceded by a small one, in ms (u64::MAX: the node's own).
     probe_ms: AtomicU64,
 }
@@ -144,7 +146,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default(), probe_ms: AtomicU64::new(u64::MAX) })
+        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default(), entry_caps: Mutex::default(), probe_ms: AtomicU64::new(u64::MAX) })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
@@ -173,6 +175,7 @@ impl MultiTransport {
         let node = Arc::new(RnsNode::start(cfg, Arc::new(Serving { serve: a.serve.clone() })).await?);
         let dest = node.destination();
         node.set_former(&self.former_keys());
+        node.set_entry_caps(&self.entry_caps.lock().unwrap());
         if let Some(ms) = Some(self.reach_gap_ms.load(Ordering::Relaxed)).filter(|ms| *ms > 0) {
             node.set_reach_gap(Duration::from_millis(ms));
         }
@@ -493,8 +496,22 @@ impl Transport for MultiTransport {
     fn set_entry_points(&self, entries: Vec<EntryPoint>) {
         let all: Vec<cache_rns::EntryPoint> = entries.iter().map(to_rns).collect();
         *self.entries.lock().unwrap() = all.clone();
+        let caps: Vec<(String, u64)> = entries.iter().map(|e| (e.id.clone(), e.cap_bytes)).collect();
+        *self.entry_caps.lock().unwrap() = caps.clone();
         if let Some(n) = self.node() {
             n.set_entry_points(&all);
+            n.set_entry_caps(&caps);
+        }
+    }
+
+    fn over_cap(&self, peer: &str, size: u64) -> bool {
+        if !self.reached_over_rns(peer) {
+            return false;
+        }
+        let Some((k, n)) = peer.parse::<PublicKey>().ok().zip(self.node()) else { return false };
+        match n.via(&k) {
+            Some(Via::Entry(id)) => n.entry_cap(&id).is_some_and(|c| size > c),
+            _ => false,
         }
     }
 
@@ -660,6 +677,7 @@ impl RnsFetch {
             let have = Arc::new(AtomicU64::new(0));
             let mut last = String::from("no linked device could be reached over Reticulum");
             let mut slow = false;
+            let mut over = false;
             for peer in providers {
                 let (h, t2) = (have.clone(), tx.clone());
                 let fetch = blobs::fetch(&node, &peer, &store, hash, WINDOW_TIMEOUT, move |f| {
@@ -683,12 +701,14 @@ impl RnsFetch {
                     }
                     Err(e) => {
                         slow |= blobs::is_too_slow(&e);
+                        over |= blobs::is_over_cap(&e);
                         last = format!("{e:#}");
                     }
                 }
             }
             // Every device that could not carry it said the link is too slow (or this end did): the file waits, it did not fail.
-            let _ = tx.send(if slow { FetchEvent::Waiting(last) } else { FetchEvent::Failed(last) }).await;
+            // A device that holds it back for the entry point's cap says so (the file waits for Wi-Fi), whatever else was said.
+            let _ = tx.send(if over { FetchEvent::OverCap(last) } else if slow { FetchEvent::Waiting(last) } else { FetchEvent::Failed(last) }).await;
         });
         RnsFetch { rx, task }
     }
@@ -800,6 +820,10 @@ impl Handler for Serving {
     #[cfg(feature = "test-hooks")]
     fn refuse_blobs(&self) -> bool {
         self.serve.test_refuse_blobs()
+    }
+
+    fn refused_over_cap(&self, peer: PublicKey, hash: Hash) {
+        self.serve.refused_over_cap(&peer.to_string(), &hash.to_string());
     }
 
     fn blob_allowed(&self, peer: PublicKey, hash: Hash, speed: cache_rns::Speed) -> bool {

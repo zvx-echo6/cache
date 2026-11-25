@@ -37,7 +37,7 @@ use n0_future::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -710,6 +710,8 @@ struct Serving {
 
 /// What the status says an item that a link's class holds back is waiting for.
 const WAITING_FOR_FASTER: &str = "Waiting for a faster connection";
+/// What the status says a file waits for when the entry point its device is reached through takes no file that big (its cap).
+const WAITING_FOR_WIFI: &str = "Bigger files wait for Wi-Fi";
 
 /// An item the link's class does not allow now: a file too big for it (or of a big kind), or a folder's whole list. Not a
 /// failure: it stays wanted and goes when the link allows it.
@@ -724,8 +726,25 @@ impl std::fmt::Display for Waiting {
 
 impl std::error::Error for Waiting {}
 
+/// A file bigger than the cap of the entry point its device is reached through: like [`Waiting`], not a failure; it goes when the
+/// route is no longer through a capped entry (Wi-Fi is back, another way is up) or the cap is raised.
+#[derive(Debug)]
+struct WaitingCap;
+
+impl std::fmt::Display for WaitingCap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(WAITING_FOR_WIFI)
+    }
+}
+
+impl std::error::Error for WaitingCap {}
+
 fn is_waiting(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| c.downcast_ref::<Waiting>().is_some())
+    e.chain().any(|c| c.downcast_ref::<Waiting>().is_some() || c.downcast_ref::<WaitingCap>().is_some())
+}
+
+fn is_waiting_cap(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<WaitingCap>().is_some())
 }
 
 /// A held back item as the status lists it: (device, folder id, path; empty for a folder's whole list).
@@ -1050,6 +1069,10 @@ struct Inner {
     resume_fires: Mutex<Vec<(u64, &'static str, u32)>>,
     /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
     waiting: Mutex<BTreeMap<WaitKey, u64>>,
+    /// The files of `waiting` that wait for an entry point's cap (their reason is [`WAITING_FOR_WIFI`], not the link's speed).
+    waiting_cap: Mutex<BTreeSet<WaitKey>>,
+    /// Windows this device refused because the file was bigger than the cap of the entry point the asker came in through.
+    refused_cap: AtomicU64,
     /// [`Config::bulk`].
     bulk: HashSet<String>,
     /// [`Config::medium_page_bytes`].
@@ -2273,7 +2296,7 @@ impl Inner {
                     self.end_backoff(&peer);
                 }
                 let class = self.class_of(&peer);
-                let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) });
+                let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) && !self.over_cap(&peer, *size) });
                 if !allowed {
                     self.resume_since.lock().unwrap().remove(&peer);
                     continue;
@@ -2408,6 +2431,16 @@ impl Inner {
     /// comes inline with its entry and is then in the store already).
     fn class_allows(&self, class: Speed, share: &str, size: u64) -> bool {
         class.carries_file(size) && !(class == Speed::Medium && self.bulk.contains(share))
+    }
+
+    /// A file of `size` is more than the entry point `peer` is reached through takes (its cap). Tests only: a device with
+    /// `<dir>/ignore-cap` acts as a build that does not check the cap (the answering end still does).
+    fn over_cap(&self, peer: &str, size: u64) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("ignore-cap").exists() {
+            return false;
+        }
+        self.net.over_cap(peer, size)
     }
 
     /// The page of differences to ask for over a link of class `class` (none: the answering end's own, 1 MB).
@@ -2676,6 +2709,7 @@ impl Inner {
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
         self.waiting.lock().unwrap().retain(|(p, _, _), _| p != id);
+        self.waiting_cap.lock().unwrap().retain(|(p, _, _)| p != id);
         self.summary_peers.lock().unwrap().remove(id);
         for f in self.mirror_files(id, &[]) {
             let _ = std::fs::remove_file(f);
@@ -3214,6 +3248,7 @@ impl Inner {
                     match self.fetch(sh, &path, entry, conflict, from).await {
                         Ok(true) => {
                             self.waiting.lock().unwrap().remove(&wkey);
+                            self.waiting_cap.lock().unwrap().remove(&wkey);
                             self.end_backoff(from);
                             if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
                                 say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
@@ -3222,6 +3257,7 @@ impl Inner {
                         Ok(false) => {
                             held = true;
                             self.waiting.lock().unwrap().remove(&wkey);
+                            self.waiting_cap.lock().unwrap().remove(&wkey);
                             if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
                                 s.remove(&key);
                             }
@@ -3232,6 +3268,11 @@ impl Inner {
                             held = true;
                             self.note_slow_cancel(from);
                             self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
+                            if is_waiting_cap(&e) {
+                                self.waiting_cap.lock().unwrap().insert(wkey.clone());
+                            } else {
+                                self.waiting_cap.lock().unwrap().remove(&wkey);
+                            }
                             self.waiting.lock().unwrap().insert(wkey, size);
                         }
                         Err(e) => {
@@ -3261,6 +3302,7 @@ impl Inner {
                 s.retain(|(id, p)| *id != sh.id || fetch_paths.contains(p));
             }
             self.waiting.lock().unwrap().retain(|(f, id, p), _| p.is_empty() || f != from || *id != sh.id || fetch_paths.contains(p));
+            self.waiting_cap.lock().unwrap().retain(|(f, id, p)| f != from || *id != sh.id || fetch_paths.contains(p));
         }
         match no_room {
             Some(e) => Err(e),
@@ -3299,8 +3341,14 @@ impl Inner {
                 bail!("no linked device has {path} right now");
             }
             self.wanted.lock().unwrap().insert(hash);
-            // Only from the devices whose link carries it: the others hold it back, and it waits for a faster link.
-            let providers: Vec<String> = providers.into_iter().filter(|p| self.class_allows(self.class_of(p), &sh.id, entry.size)).collect();
+            // Only from the devices whose route and link carry it: the others hold it back, and it waits (for Wi-Fi, or a faster link).
+            // Not through an entry point whose cap is less than the file: that waits for another way (Wi-Fi). This is looked at first,
+            // since a faster connection through the same entry point would not change it.
+            let by_cap: Vec<String> = providers.into_iter().filter(|p| !self.over_cap(p, entry.size)).collect();
+            if by_cap.is_empty() {
+                return Err(anyhow::Error::new(WaitingCap));
+            }
+            let providers: Vec<String> = by_cap.into_iter().filter(|p| self.class_allows(self.class_of(p), &sh.id, entry.size)).collect();
             if providers.is_empty() {
                 return Err(anyhow::Error::new(Waiting));
             }
@@ -3315,6 +3363,7 @@ impl Inner {
             let mut stream = self.net.fetch(self.store.raw(), hash, providers.clone()).await?;
             let mut failed = None;
             let mut too_slow = false;
+            let mut over_cap = false;
             let mut last_progress = Instant::now();
             loop {
                 // Woken every second even when nothing arrives, so a pause or a stalled path is noticed.
@@ -3352,6 +3401,10 @@ impl Inner {
                             failed = Some(m);
                             too_slow = true;
                         }
+                        FetchEvent::OverCap(m) => {
+                            failed = Some(m);
+                            over_cap = true;
+                        }
                     },
                     Err(_) => {}
                 }
@@ -3368,6 +3421,10 @@ impl Inner {
             let done = self.run.lock().unwrap().transfer.as_ref().map(|t| t.done).unwrap_or(0);
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
+                if over_cap {
+                    // The other end says the entry point this goes through takes no file that big: held back, not failed.
+                    return Err(anyhow::Error::new(WaitingCap));
+                }
                 if too_slow {
                     // Either end says the link is too slow for it: held back, not failed. What arrived stays in the store.
                     return Err(anyhow::Error::new(Waiting));
@@ -3789,6 +3846,10 @@ impl Serve for Inner {
 
     /// The big kinds do not go over a Medium link: a window is refused when every folder kept with `peer` that lists the file is
     /// one of them. A file no folder lists (or any folder that is not a big kind lists) goes, subject to its size.
+    fn refused_over_cap(&self, _peer: &str, _hash: &str) {
+        self.refused_cap.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[cfg(feature = "test-hooks")]
     fn test_refuse_blobs(&self) -> bool {
         // A device with `<dir>/refuse-blobs` refuses every window as too slow (a link that turned out slow at the answering end).
@@ -4215,6 +4276,8 @@ impl SyncEngine {
             heard_from: Mutex::new(HashSet::new()),
             reach_pending: Mutex::new(HashMap::new()),
             waiting: Mutex::new(BTreeMap::new()),
+            waiting_cap: Mutex::new(BTreeSet::new()),
+            refused_cap: AtomicU64::new(0),
             resume_check: Duration::from_millis(cfg.resume_check_ms.unwrap_or(5_000).max(50)),
             resume_hold: Duration::from_millis(cfg.resume_hold_ms.unwrap_or(30_000)),
             resume_since: Mutex::new(HashMap::new()),
@@ -4394,6 +4457,7 @@ impl SyncEngine {
                 "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
                 "notice_got": inner.notice_got.load(Ordering::Relaxed),
                 "entries": inner.asked_entries.load(Ordering::Relaxed),
+                "refused_cap": inner.refused_cap.load(Ordering::Relaxed),
                 "inline_ok": inner.inline_ok.load(Ordering::Relaxed),
                 "inline_bad": inner.inline_bad.load(Ordering::Relaxed),
             })),
@@ -5065,17 +5129,19 @@ impl SyncEngine {
             })
             .collect();
         // What a link's class holds back (engine field only; the wording on the device row is part 4): files and whole lists.
+        let waiting_cap = inner.waiting_cap.lock().unwrap().clone();
         let waiting: Vec<Value> = inner
             .waiting
             .lock()
             .unwrap()
             .iter()
             .map(|((peer, share, path), size)| {
+                let reason = if waiting_cap.contains(&(peer.clone(), share.clone(), path.clone())) { WAITING_FOR_WIFI } else { WAITING_FOR_FASTER };
                 let peer_name = saved.peers.iter().find(|p| p.id == *peer).map(|p| p.name.clone());
                 let share_name = saved.shares.iter().find(|s| s.id == *share).map(|s| s.name.clone());
                 json!({
                     "peer": peer, "peer_name": peer_name, "share_id": share, "share": share_name, "path": path,
-                    "what": if path.is_empty() { "list" } else { "file" }, "size": size, "reason": WAITING_FOR_FASTER,
+                    "what": if path.is_empty() { "list" } else { "file" }, "size": size, "reason": reason,
                 })
             })
             .collect();
@@ -5494,7 +5560,7 @@ mod former_tests {
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn plan_entry(id: &str, on: bool) -> entries::EntryPoint {
-        entries::EntryPoint { id: id.into(), host: "rt.example.net".into(), port: 4965, network_name: None, passphrase: None, on }
+        entries::EntryPoint { id: id.into(), host: "rt.example.net".into(), port: 4965, network_name: None, passphrase: None, on, cap_bytes: entries::DEFAULT_CAP_BYTES }
     }
 
     /// The background mode (`"reticulum": "entries"`) starts the entry points that are on and no Wi-Fi auto (the background service

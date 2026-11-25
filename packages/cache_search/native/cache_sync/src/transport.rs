@@ -126,6 +126,9 @@ pub enum FetchEvent {
     Failed(String),
     /// The link is too slow for this file (either end's judgment): not a failure, the file waits for a faster link.
     Waiting(String),
+    /// The file is bigger than the cap of the entry point the link goes through (either end's judgment): not a failure, it waits
+    /// for another way.
+    OverCap(String),
 }
 
 /// Where a pairing hello goes: the iroh address from the link code, and the Reticulum destination (32 hex characters) when
@@ -215,6 +218,11 @@ pub trait Transport: Send + Sync + 'static {
     /// Makes the entry points (rnsds the person entered) the ones listed: on the running network, never a restart. Only Reticulum
     /// has any; elsewhere this does nothing.
     fn set_entry_points(&self, _entries: Vec<crate::entries::EntryPoint>) {}
+    /// Whether a file of `size` is more than the entry point `peer` is reached through takes (its cap): the file waits for another way.
+    /// False where the device is not reached through an entry point (iroh, Wi-Fi, other Reticulum interfaces) or the entry has no cap.
+    fn over_cap(&self, _peer: &str, _size: u64) -> bool {
+        false
+    }
     /// Where each entry point stands (none where there is no Reticulum).
     fn entry_status(&self) -> Vec<EntryStatus> {
         Vec::new()
@@ -291,6 +299,8 @@ pub trait Serve: Send + Sync + 'static {
     fn blob_allowed(&self, _peer: &str, _hash: &str, _speed: Speed) -> bool {
         true
     }
+    /// A window of the file `hash` was refused to `peer`: the file is bigger than the cap of the entry point its route comes in through.
+    fn refused_over_cap(&self, _peer: &str, _hash: &str) {}
     /// Tests only: every window is refused as too slow.
     #[cfg(feature = "test-hooks")]
     fn test_refuse_blobs(&self) -> bool {
