@@ -80,7 +80,7 @@ TextPainter pinGlyph(IconData icon, double fontSize, {Color color = const Color(
 ///
 /// [flat] (the light and Parchment themes): no white halo or ring on any style. The Icon style is a solid disc in [tint] with the glyph
 /// inside it (the map's own public-place chip, scaled: disc 9/20 of [size], glyph 12.5/20); the teardrop and the badge keep their shapes.
-/// All have a faint 1 pixel edge ([kFlatIconEdge]; [ratio] is the pixels per point the image is drawn at). The dark and Tactical themes
+/// All have a 2 pixel edge ([kFlatIconEdge]; [ratio] is the pixels per point the image is drawn at). The dark and Tactical themes
 /// keep the white they have always had.
 void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tint, PinStyle style, {bool tactical = false, bool flat = false, double ratio = 3}) {
   final halo = tactical ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
@@ -93,7 +93,7 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
     case PinStyle.icon:
       if (flat && !tactical) {
         final k = size / 20;
-        canvas.drawCircle(at, 9 * k + 1 / ratio, Paint()..color = kFlatIconEdge);
+        canvas.drawCircle(at, 9 * k + flatEdgeWidth(ratio), Paint()..color = kFlatIconEdge);
         canvas.drawCircle(at, 9 * k, Paint()..color = tint);
         _paintGlyph(canvas, at, _glyph(icon, 12.5 * k, color: glyphOn(tint)));
         return;
@@ -109,7 +109,7 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
       final rect = Rect.fromCenter(center: at, width: size, height: size);
       RRect rr(double grow) => RRect.fromRectAndRadius(rect.inflate(grow), Radius.circular(size * 0.26 + grow));
       if (flat && !tactical) {
-        canvas.drawRRect(rr(1 / ratio), Paint()..color = kFlatIconEdge);
+        canvas.drawRRect(rr(flatEdgeWidth(ratio)), Paint()..color = kFlatIconEdge);
       } else {
         canvas.drawRRect(rr(ringGrow + size * 0.05), Paint()..color = edge);
         canvas.drawRRect(rr(ringGrow), Paint()..color = ring);
@@ -119,8 +119,13 @@ void paintMapPin(Canvas canvas, Offset at, double size, IconData icon, Color tin
   }
 }
 
-/// The edge of the flat icons (pins and public-place discs): a fine 1 pixel line, near black at full opacity.
+/// The edge of the flat icons (pins and public-place discs): a 2 pixel line, near black at full opacity.
 const Color kFlatIconEdge = Color(0xFF14141A);
+
+/// The width of that edge on the screen, in pixels, and how wide it is in points for an image drawn at [ratio] pixels per point
+/// (the one width every flat painter uses).
+const double kFlatEdgePixels = 2;
+double flatEdgeWidth(double ratio) => kFlatEdgePixels / ratio;
 
 /// The teardrop (needle pin) of [size] whose point is [at], filled with [tint]: with an [icon] drawn in its head, or with none a round
 /// hole (a plain pin, which needs no icon font).
@@ -148,7 +153,7 @@ void _paintTeardrop(Canvas canvas, Offset at, double size, Color tint, {required
     ..strokeWidth = grow * 2
     ..strokeJoin = StrokeJoin.round;
   if (flat && !tactical) {
-    canvas.drawPath(needle, line(kFlatIconEdge, 1 / ratio));
+    canvas.drawPath(needle, line(kFlatIconEdge, flatEdgeWidth(ratio)));
   } else {
     canvas.drawPath(needle, line(edge, ringGrow + size * 0.05));
     canvas.drawPath(needle, line(ring, ringGrow));

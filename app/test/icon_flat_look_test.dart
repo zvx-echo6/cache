@@ -13,6 +13,8 @@ import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
 import 'package:cache/notebook/notebook_map.dart' show repeaterPinName;
 import 'package:cache/notebook/pin_image.dart';
+import 'package:cache/roads/road_chips.dart';
+import 'package:cache/roads/road_event.dart';
 import 'package:cache/theme.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -221,6 +223,81 @@ void main() {
         }
         final dark = await _decode(await renderPoiChipPng(poiIcons.first, mapPaletteFor(CacheThemeId.dark), ratio: 3));
         expect(_rgba(dark, dark.w ~/ 2 + 29, dark.w ~/ 2)[3], 255, reason: 'dark keeps its ring');
+      });
+    });
+  });
+
+  group('the edge is 2 pixels wide on the screen, on every flat painter', () {
+    // At 2 pixels per point the sizes below are whole pixels: a 2 pixel edge fills the two pixels outside the shape, a 1 pixel edge
+    // only the first. Pixel 1.5 outside the shape is dark with a 2 pixel edge and clear with a 1 pixel one.
+    bool dark(List<int> p) => p[3] >= 240 && p[0] < 40 && p[1] < 40 && p[2] < 45;
+
+    testWidgets('the Icon pin: disc of 27 pixels, edge on the next two, then nothing', (tester) async {
+      await tester.runAsync(() async {
+        final i = await _decode(await renderPinPng(Icons.place, purple, PinStyle.icon, ratio: 2, flat: true));
+        final cx = i.w ~/ 2, cy = i.h ~/ 2;
+        expect(dark(_rgba(i, cx + 27, cy)), isTrue, reason: 'first edge pixel: ${_rgba(i, cx + 27, cy)}');
+        expect(dark(_rgba(i, cx + 28, cy)), isTrue, reason: 'second edge pixel (1.5 px out): ${_rgba(i, cx + 28, cy)}');
+        expect(_rgba(i, cx + 29, cy)[3], 0, reason: 'nothing beyond 2 pixels');
+      });
+    });
+
+    testWidgets('the Badge: the edge is 2 pixels beyond its square', (tester) async {
+      await tester.runAsync(() async {
+        final i = await _decode(await renderPinPng(Icons.place, purple, PinStyle.badge, ratio: 2, flat: true));
+        final cx = i.w ~/ 2, cy = i.h ~/ 2;
+        // The square is 30 points = 60 pixels wide: its edge is at 30 pixels from the middle.
+        expect(dark(_rgba(i, cx + 30, cy)), isTrue, reason: '${_rgba(i, cx + 30, cy)}');
+        expect(dark(_rgba(i, cx + 31, cy)), isTrue, reason: '1.5 px out: ${_rgba(i, cx + 31, cy)}');
+        expect(_rgba(i, cx + 32, cy)[3], 0);
+      });
+    });
+
+    testWidgets('the Teardrop: the edge is 2 pixels beyond its head', (tester) async {
+      await tester.runAsync(() async {
+        const ratio = 2.0, size = 30.0;
+        final i = await _decode(await renderPinPng(Icons.place, purple, PinStyle.teardrop, ratio: ratio, flat: true));
+        final head = teardropHead(pinImageAt(PinStyle.teardrop, size), size);
+        final y = (head.centre.dy * ratio).round();
+        final x = ((head.centre.dx + head.radius) * ratio).round(); // the head's edge, in pixels
+        // The head's edge is not on a whole pixel: the pixel 1.5 out holds part of the edge (at least 40% of it).
+        final p = _rgba(i, x + 1, y);
+        expect(p[3] >= 100 && p[0] < 40 && p[1] < 40, isTrue, reason: '1.5 px out: $p');
+        expect(_rgba(i, x + 3, y)[3], 0, reason: 'nothing beyond 2 pixels');
+      });
+    });
+
+    testWidgets('a public-place disc and a road chip: disc of 18 pixels, edge on the next two', (tester) async {
+      await tester.runAsync(() async {
+        for (final id in [CacheThemeId.light, CacheThemeId.parchment]) {
+          final chip = await _decode(await renderPoiChipPng(poiIcons.first, mapPaletteFor(id), ratio: 2));
+          final c = chip.w ~/ 2;
+          expect(dark(_rgba(chip, c + 18, c)), isTrue, reason: '${id.name}: ${_rgba(chip, c + 18, c)}');
+          expect(dark(_rgba(chip, c + 19, c)), isTrue, reason: '${id.name} 1.5 px out: ${_rgba(chip, c + 19, c)}');
+          expect(_rgba(chip, c + 20, c)[3], 0, reason: '${id.name}: nothing beyond');
+          final road = await _decode(await renderRoadChipPng(RoadEventKind.work, mapPaletteFor(id), ratio: 2));
+          final rc = road.w ~/ 2;
+          expect(dark(_rgba(road, rc + 19, rc)), isTrue, reason: 'road chip ${id.name}');
+        }
+      });
+    });
+
+    testWidgets('nothing is cut off at the image bounds, and dark and Tactical have no such edge', (tester) async {
+      await tester.runAsync(() async {
+        for (final style in PinStyle.values) {
+          final i = await _decode(await renderPinPng(Icons.place, purple, style, ratio: 3, flat: true));
+          for (var k = 0; k < i.w; k++) {
+            expect(_rgba(i, k, 0)[3], 0, reason: '${style.name} top row');
+            expect(_rgba(i, k, i.h - 1)[3], 0, reason: '${style.name} bottom row');
+          }
+          for (var k = 0; k < i.h; k++) {
+            expect(_rgba(i, 0, k)[3], 0, reason: '${style.name} left column');
+            expect(_rgba(i, i.w - 1, k)[3], 0, reason: '${style.name} right column');
+          }
+        }
+        // Dark keeps its white halo; the 2 pixel dark edge is only for the flat look.
+        final d = await _decode(await renderPinPng(Icons.place, purple, PinStyle.icon, ratio: 2));
+        expect(dark(_rgba(d, d.w ~/ 2 + 28, d.h ~/ 2)), isFalse);
       });
     });
   });
