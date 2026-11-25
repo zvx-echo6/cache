@@ -998,7 +998,7 @@ struct Inner {
     resume_gen: Mutex<HashMap<String, u64>>,
     /// Tests only: when (ms since 1970) a round was started by the resume watcher.
     #[cfg(feature = "test-hooks")]
-    resume_fires: Mutex<Vec<u64>>,
+    resume_fires: Mutex<Vec<(u64, &'static str, u32)>>,
     /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
     waiting: Mutex<BTreeMap<WaitKey, u64>>,
     /// [`Config::bulk`].
@@ -2209,9 +2209,10 @@ impl Inner {
             }
             let iface_gen = self.net.interface_gen();
             for (peer, items) in held {
-                let mut fresh = self.net.measure(&peer).await;
+                let new_link = self.net.measure(&peer).await;
                 // An interface of this device came up or went down since the watcher last looked: the path may be faster.
-                fresh |= self.resume_gen.lock().unwrap().insert(peer.clone(), iface_gen).is_some_and(|g| g != iface_gen);
+                let iface_changed = self.resume_gen.lock().unwrap().insert(peer.clone(), iface_gen).is_some_and(|g| g != iface_gen);
+                let fresh = new_link || iface_changed;
                 if fresh {
                     // A new link or a change of interface ends the backoff at once, so a real speed-up is caught right away.
                     self.end_backoff(&peer);
@@ -2227,7 +2228,7 @@ impl Inner {
                     self.resume_since.lock().unwrap().remove(&peer);
                     self.resume_trial.lock().unwrap().insert(peer.clone());
                     #[cfg(feature = "test-hooks")]
-                    self.resume_fires.lock().unwrap().push(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64));
+                    self.resume_fires.lock().unwrap().push((std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64), if new_link { "new link" } else if iface_changed { "interface" } else { "hold" }, self.resume_cancels.lock().unwrap().get(&peer).copied().unwrap_or(0)));
                     self.due.lock().unwrap().insert(peer.clone());
                     self.due_why.lock().unwrap().insert(peer.clone(), format!("faster connection to {}", self.peer_name(&peer)));
                     self.wake_due.notify_one();
@@ -4208,7 +4209,8 @@ impl SyncEngine {
             "test_resume" => {
                 // The resume watcher: when it started rounds (ms since 1970), and the hold it now waits for `peer`.
                 let peer = s("peer").unwrap_or_default();
-                Ok(json!({"fires": inner.resume_fires.lock().unwrap().clone(), "hold_ms": inner.resume_hold_for(&peer).as_millis() as u64}))
+                let fires = inner.resume_fires.lock().unwrap().clone();
+                Ok(json!({"fires": fires.iter().map(|f| f.0).collect::<Vec<_>>(), "why": fires.iter().map(|f| f.1).collect::<Vec<_>>(), "cancels": fires.iter().map(|f| f.2).collect::<Vec<_>>(), "hold_ms": inner.resume_hold_for(&peer).as_millis() as u64}))
             }
             #[cfg(feature = "test-hooks")]
             "test_relink" => {

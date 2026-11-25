@@ -427,9 +427,9 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
-/// (when the watcher started rounds, ms since 1970; the hold it now waits for the device).
-fn resumes(e: &SyncEngine) -> (Vec<u64>, u64) {
-    let v = call(e, "test_resume", json!({}));
+/// (when the watcher started rounds, ms since 1970; the hold it now waits for the device B holds files back from).
+fn resumes(t: &T) -> (Vec<u64>, u64) {
+    let v = call(&t.b, "test_resume", json!({"peer": saved_peer(&t.db)["id"]}));
     (v["fires"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect(), v["hold_ms"].as_u64().unwrap())
 }
 
@@ -448,7 +448,7 @@ fn held_back() -> T {
 fn watch_until(t: &T, what: &str, secs: u64, ok: impl Fn(&(Vec<u64>, u64)) -> bool) -> (Vec<u64>, u64) {
     let end = Instant::now() + Duration::from_secs(secs);
     loop {
-        let r = resumes(&t.b);
+        let r = resumes(t);
         if ok(&r) {
             return r;
         }
@@ -466,7 +466,7 @@ fn the_retry_gap_doubles_after_each_slow_cancel_up_to_the_cap() {
     let gaps: Vec<u64> = fires.windows(2).map(|w| w[1] - w[0]).collect();
     // After 1, 2, 3 and 4 slow cancels: 1.2 s, 2.4 s, then the cap (3 s) twice. A gap is at least the hold and a little over it.
     for (gap, hold) in gaps.iter().zip([1200u64, 2400, 3000, 3000]) {
-        assert!(*gap >= hold && *gap < hold + 1500, "gaps {gaps:?}, wanted {hold} ms and a little over for one of them");
+        assert!(*gap >= hold && *gap < hold + 1500, "gaps {gaps:?} {}, wanted {hold} ms and a little over for one of them", call(&t.b, "test_resume", json!({})));
     }
     t.a.close();
     t.b.close();

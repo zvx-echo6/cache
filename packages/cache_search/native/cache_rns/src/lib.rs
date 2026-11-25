@@ -358,6 +358,8 @@ pub struct RnsNode {
     reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
     /// What the node's interfaces looked like when [`RnsNode::interface_gen`] last looked, and how many changes it has seen.
     iface_sig: Mutex<Option<u64>>,
+    /// Per linked device: held while a link to it is being made ([`RnsNode::link_to`]).
+    link_gates: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Mutex<()>>>>,
     iface_gen: std::sync::atomic::AtomicU64,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -969,6 +971,7 @@ impl RnsNode {
             speeds,
             reach_gap_ms,
             iface_sig: Mutex::new(None),
+            link_gates: Mutex::new(HashMap::new()),
             iface_gen: std::sync::atomic::AtomicU64::new(0),
             tasks,
             stop: Mutex::new(Some(stop_tx)),
@@ -1085,7 +1088,15 @@ impl RnsNode {
         }
     }
 
+    /// The link this device has to `peer`, made if there is none. One at a time per device: two requests (a transfer and a
+    /// measurement) that both find no link would each make one, and the second would look like a new link.
     async fn link_to(&self, peer: &PublicKey, timeout: Duration) -> Result<LinkId> {
+        let gate = self.link_gates.lock().unwrap().entry(*peer.as_bytes()).or_default().clone();
+        let _one_at_a_time = gate.lock().await;
+        self.make_link(peer, timeout).await
+    }
+
+    async fn make_link(&self, peer: &PublicKey, timeout: Duration) -> Result<LinkId> {
         let (existing, destination) = {
             let s = self.state.lock().unwrap();
             if !s.peers.contains(peer.as_bytes()) {
