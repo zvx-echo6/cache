@@ -440,7 +440,7 @@ class _MoreSourcesPageState extends State<MoreSourcesPage> {
                 filled: true,
                 fillColor: k.surface,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
               ),
             ),
             if (more.isNotEmpty && shown.isEmpty) const NoteText('No source matches your search.'),

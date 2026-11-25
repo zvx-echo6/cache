@@ -119,6 +119,15 @@ extension CacheTokensContext on BuildContext {
   CacheTokens get t => Theme.of(this).extension<CacheTokens>()!;
 }
 
+/// The corner radius of every button, chip, segmented button, search field and bar: a rounded rectangle, never a pill (14 dp, the
+/// route cards' and the travel buttons' own).
+const double kControlRadius = 14;
+const RoundedRectangleBorder kControlShape = RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(kControlRadius)));
+
+/// The themes whose map icons are flat (a solid disc with a faint edge, no white halo): light and Parchment. Dark and Tactical keep the
+/// halo they have always had.
+bool isFlatIconTheme(CacheThemeId id) => id == CacheThemeId.light || id == CacheThemeId.parchment;
+
 enum CacheThemeId { dark, light, parchment, tactical }
 
 extension CacheThemeIdInfo on CacheThemeId {
@@ -277,6 +286,7 @@ ThemeData buildTheme(CacheThemeId id) {
       backgroundColor: k.surface,
       surfaceTintColor: Colors.transparent,
       indicatorColor: k.primary.withValues(alpha: 0.28),
+      indicatorShape: kControlShape,
       height: 72,
       iconTheme: WidgetStateProperty.resolveWith((s) =>
           IconThemeData(size: 26, color: s.contains(WidgetState.selected) ? k.accent : k.secondary)),
@@ -290,6 +300,7 @@ ThemeData buildTheme(CacheThemeId id) {
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: k.surface,
       indicatorColor: k.primary.withValues(alpha: 0.28),
+      indicatorShape: kControlShape,
       selectedIconTheme: IconThemeData(size: 26, color: k.accent),
       unselectedIconTheme: IconThemeData(size: 26, color: k.secondary),
       selectedLabelTextStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.accent),
@@ -330,13 +341,14 @@ ThemeData buildTheme(CacheThemeId id) {
       fillColor: k.surface,
       hintStyle: TextStyle(fontSize: 17, color: k.secondary),
       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide.none),
       focusedBorder:
-          OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide(color: k.primary, width: 1.5)),
+          OutlineInputBorder(borderRadius: BorderRadius.circular(kControlRadius), borderSide: BorderSide(color: k.primary, width: 1.5)),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
+        shape: kControlShape,
         backgroundColor: k.primary,
         foregroundColor: k.onPrimary,
         minimumSize: const Size(48, 52),
@@ -345,6 +357,7 @@ ThemeData buildTheme(CacheThemeId id) {
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
+        shape: kControlShape,
         foregroundColor: k.accent,
         side: BorderSide(color: k.secondary),
         minimumSize: const Size(48, 52),
@@ -352,8 +365,11 @@ ThemeData buildTheme(CacheThemeId id) {
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(foregroundColor: k.accent, minimumSize: const Size(48, 48)),
+      style: TextButton.styleFrom(shape: kControlShape, foregroundColor: k.accent, minimumSize: const Size(48, 48)),
     ),
+    elevatedButtonTheme: ElevatedButtonThemeData(style: ElevatedButton.styleFrom(shape: kControlShape)),
+    segmentedButtonTheme: SegmentedButtonThemeData(style: ButtonStyle(shape: WidgetStatePropertyAll(kControlShape))),
+    chipTheme: const ChipThemeData(shape: kControlShape),
     radioTheme: RadioThemeData(fillColor: WidgetStatePropertyAll(k.primary)),
     listTileTheme: ListTileThemeData(
       iconColor: k.secondary,

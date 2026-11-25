@@ -238,7 +238,7 @@ class LookSwitch extends StatelessWidget {
       label: 'How Bookshelves look',
       child: Container(
         padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(color: k.secondary.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(999)),
+        decoration: BoxDecoration(color: k.secondary.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(kControlRadius)),
         child: Row(
           children: [
             for (final l in ShelfLook.values)
@@ -248,7 +248,7 @@ class LookSwitch extends StatelessWidget {
                   selected: l == value,
                   child: Material(
                     color: l == value ? k.primary : Colors.transparent,
-                    shape: const StadiumBorder(),
+                    shape: kControlShape,
                     clipBehavior: Clip.antiAlias,
                     child: InkWell(
                       key: ValueKey('look-${l.name}'),

@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../notebook/notebook_map.dart' show repeaterPinName;
-import '../../notebook/pin_image.dart' show PinStyle, pinIconSize;
+import '../../notebook/pin_image.dart' show PinStyle, iconSizeByZoom, pinIconSize;
 import '../../roads/road_map_layers.dart';
-import '../../theme.dart' show CacheThemeId;
+import '../../theme.dart' show CacheThemeId, isFlatIconTheme;
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
 import 'protomaps_layout.dart';
@@ -38,6 +38,9 @@ const String kNotebookSource = 'cache-notebook';
 const String kRouteAlt = 'route-alt';
 const String kRouteCasing = 'route-casing';
 const String kRouteRoad = 'route-road';
+
+/// The time labels of the routes (a small rounded label per route, its own map image: see route_time_image.dart).
+const String kRouteTime = 'route-time';
 const String kRouteFollow = 'route-follow';
 const String kRouteOffroad = 'route-offroad';
 const String kNotebookPins = 'notebook-pins';
@@ -70,6 +73,10 @@ const String kPinResultsIcon = 'pin-results-icon';
 
 /// The name of the vehicle arrow's image (the car's arrow, VehicleArrow) the screen adds to the style.
 const String kHeadingImage = 'position-heading';
+
+/// The other routes' line while a route is chosen: the route colour at this opacity and width (points).
+const double kRouteAltOpacity = 0.4;
+const double kRouteAltWidth = 4;
 
 /// The chosen place's pin (a route's destination while it is shown): its circle's radius and the edge around it, in points.
 /// Whole numbers, so the style is written as it was.
@@ -467,7 +474,8 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'source': kRouteSource,
         'filter': ['==', ['get', 'alt'], true],
         'layout': {'line-cap': 'round', 'line-join': 'round'},
-        'paint': {'line-color': p.css('routeAlternate'), 'line-width': 6, 'line-opacity': 0.85},
+        // The other routes: the route colour, faded and thinner, under the chosen route's casing and line.
+        'paint': {'line-color': p.css('route'), 'line-width': kRouteAltWidth, 'line-opacity': kRouteAltOpacity},
       },
       {
         'id': kRouteCasing,
@@ -502,6 +510,21 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
         'paint': {'line-color': p.css('routeOffroad'), 'line-width': 6, 'line-dasharray': [2, 1.2]},
       },
       {
+        'id': kRouteTime,
+        'type': 'symbol',
+        'source': kRouteSource,
+        'filter': ['all', ['==', ['geometry-type'], 'Point'], ['has', 'img']],
+        'layout': {
+          'icon-image': ['get', 'img'],
+          'icon-size': pinIconSize(),
+          'icon-anchor': 'center',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          // The chosen route's label is drawn last, on top.
+          'symbol-sort-key': ['case', ['get', 'sel'], 1, 0],
+        },
+      },
+      {
         'id': kUserAreas,
         'type': 'fill',
         'source': kUserSource,
@@ -532,8 +555,8 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'source': kUserSource,
           'filter': ['==', ['geometry-type'], 'Point'],
           'layout': {
-            'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical),
-            'icon-size': pinIconSize(),
+            'icon-image': repeaterPinName(pinStyle, tactical: p.id == CacheThemeId.tactical, flat: isFlatIconTheme(p.id)),
+            'icon-size': iconSizeByZoom(pinIconSize()),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -563,7 +586,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
           'filter': ['has', 'pin'],
           'layout': {
             'icon-image': ['get', 'pin'],
-            'icon-size': pinIconSize(),
+            'icon-size': iconSizeByZoom(pinIconSize()),
             'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
@@ -617,7 +640,7 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p, PinStyle? pinStyle) => [
             'filter': ['all', ['==', ['get', 'role'], role], ['has', 'pin']],
             'layout': {
               'icon-image': ['get', 'pin'],
-              'icon-size': pinIconSize(),
+              'icon-size': iconSizeByZoom(pinIconSize()),
               'icon-anchor': pinStyle == PinStyle.teardrop ? 'bottom' : 'center',
               'icon-allow-overlap': true,
               'icon-ignore-placement': true,
@@ -690,6 +713,7 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kRouteRoad,
     kRouteFollow,
     kRouteOffroad,
+    kRouteTime,
     kAreaFill,
     kAreaCasing,
     kAreaLine,

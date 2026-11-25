@@ -117,6 +117,26 @@ void main() {
     });
   }
 
+  test('the other routes are the route colour at 40% opacity and thinner than the chosen route, under it; each route has a time label layer', () {
+    for (final id in CacheThemeId.values) {
+      final palette = mapPaletteFor(id);
+      final layers = {for (final l in build(id, all)['layers'] as List) (l as Map)['id'] as String: l};
+      final alt = layers[kRouteAlt]!['paint'] as Map;
+      expect(alt['line-color'], palette.css('route'), reason: '$id: the route colour, not the grey of routeAlternate');
+      expect(alt['line-color'], isNot(palette.css('routeAlternate')));
+      expect(alt['line-opacity'], 0.4);
+      final road = layers[kRouteRoad]!['paint'] as Map;
+      expect(alt['line-width'] as num, lessThan(road['line-width'] as num), reason: 'thinner than the chosen route');
+      final order = (build(id, all)['layers'] as List).map((l) => (l as Map)['id']).toList();
+      expect(order.indexOf(kRouteAlt), lessThan(order.indexOf(kRouteCasing)), reason: 'under the chosen route\'s casing');
+      final time = layers[kRouteTime]!;
+      expect(time['type'], 'symbol');
+      expect((time['layout'] as Map)['icon-image'], ['get', 'img']);
+      expect((time['layout'] as Map)['symbol-sort-key'], isNotNull, reason: 'the chosen route\'s label is drawn on top');
+      expect(order.indexOf(kRouteTime), greaterThan(order.indexOf(kRouteOffroad)));
+    }
+  });
+
   test('the four palettes give four different styles from the same layout', () {
     final styles = {for (final id in CacheThemeId.values) id: jsonEncode(build(id, all))};
     expect(styles.values.toSet().length, 4);
@@ -129,7 +149,7 @@ void main() {
   test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRoadEventCasing, kRoadEventClosure, kRoadEventWork, kRoadEventDetour, kRoadEventSelected, kRoadEventChips, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kAreaFill, kAreaCasing, kAreaLine, kRoadEventCasing, kRoadEventClosure, kRoadEventWork, kRoadEventDetour, kRoadEventSelected, kRoadEventChips, kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kRouteTime, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
   });
 
   test('a tapped area\'s outline is above the roads and buildings and under the labels (Protomaps layout)', () {

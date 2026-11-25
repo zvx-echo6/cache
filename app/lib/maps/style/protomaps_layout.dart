@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart' show Color;
 import 'package:flutter/services.dart' show rootBundle;
 
+import '../../notebook/pin_image.dart' show iconSizeByZoom;
+import '../../theme.dart' show isFlatIconTheme;
 import '../palette/map_palette.dart';
 import '../poi_chips.dart';
 
@@ -156,7 +158,7 @@ List<Map<String, dynamic>> protomapsLayers(MapPalette p, Map<String, dynamic> te
   ];
   // Points of interest sit above road labels and below place labels, so a town name wins a collision with a nearby POI.
   final at = out.indexWhere((l) => l['id'] == 'places_subplace');
-  out.insertAll(at < 0 ? out.length : at, poiLayers(flavor, src, iconScale: poiIconScale));
+  out.insertAll(at < 0 ? out.length : at, poiLayers(flavor, src, iconScale: poiIconScale, flat: isFlatIconTheme(p.id)));
   return out;
 }
 
@@ -191,9 +193,9 @@ List<Object> poiFilter() => [
 List<Object> poiFilterAfterChips() => ['all', poiFilter(), ['has', 'kind']];
 
 /// The public places: a round chip (an image `poi-<icon>`, added at style load, see poi_chips.dart) and the name beside it. The name is
-/// optional, so a crowded chip keeps its icon. Medical and emergency kinds sort first, so they win a collision. The chip is 0.78 of its size
-/// at zoom 12 and full size from zoom 16.
-List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src, {double iconScale = 1}) => [
+/// optional, so a crowded chip keeps its icon. Medical and emergency kinds sort first, so they win a collision. The chip is drawn smaller zoomed out
+/// (iconSizeByZoom: 0.4 at zoom 5, 0.55 at 9, 0.8 at 12, full size from 15).
+List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src, {double iconScale = 1, bool flat = false}) => [
       {
         'id': 'pois',
         'type': 'symbol',
@@ -204,10 +206,10 @@ List<Map<String, dynamic>> poiLayers(Map<String, Color> flavor, String src, {dou
           'icon-image': [
             'match',
             ['get', 'kind'],
-            for (final i in poiIcons) ...[i.kinds, i.image],
+            for (final i in poiIcons) ...[i.kinds, i.imageFor(flat: flat)],
             '',
           ],
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 12, 0.78 * iconScale, 16, 1.0 * iconScale],
+          'icon-size': iconSizeByZoom(iconScale),
           'icon-padding': 3,
           'symbol-sort-key': [
             '-',

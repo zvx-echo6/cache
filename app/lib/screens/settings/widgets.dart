@@ -335,7 +335,7 @@ class RowButton extends StatelessWidget {
         side: BorderSide(color: k.accent, width: 1.5),
         minimumSize: const Size(0, 36),
         padding: const EdgeInsets.symmetric(horizontal: 14),
-        shape: const StadiumBorder(),
+        shape: kControlShape,
       ),
       child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
     );

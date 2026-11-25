@@ -207,9 +207,9 @@ void main() {
 
     test('the pins and the repeaters are drawn at the size their images are made for: as they are, on a phone', () {
       // (This test runs as the phone app does, not in a browser; a browser's size is in the pin images' tests.)
-      expect(pinsLayer(PinStyle.icon)['layout']['icon-size'], pinIconSize(web: false));
-      expect(pinsLayer(PinStyle.teardrop)['layout']['icon-size'], 1);
-      expect(pinsLayer(PinStyle.badge, id: kUserRepeaters)['layout']['icon-size'], 1);
+      expect(pinsLayer(PinStyle.icon)['layout']['icon-size'], iconSizeByZoom(pinIconSize(web: false)));
+      expect(pinsLayer(PinStyle.teardrop)['layout']['icon-size'], iconSizeByZoom(1));
+      expect(pinsLayer(PinStyle.badge, id: kUserRepeaters)['layout']['icon-size'], iconSizeByZoom(1));
     });
 
     test('repeaters are radio towers in the same style, red in Tactical', () {
