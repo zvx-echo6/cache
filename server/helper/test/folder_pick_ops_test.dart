@@ -92,8 +92,8 @@ void main() {
     await expectLater(list('${home.path}/a.txt'), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'io_error')));
   });
 
-  test('with no home folder (HOME=/nonexistent, a system account) or a home that is not a folder, no path starts at "/"', () async {
-    for (final h in ['/nonexistent', '${tmp.path}/a-file']) {
+  test('with a home that does not exist (like a system account, /nonexistent) or a home that is not a folder, no path starts at "/"', () async {
+    for (final h in ['${tmp.path}/no-such-home', '${tmp.path}/a-file']) {
       File('${tmp.path}/a-file').writeAsStringSync('x');
       final r = (await FolderPickOps(home: h).handle('devfs.list', {}) as Map).cast<String, dynamic>();
       expect(r['path'], '/', reason: h);
