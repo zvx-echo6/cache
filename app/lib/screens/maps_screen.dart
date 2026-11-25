@@ -25,7 +25,7 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
-import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource;
+import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource, pointInGeometry;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
@@ -942,7 +942,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final id = pickEvent(ids, r.events);
       if (id != null) {
         // A town's name label under the icon is what was meant: the town opens. Own pins, repeaters and the route lines were asked before.
-        if (await _tapTownLabel(point, at)) return true;
+        // Only a name whose TEXT is under the finger (a query at the point itself): the label layer is text only, so its hit is the text.
+        if (await _tapTownLabel(point, at, exact: true)) return true;
         HapticFeedback.selectionClick();
         if (nav.selected != null) nav.clearSelection();
         widget.userLayers?.clearRepeater();
@@ -1827,8 +1828,43 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (!mounted || _pinCountyFor != pin.id) return;
     final c = hit?.county;
     if (hit == null || c == null) return;
+    final guesses = hit.countyCandidates;
+    // A county found from its outline is certain. One named from the boxes alone is a guess: it shows only when no other county's box
+    // holds the point, and the outline is fetched right away to check it (below).
+    if (guesses.length <= 1) setState(() => _pinCounty = (_countyText(c, hit!), hit));
+    if (guesses.isNotEmpty) unawaited(_verifyPinCounty(pin, hit, guesses));
+  }
+
+  String _countyText(RegionRecord c, AreaHit hit) {
     final st = stateShort(c, hit);
-    setState(() => _pinCounty = ([c.name, if (st.isNotEmpty) st].join(', '), hit!));
+    return [c.name, if (st.isNotEmpty) st].join(', ');
+  }
+
+  /// Checks a county guessed from the boxes against its real outline: each candidate's outline is fetched (kept on the phone) and the
+  /// first that holds the pin is the county. None does: no county line. Offline, blocked by the mobile data setting or failing: the
+  /// line stays as it was (shown only when one box held the point).
+  Future<void> _verifyPinCounty(MapPlace pin, AreaHit hit, List<RegionRecord> candidates) async {
+    final src = _areaSource;
+    if (src is! AreaFetcher) return;
+    try {
+      final policy = widget.regions?.policy;
+      if (policy != null && await policy.blocksDownload()) return;
+    } catch (_) {}
+    for (final cand in candidates) {
+      Map<String, dynamic>? g;
+      try {
+        g = await (src as AreaFetcher).fetchGeometry(cand).timeout(_outlineFetchWait);
+      } catch (_) {
+        return;
+      }
+      if (!mounted || _pinCountyFor != pin.id) return;
+      if (g == null) return;
+      if (pointInGeometry(g, pin.lat, pin.lon)) {
+        setState(() => _pinCounty = (_countyText(cand, hit), AreaHit(county: cand, state: hit.state)));
+        return;
+      }
+    }
+    if (mounted && _pinCountyFor == pin.id) setState(() => _pinCounty = null);
   }
 
   /// The county line of the card of [sel]: a dropped pin's looked-up county, or a town card's own "county, state" line; null for others.

@@ -25,10 +25,14 @@ abstract class AreaFetcher {
 
 /// The result of [areaAt]: the smallest city or town holding the point, the county, the state. Any may be null.
 class AreaHit {
-  const AreaHit({this.town, this.county, this.state});
+  const AreaHit({this.town, this.county, this.state, this.countyCandidates = const []});
 
   final RegionRecord? town;
   final RegionRecord? county;
+
+  /// When [county] is a guess from the boxes (no outline of it is on the phone): every county whose box holds the point and that has no
+  /// outline here, smallest first ([county] is the first). Empty when the county was found from its outline.
+  final List<RegionRecord> countyCandidates;
   final RegionRecord? state;
 
   bool get isEmpty => town == null && county == null && state == null;
@@ -47,9 +51,14 @@ Future<AreaHit?> areaAt(double lat, double lon, Iterable<RegionRecord> records, 
     if (b == null || !b.contains(lat, lon)) continue;
     (byKind[r.kind] ??= []).add(r);
   }
-  Future<RegionRecord?> smallest(String kind) async {
+  var countyGuesses = <RegionRecord>[];
+  // [orRecord]: when none of the kind's outlines holds the point, and some record whose box holds it has no outline on the phone, the
+  // smallest of those is taken (its box holds the point; the outline is fetched when its card is opened). Only for the county, which
+  // the pin card's county line needs; a town is never guessed.
+  Future<RegionRecord?> smallest(String kind, {bool orRecord = false}) async {
     final list = byKind[kind];
     if (list == null) return null;
+    final missingList = <RegionRecord>[];
     // Smaller areas first: the first one that holds the point is the smallest. A region with no area figure goes last.
     list.sort((a, b) => (a.areaKm2 ?? double.infinity).compareTo(b.areaKm2 ?? double.infinity));
     for (final r in list) {
@@ -59,12 +68,19 @@ Future<AreaHit?> areaAt(double lat, double lon, Iterable<RegionRecord> records, 
       } catch (_) {
         continue;
       }
-      if (g != null && pointInGeometry(g, lat, lon)) return r;
+      if (g == null) {
+        missingList.add(r);
+        continue;
+      }
+      if (pointInGeometry(g, lat, lon)) return r;
     }
-    return null;
+    if (orRecord) countyGuesses = missingList;
+    return orRecord && missingList.isNotEmpty ? missingList.first : null;
   }
 
-  final hit = AreaHit(town: await smallest('locality'), county: await smallest('county'), state: await smallest('region'));
+  final town = await smallest('locality');
+  final county = await smallest('county', orRecord: true);
+  final hit = AreaHit(town: town, county: county, state: await smallest('region'), countyCandidates: county == null ? const [] : countyGuesses);
   return hit.isEmpty ? null : hit;
 }
 

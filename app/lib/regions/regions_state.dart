@@ -2014,12 +2014,13 @@ class RegionsState extends ChangeNotifier {
       for (final l in local) {
         if (only != null && l.id != only) continue;
         if (l.kind == kDrawnRegionKind || l.kind == kAreaRegionKind) continue;
-        if (await catalogue.outlinesDone(l.id)) continue;
         RegionRecord? rec;
         try {
           rec = await catalogue.record(l.id);
         } catch (_) {}
         if (rec == null || rec.isDrawn || rec.kind == kAreaRegionKind) continue;
+        // The marker is checked against the files (a stat of each): a region whose files were lost is filled again.
+        if (await catalogue.outlinesComplete(rec)) continue;
         final r = await catalogue.storeAreaPolygons(rec);
         appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${r.wanted} present=${r.present} fetched=${r.fetched} failed=${r.failed}');
       }

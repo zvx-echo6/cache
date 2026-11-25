@@ -307,6 +307,28 @@ void main() {
       await r.dispose(tester);
     });
 
+    testWidgets('outline back-fill: the marker is not trusted: with it present and the files gone, they are fetched again', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      for (final f in polygons(r).listSync().whereType<File>().where((f) => f.path.endsWith('.geojson'))) {
+        f.deleteSync();
+      }
+      expect(File('${polygons(r).path}/.done-${r.county.id}').existsSync(), isTrue, reason: 'the marker is still there');
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isNotEmpty, reason: 'the expected files are stat\'ed and the missing ones fetched');
+      final want = {for (final x in r.catalogue.areaRecordsOf(r.county)) '${x.id}.geojson'};
+      for (final n in want) {
+        expect(File('${polygons(r).path}/$n').existsSync(), isTrue, reason: n);
+      }
+      expect(File('${polygons(r).path}/.done-${r.county.id}').existsSync(), isTrue);
+      // With everything present the next run only stats: nothing is fetched.
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isEmpty);
+      await r.dispose(tester);
+    });
+
     testWidgets('outline back-fill: a partly filled folder fetches only the missing outlines', (tester) async {
       final asked = <String>[];
       final r = await keptWithOutlines(tester, asked);
