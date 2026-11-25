@@ -453,11 +453,14 @@ class RouteTotals {
 }
 
 class RouteWarning {
-  const RouteWarning({required this.code, this.end, this.gapM});
+  const RouteWarning({required this.code, this.end, this.gapM, this.reason});
 
   final String code;
   final String? end;
   final int? gapM;
+
+  /// Why that end got no off-road leg (`not_downloaded`, `no_data`, `no_way_found`); null when the core does not say.
+  final String? reason;
 }
 
 /// A route error: the router's own code (no_route, too_far, out_of_coverage, route_too_long, ...).
@@ -508,7 +511,7 @@ class MapRoute {
       maneuvers: [for (final m in _l(j['maneuvers'])) Maneuver.fromJson(_m(m))],
       warnings: [
         for (final w in _l(j['warnings']))
-          RouteWarning(code: (_m(w)['code'] ?? '') as String, end: _s(_m(w)['end']), gapM: _i(_m(w)['gap_m'])),
+          RouteWarning(code: (_m(w)['code'] ?? '') as String, end: _s(_m(w)['end']), gapM: _i(_m(w)['gap_m']), reason: _s(_m(w)['reason'])),
       ],
       notes: [for (final n in _l(j['notes'])) if (n is String && n.isNotEmpty) n],
       alternatives: [for (final a in _l(j['alternatives'])) MapRoute.fromJson(_m(a))],
