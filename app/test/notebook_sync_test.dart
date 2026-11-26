@@ -979,18 +979,28 @@ void main() {
       await r1Delete(removalAfterMarker: true);
     });
 
-    // Seen on two emulators 2026-11-25 (cache-status/verification/notebook-delete-travels-2026-11-25, steps 3 and 3b): B is
-    // offline and edits X; A deletes X. On a phone, saving the edit runs B's own pass within about 2 s, offline too, so B's
-    // file holds the edit and B's record is up to date before the marker arrives. The edit then looks unchanged since the
-    // last sync, and the marker deletes it, whichever came later. The rule wanted: the later action wins. Each device has
-    // its own clock here (the edit's pass runs at the edit's time, the delete's pass at the delete's time), and the share
-    // sync is modelled per path with versions in the order things happened (as in R1 above).
-    Future<void> offlineEditVsDelete({required bool editLater}) async {
-      final (a, b, nb, ids) = await pair();
+    // Seen on two emulators 2026-11-25 (cache-status/verification/notebook-delete-travels-2026-11-25, steps 3, 3b and 7): B is
+    // offline and edits X; A deletes X (or X's notebook). On a phone, saving the edit runs B's own pass within about 2 s, offline
+    // too, so B's file holds the edit and B's record is up to date before the marker arrives. The edit then looked unchanged
+    // since the last sync, and the marker deleted it, whichever came later. The rule: the later action wins, and an edit within
+    // the clock-skew bound of the delete (2 minutes) counts as later (a lost edit is worse than a deleted entry coming back).
+    // Each device has its own clock here (the edit's pass runs at the edit's time, the delete's pass at the delete's time), and
+    // the share sync is modelled per path with versions in the order things happened (as in R1 above).
+    // [editAfterDelete] is the edit's time minus the delete's (negative: the edit came first). [oldRecord]: B's record has no
+    // change time (written before the fix). [oldMarker]: the marker has no `at` (written before build 57's format had one).
+    Future<void> offlineEditVsDelete({required Duration editAfterDelete, required bool kept, bool notebook = false, bool oldRecord = false, bool oldMarker = false}) async {
+      final _Rig a, b;
+      final List<String> ids;
+      if (notebook) {
+        (a, b, ids) = await tripPair();
+      } else {
+        final p = await pair();
+        (a, b, ids) = (p.$1, p.$2, p.$4);
+      }
       final x = ids[0];
       final mk = '_deleted/$x.json';
       final tDelete = DateTime(2026, 11, 25, 16, 58, 5);
-      final tEdit = editLater ? tDelete.add(const Duration(seconds: 46)) : tDelete.subtract(const Duration(seconds: 23));
+      final tEdit = tDelete.add(editAfterDelete);
       final now = {a: tDelete, b: tEdit};
       NotebookSync engine(_Rig r) => NotebookSync(
           notebook: r.nb, kind: SyncKind.share, folder: r.folder, stateFile: r.state, includePrivate: true, clock: () => now[r]!, templates: () async => builtInTemplates());
@@ -1027,31 +1037,44 @@ void main() {
       // B, offline: the edit, then B's own pass at once (as on a phone), and B's share lists the changed file.
       Future<void> editOnB() async {
         final e = (await b.nb.entry(x))!;
-        await b.nb.saveEntry(id: x, notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
+        await b.nb.saveEntry(id: x, notebookId: e.notebookId, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
         await engine(b).run();
         scan(b);
         expect(b.folder.text.values.any((t) => t.contains('edited on B')), isTrue, reason: 'B\'s own pass wrote the edit to its share file');
       }
 
-      // A: the delete, A's pass (marker written, file removed), and A's share lists both.
+      // A: the delete (of X, or of X's notebook), A's pass (marker written, file removed), and A's share lists both.
       Future<void> deleteOnA() async {
-        await a.nb.deleteEntry(x);
+        if (notebook) {
+          await a.nb.deleteNotebook(named(a, 'Trip')!.id);
+        } else {
+          await a.nb.deleteEntry(x);
+        }
         await engine(a).run();
         scan(a);
-        expect(marks(a), [mk]);
+        expect(marks(a), contains(mk));
         expect((jsonDecode(a.folder.text[mk]!) as Map)['at'], tDelete.millisecondsSinceEpoch);
       }
 
-      if (editLater) {
+      if (editAfterDelete > Duration.zero) {
         await deleteOnA();
         await editOnB();
       } else {
         await editOnB();
         await deleteOnA();
       }
+      if (oldRecord) {
+        final st = jsonDecode(b.state.readAsStringSync()) as Map;
+        ((st['items'] as Map)[x] as Map).remove('ch');
+        b.state.writeAsStringSync(jsonEncode(st));
+      }
+      if (oldMarker) {
+        a.folder.text[mk] = jsonEncode({'id': x});
+        scan(a);
+      }
 
       // B reconnects: both ways, a few rounds, both clocks after both actions.
-      final later = (editLater ? tEdit : tDelete).add(const Duration(minutes: 1));
+      final later = (tEdit.isAfter(tDelete) ? tEdit : tDelete).add(const Duration(minutes: 1));
       for (var k = 0; k < 4; k++) {
         now[a] = now[b] = later.add(Duration(minutes: k));
         fetch(b, a);
@@ -1065,25 +1088,58 @@ void main() {
 
       Future<String> state(String name, _Rig r) async {
         final e = await r.nb.entry(x);
+        final trip = notebook ? (named(r, 'Trip') == null ? ', Trip gone' : ', Trip there${e != null && e.notebookId == named(r, 'Trip')!.id ? ' with X' : ''}') : '';
         return '$name: X ${e == null ? 'gone' : 'kept (${e.body})'}, other ${await r.nb.entry(ids[1]) == null ? 'gone' : 'kept'}, '
-            'marker ${marks(r).contains(mk) ? 'there' : 'removed'}';
+            'marker ${marks(r).contains(mk) ? 'there' : 'removed'}$trip';
       }
 
+      // A notebook delete removes the other entry too (nobody edited it).
+      final other = notebook ? 'gone' : 'kept';
+      final trip = notebook ? (kept ? ', Trip there with X' : ', Trip gone') : '';
       expect(
           [await state('A', a), await state('B', b)],
-          editLater
-              ? ['A: X kept (edited on B), other kept, marker removed', 'B: X kept (edited on B), other kept, marker removed']
-              : ['A: X gone, other kept, marker there', 'B: X gone, other kept, marker there'],
-          reason: 'the later action wins: ${editLater ? 'B\'s edit, 46 s after the delete' : 'A\'s delete, 23 s after B\'s edit'}');
+          kept
+              ? ['A: X kept (edited on B), other $other, marker removed$trip', 'B: X kept (edited on B), other $other, marker removed$trip']
+              : ['A: X gone, other $other, marker there$trip', 'B: X gone, other $other, marker there$trip'],
+          reason: 'the later action wins: edit ${editAfterDelete.inSeconds} s after the delete${oldRecord ? ', old record' : ''}${oldMarker ? ', old marker' : ''}');
     }
 
-    // Expected to FAIL on main today (2026-11-25): the marker deletes B's later edit (the device symptom, X gone on both).
-    test('offline edit vs delete, the edit is later: B\'s edit, already in its own share file, survives on both and the marker is removed', () async {
-      await offlineEditVsDelete(editLater: true);
+    // Failed before the fix (2026-11-25): the marker deleted B's later edit (the device symptom, X gone on both).
+    test('offline edit vs delete, the edit is later (step 3b, 46 s): B\'s edit, already in its own share file, survives on both and the marker is removed', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: true);
     });
 
-    test('offline edit vs delete, the delete is later: X is gone on both and the marker stays', () async {
-      await offlineEditVsDelete(editLater: false);
+    test('offline edit vs delete, the delete is later by more than the skew bound (3 min): X is gone on both and the marker stays', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: false);
+    });
+
+    test('offline edit vs delete, near-tie: the edit 23 s before the delete (step 3) is within the skew bound and is kept', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -23), kept: true);
+    });
+
+    test('offline edit vs delete, near-tie: the edit 42 s before the delete (step 7) is within the skew bound and is kept', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -42), kept: true);
+    });
+
+    test('offline edit vs delete, skew bound: 1 min 59 s before the delete is kept, 2 min 1 s before is deleted', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -1, seconds: -59), kept: true);
+      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -2, seconds: -1), kept: false);
+    });
+
+    test('offline edit vs delete, old record without a change time: deleted as before the fix, even when the edit is later', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: false, oldRecord: true);
+    });
+
+    test('offline edit vs delete, old marker without `at` (read as 0): a recorded local change keeps the entry, even 3 min before the delete', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: true, oldMarker: true);
+    });
+
+    test('offline edit vs notebook delete, the edit is later: the entry AND its notebook stay on both, the other entry is gone', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: true, notebook: true);
+    });
+
+    test('offline edit vs notebook delete, the delete is later by more than the skew bound: the notebook and both entries are gone on both', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: false, notebook: true);
     });
   });
 
