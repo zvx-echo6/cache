@@ -1,3 +1,4 @@
+import AVFoundation
 import CarPlay
 import Flutter
 import Darwin
@@ -17,6 +18,8 @@ import workmanager_apple
   /// The app's one Flutter engine. It is made by the first scene that needs it (obtainFlutterEngine), not by a storyboard's
   /// view controller, so that it does not belong to one window: a window is built around it (SceneDelegate.swift).
   private var flutterEngine: FlutterEngine?
+  /// The CPR metronome's tick, ready to play again and again (see the co.cache/cpr channel).
+  private var cprTick: AVAudioPlayer?
 
   override func application(
     _ application: UIApplication,
@@ -235,6 +238,43 @@ import workmanager_apple
     }
     NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
       UIApplication.shared.isIdleTimerDisabled = false
+    }
+    // The CPR metronome's tick and buzz (lib/firstaid/cpr_feedback.dart). The tick is a short WAV the app makes; it plays in a playback
+    // audio session, which the silent switch does not mute. The buzz is a heavy tap of the haptic engine.
+    let cpr = FlutterMethodChannel(name: "co.cache/cpr", binaryMessenger: messenger)
+    cpr.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "begin":
+        guard let wav = (call.arguments as? [String: Any])?["wav"] as? FlutterStandardTypedData else {
+          result(FlutterError(code: "bad_sound", message: "No sound given", details: nil))
+          return
+        }
+        do {
+          let session = AVAudioSession.sharedInstance()
+          try session.setCategory(.playback, mode: .default, options: [])
+          try session.setActive(true)
+          let player = try AVAudioPlayer(data: wav.data)
+          player.prepareToPlay()
+          self?.cprTick = player
+          result(nil)
+        } catch {
+          result(FlutterError(code: "no_audio", message: "\(error)", details: nil))
+        }
+      case "tick":
+        self?.cprTick?.currentTime = 0
+        self?.cprTick?.play()
+        result(nil)
+      case "buzz":
+        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+        result(nil)
+      case "end":
+        self?.cprTick?.stop()
+        self?.cprTick = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
     }
     // The thermal state changed: the app reads it again at once (background index work eases off or pauses).
     NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in

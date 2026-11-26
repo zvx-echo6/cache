@@ -12,6 +12,7 @@ enum ModuleId {
   weather('Weather', Icons.cloud_outlined, Icons.cloud, BrandTile.weather),
   discover('Discover', Icons.collections_bookmark_outlined, Icons.collections_bookmark, null),
   notebooks('Notebooks', Icons.book_outlined, Icons.book, BrandTile.journal),
+  firstAid('First aid', Icons.medical_services_outlined, Icons.medical_services, null),
   settings('Settings', Icons.settings_outlined, Icons.settings, BrandTile.settings);
 
   const ModuleId(this.label, this.icon, this.selectedIcon, this.tile);
