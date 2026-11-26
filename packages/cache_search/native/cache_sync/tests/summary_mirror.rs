@@ -175,6 +175,14 @@ fn the_mirror_follows_a_device_through_changes_pages_and_a_reset_index() {
     round(t.b());
     let after = asked(t.b());
     assert!(after.2 > before.2, "another epoch: the whole list again: {before:?} {after:?}");
+    // A's own rounds go on by themselves for a moment after it opens (it picks up the other device's delete of b.txt a second or
+    // two later, on its own timing; on a slow runner that landed after B's round and the exact comparison failed). The rule holds
+    // once the rounds have run: B's mirror follows A's view until the two are equal.
+    let (viewer, sender) = (peer_id(&t.da), peer_id(&t.db));
+    t.until("the mirror to follow A's view after the reset", || {
+        let (view, mirror) = view_and_mirror(t.a(), t.b(), &viewer, &sender, "fam");
+        mirror.is_object() && mirror["files"] == view
+    });
     t.check("after the reset");
     let names: Vec<String> = std::fs::read_dir(&fb).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     assert!(names.iter().all(|n| !n.contains("conflict")), "{names:?}");
