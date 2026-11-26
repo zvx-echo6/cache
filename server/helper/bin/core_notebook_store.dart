@@ -78,6 +78,14 @@ class CoreNotebookStore implements NotebookStore {
     }
   }
 
+  @override
+  Future<Notebook?> storedNotebook(String id) => _stored(id);
+
+  @override
+  Future<void> deleteNotebook(String id) => _change(() async {
+        await call('notebook_delete', {'id': id});
+      });
+
   /// As the phone's store: a notebook that exists keeps the fields it has, hidden ones included, whatever [def] lists.
   @override
   Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef}) => _change(() async {
