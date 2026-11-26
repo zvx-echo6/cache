@@ -14,6 +14,11 @@ written by the owner (lead words in **bold**). A version with no lines shows no 
 - **API keys in one place:** Settings > API keys, with steps for getting each key.
 - **Multi-stop trips:** drag stops to reorder them.
 - **Fixes:** off-road travel times are now realistic; notebook edits made on two devices at once are both kept; a deleted notebook entry no longer comes back; your phone's backup keeps Cache's settings only.
+- **Clearer maps:** dark-edged icons, grouped repeaters and road events, and outlines that load when needed.
+- **Better off-road directions:** missing-data warnings and online fetching for needed elevation and place details.
+- **Cache on Linux:** notebooks, folder sync, access to your folders, stronger linked-device identity and better town search.
+- **First aid:** a hands-only CPR metronome with sound, vibration and emergency dialer access.
+- **Linked notebooks:** deletes reach other devices, and the later edit or delete wins.
 
 ## 1.1.0
 - **A new Library:** four places in one: ZIM Collections, Bookshelves (your books on the numbered shelves of the Cache Decimal System, each with its own call number), Catalog (every search index, with Pause and Resume) and Cache Documentation (this guide, What's new and the credits).

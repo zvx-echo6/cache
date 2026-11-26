@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+## 1.2.0 (build 59, test) - 2026-11-25
+
 ## 1.2.0 (build 58, test) - 2026-11-24
 
 ## 1.2.0 (build 57, test) - 2026-11-24

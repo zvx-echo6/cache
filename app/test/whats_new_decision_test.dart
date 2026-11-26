@@ -131,7 +131,7 @@ void main() {
 
   test('the shipped whats_new.md has a 1.2.0 section matching kAppVersion', () {
     final lines = whatsNewLines(File('assets/whats_new.md').readAsStringSync(), '1.2.0');
-    expect(lines.length, 10);
+    expect(lines.length, 15);
   });
 }
 
