@@ -105,7 +105,7 @@ void main() {
       expect(switchButton.selected, {kDefaultCprMode});
       expect(kDefaultCprMode, CprMode.handsOnly);
       expect(switchButton.showSelectedIcon, isTrue, reason: 'the selected segment shows a check mark');
-      expect(find.byIcon(Icons.check), findsOneWidget);
+      expect(find.descendant(of: find.byType(SegmentedButton<CprMode>), matching: find.byIcon(Icons.check)), findsOneWidget);
       expect(find.text('Start'), findsOneWidget);
       expect(find.text(kCprReminder), findsOneWidget);
       expect(find.text('Push hard and fast in the center of the chest, 5–6 cm (2–2.4 in) deep. Let the chest come all the way back up.'), findsOneWidget);
@@ -142,6 +142,33 @@ void main() {
       await tester.pump();
       expect(opened, ['https://medlineplus.gov/cpr.html']);
       expect(kFirstAidSourceUrl, 'https://medlineplus.gov/cpr.html');
+      await r.done(tester);
+    });
+
+    testWidgets('the Sound and Vibration chips show their state: on is selected with a check and a fill, off is outlined with no check; a tap switches and it is remembered', (tester) async {
+      final r = _Rig();
+      await r.show(tester);
+      FilterChip chip(String k) => tester.widget<FilterChip>(find.byKey(ValueKey(k)));
+      for (final k in ['cpr-sound', 'cpr-vibration']) {
+        expect(chip(k).selected, isTrue, reason: '$k is on by default');
+        expect((chip(k).avatar as Icon).icon, Icons.check, reason: '$k on shows the check');
+        expect(chip(k).selectedColor, isNotNull, reason: '$k on is filled');
+      }
+      await tester.tap(find.byKey(const ValueKey('cpr-sound')));
+      await tester.pump();
+      expect(chip('cpr-sound').selected, isFalse);
+      expect(chip('cpr-sound').avatar, isNull, reason: 'off has no check');
+      expect(chip('cpr-sound').backgroundColor, Colors.transparent, reason: 'off has no fill');
+      expect(chip('cpr-sound').side?.width, greaterThan(1), reason: 'off is outlined');
+      expect(chip('cpr-vibration').selected, isTrue, reason: 'the other chip is untouched');
+      expect(r.prefs.sound, isFalse);
+      final again = CprPrefs(settingsDirOverride: r.dir);
+      await tester.runAsync(again.init);
+      expect(again.sound, isFalse);
+      again.dispose();
+      await tester.tap(find.byKey(const ValueKey('cpr-sound')));
+      await tester.pump();
+      expect(chip('cpr-sound').selected, isTrue, reason: 'a second tap turns it back on');
       await r.done(tester);
     });
 
