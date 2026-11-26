@@ -23,9 +23,10 @@ void main() {
     final prefs = CprPrefs(settingsDirOverride: dir);
     await tester.runAsync(prefs.init);
 
-    Future<void> shot(String name, {required CprMode mode, Duration after = Duration.zero, bool start = false, bool dark = false}) async {
+    Future<void> shot(String name, {required CprMode mode, Duration after = Duration.zero, bool start = false, bool dark = false, bool soundOff = false}) async {
       final clock = FakeClock();
       final m = CprMetronome(feedback: FakeFeedback(clock), mode: mode, now: () => clock.now, timer: clock.timer);
+      if (soundOff) m.setSound(false);
       phone(tester, size: const Size(1080 / 2.625, 2400 / 2.625), ratio: 2.625);
       await tester.pumpWidget(shotApp(CprScreen(prefs: prefs, metronome: m, canCall: true), theme: dark ? CacheThemeId.dark : CacheThemeId.parchment, insets: const EdgeInsets.only(top: 54, bottom: 34)));
       if (start) {
@@ -42,6 +43,7 @@ void main() {
 
     await shot('03-ready', mode: CprMode.handsOnly);
     await shot('03b-ready-breaths', mode: CprMode.withBreaths);
+    await shot('03c-ready-sound-off', mode: CprMode.handsOnly, soundOff: true);
     await shot('04-running-30-2', mode: CprMode.withBreaths, start: true, after: Duration(microseconds: (16 * kCprBeatMicros).round() + 1000));
     await shot('05-breaths', mode: CprMode.withBreaths, start: true, after: Duration(microseconds: (29 * kCprBeatMicros).round() + 1000 + 1000000));
     await shot('06-handsonly', mode: CprMode.handsOnly, start: true, after: const Duration(seconds: 134));

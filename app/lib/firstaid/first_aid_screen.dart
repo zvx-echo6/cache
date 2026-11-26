@@ -198,30 +198,15 @@ class _CprScreenState extends State<CprScreen> {
         ),
         _callButton(context),
         const SizedBox(height: 16),
-        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          FilterChip(
-            key: const ValueKey('cpr-sound'),
-            avatar: const Icon(Icons.volume_up_outlined, size: 20),
-            label: const Text('Sound'),
-            selected: _m.sound,
-            showCheckmark: false,
-            onSelected: (v) {
-              _m.setSound(v);
-              widget.prefs.set(sound: v);
-            },
-          ),
-          const SizedBox(width: 12),
-          FilterChip(
-            key: const ValueKey('cpr-vibration'),
-            avatar: const Icon(Icons.vibration, size: 20),
-            label: const Text('Vibration'),
-            selected: _m.vibration,
-            showCheckmark: false,
-            onSelected: (v) {
-              _m.setVibration(v);
-              widget.prefs.set(vibration: v);
-            },
-          ),
+        Wrap(alignment: WrapAlignment.center, spacing: 12, runSpacing: 8, children: [
+          _toggleChip(context, const ValueKey('cpr-sound'), Icons.volume_up_outlined, 'Sound', _m.sound, (v) {
+            _m.setSound(v);
+            widget.prefs.set(sound: v);
+          }),
+          _toggleChip(context, const ValueKey('cpr-vibration'), Icons.vibration, 'Vibration', _m.vibration, (v) {
+            _m.setVibration(v);
+            widget.prefs.set(vibration: v);
+          }),
         ]),
         const SizedBox(height: 24),
         const Center(child: _SourceLine()),
@@ -340,4 +325,24 @@ class _SourceLineState extends State<_SourceLine> {
       textAlign: TextAlign.center,
     );
   }
+}
+
+
+/// A on/off chip that says which it is: on is filled in the theme's primary colour with a check mark; off is outlined with no fill and no check.
+Widget _toggleChip(BuildContext context, Key key, IconData icon, String label, bool on, ValueChanged<bool> onChanged) {
+  final k = context.t;
+  final fg = on ? k.onPrimary : k.text;
+  // The check is its own leading icon (the chip's built-in check would draw over the sound or vibration icon).
+  return FilterChip(
+    key: key,
+    avatar: on ? Icon(Icons.check, size: 20, color: fg) : null,
+    label: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 20, color: fg), const SizedBox(width: 6), Text(label)]),
+    labelStyle: TextStyle(color: fg, fontWeight: FontWeight.w600),
+    selected: on,
+    showCheckmark: false,
+    selectedColor: k.primary,
+    backgroundColor: Colors.transparent,
+    side: BorderSide(color: on ? k.primary : k.secondary, width: on ? 1 : 1.5),
+    onSelected: onChanged,
+  );
 }
