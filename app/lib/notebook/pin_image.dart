@@ -204,6 +204,17 @@ double pinImageRatio(double devicePixelRatio, {bool web = kIsWeb}) => web ? kPin
 /// multiplier on their size, 0.4 at zoom 5, 0.55 at 9, 0.8 at 12 and 1.0 from 15 up, between them linear. [stops] is that curve.
 const List<(double, double)> kIconZoomCurve = [(5, 0.4), (9, 0.55), (12, 0.8), (15, 1.0)];
 
+/// [kIconZoomCurve] at [zoom]: how big an icon is drawn there, of its full size.
+double iconScaleAt(double zoom) {
+  const c = kIconZoomCurve;
+  if (zoom <= c.first.$1) return c.first.$2;
+  if (zoom >= c.last.$1) return c.last.$2;
+  for (var i = 1; i < c.length; i++) {
+    if (zoom <= c[i].$1) return c[i - 1].$2 + (c[i].$2 - c[i - 1].$2) * (zoom - c[i - 1].$1) / (c[i].$1 - c[i - 1].$1);
+  }
+  return c.last.$2;
+}
+
 /// The `icon-size` of a symbol layer whose icon is [scale] big at full size: [kIconZoomCurve] times [scale], as the one top-level
 /// interpolate on the zoom that a style allows.
 List<Object> iconSizeByZoom(double scale) => [

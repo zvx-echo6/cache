@@ -449,20 +449,59 @@ final class RouteSnapshot {
 ///   background sync round (which can run with the phone locked) can read it.
 /// - "excludeFromBackup": creates the folder if needed and sets NSURLIsExcludedFromBackupKey on it. The app calls it at every start.
 /// - "excludeIfPresent": sets the same flag on a file or folder that exists (true), or does nothing when it is missing (false).
+/// - "readIdentity" / "writeIdentity": the second copy of the device's sync key with its install id (lib/sharing/identity_keep.dart),
+///   one more Keychain item of the same kind (same service and accessibility, account "identity-keep"). Not found is nil; any other
+///   Keychain failure is an error, so the app never takes it for "every copy is gone".
 enum InstallMarker {
   private static let service = "co.cache.install-marker"
   private static let account = "install-id"
+  private static let identityAccount = "identity-keep"
 
-  private static func query() -> [String: Any] {
+  private static func query(_ acct: String = account) -> [String: Any] {
     [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
+      kSecAttrAccount as String: acct,
     ]
+  }
+
+  /// Replaces the item for [acct] with [data], readable only on this device, after first unlock.
+  private static func keep(_ acct: String, _ data: Data) -> OSStatus {
+    SecItemDelete(query(acct) as CFDictionary)
+    var add = query(acct)
+    add[kSecValueData as String] = data
+    add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    return SecItemAdd(add as CFDictionary, nil)
   }
 
   static func handle(_ call: FlutterMethodCall, result: FlutterResult) {
     switch call.method {
+    case "readIdentity":
+      var q = query(identityAccount)
+      q[kSecReturnData as String] = true
+      q[kSecMatchLimit as String] = kSecMatchLimitOne
+      var item: CFTypeRef?
+      let status = SecItemCopyMatching(q as CFDictionary, &item)
+      if status == errSecItemNotFound {
+        result(nil)
+      } else if status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) {
+        result(text)
+      } else {
+        result(FlutterError(code: "identity_read", message: "Keychain read failed (\(status))", details: nil))
+      }
+    case "writeIdentity":
+      guard let args = call.arguments as? [String: Any], let text = args["value"] as? String, !text.isEmpty,
+        let data = text.data(using: .utf8)
+      else {
+        result(FlutterError(code: "bad_value", message: "no value given", details: nil))
+        return
+      }
+      let status = keep(identityAccount, data)
+      if status == errSecSuccess {
+        result(nil)
+      } else {
+        result(FlutterError(code: "identity_write", message: "Keychain write failed (\(status))", details: nil))
+      }
     case "read":
       var q = query()
       q[kSecReturnData as String] = true

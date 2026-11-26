@@ -165,6 +165,14 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
     let use_tls = !a.flag("no-tls");
     eprintln!("cache {VERSION} starting");
+    // Running as the fallback cache account although this release runs as the person (the drop-in is missing): Settings asks
+    // the person to run the installer again, until the next start as them.
+    let running = cache_server::runs_as::running_user();
+    let needs = cache_server::runs_as::needs_installer(running.as_deref(), &cache_server::runs_as::Paths::system(std::env::current_exe().ok().as_deref()));
+    cache_server::runs_as::set_needed(needs);
+    if needs {
+        eprintln!("running as the cache account, not as the person in /etc/cache-app/person (the drop-in cache.service.d/person.conf is missing): run install.sh again");
+    }
 
     config::make_folders(&data).map_err(|e| format!("{}: {e}", data.display()))?;
     let tls_config = if use_tls {
@@ -197,6 +205,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     }
     helper_cfg.guide_package = Some(web.join("assets").join("assets").join("guide").join("cache-guide.cache-library"));
     helper_cfg.starter_layers = Some(web.join("assets").join("packages").join("cache_search").join("layers"));
+    helper_cfg.notebook_templates = Some(web.join("assets").join("assets").join("notebook"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
     helper_cfg.data_dir = Some(data.clone());
 

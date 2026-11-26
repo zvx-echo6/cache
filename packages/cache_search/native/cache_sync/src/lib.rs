@@ -328,6 +328,15 @@ pub struct Config {
     /// The most that hold grows to after repeated slow cancels, in ms (default 10 min).
     #[serde(default)]
     pub resume_backoff_max_ms: Option<u64>,
+    /// A second copy of the device's key, in a folder outside `dir` (Cache on Linux: `<data>/identity-keep`): written at every open,
+    /// and the key comes back from it when the one in `dir` is missing or the wrong length (see [`identity::load`]). Absent on a
+    /// phone, whose app keeps its own copy beside the install marker.
+    #[serde(default)]
+    pub identity_keep: Option<PathBuf>,
+    /// Whether this open may make a new identity when none can be found (default true). A phone's background round passes false:
+    /// the open then fails, and the app's own start restores the key or makes the new one.
+    #[serde(default = "t")]
+    pub make_identity: bool,
 }
 
 fn default_bulk() -> Vec<String> {
@@ -4151,7 +4160,7 @@ impl SyncEngine {
         let gate = Arc::new(GateState::default());
         gate.grace_until.store(links_grace_until(&cfg.dir, fresh || saved_note.is_some())?, Ordering::SeqCst);
         steps.step("links loaded");
-        let (secret, _) = identity::load_or_create(&cfg.dir)?;
+        let (secret, _) = identity::load(&cfg.dir, cfg.identity_keep.as_deref(), cfg.make_identity)?;
         steps.step("identity loaded");
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());

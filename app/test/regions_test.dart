@@ -292,6 +292,21 @@ void main() {
           clock: clock,
         );
 
+    testWidgets('the region search offers towns of the country the person has regions in, with no shard opened and no position (a browser)', (tester) async {
+      final r = await _Rig.boot(tester);
+      await tester.runAsync(() => r.regions.download(r.county, routing: true, map: false));
+      // A new session: the catalogue has read nothing but the global list, and there is no position.
+      final fresh = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: regionWeb().fetch);
+      final state = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: fresh, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() => state.init());
+      expect(fresh.loadedShards, isEmpty);
+      final rows = await tester.runAsync(() => state.searchRows());
+      final names = {for (final h in rows!) if (h.kind == 'locality') h.name};
+      expect(names, contains('Twin Falls'), reason: 'a town the global list does not hold, found from the country list of a kept region');
+      state.dispose();
+      await r.dispose(tester);
+    });
+
     testWidgets('outline back-fill: a region that has its tiles and no outlines gets them all and a marker; a second run fetches nothing', (tester) async {
       final asked = <String>[];
       final r = await keptWithOutlines(tester, asked);
@@ -302,8 +317,37 @@ void main() {
       expect(asked, isNotEmpty, reason: 'an empty folder: every outline is fetched');
       expect(await tester.runAsync(() => r.catalogue.outlinesDone(r.county.id)), isTrue);
       final first = asked.length;
+      final lines = <String>[];
+      final old = debugPrint;
+      debugPrint = (String? m, {int? wrapWidth}) => lines.add(m ?? '');
       await tester.runAsync(() => r.regions.backfillOutlines());
+      debugPrint = old;
       expect(asked.length, first, reason: 'the marker is there: nothing is fetched again');
+      final summary = lines.where((l) => l.contains('outlines backfill region=${r.county.id}')).toList();
+      expect(summary, hasLength(1), reason: 'one summary line even though nothing was missing: ${lines.join('|')}');
+      expect(summary.single, matches(RegExp(r'wanted=(\d+) present=\1 fetched=0 failed=0')));
+      await r.dispose(tester);
+    });
+
+    testWidgets('outline back-fill: the marker is not trusted: with it present and the files gone, they are fetched again', (tester) async {
+      final asked = <String>[];
+      final r = await keptWithOutlines(tester, asked);
+      for (final f in polygons(r).listSync().whereType<File>().where((f) => f.path.endsWith('.geojson'))) {
+        f.deleteSync();
+      }
+      expect(File('${polygons(r).path}/.done-${r.county.id}').existsSync(), isTrue, reason: 'the marker is still there');
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isNotEmpty, reason: 'the expected files are stat\'ed and the missing ones fetched');
+      final want = {for (final x in r.catalogue.areaRecordsOf(r.county)) '${x.id}.geojson'};
+      for (final n in want) {
+        expect(File('${polygons(r).path}/$n').existsSync(), isTrue, reason: n);
+      }
+      expect(File('${polygons(r).path}/.done-${r.county.id}').existsSync(), isTrue);
+      // With everything present the next run only stats: nothing is fetched.
+      asked.clear();
+      await tester.runAsync(() => r.regions.backfillOutlines());
+      expect(asked, isEmpty);
       await r.dispose(tester);
     });
 

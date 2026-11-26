@@ -799,6 +799,113 @@ void main() {
       expect(marks(r), isEmpty);
     });
 
+    // A whole notebook deleted on one device removed its entries on the other (their markers) but left an empty notebook there
+    // (2026-11-25, Linux and a phone): a notebook travels only as its entries' files, so nothing said the notebook was gone.
+    Notebook? named(_Rig r, String name) => r.nb.notebooks.where((n) => n.name == name).firstOrNull;
+    List<String> nbMarks(_Rig r) => [for (final k in marks(r)) if (k.startsWith('_deleted/notebook-')) k];
+
+    /// Runs the devices in a ring until the folders settle: each one syncs, and the next gets its folder.
+    Future<void> rounds(List<_Rig> rs, {int n = 3}) async {
+      for (var i = 0; i < n; i++) {
+        for (var k = 0; k < rs.length; k++) {
+          await rs[k].engine.run();
+          mirror(rs[k], rs[(k + 1) % rs.length]);
+        }
+      }
+    }
+
+    /// Two devices with the notebook Trip and two entries in it, synced both ways.
+    Future<(_Rig, _Rig, List<String>)> tripPair() async {
+      final a = _Rig(SyncKind.share), b = _Rig(SyncKind.share);
+      await a.journal();
+      await b.journal();
+      final trip = await a.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Trip', fields: [], sort: NotebookSort.recent));
+      final ids = [
+        for (var i = 0; i < 2; i++) (await a.nb.saveEntry(notebookId: trip.id, occurredAt: '2026-10-27T1$i:12:00-06:00', title: 'Leg $i', body: 'leg $i')).id,
+      ];
+      await rounds([a, b]);
+      expect(named(b, 'Trip'), isNotNull, reason: 'Trip reached the other device');
+      expect(await b.nb.entries(named(b, 'Trip')!.id), hasLength(2));
+      return (a, b, ids);
+    }
+
+    test('a notebook deleted in Cache: the other device removes it and its entries, a device linked later never gets it, and a new one of that name travels', () async {
+      final (a, b, ids) = await tripPair();
+      final tripA = named(a, 'Trip')!;
+      await a.nb.deleteNotebook(tripA.id);
+      await rounds([a, b]);
+      for (final r in [a, b]) {
+        expect(named(r, 'Trip'), isNull, reason: 'no empty Trip is left behind');
+        for (final id in ids) {
+          expect(await r.nb.entry(id), isNull);
+        }
+        expect(nbMarks(r), ['_deleted/notebook-${tripA.id}.json'], reason: 'the notebook marker travels and is kept');
+      }
+      final m = jsonDecode(a.folder.text['_deleted/notebook-${tripA.id}.json']!) as Map;
+      expect(m['name'], 'Trip');
+      expect(m['at'], isA<int>());
+      // a third device linked later
+      final c = _Rig(SyncKind.share);
+      await c.journal();
+      mirror(b, c);
+      await rounds([c, a, b]);
+      for (final r in [a, b, c]) {
+        expect(named(r, 'Trip'), isNull, reason: 'Trip does not come back');
+      }
+      // made again with the same name: a new notebook, and it travels
+      final again = await a.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Trip', fields: [], sort: NotebookSort.recent));
+      expect(again.id, isNot(tripA.id));
+      final e = await a.nb.saveEntry(notebookId: again.id, occurredAt: '2026-10-28T09:00:00-06:00', title: 'New leg', body: 'new');
+      await rounds([a, b, c]);
+      for (final r in [a, b, c]) {
+        final t = named(r, 'Trip');
+        expect(t, isNotNull, reason: 'the new Trip is on every device');
+        expect([for (final x in await r.nb.entries(t!.id)) x.id], [e.id]);
+      }
+    });
+
+    test('one device edits an entry of a notebook while the other deletes the notebook: the later action wins, as for entries: the notebook stays on both with that entry', () async {
+      final (a, b, ids) = await tripPair();
+      await a.nb.deleteNotebook(named(a, 'Trip')!.id);
+      final tripB = named(b, 'Trip')!;
+      final e0 = (await b.nb.entry(ids[0]))!;
+      await b.nb.saveEntry(id: e0.id, notebookId: tripB.id, occurredAt: e0.occurredAt, title: e0.title, body: 'edited on B');
+      await rounds([a, b]);
+      for (final r in [a, b]) {
+        final t = named(r, 'Trip');
+        expect(t, isNotNull, reason: 'the edit keeps the notebook');
+        expect([for (final x in await r.nb.entries(t!.id)) x.body], ['edited on B']);
+        expect(await r.nb.entry(ids[1]), isNull, reason: 'the entry nobody edited is deleted');
+      }
+    });
+
+    test('a wiped share folder (no files, no markers) never deletes a notebook', () async {
+      final (a, b, ids) = await tripPair();
+      b.folder.text.clear();
+      b.folder.bytes.clear();
+      await rounds([b, a]);
+      for (final r in [a, b]) {
+        final t = named(r, 'Trip');
+        expect(t, isNotNull);
+        expect({for (final x in await r.nb.entries(t!.id)) x.id}, ids.toSet());
+        expect(nbMarks(r), isEmpty);
+      }
+    });
+
+    test('a notebook marker is kept for good, but a notebook of that name made after the delete is never removed by it, empty or not', () async {
+      final (a, b, _) = await tripPair();
+      await a.nb.deleteNotebook(named(a, 'Trip')!.id);
+      await rounds([a, b]);
+      expect(named(b, 'Trip'), isNull);
+      // the person makes an empty Trip on B later (the store's time is after the delete)
+      final fresh = await b.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Trip', fields: [], sort: NotebookSort.recent));
+      b.store.notebooks.firstWhere((n) => n['id'] == fresh.id)['created'] = DateTime(2026, 10, 30).millisecondsSinceEpoch;
+      await b.nb.reload();
+      await rounds([a, b]);
+      expect(named(b, 'Trip')?.id, fresh.id, reason: 'made after the delete: kept');
+      expect(nbMarks(b), hasLength(1));
+    });
+
     // R1 (build 57): a delete made in Cache came back on every device. The delete writes the marker and then removes the
     // file; the share sync's scan listed the removal at once but held the just-written marker back as still settling, so a
     // device that fetched in between got the removal alone and wrote the file back. Since the fix the share sync never

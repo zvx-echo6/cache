@@ -389,6 +389,54 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
     return list;
   }
 
+  /// Every region the search looks through: the global list (countries, states, the larger places) and the full list of each country
+  /// whose shard is loaded and of each of [countries] (country ids, "us"): the towns and counties are only in those. A list that
+  /// cannot be read is left out.
+  Future<List<RegionHit>> searchRows({Iterable<String> countries = const []}) async {
+    final rows = <RegionHit>[...await globalSearch()];
+    final ids = <String>{for (final s in loadedShards) s.id, ...countries};
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
+  /// The rows the setup wizard's place search looks through for [query]: the global list, the lists already read, and a few more read
+  /// now, at most [maxLists] (each is opened once and kept): the country at [position]; the country or state of the global list that a
+  /// word of the query names ("Hilo Hawaii": Hawaii, in the US list); and, when neither gives one, the country of the device's
+  /// [localeCountry] ("US"). A list that cannot be read is left out.
+  Future<List<RegionHit>> searchRowsFor(String query, {({double lat, double lon})? position, String? localeCountry, int maxLists = 3}) async {
+    final global = await globalSearch();
+    final rows = <RegionHit>[...global];
+    final ids = <String>{for (final s in loadedShards) s.id};
+    final fresh = <String>[];
+    if (position != null) {
+      try {
+        await readShardAt(position.lat, position.lon);
+      } catch (_) {}
+      ids.addAll([for (final s in loadedShards) s.id]);
+    }
+    final named = global.where((h) => const {'country', 'dependency', 'region', 'sub_state', 'multi_state'}.contains(h.kind)).toList();
+    for (final w in _words(query)) {
+      if (w.length < 3) continue;
+      for (final h in searchRegions(w, named, limit: 2)) {
+        if (!ids.contains(h.shardId) && !fresh.contains(h.shardId)) fresh.add(h.shardId);
+      }
+    }
+    if (fresh.isEmpty && position == null && localeCountry != null && localeCountry.isNotEmpty) fresh.add(localeCountry.toLowerCase());
+    for (final id in fresh.take(maxLists)) {
+      ids.add(id);
+    }
+    for (final id in ids) {
+      try {
+        rows.addAll(await shardSearch(id));
+      } catch (_) {}
+    }
+    return rows;
+  }
+
   /// One country's full search list (every region it holds).
   Future<List<RegionHit>> shardSearch(String id) async {
     final known = _search[id];
@@ -539,7 +587,11 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
 
     await Future.wait([for (var i = 0; i < parallel; i++) worker()]);
     // Every outline of the region is on the phone: the back-fill need not look at this region again.
-    if (failed == 0 && want.isNotEmpty) await _markOutlinesDone(r.id);
+    if (failed == 0 && want.isNotEmpty) {
+      await _markOutlinesDone(r.id);
+    } else {
+      await _unmarkOutlines(r.id); // a marker is only true while every file is there
+    }
     return AreaStoreResult(wanted: want.length, stored: stored, failed: failed, present: present);
   }
 
@@ -548,10 +600,42 @@ class RegionCatalogue implements AreaSource, AreaFetcher {
   File _doneMarker(Directory d, String regionId) => File('${d.path}/polygons/.done-$regionId');
 
   /// Whether the outlines of region [regionId] were all kept once (its marker). False in a browser, which keeps no files.
+  /// How many outlines region [r] wants and how many of those files are on the phone now (a stat of each).
+  Future<({int wanted, int present})> outlinesCount(RegionRecord r) async {
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return (wanted: want.length, present: await _presentOutlines(want));
+    } catch (_) {
+      return (wanted: 0, present: 0);
+    }
+  }
+
   Future<bool> outlinesDone(String regionId) async {
     if (plat.isWeb) return false;
     try {
       return await _doneMarker(await dir(), regionId).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _unmarkOutlines(String regionId) async {
+    if (plat.isWeb) return;
+    try {
+      final f = _doneMarker(await dir(), regionId);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  /// Whether every outline of [r] is on the phone: its marker is there and each expected file is (a stat of each, no reads). The marker
+  /// alone is not trusted: files that were lost since make this false, so the back-fill fetches them again.
+  Future<bool> outlinesComplete(RegionRecord r) async {
+    if (!await outlinesDone(r.id)) return false;
+    try {
+      await shard(r.id.split('-').first);
+      final want = areaRecordsOf(r);
+      return want.isNotEmpty && await _presentOutlines(want) == want.length;
     } catch (_) {
       return false;
     }
@@ -697,7 +781,7 @@ Future<T> _off<T>(T Function() work) => plat.isWeb ? Future<T>.sync(work) : Isol
 
 /// Finds regions by name in [rows]: every word of the query must start a word of the name (or of one of its other names).
 /// Exact names first, then names that start with the query, then the rest; larger places first within each.
-List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40}) {
+List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit = 40, bool includeInside = false}) {
   final words = _words(query);
   if (words.isEmpty) return const [];
   final seen = <String>{};
@@ -713,6 +797,14 @@ List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit
       final joined = w.join(' ');
       final s = (joined == q ? 0 : (joined.startsWith(q) ? 2 : 4)) + (i == 0 ? 0 : 1);
       if (best < 0 || s < best) best = s;
+    }
+    // [includeInside]: a word may also be one of the place it is in ("Hilo Hawaii": Hilo, in Hawaii County, Hawaii), as long as one
+    // word is in the name itself.
+    if (best < 0 && includeInside && r.inside.isNotEmpty) {
+      final own = {for (final n in [r.name, ...r.alt]) ..._words(n)};
+      final all = {...own, ..._words(r.inside)};
+      bool starts(Set<String> set, String x) => set.any((y) => y.startsWith(x));
+      if (words.every((x) => starts(all, x)) && words.any((x) => starts(own, x))) best = 6;
     }
     if (best < 0) continue;
     seen.add(r.id);

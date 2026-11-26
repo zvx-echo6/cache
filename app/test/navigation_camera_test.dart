@@ -60,10 +60,15 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
     styleEvents.add('visible:$layerId:$visible');
   }
 
+  /// The filter each layer was last given.
+  final Map<String, dynamic> filters = {};
+
   @override
   Future<void> setFilter(String layerId, dynamic filter) async {
     styleEvents.add('filter:$layerId');
+    filters[layerId] = filter;
   }
+
   @override
   Future<void> setGeoJsonSource(String id, Map<String, dynamic> geojson) async {
     sources[id] = geojson;
@@ -73,6 +78,16 @@ class CameraController extends ChangeNotifier implements MapLibreMapController {
   Future<bool?> animateCamera(CameraUpdate update, {Duration? duration}) async {
     cameras.add(update.toJson());
     return true;
+  }
+
+  /// Where the map shows a position, in the map's own pixels (a test sets it); null: the middle of a 100 x 100 map. [screenAsked] counts the asks.
+  math.Point<num> Function(LatLng at)? screenOf;
+  int screenAsked = 0;
+
+  @override
+  Future<math.Point<num>> toScreenLocation(LatLng latLng) async {
+    screenAsked++;
+    return screenOf?.call(latLng) ?? const math.Point<num>(50, 50);
   }
 
   /// The camera moves made at once (no animation), as [cameras] records them; they are in [cameras] too, in order.

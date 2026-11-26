@@ -267,6 +267,20 @@ Future<String?> readServerVersion({http.Client? client}) async {
   }
 }
 
+/// Cache on Linux: whether Settings shows "Run the installer again" (Cache runs as the fallback cache account, not as the person
+/// who installed it, so it cannot open their folders), read from `GET /api/version`'s `run_installer_again`; false when it cannot
+/// be read or an older server does not say.
+Future<bool> readRunInstallerAgain({http.Client? client}) async {
+  try {
+    final r = await (client ?? http.Client()).get(Uri.parse('/api/version')).timeout(kDeviceCallTimeout);
+    if (r.statusCode != 200) return false;
+    final j = jsonDecode(utf8.decode(r.bodyBytes));
+    return j is Map && j['ok'] == true && j['result'] is Map && (j['result'] as Map)['run_installer_again'] == true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// The bytes the server keeps for each kind of the phone's Storage page ("library", "models", "regions", ...), read from
 /// `GET /api/library/storage`; null when they cannot be read.
 Future<Map<String, int>?> readServerStorage({http.Client? client}) async {

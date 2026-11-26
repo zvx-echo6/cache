@@ -81,6 +81,7 @@ import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
 import 'notebook/media.dart' show storePhoto;
 import 'notebook/sync/connections.dart';
+import 'notebook/sync/connections_web.dart';
 import 'screens/notebooks/icon_picker.dart' show MapIconSetup;
 import 'screens/pin_screen.dart';
 import 'settings/app_pin.dart';
@@ -109,6 +110,7 @@ import 'settings/web_search_setup.dart';
 import 'sharing/link_inbox.dart';
 import 'nav/open_maps.dart';
 import 'sharing/share_items.dart';
+import 'sharing/server_private_sharing.dart';
 import 'sharing/settings_sync.dart';
 import 'sharing/sharing_state.dart';
 import 'sharing/synced_settings.dart';
@@ -935,8 +937,11 @@ class _CacheAppState extends State<CacheApp> {
     },
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
-      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
+      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, deviceConnections: deviceConnections, pin: kAppLockEnabled ? appPin : null,
       shareAvailable: () => sharing.enabled, icons: MapIconSetup.of(maps));
+  // In a browser, Obsidian and Logseq are folders of the computer Cache runs on, which Cache there keeps in step with the notebooks
+  // (Notebooks > Connections); the phone's connections below are folders of the phone.
+  late final ServerConnections? deviceConnections = plat.isWeb ? ServerConnections(HttpTransport()) : null;
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
     notebook: notebooks,
@@ -1277,7 +1282,8 @@ class _CacheAppState extends State<CacheApp> {
         before?.call();
         if (!plat.isWeb) connections.changed();
       };
-      notebooks.privateSharing = connections;
+      // A browser's switches are the server's (its notebook sync keeps them); a phone's are NotebookConnections'.
+      notebooks.privateSharing = plat.isWeb ? ServerPrivateSharing(sharing) : connections;
       // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
       if (!plat.isWeb) {
         unawaited(connections.syncAll());
@@ -1560,6 +1566,7 @@ class _CacheAppState extends State<CacheApp> {
     _askIdleRelease.dispose();
     _shareSync?.cancel();
     connections.dispose();
+    deviceConnections?.dispose();
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);

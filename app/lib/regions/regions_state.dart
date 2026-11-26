@@ -1996,6 +1996,19 @@ class RegionsState extends ChangeNotifier {
     await refresh();
   }
 
+  /// What the region search looks through (see [RegionCatalogue.searchRows]).
+  /// The towns and counties are in each country's own list, which is read when its shard is: the phone reads the one at its position
+  /// (the map, the setup), a browser often has no position and nothing opened yet. So the countries of the regions kept here and of the
+  /// position, when there is one, are read too.
+  Future<List<RegionHit>> searchRows() async {
+    final here = position?.call();
+    if (here != null) await catalogue.readShardAt(here.lat, here.lon);
+    return catalogue.searchRows(countries: {
+      for (final l in local)
+        if (l.kind != kDrawnRegionKind && l.kind != kAreaRegionKind) l.id.split('-').first,
+    });
+  }
+
   bool _backfilling = false;
 
   /// The town, county and state outlines of every kept region that has not had them all kept once (no marker): fetched, only the ones
@@ -2014,12 +2027,18 @@ class RegionsState extends ChangeNotifier {
       for (final l in local) {
         if (only != null && l.id != only) continue;
         if (l.kind == kDrawnRegionKind || l.kind == kAreaRegionKind) continue;
-        if (await catalogue.outlinesDone(l.id)) continue;
         RegionRecord? rec;
         try {
           rec = await catalogue.record(l.id);
         } catch (_) {}
         if (rec == null || rec.isDrawn || rec.kind == kAreaRegionKind) continue;
+        // The marker is checked against the files (a stat of each): a region whose files were lost is filled again.
+        if (await catalogue.outlinesComplete(rec)) {
+          // One line per region and run even when nothing is missing: the log shows that the back-fill ran.
+          final have = await catalogue.outlinesCount(rec);
+          appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${have.wanted} present=${have.present} fetched=0 failed=0');
+          continue;
+        }
         final r = await catalogue.storeAreaPolygons(rec);
         appLog.add(LogLevel.standard, 'INFO', 'outlines backfill region=${l.id} wanted=${r.wanted} present=${r.present} fetched=${r.fetched} failed=${r.failed}');
       }

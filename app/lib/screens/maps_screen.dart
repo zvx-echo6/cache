@@ -25,7 +25,10 @@ import '../maps/poi_chips.dart';
 import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerIds;
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
-import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource;
+import '../maps/stack/icon_groups.dart';
+import '../maps/stack/stack_fan.dart';
+import '../maps/stack/stack_images.dart';
+import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource, pointInGeometry;
 import '../regions/region_catalogue.dart';
 import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
@@ -42,6 +45,7 @@ import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
 import '../roads/road_chips.dart';
+import '../roads/road_event.dart' show RoadEventKind;
 import '../roads/road_event_card.dart';
 import '../roads/road_events_state.dart';
 import '../roads/road_map_layers.dart';
@@ -778,6 +782,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     widget.roadEvents?.removeListener(_onRoadEvents);
     _elevation.removeListener(_onElevation);
     if (widget.elevation == null) _elevation.dispose();
+    _swapTimer?.cancel();
     _overviewPosition.dispose();
     _insetPicture?.image.dispose();
     _fullPicture?.image.dispose();
@@ -888,6 +893,12 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     await _pushUser();
     await _pushMeasure();
     await _pushRoadEvents();
+    // The new style has none of the group markers or the pictures: made again for the groups now.
+    _stackSig = '';
+    _stackGroups = const [];
+    _nbPinsFiltered = false;
+    _discPngs.clear();
+    await _updateStacks();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     if (_slideWaits) {
       _slideWaits = false;
@@ -921,6 +932,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       await c.setGeoJsonSource(kRoadEventSource, roadEventsGeoJson(r.events, selectedId: r.selectedId));
     } catch (_) {}
+    unawaited(_updateStacks());
   }
 
   /// A road event was read or chosen: drawn again; a chosen one's card shows over a place card and replaces it.
@@ -942,7 +954,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final id = pickEvent(ids, r.events);
       if (id != null) {
         // A town's name label under the icon is what was meant: the town opens. Own pins, repeaters and the route lines were asked before.
-        if (await _tapTownLabel(point, at)) return true;
+        // Only a name whose TEXT is under the finger (a query at the point itself): the label layer is text only, so its hit is the text.
+        if (await _tapTownLabel(point, at, exact: true)) return true;
         HapticFeedback.selectionClick();
         if (nav.selected != null) nav.clearSelection();
         widget.userLayers?.clearRepeater();
@@ -999,8 +1012,13 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   void _onCameraMove(CameraPosition p) {
     _lat = p.target.latitude;
     _lon = p.target.longitude;
+    final zoomed = (_zoom - p.zoom).abs() > 1e-6;
     _zoom = p.zoom;
     nav.setMapCentre(_lat, _lon);
+    // A fan folds when the map is panned or zoomed.
+    if (_fan != null && (zoomed || (_lat - _fanLat).abs() > 1e-9 || (_lon - _fanLon).abs() > 1e-9)) _foldFan();
+    _fanLat = _lat;
+    _fanLon = _lon;
     if ((_bearing - p.bearing).abs() > 0.5 || (p.bearing != 0 && _bearing == 0) || (p.bearing == 0 && _bearing != 0)) {
       setState(() => _bearing = p.bearing);
     } else {
@@ -1010,7 +1028,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (mounted) setState(() {});
   }
 
+  double _fanLat = 0, _fanLon = 0;
+
   void _onCameraIdle() {
+    unawaited(_updateStacks());
     final c = _controller;
     final p = c?.cameraPosition;
     if (p != null) maps.rememberCamera(p.target.latitude, p.target.longitude, p.zoom);
@@ -1037,6 +1058,272 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         await maps.checkCoverage(view, _zoom.floor());
       } catch (_) {}
     });
+  }
+
+
+  // ---- stacked icons: grouped into one marker, fanned out on a tap -------------------------------------------
+
+  List<IconGroup> _stackGroups = const [];
+  String _stackSig = '';
+
+  /// The open fan (null: none), where it is on the screen, and the pictures of its discs.
+  IconGroup? _fan;
+  FanLayout? _fanLayout;
+  final Map<String, Uint8List> _discPngs = {};
+
+  /// The icons that may be grouped: a repeater list's repeaters and the road events (never the person's own pins, the chosen place,
+  /// the search results, the position or the route's markers), with where each is on the map's plane at the zoom now.
+  List<StackIcon> _stackIcons() {
+    final out = <StackIcon>[];
+    final scale = 512 * math.pow(2, _zoom).toDouble();
+    ({double x, double y}) plane(double lat, double lon) {
+      final sinLat = math.sin(lat * math.pi / 180).clamp(-0.9999, 0.9999);
+      return (x: (lon + 180) / 360 * scale, y: (0.5 - math.log((1 + sinLat) / (1 - sinLat)) / (4 * math.pi)) * scale);
+    }
+
+    final u = widget.userLayers;
+    if (u != null) {
+      for (final r in u.drawnRepeaters) {
+        final lat = r.lat, lon = r.lon;
+        if (lat == null || lon == null) continue;
+        final p = plane(lat, lon);
+        out.add(StackIcon(id: 'repeater:${r.listId}/${r.item}', kind: StackKind.repeater, name: r.name, lat: lat, lon: lon, x: p.x, y: p.y));
+      }
+    }
+    // The pins of a repeater notebook (template `repeaters`) are repeaters too. The person's other notebooks' pins are never grouped.
+    final nb = widget.notebooks;
+    if (nb != null) {
+      for (final e in _pins) {
+        final place = e.place;
+        if (place == null || !_pinNames.containsKey(e.id) || nb.notebook(e.notebookId)?.isRepeaters != true) continue;
+        final p = plane(place.lat, place.lon);
+        out.add(StackIcon(id: 'nbpin:${e.id}', kind: StackKind.repeater, name: entryTitle(e), lat: place.lat, lon: place.lon, x: p.x, y: p.y));
+      }
+    }
+    final roads = widget.roadEvents;
+    if (roads != null) {
+      for (final e in roads.events) {
+        final at = e.chipAt;
+        final p = plane(at.lat, at.lon);
+        out.add(StackIcon(id: 'road:${e.id}', kind: StackKind.roadEvent, name: e.road, lat: at.lat, lon: at.lon, x: p.x, y: p.y));
+      }
+    }
+    return out;
+  }
+
+  /// One drawn diameter at this zoom, in points: the larger of a repeater's disc and a road chip's, each by the zoom curve.
+  double _stackDiameter() => math.max(kFanDisc * iconScaleAt(_zoom), 18 * (0.8 + (1.15 - 0.8) * ((_zoom - 9) / 6).clamp(0.0, 1.0)));
+
+  /// The disc of a group marker at this zoom, in points: no smaller than 0.75 of full size (see the style's stack layer).
+  double _markerDiameter() => kFanDisc * math.max(kMarkerMin, iconScaleAt(_zoom));
+
+  /// When a tap on the dim folded a fan: the map under the dim is told of that tap too, and it is not a second one.
+  DateTime _dimTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset _dimTapPos = Offset.zero;
+
+  /// Groups the icons that overlap now, and when the groups changed draws their markers and leaves their members out of the layers.
+  Future<void> _updateStacks() async {
+    final c = _controller;
+    if (c == null || !_styleReady || !mounted) return;
+    final groups = groupIcons(_stackIcons(), diameter: _stackDiameter(), markerDiameter: _markerDiameter(), previous: _stackGroups);
+    final sig = groups.map((g) => g.key).join(';');
+    if (sig == _stackSig) return;
+    _stackSig = sig;
+    _stackGroups = groups;
+    if (_fan != null && !groups.any((g) => g.key == _fan!.key)) _foldFan();
+    final images = _pinImages;
+    final p = _palette;
+    final ratio = images?.ratio ?? 3;
+    final features = <Map<String, dynamic>>[];
+    try {
+      for (final g in groups) {
+        final road = g.members.where((m) => m.kind == StackKind.roadEvent).firstOrNull;
+        final name = 'stack-${g.kind.name}-${g.badge}${g.kind == StackKind.roadEvent ? '-${_roadKindOf(road)?.name}' : ''}';
+        await images?.ensureNamed(name, () => renderStackMarkerPng(g.kind, g.badge, p, road: _roadKindOf(road) ?? RoadEventKind.work, ratio: ratio));
+        features.add({
+          'type': 'Feature',
+          'geometry': {'type': 'Point', 'coordinates': [g.lon, g.lat]},
+          'properties': {'img': name, 'gkey': g.key},
+        });
+      }
+      await c.setGeoJsonSource(kStackSource, {'type': 'FeatureCollection', 'features': features});
+      final keys = [for (final g in groups) for (final m in g.members) if (m.id.startsWith('repeater:')) m.id.substring('repeater:'.length)];
+      final ids = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.roadEvent) m.id.substring('road:'.length)];
+      await c.setFilter(kUserRepeaters, userRepeatersFilter(keys));
+      await c.setFilter(kRoadEventChips, roadChipsFilter(ids));
+      final pinIds = [for (final g in groups) for (final m in g.members) if (m.id.startsWith('nbpin:')) m.id.substring('nbpin:'.length)];
+      if (pinIds.isNotEmpty || _nbPinsFiltered) {
+        _nbPinsFiltered = pinIds.isNotEmpty;
+        await c.setFilter(kNotebookPins, notebookPinsFilter(pinIds));
+      }
+    } catch (_) {}
+  }
+
+  RoadEventKind? _roadKindOf(StackIcon? m) {
+    if (m == null) return null;
+    final id = m.id.substring('road:'.length);
+    return widget.roadEvents?.events.where((e) => e.id == id).firstOrNull?.kind;
+  }
+
+  /// A tap on a group marker by where it is drawn: its disc and its badge, each with a 44 point target at the least. It wins over the
+  /// single icons beneath it (the map's own query can miss the marker's edge or return a repeater under it).
+  Future<bool> _tapStackMarker(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || _stackGroups.isEmpty) return false;
+    try {
+      final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      final tx = point.x / ratio, ty = point.y / ratio;
+      final md = _markerDiameter();
+      IconGroup? best;
+      var bestD = double.infinity;
+      for (final g in _stackGroups) {
+        final p = await c.toScreenLocation(LatLng(g.lat, g.lon));
+        final cx = p.x / ratio, cy = p.y / ratio;
+        for (final (i, k) in markerCircles(0, 0, g.count, md).indexed) {
+          final px = cx + k.x, py = cy + k.y;
+          final d = math.sqrt((tx - px) * (tx - px) + (ty - py) * (ty - py));
+          if (d <= math.max(kStackTargetMin / 2, k.r)) {
+            // The disc's own centre is the better guess where both are reached.
+            final score = i == 0 ? d : d + 0.001;
+            if (score < bestD) {
+              bestD = score;
+              best = g;
+            }
+          }
+        }
+      }
+      if (best != null) {
+        HapticFeedback.selectionClick();
+        await _openGroup(best);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// A tap on a group marker: its fan opens (or, over 8 members, its list).
+  Future<bool> _tapStack(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || _stackGroups.isEmpty) return false;
+    try {
+      for (final h in await _query(c, point, const [kStackMarkers])) {
+        final key = h is Map && h['properties'] is Map ? (h['properties'] as Map)['gkey'] : null;
+        final g = _stackGroups.where((x) => x.key == key).firstOrNull;
+        if (g != null) {
+          HapticFeedback.selectionClick();
+          await _openGroup(g);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<Uint8List> _discPng(StackIcon m) async {
+    final road = m.kind == StackKind.roadEvent ? _roadKindOf(m) : null;
+    final key = '${m.kind.name}-${road?.name}';
+    return _discPngs[key] ??= await renderStackDiscPng(m.kind, _palette, road: road ?? RoadEventKind.work, ratio: _images3());
+  }
+
+  double _images3() => _pinImages?.ratio ?? 3;
+
+  Future<void> _openGroup(IconGroup g) async {
+    final c = _controller;
+    if (c == null) return;
+    if (g.needsSheet) {
+      if (mounted) await _showStackSheet(g);
+      return;
+    }
+    try {
+      final ratio = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      Future<({double x, double y})> screen(double lat, double lon) async {
+        final p = await c.toScreenLocation(LatLng(lat, lon));
+        return (x: p.x / ratio, y: p.y / ratio);
+      }
+
+      final centre = await screen(g.lat, g.lon);
+      final truth = [for (final m in g.members) await screen(m.lat, m.lon)];
+      for (final m in g.members) {
+        await _discPng(m);
+      }
+      if (!mounted) return;
+      final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+      final size = stack != null && stack.hasSize ? stack.size : _mapSize;
+      final top = _boxOf(_headerKey)?.bottom ?? 0, bottom = _boxOf(_panelKey)?.top ?? size.height;
+      final radius = fanRadius(g.count);
+      final at = fanCentre(centre, free: (left: 0, top: top, right: size.width, bottom: bottom), radius: radius);
+      final discs = fanDiscs(centre: at, from: truth, radius: radius);
+      setState(() {
+        _fan = g;
+        _fanLayout = FanLayout(centre: at, discs: discs, truth: truth);
+      });
+    } catch (_) {}
+  }
+
+  /// The fan folds: a tap on the map or the dim, Back, a pan or zoom, a card that opens.
+  void _foldFan() {
+    if (_fan == null) return;
+    if (mounted) {
+      setState(() {
+        _fan = null;
+        _fanLayout = null;
+      });
+    } else {
+      _fan = null;
+      _fanLayout = null;
+    }
+  }
+
+  /// A disc of a fan (or a row of the list) was chosen: the icon's usual card opens, and the fan folds.
+  void _pickStackMember(StackIcon m) {
+    _foldFan();
+    HapticFeedback.selectionClick();
+    if (m.id.startsWith('repeater:')) {
+      final ref = m.id.substring('repeater:'.length).split('/');
+      final u = widget.userLayers;
+      if (u != null && ref.length == 2 && u.selectRepeater(ref[0], int.tryParse(ref[1]) ?? -1) != null) {
+        if (nav.selected != null) nav.clearSelection();
+      }
+    } else if (m.id.startsWith('nbpin:')) {
+      final e = _pins.where((p) => p.id == m.id.substring('nbpin:'.length)).firstOrNull;
+      if (e != null && mounted) _notebookCard(e);
+    } else if (m.id.startsWith('road:')) {
+      final r = widget.roadEvents;
+      if (r != null) {
+        if (nav.selected != null) nav.clearSelection();
+        widget.userLayers?.clearRepeater();
+        r.select(m.id.substring('road:'.length));
+      }
+    }
+  }
+
+  Future<void> _showStackSheet(IconGroup g) async {
+    final pngs = [for (final m in g.members) await _discPng(m)];
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<StackIcon>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => StackListSheet(group: g, pictures: pngs),
+    );
+    if (picked != null && mounted) _pickStackMember(picked);
+  }
+
+  Widget? _fanOverlay() {
+    final g = _fan, layout = _fanLayout;
+    if (g == null || layout == null) return null;
+    return StackFan(
+      key: const ValueKey('stack-fan'),
+      group: g,
+      layout: layout,
+      pictures: {for (final m in g.members) m.id: _discPngs['${m.kind.name}-${m.kind == StackKind.roadEvent ? _roadKindOf(m)?.name : null}']},
+      onPick: _pickStackMember,
+      onFold: _foldFan,
+      onDimTap: (at) {
+        _dimTapAt = DateTime.now();
+        _dimTapPos = at;
+      },
+    );
   }
 
   // ---- position -----------------------------------------------------------------------------------------
@@ -1658,6 +1945,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
   int _notebookSig = -1;
   List<NbEntry> _pins = const [];
 
+  /// Each notebook pin's image name by entry id, and whether the pins layer carries a grouped-entries filter now.
+  Map<String, String> _pinNames = const {};
+  bool _nbPinsFiltered = false;
+
   /// The pin images the loaded style has (a new style has none).
   PinImages? _pinImages;
 
@@ -1679,7 +1970,9 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
           names[e.id] = await images.ensure(look.icon.id, look.glyph, look.tint);
         }
       }
+      _pinNames = names;
       await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
+      unawaited(_updateStacks());
       // The chosen place's pin may be one of these entries: drawn again now that they are known.
       _navSig = null;
       await _pushNav();
@@ -1706,6 +1999,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     try {
       await c.setGeoJsonSource(kUserSource, await u.mapGeoJson());
     } catch (_) {}
+    unawaited(_updateStacks());
   }
 
   /// A tap on a notebook pin opens its card; true when there was one.
@@ -1827,8 +2121,43 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (!mounted || _pinCountyFor != pin.id) return;
     final c = hit?.county;
     if (hit == null || c == null) return;
+    final guesses = hit.countyCandidates;
+    // A county found from its outline is certain. One named from the boxes alone is a guess: it shows only when no other county's box
+    // holds the point, and the outline is fetched right away to check it (below).
+    if (guesses.length <= 1) setState(() => _pinCounty = (_countyText(c, hit!), hit));
+    if (guesses.isNotEmpty) unawaited(_verifyPinCounty(pin, hit, guesses));
+  }
+
+  String _countyText(RegionRecord c, AreaHit hit) {
     final st = stateShort(c, hit);
-    setState(() => _pinCounty = ([c.name, if (st.isNotEmpty) st].join(', '), hit!));
+    return [c.name, if (st.isNotEmpty) st].join(', ');
+  }
+
+  /// Checks a county guessed from the boxes against its real outline: each candidate's outline is fetched (kept on the phone) and the
+  /// first that holds the pin is the county. None does: no county line. Offline, blocked by the mobile data setting or failing: the
+  /// line stays as it was (shown only when one box held the point).
+  Future<void> _verifyPinCounty(MapPlace pin, AreaHit hit, List<RegionRecord> candidates) async {
+    final src = _areaSource;
+    if (src is! AreaFetcher) return;
+    try {
+      final policy = widget.regions?.policy;
+      if (policy != null && await policy.blocksDownload()) return;
+    } catch (_) {}
+    for (final cand in candidates) {
+      Map<String, dynamic>? g;
+      try {
+        g = await (src as AreaFetcher).fetchGeometry(cand).timeout(_outlineFetchWait);
+      } catch (_) {
+        return;
+      }
+      if (!mounted || _pinCountyFor != pin.id) return;
+      if (g == null) return;
+      if (pointInGeometry(g, pin.lat, pin.lon)) {
+        setState(() => _pinCounty = (_countyText(cand, hit), AreaHit(county: cand, state: hit.state)));
+        return;
+      }
+    }
+    if (mounted && _pinCountyFor == pin.id) setState(() => _pinCounty = null);
   }
 
   /// The county line of the card of [sel]: a dropped pin's looked-up county, or a town card's own "county, state" line; null for others.
@@ -2214,7 +2543,19 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       await _pushMeasure();
       return;
     }
+    // The tap that folded a fan from the dim also reaches the map: it is the same tap.
+    if (DateTime.now().difference(_dimTapAt) < const Duration(milliseconds: 800)) {
+      final r = plat.isAndroid && mounted ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      if ((Offset(point.x / r, point.y / r) - _dimTapPos).distance < 24) return;
+    }
+    // An open fan folds on any tap that is not on one of its discs (those take their own taps).
+    if (_fan != null) {
+      _foldFan();
+      return;
+    }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
+    if (!nav.searchOpen && await _tapStackMarker(point)) return;
+    if (!nav.searchOpen && await _tapStack(point)) return;
     if (!nav.searchOpen && await _tapRepeater(point)) return;
     // A road event (a closure over a road's name) wins over what is under it, except a town's name (see _tapRoadEvent).
     if (!nav.searchOpen && nav.phase == NavPhase.browsing && await _tapRoadEvent(point, at)) return;
@@ -2676,6 +3017,40 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       final f = location.fix;
       if (mounted && f != null && maps.follow != FollowMode.free) _followTo(f);
     });
+    final seq = ++_swapSeq;
+    _swapTimer?.cancel();
+    _swapTimer = Timer(_swapSettle, () => unawaited(_afterSwap(seq)));
+  }
+
+  int _swapSeq = 0;
+  Timer? _swapTimer;
+
+  /// How long after a swap the live map is left to take its new size before it is checked (a browser resizes the map's canvas a moment
+  /// after the layout changes).
+  static const Duration _swapSettle = Duration(milliseconds: 700);
+
+  /// Whichever way the views were swapped, the live map carries the position and the route: both are written to it again, and when it
+  /// is the small one and the position shows outside its frame (the camera was left where it was when the map shrank, which a browser
+  /// shows as a corner with no dot and no route), the camera comes back to the position. One line in the log says what was seen.
+  Future<void> _afterSwap(int seq) async {
+    if (!mounted || seq != _swapSeq) return;
+    _navSig = null;
+    await _pushNav();
+    await _pushPosition();
+    final c = _controller, f = location.fix;
+    if (!_swapped || c == null || f == null || _mapSize.isEmpty || !_insetOn) return;
+    try {
+      final p = await c.toScreenLocation(LatLng(f.lat, f.lon));
+      if (!mounted || seq != _swapSeq || !_swapped) return;
+      final ratio = plat.isAndroid ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+      final x = p.x / ratio, y = p.y / ratio;
+      final inside = x >= 0 && y >= 0 && x <= _mapSize.width && y <= _mapSize.height;
+      appLog.add(LogLevel.standard, 'INFO', 'map swap live=${_mapSize.width.round()}x${_mapSize.height.round()} position=(${x.round()},${y.round()}) inside=$inside');
+      if (inside) return;
+      _stopGlide();
+      await _padTo(c, EdgeInsets.zero);
+      await c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: LatLng(f.lat, f.lon), zoom: math.max(_zoom, 16).toDouble(), bearing: maps.follow == FollowMode.headingUp ? (f.heading ?? _bearing) : 0)), duration: const Duration(milliseconds: 400));
+    } catch (_) {}
   }
 
   /// The padding of the full-screen picture: the route stays clear of the banner, the card and the buttons.
@@ -2826,12 +3201,17 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // While the step card is open on the Maps tab, Back closes it (the routes again) instead of leaving.
     // While the map shows instead of the drive screen ([_peek]), Back brings the drive screen again.
     final map = PopScope(
-      canPop: (_ring == null && _step == null && !_peek && !_cardOpen && nav.phase != NavPhase.previewing && widget.onBackToJump == null) || !widget.active,
+      canPop: (_ring == null && _fan == null && _step == null && !_peek && !_cardOpen && nav.phase != NavPhase.previewing && widget.onBackToJump == null) || !widget.active,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         // With the long-press ring open, Back closes the ring and nothing else.
         if (_ring != null) {
           setState(() => _ring = null);
+          return;
+        }
+        // An open fan of stacked icons folds, and nothing else.
+        if (_fan != null) {
+          _foldFan();
           return;
         }
         if (_peek) {
@@ -3022,6 +3402,8 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
               child: NoticePill(text: maps.baseProblem!),
             ),
           ),
+        // An open fan of stacked icons: over the map, under the cards, the panel and the buttons (they are not dimmed).
+        if (!drawing) ?_fanOverlay(),
         if (!drawing && MediaQuery.sizeOf(context).width >= kSideCardWidth && _measure == null)
           _sideLayers(context, fix, follow)
         else if (!drawing) ...[

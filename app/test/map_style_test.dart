@@ -6,6 +6,7 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
+import 'package:cache/notebook/pin_image.dart' show PinStyle, pinIconSize;
 import 'package:cache/roads/road_map_layers.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,56 @@ void main() {
       }
     }
   }
+
+  group('icons and town names: the icons take part in collision and the names win', () {
+    bool on(Object? v) => v == true;
+    Map<String, dynamic> layer(Map<String, dynamic> style, String id) => ((style['layers'] as List).cast<Map<String, dynamic>>()).firstWhere((l) => l['id'] == id);
+    int at(Map<String, dynamic> style, String id) => (style['layers'] as List).indexWhere((l) => (l as Map)['id'] == id);
+
+    for (final (name, base, firstName) in [('Protomaps', protomaps, 'places_subplace'), ('OpenMapTiles', openFreeMap, 'label_other')]) {
+      for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+        test('$name, ${theme.name}: road-event icons and repeater icons collide, with padding, and sit under the place names', () {
+          final style = buildMapStyle(
+            palette: mapPaletteFor(theme),
+            omtTemplate: template,
+            protomapsTemplate: pmTemplate,
+            layers: withBase(base),
+            tilesUrl: (d) => 'http://127.0.0.1:9/layers/${d.id}/{z}/{x}/{y}',
+            glyphsUrl: 'file:///fonts/{fontstack}/{range}.pbf',
+            pinStyle: PinStyle.icon,
+          );
+          for (final id in [kRoadEventChips, kUserRepeaters]) {
+            final l = layer(style, id)['layout'] as Map<String, dynamic>;
+            expect(on(l['icon-allow-overlap']), isFalse, reason: '$id takes part in collision');
+            expect(on(l['icon-ignore-placement']), isFalse, reason: '$id is placed, so others make way for it');
+            expect(l['icon-padding'], 2, reason: '$id: near-touching icons separate');
+            expect(at(style, id), lessThan(at(style, firstName)), reason: '$id is under the place names, so a town name wins the collision');
+          }
+          // Priority, first placed first: the place names, then the repeaters, then the road events, then the public places' chips.
+          if (name == 'Protomaps') {
+            expect(at(style, kUserRepeaters), greaterThan(at(style, kRoadEventChips)));
+            expect(at(style, kRoadEventChips), greaterThan(at(style, 'pois')));
+          }
+          // The markers of grouped icons: always drawn, never smaller than 0.75, right above the repeaters.
+          final m = layer(style, kStackMarkers)['layout'] as Map<String, dynamic>;
+          expect(on(m['icon-allow-overlap']), isTrue);
+          expect(on(m['icon-ignore-placement']), isTrue);
+          expect(at(style, kStackMarkers), at(style, kUserRepeaters) + 1);
+          final size = (m['icon-size'] as List).skip(3).toList();
+          for (var i = 1; i < size.length; i += 2) {
+            expect((size[i] as num) * (1 / pinIconSize()), greaterThanOrEqualTo(0.75 - 1e-9), reason: 'a marker is never smaller than 0.75');
+          }
+          expect((style['sources'] as Map).containsKey(kStackSource), isTrue);
+          // The person's own pins and the route, destination and position markers are always drawn.
+          for (final id in [kNotebookPins, kPinSelectedIcon, kPinResultsIcon, kRouteTime, kPositionHeading]) {
+            final l = layer(style, id)['layout'] as Map<String, dynamic>;
+            expect(on(l['icon-allow-overlap']), isTrue, reason: '$id stays visible');
+            expect(on(l['icon-ignore-placement']), isTrue, reason: '$id hides nothing');
+          }
+        });
+      }
+    }
+  });
 
   test('every palette defines every role', () {
     for (final id in CacheThemeId.values) {

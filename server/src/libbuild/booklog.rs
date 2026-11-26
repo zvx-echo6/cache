@@ -38,6 +38,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// anything else sync keeps for this device. It is the one place; the Bookshelves log and any later sync use the same identity.
 pub const SYNC_DIR: &str = "sync";
 
+/// The second copy of the sync identity, `<data>/identity-keep/identity.key` (owner-only), outside `<data>/sync`: a key that goes
+/// missing from the sync folder comes back from it, so the device keeps its id and its links (cache_sync `identity::load`). The
+/// sharing host gives the engine the same folder (helper/bin/sharing_host.dart, `identity_keep`).
+pub const KEEP_DIR: &str = "identity-keep";
+
 /// The person's Bookshelves folder, `<data>/bookshelves` (`log/`, `.local/`).
 pub const BOOKSHELVES_DIR: &str = "bookshelves";
 
@@ -46,11 +51,12 @@ pub const BOOKSHELVES_DIR: &str = "bookshelves";
 const UNSYNCED_ID: &str = "unsynced";
 
 /// This server's device id: the cache_sync identity in `<data>/sync` (made the first time, read back after that), as the EndpointId's
-/// text (lower-case letters and digits). It names the Bookshelves log, `log/<device_id>.jsonl`. A reinstall that loses the key starts
-/// a new id and so a new log file; the old one stays and its events still count. The random `server-<hex>` id of earlier builds
+/// text (lower-case letters and digits). It names the Bookshelves log, `log/<device_id>.jsonl`. A key missing from `<data>/sync` is
+/// brought back from [`KEEP_DIR`]; a reinstall that loses both starts a new id and so a new log file; the old one stays and its events
+/// still count. A key that is there but cannot be read is never replaced: the fixed fallback name is used until it can be. The random `server-<hex>` id of earlier builds
 /// (`<data>/build/device_id`) is no longer read or written; its log file is left alone.
 pub(crate) fn load_device_id(data: &Path) -> String {
-    match cache_sync::identity::load_or_create(&data.join(SYNC_DIR)) {
+    match cache_sync::identity::load(&data.join(SYNC_DIR), Some(&data.join(KEEP_DIR)), true) {
         Ok((_, id)) if valid_device_id(&id) => id,
         Ok((_, id)) => {
             eprintln!("cache: the sync identity {id:?} is not usable as a log name; using {UNSYNCED_ID}");

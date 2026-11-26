@@ -14,6 +14,7 @@ import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
 import '../platform/multicast_lock.dart';
+import 'identity_keep.dart';
 import 'install_marker.dart';
 import 'share_rules.dart' show kSettingsShareId;
 
@@ -49,6 +50,7 @@ class SharingState extends ChangeNotifier {
     Timer Function(Duration every, void Function() run)? every,
     CoreTransport? remote,
     InstallMarkerStore? installMarker,
+    IdentityKeepStore? identityKeep,
     this.beforeSync,
   }) : _log = log ?? ((l) => logInfo(l)),
        _timer = timer ?? Timer.new,
@@ -66,6 +68,8 @@ class SharingState extends ChangeNotifier {
        // The install marker (install_marker.dart) is for Android and iPhone only: on Linux the folder is a file in the person's own
        // data folder, under their own backup choices.
        _marker = installMarker ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelInstallMarkerStore() : null),
+       // The second copy of the device's key beside the marker (identity_keep.dart): phones only, as the marker.
+       _keep = identityKeep ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? const ChannelIdentityKeepStore() : null),
        // ignore: prefer_initializing_formals
        _remote = remote;
 
@@ -104,6 +108,9 @@ class SharingState extends ChangeNotifier {
 
   /// The device-only install marker checked before the engine opens its folder; null where there is none (Linux, a browser).
   final InstallMarkerStore? _marker;
+
+  /// The second copy of the device's key, beside the marker; null where there is no marker.
+  final IdentityKeepStore? _keep;
 
   /// This device was started as a new, unlinked one because its sync folder came from another phone (a restore). Said once on
   /// the Sharing and sync page ([dismissNewDevice]); kept in sharing.json until then.
@@ -201,6 +208,14 @@ class SharingState extends ChangeNotifier {
     final at = peerOf(peer)?['linked'];
     return _askSince != null && at is int && at >= _askSince!;
   }
+
+  /// Cache Server only: the private notebooks switched on ("Include in sync and sharing"), by notebook id, as the server last said.
+  /// The server keeps them (its notebook sync is the one that leaves a private notebook out); a browser only shows and sets them.
+  final Set<String> _privateIncluded = {};
+  Set<String> get privateIncluded => Set.unmodifiable(_privateIncluded);
+
+  /// Cache Server only: switches a private notebook's "Include in sync and sharing" on the server.
+  Future<void> setPrivateIncluded(String notebookId, bool on) => _driver.setPrivateIncluded(notebookId, on);
 
   /// Starts sharing if it was set up before.
   Future<void> init() => _driver.init();
@@ -570,6 +585,9 @@ abstract class SharingDriver {
   Future<({String peer, String name})> link(String code);
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
+
+  /// A private notebook's "Include in sync and sharing" (Cache Server's: the phone keeps it with its notebook sync).
+  Future<void> setPrivateIncluded(String notebookId, bool on);
   Future<void> setOnly(String id, List<String> patterns);
 
   /// Brings what the engine may send from the gated folders (the notebooks' photos) up to date now.
@@ -707,6 +725,15 @@ class _PhoneDriver implements SharingDriver {
           await _save();
         }
       }
+      // The device's key: a key missing from the folder (or the wrong length) comes back from the copy kept beside the marker, for
+      // this install id only; when the copy cannot be checked the engine may not make a new one (identity_keep.dart).
+      final keep = s._keep;
+      var makeIdentity = true;
+      if (marker != null && keep != null) {
+        final kept = await keepIdentity(syncDir: dir, installId: await marker.read(), store: keep);
+        if (kept == KeepState.restored) s._log("Sharing: this device's identity was brought back from its second copy");
+        makeIdentity = kept != KeepState.unknown;
+      }
       // A background round (background/sync_background.dart) has the engine's folder while it runs: it is asked to stop, and
       // given time to close its engine, before this one opens (two engines on one folder made "Sharing could not start").
       final lock = _lock = BackgroundLock(Directory(syncBackgroundDir((await s.supportDir()).path)));
@@ -739,6 +766,7 @@ class _PhoneDriver implements SharingDriver {
         // Send mine).
         'with': {for (final l in linkShares) l.id: l.modes},
         'quiet': s.quiet,
+        if (!makeIdentity) 'make_identity': false,
       };
       _lastConfig = config;
       // Android hears multicast only while the lock is held; a lock that can't be taken leaves Wi-Fi discovery quiet, not sharing stopped.
@@ -748,6 +776,14 @@ class _PhoneDriver implements SharingDriver {
       }
       _core = await s._opener(config);
       lock.engineStarted(kSyncWork);
+      // A key the engine has just made (every copy was gone) is kept now; a copy that cannot be written is tried at the next start.
+      if (marker != null && keep != null) {
+        try {
+          await keepIdentity(syncDir: dir, installId: await marker.read(), store: keep);
+        } catch (e) {
+          logError("Sharing: the second copy of this device's identity could not be kept", error: e);
+        }
+      }
       await _writeSnapshot();
       await _applyPolicy();
       await refresh();
@@ -1015,6 +1051,10 @@ class _PhoneDriver implements SharingDriver {
     if (changed) s._changed();
   }
 
+  // The phone keeps this with its notebook sync (NotebookConnections), not here.
+  @override
+  Future<void> setPrivateIncluded(String notebookId, bool on) async {}
+
   @override
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     if (on && !s.kindOn(k)) {
@@ -1203,7 +1243,7 @@ class _WebDriver implements SharingDriver {
   final CoreTransport t;
 
   /// The kinds listed in a browser for now.
-  static const Set<String> kindIds = {'library', 'models'};
+  static const Set<String> kindIds = {'library', 'models', 'notebooks'};
 
   /// How long a link may take (the engine waits for the other device) before the browser gives up waiting.
   static const Duration kLinkWait = Duration(minutes: 3);
@@ -1241,6 +1281,10 @@ class _WebDriver implements SharingDriver {
     s._off
       ..clear()
       ..addAll({if (off is Map) for (final o in off.entries) if (o.value is List) '${o.key}': {for (final k in o.value as List) '$k'}});
+    final inc = snap['private_included'];
+    s._privateIncluded
+      ..clear()
+      ..addAll({if (inc is List) for (final x in inc) '$x'});
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
     s._drainNow();
@@ -1355,9 +1399,18 @@ class _WebDriver implements SharingDriver {
   }
 
   @override
+  Future<void> setPrivateIncluded(String notebookId, bool on) async => _apply(await _op('sharing.set_private', {'notebook': notebookId, 'on': on}));
+
+  @override
   Future<void> setItem(DataKind k, ShareItem it, bool on) async {
     // Switching one on in a kind that is off shares the kind with that item alone, which needs every item of the kind.
     final all = on && !s.kindOn(k) ? [for (final x in s.itemsOf(k)) if (!x.item.private) x.item.key] : null;
+    // A private item has its own switch (the server's notebook sync keeps it); the host's off list follows from it. Only a kind
+    // that is off needs the kind switched on as well, with every other item as it is.
+    if (it.private) {
+      await k.setPrivate?.call(it, on);
+      if (all == null) return;
+    }
     _apply(await _op('sharing.set_item', {'kind': k.id, 'key': it.key, 'on': on, 'all': ?all}));
     if (all != null) await refreshItems();
   }

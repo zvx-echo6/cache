@@ -172,17 +172,28 @@ List<Map<String, dynamic>> roadEventLayers(MapPalette p) {
       'type': 'symbol',
       'source': kRoadEventSource,
       'minzoom': kRoadEventMinZoom,
-      'filter': ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'role'], 'chip']],
+      'filter': roadChipsFilter(),
       'layout': {
         'icon-image': ['get', 'icon'],
         'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 15, 1.15],
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
+        // Takes part in collision, as the public places' chips do: it gives way to a town's name (the style puts these under the place
+        // names) and to the person's own pins, until the map is zoomed in.
+        'icon-allow-overlap': false,
+        'icon-ignore-placement': false,
+        'icon-padding': 2,
       },
       'paint': {'icon-opacity': dimOpacity},
     },
   ];
 }
+
+/// The filter of the chips layer: the chips (points), without the events in [grouped] (their ids): a group marker stands for those.
+List<Object> roadChipsFilter([Iterable<String> grouped = const []]) => [
+      'all',
+      ['==', ['geometry-type'], 'Point'],
+      ['==', ['get', 'role'], 'chip'],
+      if (grouped.isNotEmpty) ['!', ['in', ['get', 'id'], ['literal', grouped.toList()]]],
+    ];
 
 /// Which event a tap chose, from the events the query found around the tapped point (their `id` values, nearest first as the query
 /// gives them). Where two overlap the tap, the full closure wins, then the nearest: the first of [hitIds] that is a full closure, else the first.

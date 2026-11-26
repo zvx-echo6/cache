@@ -209,6 +209,9 @@ void main() {
     expect((cfg['hidden'] as Map)['indexes'], contains('*/*/snap/*/.managed.json'));
     expect(cfg['with'], {'settings': ['match', 'send'], 'bookshelves': ['match']});
     expect(cfg['never_fetch'], <String, Object?>{});
+    // the second copy of the device's key, outside the sync folder (the engine keeps it: cache_sync identity.rs)
+    expect(cfg['identity_keep'], '${data.path}/identity-keep');
+    expect(cfg.containsKey('make_identity'), isFalse, reason: 'a new identity may be made when every copy is gone');
     expect(cfg['off'], {'library': <String>[], 'libraries': <String>[], 'maps': <String>[], 'regions': <String>[], 'models': <String>[], 'notebooks': <String>[], 'videos': <String>[]});
     expect(c.argsOf('set_policy'), [
       {'network': true},
@@ -261,7 +264,7 @@ void main() {
       ..writeAsStringSync('x');
     await h.invoke('sharing.set_kind', {'kind': 'models', 'on': false});
     expect(c.argsOf('share_remove'), [
-      {'id': 'models'},
+      {'id': 'models', 'keep_history': true},
     ]);
     expect(File('${data.path}/models/a.gguf').existsSync(), isTrue);
     await expectLater(h.invoke('sharing.set_kind', {'kind': 'nonsense', 'on': true}), throwsA(isA<CacheSearchException>().having((e) => e.code, 'code', 'bad_args')));
