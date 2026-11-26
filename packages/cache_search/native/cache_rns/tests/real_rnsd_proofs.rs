@@ -279,3 +279,49 @@ async fn proof_h_reference_interop_through_the_chain() {
     say(&format!("proof (h): {:?}", find.lines_with("PATH")));
     a.stop();
 }
+
+/// Item 3 diagnostic (needs `--features test-hooks`): one node alone on hub1 for 90 s, what the entry says and what arrives on its interface. `wrong` makes the
+/// passphrase wrong (the correct one with a letter added, inside this process only). Never prints credentials: only the entry's
+/// state, the interface snapshot (byte counters, counts), and Prns events (which carry no passphrase).
+#[cfg(feature = "test-hooks")]
+async fn watch_alone_on_hub1(wrong: bool) {
+    say(&format!("diagnostic starts (passphrase {})", if wrong { "WRONG" } else { "correct" }));
+    let mut e = entry("d1", "HUB1");
+    if wrong {
+        let p = format!("{}x", e.passphrase.as_ref().unwrap().as_str());
+        e.passphrase = Some(Zeroizing::new(p));
+    }
+    let k = SecretKey::generate();
+    let (a, _rec) = start(&k, vec![Iface::Entry(e)]).await;
+    let t = Instant::now();
+    let mut next = 0u64;
+    while t.elapsed() < Duration::from_secs(90) {
+        for l in cache_rns::test_take_diag() {
+            say(&format!("  {l}"));
+        }
+        if t.elapsed().as_secs() >= next {
+            next += 5;
+            let st: Vec<String> = a.entry_status().iter().map(|(i, s, n)| format!("{i}={s:?}/{n}")).collect();
+            say(&format!("status {st:?}"));
+            for x in a.test_interfaces() {
+                say(&format!("  iface {x}"));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    a.stop();
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn diag_item3_correct_passphrase_alone_on_hub1() {
+    watch_alone_on_hub1(false).await;
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn diag_item3_wrong_passphrase_alone_on_hub1() {
+    watch_alone_on_hub1(true).await;
+}

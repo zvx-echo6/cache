@@ -428,6 +428,15 @@ impl Transport for MultiTransport {
         }
     }
 
+    #[cfg(feature = "test-hooks")]
+    fn test_route_hops(&self, dest_hex: &str) -> BoxFut<'_, Option<u8>> {
+        let dest = cache_rns::dest_from_hex(dest_hex);
+        Box::pin(async move {
+            let (node, dest) = self.node().zip(dest)?;
+            node.test_route_hops(dest).await
+        })
+    }
+
     fn reached_over_rns(&self, peer: &str) -> bool {
         let reached = self.last_via.lock().unwrap().get(peer) == Some(&Net::Reticulum);
         reached && peer.parse::<PublicKey>().ok().zip(self.node()).is_some_and(|(k, n)| n.reachable(&k))

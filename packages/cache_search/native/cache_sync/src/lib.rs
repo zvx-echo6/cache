@@ -4496,6 +4496,13 @@ impl SyncEngine {
                 Ok(json!({}))
             }
             #[cfg(feature = "test-hooks")]
+            "test_route_hops" => {
+                // The hops the routing table gives for a Reticulum destination (hex); null when there is no route.
+                let dest = s("dest").ok_or_else(|| anyhow!("dest is required"))?;
+                let net = inner.net.clone();
+                Ok(json!({"hops": self.rt.block_on(async move { net.test_route_hops(&dest).await })}))
+            }
+            #[cfg(feature = "test-hooks")]
             "test_quiet" => {
                 let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
                 Ok(json!({"quiet": inner.quiet_peer(&peer)}))

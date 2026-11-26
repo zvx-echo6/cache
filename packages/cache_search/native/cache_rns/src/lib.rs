@@ -608,6 +608,8 @@ impl RnsNode {
                         storage: GrowableHeap,
                         request_endpoints: request_endpoints![],
                         on_event: move |event, _state| {
+                            #[cfg(feature = "test-hooks")]
+                            diag_push(format!("event {event:?}"));
                             let ev = match event {
                                 PrnsEvent::Diagnostic(Diagnostic::AnnounceHeard {
                                     destination,
@@ -694,6 +696,8 @@ impl RnsNode {
                     // A validated announce, with the identity it was made by: a `cache.pair.v1` destination is recognised
                     // by recomputing its hash from that identity, so nothing is contacted until it matches.
                     .with_accepted_announce_observer(move |obs| {
+                        #[cfg(feature = "test-hooks")]
+                        diag_push(format!("accepted announce {:?} hops {} from {:?}", obs.destination, obs.hops.0, obs.source_interface));
                         let is_pair = personal_rns::routing::announce::derive_single_destination_hash(
                             &obs.announced_identity,
                             APP_NAME,
@@ -1450,6 +1454,19 @@ impl RnsNode {
         self.handle.attach(TcpClientInterface::new(addr.to_string()));
     }
 
+    /// Tests only: how many hops the node's routing table says `destination` is away (Prns `NodeIntrospection::route`, the
+    /// route's `hops`); `None` when the node holds no route.
+    #[cfg(feature = "test-hooks")]
+    pub async fn test_route_hops(&self, destination: DestinationHash) -> Option<u8> {
+        self.handle.route(destination).await.map(|r| r.hops)
+    }
+
+    /// Tests only: every interface's snapshot (Prns `interfaces()`) as text: connection state, rx and tx bytes, destinations, links.
+    #[cfg(feature = "test-hooks")]
+    pub fn test_interfaces(&self) -> Vec<String> {
+        self.handle.interfaces().iter().map(|x| format!("{x:?}")).collect()
+    }
+
     /// The link this device has open to `peer` (one it opened), as Prns numbers it: for telling whether a link was kept or made
     /// again.
     pub fn link_id_to(&self, peer: &PublicKey) -> Option<impl std::fmt::Debug + PartialEq + Clone> {
@@ -1609,6 +1626,22 @@ impl RnsNode {
             let _ = s.send(());
         }
     }
+}
+
+/// Tests only: what the node reports as it happens (every Prns event, every accepted announce), taken by [`test_take_diag`].
+#[cfg(feature = "test-hooks")]
+static DIAG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(feature = "test-hooks")]
+fn diag_push(mut line: String) {
+    line.truncate(240);
+    DIAG.lock().unwrap().push(line);
+}
+
+/// Tests only: the lines [`diag_push`] collected since the last call.
+#[cfg(feature = "test-hooks")]
+pub fn test_take_diag() -> Vec<String> {
+    std::mem::take(&mut *DIAG.lock().unwrap())
 }
 
 /// What `destination`'s route in the node's routing table comes in on (its next-hop interface: Prns `NodeIntrospection::route`).
