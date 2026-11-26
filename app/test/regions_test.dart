@@ -80,6 +80,8 @@ class _Rig {
       },
       onPlacesChanged: onPlacesChanged,
       syncedWithOtherDevice: synced,
+      // The outline back-fill does nothing from 1 to 8 AM local: a test must not depend on the hour it runs in (the CI runners use UTC).
+      clock: () => DateTime(2026, 11, 25, 12),
     );
     await tester.runAsync(() async {
       await r.regions.init();
