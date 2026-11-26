@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache/firstaid/cpr_metronome.dart';
 import 'package:cache/firstaid/cpr_prefs.dart';
 import 'package:cache/firstaid/emergency_number.dart';
+import 'package:cache/firstaid/first_aid_guides.dart';
 import 'package:cache/firstaid/first_aid_screen.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
@@ -94,6 +95,87 @@ void main() {
     prefs.dispose();
     dir.deleteSync(recursive: true);
   });
+
+  testWidgets(
+    'the five offline guides are listed after CPR and open their guide pages',
+    (tester) async {
+      final dir = Directory.systemTemp.createTempSync('first-aid-guides');
+      final prefs = CprPrefs(settingsDirOverride: dir);
+      await tester.runAsync(prefs.init);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.parchment),
+          home: FirstAidScreen(prefs: prefs, canCall: false),
+        ),
+      );
+      expect(find.text('CPR metronome'), findsOneWidget);
+      expect(find.text('Guides'), findsOneWidget);
+      for (final guide in firstAidGuides) {
+        final row = find.byKey(ValueKey('first-aid-guide-${guide.title}'));
+        await tester.ensureVisible(row);
+        expect(find.text(guide.subtitle), findsOneWidget);
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+        expect(find.text(guide.title), findsOneWidget);
+        expect(find.text('What to do'), findsOneWidget);
+        expect(find.byKey(const ValueKey('guide-call')), findsNothing);
+        expect(
+          find.textContaining(guide.actions.first),
+          findsOneWidget,
+          reason: 'guide text is present locally',
+        );
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+      prefs.dispose();
+      dir.deleteSync(recursive: true);
+    },
+  );
+
+  testWidgets(
+    'a guide opens the emergency dialer and its official source URL',
+    (tester) async {
+      final dir = Directory.systemTemp.createTempSync('first-aid-guide-links');
+      final prefs = CprPrefs(settingsDirOverride: dir);
+      await tester.runAsync(prefs.init);
+      var dials = 0;
+      final opened = <String>[];
+      final oldOpen = WebLinks.open, oldProbe = WebLinks.probe;
+      WebLinks.open = (url) async => opened.add(url);
+      WebLinks.probe = _Wifi();
+      addTearDown(() {
+        WebLinks.open = oldOpen;
+        WebLinks.probe = oldProbe;
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildTheme(CacheThemeId.parchment),
+          home: FirstAidScreen(
+            prefs: prefs,
+            canCall: true,
+            openDialer: () async {
+              dials++;
+              return true;
+            },
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const ValueKey('first-aid-guide-Stroke')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('guide-call')));
+      await tester.pump();
+      expect(dials, 1);
+      final source = find.byKey(const ValueKey('guide-source'));
+      await tester.scrollUntilVisible(source, 300);
+      await tester.tap(source);
+      await tester.pump();
+      expect(opened, [firstAidGuides[1].url]);
+      await tester.pumpWidget(const SizedBox.shrink());
+      prefs.dispose();
+      dir.deleteSync(recursive: true);
+    },
+  );
 
   group('the ready screen', () {
     testWidgets('the mode switch (Hands-only chosen, with its check mark), Start, the reminder, Call, the toggles and the source line', (tester) async {

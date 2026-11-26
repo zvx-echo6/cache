@@ -12,6 +12,7 @@ import 'cpr_feedback.dart';
 import 'cpr_metronome.dart';
 import 'cpr_prefs.dart';
 import 'emergency_number.dart';
+import 'first_aid_guides.dart';
 
 /// WORDING (the reminder the owner approved, shown before the metronome starts).
 const String kCprReminder = 'Push hard and fast in the center of the chest, 5–6 cm (2–2.4 in) deep. Let the chest come all the way back up.';
@@ -55,6 +56,47 @@ class FirstAidScreen extends StatelessWidget {
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CprScreen(prefs: prefs, feedback: feedback, canCall: canCall, openDialer: openDialer))),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
+            child: Text(
+              'Guides',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: k.text,
+              ),
+            ),
+          ),
+          for (final guide in firstAidGuides)
+            Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                key: ValueKey('first-aid-guide-${guide.title}'),
+                minTileHeight: 72,
+                title: Text(
+                  guide.title,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: k.text,
+                  ),
+                ),
+                subtitle: Text(
+                  guide.subtitle,
+                  style: TextStyle(fontSize: 15, color: k.secondary),
+                ),
+                trailing: Icon(Icons.chevron_right, color: k.secondary),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => FirstAidGuideScreen(
+                      guide: guide,
+                      canCall: canCall,
+                      openDialer: openDialer,
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
