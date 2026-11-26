@@ -22,7 +22,7 @@ import '../files.dart';
 const List<String> kThemeNames = ['dark', 'light', 'parchment', 'tactical'];
 
 /// `ModuleId` names (layout/modules.dart).
-const List<String> kModuleNames = ['ask', 'library', 'maps', 'videos', 'weather', 'discover', 'notebooks', 'settings'];
+const List<String> kModuleNames = ['ask', 'library', 'maps', 'videos', 'weather', 'discover', 'notebooks', 'firstAid', 'settings'];
 
 /// The most modules the bar holds (`kMaxPinned`).
 const int kMaxPinnedModules = 3;

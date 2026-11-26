@@ -4,6 +4,8 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../firstaid/cpr_prefs.dart';
+import '../firstaid/first_aid_screen.dart';
 import '../car/car_voice_access.dart' show carVoiceShared;
 import '../car/phone_drive.dart';
 import '../browse/browse_screen.dart';
@@ -340,6 +342,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void initState() {
+    unawaited(_cprPrefs.init());
     super.initState();
     // PDF indexing's messages ("Another device finished this. Using its index.").
     pdfIndexShared?.say = _sayIfMounted;
@@ -558,6 +561,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    _cprPrefs.dispose();
     _roadEvents?.dispose();
     if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     linkInbox.removeListener(_openIncomingLink);
@@ -1317,6 +1321,9 @@ class _ShellState extends State<Shell> {
     onOpenLibrary: () => _goModule(ModuleId.library),
   );
 
+  /// What the CPR metronome remembers (its tick and buzz switches).
+  final CprPrefs _cprPrefs = CprPrefs();
+
   Widget _moduleScreen(ModuleId m) => switch (m) {
         ModuleId.ask => AskGate(
             app: widget.app,
@@ -1332,6 +1339,7 @@ class _ShellState extends State<Shell> {
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.discover => DiscoverScreen(discover: _discover),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
+        ModuleId.firstAid => FirstAidScreen(prefs: _cprPrefs),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 

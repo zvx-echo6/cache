@@ -284,6 +284,7 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        CprBeat.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -359,6 +360,7 @@ class MainActivity : FlutterActivity() {
         pendingLock?.success("cancelled")
         pendingLock = null
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
+        CprBeat.detach(this, flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)

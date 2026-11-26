@@ -21,6 +21,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Hearing other devices on the same Wi-Fi (Reticulum's local discovery) needs a multicast lock; see MainActivity "co.cache/multicast". -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application

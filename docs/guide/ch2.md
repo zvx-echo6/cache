@@ -91,7 +91,7 @@ With no model on the device, "Ask" leaves the bar. In "Modules" it is grayed, wi
 
 ![The Modules screen](shot:modules)
 
-"Modules" lists every module: "Ask", "Library", "Maps", "Videos", "Weather", "Notebooks" and "Settings". A dot under a name means it is on the bar.
+"Modules" lists every module: "Ask", "Library", "Maps", "Videos", "Weather", "Notebooks", "First aid" and "Settings". A dot under a name means it is on the bar.
 
 To pin or unpin a module:
 1. In "Modules", tap and hold its icon.
@@ -100,6 +100,26 @@ To pin or unpin a module:
 - If the bar is full, Cache says "The bar is full (3 max)". Tap the row for the module to take off, for example "Replace Library", or tap "Cancel".
 
 For bigger icons, go to ["Settings" > "Appearance"](cache://settings/appearance) and choose "Large" under "Module icons".
+
+## First aid
+
+"First aid" is in "Modules", after "Notebooks". It holds one tool so far: the "CPR metronome". It keeps the beat for chest compressions. It works with no connection.
+
+1. Open "First aid", then tap "CPR metronome".
+2. Choose "With breaths (30:2)" or "Hands-only". The chosen one has a check mark. It opens on "Hands-only".
+3. Tap "Start". The beat is 110 per minute, and the rate cannot be changed. A timer counts up from 00:00.
+
+- With breaths (30:2): the circle shows the count out of 30, for example 17 of 30. After 30, the beat stops and the screen says "Give 2 breaths", with "One second each. Watch the chest rise." and a countdown from 5. Pushing starts again by itself at 0, counting from 1. Tap "Continue" to start at once.
+- Hands-only: the circle says "Push", with no count, and the screen says "Keep pushing until help arrives".
+- Tap "Stop" to end. The screen goes back to the start. Nothing is saved.
+
+Each beat gives a short tick and a short vibration. Turn either one off with "Sound" and "Vibration" on the start screen. Cache remembers your choice. The tick plays even when the phone is set to silent. The screen stays on while the metronome runs.
+
+"Call emergency services" is on every screen of the metronome. It opens the phone's dialer with the emergency number for your region filled in: 911 in the US and Canada, 999 in the UK, 000 in Australia, 111 in New Zealand, and 112 elsewhere. You then tap call in the dialer. Cache never places the call itself. The metronome keeps beating while the dialer is open, if Cache stays in front.
+
+- On a computer or in a browser there is no phone dialer, so the "Call emergency services" button is not shown. Everything else works, with the beat on the screen only.
+
+The start screen shows a reminder: "Push hard and fast in the center of the chest, 5–6 cm (2–2.4 in) deep. Let the chest come all the way back up." Under it, the line "Source: MedlinePlus, National Library of Medicine" links to [medlineplus.gov/cpr.html](https://medlineplus.gov/cpr.html).
 
 ## Tablets
 
