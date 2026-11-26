@@ -423,6 +423,24 @@ fn the_sender_sees_the_other_device_fetching_through_the_summary_it_sends() {
     close(t);
 }
 
+#[test]
+fn a_fetch_seen_only_through_the_summary_is_not_kept_for_the_whole_interval() {
+    // A notes no windows served, so only B's summary can say it. The interval is 600 s (the status once kept "fetching" for twice
+    // that after the summary was seen), and A makes no round after the fetch ends (B sends no notice that would make one): the
+    // summary's word expires on its own.
+    let (t, _) = held_fetch(&["no-serve-signal"], &["no-notice"]);
+    wait("A to see B fetching", 20, || {
+        round(t.a());
+        fetching(t.a()).is_object()
+    });
+    std::fs::remove_file(t.db.join("hold-fetch-mid")).unwrap();
+    wait("the file on B", 120, || t.fb.join("video.bin").exists() && call(t.b(), "status", json!({}))["transfer"].is_null());
+    let ended = Instant::now();
+    wait("A to stop showing B as fetching (no round)", 40, || fetching(t.a()) == Value::Null);
+    eprintln!("cleared {:?} after the file was whole, with no round", ended.elapsed());
+    close(t);
+}
+
 // --- Files are served over Reticulum only once the file store is ready ---
 
 #[test]

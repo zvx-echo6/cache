@@ -758,6 +758,10 @@ fn backoff_hold(base: Duration, cancels: u32, cap: Duration) -> Duration {
 
 /// A device that is served windows is "fetching from this one" until this long after the last window.
 const SERVING_FOR: Duration = Duration::from_secs(10);
+/// What a summary says of the other device's fetch is a look at one moment, so it is shown only this long after that look (or
+/// twice the interval, when that is shorter): a fetch that stopped since (it ended, failed or was cancelled) is not kept on show
+/// until the next look, which can be hours away.
+const SUMMARY_FETCHING_FOR: Duration = Duration::from_secs(20);
 /// The key in the notice queues for "this device's entry points changed" (not a folder's id: those are never empty or start with NUL).
 const ENTRIES_NOTICE: &str = "\u{0}entries";
 /// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
@@ -2459,7 +2463,8 @@ impl Inner {
             sv.get(peer).filter(|s| s.at.elapsed() < SERVING_FOR).and_then(|s| s.share.as_ref().map(|sh| json!({"share": sh, "size": s.size, "done": s.high})))
         };
         served.or_else(|| {
-            let fresh = last_seen.is_some_and(|t| now_ms().saturating_sub(t) < 2 * self.every.as_millis() as u64);
+            let bound = (2 * self.every).min(SUMMARY_FETCHING_FOR).as_millis() as u64;
+            let fresh = last_seen.is_some_and(|t| now_ms().saturating_sub(t) < bound);
             summary.filter(|_| fresh).and_then(|i| i.fetching.as_ref()).map(|f| json!({"share": f.share, "size": f.size, "done": f.done}))
         })
     }
