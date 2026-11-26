@@ -620,9 +620,9 @@ class NotebookSyncCore {
 
   /// How far apart two devices' clocks may be. An edit recorded here less than this before a delete marker's `at` counts as
   /// made after the delete: the entry is kept (a lost edit is worse than a deleted entry coming back). Phones keep network
-  /// time to well under a second, but a device offline for a while, or set by hand, drifts; 2 minutes covers that and is
-  /// still short next to the time between a person's edit and a delete on another device that they mean to win.
-  static const deleteSkew = Duration(minutes: 2);
+  /// time to well under a second, so 10 seconds covers ordinary drift and still lets a delete made a little after an edit
+  /// win, as the person meant.
+  static const deleteSkew = Duration(seconds: 10);
 
   /// The time in entry [id]'s delete marker (the deleting device's clock, ms since epoch); 0 for a marker without one, or
   /// one that cannot be read (any recorded local change then keeps the entry).

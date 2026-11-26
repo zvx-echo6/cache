@@ -983,7 +983,7 @@ void main() {
     // offline and edits X; A deletes X (or X's notebook). On a phone, saving the edit runs B's own pass within about 2 s, offline
     // too, so B's file holds the edit and B's record is up to date before the marker arrives. The edit then looked unchanged
     // since the last sync, and the marker deleted it, whichever came later. The rule: the later action wins, and an edit within
-    // the clock-skew bound of the delete (2 minutes) counts as later (a lost edit is worse than a deleted entry coming back).
+    // the clock-skew bound of the delete (10 seconds) counts as later (a lost edit is worse than a deleted entry coming back).
     // Each device has its own clock here (the edit's pass runs at the edit's time, the delete's pass at the delete's time), and
     // the share sync is modelled per path with versions in the order things happened (as in R1 above).
     // [editAfterDelete] is the edit's time minus the delete's (negative: the edit came first). [oldRecord]: B's record has no
@@ -1109,37 +1109,42 @@ void main() {
       await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: true);
     });
 
-    test('offline edit vs delete, the delete is later by more than the skew bound (3 min): X is gone on both and the marker stays', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: false);
+    test('offline edit vs delete, the edit is later by 30 s: kept on both and the marker is removed', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 30), kept: true);
     });
 
-    test('offline edit vs delete, near-tie: the edit 23 s before the delete (step 3) is within the skew bound and is kept', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -23), kept: true);
+    test('offline edit vs delete, the delete is later by 30 s (more than the 10 s skew bound): X is gone on both and the marker stays', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -30), kept: false);
     });
 
-    test('offline edit vs delete, near-tie: the edit 42 s before the delete (step 7) is within the skew bound and is kept', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -42), kept: true);
+    test('offline edit vs delete, the device timings: the edit 23 s (step 3) or 42 s (step 7) before the delete: the later delete wins', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -23), kept: false);
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -42), kept: false);
     });
 
-    test('offline edit vs delete, skew bound: 1 min 59 s before the delete is kept, 2 min 1 s before is deleted', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -1, seconds: -59), kept: true);
-      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -2, seconds: -1), kept: false);
+    test('offline edit vs delete, near-tie: the delete 5 s after the edit is within the 10 s skew bound and the edit is kept', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -5), kept: true);
+    });
+
+    test('offline edit vs delete, skew bound: 9 s before the delete is kept, 11 s before is deleted', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -9), kept: true);
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -11), kept: false);
     });
 
     test('offline edit vs delete, old record without a change time: deleted as before the fix, even when the edit is later', () async {
       await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: false, oldRecord: true);
     });
 
-    test('offline edit vs delete, old marker without `at` (read as 0): a recorded local change keeps the entry, even 3 min before the delete', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: true, oldMarker: true);
+    test('offline edit vs delete, old marker without `at` (read as 0): a recorded local change keeps the entry, even 30 s before the delete', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -30), kept: true, oldMarker: true);
     });
 
     test('offline edit vs notebook delete, the edit is later: the entry AND its notebook stay on both, the other entry is gone', () async {
       await offlineEditVsDelete(editAfterDelete: const Duration(seconds: 46), kept: true, notebook: true);
     });
 
-    test('offline edit vs notebook delete, the delete is later by more than the skew bound: the notebook and both entries are gone on both', () async {
-      await offlineEditVsDelete(editAfterDelete: const Duration(minutes: -3), kept: false, notebook: true);
+    test('offline edit vs notebook delete, the delete is later by 30 s: the notebook and both entries are gone on both', () async {
+      await offlineEditVsDelete(editAfterDelete: const Duration(seconds: -30), kept: false, notebook: true);
     });
   });
 
