@@ -86,7 +86,7 @@ class SyncReport {
 
 /// One entry's state at the last sync: where it is, the text it had there, and the entry's rev then.
 class _Item {
-  _Item(this.path, this.base, this.rev, {this.extra = const [], this.imp, this.w0, this.uk = const [], this.ht = false});
+  _Item(this.path, this.base, this.rev, {this.extra = const [], this.imp, this.w0, this.uk = const [], this.ht = false, this.ch});
 
   String path;
   String base;
@@ -105,13 +105,17 @@ class _Item {
   /// An imported Obsidian note had a `title` property: it is always written (else only when it is not the file's name).
   final bool ht;
 
+  /// When a pass last wrote out a change made to the entry on this device (this device's clock, ms since epoch); null when
+  /// none was recorded (or the record is from before it was kept). Weighed against a delete marker's `at`: the later wins.
+  final int? ch;
+
   Map<String, dynamic> toJson() => {
         'path': path, 'base': base, 'rev': rev, if (extra.isNotEmpty) 'extra': extra, if (imp != null) 'imp': imp, if (w0 != null) 'w0': w0, if (uk.isNotEmpty) 'uk': uk,
-        if (ht) 'ht': true,
+        if (ht) 'ht': true, if (ch != null) 'ch': ch,
       };
 
   static _Item fromJson(Map j) => _Item('${j['path']}', '${j['base']}', (j['rev'] as num?)?.toInt() ?? 0,
-      extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true);
+      extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true, ch: (j['ch'] as num?)?.toInt());
 }
 
 /// A note the person made with the import tag and no Cache id, found by the scan.
@@ -328,9 +332,12 @@ class NotebookSyncCore {
   }
 
   /// Records entry [id]'s state, keeping what it is (imported or Cache's own).
-  void _rec(String id, String path, String base, int rev, {List<String>? extra}) {
+  /// Records entry [id]'s file. [local]: the pass is writing out a change made to the entry on this device (the change time is
+  /// kept, see [_Item.ch]); otherwise the last one recorded stays.
+  void _rec(String id, String path, String base, int rev, {List<String>? extra, bool local = false}) {
     final old = _items[id];
-    _items[id] = _Item(path, base, rev, extra: extra ?? old?.extra ?? const [], imp: old?.imp, w0: old?.w0, uk: old?.uk ?? const [], ht: old?.ht ?? false);
+    _items[id] = _Item(path, base, rev, extra: extra ?? old?.extra ?? const [], imp: old?.imp, w0: old?.w0, uk: old?.uk ?? const [], ht: old?.ht ?? false,
+        ch: local ? _now().millisecondsSinceEpoch : old?.ch);
   }
 
   String get _nowWall => wallTime(_now().toIso8601String());
@@ -611,6 +618,31 @@ class NotebookSyncCore {
     return gone;
   }
 
+  /// How far apart two devices' clocks may be. An edit recorded here less than this before a delete marker's `at` counts as
+  /// made after the delete: the entry is kept (a lost edit is worse than a deleted entry coming back). Phones keep network
+  /// time to well under a second, but a device offline for a while, or set by hand, drifts; 2 minutes covers that and is
+  /// still short next to the time between a person's edit and a delete on another device that they mean to win.
+  static const deleteSkew = Duration(minutes: 2);
+
+  /// The time in entry [id]'s delete marker (the deleting device's clock, ms since epoch); 0 for a marker without one, or
+  /// one that cannot be read (any recorded local change then keeps the entry).
+  Future<int> _markerAt(String id) async {
+    try {
+      final j = jsonDecode(await folder.readText('$_markerDir/$id.json') ?? '');
+      return j is Map ? (j['at'] as num?)?.toInt() ?? 0 : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Whether the delete marker for entry [id] (recorded here as [s]) is later than this device's last recorded change to it.
+  /// No recorded change: the delete wins (as before change times were kept).
+  Future<bool> _deleteIsLater(String id, _Item? s) async {
+    final ch = s?.ch;
+    if (ch == null) return true;
+    return ch <= await _markerAt(id) - deleteSkew.inMilliseconds;
+  }
+
   Future<void> _removeMarker(String id) async {
     if (await folder.exists('$_markerDir/$id.json')) await folder.delete('$_markerDir/$id.json');
   }
@@ -886,7 +918,10 @@ class NotebookSyncCore {
         // A delete marker is a delete made in Cache on some device. The marker and the file's removal are separate files and
         // can arrive in either order, so a marker with the entry here and nothing changed is the pending delete, file there or not.
         // Only an edit that raced the delete (here or in the file) keeps the entry; the marker is then removed (the file wins).
-        if (c != null && !cacheChanged && !fileChanged) {
+        // An edit already written out here (a phone's own pass runs right after the save, offline too) looks unchanged since the
+        // last sync: the later action wins, by this device's change time against the marker's (near-ties keep the entry). A kept
+        // entry is written out again below (its file is missing, or it is there and travels back) and its notebook stays.
+        if (c != null && !cacheChanged && !fileChanged && await _deleteIsLater(id, s)) {
           await notebook.deleteEntry(id);
           if (f != null) await folder.delete(f.path);
           _items.remove(id);
@@ -904,7 +939,7 @@ class NotebookSyncCore {
         final doc = _docOf(c.$1, c.$2);
         final text = _renderFor(id, doc);
         if (s == null && f == null) {
-          _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev);
+          _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, ch: _now().millisecondsSinceEpoch);
           r.written++;
         } else if (s == null && f != null) {
           // Both have it and Cache has no record (a folder connected again, or a second device joining).
@@ -922,10 +957,10 @@ class NotebookSyncCore {
         } else if (missing) {
           // Cache is the source of truth, so its file or block is written back and the entry stays (a share: a file missing
           // never deletes; only a marker does, above).
-          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra, local: cacheChanged);
           r.written++;
         } else if (cacheChanged && !fileChanged) {
-          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const [], local: true);
           r.written++;
         } else if (!cacheChanged && fileChanged) {
           final saved = await _apply(id, f.doc, byName, text: f.text);
@@ -945,7 +980,7 @@ class NotebookSyncCore {
             }
             final saved = await _apply(id, mergedDoc, byName);
             final path = await _write(id, mergedDoc, c.$1, m.text);
-            _rec(id, path, m.text, saved.rev);
+            _rec(id, path, m.text, saved.rev, local: true);
             r.merged.add(doc.title ?? doc.when);
           } else {
             await _keepBoth(id, doc, text, f, c.$1, c.$2.rev, byName, r);
