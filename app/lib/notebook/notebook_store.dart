@@ -27,6 +27,12 @@ abstract class NotebookStore {
   /// Saves a notebook (a new one when [id] is null) and returns it as stored.
   Future<Notebook> saveNotebook({String? id, String? template, required NotebookDef def, bool? private, bool? map, String? templateRef});
 
+  /// Notebook [id] as the store has it now (not the list read last); null when there is none.
+  Future<Notebook?> storedNotebook(String id);
+
+  /// Deletes notebook [id] and its entries (notebook sync: a notebook deleted on another device, once it holds no entries).
+  Future<void> deleteNotebook(String id);
+
   /// The saved places' notebook, made the first time.
   Future<Notebook> ensureSavedPlaces();
 

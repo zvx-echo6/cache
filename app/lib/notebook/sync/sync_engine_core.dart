@@ -537,9 +537,78 @@ class NotebookSyncCore {
     final out = <String>{};
     for (final f in await folder.list(_markerDir)) {
       final n = f.path.substring(_markerDir.length + 1);
-      if (n.endsWith('.json') && !n.contains('/')) out.add(n.substring(0, n.length - 5));
+      if (n.endsWith('.json') && !n.contains('/') && !n.startsWith(_bookMarkerPrefix)) out.add(n.substring(0, n.length - 5));
     }
     return out;
+  }
+
+  /// A notebook deleted in Cache on some device of the share: `_deleted/notebook-<its id there>.json`, with its name and when.
+  /// A notebook travels only as its entries' files (its definition, `.cache/notebooks.json`, is a hidden file that stays on the
+  /// device, and notebook ids differ between devices), so the marker names it by name. Entry ids are UUIDs, so an older build
+  /// takes the file for the marker of an entry it never has and leaves it alone. Kept, as entry markers are.
+  static const _bookMarkerPrefix = 'notebook-';
+
+  Future<List<({String name, int at})>> _bookMarkers() async {
+    final out = <({String name, int at})>[];
+    for (final f in await folder.list(_markerDir)) {
+      final n = f.path.substring(_markerDir.length + 1);
+      if (!n.startsWith(_bookMarkerPrefix) || !n.endsWith('.json') || n.contains('/')) continue;
+      try {
+        final j = jsonDecode(await folder.readText(f.path) ?? '');
+        if (j is Map && j['name'] is String && j['at'] is num) out.add((name: j['name'] as String, at: (j['at'] as num).toInt()));
+      } catch (_) {
+        // Half-written or not one: read again next time.
+      }
+    }
+    return out;
+  }
+
+  /// The notebooks this device sent at its last sync (its own `.cache/notebooks.json`) that its store no longer has: deleted
+  /// here since. Each gets its marker. A notebook not read is not deleted: each one is looked up in the store first, and none is
+  /// marked when the list could not be read.
+  Future<void> _markDeletedBooks(List<Notebook> books) async {
+    List? sent;
+    try {
+      final t = await folder.readText('.cache/notebooks.json');
+      final j = t == null ? null : jsonDecode(t);
+      sent = j is Map ? j['notebooks'] as List? : null;
+    } catch (_) {
+      return;
+    }
+    final have = {for (final n in books) n.id};
+    for (final n in sent ?? const []) {
+      if (n is! Map || n['id'] is! String || n['def'] is! Map || (n['def'] as Map)['name'] is! String) continue;
+      final id = n['id'] as String;
+      final path = '$_markerDir/$_bookMarkerPrefix$id.json';
+      if (have.contains(id) || await folder.exists(path) || await notebook.storedNotebook(id) != null) continue;
+      final name = (n['def'] as Map)['name'] as String;
+      // A notebook of that name here now was made after the delete (names are unique): the delete is dated before it, so the
+      // marker never takes it.
+      var at = _now().millisecondsSinceEpoch;
+      for (final x in books) {
+        if (x.name == name && x.created <= at) at = x.created - 1;
+      }
+      await folder.writeText(path, jsonEncode({'notebook': id, 'name': name, 'at': at}));
+    }
+  }
+
+  /// Notebook markers here: the notebook of that name, made before the delete and synced here, goes once it holds no entries
+  /// (its entries' own markers empty it). An entry edited or added after the delete keeps it, and so the notebook, as an edit
+  /// keeps an entry; a notebook made after the delete is never touched. Returns the ids of the notebooks deleted.
+  Future<Set<String>> _applyBookMarkers(List<({String name, int at})> marks) async {
+    final gone = <String>{};
+    for (final m in marks) {
+      final n = notebook.notebooks.where((x) => x.name == m.name).firstOrNull;
+      if (n == null || n.savedPlaces || n.created > m.at || !(includePrivate || !n.private || privateBooks.contains(n.id))) continue;
+      if ((await notebook.entries(n.id)).isNotEmpty) continue;
+      try {
+        await notebook.deleteNotebook(n.id);
+        gone.add(n.id);
+      } catch (e) {
+        _logError('Notebook sync: could not delete a notebook deleted on another device', error: e, detail: m.name);
+      }
+    }
+    return gone;
   }
 
   Future<void> _removeMarker(String id) async {
@@ -759,6 +828,7 @@ class NotebookSyncCore {
     final outside = await _scan(byName, newOutside, unreadable, cache: cache, candidates: kind == SyncKind.share ? null : candidates);
     _stopped.removeWhere((id) => !cache.containsKey(id));
     final marks = kind == SyncKind.share ? await _markers() : <String>{};
+    final bookMarks = kind == SyncKind.share ? await _bookMarkers() : const <({String name, int at})>[];
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
@@ -946,7 +1016,13 @@ class NotebookSyncCore {
     }
     _conflicts = conflicts;
     r.conflicts = conflicts.length;
-    if (!_logseq) await _writeBooks(books);
+    var gone = const <String>{};
+    if (kind == SyncKind.share) {
+      // Before `.cache/notebooks.json` is written again: it says what was here at the last sync.
+      await _markDeletedBooks(books);
+      gone = await _applyBookMarkers(bookMarks);
+    }
+    if (!_logseq) await _writeBooks([for (final n in books) if (!gone.contains(n.id)) n]);
     await _save();
     return r;
   }

@@ -224,6 +224,10 @@ class NotebookState extends ChangeNotifier implements NotebookStore {
     }
   }
 
+  @override
+  Future<Notebook?> storedNotebook(String id) => _stored(id);
+
+  @override
   Future<void> deleteNotebook(String id) => _change(() => backend.call('notebook_delete', {'id': id}));
 
   /// Shows or hides a notebook's entries on the map.
